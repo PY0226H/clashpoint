@@ -1,0 +1,44 @@
+# macOS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# local env / secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+
+# logs / runtime files
+*.log
+logs/
+*.pid
+*.pid.lock
+
+# rust build artifacts
+target/
+**/target/
+
+# node / frontend artifacts
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.cache/
+**/.cache/
+
+# test reports / coverage artifacts
+coverage/
+**/coverage/
+playwright-report/
+test-results/
+
+# local automation/cache artifacts
+.fastembed*
+.codex/
