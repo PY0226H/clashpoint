@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::config::KafkaConfig;
 
 pub const TOPIC_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined.v1";
+pub const TOPIC_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +56,15 @@ pub struct DebateParticipantJoinedEvent {
     pub side: String,
     pub pro_count: i32,
     pub con_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateSessionStatusChangedEvent {
+    pub session_id: u64,
+    pub from_status: String,
+    pub to_status: String,
+    pub changed_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -110,6 +120,23 @@ impl EventBus {
             .await
     }
 
+    pub async fn publish_debate_session_status_changed(
+        &self,
+        event: DebateSessionStatusChangedEvent,
+    ) -> anyhow::Result<()> {
+        let aggregate_id = format!("session:{}", event.session_id);
+        let payload = serde_json::to_value(event)?;
+        let envelope = EventEnvelope::new(
+            "debate.session.status.changed",
+            "chat-server",
+            aggregate_id,
+            payload,
+        );
+        let key = envelope.aggregate_id.clone();
+        self.publish(TOPIC_DEBATE_SESSION_STATUS_CHANGED, &key, &envelope)
+            .await
+    }
+
     pub async fn publish(
         &self,
         base_topic: &str,
@@ -147,7 +174,10 @@ impl EventBus {
         }
 
         let topics = if bus.config.consume_topics.is_empty() {
-            vec![bus.config.topic_name(TOPIC_DEBATE_PARTICIPANT_JOINED)]
+            vec![
+                bus.config.topic_name(TOPIC_DEBATE_PARTICIPANT_JOINED),
+                bus.config.topic_name(TOPIC_DEBATE_SESSION_STATUS_CHANGED),
+            ]
         } else {
             bus.config
                 .consume_topics
@@ -222,6 +252,10 @@ mod tests {
         assert_eq!(
             cfg.topic_name(TOPIC_DEBATE_PARTICIPANT_JOINED),
             "aicomm.debate.participant.joined.v1"
+        );
+        assert_eq!(
+            cfg.topic_name(TOPIC_DEBATE_SESSION_STATUS_CHANGED),
+            "aicomm.debate.session.status.changed.v1"
         );
     }
 

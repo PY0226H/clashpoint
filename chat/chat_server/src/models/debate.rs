@@ -1,4 +1,4 @@
-use crate::{AppError, AppState, DebateParticipantJoinedEvent};
+use crate::{AppError, AppState, DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent};
 use chat_core::User;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,17 @@ fn valid_join_side(side: &str) -> bool {
 
 fn can_join_status(status: &str) -> bool {
     matches!(status, "open" | "running")
+}
+
+const JUDGING_CLOSE_GRACE_SECONDS: i64 = 30;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateSessionAdvanceReport {
+    pub opened: usize,
+    pub running: usize,
+    pub judging: usize,
+    pub closed: usize,
 }
 
 #[allow(dead_code)]
@@ -324,6 +335,159 @@ impl AppState {
             con_count,
         })
     }
+
+    pub async fn advance_debate_sessions(
+        &self,
+        batch_size: i64,
+    ) -> Result<DebateSessionAdvanceReport, AppError> {
+        let now = Utc::now();
+        let close_before = now - chrono::Duration::seconds(JUDGING_CLOSE_GRACE_SECONDS);
+        let batch_size = batch_size.max(1);
+
+        let opened_ids: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            WITH due AS (
+                SELECT id
+                FROM debate_sessions
+                WHERE status = 'scheduled'
+                  AND scheduled_start_at <= $1
+                ORDER BY scheduled_start_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE debate_sessions s
+            SET status = 'open',
+                actual_start_at = COALESCE(actual_start_at, $1),
+                updated_at = NOW()
+            FROM due
+            WHERE s.id = due.id
+            RETURNING s.id
+            "#,
+        )
+        .bind(now)
+        .bind(batch_size)
+        .fetch_all(&self.pool)
+        .await?;
+        self.publish_status_changed_batch("scheduled", "open", &opened_ids, now)
+            .await;
+
+        let running_ids: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            WITH due AS (
+                SELECT id
+                FROM debate_sessions
+                WHERE status = 'open'
+                  AND scheduled_start_at <= $1
+                  AND end_at > $1
+                  AND (pro_count + con_count) > 0
+                ORDER BY scheduled_start_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE debate_sessions s
+            SET status = 'running',
+                actual_start_at = COALESCE(actual_start_at, $1),
+                updated_at = NOW()
+            FROM due
+            WHERE s.id = due.id
+            RETURNING s.id
+            "#,
+        )
+        .bind(now)
+        .bind(batch_size)
+        .fetch_all(&self.pool)
+        .await?;
+        self.publish_status_changed_batch("open", "running", &running_ids, now)
+            .await;
+
+        let judging_ids: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            WITH due AS (
+                SELECT id
+                FROM debate_sessions
+                WHERE status = 'running'
+                  AND end_at <= $1
+                ORDER BY end_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE debate_sessions s
+            SET status = 'judging',
+                updated_at = NOW()
+            FROM due
+            WHERE s.id = due.id
+            RETURNING s.id
+            "#,
+        )
+        .bind(now)
+        .bind(batch_size)
+        .fetch_all(&self.pool)
+        .await?;
+        self.publish_status_changed_batch("running", "judging", &judging_ids, now)
+            .await;
+
+        let closed_ids: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            WITH due AS (
+                SELECT id
+                FROM debate_sessions
+                WHERE status = 'judging'
+                  AND updated_at <= $1
+                ORDER BY updated_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE debate_sessions s
+            SET status = 'closed',
+                updated_at = NOW()
+            FROM due
+            WHERE s.id = due.id
+            RETURNING s.id
+            "#,
+        )
+        .bind(close_before)
+        .bind(batch_size)
+        .fetch_all(&self.pool)
+        .await?;
+        self.publish_status_changed_batch("judging", "closed", &closed_ids, now)
+            .await;
+
+        Ok(DebateSessionAdvanceReport {
+            opened: opened_ids.len(),
+            running: running_ids.len(),
+            judging: judging_ids.len(),
+            closed: closed_ids.len(),
+        })
+    }
+
+    async fn publish_status_changed_batch(
+        &self,
+        from_status: &str,
+        to_status: &str,
+        session_ids: &[(i64,)],
+        changed_at: DateTime<Utc>,
+    ) {
+        for (session_id,) in session_ids.iter() {
+            if let Err(err) = self
+                .event_bus
+                .publish_debate_session_status_changed(DebateSessionStatusChangedEvent {
+                    session_id: *session_id as u64,
+                    from_status: from_status.to_string(),
+                    to_status: to_status.to_string(),
+                    changed_at,
+                })
+                .await
+            {
+                warn!(
+                    session_id,
+                    from_status,
+                    to_status,
+                    "publish kafka debate session status changed failed: {}",
+                    err
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -368,6 +532,14 @@ mod tests {
         .await?;
 
         Ok((topic_id.0, session_id.0))
+    }
+
+    async fn session_status(state: &AppState, session_id: i64) -> Result<String> {
+        let row: (String,) = sqlx::query_as("SELECT status FROM debate_sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_one(&state.pool)
+            .await?;
+        Ok(row.0)
     }
 
     #[tokio::test]
@@ -514,6 +686,63 @@ mod tests {
             .await
             .expect_err("side switch should fail");
         assert!(matches!(err, AppError::DebateConflict(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn advance_debate_sessions_should_open_due_scheduled_session() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "scheduled", 10).await?;
+
+        let report = state.advance_debate_sessions(100).await?;
+        assert_eq!(report.opened, 1);
+        assert_eq!(session_status(&state, session_id).await?, "open");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn advance_debate_sessions_should_move_open_to_running_when_has_participants(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+
+        sqlx::query("UPDATE debate_sessions SET pro_count = 1 WHERE id = $1")
+            .bind(session_id)
+            .execute(&state.pool)
+            .await?;
+
+        let report = state.advance_debate_sessions(100).await?;
+        assert_eq!(report.running, 1);
+        assert_eq!(session_status(&state, session_id).await?, "running");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn advance_debate_sessions_should_move_running_to_judging_then_closed() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+
+        sqlx::query(
+            "UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1",
+        )
+        .bind(session_id)
+        .execute(&state.pool)
+        .await?;
+
+        let report = state.advance_debate_sessions(100).await?;
+        assert_eq!(report.judging, 1);
+        assert_eq!(session_status(&state, session_id).await?, "judging");
+
+        sqlx::query(
+            "UPDATE debate_sessions SET updated_at = NOW() - INTERVAL '45 second' WHERE id = $1",
+        )
+        .bind(session_id)
+        .execute(&state.pool)
+        .await?;
+
+        let report = state.advance_debate_sessions(100).await?;
+        assert_eq!(report.closed, 1);
+        assert_eq!(session_status(&state, session_id).await?, "closed");
         Ok(())
     }
 }

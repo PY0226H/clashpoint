@@ -16,12 +16,15 @@ use handlers::*;
 use middlewares::{verify_chat, verify_file_ticket};
 use openapi::OpenApiRouter;
 use sqlx::PgPool;
-use std::{fmt, ops::Deref, sync::Arc};
-use tokio::fs;
+use std::{fmt, ops::Deref, sync::Arc, time::Duration};
+use tokio::{fs, time::sleep};
 use tower_http::cors::{self, CorsLayer};
+use tracing::{debug, warn};
 
 pub use error::{AppError, ErrorOutput};
-pub(crate) use event_bus::{DebateParticipantJoinedEvent, EventBus};
+pub(crate) use event_bus::{
+    DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent, EventBus,
+};
 pub use models::*;
 
 use axum::{
@@ -142,7 +145,7 @@ impl AppState {
         event_bus
             .maybe_spawn_bootstrap_consumer()
             .context("start bootstrap kafka consumer failed")?;
-        Ok(Self {
+        let state = Self {
             inner: Arc::new(AppStateInner {
                 config,
                 ek,
@@ -150,7 +153,9 @@ impl AppState {
                 pool,
                 event_bus,
             }),
-        })
+        };
+        spawn_debate_session_worker(state.clone());
+        Ok(state)
     }
 
     #[cfg(test)]
@@ -173,6 +178,25 @@ impl AppState {
             }),
         })
     }
+}
+
+const DEBATE_SESSION_WORKER_INTERVAL_SECS: u64 = 2;
+const DEBATE_SESSION_WORKER_BATCH_SIZE: i64 = 200;
+
+fn spawn_debate_session_worker(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = state
+                .advance_debate_sessions(DEBATE_SESSION_WORKER_BATCH_SIZE)
+                .await
+            {
+                warn!("debate session worker tick failed: {}", err);
+            } else {
+                debug!("debate session worker tick success");
+            }
+            sleep(Duration::from_secs(DEBATE_SESSION_WORKER_INTERVAL_SECS)).await;
+        }
+    });
 }
 
 impl fmt::Debug for AppStateInner {
