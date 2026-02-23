@@ -74,8 +74,13 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         ])
         .allow_origin(cors::Any)
         .allow_headers(cors::Any);
+    let debate = Router::new()
+        .route("/topics", get(list_debate_topics_handler))
+        .route("/sessions", get(list_debate_sessions_handler))
+        .route("/sessions/:id/join", post(join_debate_session_handler));
     let protected_api = Router::new()
         .route("/users", get(list_chat_users_handler))
+        .nest("/debate", debate)
         .nest("/chats", chat)
         .route("/upload", post(upload_handler))
         .route("/tickets", post(create_access_tickets_handler))
@@ -171,7 +176,7 @@ impl fmt::Debug for AppStateInner {
 #[cfg(feature = "test-util")]
 mod test_util {
     use super::*;
-    use sqlx::{Executor, PgPool};
+    use sqlx::{Connection, Executor, PgConnection, PgPool};
     use sqlx_db_tester::TestPg;
 
     impl AppState {
@@ -179,9 +184,8 @@ mod test_util {
             let config = AppConfig::load()?;
             let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
             let ek = EncodingKey::load(&config.auth.sk).context("load sk failed")?;
-            let post = config.server.db_url.rfind('/').expect("invalid db_url");
-            let server_url = &config.server.db_url[..post];
-            let (tdb, pool) = get_test_pool(Some(server_url)).await;
+            let maintenance_db_url = to_maintenance_db_url(&config.server.db_url);
+            let (tdb, pool) = get_test_pool(Some(maintenance_db_url.as_str())).await;
             let state = Self {
                 inner: Arc::new(AppStateInner {
                     config,
@@ -195,10 +199,7 @@ mod test_util {
     }
 
     pub async fn get_test_pool(url: Option<&str>) -> (TestPg, PgPool) {
-        let url = match url {
-            Some(url) => url.to_string(),
-            None => "postgres://postgres:postgres@localhost:5432".to_string(),
-        };
+        let url = pick_reachable_maintenance_url(url).await;
         let tdb = TestPg::new(url, std::path::Path::new("../migrations"));
         let pool = tdb.get_pool().await;
 
@@ -214,5 +215,49 @@ mod test_util {
         ts.commit().await.expect("commit transaction failed");
 
         (tdb, pool)
+    }
+
+    async fn pick_reachable_maintenance_url(preferred: Option<&str>) -> String {
+        let mut candidates = Vec::<String>::new();
+        if let Some(url) = preferred {
+            candidates.push(to_maintenance_db_url(url));
+        }
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            candidates.push(to_maintenance_db_url(&url));
+        }
+        candidates.push("postgres://postgres:postgres@localhost:5432/postgres".to_string());
+        if let Ok(user) = std::env::var("USER") {
+            candidates.push(format!("postgres://{user}@localhost:5432/postgres"));
+        }
+        candidates.dedup();
+
+        for candidate in candidates.iter() {
+            if can_connect(candidate).await {
+                return candidate.clone();
+            }
+        }
+
+        panic!(
+            "no reachable postgres maintenance url for tests, tried: {:?}",
+            candidates
+        );
+    }
+
+    async fn can_connect(url: &str) -> bool {
+        match PgConnection::connect(url).await {
+            Ok(conn) => {
+                let _ = conn.close().await;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn to_maintenance_db_url(db_url: &str) -> String {
+        // sqlx-db-tester parses URLs by plain '/' splitting and doesn't support query strings.
+        // For tests we always connect to maintenance DB `postgres` to create/drop ephemeral DBs.
+        let base = db_url.split('?').next().unwrap_or(db_url);
+        let post = base.rfind('/').expect("invalid db_url");
+        format!("{}/postgres", &base[..post])
     }
 }

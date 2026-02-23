@@ -1,5 +1,6 @@
 mod agent;
 mod chat;
+mod debate;
 mod file;
 mod messages;
 mod user;
@@ -7,6 +8,10 @@ mod workspace;
 
 pub use agent::{CreateAgent, UpdateAgent};
 pub use chat::CreateChat;
+pub use debate::{
+    DebateSessionSummary, DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput,
+    ListDebateSessions, ListDebateTopics,
+};
 pub use messages::{CreateMessage, ListMessages};
 use serde::{Deserialize, Serialize};
 pub use user::{CreateUser, SigninUser};

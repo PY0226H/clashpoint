@@ -1,6 +1,8 @@
 use crate::handlers::*;
 use crate::{
-    AppState, CreateChat, CreateMessage, CreateUser, ErrorOutput, ListMessages, SigninUser,
+    AppState, CreateChat, CreateMessage, CreateUser, DebateSessionSummary, DebateTopic,
+    ErrorOutput, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateSessions,
+    ListDebateTopics, ListMessages, SigninUser,
 };
 use axum::Router;
 use chat_core::{AgentType, Chat, ChatAgent, ChatType, ChatUser, Message, User, Workspace};
@@ -22,6 +24,9 @@ pub(crate) trait OpenApiRouter {
             signup_handler,
             signin_handler,
             create_access_tickets_handler,
+            list_debate_topics_handler,
+            list_debate_sessions_handler,
+            join_debate_session_handler,
             list_chat_handler,
             create_chat_handler,
             get_chat_handler,
@@ -35,6 +40,8 @@ pub(crate) trait OpenApiRouter {
         components(
             schemas(
                 User, Chat, ChatType, ChatAgent, AgentType, ChatUser, Message, Workspace,
+                DebateTopic, DebateSessionSummary, ListDebateTopics, ListDebateSessions,
+                JoinDebateSessionInput, JoinDebateSessionOutput,
                 SigninUser, CreateUser, CreateChat, CreateMessage, ListMessages, AuthOutput, AccessTicketsOutput, ErrorOutput
             ),
         ),

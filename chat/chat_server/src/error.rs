@@ -31,6 +31,12 @@ pub enum AppError {
     #[error("create message error: {0}")]
     CreateMessageError(String),
 
+    #[error("debate error: {0}")]
+    DebateError(String),
+
+    #[error("debate conflict: {0}")]
+    DebateConflict(String),
+
     #[error("{0}")]
     ChatFileError(String),
 
@@ -78,6 +84,8 @@ impl IntoResponse for AppError {
             Self::CreateChatError(_) => StatusCode::BAD_REQUEST,
             Self::CreateAgentError(_) => StatusCode::BAD_REQUEST,
             Self::UpdateAgentError(_) => StatusCode::BAD_REQUEST,
+            Self::DebateError(_) => StatusCode::BAD_REQUEST,
+            Self::DebateConflict(_) => StatusCode::CONFLICT,
             Self::NotChatMemberError { .. } => StatusCode::FORBIDDEN,
             Self::NotLoggedIn => StatusCode::UNAUTHORIZED,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
