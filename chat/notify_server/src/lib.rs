@@ -3,6 +3,7 @@ mod error;
 mod middlewares;
 mod notif;
 mod sse;
+mod ws;
 
 use axum::{
     http::Method,
@@ -18,10 +19,13 @@ use sse::sse_handler;
 use std::{ops::Deref, sync::Arc};
 use tokio::sync::broadcast;
 use tower_http::cors::{self, CorsLayer};
+use ws::ws_handler;
 
 pub use config::AppConfig;
 pub use error::AppError;
 pub use notif::AppEvent;
+
+const CHANNEL_CAPACITY: usize = 256;
 
 pub type UserMap = Arc<DashMap<u64, broadcast::Sender<Arc<AppEvent>>>>;
 
@@ -54,6 +58,7 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
 
     let app = Router::new()
         .route("/events", get(sse_handler))
+        .route("/ws", get(ws_handler))
         .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
         .layer(cors)
         .route("/", get(index_handler))
@@ -87,5 +92,15 @@ impl AppState {
         let dk = DecodingKey::load(&config.auth.pk).expect("Failed to load public key");
         let users = Arc::new(DashMap::new());
         Self(Arc::new(AppStateInner { config, dk, users }))
+    }
+
+    pub(crate) fn subscribe_user_events(&self, user_id: u64) -> broadcast::Receiver<Arc<AppEvent>> {
+        if let Some(tx) = self.users.get(&user_id) {
+            tx.subscribe()
+        } else {
+            let (tx, rx) = broadcast::channel(CHANNEL_CAPACITY);
+            self.users.insert(user_id, tx);
+            rx
+        }
     }
 }

@@ -56,3 +56,58 @@ CREATE INDEX IF NOT EXISTS idx_participants_session_side
   ON session_participants(session_id, side);
 CREATE INDEX IF NOT EXISTS idx_participants_user_joined_at
   ON session_participants(user_id, joined_at DESC);
+
+-- realtime notification for debate participant join
+CREATE OR REPLACE FUNCTION add_to_debate_participant()
+  RETURNS TRIGGER
+  AS $$
+DECLARE
+  users bigint[];
+  pro_cnt int;
+  con_cnt int;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT
+      ARRAY_AGG(sp.user_id),
+      COUNT(*) FILTER (WHERE sp.side = 'pro')::int,
+      COUNT(*) FILTER (WHERE sp.side = 'con')::int
+      INTO users, pro_cnt, con_cnt
+    FROM
+      session_participants sp
+    WHERE
+      sp.session_id = NEW.session_id;
+
+    IF users IS NULL THEN
+      users := ARRAY[]::bigint[];
+    END IF;
+
+    PERFORM
+      pg_notify(
+        'debate_participant_joined',
+        json_build_object(
+          'session_id',
+          NEW.session_id,
+          'user_id',
+          NEW.user_id,
+          'side',
+          NEW.side,
+          'pro_count',
+          pro_cnt,
+          'con_count',
+          con_cnt,
+          'user_ids',
+          users
+        )::text
+      );
+  END IF;
+
+  RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS add_to_debate_participant_trigger ON session_participants;
+CREATE TRIGGER add_to_debate_participant_trigger
+  AFTER INSERT ON session_participants
+  FOR EACH ROW
+  EXECUTE FUNCTION add_to_debate_participant();
