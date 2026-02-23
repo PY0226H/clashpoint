@@ -32,6 +32,14 @@ struct AuthToken {
     token: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessTickets {
+    file_token: String,
+    notify_token: String,
+    expires_in_secs: u64,
+}
+
 struct ChatServer {
     addr: SocketAddr,
     token: String,
@@ -47,7 +55,8 @@ async fn chat_server_should_work() -> Result<()> {
     let (tdb, state) = chat_server::AppState::new_for_test().await?;
     let chat_server = ChatServer::new(state).await?;
     let db_url = tdb.url();
-    NotifyServer::new(&db_url, &chat_server.token).await?;
+    let tickets = chat_server.create_access_tickets().await?;
+    NotifyServer::new(&db_url, &tickets.notify_token).await?;
     let chat = chat_server.create_chat().await?;
     let _agent = chat_server.create_agent(chat.id as u64).await?;
     let _msg = chat_server.create_message(chat.id as u64).await?;
@@ -159,6 +168,21 @@ impl ChatServer {
         assert_eq!(chat.r#type, ChatType::PrivateChannel);
 
         Ok(chat)
+    }
+
+    async fn create_access_tickets(&self) -> Result<AccessTickets> {
+        let res = self
+            .client
+            .post(format!("http://{}/api/tickets", self.addr))
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let tickets: AccessTickets = res.json().await?;
+        assert!(tickets.notify_token.len() > 10);
+        assert!(tickets.file_token.len() > 10);
+        assert!(tickets.expires_in_secs > 0);
+        Ok(tickets)
     }
 
     async fn create_agent(&self, chat_id: u64) -> Result<ChatAgent> {

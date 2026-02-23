@@ -92,3 +92,28 @@
 - 验证结果:
 - cd chat && cargo test -p chat-core extract_user_header_only_should_ignore_query_token -- --nocapture -> pass;cd chat && cargo test -p chat-core verify_token_header_only_middleware_should_reject_query_token -- --nocapture -> pass;bash skills/post-module-test-guard/scripts/test_change_guard.sh --changes 'chat/analytics_server/src/lib.rs;chatapp/src/analytics/event.js;chat/chat_core/src/middlewares/auth.rs' -> pass;bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode quick -> blocked by swagger-ui download (no network in this runtime)
 
+## security-ticketed-query-access-v1 | 2026-02-22 23:20:17 -0800
+- 分支: `main`
+- 提交: `7110347`
+- 改动概述:
+- 第三模块完成：为 SSE 与文件下载引入短时 access ticket。后端新增 /api/tickets（仅 Header 登录态可调用）签发 file/notify 两类 audience ticket；chat_server 文件链路改为仅接受 query file ticket；notify_server 事件流改为仅接受 query notify ticket。前端改为先换票再初始化 EventSource 与拼接文件 URL，不再在 URL 上使用长期用户 token。
+- 改动文件:
+- chat/chat_core/src/utils/jwt.rs
+- chat/chat_server/src/handlers/mod.rs
+- chat/chat_server/src/handlers/ticket.rs
+- chat/chat_server/src/lib.rs
+- chat/chat_server/src/middlewares/mod.rs
+- chat/chat_server/src/middlewares/ticket.rs
+- chat/chat_server/src/openapi.rs
+- chat/chat_test/tests/chat.rs
+- chat/notify_server/Cargo.toml
+- chat/notify_server/index.html
+- chat/notify_server/src/lib.rs
+- chat/notify_server/src/middlewares.rs
+- chatapp/src/components/MessageList.vue
+- chatapp/src/store/index.js
+- chatapp/src/utils.js
+- chat/Cargo.lock
+- 验证结果:
+- cd chat && cargo test -p chat-core audience_scoped_ticket_should_work -- --nocapture -> pass;cd chat && cargo test -p chat-server create_access_tickets_should_return_audience_scoped_tickets -- --nocapture -> pass;cd chat && cargo test -p chat-server verify_file_ticket_middleware_should_only_accept_file_ticket_query -- --nocapture -> pass;cd chat && cargo test -p notify-server verify_notify_ticket_middleware_should_only_accept_notify_ticket_query -- --nocapture -> pass;cd chat && cargo test -p chat_test --no-run -> pass;bash skills/post-module-test-guard/scripts/test_change_guard.sh --changes '<module-files>' -> pass;bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode quick -> blocked by utoipa-swagger-ui download (github network in runtime)
+

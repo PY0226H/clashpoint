@@ -8,11 +8,11 @@ mod openapi;
 
 use anyhow::Context;
 use chat_core::{
-    middlewares::{set_layer, verify_token, verify_token_header_only, TokenVerify},
+    middlewares::{set_layer, verify_token_header_only, TokenVerify},
     DecodingKey, EncodingKey, User,
 };
 use handlers::*;
-use middlewares::verify_chat;
+use middlewares::{verify_chat, verify_file_ticket};
 use openapi::OpenApiRouter;
 use sqlx::PgPool;
 use std::{fmt, ops::Deref, sync::Arc};
@@ -78,13 +78,14 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/users", get(list_chat_users_handler))
         .nest("/chats", chat)
         .route("/upload", post(upload_handler))
+        .route("/tickets", post(create_access_tickets_handler))
         .layer(from_fn_with_state(
             state.clone(),
             verify_token_header_only::<AppState>,
         ));
     let file_api = Router::new()
         .route("/files/:ws_id/*path", get(file_handler))
-        .layer(from_fn_with_state(state.clone(), verify_token::<AppState>));
+        .layer(from_fn_with_state(state.clone(), verify_file_ticket));
     let api = Router::new()
         .merge(protected_api)
         .merge(file_api)
@@ -129,6 +130,25 @@ impl AppState {
         let pool = PgPool::connect(&config.server.db_url)
             .await
             .context("connect to db failed")?;
+        Ok(Self {
+            inner: Arc::new(AppStateInner {
+                config,
+                ek,
+                dk,
+                pool,
+            }),
+        })
+    }
+
+    #[cfg(test)]
+    pub fn new_for_unit_test(config: AppConfig) -> Result<Self, AppError> {
+        use sqlx::postgres::PgPoolOptions;
+
+        let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
+        let ek = EncodingKey::load(&config.auth.sk).context("load sk failed")?;
+        let pool = PgPoolOptions::new()
+            .connect_lazy(&config.server.db_url)
+            .context("create lazy db pool failed")?;
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,

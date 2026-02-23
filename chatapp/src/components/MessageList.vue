@@ -78,7 +78,8 @@ export default {
       }
     },
     getFileUrl(file) {
-      return `${getUrlBase()}${file}?token=${this.$store.state.token}`;
+      const fileToken = this.$store.state.accessTickets?.fileToken || '';
+      return `${getUrlBase()}${file}?token=${fileToken}`;
     },
     toggleImage(messageId) {
       this.enlargedImage[messageId] = !this.enlargedImage[messageId];

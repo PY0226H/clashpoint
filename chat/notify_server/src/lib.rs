@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod middlewares;
 mod notif;
 mod sse;
 
@@ -10,11 +11,9 @@ use axum::{
     routing::get,
     Router,
 };
-use chat_core::{
-    middlewares::{verify_token, TokenVerify},
-    DecodingKey, User,
-};
+use chat_core::{middlewares::TokenVerify, DecodingKey, User};
 use dashmap::DashMap;
+use middlewares::verify_notify_ticket;
 use sse::sse_handler;
 use std::{ops::Deref, sync::Arc};
 use tokio::sync::broadcast;
@@ -55,7 +54,7 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
 
     let app = Router::new()
         .route("/events", get(sse_handler))
-        .layer(from_fn_with_state(state.clone(), verify_token::<AppState>))
+        .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
         .layer(cors)
         .route("/", get(index_handler))
         .with_state(state);

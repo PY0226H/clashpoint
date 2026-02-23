@@ -21,6 +21,7 @@ pub(crate) trait OpenApiRouter {
         paths(
             signup_handler,
             signin_handler,
+            create_access_tickets_handler,
             list_chat_handler,
             create_chat_handler,
             get_chat_handler,
@@ -34,7 +35,7 @@ pub(crate) trait OpenApiRouter {
         components(
             schemas(
                 User, Chat, ChatType, ChatAgent, AgentType, ChatUser, Message, Workspace,
-                SigninUser, CreateUser, CreateChat, CreateMessage, ListMessages, AuthOutput, ErrorOutput
+                SigninUser, CreateUser, CreateChat, CreateMessage, ListMessages, AuthOutput, AccessTicketsOutput, ErrorOutput
             ),
         ),
         modifiers(&SecurityAddon),

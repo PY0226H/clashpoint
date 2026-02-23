@@ -29,9 +29,9 @@ const getSseBase = () => {
   return SSE_URL;
 }
 
-const initSSE = (store) => {
+const initSSE = (store, notifyTicket) => {
   let sse_base = getSseBase();
-  let url = `${sse_base}?token=${store.state.token}`;
+  let url = `${sse_base}?token=${notifyTicket}`;
   const sse = new EventSource(url);
 
   sse.addEventListener("NewMessage", (e) => {

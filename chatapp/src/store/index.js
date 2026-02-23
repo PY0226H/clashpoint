@@ -42,6 +42,7 @@ export default createStore({
     users: {},          // Users hashmap under workspace, keyed by user ID
     activeChannel: null,
     sse: null,
+    accessTickets: null,
   },
   mutations: {
     setSSE(state, sse) {
@@ -52,6 +53,9 @@ export default createStore({
     },
     setToken(state, token) {
       state.token = token;
+    },
+    setAccessTickets(state, tickets) {
+      state.accessTickets = tickets;
     },
     setWorkspace(state, workspace) {
       state.workspace = workspace;
@@ -128,11 +132,20 @@ export default createStore({
     },
   },
   actions: {
-    initSSE({ state, commit }) {
+    async initSSE({ state, commit, dispatch }) {
+      if (!state.token) {
+        return;
+      }
+      await dispatch('refreshAccessTickets');
       if (state.sse) {
         state.sse.close();
       }
-      const sse = initSSE(this);
+      const notifyToken = state.accessTickets?.notifyToken;
+      if (!notifyToken) {
+        console.warn('notify ticket is missing, skip SSE init');
+        return;
+      }
+      const sse = initSSE(this, notifyToken);
       commit('setSSE', sse);
     },
     closeSSE({ state, commit }) {
@@ -182,6 +195,7 @@ export default createStore({
 
       commit('setUser', null);
       commit('setToken', null);
+      commit('setAccessTickets', null);
       commit('setWorkspace', '');
       commit('setChannels', []);
 
@@ -203,6 +217,7 @@ export default createStore({
     async fetchMessagesForChannel({ state, commit }, channelId) {
       if (!state.messages[channelId] || state.messages[channelId].length === 0) {
         try {
+          await this.dispatch('refreshAccessTickets');
           const response = await network(this, 'get', `/chats/${channelId}/messages`, null, {
             Authorization: `Bearer ${state.token}`,
           });
@@ -215,6 +230,7 @@ export default createStore({
     },
     async uploadFiles({ state, commit }, files) {
       try {
+        await this.dispatch('refreshAccessTickets');
         const formData = new FormData();
         files.forEach(file => {
           formData.append(`files`, file);
@@ -227,7 +243,7 @@ export default createStore({
 
         const uploadedFiles = response.data.map(path => ({
           path,
-          fullUrl: `${getUrlBase()}${path}?token=${state.token}`
+          fullUrl: `${getUrlBase()}${path}?token=${state.accessTickets?.fileToken || ''}`
         }));
 
         return uploadedFiles;
@@ -286,6 +302,30 @@ export default createStore({
     },
     async navigation({ state }, { from, to }) {
       await sendNavigationEvent(state.context, state.token, from, to);
+    },
+    async refreshAccessTickets({ state, commit }) {
+      if (!state.token) {
+        commit('setAccessTickets', null);
+        return null;
+      }
+      const now = Date.now();
+      const expireAt = state.accessTickets?.expireAt || 0;
+      if (expireAt > now + 30_000) {
+        return state.accessTickets;
+      }
+
+      const response = await network(this, 'post', '/tickets', null, {
+        Authorization: `Bearer ${state.token}`,
+      });
+      const data = response.data;
+      const tickets = {
+        fileToken: data.fileToken,
+        notifyToken: data.notifyToken,
+        expiresInSecs: data.expiresInSecs,
+        expireAt: now + data.expiresInSecs * 1000,
+      };
+      commit('setAccessTickets', tickets);
+      return tickets;
     },
   },
   getters: {

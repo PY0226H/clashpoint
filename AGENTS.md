@@ -6,6 +6,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 - skill-installer: Install Codex skills into `$CODEX_HOME/skills` from a curated list or a GitHub repo path. Use when users ask to list installable skills, install a curated skill, or install a skill from another repo (including private repos). (file: /Users/panyihang/.codex/skills/.system/skill-installer/SKILL.md)
 - post-module-test-guard: Generate or update tests for changed module behavior and run repository quality gates after implementation. Use when a turn includes module-level code changes and you must ensure tests are present and passing before considering the module complete. (file: /Users/panyihang/Documents/aicomm/skills/post-module-test-guard/SKILL.md)
 - post-module-interview-journal: Generate interview-ready development records after each module implementation. Use when a turn includes feature/module code changes and you need to update development log, troubleshooting log, and interview Q&A materials. (file: /Users/panyihang/Documents/aicomm/skills/post-module-interview-journal/SKILL.md)
+- post-module-explanation-journal: Generate deep Chinese explanation documents for newly added or modified module code and write a new file under `docs/explanation` after each module change. Use when a turn includes module-level implementation/refactor/fix and explanation assets must be updated for learning/interview review. (file: /Users/panyihang/Documents/aicomm/skills/post-module-explanation-journal/SKILL.md)
 
 ### How to use skills
 - Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
@@ -28,6 +29,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 ### Mandatory post-module hook
 - For any turn that includes module-level code implementation/refactor/fix in this repository, run `post-module-test-guard` after coding and before final verification sign-off.
 - Then run `post-module-interview-journal` before the final user response.
+- Then run `post-module-explanation-journal` before the final user response.
 - The testing hook must:
   - check whether test changes are missing for production/module code changes
   - generate or update tests when needed
@@ -36,3 +38,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
   - `docs/interview/01-development-log.md`
   - `docs/interview/02-troubleshooting-log.md`
   - `docs/interview/03-interview-qa-log.md`
+- The explanation journal hook must:
+  - follow `docs/explanation/00-讲解规范.md`
+  - create a new markdown file under `docs/explanation/`
+  - explain only new/modified code paths with architecture, execution flow, tradeoffs, and testing evidence

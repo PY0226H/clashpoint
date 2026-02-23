@@ -129,3 +129,23 @@
 - 前端上报通道安全化
 - 测试守门规则工程化
 
+## security-ticketed-query-access-v1 | 2026-02-22 23:20:17 -0800
+### 面试叙事（STAR）
+- Situation（背景）: 该模块在正确性/安全性/产品可用性方面需要提升。
+- Task（任务）: 在不引入回归的前提下完成模块改造，并保证上线风险可控。
+- Action（行动）: 第三模块完成：为 SSE 与文件下载引入短时 access ticket。后端新增 /api/tickets（仅 Header 登录态可调用）签发 file/notify 两类 audience ticket；chat_server 文件链路改为仅接受 query file ticket；notify_server 事件流改为仅接受 query notify ticket。前端改为先换票再初始化 EventSource 与拼接文件 URL，不再在 URL 上使用长期用户 token。
+- Result（结果）: 已通过列出的验证，并沉淀了关键取舍与风险控制点。
+
+### 高频面试问题
+- 为什么采用这个方案，而不是其他替代方案？
+- 实现过程中遇到过哪些失败/故障，如何定位并修复？
+- 如何证明这次改动没有引入回归？
+- 如果流量增长 10 倍，最先优化哪一层，为什么？
+
+### 面试知识点
+- JWT audience 隔离设计
+- 短时 access ticket 模式
+- SSE/EventSource 鉴权约束与替代方案
+- Axum query-only 中间件实现
+- 前后端票据刷新协同
+
