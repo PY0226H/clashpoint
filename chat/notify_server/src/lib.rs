@@ -19,7 +19,7 @@ use sse::sse_handler;
 use std::{ops::Deref, sync::Arc};
 use tokio::sync::broadcast;
 use tower_http::cors::{self, CorsLayer};
-use ws::ws_handler;
+use ws::{debate_room_ws_handler, ws_handler};
 
 pub use config::AppConfig;
 pub use error::AppError;
@@ -59,6 +59,7 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
     let app = Router::new()
         .route("/events", get(sse_handler))
         .route("/ws", get(ws_handler))
+        .route("/ws/debate/:session_id", get(debate_room_ws_handler))
         .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
         .layer(cors)
         .route("/", get(index_handler))

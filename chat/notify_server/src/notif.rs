@@ -15,6 +15,7 @@ pub enum AppEvent {
     RemoveFromChat(Chat),
     NewMessage(Message),
     DebateParticipantJoined(DebateParticipantJoined),
+    DebateSessionStatusChanged(DebateSessionStatusChanged),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,14 @@ pub struct DebateParticipantJoined {
     pub side: String,
     pub pro_count: i64,
     pub con_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateSessionStatusChanged {
+    pub session_id: i64,
+    pub from_status: String,
+    pub to_status: String,
 }
 
 #[derive(Debug)]
@@ -59,11 +68,20 @@ struct DebateParticipantJoinedPayload {
     user_ids: Vec<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct DebateSessionStatusChangedPayload {
+    session_id: i64,
+    from_status: String,
+    to_status: String,
+    user_ids: Vec<i64>,
+}
+
 pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     let mut listener = PgListener::connect(&state.config.server.db_url).await?;
     listener.listen("chat_updated").await?;
     listener.listen("chat_message_created").await?;
     listener.listen("debate_participant_joined").await?;
+    listener.listen("debate_session_status_changed").await?;
 
     let mut stream = listener.into_stream();
 
@@ -129,6 +147,19 @@ impl Notification {
                     event: Arc::new(AppEvent::DebateParticipantJoined(event)),
                 })
             }
+            "debate_session_status_changed" => {
+                let payload: DebateSessionStatusChangedPayload = serde_json::from_str(payload)?;
+                let event = DebateSessionStatusChanged {
+                    session_id: payload.session_id,
+                    from_status: payload.from_status,
+                    to_status: payload.to_status,
+                };
+                let user_ids = payload.user_ids.iter().map(|v| *v as u64).collect();
+                Ok(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateSessionStatusChanged(event)),
+                })
+            }
             _ => Err(anyhow::anyhow!("Invalid notification type")),
         }
     }
@@ -142,6 +173,15 @@ impl AppEvent {
             AppEvent::RemoveFromChat(_) => "RemoveFromChat",
             AppEvent::NewMessage(_) => "NewMessage",
             AppEvent::DebateParticipantJoined(_) => "DebateParticipantJoined",
+            AppEvent::DebateSessionStatusChanged(_) => "DebateSessionStatusChanged",
+        }
+    }
+
+    pub fn debate_session_id(&self) -> Option<i64> {
+        match self {
+            AppEvent::DebateParticipantJoined(v) => Some(v.session_id),
+            AppEvent::DebateSessionStatusChanged(v) => Some(v.session_id),
+            _ => None,
         }
     }
 }
@@ -189,6 +229,26 @@ mod tests {
                 assert_eq!(v.con_count, 2);
             }
             _ => panic!("expected DebateParticipantJoined event"),
+        }
+    }
+
+    #[test]
+    fn notification_load_should_parse_debate_session_status_changed() {
+        let payload = r#"{
+            "session_id": 15,
+            "from_status": "running",
+            "to_status": "judging",
+            "user_ids": [7, 8, 9]
+        }"#;
+        let notif = Notification::load("debate_session_status_changed", payload).unwrap();
+        assert_eq!(notif.user_ids, HashSet::from([7_u64, 8_u64, 9_u64]));
+        match notif.event.as_ref() {
+            AppEvent::DebateSessionStatusChanged(v) => {
+                assert_eq!(v.session_id, 15);
+                assert_eq!(v.from_status, "running");
+                assert_eq!(v.to_status, "judging");
+            }
+            _ => panic!("expected DebateSessionStatusChanged event"),
         }
     }
 }

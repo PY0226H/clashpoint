@@ -111,3 +111,49 @@ CREATE TRIGGER add_to_debate_participant_trigger
   AFTER INSERT ON session_participants
   FOR EACH ROW
   EXECUTE FUNCTION add_to_debate_participant();
+
+-- realtime notification for debate session status transition
+CREATE OR REPLACE FUNCTION add_to_debate_session_status_change()
+  RETURNS TRIGGER
+  AS $$
+DECLARE
+  users bigint[];
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    SELECT
+      ARRAY_AGG(sp.user_id) INTO users
+    FROM
+      session_participants sp
+    WHERE
+      sp.session_id = NEW.id;
+
+    IF users IS NULL THEN
+      users := ARRAY[]::bigint[];
+    END IF;
+
+    PERFORM
+      pg_notify(
+        'debate_session_status_changed',
+        json_build_object(
+          'session_id',
+          NEW.id,
+          'from_status',
+          OLD.status,
+          'to_status',
+          NEW.status,
+          'user_ids',
+          users
+        )::text
+      );
+  END IF;
+
+  RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS add_to_debate_session_status_change_trigger ON debate_sessions;
+CREATE TRIGGER add_to_debate_session_status_change_trigger
+  AFTER UPDATE ON debate_sessions
+  FOR EACH ROW
+  EXECUTE FUNCTION add_to_debate_session_status_change();
