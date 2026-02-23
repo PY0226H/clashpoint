@@ -29,10 +29,21 @@ const getSseBase = () => {
   return SSE_URL;
 }
 
-const initSSE = (store, notifyTicket) => {
+const initSSE = (store, notifyTicket, handlers = {}) => {
+  const {
+    onOpen = null,
+    onError = null,
+  } = handlers;
   let sse_base = getSseBase();
   let url = `${sse_base}?token=${notifyTicket}`;
   const sse = new EventSource(url);
+
+  sse.onopen = (event) => {
+    console.log('EventSource connected');
+    if (onOpen) {
+      onOpen(event);
+    }
+  };
 
   sse.addEventListener("NewMessage", (e) => {
     let data = JSON.parse(e.data);
@@ -50,6 +61,9 @@ const initSSE = (store, notifyTicket) => {
   sse.onerror = (error) => {
     console.error('EventSource failed:', error);
     sse.close();
+    if (onError) {
+      onError(error);
+    }
   };
 
   return sse;

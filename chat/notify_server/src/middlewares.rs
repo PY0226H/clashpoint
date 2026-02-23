@@ -105,4 +105,22 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn verify_notify_ticket_middleware_should_return_401_when_missing_query_token(
+    ) -> Result<()> {
+        let state = test_state()?;
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                verify_notify_ticket,
+            ))
+            .with_state(state);
+
+        let req = Request::builder().uri("/").body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
 }

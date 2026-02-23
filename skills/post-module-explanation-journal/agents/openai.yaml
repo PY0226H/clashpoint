@@ -1,0 +1,4 @@
+interface:
+  display_name: "Post Module Explanation Journal"
+  short_description: "Generate deep Chinese explanation docs after code changes."
+  default_prompt: "Use $post-module-explanation-journal to generate a deep Chinese explanation document for changed module code and write it to docs/explanation."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Post Module Interview Journal"
+  short_description: "Generate interview-ready dev logs after each module change."
+  default_prompt: "After each module implementation, update development, troubleshooting, and interview preparation docs with concrete details from the changes."

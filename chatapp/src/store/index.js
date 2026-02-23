@@ -43,6 +43,8 @@ export default createStore({
     activeChannel: null,
     sse: null,
     accessTickets: null,
+    sseReconnectAttempts: 0,
+    sseReconnectTimer: null,
   },
   mutations: {
     setSSE(state, sse) {
@@ -56,6 +58,12 @@ export default createStore({
     },
     setAccessTickets(state, tickets) {
       state.accessTickets = tickets;
+    },
+    setSSEReconnectAttempts(state, attempts) {
+      state.sseReconnectAttempts = attempts;
+    },
+    setSSEReconnectTimer(state, timerId) {
+      state.sseReconnectTimer = timerId;
     },
     setWorkspace(state, workspace) {
       state.workspace = workspace;
@@ -136,6 +144,10 @@ export default createStore({
       if (!state.token) {
         return;
       }
+      if (state.sseReconnectTimer) {
+        clearTimeout(state.sseReconnectTimer);
+        commit('setSSEReconnectTimer', null);
+      }
       await dispatch('refreshAccessTickets');
       if (state.sse) {
         state.sse.close();
@@ -145,7 +157,14 @@ export default createStore({
         console.warn('notify ticket is missing, skip SSE init');
         return;
       }
-      const sse = initSSE(this, notifyToken);
+      const sse = initSSE(this, notifyToken, {
+        onOpen: () => {
+          commit('setSSEReconnectAttempts', 0);
+        },
+        onError: () => {
+          dispatch('scheduleSSEReconnect');
+        },
+      });
       commit('setSSE', sse);
     },
     closeSSE({ state, commit }) {
@@ -153,6 +172,11 @@ export default createStore({
         state.sse.close();
         commit('setSSE', null);
       }
+      if (state.sseReconnectTimer) {
+        clearTimeout(state.sseReconnectTimer);
+        commit('setSSEReconnectTimer', null);
+      }
+      commit('setSSEReconnectAttempts', 0);
     },
     async signup({ commit }, { email, fullname, password, workspace }) {
       try {
@@ -326,6 +350,32 @@ export default createStore({
       };
       commit('setAccessTickets', tickets);
       return tickets;
+    },
+    scheduleSSEReconnect({ state, commit, dispatch }) {
+      if (!state.token) {
+        return;
+      }
+      if (state.sseReconnectTimer) {
+        return;
+      }
+      const attempts = state.sseReconnectAttempts + 1;
+      commit('setSSEReconnectAttempts', attempts);
+      const baseDelay = Math.min(30000, 1000 * Math.pow(2, Math.max(0, attempts - 1)));
+      const jitter = Math.floor(Math.random() * 300);
+      const delay = baseDelay + jitter;
+      const timerId = setTimeout(async () => {
+        commit('setSSEReconnectTimer', null);
+        if (!state.token) {
+          return;
+        }
+        try {
+          await dispatch('initSSE');
+        } catch (error) {
+          console.error('SSE reconnect failed:', error);
+          dispatch('scheduleSSEReconnect');
+        }
+      }, delay);
+      commit('setSSEReconnectTimer', timerId);
     },
   },
   getters: {
