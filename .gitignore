@@ -33,6 +33,13 @@ dist/
 .cache/
 **/.cache/
 
+# python artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+**/.venv/
+
 # test reports / coverage artifacts
 coverage/
 **/coverage/
