@@ -11,7 +11,7 @@ impl ChatFile {
         let hash = Sha1::digest(data);
         Self {
             ws_id,
-            ext: filename.split('.').last().unwrap_or("txt").to_string(),
+            ext: filename.rsplit('.').next().unwrap_or("txt").to_string(),
             hash: hex::encode(hash),
         }
     }

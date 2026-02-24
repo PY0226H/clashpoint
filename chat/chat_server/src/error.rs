@@ -37,6 +37,12 @@ pub enum AppError {
     #[error("debate conflict: {0}")]
     DebateConflict(String),
 
+    #[error("payment error: {0}")]
+    PaymentError(String),
+
+    #[error("payment conflict: {0}")]
+    PaymentConflict(String),
+
     #[error("{0}")]
     ChatFileError(String),
 
@@ -86,6 +92,8 @@ impl IntoResponse for AppError {
             Self::UpdateAgentError(_) => StatusCode::BAD_REQUEST,
             Self::DebateError(_) => StatusCode::BAD_REQUEST,
             Self::DebateConflict(_) => StatusCode::CONFLICT,
+            Self::PaymentError(_) => StatusCode::BAD_REQUEST,
+            Self::PaymentConflict(_) => StatusCode::CONFLICT,
             Self::NotChatMemberError { .. } => StatusCode::FORBIDDEN,
             Self::NotLoggedIn => StatusCode::UNAUTHORIZED,
             Self::NotFound(_) => StatusCode::NOT_FOUND,

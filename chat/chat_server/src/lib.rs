@@ -84,9 +84,15 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/topics", get(list_debate_topics_handler))
         .route("/sessions", get(list_debate_sessions_handler))
         .route("/sessions/:id/join", post(join_debate_session_handler));
+    let pay = Router::new()
+        .route("/iap/products", get(list_iap_products_handler))
+        .route("/iap/verify", post(verify_iap_order_handler))
+        .route("/wallet", get(get_wallet_balance_handler))
+        .route("/wallet/ledger", get(list_wallet_ledger_handler));
     let protected_api = Router::new()
         .route("/users", get(list_chat_users_handler))
         .nest("/debate", debate)
+        .nest("/pay", pay)
         .nest("/chats", chat)
         .route("/upload", post(upload_handler))
         .route("/tickets", post(create_access_tickets_handler))

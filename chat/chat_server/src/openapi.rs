@@ -1,8 +1,9 @@
 use crate::handlers::*;
 use crate::{
     AppState, CreateChat, CreateMessage, CreateUser, DebateSessionSummary, DebateTopic,
-    ErrorOutput, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateSessions,
-    ListDebateTopics, ListMessages, SigninUser,
+    ErrorOutput, IapProduct, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateSessions,
+    ListDebateTopics, ListIapProducts, ListMessages, ListWalletLedger, SigninUser,
+    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
 };
 use axum::Router;
 use chat_core::{AgentType, Chat, ChatAgent, ChatType, ChatUser, Message, User, Workspace};
@@ -27,6 +28,10 @@ pub(crate) trait OpenApiRouter {
             list_debate_topics_handler,
             list_debate_sessions_handler,
             join_debate_session_handler,
+            list_iap_products_handler,
+            verify_iap_order_handler,
+            get_wallet_balance_handler,
+            list_wallet_ledger_handler,
             list_chat_handler,
             create_chat_handler,
             get_chat_handler,
@@ -42,6 +47,8 @@ pub(crate) trait OpenApiRouter {
                 User, Chat, ChatType, ChatAgent, AgentType, ChatUser, Message, Workspace,
                 DebateTopic, DebateSessionSummary, ListDebateTopics, ListDebateSessions,
                 JoinDebateSessionInput, JoinDebateSessionOutput,
+                IapProduct, ListIapProducts, VerifyIapOrderInput, VerifyIapOrderOutput,
+                WalletBalanceOutput, ListWalletLedger, WalletLedgerItem,
                 SigninUser, CreateUser, CreateChat, CreateMessage, ListMessages, AuthOutput, AccessTicketsOutput, ErrorOutput
             ),
         ),

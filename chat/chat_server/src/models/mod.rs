@@ -3,6 +3,7 @@ mod chat;
 mod debate;
 mod file;
 mod messages;
+mod payment;
 mod user;
 mod workspace;
 
@@ -13,6 +14,10 @@ pub use debate::{
     ListDebateSessions, ListDebateTopics,
 };
 pub use messages::{CreateMessage, ListMessages};
+pub use payment::{
+    IapProduct, ListIapProducts, ListWalletLedger, VerifyIapOrderInput, VerifyIapOrderOutput,
+    WalletBalanceOutput, WalletLedgerItem,
+};
 use serde::{Deserialize, Serialize};
 pub use user::{CreateUser, SigninUser};
 

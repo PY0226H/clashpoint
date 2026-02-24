@@ -95,7 +95,7 @@ fn default_true() -> bool {
 }
 
 fn normalize_limit(limit: Option<u64>) -> i64 {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).max(1).min(MAX_LIMIT);
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     limit as i64
 }
 

@@ -73,7 +73,7 @@ async fn websocket_loop(
                                 continue;
                             }
                         };
-                        if socket.send(Message::Text(payload.into())).await.is_err() {
+                        if socket.send(Message::Text(payload)).await.is_err() {
                             break;
                         }
                     }
@@ -189,7 +189,7 @@ async fn send_room_message(socket: &mut WebSocket, msg: &RoomServerMessage) -> b
         Ok(v) => v,
         Err(_) => return false,
     };
-    socket.send(Message::Text(payload.into())).await.is_ok()
+    socket.send(Message::Text(payload)).await.is_ok()
 }
 
 #[cfg(test)]
