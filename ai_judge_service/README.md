@@ -28,6 +28,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8787
 - `CHAT_SERVER_FAILED_PATH_TEMPLATE`: 默认 `/api/internal/ai/judge/jobs/{job_id}/failed`
 - `CALLBACK_TIMEOUT_SECONDS`: 回调超时，默认 `8`
 - `JUDGE_PROCESS_DELAY_MS`: 模拟处理耗时，默认 `0`
+- `JUDGE_STYLE_MODE`: 系统级文风开关，`rational|entertaining|mixed`，默认 `rational`
 
 ## 运行测试
 

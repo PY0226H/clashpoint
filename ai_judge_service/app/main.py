@@ -17,6 +17,7 @@ class Settings:
     failed_path_template: str
     callback_timeout_secs: float
     process_delay_ms: int
+    judge_style_mode: str
 
 
 def _load_settings() -> Settings:
@@ -33,6 +34,7 @@ def _load_settings() -> Settings:
         ),
         callback_timeout_secs=float(os.getenv("CALLBACK_TIMEOUT_SECONDS", "8")),
         process_delay_ms=int(os.getenv("JUDGE_PROCESS_DELAY_MS", "0")),
+        judge_style_mode=os.getenv("JUDGE_STYLE_MODE", "rational"),
     )
 
 
@@ -96,7 +98,7 @@ async def dispatch_judge_job(
         await _callback_failed(request.job.job_id, "empty debate messages, cannot judge")
         return {"accepted": True, "jobId": request.job.job_id, "status": "marked_failed"}
 
-    report = build_report(request)
+    report = build_report(request, system_style_mode=SETTINGS.judge_style_mode)
     try:
         await _callback_report(request.job.job_id, report.model_dump(mode="json"))
     except Exception as err:  # pragma: no cover
