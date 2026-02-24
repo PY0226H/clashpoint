@@ -50,6 +50,8 @@ pub struct KafkaConfig {
 pub struct AiJudgeConfig {
     #[serde(default = "default_ai_judge_internal_key")]
     pub internal_key: String,
+    #[serde(default = "default_ai_judge_style_mode")]
+    pub style_mode: String,
     #[serde(default)]
     pub dispatch_enabled: bool,
     #[serde(default = "default_ai_judge_service_base_url")]
@@ -74,6 +76,7 @@ impl Default for AiJudgeConfig {
     fn default() -> Self {
         Self {
             internal_key: default_ai_judge_internal_key(),
+            style_mode: default_ai_judge_style_mode(),
             dispatch_enabled: false,
             service_base_url: default_ai_judge_service_base_url(),
             dispatch_path: default_ai_judge_dispatch_path(),
@@ -124,6 +127,10 @@ fn default_kafka_timeout_ms() -> u64 {
 
 fn default_ai_judge_internal_key() -> String {
     "dev-ai-internal-key".to_string()
+}
+
+fn default_ai_judge_style_mode() -> String {
+    "rational".to_string()
 }
 
 fn default_ai_judge_service_base_url() -> String {

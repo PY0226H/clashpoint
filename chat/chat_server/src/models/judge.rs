@@ -406,7 +406,17 @@ impl AppState {
         user: &User,
         input: RequestJudgeJobInput,
     ) -> Result<RequestJudgeJobOutput, AppError> {
-        let style_mode = normalize_style_mode(input.style_mode)?;
+        let configured_style_mode = self.config.ai_judge.style_mode.clone();
+        let style_mode = match normalize_style_mode(Some(configured_style_mode.clone())) {
+            Ok(mode) => mode,
+            Err(_) => {
+                warn!(
+                    configured_style_mode,
+                    "invalid ai_judge.style_mode config, fallback to rational"
+                );
+                STYLE_RATIONAL.to_string()
+            }
+        };
         let mut tx = self.pool.begin().await?;
 
         let Some(session): Option<DebateSessionForJudge> = sqlx::query_as(
@@ -1368,6 +1378,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use chrono::Duration;
+    use std::sync::Arc;
 
     async fn seed_topic_and_session(state: &AppState, ws_id: i64, status: &str) -> Result<i64> {
         let topic_id: (i64,) = sqlx::query_as(
@@ -1490,6 +1501,58 @@ mod tests {
         assert!(first.newly_created);
         assert!(!second.newly_created);
         assert_eq!(first.job_id, second.job_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_judge_job_should_use_system_style_mode_instead_of_request_value() -> Result<()>
+    {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.style_mode = "entertaining".to_string();
+
+        let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+        join_user_to_session(&state, session_id, 1).await?;
+        let user = state.find_user_by_id(1).await?.expect("user should exist");
+
+        let ret = state
+            .request_judge_job(
+                session_id as u64,
+                &user,
+                RequestJudgeJobInput {
+                    style_mode: Some("mixed".to_string()),
+                    allow_rejudge: false,
+                },
+            )
+            .await?;
+
+        assert_eq!(ret.style_mode, "entertaining");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_judge_job_should_fallback_to_rational_when_system_style_invalid() -> Result<()>
+    {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.style_mode = "invalid-style".to_string();
+
+        let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+        join_user_to_session(&state, session_id, 1).await?;
+        let user = state.find_user_by_id(1).await?.expect("user should exist");
+
+        let ret = state
+            .request_judge_job(
+                session_id as u64,
+                &user,
+                RequestJudgeJobInput {
+                    style_mode: Some("mixed".to_string()),
+                    allow_rejudge: false,
+                },
+            )
+            .await?;
+
+        assert_eq!(ret.style_mode, "rational");
         Ok(())
     }
 
