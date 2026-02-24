@@ -679,6 +679,11 @@ impl AppState {
         let Some((status, resolution)) = decision else {
             return Ok(vote);
         };
+        let vote = if resolution == "open_rematch" && vote.rematch_session_id.is_none() {
+            Self::ensure_rematch_session_for_vote(tx, vote).await?
+        } else {
+            vote
+        };
         let updated: DrawVoteRow = sqlx::query_as(
             r#"
             UPDATE judge_draw_votes
@@ -698,10 +703,6 @@ impl AppState {
         .bind(Some(now))
         .fetch_one(&mut **tx)
         .await?;
-        if updated.resolution == "open_rematch" {
-            let with_rematch = Self::ensure_rematch_session_for_vote(tx, updated).await?;
-            return Ok(with_rematch);
-        }
         Ok(updated)
     }
 

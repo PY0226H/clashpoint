@@ -20,6 +20,7 @@ pub enum AppEvent {
     DebateMessageCreated(DebateMessageCreated),
     DebateMessagePinned(DebateMessagePinned),
     DebateJudgeReportReady(DebateJudgeReportReady),
+    DebateDrawVoteResolved(DebateDrawVoteResolved),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +74,22 @@ pub struct DebateJudgeReportReady {
     pub pro_score: i32,
     pub con_score: i32,
     pub needs_draw_vote: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateDrawVoteResolved {
+    pub vote_id: i64,
+    pub session_id: i64,
+    pub report_id: i64,
+    pub status: String,
+    pub resolution: String,
+    pub participated_voters: i32,
+    pub agree_votes: i32,
+    pub disagree_votes: i32,
+    pub required_voters: i32,
+    pub decided_at: Option<DateTime<Utc>>,
+    pub rematch_session_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -150,6 +167,22 @@ struct DebateJudgeReportReadyPayload {
     user_ids: Vec<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct DebateDrawVoteResolvedPayload {
+    vote_id: i64,
+    session_id: i64,
+    report_id: i64,
+    status: String,
+    resolution: String,
+    participated_voters: i32,
+    agree_votes: i32,
+    disagree_votes: i32,
+    required_voters: i32,
+    decided_at: Option<DateTime<Utc>>,
+    rematch_session_id: Option<i64>,
+    user_ids: Vec<i64>,
+}
+
 pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     let mut listener = PgListener::connect(&state.config.server.db_url).await?;
     listener.listen("chat_updated").await?;
@@ -159,6 +192,7 @@ pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     listener.listen("debate_message_created").await?;
     listener.listen("debate_message_pinned").await?;
     listener.listen("debate_judge_report_ready").await?;
+    listener.listen("debate_draw_vote_resolved").await?;
 
     let mut stream = listener.into_stream();
 
@@ -287,6 +321,27 @@ impl Notification {
                     event: Arc::new(AppEvent::DebateJudgeReportReady(event)),
                 })
             }
+            "debate_draw_vote_resolved" => {
+                let payload: DebateDrawVoteResolvedPayload = serde_json::from_str(payload)?;
+                let event = DebateDrawVoteResolved {
+                    vote_id: payload.vote_id,
+                    session_id: payload.session_id,
+                    report_id: payload.report_id,
+                    status: payload.status,
+                    resolution: payload.resolution,
+                    participated_voters: payload.participated_voters,
+                    agree_votes: payload.agree_votes,
+                    disagree_votes: payload.disagree_votes,
+                    required_voters: payload.required_voters,
+                    decided_at: payload.decided_at,
+                    rematch_session_id: payload.rematch_session_id,
+                };
+                let user_ids = payload.user_ids.iter().map(|v| *v as u64).collect();
+                Ok(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateDrawVoteResolved(event)),
+                })
+            }
             _ => Err(anyhow::anyhow!("Invalid notification type")),
         }
     }
@@ -304,6 +359,7 @@ impl AppEvent {
             AppEvent::DebateMessageCreated(_) => "DebateMessageCreated",
             AppEvent::DebateMessagePinned(_) => "DebateMessagePinned",
             AppEvent::DebateJudgeReportReady(_) => "DebateJudgeReportReady",
+            AppEvent::DebateDrawVoteResolved(_) => "DebateDrawVoteResolved",
         }
     }
 
@@ -314,6 +370,7 @@ impl AppEvent {
             AppEvent::DebateMessageCreated(v) => Some(v.session_id),
             AppEvent::DebateMessagePinned(v) => Some(v.session_id),
             AppEvent::DebateJudgeReportReady(v) => Some(v.session_id),
+            AppEvent::DebateDrawVoteResolved(v) => Some(v.session_id),
             _ => None,
         }
     }
@@ -457,6 +514,40 @@ mod tests {
                 assert!(!v.needs_draw_vote);
             }
             _ => panic!("expected DebateJudgeReportReady event"),
+        }
+    }
+
+    #[test]
+    fn notification_load_should_parse_debate_draw_vote_resolved() {
+        let payload = r#"{
+            "vote_id": 41,
+            "session_id": 15,
+            "report_id": 31,
+            "status": "decided",
+            "resolution": "open_rematch",
+            "participated_voters": 7,
+            "agree_votes": 2,
+            "disagree_votes": 5,
+            "required_voters": 7,
+            "decided_at": "2026-02-24T10:00:00Z",
+            "rematch_session_id": 88,
+            "user_ids": [7, 8, 9]
+        }"#;
+        let notif = Notification::load("debate_draw_vote_resolved", payload).unwrap();
+        assert_eq!(notif.user_ids, HashSet::from([7_u64, 8_u64, 9_u64]));
+        match notif.event.as_ref() {
+            AppEvent::DebateDrawVoteResolved(v) => {
+                assert_eq!(v.vote_id, 41);
+                assert_eq!(v.session_id, 15);
+                assert_eq!(v.report_id, 31);
+                assert_eq!(v.status, "decided");
+                assert_eq!(v.resolution, "open_rematch");
+                assert_eq!(v.agree_votes, 2);
+                assert_eq!(v.disagree_votes, 5);
+                assert_eq!(v.required_voters, 7);
+                assert_eq!(v.rematch_session_id, Some(88));
+            }
+            _ => panic!("expected DebateDrawVoteResolved event"),
         }
     }
 }
