@@ -2,9 +2,11 @@ import { createRouter, createWebHistory } from 'vue-router';
 import Login from '../views/Login.vue';
 import Register from '../views/Register.vue';
 import Chat from '../views/Chat.vue';
+import JudgeReport from '../views/JudgeReport.vue';
 
 const routes = [
   { path: '/', name: 'Chat', component: Chat, meta: { requiresAuth: true } },
+  { path: '/judge-report', name: 'JudgeReport', component: JudgeReport, meta: { requiresAuth: true } },
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
 

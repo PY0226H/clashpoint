@@ -15,6 +15,24 @@
     </div>
 
     <div class="mb-6">
+      <h2 class="text-xs uppercase text-gray-400 mb-2">Navigation</h2>
+      <ul>
+        <li
+          @click="goRoute('/')"
+          :class="['px-2 py-1 rounded cursor-pointer mb-1', { 'bg-blue-600': isRouteActive('/') }]"
+        >
+          Chat
+        </li>
+        <li
+          @click="goRoute('/judge-report')"
+          :class="['px-2 py-1 rounded cursor-pointer', { 'bg-blue-600': isRouteActive('/judge-report') }]"
+        >
+          AI Judge
+        </li>
+      </ul>
+    </div>
+
+    <div class="mb-6">
       <h2 class="text-xs uppercase text-gray-400 mb-2">Channels</h2>
       <ul>
         <li v-for="channel in channels" :key="channel.id" @click="selectChannel(channel.id)"
@@ -86,6 +104,14 @@ export default {
         name: `Channel ${this.channels.length + 1}`,
       };
       this.$store.dispatch('addChannel', newChannel);
+    },
+    goRoute(path) {
+      if (this.$route.path !== path) {
+        this.$router.push(path);
+      }
+    },
+    isRouteActive(path) {
+      return this.$route.path === path;
     },
     selectChannel(channelId) {
       const from = `/chats/${this.activeChannelId}`;

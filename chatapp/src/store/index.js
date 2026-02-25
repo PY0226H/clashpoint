@@ -252,6 +252,29 @@ export default createStore({
         }
       }
     },
+    async fetchJudgeReport({ state }, { sessionId, maxStageCount = 3, stageOffset = 0 }) {
+      if (!sessionId) {
+        throw new Error('sessionId is required');
+      }
+      const query = new URLSearchParams();
+      if (maxStageCount != null) {
+        query.set('maxStageCount', String(maxStageCount));
+      }
+      if (stageOffset != null) {
+        query.set('stageOffset', String(stageOffset));
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : '';
+      const response = await network(
+        this,
+        'get',
+        `/debate/sessions/${sessionId}/judge-report${suffix}`,
+        null,
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
     async uploadFiles({ state, commit }, files) {
       try {
         await this.dispatch('refreshAccessTickets');
