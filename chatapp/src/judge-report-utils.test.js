@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { mergeJudgeReportWindow, normalizeSessionId } from './judge-report-utils.js';
+import {
+  drawVoteChoiceText,
+  drawVoteResolutionText,
+  isDrawVoteOpen,
+  mergeJudgeReportWindow,
+  normalizeSessionId,
+} from './judge-report-utils.js';
 
 const currentPayload = {
   report: {
@@ -46,3 +52,12 @@ assert.equal(normalizeSessionId(' 7 '), 7);
 assert.equal(normalizeSessionId('0'), null);
 assert.equal(normalizeSessionId('-1'), null);
 assert.equal(normalizeSessionId('abc'), null);
+
+assert.equal(isDrawVoteOpen({ status: 'open' }), true);
+assert.equal(isDrawVoteOpen({ status: 'decided' }), false);
+assert.equal(drawVoteResolutionText('accept_draw'), '用户同意平局，不开启二番战');
+assert.equal(drawVoteResolutionText('open_rematch'), '用户不同意平局，将开启二番战');
+assert.equal(drawVoteResolutionText(''), '暂无决议');
+assert.equal(drawVoteChoiceText(true), '已投：同意平局');
+assert.equal(drawVoteChoiceText(false), '已投：不同意平局');
+assert.equal(drawVoteChoiceText(undefined), '你还未投票');

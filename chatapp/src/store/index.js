@@ -275,6 +275,39 @@ export default createStore({
       );
       return response.data;
     },
+    async fetchDrawVoteStatus({ state }, { sessionId }) {
+      if (!sessionId) {
+        throw new Error('sessionId is required');
+      }
+      const response = await network(
+        this,
+        'get',
+        `/debate/sessions/${sessionId}/draw-vote`,
+        null,
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
+    async submitDrawVote({ state }, { sessionId, agreeDraw }) {
+      if (!sessionId) {
+        throw new Error('sessionId is required');
+      }
+      if (typeof agreeDraw !== 'boolean') {
+        throw new Error('agreeDraw must be boolean');
+      }
+      const response = await network(
+        this,
+        'post',
+        `/debate/sessions/${sessionId}/draw-vote/ballots`,
+        { agreeDraw },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
     async uploadFiles({ state, commit }, files) {
       try {
         await this.dispatch('refreshAccessTickets');

@@ -47,3 +47,28 @@ export function normalizeSessionId(input) {
   }
   return n;
 }
+
+export function isDrawVoteOpen(vote) {
+  return String(vote?.status || '') === 'open';
+}
+
+export function drawVoteResolutionText(resolution) {
+  switch (String(resolution || '')) {
+    case 'accept_draw':
+      return '用户同意平局，不开启二番战';
+    case 'open_rematch':
+      return '用户不同意平局，将开启二番战';
+    default:
+      return '暂无决议';
+  }
+}
+
+export function drawVoteChoiceText(agreeDraw) {
+  if (agreeDraw === true) {
+    return '已投：同意平局';
+  }
+  if (agreeDraw === false) {
+    return '已投：不同意平局';
+  }
+  return '你还未投票';
+}
