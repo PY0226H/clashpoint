@@ -21,6 +21,7 @@ import {
   normalizeJudgeRefreshSummaryMetrics,
   normalizeJudgeRefreshSummaryQuery,
 } from '../judge-refresh-summary-utils';
+import { normalizeWalletLedgerLimit } from '../wallet-utils';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -457,6 +458,65 @@ export default createStore({
           Authorization: `Bearer ${state.token}`,
         },
       );
+      return response.data || [];
+    },
+    async listIapProducts({ state }, { activeOnly = true } = {}) {
+      const suffix = buildQueryString({ activeOnly });
+      const response = await network(this, 'get', `/pay/iap/products${suffix}`, null, {
+        Authorization: `Bearer ${state.token}`,
+      });
+      return response.data || [];
+    },
+    async verifyIapOrder(
+      { state },
+      {
+        productId,
+        transactionId,
+        originalTransactionId = null,
+        receiptData,
+      } = {},
+    ) {
+      if (!productId || !String(productId).trim()) {
+        throw new Error('productId is required');
+      }
+      if (!transactionId || !String(transactionId).trim()) {
+        throw new Error('transactionId is required');
+      }
+      if (!receiptData || !String(receiptData).trim()) {
+        throw new Error('receiptData is required');
+      }
+      const response = await network(
+        this,
+        'post',
+        '/pay/iap/verify',
+        {
+          productId: String(productId).trim(),
+          transactionId: String(transactionId).trim(),
+          originalTransactionId: originalTransactionId == null
+            ? null
+            : String(originalTransactionId).trim() || null,
+          receiptData: String(receiptData).trim(),
+        },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
+    async fetchWalletBalance({ state }) {
+      const response = await network(this, 'get', '/pay/wallet', null, {
+        Authorization: `Bearer ${state.token}`,
+      });
+      return response.data;
+    },
+    async listWalletLedger({ state }, { lastId = null, limit = 20 } = {}) {
+      const suffix = buildQueryString({
+        lastId,
+        limit: normalizeWalletLedgerLimit(limit),
+      });
+      const response = await network(this, 'get', `/pay/wallet/ledger${suffix}`, null, {
+        Authorization: `Bearer ${state.token}`,
+      });
       return response.data || [];
     },
     async createDebateMessage({ state }, { sessionId, content }) {

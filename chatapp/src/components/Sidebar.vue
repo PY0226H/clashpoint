@@ -35,6 +35,12 @@
         >
           Debate
         </li>
+        <li
+          @click="goRoute('/wallet')"
+          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/wallet') }]"
+        >
+          Wallet
+        </li>
       </ul>
     </div>
 

@@ -8,6 +8,9 @@
           <div class="text-lg font-semibold text-gray-900">Session {{ sessionId || '-' }}</div>
         </div>
         <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-700 bg-gray-100 border border-gray-200 rounded px-2 py-1">
+            余额: {{ walletLoading ? '...' : walletBalance }}
+          </span>
           <span
             :class="[
               'inline-block w-2.5 h-2.5 rounded-full',
@@ -33,6 +36,9 @@
 
       <div v-if="errorText" class="mx-5 mt-4 bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm">
         {{ errorText }}
+      </div>
+      <div v-if="walletErrorText" class="mx-5 mt-2 bg-amber-50 text-amber-700 border border-amber-200 rounded p-3 text-sm">
+        {{ walletErrorText }}
       </div>
 
       <div class="px-5 pt-4">
@@ -291,6 +297,9 @@ export default {
       pinningMessageId: null,
       messageInput: '',
       pinSeconds: 60,
+      walletBalance: 0,
+      walletLoading: false,
+      walletErrorText: '',
       errorText: '',
       ws: null,
       wsConnected: false,
@@ -442,7 +451,7 @@ export default {
       this.loading = true;
       this.errorText = '';
       try {
-        const [messages, pins] = await Promise.all([
+        const [messages, pins, wallet] = await Promise.all([
           this.$store.dispatch('listDebateMessages', {
             sessionId: this.sessionId,
             limit: this.historyLimit,
@@ -452,10 +461,12 @@ export default {
             activeOnly: true,
             limit: 30,
           }),
+          this.$store.dispatch('fetchWalletBalance'),
         ]);
         this.messages = mergeDebateRoomMessages([], messages || []);
         this.historyHasMore = Array.isArray(messages) && messages.length >= this.historyLimit;
         this.pins = pins;
+        this.walletBalance = Number(wallet?.balance || 0);
       } catch (error) {
         this.errorText = error?.response?.data?.error || error?.message || '加载辩论房间失败';
       } finally {
@@ -745,6 +756,22 @@ export default {
         // Keep current room usable even if pin list refresh fails.
       }
     },
+    async refreshWalletBalance({ silent = false } = {}) {
+      if (silent !== true) {
+        this.walletLoading = true;
+      }
+      this.walletErrorText = '';
+      try {
+        const payload = await this.$store.dispatch('fetchWalletBalance');
+        this.walletBalance = Number(payload?.balance || 0);
+      } catch (error) {
+        this.walletErrorText = error?.response?.data?.error || error?.message || '刷新余额失败';
+      } finally {
+        if (silent !== true) {
+          this.walletLoading = false;
+        }
+      }
+    },
     async sendMessage() {
       if (!this.messageInput.trim() || !this.sessionId) {
         return;
@@ -782,7 +809,7 @@ export default {
           pinSeconds: this.pinSeconds,
           idempotencyKey: this.buildPinIdempotencyKey(message.id),
         });
-        await this.refreshPins();
+        await Promise.all([this.refreshPins(), this.refreshWalletBalance({ silent: true })]);
       } catch (error) {
         this.errorText = error?.response?.data?.error || error?.message || '置顶失败';
       } finally {
