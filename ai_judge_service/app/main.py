@@ -41,6 +41,7 @@ class Settings:
     rag_max_chars_per_snippet: int
     rag_query_message_limit: int
     rag_source_whitelist: tuple[str, ...]
+    stage_agent_max_chunks: int
 
 
 def _load_settings() -> Settings:
@@ -81,6 +82,7 @@ def _load_settings() -> Settings:
                 DEFAULT_RAG_SOURCE_WHITELIST,
             )
         ),
+        stage_agent_max_chunks=int(os.getenv("AI_JUDGE_STAGE_AGENT_MAX_CHUNKS", "12")),
     )
 
 
@@ -156,6 +158,7 @@ async def _build_report_by_runtime(
             timeout_secs=SETTINGS.openai_timeout_secs,
             temperature=SETTINGS.openai_temperature,
             max_retries=SETTINGS.openai_max_retries,
+            max_stage_agent_chunks=SETTINGS.stage_agent_max_chunks,
         )
         try:
             report = await build_report_with_openai(

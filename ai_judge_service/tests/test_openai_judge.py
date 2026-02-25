@@ -2,7 +2,15 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from app.openai_judge import _build_user_prompt, _merge_two_pass, _normalize_eval
+from app.openai_judge import (
+    _build_user_prompt,
+    _merge_two_pass,
+    _normalize_aggregate_eval,
+    _normalize_display_eval,
+    _normalize_eval,
+    _normalize_stage_eval,
+    _split_message_chunks,
+)
 from app.rag_retriever import RetrievedContext
 from app.scoring_core import DebateMessage
 
@@ -125,6 +133,68 @@ class OpenAiJudgeTests(unittest.TestCase):
         self.assertIn("14.3 版本更新", prompt)
         self.assertIn("https://example.com/tft/14-3", prompt)
         self.assertIn("前排羁绊获得额外护甲收益", prompt)
+
+    def test_split_message_chunks_should_keep_recent_chunks_when_capped(self) -> None:
+        messages = [
+            DebateMessage(
+                message_id=idx,
+                user_id=1000 + idx,
+                side="pro" if idx % 2 == 0 else "con",
+                content=f"msg-{idx}",
+            )
+            for idx in range(1, 251)
+        ]
+        chunks = _split_message_chunks(messages, window_size=100, max_chunks=2)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0][0], 2)
+        self.assertEqual(chunks[0][1][0].message_id, 101)
+        self.assertEqual(chunks[1][0], 3)
+        self.assertEqual(chunks[1][1][-1].message_id, 250)
+
+    def test_normalize_stage_eval_should_keep_message_range_and_winner_hint(self) -> None:
+        chunk = [
+            DebateMessage(message_id=11, user_id=1, side="pro", content="pro msg"),
+            DebateMessage(message_id=12, user_id=2, side="con", content="con msg"),
+        ]
+        normalized = _normalize_stage_eval(
+            {
+                "pro_score": 78,
+                "con_score": 68,
+                "winner_hint": "pro",
+                "pro_summary": "pro stage summary",
+                "con_summary": "con stage summary",
+                "rationale": "stage rationale",
+            },
+            chunk,
+            stage_no=2,
+        )
+        self.assertEqual(normalized["stage_no"], 2)
+        self.assertEqual(normalized["from_message_id"], 11)
+        self.assertEqual(normalized["to_message_id"], 12)
+        self.assertEqual(normalized["summary"]["winnerHint"], "pro")
+
+    def test_normalize_aggregate_and_display_should_fallback_to_safe_text(self) -> None:
+        stage_summaries = [
+            {
+                "stage_no": 1,
+                "from_message_id": 1,
+                "to_message_id": 2,
+                "pro_score": 60,
+                "con_score": 55,
+                "summary": {"winnerHint": "pro"},
+            }
+        ]
+        aggregate = _normalize_aggregate_eval({}, stage_summaries)
+        self.assertIn("信息不足", aggregate["pro_summary"])
+        self.assertEqual(aggregate["winner_hint"], "pro")
+
+        display = _normalize_display_eval(
+            {},
+            {"pro_summary": "p raw", "con_summary": "c raw", "rationale": "r raw"},
+        )
+        self.assertEqual(display["pro_summary"], "p raw")
+        self.assertEqual(display["con_summary"], "c raw")
+        self.assertEqual(display["rationale"], "r raw")
 
 
 if __name__ == "__main__":

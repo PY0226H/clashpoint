@@ -1,6 +1,6 @@
 # AI Judge Service
 
-用于接收 `chat_server` 的评审派发请求，执行双次评估逻辑（`mock` 或 `openai`），并回调内部接口写入评审结果。
+用于接收 `chat_server` 的评审派发请求，执行评审逻辑（`mock` 或 `openai` 多 Agent 流水线），并回调内部接口写入评审结果。
 
 ## 目录结构
 
@@ -9,7 +9,7 @@
 - `app/scoring_core.py`: 不依赖三方框架的评分核心
 - `app/scoring.py`: `pydantic` 适配层
 - `app/runtime_policy.py`: provider 与环境开关解析
-- `app/openai_judge.py`: OpenAI 运行时（双次评估 + 合并）
+- `app/openai_judge.py`: OpenAI 运行时（阶段 Agent -> 汇总 Agent -> 终局 Agent -> 展示 Agent）
 - `tests/test_scoring_core.py`: 评分核心单测（`unittest`）
 
 ## 快速启动
@@ -44,6 +44,7 @@ python3 -m venv .venv
 - `AI_JUDGE_RAG_MAX_CHARS_PER_SNIPPET`: 单片段最大字符数，默认 `280`
 - `AI_JUDGE_RAG_QUERY_MESSAGE_LIMIT`: 检索查询使用最近消息条数，默认 `80`
 - `AI_JUDGE_RAG_SOURCE_WHITELIST`: 允许知识来源的 URL 前缀列表（逗号/分号/换行分隔），默认 `https://teamfighttactics.leagueoflegends.com/en-us/news/`
+- `AI_JUDGE_STAGE_AGENT_MAX_CHUNKS`: 阶段 Agent 最大处理窗口数（超出取最近窗口），默认 `12`
 
 ## 知识文件格式（最小）
 
