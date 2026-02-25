@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import {
   buildDebateRoomWsUrl,
   canSubmitDrawVote,
+  getOldestDebateMessageId,
   extractDebateRoomEvent,
+  mergeDebateRoomMessages,
+  normalizeDebateRoomMessage,
   normalizeDrawVoteStatus,
   normalizeJudgeReportStatus,
   parseDebateRoomWsMessage,
@@ -76,3 +79,37 @@ assert.equal(
   false,
 );
 assert.equal(canSubmitDrawVote({ status: 'decided' }), false);
+
+const normalized = normalizeDebateRoomMessage({
+  messageId: 12,
+  sessionId: 7,
+  userId: 3,
+  side: 'pro',
+  content: 'hello',
+  createdAt: '2026-02-25T00:00:00Z',
+});
+assert.deepEqual(normalized, {
+  id: 12,
+  sessionId: 7,
+  userId: 3,
+  side: 'pro',
+  content: 'hello',
+  createdAt: '2026-02-25T00:00:00Z',
+});
+assert.equal(normalizeDebateRoomMessage({}), null);
+
+const mergedMessages = mergeDebateRoomMessages(
+  [
+    { id: 2, content: 'old2', side: 'pro' },
+    { id: 4, content: 'old4', side: 'con' },
+  ],
+  [
+    { id: 1, content: 'old1', side: 'pro' },
+    { id: 4, content: 'new4', side: 'con' },
+    { id: 5, content: 'new5', side: 'pro' },
+  ],
+);
+assert.deepEqual(mergedMessages.map((item) => item.id), [1, 2, 4, 5]);
+assert.equal(mergedMessages.find((item) => item.id === 4)?.content, 'new4');
+assert.equal(getOldestDebateMessageId(mergedMessages), 1);
+assert.equal(getOldestDebateMessageId([]), null);

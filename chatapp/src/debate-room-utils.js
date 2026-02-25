@@ -112,3 +112,57 @@ export function canSubmitDrawVote(vote, nowMs = Date.now()) {
   }
   return nowMs < endsAtMs;
 }
+
+export function normalizeDebateRoomMessage(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const id = raw.id ?? raw.messageId;
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    sessionId: raw.sessionId,
+    userId: raw.userId,
+    side: raw.side || 'unknown',
+    content: raw.content || '',
+    createdAt: raw.createdAt || new Date().toISOString(),
+  };
+}
+
+export function mergeDebateRoomMessages(currentMessages = [], incomingMessages = []) {
+  const map = new Map();
+  for (const item of currentMessages) {
+    const normalized = normalizeDebateRoomMessage(item);
+    if (!normalized) {
+      continue;
+    }
+    map.set(String(normalized.id), normalized);
+  }
+  for (const item of incomingMessages) {
+    const normalized = normalizeDebateRoomMessage(item);
+    if (!normalized) {
+      continue;
+    }
+    map.set(String(normalized.id), normalized);
+  }
+  return Array.from(map.values()).sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+export function getOldestDebateMessageId(messages = []) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return null;
+  }
+  let oldest = null;
+  for (const item of messages) {
+    const id = Number(item?.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      continue;
+    }
+    if (oldest == null || id < oldest) {
+      oldest = id;
+    }
+  }
+  return oldest;
+}

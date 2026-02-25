@@ -175,7 +175,16 @@
       <div class="flex-1 min-h-0 px-5 pb-4">
         <div class="text-xs uppercase text-gray-500 mb-2">发言流</div>
         <div class="bg-white border rounded-lg h-full flex flex-col min-h-0">
-          <div class="flex-1 overflow-y-auto p-3 space-y-2">
+          <div ref="messageScrollBox" class="flex-1 overflow-y-auto p-3 space-y-2">
+            <div v-if="historyHasMore" class="flex justify-center pb-2">
+              <button
+                @click="loadOlderMessages"
+                :disabled="historyLoading || loading"
+                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+              >
+                {{ historyLoading ? '加载中...' : '加载更早消息' }}
+              </button>
+            </div>
             <div v-if="messages.length === 0" class="text-sm text-gray-500">
               当前暂无消息
             </div>
@@ -252,29 +261,14 @@ import {
   buildDebateRoomWsUrl,
   canSubmitDrawVote as canSubmitDrawVoteNow,
   extractDebateRoomEvent,
+  getOldestDebateMessageId,
+  mergeDebateRoomMessages,
+  normalizeDebateRoomMessage,
   normalizeDrawVoteStatus,
   normalizeJudgeReportStatus,
   parseDebateRoomWsMessage,
   shouldPollJudgeReportStatus,
 } from '../debate-room-utils';
-
-function normalizeMessage(raw) {
-  if (!raw) {
-    return null;
-  }
-  const id = raw.id ?? raw.messageId;
-  if (!id) {
-    return null;
-  }
-  return {
-    id,
-    sessionId: raw.sessionId,
-    userId: raw.userId,
-    side: raw.side || 'unknown',
-    content: raw.content || '',
-    createdAt: raw.createdAt || new Date().toISOString(),
-  };
-}
 
 export default {
   components: {
@@ -286,6 +280,9 @@ export default {
       messages: [],
       pins: [],
       loading: false,
+      historyLoading: false,
+      historyHasMore: true,
+      historyLimit: 80,
       sending: false,
       pinningMessageId: null,
       messageInput: '',
@@ -382,17 +379,11 @@ export default {
       return Number(message.userId) === Number(this.userId);
     },
     upsertMessage(raw) {
-      const normalized = normalizeMessage(raw);
+      const normalized = normalizeDebateRoomMessage(raw);
       if (!normalized) {
         return;
       }
-      const index = this.messages.findIndex((item) => item.id === normalized.id);
-      if (index >= 0) {
-        this.messages.splice(index, 1, normalized);
-      } else {
-        this.messages.push(normalized);
-      }
-      this.messages.sort((a, b) => Number(a.id) - Number(b.id));
+      this.messages = mergeDebateRoomMessages(this.messages, [normalized]);
     },
     async refreshRoom() {
       if (!this.sessionId) {
@@ -404,7 +395,7 @@ export default {
         const [messages, pins] = await Promise.all([
           this.$store.dispatch('listDebateMessages', {
             sessionId: this.sessionId,
-            limit: 120,
+            limit: this.historyLimit,
           }),
           this.$store.dispatch('listDebatePinnedMessages', {
             sessionId: this.sessionId,
@@ -412,13 +403,55 @@ export default {
             limit: 30,
           }),
         ]);
-        this.messages = [];
-        messages.forEach((item) => this.upsertMessage(item));
+        this.messages = mergeDebateRoomMessages([], messages || []);
+        this.historyHasMore = Array.isArray(messages) && messages.length >= this.historyLimit;
         this.pins = pins;
       } catch (error) {
         this.errorText = error?.response?.data?.error || error?.message || '加载辩论房间失败';
       } finally {
         this.loading = false;
+      }
+    },
+    async loadOlderMessages() {
+      if (!this.sessionId || this.historyLoading || !this.historyHasMore) {
+        return;
+      }
+      const oldestId = getOldestDebateMessageId(this.messages);
+      if (!oldestId) {
+        this.historyHasMore = false;
+        return;
+      }
+
+      this.historyLoading = true;
+      this.errorText = '';
+      const box = this.$refs.messageScrollBox;
+      const beforeHeight = box?.scrollHeight || 0;
+      const beforeTop = box?.scrollTop || 0;
+      try {
+        const older = await this.$store.dispatch('listDebateMessages', {
+          sessionId: this.sessionId,
+          lastId: oldestId,
+          limit: this.historyLimit,
+        });
+        const list = Array.isArray(older) ? older : [];
+        if (list.length === 0) {
+          this.historyHasMore = false;
+          return;
+        }
+        this.messages = mergeDebateRoomMessages(this.messages, list);
+        this.historyHasMore = list.length >= this.historyLimit;
+        this.$nextTick(() => {
+          const nextBox = this.$refs.messageScrollBox;
+          if (!nextBox) {
+            return;
+          }
+          const afterHeight = nextBox.scrollHeight || 0;
+          nextBox.scrollTop = Math.max(0, afterHeight - beforeHeight + beforeTop);
+        });
+      } catch (error) {
+        this.errorText = error?.response?.data?.error || error?.message || '加载历史消息失败';
+      } finally {
+        this.historyLoading = false;
       }
     },
     handleRoomPayload(payload) {
