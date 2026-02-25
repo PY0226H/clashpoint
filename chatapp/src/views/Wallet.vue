@@ -141,6 +141,48 @@
 
         <div class="bg-white border rounded-lg p-4 space-y-3">
           <div class="flex items-center justify-between">
+            <div class="text-sm font-semibold text-gray-900">待重试交易队列</div>
+            <button
+              @click="retryAllPending"
+              :disabled="retryingAll || pendingQueue.length === 0"
+              class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+            >
+              {{ retryingAll ? '重试中...' : '重试全部' }}
+            </button>
+          </div>
+          <div v-if="pendingQueue.length === 0" class="text-sm text-gray-600">
+            当前没有待重试交易。
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="item in pendingQueue"
+              :key="item.transactionId"
+              class="border rounded p-3 bg-gray-50"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <div class="text-xs text-gray-700 space-y-1">
+                  <div><span class="font-semibold">tx:</span> {{ item.transactionId }}</div>
+                  <div><span class="font-semibold">product:</span> {{ item.productId }}</div>
+                  <div><span class="font-semibold">attempts:</span> {{ item.attempts }}</div>
+                  <div><span class="font-semibold">updated:</span> {{ formatDateTime(item.updatedAt) }}</div>
+                  <div v-if="item.lastError" class="text-red-700">
+                    <span class="font-semibold">lastError:</span> {{ item.lastError }}
+                  </div>
+                </div>
+                <button
+                  @click="retryPendingItem(item)"
+                  :disabled="isRetryingItem(item.transactionId)"
+                  class="px-2 py-1 text-xs rounded bg-blue-600 text-white disabled:opacity-50"
+                >
+                  {{ isRetryingItem(item.transactionId) ? '重试中...' : '重试' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white border rounded-lg p-4 space-y-3">
+          <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">钱包账本</div>
             <button
               @click="refreshLedger"
@@ -182,6 +224,12 @@
 <script>
 import Sidebar from '../components/Sidebar.vue';
 import { isTauriRuntime, purchaseIapViaTauri } from '../iap-bridge';
+import {
+  readPendingIapQueue,
+  registerPendingIapFailure,
+  settlePendingIapSuccess,
+  writePendingIapQueue,
+} from '../iap-pending-utils';
 import { buildMockReceiptData, buildMockTransactionId } from '../wallet-utils';
 
 export default {
@@ -195,6 +243,9 @@ export default {
       errorText: '',
       successText: '',
       tauriReady: false,
+      pendingQueue: [],
+      retryingMap: {},
+      retryingAll: false,
       walletBalance: 0,
       products: [],
       ledger: [],
@@ -233,6 +284,59 @@ export default {
       this.successText = '已填充 mock 验单参数，可直接提交。';
       this.errorText = '';
     },
+    syncPendingQueue(queue) {
+      this.pendingQueue = Array.isArray(queue) ? queue : [];
+      writePendingIapQueue(this.pendingQueue);
+    },
+    loadPendingQueue() {
+      this.pendingQueue = readPendingIapQueue();
+    },
+    markRetrying(transactionId, retrying) {
+      if (!transactionId) {
+        return;
+      }
+      const next = { ...this.retryingMap };
+      if (retrying) {
+        next[transactionId] = true;
+      } else {
+        delete next[transactionId];
+      }
+      this.retryingMap = next;
+    },
+    isRetryingItem(transactionId) {
+      return !!this.retryingMap[transactionId];
+    },
+    async verifyAndSettlePurchase(purchase, { queueOnFailure = true, silent = false } = {}) {
+      try {
+        const result = await this.$store.dispatch('verifyIapOrder', {
+          productId: purchase.productId,
+          transactionId: purchase.transactionId,
+          originalTransactionId: purchase.originalTransactionId,
+          receiptData: purchase.receiptData,
+        });
+        this.syncPendingQueue(
+          settlePendingIapSuccess(this.pendingQueue, purchase.transactionId),
+        );
+        await Promise.all([this.refreshWallet(), this.refreshLedger()]);
+        if (!silent) {
+          this.successText = `验单完成：status=${result.status}, verifyMode=${result.verifyMode}, credited=${result.credited}`;
+        }
+        return true;
+      } catch (error) {
+        const errorText = error?.response?.data?.error || error?.message || 'verify failed';
+        if (queueOnFailure) {
+          this.syncPendingQueue(
+            registerPendingIapFailure(this.pendingQueue, purchase, errorText),
+          );
+        }
+        if (!silent) {
+          this.errorText = queueOnFailure
+            ? `验单失败，已加入待重试队列：${errorText}`
+            : errorText;
+        }
+        return false;
+      }
+    },
     async quickMockVerify(product) {
       this.prepareMockPayload(product);
       await this.submitVerify();
@@ -252,14 +356,15 @@ export default {
         this.form.transactionId = purchase.transactionId;
         this.form.originalTransactionId = purchase.originalTransactionId || '';
         this.form.receiptData = purchase.receiptData;
-        const result = await this.$store.dispatch('verifyIapOrder', {
-          productId: purchase.productId,
-          transactionId: purchase.transactionId,
-          originalTransactionId: purchase.originalTransactionId,
-          receiptData: purchase.receiptData,
+        const ok = await this.verifyAndSettlePurchase(purchase, {
+          queueOnFailure: true,
+          silent: true,
         });
-        await Promise.all([this.refreshWallet(), this.refreshLedger()]);
-        this.successText = `Tauri 购买上报完成：source=${purchase.source}, status=${result.status}, verifyMode=${result.verifyMode}, credited=${result.credited}`;
+        if (ok) {
+          this.successText = `Tauri 购买上报完成：source=${purchase.source}, tx=${purchase.transactionId}`;
+        } else {
+          this.errorText = `Tauri 购买验单失败，交易已入待重试队列：tx=${purchase.transactionId}`;
+        }
       } catch (error) {
         this.errorText = error?.response?.data?.error || error?.message || 'Tauri 购买验单失败';
       } finally {
@@ -300,24 +405,68 @@ export default {
       this.errorText = '';
       this.successText = '';
       try {
-        const result = await this.$store.dispatch('verifyIapOrder', {
+        const purchase = {
           productId: this.form.productId,
           transactionId: this.form.transactionId,
           originalTransactionId: this.form.originalTransactionId || null,
           receiptData: this.form.receiptData,
+          source: 'manual',
+        };
+        await this.verifyAndSettlePurchase(purchase, {
+          queueOnFailure: true,
+          silent: false,
         });
-        await Promise.all([this.refreshWallet(), this.refreshLedger()]);
-        this.successText = `验单完成：status=${result.status}, verifyMode=${result.verifyMode}, credited=${result.credited}`;
-      } catch (error) {
-        this.errorText = error?.response?.data?.error || error?.message || '验单失败';
       } finally {
         this.verifying = false;
       }
     },
+    async retryPendingItem(item, { silent = false } = {}) {
+      if (!item?.transactionId || this.isRetryingItem(item.transactionId)) {
+        return false;
+      }
+      this.markRetrying(item.transactionId, true);
+      try {
+        return await this.verifyAndSettlePurchase(item, {
+          queueOnFailure: true,
+          silent,
+        });
+      } finally {
+        this.markRetrying(item.transactionId, false);
+      }
+    },
+    async retryAllPending() {
+      if (this.retryingAll || this.pendingQueue.length === 0) {
+        return;
+      }
+      this.retryingAll = true;
+      this.errorText = '';
+      this.successText = '';
+      let successCount = 0;
+      let failedCount = 0;
+      const snapshot = [...this.pendingQueue];
+      for (const item of snapshot) {
+        const ok = await this.retryPendingItem(item, { silent: true });
+        if (ok) {
+          successCount += 1;
+        } else {
+          failedCount += 1;
+        }
+      }
+      if (failedCount > 0) {
+        this.errorText = `队列重试完成：成功 ${successCount}，失败 ${failedCount}（失败交易仍保留在队列中）`;
+      } else {
+        this.successText = `队列重试完成：全部成功（${successCount}）`;
+      }
+      this.retryingAll = false;
+    },
   },
   async mounted() {
     this.tauriReady = isTauriRuntime();
+    this.loadPendingQueue();
     await this.refreshPage();
+    if (this.pendingQueue.length > 0) {
+      await this.retryAllPending();
+    }
   },
 };
 </script>
