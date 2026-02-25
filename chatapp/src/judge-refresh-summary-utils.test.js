@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   clampInt,
+  normalizeJudgeRefreshSummaryMetrics,
   normalizeJudgeRefreshSummaryQuery,
 } from './judge-refresh-summary-utils.js';
 
@@ -39,4 +40,26 @@ test('normalizeJudgeRefreshSummaryQuery should clamp payload values', () => {
 test('normalizeJudgeRefreshSummaryQuery should ignore invalid session id', () => {
   assert.equal(normalizeJudgeRefreshSummaryQuery({ debateSessionId: 'x' }).debateSessionId, null);
   assert.equal(normalizeJudgeRefreshSummaryQuery({ debateSessionId: 0 }).debateSessionId, null);
+});
+
+test('normalizeJudgeRefreshSummaryMetrics should normalize invalid fields', () => {
+  assert.deepEqual(normalizeJudgeRefreshSummaryMetrics({
+    requestTotal: '100',
+    cacheHitTotal: 80,
+    cacheMissTotal: '20',
+    cacheHitRate: '80.5',
+    dbQueryTotal: '20',
+    dbErrorTotal: -1,
+    avgDbLatencyMs: '14.2',
+    lastDbLatencyMs: 'x',
+  }), {
+    requestTotal: 100,
+    cacheHitTotal: 80,
+    cacheMissTotal: 20,
+    cacheHitRate: 80.5,
+    dbQueryTotal: 20,
+    dbErrorTotal: 0,
+    avgDbLatencyMs: 14.2,
+    lastDbLatencyMs: 0,
+  });
 });

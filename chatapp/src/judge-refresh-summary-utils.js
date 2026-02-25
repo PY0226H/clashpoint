@@ -27,3 +27,21 @@ export function normalizeJudgeRefreshSummaryQuery(payload = {}) {
     debateSessionId,
   };
 }
+
+function toNumberOrFallback(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function normalizeJudgeRefreshSummaryMetrics(payload = {}) {
+  return {
+    requestTotal: Math.max(0, toNumberOrFallback(payload.requestTotal, 0)),
+    cacheHitTotal: Math.max(0, toNumberOrFallback(payload.cacheHitTotal, 0)),
+    cacheMissTotal: Math.max(0, toNumberOrFallback(payload.cacheMissTotal, 0)),
+    cacheHitRate: Math.max(0, toNumberOrFallback(payload.cacheHitRate, 0)),
+    dbQueryTotal: Math.max(0, toNumberOrFallback(payload.dbQueryTotal, 0)),
+    dbErrorTotal: Math.max(0, toNumberOrFallback(payload.dbErrorTotal, 0)),
+    avgDbLatencyMs: Math.max(0, toNumberOrFallback(payload.avgDbLatencyMs, 0)),
+    lastDbLatencyMs: Math.max(0, toNumberOrFallback(payload.lastDbLatencyMs, 0)),
+  };
+}

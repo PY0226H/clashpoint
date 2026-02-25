@@ -18,6 +18,7 @@ import {
 } from '../analytics/event';
 import {
   ANALYTICS_API_BASE_URL,
+  normalizeJudgeRefreshSummaryMetrics,
   normalizeJudgeRefreshSummaryQuery,
 } from '../judge-refresh-summary-utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -444,6 +445,24 @@ export default createStore({
             : {},
         });
         return response.data;
+      } catch (error) {
+        if (error.response && error.response.status === 403) {
+          console.error('Unauthorized access to analytics API, logging out');
+          await dispatch('logout');
+          window.location.href = '/login';
+          return;
+        }
+        throw error;
+      }
+    },
+    async fetchJudgeRefreshSummaryMetrics({ state, dispatch }) {
+      try {
+        const response = await axios.get(`${ANALYTICS_API_BASE_URL}/judge-refresh/summary/metrics`, {
+          headers: state.token
+            ? { Authorization: `Bearer ${state.token}` }
+            : {},
+        });
+        return normalizeJudgeRefreshSummaryMetrics(response.data || {});
       } catch (error) {
         if (error.response && error.response.status === 403) {
           console.error('Unauthorized access to analytics API, logging out');

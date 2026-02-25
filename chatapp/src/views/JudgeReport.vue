@@ -115,6 +115,84 @@
           </div>
         </div>
 
+        <div class="bg-white rounded-lg border p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs uppercase text-gray-500">Summary Metrics (Debug)</div>
+              <div class="text-xs text-gray-500">
+                updatedAt: {{ formatDateTime(summaryMetricsUpdatedAt) }}
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                @click="toggleSummaryMetricsPanel"
+                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100"
+              >
+                {{ summaryMetricsPanelOpen ? '收起' : '展开' }}
+              </button>
+              <button
+                @click="refreshSummaryMetrics"
+                :disabled="summaryMetricsLoading || loading"
+                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+              >
+                {{ summaryMetricsLoading ? '刷新中...' : '刷新指标' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="summaryMetricsPanelOpen">
+            <div
+              v-if="summaryMetricsErrorText"
+              class="bg-red-50 text-red-700 text-xs border border-red-200 rounded p-2 mb-2"
+            >
+              {{ summaryMetricsErrorText }}
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div>
+                <div class="text-xs uppercase text-gray-500">Requests</div>
+                <div class="font-semibold text-gray-900">{{ summaryMetrics.requestTotal }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Cache Hit</div>
+                <div class="font-semibold text-green-700">{{ summaryMetrics.cacheHitTotal }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Cache Miss</div>
+                <div class="font-semibold text-amber-700">{{ summaryMetrics.cacheMissTotal }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Hit Rate</div>
+                <div class="font-semibold text-indigo-700">
+                  {{ formatPercent(summaryMetrics.cacheHitRate) }}
+                </div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Miss Rate</div>
+                <div class="font-semibold text-orange-700">
+                  {{ formatPercent(summaryCacheMissRate) }}
+                </div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">DB Queries</div>
+                <div class="font-semibold text-gray-900">{{ summaryMetrics.dbQueryTotal }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">DB Errors</div>
+                <div class="font-semibold text-red-700">{{ summaryMetrics.dbErrorTotal }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Avg DB Latency</div>
+                <div class="font-semibold text-gray-900">
+                  {{ formatDecimal(summaryMetrics.avgDbLatencyMs) }} ms
+                </div>
+              </div>
+            </div>
+            <div class="text-xs text-gray-500 mt-2">
+              lastDbLatency: {{ formatDecimal(summaryMetrics.lastDbLatencyMs) }} ms
+            </div>
+          </div>
+        </div>
+
         <div v-if="reportData" class="space-y-4">
           <div class="bg-white rounded-lg border p-4">
             <div class="flex items-center justify-between">
@@ -347,6 +425,20 @@ export default {
       summaryLoading: false,
       summaryUpdatedAt: null,
       summaryErrorText: '',
+      summaryMetricsPanelOpen: false,
+      summaryMetricsLoading: false,
+      summaryMetricsUpdatedAt: null,
+      summaryMetricsErrorText: '',
+      summaryMetrics: {
+        requestTotal: 0,
+        cacheHitTotal: 0,
+        cacheMissTotal: 0,
+        cacheHitRate: 0,
+        dbQueryTotal: 0,
+        dbErrorTotal: 0,
+        avgDbLatencyMs: 0,
+        lastDbLatencyMs: 0,
+      },
     };
   },
   computed: {
@@ -376,6 +468,10 @@ export default {
     },
     latestDrawVoteResolvedEvent() {
       return this.$store.state.latestDrawVoteResolvedEvent;
+    },
+    summaryCacheMissRate() {
+      const missRate = 100 - Number(this.summaryMetrics.cacheHitRate || 0);
+      return Math.max(0, missRate);
     },
   },
   watch: {
@@ -410,8 +506,16 @@ export default {
       if (!Number.isFinite(n)) return '-';
       return `${n.toFixed(2)}%`;
     },
+    formatDecimal(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '-';
+      return n.toFixed(2);
+    },
     summaryRowKey(row) {
       return `${row.debateSessionId || ''}:${row.sourceEventType || ''}`;
+    },
+    toggleSummaryMetricsPanel() {
+      this.summaryMetricsPanelOpen = !this.summaryMetricsPanelOpen;
     },
     drawVoteChoiceText(myVote) {
       return drawVoteChoiceTextLabel(myVote);
@@ -561,6 +665,7 @@ export default {
         this.summaryLimit = Number(payload?.limit || this.summaryLimit);
         this.summaryRows = Array.isArray(payload?.rows) ? payload.rows : [];
         this.summaryUpdatedAt = Date.now();
+        this.loadRefreshSummaryMetrics({ silent: true, suppressOnError: true }).catch(() => {});
       } catch (err) {
         if (!silent) {
           this.summaryErrorText = this.errorMessage(err);
@@ -570,6 +675,33 @@ export default {
           this.summaryLoading = false;
         }
       }
+    },
+    async loadRefreshSummaryMetrics({ silent = false, suppressOnError = false } = {}) {
+      if (!silent) {
+        this.summaryMetricsLoading = true;
+      }
+      if (!silent) {
+        this.summaryMetricsErrorText = '';
+      }
+      try {
+        const payload = await this.$store.dispatch('fetchJudgeRefreshSummaryMetrics');
+        this.summaryMetrics = {
+          ...this.summaryMetrics,
+          ...(payload || {}),
+        };
+        this.summaryMetricsUpdatedAt = Date.now();
+      } catch (err) {
+        if (!silent && !suppressOnError) {
+          this.summaryMetricsErrorText = this.errorMessage(err);
+        }
+      } finally {
+        if (!silent) {
+          this.summaryMetricsLoading = false;
+        }
+      }
+    },
+    async refreshSummaryMetrics() {
+      await this.loadRefreshSummaryMetrics();
     },
     async flushPendingAutoRefresh() {
       if (!this.pendingAutoRefresh || !this.canRunAutoRefreshNow()) {
@@ -694,8 +826,10 @@ export default {
       this.clearAutoRefreshTimer();
       this.summaryRows = [];
       this.summaryErrorText = '';
+      this.summaryMetricsErrorText = '';
       await this.fetchReportForSession(sessionId);
       await this.loadRefreshSummary(sessionId);
+      await this.loadRefreshSummaryMetrics({ silent: true, suppressOnError: true });
     },
     async refreshSummary() {
       const sessionId = normalizeSessionId(this.sessionIdInput);
