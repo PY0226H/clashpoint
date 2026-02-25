@@ -7,6 +7,7 @@ use tracing::warn;
 
 const DISPATCH_MESSAGE_WINDOW_LIMIT: i64 = 100;
 const DISPATCH_ERROR_MAX_LEN: usize = 1000;
+const DISPATCH_RETRY_BACKOFF_MAX_MULTIPLIER: i64 = 8;
 
 #[derive(Debug, Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,6 +152,14 @@ fn sanitize_error_message(err: &str) -> String {
         return ret.to_string();
     }
     ret.chars().take(DISPATCH_ERROR_MAX_LEN).collect()
+}
+
+fn calc_retry_lock_secs(dispatch_attempts: i32, base_lock_secs: i64) -> i64 {
+    let base = base_lock_secs.max(1);
+    let attempts = dispatch_attempts.max(1) as u32;
+    let shift = attempts.saturating_sub(1).min(3);
+    let multiplier = (1_i64 << shift).min(DISPATCH_RETRY_BACKOFF_MAX_MULTIPLIER);
+    base.saturating_mul(multiplier)
 }
 
 fn validate_dispatch_response(body: &str, expected_job_id: u64) -> Result<(), AppError> {
@@ -498,10 +507,13 @@ impl AppState {
             );
             Ok(true)
         } else {
+            let retry_lock_secs =
+                calc_retry_lock_secs(dispatch_attempts, self.config.ai_judge.dispatch_lock_secs);
             sqlx::query(
                 r#"
                 UPDATE judge_jobs
                 SET error_message = $2,
+                    dispatch_locked_until = NOW() + ($3::bigint * INTERVAL '1 second'),
                     updated_at = NOW()
                 WHERE id = $1
                   AND status = 'running'
@@ -509,11 +521,12 @@ impl AppState {
             )
             .bind(job_id)
             .bind(&err_msg)
+            .bind(retry_lock_secs)
             .execute(&self.pool)
             .await?;
             warn!(
                 job_id,
-                "judge dispatch failed, waiting next retry: {}", err_msg
+                retry_lock_secs, "judge dispatch failed, waiting next retry: {}", err_msg
             );
             Ok(false)
         }
@@ -1042,6 +1055,44 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn dispatch_pending_judge_jobs_once_should_keep_running_on_http_429_when_retries_left(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.dispatch_max_attempts = 3;
+        inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+        inner.config.ai_judge.dispatch_lock_secs = 1;
+        inner.config.ai_judge.dispatch_batch_size = 20;
+        inner.config.ai_judge.service_base_url =
+            spawn_mock_dispatch_server_with_status(StatusCode::TOO_MANY_REQUESTS).await?;
+        inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
+
+        let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+        let job_id = seed_running_job(&state, session_id, 0, None).await?;
+
+        let tick = state.dispatch_pending_judge_jobs_once().await?;
+        assert_eq!(tick.claimed, 1);
+        assert_eq!(tick.dispatched, 0);
+        assert_eq!(tick.failed, 1);
+        assert_eq!(tick.marked_failed, 0);
+
+        let row: (String, i32, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT status, dispatch_attempts, error_message
+            FROM judge_jobs
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, "running");
+        assert_eq!(row.1, 1);
+        assert!(row.2.unwrap_or_default().contains("status=429"));
+        Ok(())
+    }
+
     #[test]
     fn build_dispatch_url_should_join_base_and_path() {
         assert_eq!(
@@ -1073,5 +1124,14 @@ mod tests {
         let err = validate_dispatch_response(r#"{"accepted":true,"jobId":99}"#, 42)
             .expect_err("should reject mismatch");
         assert!(err.to_string().contains("job_id mismatch"));
+    }
+
+    #[test]
+    fn calc_retry_lock_secs_should_apply_exponential_backoff_with_cap() {
+        assert_eq!(calc_retry_lock_secs(1, 2), 2);
+        assert_eq!(calc_retry_lock_secs(2, 2), 4);
+        assert_eq!(calc_retry_lock_secs(3, 2), 8);
+        assert_eq!(calc_retry_lock_secs(4, 2), 16);
+        assert_eq!(calc_retry_lock_secs(9, 2), 16);
     }
 }
