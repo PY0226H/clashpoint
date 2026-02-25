@@ -7,7 +7,6 @@ use tracing::warn;
 
 const DISPATCH_MESSAGE_WINDOW_LIMIT: i64 = 100;
 const DISPATCH_ERROR_MAX_LEN: usize = 1000;
-const DISPATCH_RETRY_BACKOFF_MAX_MULTIPLIER: i64 = 8;
 
 #[derive(Debug, Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,12 +153,40 @@ fn sanitize_error_message(err: &str) -> String {
     ret.chars().take(DISPATCH_ERROR_MAX_LEN).collect()
 }
 
-fn calc_retry_lock_secs(dispatch_attempts: i32, base_lock_secs: i64) -> i64 {
+fn deterministic_jitter_offset(job_id: i64, dispatch_attempts: i32, jitter_window: i64) -> i64 {
+    if jitter_window <= 0 {
+        return 0;
+    }
+    let attempt = dispatch_attempts.max(1) as u64;
+    let seed = (job_id as u64)
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(attempt.wrapping_mul(1_442_695_040_888_963_407));
+    let span = (jitter_window as u64).saturating_mul(2).saturating_add(1);
+    let bucket = if span == 0 { 0 } else { seed % span };
+    bucket as i64 - jitter_window
+}
+
+fn calc_retry_lock_secs(
+    job_id: i64,
+    dispatch_attempts: i32,
+    base_lock_secs: i64,
+    max_backoff_multiplier: i64,
+    jitter_ratio: i64,
+) -> i64 {
     let base = base_lock_secs.max(1);
     let attempts = dispatch_attempts.max(1) as u32;
     let shift = attempts.saturating_sub(1).min(3);
-    let multiplier = (1_i64 << shift).min(DISPATCH_RETRY_BACKOFF_MAX_MULTIPLIER);
-    base.saturating_mul(multiplier)
+    let max_multiplier = max_backoff_multiplier.clamp(1, 64);
+    let multiplier = (1_i64 << shift).min(max_multiplier);
+    let lock_secs = base.saturating_mul(multiplier).max(1);
+
+    let jitter_ratio = jitter_ratio.clamp(0, 100);
+    if jitter_ratio == 0 {
+        return lock_secs;
+    }
+    let jitter_window = lock_secs.saturating_mul(jitter_ratio).saturating_div(100);
+    let jitter_offset = deterministic_jitter_offset(job_id, dispatch_attempts, jitter_window);
+    lock_secs.saturating_add(jitter_offset).max(1)
 }
 
 fn validate_dispatch_response(body: &str, expected_job_id: u64) -> Result<(), AppError> {
@@ -507,8 +534,13 @@ impl AppState {
             );
             Ok(true)
         } else {
-            let retry_lock_secs =
-                calc_retry_lock_secs(dispatch_attempts, self.config.ai_judge.dispatch_lock_secs);
+            let retry_lock_secs = calc_retry_lock_secs(
+                job_id,
+                dispatch_attempts,
+                self.config.ai_judge.dispatch_lock_secs,
+                self.config.ai_judge.dispatch_retry_backoff_max_multiplier,
+                self.config.ai_judge.dispatch_retry_jitter_ratio,
+            );
             sqlx::query(
                 r#"
                 UPDATE judge_jobs
@@ -1128,10 +1160,21 @@ mod tests {
 
     #[test]
     fn calc_retry_lock_secs_should_apply_exponential_backoff_with_cap() {
-        assert_eq!(calc_retry_lock_secs(1, 2), 2);
-        assert_eq!(calc_retry_lock_secs(2, 2), 4);
-        assert_eq!(calc_retry_lock_secs(3, 2), 8);
-        assert_eq!(calc_retry_lock_secs(4, 2), 16);
-        assert_eq!(calc_retry_lock_secs(9, 2), 16);
+        assert_eq!(calc_retry_lock_secs(1, 1, 2, 8, 0), 2);
+        assert_eq!(calc_retry_lock_secs(1, 2, 2, 8, 0), 4);
+        assert_eq!(calc_retry_lock_secs(1, 3, 2, 8, 0), 8);
+        assert_eq!(calc_retry_lock_secs(1, 4, 2, 8, 0), 16);
+        assert_eq!(calc_retry_lock_secs(1, 9, 2, 8, 0), 16);
+    }
+
+    #[test]
+    fn calc_retry_lock_secs_should_apply_deterministic_jitter_within_bounds() {
+        let base = calc_retry_lock_secs(42, 4, 10, 8, 0);
+        let jittered = calc_retry_lock_secs(42, 4, 10, 8, 20);
+        let jittered_repeat = calc_retry_lock_secs(42, 4, 10, 8, 20);
+        let window = base * 20 / 100;
+        assert!(jittered >= base - window);
+        assert!(jittered <= base + window);
+        assert_eq!(jittered, jittered_repeat);
     }
 }

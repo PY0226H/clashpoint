@@ -64,6 +64,10 @@ pub struct AiJudgeConfig {
     pub dispatch_batch_size: i64,
     #[serde(default = "default_ai_judge_dispatch_lock_secs")]
     pub dispatch_lock_secs: i64,
+    #[serde(default = "default_ai_judge_dispatch_retry_backoff_max_multiplier")]
+    pub dispatch_retry_backoff_max_multiplier: i64,
+    #[serde(default = "default_ai_judge_dispatch_retry_jitter_ratio")]
+    pub dispatch_retry_jitter_ratio: i64,
     #[serde(default = "default_ai_judge_dispatch_timeout_ms")]
     pub dispatch_timeout_ms: u64,
     #[serde(default = "default_ai_judge_dispatch_max_attempts")]
@@ -83,6 +87,9 @@ impl Default for AiJudgeConfig {
             dispatch_interval_secs: default_ai_judge_dispatch_interval_secs(),
             dispatch_batch_size: default_ai_judge_dispatch_batch_size(),
             dispatch_lock_secs: default_ai_judge_dispatch_lock_secs(),
+            dispatch_retry_backoff_max_multiplier:
+                default_ai_judge_dispatch_retry_backoff_max_multiplier(),
+            dispatch_retry_jitter_ratio: default_ai_judge_dispatch_retry_jitter_ratio(),
             dispatch_timeout_ms: default_ai_judge_dispatch_timeout_ms(),
             dispatch_max_attempts: default_ai_judge_dispatch_max_attempts(),
             dispatch_callback_wait_secs: default_ai_judge_dispatch_callback_wait_secs(),
@@ -151,6 +158,14 @@ fn default_ai_judge_dispatch_batch_size() -> i64 {
 
 fn default_ai_judge_dispatch_lock_secs() -> i64 {
     30
+}
+
+fn default_ai_judge_dispatch_retry_backoff_max_multiplier() -> i64 {
+    8
+}
+
+fn default_ai_judge_dispatch_retry_jitter_ratio() -> i64 {
+    20
 }
 
 fn default_ai_judge_dispatch_timeout_ms() -> u64 {
