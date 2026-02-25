@@ -31,7 +31,7 @@ pub use models::*;
 use axum::{
     http::Method,
     middleware::from_fn_with_state,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 
@@ -84,6 +84,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .allow_headers(cors::Any);
     let debate = Router::new()
         .route("/topics", get(list_debate_topics_handler))
+        .route("/ops/topics", post(create_debate_topic_ops_handler))
+        .route("/ops/topics/:id", put(update_debate_topic_ops_handler))
+        .route("/ops/sessions", post(create_debate_session_ops_handler))
+        .route("/ops/sessions/:id", put(update_debate_session_ops_handler))
         .route("/sessions", get(list_debate_sessions_handler))
         .route("/sessions/:id/join", post(join_debate_session_handler))
         .route(

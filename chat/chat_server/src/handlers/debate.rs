@@ -1,7 +1,8 @@
 use crate::{
     AppError, AppState, CreateDebateMessageInput, GetJudgeReportQuery, JoinDebateSessionInput,
     ListDebateMessages, ListDebatePinnedMessages, ListDebateSessions, ListDebateTopics,
-    PinDebateMessageInput, RequestJudgeJobInput, SubmitDrawVoteInput,
+    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsUpdateDebateSessionInput,
+    OpsUpdateDebateTopicInput, PinDebateMessageInput, RequestJudgeJobInput, SubmitDrawVoteInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -32,6 +33,112 @@ pub(crate) async fn list_debate_topics_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let topics = state.list_debate_topics(user.ws_id as _, input).await?;
     Ok((StatusCode::OK, Json(topics)))
+}
+
+/// Create debate topic by workspace owner (ops).
+#[utoipa::path(
+    post,
+    path = "/api/debate/ops/topics",
+    request_body = OpsCreateDebateTopicInput,
+    responses(
+        (status = 201, description = "Created debate topic", body = crate::DebateTopic),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 404, description = "Workspace not found", body = ErrorOutput),
+        (status = 409, description = "Permission conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn create_debate_topic_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Json(input): Json<OpsCreateDebateTopicInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let topic = state.create_debate_topic_by_owner(&user, input).await?;
+    Ok((StatusCode::CREATED, Json(topic)))
+}
+
+/// Update debate topic by workspace owner (ops).
+#[utoipa::path(
+    put,
+    path = "/api/debate/ops/topics/{id}",
+    params(
+        ("id" = u64, Path, description = "Debate topic id")
+    ),
+    request_body = OpsUpdateDebateTopicInput,
+    responses(
+        (status = 200, description = "Updated debate topic", body = crate::DebateTopic),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 404, description = "Topic/workspace not found", body = ErrorOutput),
+        (status = 409, description = "Permission conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn update_debate_topic_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(input): Json<OpsUpdateDebateTopicInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let topic = state.update_debate_topic_by_owner(&user, id, input).await?;
+    Ok((StatusCode::OK, Json(topic)))
+}
+
+/// Create debate session by workspace owner (ops).
+#[utoipa::path(
+    post,
+    path = "/api/debate/ops/sessions",
+    request_body = OpsCreateDebateSessionInput,
+    responses(
+        (status = 201, description = "Created debate session", body = crate::DebateSessionSummary),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 404, description = "Topic/workspace not found", body = ErrorOutput),
+        (status = 409, description = "Permission conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn create_debate_session_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Json(input): Json<OpsCreateDebateSessionInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let session = state.create_debate_session_by_owner(&user, input).await?;
+    Ok((StatusCode::CREATED, Json(session)))
+}
+
+/// Update debate session by workspace owner (ops).
+#[utoipa::path(
+    put,
+    path = "/api/debate/ops/sessions/{id}",
+    params(
+        ("id" = u64, Path, description = "Debate session id")
+    ),
+    request_body = OpsUpdateDebateSessionInput,
+    responses(
+        (status = 200, description = "Updated debate session", body = crate::DebateSessionSummary),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 404, description = "Session/workspace not found", body = ErrorOutput),
+        (status = 409, description = "Permission conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn update_debate_session_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(input): Json<OpsUpdateDebateSessionInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let session = state
+        .update_debate_session_by_owner(&user, id, input)
+        .await?;
+    Ok((StatusCode::OK, Json(session)))
 }
 
 /// List debate sessions in the current workspace.

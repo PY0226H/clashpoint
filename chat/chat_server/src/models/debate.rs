@@ -17,6 +17,10 @@ const DEBATE_MESSAGE_MAX_LIMIT: u64 = 200;
 const DEBATE_PIN_DEFAULT_LIMIT: u64 = 20;
 const DEBATE_PIN_MAX_LIMIT: u64 = 100;
 const DEBATE_MESSAGE_MAX_LEN: usize = 1000;
+const DEBATE_TOPIC_TITLE_MAX_LEN: usize = 120;
+const DEBATE_TOPIC_CATEGORY_MAX_LEN: usize = 32;
+const DEBATE_STANCE_MAX_LEN: usize = 64;
+const DEBATE_SESSION_STATUS_MAX_LEN: usize = 20;
 const PIN_MIN_SECONDS: i32 = 30;
 const PIN_MAX_SECONDS: i32 = 600;
 const PIN_BILLING_UNIT_SECONDS: i32 = 30;
@@ -75,6 +79,50 @@ pub struct ListDebateSessions {
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsCreateDebateTopicInput {
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub stance_pro: String,
+    pub stance_con: String,
+    pub context_seed: Option<String>,
+    #[serde(default = "default_true")]
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsCreateDebateSessionInput {
+    pub topic_id: u64,
+    pub status: Option<String>,
+    pub scheduled_start_at: DateTime<Utc>,
+    pub end_at: DateTime<Utc>,
+    pub max_participants_per_side: Option<i32>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsUpdateDebateTopicInput {
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub stance_pro: String,
+    pub stance_con: String,
+    pub context_seed: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsUpdateDebateSessionInput {
+    pub status: Option<String>,
+    pub scheduled_start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub max_participants_per_side: Option<i32>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -182,6 +230,16 @@ struct DebateSessionForAction {
 }
 
 #[derive(Debug, FromRow)]
+struct DebateSessionForOpsUpdate {
+    status: String,
+    scheduled_start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    max_participants_per_side: i32,
+    pro_count: i32,
+    con_count: i32,
+}
+
+#[derive(Debug, FromRow)]
 struct DebateMessageForPin {
     id: i64,
     ws_id: i64,
@@ -236,6 +294,48 @@ fn valid_join_side(side: &str) -> bool {
 
 fn can_join_status(status: &str) -> bool {
     matches!(status, "open" | "running")
+}
+
+fn normalize_ops_topic_field(value: &str, field: &str, max_len: usize) -> Result<String, AppError> {
+    let text = value.trim();
+    if text.is_empty() {
+        return Err(AppError::DebateError(format!("{field} cannot be empty")));
+    }
+    if text.len() > max_len {
+        return Err(AppError::DebateError(format!(
+            "{field} is too long, max {max_len}"
+        )));
+    }
+    Ok(text.to_string())
+}
+
+fn normalize_ops_session_status(status: Option<String>) -> Result<String, AppError> {
+    let status = status
+        .unwrap_or_else(|| "scheduled".to_string())
+        .trim()
+        .to_lowercase();
+    if matches!(status.as_str(), "scheduled" | "open") {
+        return Ok(status);
+    }
+    Err(AppError::DebateError(
+        "status must be `scheduled` or `open`".to_string(),
+    ))
+}
+
+fn normalize_ops_manage_session_status(status: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    let status = status.trim().to_lowercase();
+    if matches!(
+        status.as_str(),
+        "scheduled" | "open" | "running" | "judging" | "closed" | "canceled"
+    ) {
+        return Ok(Some(status));
+    }
+    Err(AppError::DebateError(
+        "status must be one of `scheduled|open|running|judging|closed|canceled`".to_string(),
+    ))
 }
 
 fn normalize_message_content(content: &str) -> Result<String, AppError> {
@@ -341,6 +441,281 @@ impl AppState {
         .await?;
 
         Ok(rows)
+    }
+
+    async fn ensure_workspace_owner(&self, ws_id: i64, user_id: i64) -> Result<(), AppError> {
+        let owner_row: Option<(i64,)> =
+            sqlx::query_as("SELECT owner_id FROM workspaces WHERE id = $1")
+                .bind(ws_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some((owner_id,)) = owner_row else {
+            return Err(AppError::NotFound(format!("workspace id {}", ws_id)));
+        };
+        if owner_id != user_id {
+            return Err(AppError::DebateConflict(
+                "only workspace owner can manage debate operations".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn create_debate_topic_by_owner(
+        &self,
+        user: &User,
+        input: OpsCreateDebateTopicInput,
+    ) -> Result<DebateTopic, AppError> {
+        self.ensure_workspace_owner(user.ws_id, user.id).await?;
+
+        let title = normalize_ops_topic_field(&input.title, "title", DEBATE_TOPIC_TITLE_MAX_LEN)?;
+        let description = normalize_ops_topic_field(&input.description, "description", 4000)?;
+        let category =
+            normalize_ops_topic_field(&input.category, "category", DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
+        let stance_pro =
+            normalize_ops_topic_field(&input.stance_pro, "stance_pro", DEBATE_STANCE_MAX_LEN)?;
+        let stance_con =
+            normalize_ops_topic_field(&input.stance_con, "stance_con", DEBATE_STANCE_MAX_LEN)?;
+        let context_seed = input
+            .context_seed
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
+        let row = sqlx::query_as(
+            r#"
+            INSERT INTO debate_topics(
+                ws_id, title, description, category, stance_pro, stance_con,
+                context_seed, is_active, created_by
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING
+                id, ws_id, title, description, category, stance_pro, stance_con,
+                context_seed, is_active, created_by, created_at, updated_at
+            "#,
+        )
+        .bind(user.ws_id)
+        .bind(title)
+        .bind(description)
+        .bind(category)
+        .bind(stance_pro)
+        .bind(stance_con)
+        .bind(context_seed)
+        .bind(input.is_active)
+        .bind(user.id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    pub async fn create_debate_session_by_owner(
+        &self,
+        user: &User,
+        input: OpsCreateDebateSessionInput,
+    ) -> Result<DebateSessionSummary, AppError> {
+        self.ensure_workspace_owner(user.ws_id, user.id).await?;
+
+        let status = normalize_ops_session_status(input.status)?;
+        if status.len() > DEBATE_SESSION_STATUS_MAX_LEN {
+            return Err(AppError::DebateError(format!(
+                "status is too long, max {}",
+                DEBATE_SESSION_STATUS_MAX_LEN
+            )));
+        }
+
+        let max_per_side = input.max_participants_per_side.unwrap_or(500);
+        if max_per_side <= 0 {
+            return Err(AppError::DebateError(
+                "maxParticipantsPerSide must be > 0".to_string(),
+            ));
+        }
+        if input.end_at <= input.scheduled_start_at {
+            return Err(AppError::DebateError(
+                "scheduledStartAt must be before endAt".to_string(),
+            ));
+        }
+
+        let topic_exists: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT id
+            FROM debate_topics
+            WHERE id = $1 AND ws_id = $2
+            "#,
+        )
+        .bind(input.topic_id as i64)
+        .bind(user.ws_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if topic_exists.is_none() {
+            return Err(AppError::NotFound(format!(
+                "debate topic id {}",
+                input.topic_id
+            )));
+        }
+
+        let row = sqlx::query_as(
+            r#"
+            INSERT INTO debate_sessions(
+                ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+            )
+            VALUES ($1, $2, $3, $4, NULL, $5, $6)
+            RETURNING
+                id, ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
+                max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
+                ((status IN ('open', 'running')) AND end_at > NOW()) AS joinable
+            "#,
+        )
+        .bind(user.ws_id)
+        .bind(input.topic_id as i64)
+        .bind(status)
+        .bind(input.scheduled_start_at)
+        .bind(input.end_at)
+        .bind(max_per_side)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    pub async fn update_debate_topic_by_owner(
+        &self,
+        user: &User,
+        topic_id: u64,
+        input: OpsUpdateDebateTopicInput,
+    ) -> Result<DebateTopic, AppError> {
+        self.ensure_workspace_owner(user.ws_id, user.id).await?;
+
+        let title = normalize_ops_topic_field(&input.title, "title", DEBATE_TOPIC_TITLE_MAX_LEN)?;
+        let description = normalize_ops_topic_field(&input.description, "description", 4000)?;
+        let category =
+            normalize_ops_topic_field(&input.category, "category", DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
+        let stance_pro =
+            normalize_ops_topic_field(&input.stance_pro, "stance_pro", DEBATE_STANCE_MAX_LEN)?;
+        let stance_con =
+            normalize_ops_topic_field(&input.stance_con, "stance_con", DEBATE_STANCE_MAX_LEN)?;
+        let context_seed = input
+            .context_seed
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
+        let row = sqlx::query_as(
+            r#"
+            UPDATE debate_topics
+            SET
+              title = $3,
+              description = $4,
+              category = $5,
+              stance_pro = $6,
+              stance_con = $7,
+              context_seed = $8,
+              is_active = $9,
+              updated_at = NOW()
+            WHERE id = $1 AND ws_id = $2
+            RETURNING
+                id, ws_id, title, description, category, stance_pro, stance_con,
+                context_seed, is_active, created_by, created_at, updated_at
+            "#,
+        )
+        .bind(topic_id as i64)
+        .bind(user.ws_id)
+        .bind(title)
+        .bind(description)
+        .bind(category)
+        .bind(stance_pro)
+        .bind(stance_con)
+        .bind(context_seed)
+        .bind(input.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.ok_or_else(|| AppError::NotFound(format!("debate topic id {topic_id}")))
+    }
+
+    pub async fn update_debate_session_by_owner(
+        &self,
+        user: &User,
+        session_id: u64,
+        input: OpsUpdateDebateSessionInput,
+    ) -> Result<DebateSessionSummary, AppError> {
+        self.ensure_workspace_owner(user.ws_id, user.id).await?;
+
+        let status_input = normalize_ops_manage_session_status(input.status)?;
+        let mut tx = self.pool.begin().await?;
+
+        let current = sqlx::query_as::<_, DebateSessionForOpsUpdate>(
+            r#"
+            SELECT status, scheduled_start_at, end_at, max_participants_per_side, pro_count, con_count
+            FROM debate_sessions
+            WHERE id = $1 AND ws_id = $2
+            FOR UPDATE
+            "#,
+        )
+        .bind(session_id as i64)
+        .bind(user.ws_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
+
+        let next_status = status_input.unwrap_or(current.status);
+        if next_status.len() > DEBATE_SESSION_STATUS_MAX_LEN {
+            return Err(AppError::DebateError(format!(
+                "status is too long, max {}",
+                DEBATE_SESSION_STATUS_MAX_LEN
+            )));
+        }
+
+        let next_scheduled_start = input
+            .scheduled_start_at
+            .unwrap_or(current.scheduled_start_at);
+        let next_end_at = input.end_at.unwrap_or(current.end_at);
+        if next_end_at <= next_scheduled_start {
+            return Err(AppError::DebateError(
+                "scheduledStartAt must be before endAt".to_string(),
+            ));
+        }
+
+        let next_max_per_side = input
+            .max_participants_per_side
+            .unwrap_or(current.max_participants_per_side);
+        if next_max_per_side <= 0 {
+            return Err(AppError::DebateError(
+                "maxParticipantsPerSide must be > 0".to_string(),
+            ));
+        }
+        if current.pro_count > next_max_per_side || current.con_count > next_max_per_side {
+            return Err(AppError::DebateConflict(format!(
+                "maxParticipantsPerSide {} is smaller than current participant count",
+                next_max_per_side
+            )));
+        }
+
+        let row = sqlx::query_as(
+            r#"
+            UPDATE debate_sessions
+            SET
+              status = $3,
+              scheduled_start_at = $4,
+              end_at = $5,
+              max_participants_per_side = $6,
+              updated_at = NOW()
+            WHERE id = $1 AND ws_id = $2
+            RETURNING
+                id, ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
+                max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
+                ((status IN ('open', 'running')) AND end_at > NOW()) AS joinable
+            "#,
+        )
+        .bind(session_id as i64)
+        .bind(user.ws_id)
+        .bind(next_status)
+        .bind(next_scheduled_start)
+        .bind(next_end_at)
+        .bind(next_max_per_side)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(row)
     }
 
     pub async fn join_debate_session(
@@ -1274,6 +1649,256 @@ mod tests {
             .find(|v| v.id == session_id)
             .expect("seeded session should exist");
         assert!(row.joinable);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_topic_by_owner_should_work_and_reject_non_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state
+            .find_user_by_id(1)
+            .await?
+            .expect("owner user should exist");
+        let non_owner = state
+            .find_user_by_id(2)
+            .await?
+            .expect("non owner user should exist");
+
+        let topic = state
+            .create_debate_topic_by_owner(
+                &owner,
+                OpsCreateDebateTopicInput {
+                    title: "运营辩题".to_string(),
+                    description: "用于运营排期".to_string(),
+                    category: "game".to_string(),
+                    stance_pro: "支持".to_string(),
+                    stance_con: "反对".to_string(),
+                    context_seed: Some("种子背景".to_string()),
+                    is_active: true,
+                },
+            )
+            .await?;
+        assert_eq!(topic.ws_id, owner.ws_id);
+        assert_eq!(topic.created_by, owner.id);
+
+        let err = state
+            .create_debate_topic_by_owner(
+                &non_owner,
+                OpsCreateDebateTopicInput {
+                    title: "越权辩题".to_string(),
+                    description: "not allowed".to_string(),
+                    category: "game".to_string(),
+                    stance_pro: "pro".to_string(),
+                    stance_con: "con".to_string(),
+                    context_seed: None,
+                    is_active: true,
+                },
+            )
+            .await
+            .expect_err("non owner should be rejected");
+        assert!(matches!(err, AppError::DebateConflict(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_session_by_owner_should_validate_status_and_topic() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state
+            .find_user_by_id(1)
+            .await?
+            .expect("owner user should exist");
+        let (topic_id, _) = seed_topic_and_session(&state, 1, "scheduled", 50).await?;
+
+        let now = Utc::now();
+        let session = state
+            .create_debate_session_by_owner(
+                &owner,
+                OpsCreateDebateSessionInput {
+                    topic_id: topic_id as u64,
+                    status: Some("open".to_string()),
+                    scheduled_start_at: now,
+                    end_at: now + Duration::minutes(20),
+                    max_participants_per_side: Some(200),
+                },
+            )
+            .await?;
+        assert_eq!(session.ws_id, owner.ws_id);
+        assert_eq!(session.topic_id, topic_id);
+        assert_eq!(session.status, "open");
+        assert!(session.joinable);
+
+        let invalid_status_err = state
+            .create_debate_session_by_owner(
+                &owner,
+                OpsCreateDebateSessionInput {
+                    topic_id: topic_id as u64,
+                    status: Some("judging".to_string()),
+                    scheduled_start_at: now,
+                    end_at: now + Duration::minutes(20),
+                    max_participants_per_side: Some(200),
+                },
+            )
+            .await
+            .expect_err("invalid status should fail");
+        assert!(matches!(invalid_status_err, AppError::DebateError(_)));
+
+        let not_found_err = state
+            .create_debate_session_by_owner(
+                &owner,
+                OpsCreateDebateSessionInput {
+                    topic_id: 999_999,
+                    status: Some("scheduled".to_string()),
+                    scheduled_start_at: now,
+                    end_at: now + Duration::minutes(20),
+                    max_participants_per_side: Some(200),
+                },
+            )
+            .await
+            .expect_err("missing topic should fail");
+        assert!(matches!(not_found_err, AppError::NotFound(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_debate_topic_by_owner_should_update_and_reject_non_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state
+            .find_user_by_id(1)
+            .await?
+            .expect("owner user should exist");
+        let non_owner = state
+            .find_user_by_id(2)
+            .await?
+            .expect("non owner user should exist");
+
+        let created = state
+            .create_debate_topic_by_owner(
+                &owner,
+                OpsCreateDebateTopicInput {
+                    title: "old".to_string(),
+                    description: "old desc".to_string(),
+                    category: "game".to_string(),
+                    stance_pro: "支持".to_string(),
+                    stance_con: "反对".to_string(),
+                    context_seed: None,
+                    is_active: true,
+                },
+            )
+            .await?;
+
+        let updated = state
+            .update_debate_topic_by_owner(
+                &owner,
+                created.id as u64,
+                OpsUpdateDebateTopicInput {
+                    title: "new-title".to_string(),
+                    description: "new desc".to_string(),
+                    category: "sports".to_string(),
+                    stance_pro: "赞成".to_string(),
+                    stance_con: "否定".to_string(),
+                    context_seed: Some("ctx".to_string()),
+                    is_active: false,
+                },
+            )
+            .await?;
+        assert_eq!(updated.title, "new-title");
+        assert_eq!(updated.category, "sports");
+        assert!(!updated.is_active);
+        assert_eq!(updated.context_seed.as_deref(), Some("ctx"));
+
+        let err = state
+            .update_debate_topic_by_owner(
+                &non_owner,
+                created.id as u64,
+                OpsUpdateDebateTopicInput {
+                    title: "hack".to_string(),
+                    description: "hack".to_string(),
+                    category: "game".to_string(),
+                    stance_pro: "p".to_string(),
+                    stance_con: "c".to_string(),
+                    context_seed: None,
+                    is_active: true,
+                },
+            )
+            .await
+            .expect_err("non owner should be rejected");
+        assert!(matches!(err, AppError::DebateConflict(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_debate_session_by_owner_should_validate_and_update() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state
+            .find_user_by_id(1)
+            .await?
+            .expect("owner user should exist");
+
+        let (topic_id, session_id) = seed_topic_and_session(&state, 1, "scheduled", 5).await?;
+        for user_id in [1_i64, 2_i64] {
+            sqlx::query(
+                "INSERT INTO session_participants(session_id, user_id, side) VALUES ($1, $2, 'pro')",
+            )
+            .bind(session_id)
+            .bind(user_id)
+            .execute(&state.pool)
+            .await?;
+        }
+        sqlx::query("UPDATE debate_sessions SET pro_count = 2 WHERE id = $1")
+            .bind(session_id)
+            .execute(&state.pool)
+            .await?;
+
+        let now = Utc::now();
+        let updated = state
+            .update_debate_session_by_owner(
+                &owner,
+                session_id as u64,
+                OpsUpdateDebateSessionInput {
+                    status: Some("open".to_string()),
+                    scheduled_start_at: Some(now - Duration::minutes(2)),
+                    end_at: Some(now + Duration::minutes(30)),
+                    max_participants_per_side: Some(10),
+                },
+            )
+            .await?;
+        assert_eq!(updated.status, "open");
+        assert_eq!(updated.topic_id, topic_id);
+        assert_eq!(updated.max_participants_per_side, 10);
+
+        let too_small_err = state
+            .update_debate_session_by_owner(
+                &owner,
+                session_id as u64,
+                OpsUpdateDebateSessionInput {
+                    status: None,
+                    scheduled_start_at: None,
+                    end_at: None,
+                    max_participants_per_side: Some(1),
+                },
+            )
+            .await
+            .expect_err("max below current should fail");
+        assert!(matches!(too_small_err, AppError::DebateConflict(_)));
+
+        let invalid_status_err = state
+            .update_debate_session_by_owner(
+                &owner,
+                session_id as u64,
+                OpsUpdateDebateSessionInput {
+                    status: Some("invalid".to_string()),
+                    scheduled_start_at: None,
+                    end_at: None,
+                    max_participants_per_side: None,
+                },
+            )
+            .await
+            .expect_err("invalid status should fail");
+        assert!(matches!(invalid_status_err, AppError::DebateError(_)));
         Ok(())
     }
 

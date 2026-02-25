@@ -404,6 +404,176 @@ export default createStore({
       });
       return response.data || [];
     },
+    async createDebateTopicOps(
+      { state },
+      {
+        title,
+        description,
+        category,
+        stancePro,
+        stanceCon,
+        contextSeed = null,
+        isActive = true,
+      } = {},
+    ) {
+      if (!title || !String(title).trim()) {
+        throw new Error('title is required');
+      }
+      if (!description || !String(description).trim()) {
+        throw new Error('description is required');
+      }
+      if (!category || !String(category).trim()) {
+        throw new Error('category is required');
+      }
+      if (!stancePro || !String(stancePro).trim()) {
+        throw new Error('stancePro is required');
+      }
+      if (!stanceCon || !String(stanceCon).trim()) {
+        throw new Error('stanceCon is required');
+      }
+
+      const response = await network(
+        this,
+        'post',
+        '/debate/ops/topics',
+        {
+          title: String(title).trim(),
+          description: String(description).trim(),
+          category: String(category).trim(),
+          stancePro: String(stancePro).trim(),
+          stanceCon: String(stanceCon).trim(),
+          contextSeed: contextSeed == null ? null : String(contextSeed).trim() || null,
+          isActive: !!isActive,
+        },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
+    async updateDebateTopicOps(
+      { state },
+      {
+        topicId,
+        title,
+        description,
+        category,
+        stancePro,
+        stanceCon,
+        contextSeed = null,
+        isActive = true,
+      } = {},
+    ) {
+      if (!topicId) {
+        throw new Error('topicId is required');
+      }
+      if (!title || !String(title).trim()) {
+        throw new Error('title is required');
+      }
+      if (!description || !String(description).trim()) {
+        throw new Error('description is required');
+      }
+      if (!category || !String(category).trim()) {
+        throw new Error('category is required');
+      }
+      if (!stancePro || !String(stancePro).trim()) {
+        throw new Error('stancePro is required');
+      }
+      if (!stanceCon || !String(stanceCon).trim()) {
+        throw new Error('stanceCon is required');
+      }
+      const response = await network(
+        this,
+        'put',
+        `/debate/ops/topics/${Number(topicId)}`,
+        {
+          title: String(title).trim(),
+          description: String(description).trim(),
+          category: String(category).trim(),
+          stancePro: String(stancePro).trim(),
+          stanceCon: String(stanceCon).trim(),
+          contextSeed: contextSeed == null ? null : String(contextSeed).trim() || null,
+          isActive: !!isActive,
+        },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
+    async createDebateSessionOps(
+      { state },
+      {
+        topicId,
+        status = 'scheduled',
+        scheduledStartAt,
+        endAt,
+        maxParticipantsPerSide = 500,
+      } = {},
+    ) {
+      if (!topicId) {
+        throw new Error('topicId is required');
+      }
+      if (!scheduledStartAt || !String(scheduledStartAt).trim()) {
+        throw new Error('scheduledStartAt is required');
+      }
+      if (!endAt || !String(endAt).trim()) {
+        throw new Error('endAt is required');
+      }
+      const response = await network(
+        this,
+        'post',
+        '/debate/ops/sessions',
+        {
+          topicId: Number(topicId),
+          status: String(status || 'scheduled').trim(),
+          scheduledStartAt: String(scheduledStartAt).trim(),
+          endAt: String(endAt).trim(),
+          maxParticipantsPerSide: Number(maxParticipantsPerSide),
+        },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
+    async updateDebateSessionOps(
+      { state },
+      {
+        sessionId,
+        status = null,
+        scheduledStartAt = null,
+        endAt = null,
+        maxParticipantsPerSide = null,
+      } = {},
+    ) {
+      if (!sessionId) {
+        throw new Error('sessionId is required');
+      }
+      const payload = {};
+      if (status != null && String(status).trim()) {
+        payload.status = String(status).trim();
+      }
+      if (scheduledStartAt != null && String(scheduledStartAt).trim()) {
+        payload.scheduledStartAt = String(scheduledStartAt).trim();
+      }
+      if (endAt != null && String(endAt).trim()) {
+        payload.endAt = String(endAt).trim();
+      }
+      if (maxParticipantsPerSide != null) {
+        payload.maxParticipantsPerSide = Number(maxParticipantsPerSide);
+      }
+      const response = await network(
+        this,
+        'put',
+        `/debate/ops/sessions/${Number(sessionId)}`,
+        payload,
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data;
+    },
     async joinDebateSession({ state }, { sessionId, side }) {
       if (!sessionId) {
         throw new Error('sessionId is required');

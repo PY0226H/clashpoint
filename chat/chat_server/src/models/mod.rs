@@ -14,8 +14,9 @@ pub use chat::CreateChat;
 pub use debate::{
     CreateDebateMessageInput, DebateMessage, DebatePinnedMessage, DebateSessionSummary,
     DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateMessages,
-    ListDebatePinnedMessages, ListDebateSessions, ListDebateTopics, PinDebateMessageInput,
-    PinDebateMessageOutput,
+    ListDebatePinnedMessages, ListDebateSessions, ListDebateTopics, OpsCreateDebateSessionInput,
+    OpsCreateDebateTopicInput, OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput,
+    PinDebateMessageInput, PinDebateMessageOutput,
 };
 pub use judge::{
     DrawVoteDetail, GetDrawVoteOutput, GetJudgeReportOutput, GetJudgeReportQuery, JudgeJobSnapshot,

@@ -8,10 +8,11 @@ use crate::{
     JudgeRagSourceItem, JudgeReportDetail, JudgeStageSummariesMeta, JudgeStageSummaryDetail,
     JudgeStageSummaryInput, ListDebateMessages, ListDebatePinnedMessages, ListDebateSessions,
     ListDebateTopics, ListIapProducts, ListMessages, ListWalletLedger, MarkJudgeJobFailedInput,
-    MarkJudgeJobFailedOutput, PinDebateMessageInput, PinDebateMessageOutput, RequestJudgeJobInput,
-    RequestJudgeJobOutput, SigninUser, SubmitDrawVoteInput, SubmitDrawVoteOutput,
-    SubmitJudgeReportInput, SubmitJudgeReportOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
-    WalletBalanceOutput, WalletLedgerItem,
+    MarkJudgeJobFailedOutput, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
+    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, PinDebateMessageInput,
+    PinDebateMessageOutput, RequestJudgeJobInput, RequestJudgeJobOutput, SigninUser,
+    SubmitDrawVoteInput, SubmitDrawVoteOutput, SubmitJudgeReportInput, SubmitJudgeReportOutput,
+    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
 };
 use axum::Router;
 use chat_core::{AgentType, Chat, ChatAgent, ChatType, ChatUser, Message, User, Workspace};
@@ -34,6 +35,10 @@ pub(crate) trait OpenApiRouter {
             signin_handler,
             create_access_tickets_handler,
             list_debate_topics_handler,
+            create_debate_topic_ops_handler,
+            update_debate_topic_ops_handler,
+            create_debate_session_ops_handler,
+            update_debate_session_ops_handler,
             list_debate_sessions_handler,
             join_debate_session_handler,
             list_debate_messages_handler,
@@ -66,6 +71,8 @@ pub(crate) trait OpenApiRouter {
             schemas(
                 User, Chat, ChatType, ChatAgent, AgentType, ChatUser, Message, Workspace,
                 DebateTopic, DebateSessionSummary, ListDebateTopics, ListDebateSessions,
+                OpsCreateDebateTopicInput, OpsCreateDebateSessionInput,
+                OpsUpdateDebateTopicInput, OpsUpdateDebateSessionInput,
                 JoinDebateSessionInput, JoinDebateSessionOutput,
                 DebateMessage, CreateDebateMessageInput, ListDebateMessages,
                 DebatePinnedMessage, ListDebatePinnedMessages, PinDebateMessageInput, PinDebateMessageOutput,

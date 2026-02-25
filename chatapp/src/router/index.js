@@ -6,11 +6,13 @@ import JudgeReport from '../views/JudgeReport.vue';
 import DebateLobby from '../views/DebateLobby.vue';
 import DebateRoom from '../views/DebateRoom.vue';
 import Wallet from '../views/Wallet.vue';
+import DebateOpsAdmin from '../views/DebateOpsAdmin.vue';
 
 const routes = [
   { path: '/', name: 'Chat', component: Chat, meta: { requiresAuth: true } },
   { path: '/debate', name: 'DebateLobby', component: DebateLobby, meta: { requiresAuth: true } },
   { path: '/debate/sessions/:id', name: 'DebateRoom', component: DebateRoom, meta: { requiresAuth: true } },
+  { path: '/debate/ops', name: 'DebateOpsAdmin', component: DebateOpsAdmin, meta: { requiresAuth: true } },
   { path: '/judge-report', name: 'JudgeReport', component: JudgeReport, meta: { requiresAuth: true } },
   { path: '/wallet', name: 'Wallet', component: Wallet, meta: { requiresAuth: true } },
   { path: '/login', name: 'Login', component: Login },

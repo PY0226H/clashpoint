@@ -36,6 +36,12 @@
           Debate
         </li>
         <li
+          @click="goRoute('/debate/ops')"
+          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/debate/ops') }]"
+        >
+          Debate Ops
+        </li>
+        <li
           @click="goRoute('/wallet')"
           :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/wallet') }]"
         >
@@ -123,8 +129,11 @@ export default {
       }
     },
     isRouteActive(path) {
+      if (path === '/debate/ops') {
+        return this.$route.path.startsWith('/debate/ops');
+      }
       if (path === '/debate') {
-        return this.$route.path.startsWith('/debate');
+        return this.$route.path.startsWith('/debate') && !this.$route.path.startsWith('/debate/ops');
       }
       return this.$route.path === path;
     },
