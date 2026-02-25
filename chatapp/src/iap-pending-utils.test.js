@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   computePendingIapRetryDelayMs,
   DEFAULT_PENDING_IAP_RETRY_POLICY,
+  DEFAULT_PENDING_IAP_RETENTION_POLICY,
   filterRetryablePendingIap,
   isPendingIapRetryable,
   PENDING_IAP_STORAGE_KEY,
@@ -33,14 +34,46 @@ test('normalizePendingIapItem should reject invalid payload', () => {
 });
 
 test('sanitizePendingIapQueue should dedupe by transaction and keep latest updatedAt', () => {
+  const now = 50_000;
   const queue = sanitizePendingIapQueue([
-    buildItem({ transactionId: 'tx-a', updatedAt: 1, attempts: 1 }),
-    buildItem({ transactionId: 'tx-a', updatedAt: 10, attempts: 3 }),
-    buildItem({ transactionId: 'tx-b', updatedAt: 5 }),
-  ]);
+    buildItem({ transactionId: 'tx-a', updatedAt: now - 3, attempts: 1 }),
+    buildItem({ transactionId: 'tx-a', updatedAt: now - 1, attempts: 3 }),
+    buildItem({ transactionId: 'tx-b', updatedAt: now - 2 }),
+  ], now);
   assert.equal(queue.length, 2);
   assert.equal(queue[0].transactionId, 'tx-a');
   assert.equal(queue[0].attempts, 3);
+});
+
+test('sanitizePendingIapQueue should drop stale items by max age policy', () => {
+  const now = 2_000_000;
+  const queue = sanitizePendingIapQueue(
+    [
+      buildItem({ transactionId: 'tx-fresh', updatedAt: now - 1_000 }),
+      buildItem({
+        transactionId: 'tx-stale',
+        updatedAt: now - (DEFAULT_PENDING_IAP_RETENTION_POLICY.maxItemAgeMs + 1),
+      }),
+    ],
+    now,
+  );
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].transactionId, 'tx-fresh');
+});
+
+test('sanitizePendingIapQueue should cap queue size and keep latest items', () => {
+  const now = 3_000_000;
+  const queue = sanitizePendingIapQueue(
+    [
+      buildItem({ transactionId: 'tx-1', updatedAt: now - 3 }),
+      buildItem({ transactionId: 'tx-2', updatedAt: now - 2 }),
+      buildItem({ transactionId: 'tx-3', updatedAt: now - 1 }),
+    ],
+    now,
+    { maxQueueSize: 2, maxItemAgeMs: DEFAULT_PENDING_IAP_RETENTION_POLICY.maxItemAgeMs },
+  );
+  assert.equal(queue.length, 2);
+  assert.deepEqual(queue.map((item) => item.transactionId), ['tx-3', 'tx-2']);
 });
 
 test('registerPendingIapFailure should upsert and increment attempts', () => {

@@ -4,6 +4,10 @@ const DEFAULT_PENDING_IAP_RETRY_POLICY = Object.freeze({
   maxDelayMs: 30 * 60_000,
   maxAttempts: 6,
 });
+const DEFAULT_PENDING_IAP_RETENTION_POLICY = Object.freeze({
+  maxQueueSize: 200,
+  maxItemAgeMs: 30 * 24 * 60 * 60_000,
+});
 
 function toNonEmptyString(value) {
   const normalized = String(value || '').trim();
@@ -38,6 +42,23 @@ function normalizeRetryPolicy(policy = {}) {
     baseDelayMs,
     maxDelayMs,
     maxAttempts,
+  };
+}
+
+function normalizeRetentionPolicy(policy = {}) {
+  const maxQueueSize = normalizePositiveInt(
+    policy.maxQueueSize,
+    DEFAULT_PENDING_IAP_RETENTION_POLICY.maxQueueSize,
+    { min: 1, max: 5_000 },
+  );
+  const maxItemAgeMs = normalizePositiveInt(
+    policy.maxItemAgeMs,
+    DEFAULT_PENDING_IAP_RETENTION_POLICY.maxItemAgeMs,
+    { min: 60_000, max: 365 * 24 * 60 * 60_000 },
+  );
+  return {
+    maxQueueSize,
+    maxItemAgeMs,
   };
 }
 
@@ -94,8 +115,9 @@ export function normalizePendingIapItem(raw, nowMs = Date.now()) {
   };
 }
 
-export function sanitizePendingIapQueue(input, nowMs = Date.now()) {
+export function sanitizePendingIapQueue(input, nowMs = Date.now(), retentionPolicyInput = {}) {
   const arr = Array.isArray(input) ? input : [];
+  const retentionPolicy = normalizeRetentionPolicy(retentionPolicyInput);
   const byTransaction = new Map();
   for (const item of arr) {
     const normalized = normalizePendingIapItem(item, nowMs);
@@ -107,7 +129,10 @@ export function sanitizePendingIapQueue(input, nowMs = Date.now()) {
       byTransaction.set(normalized.transactionId, normalized);
     }
   }
-  return Array.from(byTransaction.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+  return Array.from(byTransaction.values())
+    .filter((item) => (nowMs - item.updatedAt) <= retentionPolicy.maxItemAgeMs)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, retentionPolicy.maxQueueSize);
 }
 
 export function upsertPendingIap(queue, payload, nowMs = Date.now()) {
@@ -206,4 +231,8 @@ export function writePendingIapQueue(queue, storage = globalThis?.localStorage) 
   storage.setItem(PENDING_IAP_STORAGE_KEY, JSON.stringify(normalized));
 }
 
-export { PENDING_IAP_STORAGE_KEY, DEFAULT_PENDING_IAP_RETRY_POLICY };
+export {
+  PENDING_IAP_STORAGE_KEY,
+  DEFAULT_PENDING_IAP_RETRY_POLICY,
+  DEFAULT_PENDING_IAP_RETENTION_POLICY,
+};
