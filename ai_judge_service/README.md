@@ -39,6 +39,27 @@ uvicorn app.main:app --host 0.0.0.0 --port 8787
 - `AI_JUDGE_OPENAI_TEMPERATURE`: 默认 `0.1`
 - `AI_JUDGE_OPENAI_MAX_RETRIES`: 每次评估重试次数，默认 `2`
 - `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK`: OpenAI 失败时是否回退到 mock，默认 `true`
+- `AI_JUDGE_RAG_ENABLED`: 是否启用检索上下文，默认 `true`
+- `AI_JUDGE_RAG_KNOWLEDGE_FILE`: 本地知识库 JSON 文件路径（为空则仅使用 `context_seed`）
+- `AI_JUDGE_RAG_MAX_SNIPPETS`: 检索片段上限，默认 `4`
+- `AI_JUDGE_RAG_MAX_CHARS_PER_SNIPPET`: 单片段最大字符数，默认 `280`
+- `AI_JUDGE_RAG_QUERY_MESSAGE_LIMIT`: 检索查询使用最近消息条数，默认 `80`
+
+## 知识文件格式（最小）
+
+`AI_JUDGE_RAG_KNOWLEDGE_FILE` 指向一个 JSON 数组，每个元素示例：
+
+```json
+[
+  {
+    "chunkId": "tft-frontline-001",
+    "title": "前排改动说明",
+    "sourceUrl": "https://teamfighttactics.leagueoflegends.com/en-us/news/...",
+    "content": "该版本前排羁绊获得额外护甲和魔抗加成。",
+    "tags": ["tft", "frontline"]
+  }
+]
+```
 
 ## 运行测试
 

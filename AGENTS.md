@@ -7,6 +7,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 - post-module-test-guard: Generate or update tests for changed module behavior and run repository quality gates after implementation. Use when a turn includes module-level code changes and you must ensure tests are present and passing before considering the module complete. (file: /Users/panyihang/Documents/aicomm/skills/post-module-test-guard/SKILL.md)
 - post-module-interview-journal: Generate interview-ready development records after each module implementation. Use when a turn includes feature/module code changes and you need to update development log, troubleshooting log, and interview Q&A materials. (file: /Users/panyihang/Documents/aicomm/skills/post-module-interview-journal/SKILL.md)
 - post-module-explanation-journal: Generate deep Chinese explanation documents for newly added or modified module code and write a new file under `docs/explanation` after each module change. Use when a turn includes module-level implementation/refactor/fix and explanation assets must be updated for learning/interview review. (file: /Users/panyihang/Documents/aicomm/skills/post-module-explanation-journal/SKILL.md)
+- python-venv-guard: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. Use whenever a turn includes Python dependency install, Python test run, Python script execution, or service startup. (file: /Users/panyihang/Documents/aicomm/skills/python-venv-guard/SKILL.md)
 
 ### How to use skills
 - Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
@@ -25,6 +26,11 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
   - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
   - Avoid deep reference chasing: prefer opening only files directly linked from `SKILL.md` unless blocked.
 - Safety and fallback: If a skill cannot be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+
+### Mandatory Python environment rule
+- For any turn that runs Python commands in this repository, run `python-venv-guard` first.
+- Never run Python with global interpreters (`python`, `python3`, `pip`, `pip3`) for project tasks.
+- Always use project virtual environment interpreter directly (for this repo: `/Users/panyihang/Documents/aicomm/ai_judge_service/.venv/bin/python`).
 
 ### Mandatory post-module hook
 - For any turn that includes module-level code implementation/refactor/fix in this repository, run `post-module-test-guard` after coding and before final verification sign-off.

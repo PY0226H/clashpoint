@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from .rag_retriever import RetrievedContext, summarize_retrieved_contexts
 from .scoring_core import DebateMessage
 
 if TYPE_CHECKING:
@@ -110,7 +111,27 @@ def _build_system_prompt(style_mode: str, pass_no: int) -> str:
     )
 
 
-def _build_user_prompt(request: JudgeDispatchRequest, messages: list[DebateMessage]) -> str:
+def _build_retrieved_contexts_section(retrieved_contexts: list[RetrievedContext]) -> str:
+    if not retrieved_contexts:
+        return "Retrieved background knowledge:\n- (none)\n"
+
+    blocks: list[str] = []
+    for idx, snippet in enumerate(retrieved_contexts, start=1):
+        source = snippet.source_url or "unknown_source"
+        blocks.append(
+            (
+                f"[{idx}] title={snippet.title}; source={source}; score={snippet.score:.4f}\n"
+                f"{snippet.content}"
+            ).strip()
+        )
+    return "Retrieved background knowledge:\n" + "\n\n".join(blocks) + "\n"
+
+
+def _build_user_prompt(
+    request: JudgeDispatchRequest,
+    messages: list[DebateMessage],
+    retrieved_contexts: list[RetrievedContext],
+) -> str:
     topic = request.topic
     session = request.session
     return (
@@ -122,6 +143,7 @@ def _build_user_prompt(request: JudgeDispatchRequest, messages: list[DebateMessa
         f"- con stance: {topic.stance_con}\n"
         f"- context seed: {topic.context_seed or ''}\n"
         f"- session status: {session.status}\n"
+        f"{_build_retrieved_contexts_section(retrieved_contexts)}"
         "Messages:\n"
         f"{_messages_to_prompt_lines(messages)}\n"
     )
@@ -132,6 +154,7 @@ async def _call_openai_once(
     cfg: OpenAiJudgeConfig,
     request: "JudgeDispatchRequest",
     messages: list[DebateMessage],
+    retrieved_contexts: list[RetrievedContext],
     style_mode: str,
     pass_no: int,
 ) -> dict[str, Any]:
@@ -141,7 +164,10 @@ async def _call_openai_once(
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": _build_system_prompt(style_mode, pass_no)},
-            {"role": "user", "content": _build_user_prompt(request, messages)},
+            {
+                "role": "user",
+                "content": _build_user_prompt(request, messages, retrieved_contexts),
+            },
         ],
     }
     headers = {
@@ -244,9 +270,11 @@ async def build_report_with_openai(
     effective_style_mode: str,
     style_mode_source: str,
     cfg: OpenAiJudgeConfig,
+    retrieved_contexts: list[RetrievedContext] | None = None,
 ) -> "SubmitJudgeReportInput":
     from .models import SubmitJudgeReportInput
 
+    retrieved_contexts = retrieved_contexts or []
     messages = [
         DebateMessage(
             message_id=msg.message_id,
@@ -260,6 +288,7 @@ async def build_report_with_openai(
         cfg=cfg,
         request=request,
         messages=messages,
+        retrieved_contexts=retrieved_contexts,
         style_mode=effective_style_mode,
         pass_no=1,
     )
@@ -267,6 +296,7 @@ async def build_report_with_openai(
         cfg=cfg,
         request=request,
         messages=messages,
+        retrieved_contexts=retrieved_contexts,
         style_mode=effective_style_mode,
         pass_no=2,
     )
@@ -285,6 +315,10 @@ async def build_report_with_openai(
         "requestedStyleMode": request.job.style_mode,
         "effectiveStyleMode": effective_style_mode,
         "styleModeSource": style_mode_source,
+        "ragEnabled": True,
+        "ragUsedByModel": bool(retrieved_contexts),
+        "ragSnippetCount": len(retrieved_contexts),
+        "ragSources": summarize_retrieved_contexts(retrieved_contexts),
     }
     return SubmitJudgeReportInput(
         winner=merged["winner"],
