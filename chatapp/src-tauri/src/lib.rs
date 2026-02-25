@@ -3,7 +3,7 @@ mod config;
 mod utils;
 
 use arc_swap::ArcSwap;
-use commands::{get_app_dir, get_config, greet};
+use commands::{get_app_dir, get_config, greet, iap_purchase_product};
 use config::AppConfig;
 use std::sync::Arc;
 use tauri::{
@@ -27,7 +27,12 @@ pub fn app() -> anyhow::Result<Builder<Wry>> {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(logger().build())
-        .invoke_handler(tauri::generate_handler![greet, get_app_dir, get_config])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            get_app_dir,
+            get_config,
+            iap_purchase_product
+        ])
         .setup(setup)
         .on_page_load(page_load_handler)
         .on_window_event(window_event_handler);

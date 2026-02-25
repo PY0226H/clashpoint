@@ -68,6 +68,14 @@
                 >
                   {{ verifying ? '处理中...' : '一键 mock 验单' }}
                 </button>
+                <button
+                  v-if="tauriReady"
+                  @click="purchaseAndVerifyViaTauri(product)"
+                  :disabled="verifying"
+                  class="px-2 py-1 text-xs rounded bg-emerald-600 text-white disabled:opacity-50"
+                >
+                  {{ verifying ? '处理中...' : 'Tauri 购买并验单' }}
+                </button>
               </div>
             </div>
           </div>
@@ -173,6 +181,7 @@
 
 <script>
 import Sidebar from '../components/Sidebar.vue';
+import { isTauriRuntime, purchaseIapViaTauri } from '../iap-bridge';
 import { buildMockReceiptData, buildMockTransactionId } from '../wallet-utils';
 
 export default {
@@ -185,6 +194,7 @@ export default {
       verifying: false,
       errorText: '',
       successText: '',
+      tauriReady: false,
       walletBalance: 0,
       products: [],
       ledger: [],
@@ -226,6 +236,35 @@ export default {
     async quickMockVerify(product) {
       this.prepareMockPayload(product);
       await this.submitVerify();
+    },
+    async purchaseAndVerifyViaTauri(product) {
+      const productId = product?.productId || this.form.productId;
+      if (!productId) {
+        this.errorText = 'productId 不能为空';
+        return;
+      }
+      this.verifying = true;
+      this.errorText = '';
+      this.successText = '';
+      try {
+        const purchase = await purchaseIapViaTauri(productId);
+        this.form.productId = purchase.productId;
+        this.form.transactionId = purchase.transactionId;
+        this.form.originalTransactionId = purchase.originalTransactionId || '';
+        this.form.receiptData = purchase.receiptData;
+        const result = await this.$store.dispatch('verifyIapOrder', {
+          productId: purchase.productId,
+          transactionId: purchase.transactionId,
+          originalTransactionId: purchase.originalTransactionId,
+          receiptData: purchase.receiptData,
+        });
+        await Promise.all([this.refreshWallet(), this.refreshLedger()]);
+        this.successText = `Tauri 购买上报完成：source=${purchase.source}, status=${result.status}, verifyMode=${result.verifyMode}, credited=${result.credited}`;
+      } catch (error) {
+        this.errorText = error?.response?.data?.error || error?.message || 'Tauri 购买验单失败';
+      } finally {
+        this.verifying = false;
+      }
     },
     async refreshProducts() {
       this.products = await this.$store.dispatch('listIapProducts', { activeOnly: true });
@@ -277,6 +316,7 @@ export default {
     },
   },
   async mounted() {
+    this.tauriReady = isTauriRuntime();
     await this.refreshPage();
   },
 };
