@@ -16,6 +16,14 @@ pub struct JudgeDispatchTickReport {
     pub failed: usize,
     pub marked_failed: usize,
     pub timed_out_failed: usize,
+    pub terminal_failed: usize,
+    pub retryable_failed: usize,
+    pub failed_contract: usize,
+    pub failed_http_4xx: usize,
+    pub failed_http_429: usize,
+    pub failed_http_5xx: usize,
+    pub failed_network: usize,
+    pub failed_internal: usize,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -114,22 +122,78 @@ struct AiJudgeDispatchResponse {
     status: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DispatchFailureCode {
+    PayloadBuildFailed,
+    BuildClientFailed,
+    NetworkSendFailed,
+    ResponseAcceptedFalse,
+    ResponseJobIdMismatch,
+    Http4xx,
+    Http429,
+    Http5xx,
+    HttpUnexpectedStatus,
+}
+
+impl DispatchFailureCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PayloadBuildFailed => "payload_build_failed",
+            Self::BuildClientFailed => "build_client_failed",
+            Self::NetworkSendFailed => "network_send_failed",
+            Self::ResponseAcceptedFalse => "response_accepted_false",
+            Self::ResponseJobIdMismatch => "response_job_id_mismatch",
+            Self::Http4xx => "http_4xx",
+            Self::Http429 => "http_429",
+            Self::Http5xx => "http_5xx",
+            Self::HttpUnexpectedStatus => "http_unexpected_status",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DispatchResponseViolation {
+    AcceptedFalse { status: String },
+    JobIdMismatch { expected: u64, got: u64 },
+}
+
+impl std::fmt::Display for DispatchResponseViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AcceptedFalse { status } => {
+                write!(
+                    f,
+                    "dispatch response rejected: accepted=false, status={status}"
+                )
+            }
+            Self::JobIdMismatch { expected, got } => write!(
+                f,
+                "dispatch response job_id mismatch: expected={}, got={}",
+                expected, got
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DispatchSendError {
+    code: DispatchFailureCode,
     message: String,
     terminal: bool,
 }
 
 impl DispatchSendError {
-    fn retryable(message: impl Into<String>) -> Self {
+    fn retryable(code: DispatchFailureCode, message: impl Into<String>) -> Self {
         Self {
+            code,
             message: message.into(),
             terminal: false,
         }
     }
 
-    fn terminal(message: impl Into<String>) -> Self {
+    fn terminal(code: DispatchFailureCode, message: impl Into<String>) -> Self {
         Self {
+            code,
             message: message.into(),
             terminal: true,
         }
@@ -151,6 +215,10 @@ fn sanitize_error_message(err: &str) -> String {
         return ret.to_string();
     }
     ret.chars().take(DISPATCH_ERROR_MAX_LEN).collect()
+}
+
+fn coded_error_message(code: DispatchFailureCode, msg: &str) -> String {
+    format!("[{}] {}", code.as_str(), msg)
 }
 
 fn deterministic_jitter_offset(job_id: i64, dispatch_attempts: i32, jitter_window: i64) -> i64 {
@@ -189,7 +257,10 @@ fn calc_retry_lock_secs(
     lock_secs.saturating_add(jitter_offset).max(1)
 }
 
-fn validate_dispatch_response(body: &str, expected_job_id: u64) -> Result<(), AppError> {
+fn validate_dispatch_response(
+    body: &str,
+    expected_job_id: u64,
+) -> Result<(), DispatchResponseViolation> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -202,18 +273,17 @@ fn validate_dispatch_response(body: &str, expected_job_id: u64) -> Result<(), Ap
     };
 
     if parsed.accepted == Some(false) {
-        return Err(AppError::DebateConflict(format!(
-            "dispatch response rejected: accepted=false, status={}",
-            parsed.status.unwrap_or_else(|| "unknown".to_string())
-        )));
+        return Err(DispatchResponseViolation::AcceptedFalse {
+            status: parsed.status.unwrap_or_else(|| "unknown".to_string()),
+        });
     }
 
     if let Some(job_id) = parsed.job_id {
         if job_id != expected_job_id {
-            return Err(AppError::DebateConflict(format!(
-                "dispatch response job_id mismatch: expected={}, got={}",
-                expected_job_id, job_id
-            )));
+            return Err(DispatchResponseViolation::JobIdMismatch {
+                expected: expected_job_id,
+                got: job_id,
+            });
         }
     }
 
@@ -237,8 +307,14 @@ impl AppState {
                 Ok(v) => v,
                 Err(err) => {
                     report.failed += 1;
+                    report.retryable_failed += 1;
+                    report.failed_internal += 1;
+                    let coded_msg = coded_error_message(
+                        DispatchFailureCode::PayloadBuildFailed,
+                        &err.to_string(),
+                    );
                     if self
-                        .mark_dispatch_failure(job.id, job.dispatch_attempts, &err.to_string())
+                        .mark_dispatch_failure(job.id, job.dispatch_attempts, &coded_msg)
                         .await?
                     {
                         report.marked_failed += 1;
@@ -254,6 +330,7 @@ impl AppState {
                 Err(err) => {
                     report.failed += 1;
                     if err.terminal {
+                        report.terminal_failed += 1;
                         if self
                             .mark_dispatch_terminal_failure(job.id, &err.message)
                             .await?
@@ -264,7 +341,21 @@ impl AppState {
                         .mark_dispatch_failure(job.id, job.dispatch_attempts, &err.message)
                         .await?
                     {
+                        report.retryable_failed += 1;
                         report.marked_failed += 1;
+                    } else {
+                        report.retryable_failed += 1;
+                    }
+                    match err.code {
+                        DispatchFailureCode::ResponseAcceptedFalse
+                        | DispatchFailureCode::ResponseJobIdMismatch => report.failed_contract += 1,
+                        DispatchFailureCode::Http4xx => report.failed_http_4xx += 1,
+                        DispatchFailureCode::Http429 => report.failed_http_429 += 1,
+                        DispatchFailureCode::Http5xx
+                        | DispatchFailureCode::HttpUnexpectedStatus => report.failed_http_5xx += 1,
+                        DispatchFailureCode::NetworkSendFailed => report.failed_network += 1,
+                        DispatchFailureCode::BuildClientFailed
+                        | DispatchFailureCode::PayloadBuildFailed => report.failed_internal += 1,
                     }
                 }
             }
@@ -455,7 +546,13 @@ impl AppState {
             ))
             .build()
             .map_err(|e| {
-                DispatchSendError::terminal(format!("build dispatch client failed: {e}"))
+                DispatchSendError::terminal(
+                    DispatchFailureCode::BuildClientFailed,
+                    coded_error_message(
+                        DispatchFailureCode::BuildClientFailed,
+                        &format!("build dispatch client failed: {e}"),
+                    ),
+                )
             })?;
         let resp = client
             .post(&url)
@@ -464,22 +561,64 @@ impl AppState {
             .send()
             .await
             .map_err(|e| {
-                DispatchSendError::retryable(format!("dispatch request io failed: {e}"))
+                DispatchSendError::retryable(
+                    DispatchFailureCode::NetworkSendFailed,
+                    coded_error_message(
+                        DispatchFailureCode::NetworkSendFailed,
+                        &format!("dispatch request io failed: {e}"),
+                    ),
+                )
             })?;
         if resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Err(err) = validate_dispatch_response(&body, payload.job.job_id) {
-                return Err(DispatchSendError::terminal(err.to_string()));
+                let (code, msg) = match err {
+                    DispatchResponseViolation::AcceptedFalse { status } => (
+                        DispatchFailureCode::ResponseAcceptedFalse,
+                        format!("dispatch response rejected: accepted=false, status={status}"),
+                    ),
+                    DispatchResponseViolation::JobIdMismatch { expected, got } => (
+                        DispatchFailureCode::ResponseJobIdMismatch,
+                        format!(
+                            "dispatch response job_id mismatch: expected={}, got={}",
+                            expected, got
+                        ),
+                    ),
+                };
+                return Err(DispatchSendError::terminal(
+                    code,
+                    coded_error_message(code, &msg),
+                ));
             }
             Ok(())
         } else {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             let message = format!("dispatch request failed: status={}, body={}", status, body);
-            if status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
-                Err(DispatchSendError::terminal(message))
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let code = DispatchFailureCode::Http429;
+                Err(DispatchSendError::retryable(
+                    code,
+                    coded_error_message(code, &message),
+                ))
+            } else if status.is_client_error() {
+                let code = DispatchFailureCode::Http4xx;
+                Err(DispatchSendError::terminal(
+                    code,
+                    coded_error_message(code, &message),
+                ))
+            } else if status.is_server_error() {
+                let code = DispatchFailureCode::Http5xx;
+                Err(DispatchSendError::retryable(
+                    code,
+                    coded_error_message(code, &message),
+                ))
             } else {
-                Err(DispatchSendError::retryable(message))
+                let code = DispatchFailureCode::HttpUnexpectedStatus;
+                Err(DispatchSendError::retryable(
+                    code,
+                    coded_error_message(code, &message),
+                ))
             }
         }
     }
@@ -914,6 +1053,9 @@ mod tests {
         assert_eq!(tick.dispatched, 0);
         assert_eq!(tick.failed, 1);
         assert_eq!(tick.marked_failed, 1);
+        assert_eq!(tick.terminal_failed, 1);
+        assert_eq!(tick.retryable_failed, 0);
+        assert_eq!(tick.failed_contract, 1);
 
         let row: (String, Option<String>) = sqlx::query_as(
             r#"
@@ -955,6 +1097,9 @@ mod tests {
         assert_eq!(tick.dispatched, 0);
         assert_eq!(tick.failed, 1);
         assert_eq!(tick.marked_failed, 1);
+        assert_eq!(tick.terminal_failed, 1);
+        assert_eq!(tick.retryable_failed, 0);
+        assert_eq!(tick.failed_contract, 1);
 
         let row: (String, i32) = sqlx::query_as(
             r#"
@@ -996,6 +1141,8 @@ mod tests {
         assert_eq!(tick.dispatched, 0);
         assert_eq!(tick.failed, 1);
         assert_eq!(tick.marked_failed, 1);
+        assert_eq!(tick.terminal_failed, 1);
+        assert_eq!(tick.failed_contract, 1);
 
         let row: (String, Option<String>) = sqlx::query_as(
             r#"
@@ -1033,6 +1180,8 @@ mod tests {
         assert_eq!(tick.dispatched, 0);
         assert_eq!(tick.failed, 1);
         assert_eq!(tick.marked_failed, 1);
+        assert_eq!(tick.terminal_failed, 1);
+        assert_eq!(tick.failed_http_4xx, 1);
 
         let row: (String, Option<String>) = sqlx::query_as(
             r#"
@@ -1070,6 +1219,8 @@ mod tests {
         assert_eq!(tick.dispatched, 0);
         assert_eq!(tick.failed, 1);
         assert_eq!(tick.marked_failed, 0);
+        assert_eq!(tick.retryable_failed, 1);
+        assert_eq!(tick.failed_http_5xx, 1);
 
         let row: (String, i32, Option<String>) = sqlx::query_as(
             r#"
@@ -1108,6 +1259,8 @@ mod tests {
         assert_eq!(tick.dispatched, 0);
         assert_eq!(tick.failed, 1);
         assert_eq!(tick.marked_failed, 0);
+        assert_eq!(tick.retryable_failed, 1);
+        assert_eq!(tick.failed_http_429, 1);
 
         let row: (String, i32, Option<String>) = sqlx::query_as(
             r#"
@@ -1122,6 +1275,44 @@ mod tests {
         assert_eq!(row.0, "running");
         assert_eq!(row.1, 1);
         assert!(row.2.unwrap_or_default().contains("status=429"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_pending_judge_jobs_once_should_count_failed_internal_when_payload_loading_fails(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.dispatch_max_attempts = 1;
+        inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+        inner.config.ai_judge.dispatch_lock_secs = 1;
+        inner.config.ai_judge.dispatch_batch_size = 20;
+        inner.config.ai_judge.service_base_url = "http://127.0.0.1:9".to_string();
+        inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
+
+        let session_id = seed_topic_and_session(&state, 2, "judging").await?;
+        let job_id = seed_running_job(&state, session_id, 0, None).await?;
+
+        let tick = state.dispatch_pending_judge_jobs_once().await?;
+        assert_eq!(tick.claimed, 1);
+        assert_eq!(tick.dispatched, 0);
+        assert_eq!(tick.failed, 1);
+        assert_eq!(tick.marked_failed, 1);
+        assert_eq!(tick.retryable_failed, 1);
+        assert_eq!(tick.failed_internal, 1);
+
+        let row: (String, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT status, error_message
+            FROM judge_jobs
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, "failed");
+        assert!(row.1.unwrap_or_default().contains("[payload_build_failed]"));
         Ok(())
     }
 
