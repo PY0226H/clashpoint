@@ -4,11 +4,12 @@ use crate::{
     DebateSessionSummary, DebateTopic, DrawVoteDetail, ErrorOutput, GetDrawVoteOutput,
     GetJudgeDispatchMetricsOutput, GetJudgeReportOutput, IapProduct, JoinDebateSessionInput,
     JoinDebateSessionOutput, JudgeJobSnapshot, JudgeRagMeta, JudgeRagSourceItem, JudgeReportDetail,
-    JudgeStageSummaryInput, ListDebateSessions, ListDebateTopics, ListIapProducts, ListMessages,
-    ListWalletLedger, MarkJudgeJobFailedInput, MarkJudgeJobFailedOutput, PinDebateMessageInput,
-    PinDebateMessageOutput, RequestJudgeJobInput, RequestJudgeJobOutput, SigninUser,
-    SubmitDrawVoteInput, SubmitDrawVoteOutput, SubmitJudgeReportInput, SubmitJudgeReportOutput,
-    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
+    JudgeStageSummaryDetail, JudgeStageSummaryInput, ListDebateSessions, ListDebateTopics,
+    ListIapProducts, ListMessages, ListWalletLedger, MarkJudgeJobFailedInput,
+    MarkJudgeJobFailedOutput, PinDebateMessageInput, PinDebateMessageOutput, RequestJudgeJobInput,
+    RequestJudgeJobOutput, SigninUser, SubmitDrawVoteInput, SubmitDrawVoteOutput,
+    SubmitJudgeReportInput, SubmitJudgeReportOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
+    WalletBalanceOutput, WalletLedgerItem,
 };
 use axum::Router;
 use chat_core::{AgentType, Chat, ChatAgent, ChatType, ChatUser, Message, User, Workspace};
@@ -63,7 +64,7 @@ pub(crate) trait OpenApiRouter {
                 JoinDebateSessionInput, JoinDebateSessionOutput,
                 DebateMessage, CreateDebateMessageInput, PinDebateMessageInput, PinDebateMessageOutput,
                 RequestJudgeJobInput, RequestJudgeJobOutput, JudgeJobSnapshot, JudgeRagSourceItem,
-                JudgeRagMeta, JudgeReportDetail, GetJudgeReportOutput,
+                JudgeRagMeta, JudgeStageSummaryDetail, JudgeReportDetail, GetJudgeReportOutput,
                 DrawVoteDetail, GetDrawVoteOutput, SubmitDrawVoteInput, SubmitDrawVoteOutput,
                 SubmitJudgeReportInput, SubmitJudgeReportOutput, JudgeStageSummaryInput,
                 MarkJudgeJobFailedInput, MarkJudgeJobFailedOutput,

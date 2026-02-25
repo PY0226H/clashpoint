@@ -96,6 +96,8 @@ pub struct JudgeReportDetail {
     pub rejudge_triggered: bool,
     pub payload: Value,
     pub rag: Option<JudgeRagMeta>,
+    #[serde(default)]
+    pub stage_summaries: Vec<JudgeStageSummaryDetail>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -159,6 +161,18 @@ pub struct JudgeStageSummaryInput {
     pub pro_score: i32,
     pub con_score: i32,
     pub summary: Value,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeStageSummaryDetail {
+    pub stage_no: i32,
+    pub from_message_id: Option<u64>,
+    pub to_message_id: Option<u64>,
+    pub pro_score: i32,
+    pub con_score: i32,
+    pub summary: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -268,6 +282,17 @@ struct JudgeReportRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
+struct JudgeStageSummaryRow {
+    stage_no: i32,
+    from_message_id: Option<i64>,
+    to_message_id: Option<i64>,
+    pro_score: i32,
+    con_score: i32,
+    summary: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
 struct DrawVoteRow {
     id: i64,
     ws_id: i64,
@@ -359,7 +384,10 @@ fn validate_non_empty_text(input: &str, field: &str, max_len: usize) -> Result<S
     Ok(ret.to_string())
 }
 
-fn map_report_detail(v: JudgeReportRow) -> JudgeReportDetail {
+fn map_report_detail(
+    v: JudgeReportRow,
+    stage_summaries: Vec<JudgeStageSummaryDetail>,
+) -> JudgeReportDetail {
     let rag = extract_rag_meta(&v.payload);
     JudgeReportDetail {
         report_id: v.id as u64,
@@ -383,6 +411,19 @@ fn map_report_detail(v: JudgeReportRow) -> JudgeReportDetail {
         rejudge_triggered: v.rejudge_triggered,
         payload: v.payload,
         rag,
+        stage_summaries,
+        created_at: v.created_at,
+    }
+}
+
+fn map_stage_summary(v: JudgeStageSummaryRow) -> JudgeStageSummaryDetail {
+    JudgeStageSummaryDetail {
+        stage_no: v.stage_no,
+        from_message_id: v.from_message_id.map(|value| value as u64),
+        to_message_id: v.to_message_id.map(|value| value as u64),
+        pro_score: v.pro_score,
+        con_score: v.con_score,
+        summary: v.summary,
         created_at: v.created_at,
     }
 }
@@ -732,6 +773,28 @@ impl AppState {
         .fetch_optional(&self.pool)
         .await?;
 
+        let report = if let Some(report) = report {
+            let stage_summaries: Vec<JudgeStageSummaryRow> = sqlx::query_as(
+                r#"
+                SELECT
+                    stage_no, from_message_id, to_message_id,
+                    pro_score, con_score, summary, created_at
+                FROM judge_stage_summaries
+                WHERE job_id = $1
+                ORDER BY stage_no ASC, created_at ASC
+                "#,
+            )
+            .bind(report.job_id)
+            .fetch_all(&self.pool)
+            .await?;
+            Some(map_report_detail(
+                report,
+                stage_summaries.into_iter().map(map_stage_summary).collect(),
+            ))
+        } else {
+            None
+        };
+
         let status = if report.is_some() {
             "ready".to_string()
         } else if let Some(job) = latest_job.as_ref() {
@@ -754,7 +817,7 @@ impl AppState {
                 rejudge_triggered: job.rejudge_triggered,
                 requested_at: job.requested_at,
             }),
-            report: report.map(map_report_detail),
+            report,
         })
     }
 
@@ -1846,6 +1909,75 @@ mod tests {
         assert_eq!(report.job_id, job_id.0 as u64);
         assert_eq!(report.winner, "pro");
         assert_eq!(report.pro_score, 82);
+        assert!(report.stage_summaries.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_latest_judge_report_should_include_stage_summaries() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+        let user = state.find_user_by_id(1).await?.expect("user should exist");
+        let job_id = seed_running_judge_job(&state, session_id).await?;
+
+        state
+            .submit_judge_report(
+                job_id as u64,
+                SubmitJudgeReportInput {
+                    winner: "pro".to_string(),
+                    pro_score: 83,
+                    con_score: 77,
+                    logic_pro: 82,
+                    logic_con: 75,
+                    evidence_pro: 84,
+                    evidence_con: 78,
+                    rebuttal_pro: 81,
+                    rebuttal_con: 76,
+                    clarity_pro: 85,
+                    clarity_con: 79,
+                    pro_summary: "pro summary".to_string(),
+                    con_summary: "con summary".to_string(),
+                    rationale: "rationale".to_string(),
+                    style_mode: Some("rational".to_string()),
+                    needs_draw_vote: false,
+                    rejudge_triggered: false,
+                    payload: serde_json::json!({"trace":"with-stages"}),
+                    winner_first: Some("pro".to_string()),
+                    winner_second: Some("pro".to_string()),
+                    stage_summaries: vec![
+                        JudgeStageSummaryInput {
+                            stage_no: 2,
+                            from_message_id: Some(101),
+                            to_message_id: Some(200),
+                            pro_score: 84,
+                            con_score: 77,
+                            summary: serde_json::json!({"brief":"s2"}),
+                        },
+                        JudgeStageSummaryInput {
+                            stage_no: 1,
+                            from_message_id: Some(1),
+                            to_message_id: Some(100),
+                            pro_score: 82,
+                            con_score: 76,
+                            summary: serde_json::json!({"brief":"s1"}),
+                        },
+                    ],
+                },
+            )
+            .await?;
+
+        let ret = state
+            .get_latest_judge_report(session_id as u64, &user)
+            .await?;
+        assert_eq!(ret.status, "ready");
+        let report = ret.report.expect("report should exist");
+        assert_eq!(report.stage_summaries.len(), 2);
+        assert_eq!(report.stage_summaries[0].stage_no, 1);
+        assert_eq!(report.stage_summaries[0].from_message_id, Some(1));
+        assert_eq!(report.stage_summaries[0].to_message_id, Some(100));
+        assert_eq!(report.stage_summaries[1].stage_no, 2);
+        assert_eq!(report.stage_summaries[1].from_message_id, Some(101));
+        assert_eq!(report.stage_summaries[1].to_message_id, Some(200));
         Ok(())
     }
 
