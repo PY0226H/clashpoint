@@ -55,6 +55,25 @@ pub struct JudgeJobSnapshot {
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct JudgeRagSourceItem {
+    pub chunk_id: String,
+    pub title: String,
+    pub source_url: String,
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeRagMeta {
+    pub enabled: Option<bool>,
+    pub used_by_model: Option<bool>,
+    pub snippet_count: Option<u32>,
+    pub source_whitelist: Vec<String>,
+    pub sources: Vec<JudgeRagSourceItem>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JudgeReportDetail {
     pub report_id: u64,
     pub job_id: u64,
@@ -76,6 +95,7 @@ pub struct JudgeReportDetail {
     pub needs_draw_vote: bool,
     pub rejudge_triggered: bool,
     pub payload: Value,
+    pub rag: Option<JudgeRagMeta>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -340,6 +360,7 @@ fn validate_non_empty_text(input: &str, field: &str, max_len: usize) -> Result<S
 }
 
 fn map_report_detail(v: JudgeReportRow) -> JudgeReportDetail {
+    let rag = extract_rag_meta(&v.payload);
     JudgeReportDetail {
         report_id: v.id as u64,
         job_id: v.job_id as u64,
@@ -361,8 +382,86 @@ fn map_report_detail(v: JudgeReportRow) -> JudgeReportDetail {
         needs_draw_vote: v.needs_draw_vote,
         rejudge_triggered: v.rejudge_triggered,
         payload: v.payload,
+        rag,
         created_at: v.created_at,
     }
+}
+
+fn extract_rag_meta(payload: &Value) -> Option<JudgeRagMeta> {
+    let enabled = payload.get("ragEnabled").and_then(Value::as_bool);
+    let used_by_model = payload.get("ragUsedByModel").and_then(Value::as_bool);
+    let snippet_count = payload
+        .get("ragSnippetCount")
+        .and_then(Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok());
+    let source_whitelist: Vec<String> = payload
+        .get("ragSourceWhitelist")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let sources: Vec<JudgeRagSourceItem> = payload
+        .get("ragSources")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let chunk_id = item
+                        .get("chunkId")
+                        .and_then(Value::as_str)
+                        .or_else(|| item.get("chunk_id").and_then(Value::as_str))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let title = item
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let source_url = item
+                        .get("sourceUrl")
+                        .and_then(Value::as_str)
+                        .or_else(|| item.get("source_url").and_then(Value::as_str))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if chunk_id.is_empty() && title.is_empty() && source_url.is_empty() {
+                        return None;
+                    }
+                    Some(JudgeRagSourceItem {
+                        chunk_id,
+                        title,
+                        source_url,
+                        score: item.get("score").and_then(Value::as_f64),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if enabled.is_none()
+        && used_by_model.is_none()
+        && snippet_count.is_none()
+        && source_whitelist.is_empty()
+        && sources.is_empty()
+    {
+        return None;
+    }
+    Some(JudgeRagMeta {
+        enabled,
+        used_by_model,
+        snippet_count,
+        source_whitelist,
+        sources,
+    })
 }
 
 fn calc_required_voters(eligible_voters: i32, threshold_percent: i32) -> i32 {
@@ -1456,6 +1555,56 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         Ok(job_id.0)
+    }
+
+    #[test]
+    fn extract_rag_meta_should_return_none_when_payload_has_no_rag_fields() {
+        let payload = serde_json::json!({
+            "provider": "openai",
+            "traceId": "trace-1"
+        });
+        assert!(extract_rag_meta(&payload).is_none());
+    }
+
+    #[test]
+    fn extract_rag_meta_should_parse_whitelist_and_sources() {
+        let payload = serde_json::json!({
+            "ragEnabled": true,
+            "ragUsedByModel": false,
+            "ragSnippetCount": 2,
+            "ragSourceWhitelist": [" https://foo.example/news/ ", "", "https://bar.example/"],
+            "ragSources": [
+                {
+                    "chunkId": "chunk-1",
+                    "title": "doc-a",
+                    "sourceUrl": "https://foo.example/news/a",
+                    "score": 0.91
+                },
+                {
+                    "chunk_id": "chunk-2",
+                    "title": "doc-b",
+                    "source_url": "https://bar.example/b"
+                },
+                {}
+            ]
+        });
+
+        let meta = extract_rag_meta(&payload).expect("meta should exist");
+        assert_eq!(meta.enabled, Some(true));
+        assert_eq!(meta.used_by_model, Some(false));
+        assert_eq!(meta.snippet_count, Some(2));
+        assert_eq!(
+            meta.source_whitelist,
+            vec![
+                "https://foo.example/news/".to_string(),
+                "https://bar.example/".to_string()
+            ]
+        );
+        assert_eq!(meta.sources.len(), 2);
+        assert_eq!(meta.sources[0].chunk_id, "chunk-1");
+        assert_eq!(meta.sources[0].source_url, "https://foo.example/news/a");
+        assert_eq!(meta.sources[1].chunk_id, "chunk-2");
+        assert_eq!(meta.sources[1].source_url, "https://bar.example/b");
     }
 
     #[tokio::test]
