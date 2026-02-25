@@ -114,6 +114,28 @@ struct AiJudgeDispatchResponse {
     status: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct DispatchSendError {
+    message: String,
+    terminal: bool,
+}
+
+impl DispatchSendError {
+    fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            terminal: false,
+        }
+    }
+
+    fn terminal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            terminal: true,
+        }
+    }
+}
+
 fn build_dispatch_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
@@ -195,8 +217,15 @@ impl AppState {
                 }
                 Err(err) => {
                     report.failed += 1;
-                    if self
-                        .mark_dispatch_failure(job.id, job.dispatch_attempts, &err.to_string())
+                    if err.terminal {
+                        if self
+                            .mark_dispatch_terminal_failure(job.id, &err.message)
+                            .await?
+                        {
+                            report.marked_failed += 1;
+                        }
+                    } else if self
+                        .mark_dispatch_failure(job.id, job.dispatch_attempts, &err.message)
                         .await?
                     {
                         report.marked_failed += 1;
@@ -379,7 +408,7 @@ impl AppState {
     async fn send_dispatch_request(
         &self,
         payload: &AiJudgeDispatchRequest,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), DispatchSendError> {
         let url = build_dispatch_url(
             &self.config.ai_judge.service_base_url,
             &self.config.ai_judge.dispatch_path,
@@ -389,25 +418,33 @@ impl AppState {
                 self.config.ai_judge.dispatch_timeout_ms.max(1),
             ))
             .build()
-            .map_err(|e| AppError::AnyError(e.into()))?;
+            .map_err(|e| {
+                DispatchSendError::terminal(format!("build dispatch client failed: {e}"))
+            })?;
         let resp = client
             .post(&url)
             .header("x-ai-internal-key", &self.config.ai_judge.internal_key)
             .json(payload)
             .send()
             .await
-            .map_err(|e| AppError::AnyError(e.into()))?;
+            .map_err(|e| {
+                DispatchSendError::retryable(format!("dispatch request io failed: {e}"))
+            })?;
         if resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            validate_dispatch_response(&body, payload.job.job_id)?;
+            if let Err(err) = validate_dispatch_response(&body, payload.job.job_id) {
+                return Err(DispatchSendError::terminal(err.to_string()));
+            }
             Ok(())
         } else {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            Err(AppError::DebateConflict(format!(
-                "dispatch request failed: status={}, body={}",
-                status, body
-            )))
+            let message = format!("dispatch request failed: status={}, body={}", status, body);
+            if status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+                Err(DispatchSendError::terminal(message))
+            } else {
+                Err(DispatchSendError::retryable(message))
+            }
         }
     }
 
@@ -481,6 +518,40 @@ impl AppState {
             Ok(false)
         }
     }
+
+    async fn mark_dispatch_terminal_failure(
+        &self,
+        job_id: i64,
+        err_msg: &str,
+    ) -> Result<bool, AppError> {
+        let err_msg = sanitize_error_message(err_msg);
+        let rows_affected = sqlx::query(
+            r#"
+            UPDATE judge_jobs
+            SET status = 'failed',
+                error_message = $2,
+                finished_at = NOW(),
+                dispatch_locked_until = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+              AND status = 'running'
+            "#,
+        )
+        .bind(job_id)
+        .bind(&err_msg)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if rows_affected > 0 {
+            warn!(
+                job_id,
+                "judge dispatch terminal failure, job marked failed: {}", err_msg
+            );
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -489,6 +560,7 @@ mod tests {
     use anyhow::Result;
     use axum::{routing::post, Json, Router};
     use chrono::Duration;
+    use reqwest::StatusCode;
     use serde_json::Value;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -589,6 +661,24 @@ mod tests {
             post(move |Json(_payload): Json<Value>| {
                 let response = response.clone();
                 async move { (axum::http::StatusCode::OK, Json(response)) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok(format!("http://{}", addr))
+    }
+
+    async fn spawn_mock_dispatch_server_with_status(status: StatusCode) -> Result<String> {
+        let app = Router::new().route(
+            "/internal/judge/dispatch",
+            post(move |Json(_payload): Json<Value>| async move {
+                (
+                    axum::http::StatusCode::from_u16(status.as_u16()).expect("valid status"),
+                    Json(serde_json::json!({"error":"mock"})),
+                )
             }),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -796,6 +886,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_pending_judge_jobs_once_should_mark_terminal_failed_immediately_when_response_rejected_with_retries_left(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.dispatch_max_attempts = 3;
+        inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+        inner.config.ai_judge.dispatch_lock_secs = 1;
+        inner.config.ai_judge.dispatch_batch_size = 20;
+        inner.config.ai_judge.service_base_url =
+            spawn_mock_dispatch_server_with_json(serde_json::json!({
+                "accepted": false,
+                "status": "marked_failed"
+            }))
+            .await?;
+        inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
+
+        let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+        let job_id = seed_running_job(&state, session_id, 0, None).await?;
+
+        let tick = state.dispatch_pending_judge_jobs_once().await?;
+        assert_eq!(tick.claimed, 1);
+        assert_eq!(tick.dispatched, 0);
+        assert_eq!(tick.failed, 1);
+        assert_eq!(tick.marked_failed, 1);
+
+        let row: (String, i32) = sqlx::query_as(
+            r#"
+            SELECT status, dispatch_attempts
+            FROM judge_jobs
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn dispatch_pending_judge_jobs_once_should_mark_failed_when_response_job_id_mismatch(
     ) -> Result<()> {
         let (_tdb, mut state) = AppState::new_for_test().await?;
@@ -833,6 +964,81 @@ mod tests {
         .await?;
         assert_eq!(row.0, "failed");
         assert!(row.1.unwrap_or_default().contains("job_id mismatch"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_pending_judge_jobs_once_should_mark_terminal_failed_on_http_400_even_with_retries_left(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.dispatch_max_attempts = 3;
+        inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+        inner.config.ai_judge.dispatch_lock_secs = 1;
+        inner.config.ai_judge.dispatch_batch_size = 20;
+        inner.config.ai_judge.service_base_url =
+            spawn_mock_dispatch_server_with_status(StatusCode::BAD_REQUEST).await?;
+        inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
+
+        let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+        let job_id = seed_running_job(&state, session_id, 0, None).await?;
+
+        let tick = state.dispatch_pending_judge_jobs_once().await?;
+        assert_eq!(tick.claimed, 1);
+        assert_eq!(tick.dispatched, 0);
+        assert_eq!(tick.failed, 1);
+        assert_eq!(tick.marked_failed, 1);
+
+        let row: (String, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT status, error_message
+            FROM judge_jobs
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, "failed");
+        assert!(row.1.unwrap_or_default().contains("status=400"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_pending_judge_jobs_once_should_keep_running_on_http_500_when_retries_left(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.dispatch_max_attempts = 3;
+        inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+        inner.config.ai_judge.dispatch_lock_secs = 1;
+        inner.config.ai_judge.dispatch_batch_size = 20;
+        inner.config.ai_judge.service_base_url =
+            spawn_mock_dispatch_server_with_status(StatusCode::INTERNAL_SERVER_ERROR).await?;
+        inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
+
+        let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+        let job_id = seed_running_job(&state, session_id, 0, None).await?;
+
+        let tick = state.dispatch_pending_judge_jobs_once().await?;
+        assert_eq!(tick.claimed, 1);
+        assert_eq!(tick.dispatched, 0);
+        assert_eq!(tick.failed, 1);
+        assert_eq!(tick.marked_failed, 0);
+
+        let row: (String, i32, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT status, dispatch_attempts, error_message
+            FROM judge_jobs
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, "running");
+        assert_eq!(row.1, 1);
+        assert!(row.2.unwrap_or_default().contains("status=500"));
         Ok(())
     }
 
