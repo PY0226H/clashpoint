@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { parseNamedSseEventData } from './sse-event-utils';
 
 const URL_BASE = 'http://localhost:6688/api';
 const SSE_URL = 'http://localhost:6687/events';
@@ -33,6 +34,8 @@ const initSSE = (store, notifyTicket, handlers = {}) => {
   const {
     onOpen = null,
     onError = null,
+    onDebateJudgeReportReady = null,
+    onDebateDrawVoteResolved = null,
   } = handlers;
   let sse_base = getSseBase();
   let url = `${sse_base}?token=${notifyTicket}`;
@@ -50,6 +53,26 @@ const initSSE = (store, notifyTicket, handlers = {}) => {
     console.log('message:', e.data);
     delete data.event;
     store.commit('addMessage', { channelId: data.chatId, message: data });
+  });
+
+  sse.addEventListener("DebateJudgeReportReady", (e) => {
+    const payload = parseNamedSseEventData(e.data, 'DebateJudgeReportReady');
+    if (!payload) {
+      return;
+    }
+    if (onDebateJudgeReportReady) {
+      onDebateJudgeReportReady(payload);
+    }
+  });
+
+  sse.addEventListener("DebateDrawVoteResolved", (e) => {
+    const payload = parseNamedSseEventData(e.data, 'DebateDrawVoteResolved');
+    if (!payload) {
+      return;
+    }
+    if (onDebateDrawVoteResolved) {
+      onDebateDrawVoteResolved(payload);
+    }
   });
 
   sse.onmessage = (event) => {

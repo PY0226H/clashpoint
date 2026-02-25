@@ -45,6 +45,8 @@ export default createStore({
     accessTickets: null,
     sseReconnectAttempts: 0,
     sseReconnectTimer: null,
+    latestJudgeReportEvent: null,
+    latestDrawVoteResolvedEvent: null,
   },
   mutations: {
     setSSE(state, sse) {
@@ -64,6 +66,12 @@ export default createStore({
     },
     setSSEReconnectTimer(state, timerId) {
       state.sseReconnectTimer = timerId;
+    },
+    setLatestJudgeReportEvent(state, event) {
+      state.latestJudgeReportEvent = event;
+    },
+    setLatestDrawVoteResolvedEvent(state, event) {
+      state.latestDrawVoteResolvedEvent = event;
     },
     setWorkspace(state, workspace) {
       state.workspace = workspace;
@@ -164,6 +172,18 @@ export default createStore({
         onError: () => {
           dispatch('scheduleSSEReconnect');
         },
+        onDebateJudgeReportReady: (payload) => {
+          commit('setLatestJudgeReportEvent', {
+            ...payload,
+            receivedAt: Date.now(),
+          });
+        },
+        onDebateDrawVoteResolved: (payload) => {
+          commit('setLatestDrawVoteResolvedEvent', {
+            ...payload,
+            receivedAt: Date.now(),
+          });
+        },
       });
       commit('setSSE', sse);
     },
@@ -222,6 +242,8 @@ export default createStore({
       commit('setAccessTickets', null);
       commit('setWorkspace', '');
       commit('setChannels', []);
+      commit('setLatestJudgeReportEvent', null);
+      commit('setLatestDrawVoteResolvedEvent', null);
 
       // close SSE
       this.dispatch('closeSSE');
@@ -469,6 +491,12 @@ export default createStore({
         return [];
       }
       return state.messages[state.activeChannel.id] || [];
+    },
+    getLatestJudgeReportEvent(state) {
+      return state.latestJudgeReportEvent;
+    },
+    getLatestDrawVoteResolvedEvent(state) {
+      return state.latestDrawVoteResolvedEvent;
     },
   },
 });

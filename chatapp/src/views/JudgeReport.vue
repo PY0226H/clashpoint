@@ -233,6 +233,7 @@ export default {
       loadingMore: false,
       drawVoteLoading: false,
       voteSubmitting: false,
+      autoRefreshBusy: false,
       errorText: '',
       windowSize: 3,
     };
@@ -258,6 +259,20 @@ export default {
     },
     canSubmitVote() {
       return !!(this.drawVote && isDrawVoteOpen(this.drawVote) && !this.voteSubmitting);
+    },
+    latestJudgeReportEvent() {
+      return this.$store.state.latestJudgeReportEvent;
+    },
+    latestDrawVoteResolvedEvent() {
+      return this.$store.state.latestDrawVoteResolvedEvent;
+    },
+  },
+  watch: {
+    latestJudgeReportEvent(event) {
+      this.handleJudgeReportReadyEvent(event);
+    },
+    latestDrawVoteResolvedEvent(event) {
+      this.handleDrawVoteResolvedEvent(event);
     },
   },
   methods: {
@@ -285,14 +300,85 @@ export default {
     errorMessage(err) {
       return err?.response?.data?.error || err?.message || '请求失败';
     },
-    async refreshDrawVote(sessionId) {
-      this.drawVoteLoading = true;
+    currentSessionId() {
+      if (this.reportData?.sessionId) {
+        return Number(this.reportData.sessionId);
+      }
+      return normalizeSessionId(this.sessionIdInput);
+    },
+    shouldHandleSessionEvent(event) {
+      const eventSessionId = Number(event?.sessionId || 0);
+      const currentSessionId = Number(this.currentSessionId() || 0);
+      return eventSessionId > 0 && currentSessionId > 0 && eventSessionId === currentSessionId;
+    },
+    async refreshDrawVote(sessionId, { silent = false } = {}) {
+      if (!silent) {
+        this.drawVoteLoading = true;
+      }
       try {
         const payload = await this.$store.dispatch('fetchDrawVoteStatus', { sessionId });
         this.drawVoteData = payload;
       } finally {
-        this.drawVoteLoading = false;
+        if (!silent) {
+          this.drawVoteLoading = false;
+        }
       }
+    },
+    async fetchReportForSession(sessionId, { silent = false } = {}) {
+      if (!silent) {
+        this.loading = true;
+        this.errorText = '';
+        this.drawVoteData = null;
+      }
+      try {
+        const maxStageCount = silent
+          ? Math.max(this.stageSummaries.length || 0, this.windowSize)
+          : this.windowSize;
+        const payload = await this.$store.dispatch('fetchJudgeReport', {
+          sessionId,
+          maxStageCount,
+          stageOffset: 0,
+        });
+        this.reportData = payload;
+        if (payload?.report) {
+          await this.refreshDrawVote(sessionId, { silent });
+        }
+      } catch (err) {
+        if (silent) {
+          console.warn('silent judge report refresh failed:', err);
+        } else {
+          this.errorText = this.errorMessage(err);
+        }
+      } finally {
+        if (!silent) {
+          this.loading = false;
+        }
+      }
+    },
+    async reloadFromRealtimeEvent(sessionId) {
+      if (this.autoRefreshBusy || this.loading || this.loadingMore || this.voteSubmitting) {
+        return;
+      }
+      this.autoRefreshBusy = true;
+      try {
+        await this.fetchReportForSession(sessionId, { silent: true });
+      } finally {
+        this.autoRefreshBusy = false;
+      }
+    },
+    handleJudgeReportReadyEvent(event) {
+      if (!this.shouldHandleSessionEvent(event)) {
+        return;
+      }
+      const sessionId = Number(event.sessionId);
+      this.reloadFromRealtimeEvent(sessionId);
+    },
+    handleDrawVoteResolvedEvent(event) {
+      if (!this.shouldHandleSessionEvent(event)) {
+        return;
+      }
+      const sessionId = Number(event.sessionId);
+      this.reloadFromRealtimeEvent(sessionId);
     },
     async submitVote(agreeDraw) {
       if (!this.canSubmitVote) return;
@@ -322,24 +408,7 @@ export default {
         this.errorText = '请输入有效的 session id（正整数）';
         return;
       }
-      this.loading = true;
-      this.errorText = '';
-      this.drawVoteData = null;
-      try {
-        const payload = await this.$store.dispatch('fetchJudgeReport', {
-          sessionId,
-          maxStageCount: this.windowSize,
-          stageOffset: 0,
-        });
-        this.reportData = payload;
-        if (payload?.report) {
-          await this.refreshDrawVote(sessionId);
-        }
-      } catch (err) {
-        this.errorText = this.errorMessage(err);
-      } finally {
-        this.loading = false;
-      }
+      await this.fetchReportForSession(sessionId);
     },
     async loadMoreStages() {
       if (!this.canLoadMore) return;
