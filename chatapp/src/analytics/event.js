@@ -1,7 +1,8 @@
 import { AnalyticsEventSchema } from "../gen/messages_pb";
 import { create, toBinary } from "@bufbuild/protobuf";
+import { ANALYTICS_API_BASE_URL } from "../judge-refresh-summary-utils";
 
-const URL = "http://localhost:6690/api/event";
+const URL = `${ANALYTICS_API_BASE_URL}/event`;
 
 export async function sendAppStartEvent(context, token) {
     const event = create(AnalyticsEventSchema, {

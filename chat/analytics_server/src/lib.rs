@@ -16,13 +16,18 @@ use chat_core::{
     DecodingKey, User,
 };
 use clickhouse::Client;
-use handlers::create_event_handler;
+use handlers::{create_event_handler, get_judge_refresh_summary_handler};
 use openapi::OpenApiRouter as _;
 use std::{fmt, ops::Deref, sync::Arc};
 use tokio::fs;
 use tower_http::cors::{self, CorsLayer};
 
-use axum::{http::Method, middleware::from_fn_with_state, routing::post, Router};
+use axum::{
+    http::Method,
+    middleware::from_fn_with_state,
+    routing::{get, post},
+    Router,
+};
 
 pub use config::AppConfig;
 
@@ -52,6 +57,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .allow_headers(cors::Any);
     let api = Router::new()
         .route("/event", post(create_event_handler))
+        .route(
+            "/judge-refresh/summary",
+            get(get_judge_refresh_summary_handler),
+        )
         .layer(from_fn_with_state(
             state.clone(),
             extract_user_header_only::<AppState>,

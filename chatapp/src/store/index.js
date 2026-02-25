@@ -16,6 +16,10 @@ import {
   sendUserLogoutEvent,
   sendUserRegisterEvent,
 } from '../analytics/event';
+import {
+  ANALYTICS_API_BASE_URL,
+  normalizeJudgeRefreshSummaryQuery,
+} from '../judge-refresh-summary-utils';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -418,6 +422,37 @@ export default createStore({
     },
     async judgeRealtimeRefresh({ state }, payload) {
       await sendJudgeRealtimeRefreshEvent(state.context, state.token, payload);
+    },
+    async fetchJudgeRefreshSummary({ state, dispatch }, payload = {}) {
+      const {
+        hours,
+        limit,
+        debateSessionId,
+      } = normalizeJudgeRefreshSummaryQuery(payload);
+      const params = {
+        hours,
+        limit,
+      };
+      if (debateSessionId != null) {
+        params.debateSessionId = debateSessionId;
+      }
+      try {
+        const response = await axios.get(`${ANALYTICS_API_BASE_URL}/judge-refresh/summary`, {
+          params,
+          headers: state.token
+            ? { Authorization: `Bearer ${state.token}` }
+            : {},
+        });
+        return response.data;
+      } catch (error) {
+        if (error.response && error.response.status === 403) {
+          console.error('Unauthorized access to analytics API, logging out');
+          await dispatch('logout');
+          window.location.href = '/login';
+          return;
+        }
+        throw error;
+      }
     },
     async refreshAccessTickets({ state, commit }) {
       if (!state.token) {

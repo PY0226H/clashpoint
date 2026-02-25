@@ -61,6 +61,60 @@
           </div>
         </div>
 
+        <div class="bg-white rounded-lg border p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs uppercase text-gray-500">Refresh Summary (Analytics)</div>
+              <div class="text-xs text-gray-500">
+                window: {{ summaryWindowHours }}h | limit: {{ summaryLimit }} |
+                updatedAt: {{ formatDateTime(summaryUpdatedAt) }}
+              </div>
+            </div>
+            <button
+              @click="refreshSummary"
+              :disabled="summaryLoading || loading"
+              class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+            >
+              {{ summaryLoading ? '刷新中...' : '刷新汇总' }}
+            </button>
+          </div>
+
+          <div v-if="summaryErrorText" class="bg-red-50 text-red-700 text-xs border border-red-200 rounded p-2">
+            {{ summaryErrorText }}
+          </div>
+
+          <div v-if="summaryRows.length === 0" class="text-sm text-gray-500">
+            当前没有刷新汇总数据。
+          </div>
+
+          <div v-else class="overflow-x-auto">
+            <table class="min-w-full text-xs border rounded">
+              <thead class="bg-gray-50 text-gray-600">
+                <tr>
+                  <th class="text-left p-2 border-b">Session</th>
+                  <th class="text-left p-2 border-b">Source</th>
+                  <th class="text-right p-2 border-b">Success Rate</th>
+                  <th class="text-right p-2 border-b">Runs</th>
+                  <th class="text-right p-2 border-b">Avg Retry</th>
+                  <th class="text-right p-2 border-b">Avg Coalesced</th>
+                  <th class="text-right p-2 border-b">Last Seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in summaryRows" :key="summaryRowKey(row)">
+                  <td class="p-2 border-b text-gray-900">{{ row.debateSessionId || '-' }}</td>
+                  <td class="p-2 border-b text-gray-700">{{ row.sourceEventType || '-' }}</td>
+                  <td class="p-2 border-b text-right text-gray-900">{{ formatPercent(row.successRate) }}</td>
+                  <td class="p-2 border-b text-right text-gray-900">{{ row.totalRuns || 0 }}</td>
+                  <td class="p-2 border-b text-right text-gray-900">{{ row.avgRetryCount ?? 0 }}</td>
+                  <td class="p-2 border-b text-right text-gray-900">{{ row.avgCoalescedEvents ?? 0 }}</td>
+                  <td class="p-2 border-b text-right text-gray-700">{{ formatDateTime(row.lastSeenAtMs) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div v-if="reportData" class="space-y-4">
           <div class="bg-white rounded-lg border p-4">
             <div class="flex items-center justify-between">
@@ -287,6 +341,12 @@ export default {
         lastRefreshAt: null,
         lastError: '',
       },
+      summaryWindowHours: 24,
+      summaryLimit: 20,
+      summaryRows: [],
+      summaryLoading: false,
+      summaryUpdatedAt: null,
+      summaryErrorText: '',
     };
   },
   computed: {
@@ -344,6 +404,14 @@ export default {
       const d = new Date(value);
       if (Number.isNaN(d.getTime())) return String(value);
       return d.toLocaleString();
+    },
+    formatPercent(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '-';
+      return `${n.toFixed(2)}%`;
+    },
+    summaryRowKey(row) {
+      return `${row.debateSessionId || ''}:${row.sourceEventType || ''}`;
     },
     drawVoteChoiceText(myVote) {
       return drawVoteChoiceTextLabel(myVote);
@@ -475,6 +543,34 @@ export default {
         }
       }
     },
+    async loadRefreshSummary(sessionId, { silent = false } = {}) {
+      if (!sessionId) return;
+      if (!silent) {
+        this.summaryLoading = true;
+      }
+      if (!silent) {
+        this.summaryErrorText = '';
+      }
+      try {
+        const payload = await this.$store.dispatch('fetchJudgeRefreshSummary', {
+          debateSessionId: sessionId,
+          hours: this.summaryWindowHours,
+          limit: this.summaryLimit,
+        });
+        this.summaryWindowHours = Number(payload?.windowHours || this.summaryWindowHours);
+        this.summaryLimit = Number(payload?.limit || this.summaryLimit);
+        this.summaryRows = Array.isArray(payload?.rows) ? payload.rows : [];
+        this.summaryUpdatedAt = Date.now();
+      } catch (err) {
+        if (!silent) {
+          this.summaryErrorText = this.errorMessage(err);
+        }
+      } finally {
+        if (!silent) {
+          this.summaryLoading = false;
+        }
+      }
+    },
     async flushPendingAutoRefresh() {
       if (!this.pendingAutoRefresh || !this.canRunAutoRefreshNow()) {
         this.maybeFlushPendingAutoRefresh();
@@ -520,6 +616,9 @@ export default {
           result,
           retryCountInRun,
           errorMessage: lastRunErrorMessage,
+        });
+        this.loadRefreshSummary(pending.sessionId, { silent: true }).catch((err) => {
+          console.warn('silent refresh summary failed:', err);
         });
       } finally {
         this.autoRefreshBusy = false;
@@ -593,7 +692,18 @@ export default {
       }
       this.pendingAutoRefresh = null;
       this.clearAutoRefreshTimer();
+      this.summaryRows = [];
+      this.summaryErrorText = '';
       await this.fetchReportForSession(sessionId);
+      await this.loadRefreshSummary(sessionId);
+    },
+    async refreshSummary() {
+      const sessionId = normalizeSessionId(this.sessionIdInput);
+      if (!sessionId) {
+        this.summaryErrorText = '请输入有效的 session id（正整数）';
+        return;
+      }
+      await this.loadRefreshSummary(sessionId);
     },
     async loadMoreStages() {
       if (!this.canLoadMore) return;
