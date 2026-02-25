@@ -32,7 +32,7 @@
 
         <div class="bg-white rounded-lg border p-4">
           <div class="text-xs uppercase text-gray-500 mb-2">Realtime Refresh</div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
             <div>
               <div class="text-xs uppercase text-gray-500">Events</div>
               <div class="font-semibold text-gray-900">{{ realtimeStats.receivedEvents }}</div>
@@ -48,6 +48,10 @@
             <div>
               <div class="text-xs uppercase text-gray-500">Retry</div>
               <div class="font-semibold text-amber-700">{{ realtimeStats.retryTriggered }}</div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-gray-500">Coalesced</div>
+              <div class="font-semibold text-indigo-700">{{ realtimeStats.coalescedEvents }}</div>
             </div>
           </div>
           <div class="text-xs text-gray-500 mt-2">
@@ -247,10 +251,12 @@ import {
   normalizeSessionId,
 } from '../judge-report-utils';
 import {
-  AUTO_REFRESH_MAX_ATTEMPTS,
-  calcAutoRefreshDelayMs,
   shouldRetryAutoRefresh,
 } from '../realtime-refresh-utils';
+import { runAutoRefreshWithRetry } from '../realtime-refresh-runner';
+
+const AUTO_REFRESH_THROTTLE_MS = 1200;
+const AUTO_REFRESH_BUSY_RECHECK_MS = 300;
 
 export default {
   components: {
@@ -266,6 +272,9 @@ export default {
       drawVoteLoading: false,
       voteSubmitting: false,
       autoRefreshBusy: false,
+      autoRefreshTimer: null,
+      pendingAutoRefresh: null,
+      lastAutoRefreshAt: 0,
       errorText: '',
       windowSize: 3,
       realtimeStats: {
@@ -273,6 +282,7 @@ export default {
         refreshSuccess: 0,
         refreshFailure: 0,
         retryTriggered: 0,
+        coalescedEvents: 0,
         lastEventType: '',
         lastRefreshAt: null,
         lastError: '',
@@ -316,6 +326,9 @@ export default {
       this.handleDrawVoteResolvedEvent(event);
     },
   },
+  beforeUnmount() {
+    this.clearAutoRefreshTimer();
+  },
   methods: {
     statusClass(status) {
       if (status === 'ready') return 'text-green-700';
@@ -341,16 +354,61 @@ export default {
     errorMessage(err) {
       return err?.response?.data?.error || err?.message || '请求失败';
     },
-    wait(ms) {
-      return new Promise((resolve) => {
-        setTimeout(resolve, Math.max(0, Number(ms) || 0));
-      });
-    },
     patchRealtimeStats(delta) {
       this.realtimeStats = {
         ...this.realtimeStats,
         ...delta,
       };
+    },
+    clearAutoRefreshTimer() {
+      if (this.autoRefreshTimer) {
+        clearTimeout(this.autoRefreshTimer);
+        this.autoRefreshTimer = null;
+      }
+    },
+    scheduleAutoRefreshFlush(delayMs) {
+      this.clearAutoRefreshTimer();
+      this.autoRefreshTimer = setTimeout(() => {
+        this.autoRefreshTimer = null;
+        this.maybeFlushPendingAutoRefresh();
+      }, Math.max(0, Number(delayMs) || 0));
+    },
+    canRunAutoRefreshNow() {
+      return !(
+        this.autoRefreshBusy ||
+        this.loading ||
+        this.loadingMore ||
+        this.voteSubmitting
+      );
+    },
+    enqueueRealtimeRefresh(sessionId, sourceEventType) {
+      if (!sessionId) return;
+      if (this.pendingAutoRefresh) {
+        this.patchRealtimeStats({
+          coalescedEvents: this.realtimeStats.coalescedEvents + 1,
+        });
+      }
+      this.pendingAutoRefresh = {
+        sessionId,
+        sourceEventType,
+      };
+      this.maybeFlushPendingAutoRefresh();
+    },
+    maybeFlushPendingAutoRefresh() {
+      if (!this.pendingAutoRefresh) {
+        return;
+      }
+      if (!this.canRunAutoRefreshNow()) {
+        this.scheduleAutoRefreshFlush(AUTO_REFRESH_BUSY_RECHECK_MS);
+        return;
+      }
+      const now = Date.now();
+      const waitMs = Math.max(0, AUTO_REFRESH_THROTTLE_MS - (now - this.lastAutoRefreshAt));
+      if (waitMs > 0) {
+        this.scheduleAutoRefreshFlush(waitMs);
+        return;
+      }
+      this.flushPendingAutoRefresh();
     },
     currentSessionId() {
       if (this.reportData?.sessionId) {
@@ -410,48 +468,47 @@ export default {
         }
       }
     },
-    async runAutoRefreshWithRetry(sessionId, sourceEventType) {
-      let lastErr = null;
-      for (let attempt = 1; attempt <= AUTO_REFRESH_MAX_ATTEMPTS; attempt += 1) {
-        const delayMs = calcAutoRefreshDelayMs(attempt);
-        if (delayMs > 0) {
-          this.patchRealtimeStats({
-            retryTriggered: this.realtimeStats.retryTriggered + 1,
-          });
-          await this.wait(delayMs);
-        }
-        try {
-          await this.fetchReportForSession(sessionId, { silent: true, throwOnError: true });
-          this.patchRealtimeStats({
-            refreshSuccess: this.realtimeStats.refreshSuccess + 1,
-            lastRefreshAt: Date.now(),
-            lastError: '',
-            lastEventType: sourceEventType,
-          });
-          return;
-        } catch (err) {
-          lastErr = err;
-          if (attempt >= AUTO_REFRESH_MAX_ATTEMPTS || !shouldRetryAutoRefresh(err)) {
-            break;
-          }
-        }
-      }
-      this.patchRealtimeStats({
-        refreshFailure: this.realtimeStats.refreshFailure + 1,
-        lastRefreshAt: Date.now(),
-        lastEventType: sourceEventType,
-        lastError: this.errorMessage(lastErr),
-      });
-    },
-    async reloadFromRealtimeEvent(sessionId, sourceEventType) {
-      if (this.autoRefreshBusy || this.loading || this.loadingMore || this.voteSubmitting) {
+    async flushPendingAutoRefresh() {
+      if (!this.pendingAutoRefresh || !this.canRunAutoRefreshNow()) {
+        this.maybeFlushPendingAutoRefresh();
         return;
       }
+      const pending = this.pendingAutoRefresh;
+      this.pendingAutoRefresh = null;
       this.autoRefreshBusy = true;
       try {
-        await this.runAutoRefreshWithRetry(sessionId, sourceEventType);
+        const result = await runAutoRefreshWithRetry({
+          fetchOnce: () => this.fetchReportForSession(pending.sessionId, { silent: true, throwOnError: true }),
+          sourceEventType: pending.sourceEventType,
+          shouldRetry: shouldRetryAutoRefresh,
+          onRetry: () => {
+            this.patchRealtimeStats({
+              retryTriggered: this.realtimeStats.retryTriggered + 1,
+            });
+          },
+          onSuccess: (v) => {
+            this.patchRealtimeStats({
+              refreshSuccess: this.realtimeStats.refreshSuccess + 1,
+              lastRefreshAt: v.at,
+              lastError: '',
+              lastEventType: pending.sourceEventType,
+            });
+          },
+          onFailure: (v) => {
+            this.patchRealtimeStats({
+              refreshFailure: this.realtimeStats.refreshFailure + 1,
+              lastRefreshAt: v.at,
+              lastEventType: pending.sourceEventType,
+              lastError: this.errorMessage(v.error),
+            });
+          },
+        });
+        this.lastAutoRefreshAt = result.at || Date.now();
       } finally {
         this.autoRefreshBusy = false;
+        if (this.pendingAutoRefresh) {
+          this.maybeFlushPendingAutoRefresh();
+        }
       }
     },
     handleJudgeReportReadyEvent(event) {
@@ -463,7 +520,7 @@ export default {
         receivedEvents: this.realtimeStats.receivedEvents + 1,
         lastEventType: 'DebateJudgeReportReady',
       });
-      this.reloadFromRealtimeEvent(sessionId, 'DebateJudgeReportReady');
+      this.enqueueRealtimeRefresh(sessionId, 'DebateJudgeReportReady');
     },
     handleDrawVoteResolvedEvent(event) {
       if (!this.shouldHandleSessionEvent(event)) {
@@ -474,7 +531,7 @@ export default {
         receivedEvents: this.realtimeStats.receivedEvents + 1,
         lastEventType: 'DebateDrawVoteResolved',
       });
-      this.reloadFromRealtimeEvent(sessionId, 'DebateDrawVoteResolved');
+      this.enqueueRealtimeRefresh(sessionId, 'DebateDrawVoteResolved');
     },
     async submitVote(agreeDraw) {
       if (!this.canSubmitVote) return;
@@ -504,6 +561,8 @@ export default {
         this.errorText = '请输入有效的 session id（正整数）';
         return;
       }
+      this.pendingAutoRefresh = null;
+      this.clearAutoRefreshTimer();
       await this.fetchReportForSession(sessionId);
     },
     async loadMoreStages() {
