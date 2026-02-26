@@ -1,5 +1,5 @@
 # path|max_lines|note
-chat/chat_server/src/models/judge.rs|2188|legacy monolith shrinking, stage B split target
+chat/chat_server/src/models/judge.rs|1860|legacy monolith shrinking, stage B split target
 chat/chat_server/src/models/debate.rs|2266|legacy monolith, stage B split target
 chat/chat_server/src/models/judge_dispatch.rs|1481|legacy monolith, stage B split target
 chat/chat_server/src/models/payment.rs|1128|legacy monolith, stage B split target
