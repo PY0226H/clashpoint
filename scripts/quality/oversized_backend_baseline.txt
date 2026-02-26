@@ -1,5 +1,2 @@
 # path|max_lines|note
-chat/chat_server/src/models/debate.rs|1404|legacy monolith shrinking, stage B split target
-chat/chat_server/src/models/judge_dispatch.rs|1020|legacy monolith, stage B split target
-chat/chat_server/src/models/payment.rs|801|legacy monolith, stage B split target
 ai_judge_service/app/openai_judge.py|706|legacy monolith, stage D split target
