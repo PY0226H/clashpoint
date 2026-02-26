@@ -9,6 +9,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 - post-module-explanation-journal: Generate deep Chinese explanation documents for newly added or modified module code and write a new file under `docs/explanation` after each module change. Use when a turn includes module-level implementation/refactor/fix and explanation assets must be updated for learning/interview review. (file: /Users/panyihang/Documents/aicomm/skills/post-module-explanation-journal/SKILL.md)
 - python-venv-guard: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. Use whenever a turn includes Python dependency install, Python test run, Python script execution, or service startup. (file: /Users/panyihang/Documents/aicomm/skills/python-venv-guard/SKILL.md)
 - pre-module-mvp-plan-guard: Before starting each development module, read the productization MVP plan, verify planned work alignment, and update the plan document with a pre-development alignment record. (file: /Users/panyihang/Documents/aicomm/skills/pre-module-mvp-plan-guard/SKILL.md)
+- post-module-plan-sync: After each module completion, sync the product MVP plan by writing completed/incomplete matrix and next-step recommendation based on contract/test/linkage probes. (file: /Users/panyihang/Documents/aicomm/skills/post-module-plan-sync/SKILL.md)
 
 ### How to use skills
 - Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
@@ -41,6 +42,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 
 ### Mandatory post-module hook
 - For any turn that includes module-level code implementation/refactor/fix in this repository, run `post-module-test-guard` after coding and before final verification sign-off.
+- Then run `post-module-plan-sync` before interview/explanation journaling.
 - Then run `post-module-interview-journal` before the final user response.
 - Then run `post-module-explanation-journal` before the final user response.
 - The testing hook must:
@@ -51,6 +53,10 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
   - `docs/interview/01-development-log.md`
   - `docs/interview/02-troubleshooting-log.md`
   - `docs/interview/03-interview-qa-log.md`
+- The plan sync hook must:
+  - update `/Users/panyihang/Documents/aicomm/docs/产品化开发计划-在线辩论AI裁判平台.md`
+  - rewrite “下一开发模块建议”与“已完成/未完成矩阵”
+  - append module completion sync history
 - The explanation journal hook must:
   - follow `docs/explanation/00-讲解规范.md`
   - create a new markdown file under `docs/explanation/`

@@ -21,7 +21,7 @@
           {{ errorText }}
         </div>
 
-        <div class="bg-white border rounded-lg p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div class="bg-white border rounded-lg p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
             <div class="text-xs uppercase text-gray-500 mb-1">Topic</div>
             <select
@@ -41,12 +41,27 @@
               class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">全部</option>
+              <option value="joinable">可加入</option>
+              <option value="live">live</option>
+              <option value="upcoming">scheduled</option>
               <option value="open">open</option>
               <option value="running">running</option>
               <option value="ended">ended</option>
             </select>
           </div>
-          <div class="text-xs text-gray-500 self-end">
+          <div>
+            <div class="text-xs uppercase text-gray-500 mb-1">Keyword</div>
+            <input
+              v-model.trim="keyword"
+              class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="按辩题关键词筛选"
+            />
+          </div>
+          <label class="inline-flex items-center gap-2 text-xs text-gray-700 self-end">
+            <input v-model="joinableOnly" type="checkbox" class="rounded border-gray-300" />
+            仅可加入
+          </label>
+          <div class="text-xs text-gray-500 self-end text-right">
             sessions: {{ filteredSessions.length }} / {{ sessions.length }}
           </div>
         </div>
@@ -114,6 +129,7 @@
 
 <script>
 import Sidebar from '../components/Sidebar.vue';
+import { filterDebateSessions } from '../debate-lobby-utils';
 
 export default {
   components: {
@@ -125,20 +141,20 @@ export default {
       sessions: [],
       selectedTopicId: '',
       statusFilter: 'open',
+      joinableOnly: false,
+      keyword: '',
       loading: false,
       errorText: '',
     };
   },
   computed: {
     filteredSessions() {
-      return this.sessions.filter((session) => {
-        if (this.selectedTopicId && String(session.topicId) !== this.selectedTopicId) {
-          return false;
-        }
-        if (this.statusFilter !== 'all' && session.status !== this.statusFilter) {
-          return false;
-        }
-        return true;
+      return filterDebateSessions(this.sessions, {
+        selectedTopicId: this.selectedTopicId,
+        statusFilter: this.statusFilter,
+        joinableOnly: this.joinableOnly,
+        keyword: this.keyword,
+        topicTitleById: (topicId) => this.topicTitle(topicId),
       });
     },
   },
