@@ -3,7 +3,6 @@ import axios from 'axios';
 import { jwtDecode } from "jwt-decode";
 import { getUrlBase } from '../utils';
 import { initSSE } from '../utils';
-import { formatMessageDate } from '../utils';
 import {
   sendAppStartEvent,
   sendChatCreatedEvent,
@@ -22,6 +21,8 @@ import {
   normalizeJudgeRefreshSummaryQuery,
 } from '../judge-refresh-summary-utils';
 import { normalizeWalletLedgerLimit } from '../wallet-utils';
+import { toDisplayMessage, upsertMessage } from '../message-store-utils';
+import { pickActiveChannelId } from '../channel-utils';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -112,11 +113,7 @@ export default createStore({
       state.users = users;
     },
     setMessages(state, { channelId, messages }) {
-      // Format the date for each message before setting them in the state
-      const formattedMessages = messages.map(message => ({
-        ...message,
-        formattedCreatedAt: formatMessageDate(message.createdAt)
-      }));
+      const formattedMessages = messages.map((message) => toDisplayMessage(message));
       state.messages[channelId] = formattedMessages.reverse();
     },
     addChannel(state, channel) {
@@ -124,14 +121,8 @@ export default createStore({
       state.messages[channel.id] = [];  // Initialize message list for the new channel
     },
     addMessage(state, { channelId, message }) {
-      if (state.messages[channelId]) {
-        // Format the message date before adding it to the state
-        message.formattedCreatedAt = formatMessageDate(message.createdAt);
-        state.messages[channelId].push(message);
-      } else {
-        message.formattedCreatedAt = formatMessageDate(message.createdAt);
-        state.messages[channelId] = [message];
-      }
+      const existing = state.messages[channelId] || [];
+      state.messages[channelId] = upsertMessage(existing, message);
     },
     setActiveChannel(state, channelId) {
       const channel = state.channels.find((c) => c.id === channelId);
@@ -173,6 +164,14 @@ export default createStore({
         const id = JSON.parse(storedActiveChannelId);
         const channel = state.channels.find((c) => c.id === id);
         state.activeChannel = channel;
+      }
+      if (!state.activeChannel && state.channels.length > 0) {
+        const fallbackId = pickActiveChannelId(state.channels, null);
+        const fallbackChannel = state.channels.find((c) => c.id === fallbackId);
+        state.activeChannel = fallbackChannel || null;
+        if (fallbackId != null) {
+          localStorage.setItem('activeChannelId', JSON.stringify(fallbackId));
+        }
       }
     },
   },
@@ -265,6 +264,7 @@ export default createStore({
       localStorage.removeItem('workspace');
       localStorage.removeItem('channels');
       localStorage.removeItem('messages');
+      localStorage.removeItem('activeChannelId');
 
       commit('setUser', null);
       commit('setToken', null);
@@ -280,7 +280,7 @@ export default createStore({
     setActiveChannel({ commit }, channel) {
       commit('setActiveChannel', channel);
       console.log("setActiveChannel:", channel);
-      localStorage.setItem('activeChannelId', channel);
+      localStorage.setItem('activeChannelId', JSON.stringify(channel));
     },
     addChannel({ commit }, channel) {
       commit('addChannel', channel);
@@ -288,6 +288,28 @@ export default createStore({
       // Update the channels and messages in local storage
       localStorage.setItem('channels', JSON.stringify(this.state.channels));
       localStorage.setItem('messages', JSON.stringify(this.state.messages));
+    },
+    async createChannel({ state, commit }, { name, members, public: isPublic = false }) {
+      const response = await network(
+        this,
+        'post',
+        '/chats',
+        {
+          name,
+          members,
+          public: isPublic,
+        },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      const channel = response.data;
+      commit('addChannel', channel);
+      commit('setActiveChannel', channel.id);
+      localStorage.setItem('channels', JSON.stringify(this.state.channels));
+      localStorage.setItem('messages', JSON.stringify(this.state.messages));
+      localStorage.setItem('activeChannelId', JSON.stringify(channel.id));
+      return channel;
     },
     async fetchMessagesForChannel({ state, commit }, channelId) {
       if (!state.messages[channelId] || state.messages[channelId].length === 0) {
@@ -768,11 +790,16 @@ export default createStore({
       }
     },
     async sendMessage({ state, commit }, payload) {
+      if (!payload.chatId) {
+        throw new Error('active channel is required before sending message');
+      }
       try {
         const response = await network(this, 'post', `/chats/${payload.chatId}`, payload, {
           Authorization: `Bearer ${state.token}`,
         });
+        commit('addMessage', { channelId: payload.chatId, message: response.data });
         console.log('Message sent:', response.data);
+        return response.data;
       } catch (error) {
         console.error('Failed to send message:', error);
         throw error;
@@ -987,6 +1014,20 @@ async function loadState(response, self, commit) {
       Authorization: `Bearer ${token}`,
     });
     const channels = chatsResp.data;
+    const activeChannelId = pickActiveChannelId(
+      channels,
+      (() => {
+        const raw = localStorage.getItem('activeChannelId');
+        if (!raw) {
+          return null;
+        }
+        try {
+          return JSON.parse(raw);
+        } catch (_err) {
+          return null;
+        }
+      })(),
+    );
 
     // Store user info, token, and workspace in localStorage
     localStorage.setItem('user', JSON.stringify(user));
@@ -994,6 +1035,11 @@ async function loadState(response, self, commit) {
     localStorage.setItem('workspace', JSON.stringify(workspace));
     localStorage.setItem('users', JSON.stringify(usersMap));
     localStorage.setItem('channels', JSON.stringify(channels));
+    if (activeChannelId != null) {
+      localStorage.setItem('activeChannelId', JSON.stringify(activeChannelId));
+    } else {
+      localStorage.removeItem('activeChannelId');
+    }
 
     // Commit the mutations to update the state
     commit('setUser', user);
@@ -1001,6 +1047,9 @@ async function loadState(response, self, commit) {
     commit('setWorkspace', workspace);
     commit('setChannels', channels);
     commit('setUsers', usersMap);
+    if (activeChannelId != null) {
+      commit('setActiveChannel', activeChannelId);
+    }
 
     // call initSSE action
     await self.dispatch('initSSE');

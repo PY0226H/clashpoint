@@ -75,6 +75,8 @@
 </template>
 
 <script>
+import { pickDefaultPeerUserId } from '../channel-utils';
+
 export default {
   data() {
     return {
@@ -116,12 +118,25 @@ export default {
         this.dropdownVisible = false;
       }
     },
-    addChannel() {
-      const newChannel = {
-        id: Date.now().toString(),
-        name: `Channel ${this.channels.length + 1}`,
-      };
-      this.$store.dispatch('addChannel', newChannel);
+    async addChannel() {
+      const selfId = this.$store.state.user?.id;
+      const peerId = pickDefaultPeerUserId(this.$store.state.users, selfId);
+      if (!peerId) {
+        alert('当前工作区没有其他用户，无法创建频道。请先注册第二个用户后再创建。');
+        return;
+      }
+
+      const name = `channel-${this.channels.length + 1}`;
+      try {
+        const channel = await this.$store.dispatch('createChannel', {
+          name,
+          members: [selfId, peerId],
+          public: false,
+        });
+        this.selectChannel(channel.id);
+      } catch (error) {
+        console.error('Failed to create channel:', error);
+      }
     },
     goRoute(path) {
       if (this.$route.path !== path) {
@@ -142,6 +157,9 @@ export default {
       const to = `/chats/${channelId}`;
       this.$store.dispatch('navigation', { from, to });
       this.$store.dispatch('setActiveChannel', channelId);
+      if (this.$route.path !== '/') {
+        this.$router.push('/');
+      }
     },
   },
   mounted() {

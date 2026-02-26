@@ -63,6 +63,7 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
         .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
         .layer(cors)
         .route("/", get(index_handler))
+        .route("/health", get(health_handler))
         .with_state(state);
 
     Ok(app)
@@ -70,6 +71,10 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
 
 async fn index_handler() -> impl IntoResponse {
     Html(INDEX_HTML)
+}
+
+async fn health_handler() -> &'static str {
+    "ok"
 }
 
 impl TokenVerify for AppState {
@@ -103,5 +108,15 @@ impl AppState {
             self.users.insert(user_id, tx);
             rx
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn health_handler_should_return_ok() {
+        assert_eq!(health_handler().await, "ok");
     }
 }

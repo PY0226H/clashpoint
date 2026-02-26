@@ -20,7 +20,7 @@
     <div>
       <textarea
         v-model="message"
-        @keyup.enter="sendMessage"
+        @keydown.enter.exact.prevent="sendMessage"
         placeholder="Type a message..."
         class="w-full px-4 text-sm bg-gray-100 border-none rounded-lg focus:outline-none resize-none"
         rows="3"
@@ -77,8 +77,12 @@ export default {
     },
   },
   methods: {
-    sendMessage() {
+    async sendMessage() {
       if (this.message.trim() === '') return;
+      if (!this.activeChannelId) {
+        console.warn('No active channel selected, skip send');
+        return;
+      }
 
       const payload = {
         chatId: this.activeChannelId,
@@ -88,10 +92,9 @@ export default {
 
       console.log('Sending message:', payload);
 
-      this.$store.dispatch('messageSent', { chatId: payload.chatId, type: "text", size: payload.content.length, totalFiles: payload.files.length });
-
       try {
-        this.$store.dispatch('sendMessage', payload);
+        await this.$store.dispatch('sendMessage', payload);
+        this.$store.dispatch('messageSent', { chatId: payload.chatId, type: "text", size: payload.content.length, totalFiles: payload.files.length });
         this.message = ''; // Clear the input after sending
         this.files = []; // Clear the files after sending
       } catch (error) {

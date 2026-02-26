@@ -155,10 +155,15 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
     let app = Router::new()
         .openapi()
         .route("/", get(index_handler))
+        .route("/health", get(health_handler))
         .nest("/api", api)
         .with_state(state);
 
     Ok(set_layer(app))
+}
+
+async fn health_handler() -> &'static str {
+    "ok"
 }
 
 // 当我调用 state.config => state.inner.config
@@ -289,6 +294,16 @@ impl fmt::Debug for AppStateInner {
         f.debug_struct("AppStateInner")
             .field("config", &self.config)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn health_handler_should_return_ok() {
+        assert_eq!(health_handler().await, "ok");
     }
 }
 

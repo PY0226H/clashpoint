@@ -16,6 +16,21 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+wait_for_port() {
+    local port="$1"
+    local timeout_secs="${2:-30}"
+    local waited=0
+
+    while [ "$waited" -lt "$timeout_secs" ]; do
+        if lsof -Pi :"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
+}
+
 # 检查 PostgreSQL
 echo "1. 检查 PostgreSQL 数据库..."
 if brew services list | grep -q "postgresql.*started"; then
@@ -35,6 +50,15 @@ else
     echo -e "${YELLOW}!${NC} 数据库 'chat' 不存在，正在创建..."
     createdb chat
     echo -e "${GREEN}✓${NC} 数据库创建完成"
+fi
+
+echo ""
+echo "2.1 检查运行时业务核心表..."
+if bash chat/scripts/repair_runtime_schema.sh chat; then
+    echo -e "${GREEN}✓${NC} 运行时业务核心表检查完成"
+else
+    echo -e "${RED}✗${NC} 运行时业务核心表修复失败"
+    exit 1
 fi
 
 # 检查端口占用
@@ -102,29 +126,28 @@ cd ..
 
 echo ""
 echo "6. 等待服务启动..."
-sleep 5
+sleep 2
 
 # 检查服务是否启动成功
 echo ""
 echo "7. 检查服务状态..."
 
 # 检查 chat_server
-if lsof -Pi :6688 -sTCP:LISTEN -t >/dev/null 2>&1; then
+if wait_for_port 6688 45; then
     echo -e "${GREEN}✓${NC} chat_server 运行中 (PID: $CHAT_PID, 端口: 6688)"
 else
     echo -e "${RED}✗${NC} chat_server 启动失败，查看日志: tail -f /tmp/aicomm_logs/chat_server.log"
 fi
 
 # 检查 notify_server
-if lsof -Pi :6687 -sTCP:LISTEN -t >/dev/null 2>&1; then
+if wait_for_port 6687 30; then
     echo -e "${GREEN}✓${NC} notify_server 运行中 (PID: $NOTIFY_PID, 端口: 6687)"
 else
     echo -e "${RED}✗${NC} notify_server 启动失败，查看日志: tail -f /tmp/aicomm_logs/notify_server.log"
 fi
 
 # 检查前端
-sleep 3
-if lsof -Pi :1420 -sTCP:LISTEN -t >/dev/null 2>&1; then
+if wait_for_port 1420 30; then
     echo -e "${GREEN}✓${NC} 前端应用运行中 (PID: $APP_PID, 端口: 1420)"
 else
     echo -e "${RED}✗${NC} 前端应用启动失败，查看日志: tail -f /tmp/aicomm_logs/chatapp.log"

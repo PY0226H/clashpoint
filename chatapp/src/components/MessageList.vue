@@ -69,7 +69,11 @@ export default {
       this.$store.dispatch('fetchMessagesForChannel', channelId);
     },
     getSender(userId) {
-      return this.$store.getters.getUserById(userId);
+      return this.$store.getters.getUserById(userId) || {
+        id: userId,
+        fullname: `User#${userId}`,
+        email: '',
+      };
     },
     scrollToBottom() {
       const container = this.$refs.messageContainer;
