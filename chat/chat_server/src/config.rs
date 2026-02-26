@@ -1,6 +1,7 @@
-use std::{env, fs::File, path::PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
+use chat_core::load_yaml_with_fallback;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,17 +227,6 @@ fn default_payment_verify_timeout_ms() -> u64 {
 
 impl AppConfig {
     pub fn load() -> Result<Self> {
-        // read from  ./app.yml, or /etc/config/app.yml, or from env CHAT_CONFIG
-        let ret = match (
-            File::open("chat.yml"),
-            File::open("/etc/config/chat.yml"),
-            env::var("CHAT_CONFIG"),
-        ) {
-            (Ok(reader), _, _) => serde_yaml::from_reader(reader),
-            (_, Ok(reader), _) => serde_yaml::from_reader(reader),
-            (_, _, Ok(path)) => serde_yaml::from_reader(File::open(path)?),
-            _ => bail!("Config file not found"),
-        };
-        Ok(ret?)
+        load_yaml_with_fallback("chat.yml", "/etc/config/chat.yml", "CHAT_CONFIG")
     }
 }

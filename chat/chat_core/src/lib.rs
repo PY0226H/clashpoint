@@ -1,8 +1,10 @@
+mod config_loader;
 mod utils;
 
 pub mod middlewares;
 pub mod pb;
 
+pub use config_loader::*;
 pub use utils::*;
 
 use chrono::{DateTime, Utc};

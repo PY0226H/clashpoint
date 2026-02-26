@@ -1,6 +1,6 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
+use chat_core::load_yaml_with_fallback;
 use serde::{Deserialize, Serialize};
-use std::{env, fs::File};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -15,17 +15,6 @@ pub struct ServerConfig {
 
 impl AppConfig {
     pub fn load() -> Result<Self> {
-        // read from  ./app.yml, or /etc/config/app.yml, or from env CHAT_CONFIG
-        let ret = match (
-            File::open("bot.yml"),
-            File::open("/etc/config/bot.yml"),
-            env::var("BOT_CONFIG"),
-        ) {
-            (Ok(reader), _, _) => serde_yaml::from_reader(reader),
-            (_, Ok(reader), _) => serde_yaml::from_reader(reader),
-            (_, _, Ok(path)) => serde_yaml::from_reader(File::open(path)?),
-            _ => bail!("Config file not found"),
-        };
-        Ok(ret?)
+        load_yaml_with_fallback("bot.yml", "/etc/config/bot.yml", "BOT_CONFIG")
     }
 }
