@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   buildDebateRoomWsUrl,
   canSubmitDrawVote,
+  computeWsReconnectDelayMs,
   getDrawVoteRemainingMs,
   getOldestDebateMessageId,
   extractDebateRoomEvent,
@@ -123,3 +124,34 @@ assert.deepEqual(mergedMessages.map((item) => item.id), [1, 2, 4, 5]);
 assert.equal(mergedMessages.find((item) => item.id === 4)?.content, 'new4');
 assert.equal(getOldestDebateMessageId(mergedMessages), 1);
 assert.equal(getOldestDebateMessageId([]), null);
+
+assert.equal(
+  computeWsReconnectDelayMs(1, { baseMs: 1000, maxMs: 15000, jitterRatio: 0 }),
+  1000,
+);
+assert.equal(
+  computeWsReconnectDelayMs(2, { baseMs: 1000, maxMs: 15000, jitterRatio: 0 }),
+  2000,
+);
+assert.equal(
+  computeWsReconnectDelayMs(20, { baseMs: 1000, maxMs: 15000, jitterRatio: 0 }),
+  15000,
+);
+assert.equal(
+  computeWsReconnectDelayMs(3, {
+    baseMs: 1000,
+    maxMs: 15000,
+    jitterRatio: 0.25,
+    randomValue: 0,
+  }),
+  3000,
+);
+assert.equal(
+  computeWsReconnectDelayMs(3, {
+    baseMs: 1000,
+    maxMs: 15000,
+    jitterRatio: 0.25,
+    randomValue: 1,
+  }),
+  5001,
+);

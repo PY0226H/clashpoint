@@ -1,6 +1,9 @@
 const DEFAULT_NOTIFY_BASE = 'http://localhost:6687/events';
 const KNOWN_JUDGE_REPORT_STATUS = new Set(['ready', 'pending', 'failed', 'absent']);
 const KNOWN_DRAW_VOTE_STATUS = new Set(['open', 'decided', 'expired', 'absent']);
+const DEFAULT_WS_RECONNECT_BASE_MS = 1200;
+const DEFAULT_WS_RECONNECT_MAX_MS = 15000;
+const DEFAULT_WS_RECONNECT_JITTER_RATIO = 0.2;
 
 function toWsProtocol(protocol) {
   if (protocol === 'https:') {
@@ -176,4 +179,35 @@ export function getOldestDebateMessageId(messages = []) {
     }
   }
   return oldest;
+}
+
+export function computeWsReconnectDelayMs(
+  attempt,
+  {
+    baseMs = DEFAULT_WS_RECONNECT_BASE_MS,
+    maxMs = DEFAULT_WS_RECONNECT_MAX_MS,
+    jitterRatio = DEFAULT_WS_RECONNECT_JITTER_RATIO,
+    randomValue = Math.random(),
+  } = {},
+) {
+  const normalizedBaseMs = Math.max(1, Number(baseMs) || DEFAULT_WS_RECONNECT_BASE_MS);
+  const normalizedMaxMs = Math.max(normalizedBaseMs, Number(maxMs) || DEFAULT_WS_RECONNECT_MAX_MS);
+  const normalizedAttempt = Math.max(1, Number(attempt) || 1);
+  const normalizedJitterRatio = Math.max(0, Number(jitterRatio) || 0);
+
+  const expDelay = Math.min(
+    normalizedMaxMs,
+    normalizedBaseMs * Math.pow(2, normalizedAttempt - 1),
+  );
+  const jitterWindow = Math.floor(expDelay * normalizedJitterRatio);
+  if (jitterWindow <= 0) {
+    return Math.floor(expDelay);
+  }
+
+  const random = Math.max(0, Math.min(1, Number(randomValue) || 0));
+  const offset = Math.floor(random * (jitterWindow * 2 + 1)) - jitterWindow;
+  return Math.max(
+    normalizedBaseMs,
+    Math.min(normalizedMaxMs, Math.floor(expDelay + offset)),
+  );
 }

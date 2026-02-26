@@ -17,7 +17,7 @@
               wsConnected ? 'bg-green-500' : 'bg-gray-400',
             ]"
           />
-          <span class="text-xs text-gray-600">{{ wsConnected ? 'WS Connected' : 'WS Disconnected' }}</span>
+          <span class="text-xs text-gray-600">{{ wsStatusText }}</span>
           <button
             @click="refreshRoom"
             :disabled="loading"
@@ -269,6 +269,7 @@ import {
 import {
   buildDebateRoomWsUrl,
   canSubmitDrawVote as canSubmitDrawVoteNow,
+  computeWsReconnectDelayMs,
   extractDebateRoomEvent,
   getDrawVoteRemainingMs,
   getOldestDebateMessageId,
@@ -304,6 +305,9 @@ export default {
       ws: null,
       wsConnected: false,
       wsReconnectTimer: null,
+      wsReconnectAttempts: 0,
+      roomRecovering: false,
+      lastRoomRecoverAt: 0,
       judgeLoading: false,
       judgeRequesting: false,
       judgeErrorText: '',
@@ -374,6 +378,15 @@ export default {
         return 'text-red-700';
       }
       return 'text-gray-700';
+    },
+    wsStatusText() {
+      if (this.wsConnected) {
+        return 'WS Connected';
+      }
+      if (this.wsReconnectTimer) {
+        return `WS Reconnecting (#${this.wsReconnectAttempts})`;
+      }
+      return 'WS Disconnected';
     },
   },
   methods: {
@@ -678,18 +691,59 @@ export default {
       if (this.destroyed || this.wsReconnectTimer) {
         return;
       }
+      this.wsReconnectAttempts += 1;
+      const delayMs = computeWsReconnectDelayMs(this.wsReconnectAttempts);
       this.wsReconnectTimer = setTimeout(() => {
         this.wsReconnectTimer = null;
         this.connectRoomWs();
-      }, 3000);
+      }, delayMs);
     },
-    disconnectWs() {
+    disconnectWs({ resetBackoff = false } = {}) {
       this.clearWsReconnectTimer();
       if (this.ws) {
         this.ws.close();
       }
       this.ws = null;
       this.wsConnected = false;
+      if (resetBackoff) {
+        this.wsReconnectAttempts = 0;
+      }
+    },
+    async recoverRoomStateAfterReconnect() {
+      if (!this.sessionId || this.roomRecovering) {
+        return;
+      }
+      const now = Date.now();
+      if (now - this.lastRoomRecoverAt < 3000) {
+        return;
+      }
+      this.roomRecovering = true;
+      try {
+        const [messages, pins] = await Promise.all([
+          this.$store.dispatch('listDebateMessages', {
+            sessionId: this.sessionId,
+            limit: this.historyLimit,
+          }),
+          this.$store.dispatch('listDebatePinnedMessages', {
+            sessionId: this.sessionId,
+            activeOnly: true,
+            limit: 30,
+          }),
+        ]);
+        this.messages = mergeDebateRoomMessages(this.messages, messages || []);
+        this.historyHasMore = Array.isArray(messages) && messages.length >= this.historyLimit;
+        this.pins = pins;
+        await Promise.all([
+          this.refreshJudgeReport({ silent: true }),
+          this.refreshDrawVote({ silent: true }),
+          this.refreshWalletBalance({ silent: true }),
+        ]);
+      } catch (_) {
+        // Keep websocket reconnect recovery non-blocking.
+      } finally {
+        this.lastRoomRecoverAt = Date.now();
+        this.roomRecovering = false;
+      }
     },
     async connectRoomWs() {
       if (this.destroyed || !this.sessionId) {
@@ -715,6 +769,8 @@ export default {
             return;
           }
           this.wsConnected = true;
+          this.wsReconnectAttempts = 0;
+          this.recoverRoomStateAfterReconnect();
         };
         ws.onmessage = (event) => {
           const msg = parseDebateRoomWsMessage(event?.data);
@@ -835,7 +891,7 @@ export default {
     this.destroyed = true;
     this.stopClock();
     this.clearJudgePollTimer();
-    this.disconnectWs();
+    this.disconnectWs({ resetBackoff: true });
   },
 };
 </script>
