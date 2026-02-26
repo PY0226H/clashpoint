@@ -1,0 +1,268 @@
+import unittest
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from app.rag_retriever import RAG_BACKEND_MILVUS, RetrievedContext
+from app.runtime_orchestrator import build_report_by_runtime
+from app.runtime_policy import PROVIDER_MOCK, PROVIDER_OPENAI
+from app.settings import Settings
+
+
+class _FakeReport:
+    def __init__(self, payload: dict | None = None) -> None:
+        self.payload = payload or {}
+
+
+def _build_settings(**overrides: object) -> Settings:
+    base = {
+        "ai_internal_key": "k",
+        "chat_server_base_url": "http://chat",
+        "report_path_template": "/r/{job_id}",
+        "failed_path_template": "/f/{job_id}",
+        "callback_timeout_secs": 8.0,
+        "process_delay_ms": 0,
+        "judge_style_mode": "rational",
+        "provider": PROVIDER_MOCK,
+        "openai_api_key": "",
+        "openai_model": "gpt-4.1-mini",
+        "openai_base_url": "https://api.openai.com/v1",
+        "openai_timeout_secs": 25.0,
+        "openai_temperature": 0.1,
+        "openai_max_retries": 2,
+        "openai_fallback_to_mock": True,
+        "rag_enabled": True,
+        "rag_knowledge_file": "",
+        "rag_max_snippets": 4,
+        "rag_max_chars_per_snippet": 280,
+        "rag_query_message_limit": 80,
+        "rag_source_whitelist": ("https://teamfighttactics.leagueoflegends.com/en-us/news",),
+        "rag_backend": "file",
+        "rag_openai_embedding_model": "text-embedding-3-small",
+        "rag_milvus_uri": "",
+        "rag_milvus_token": "",
+        "rag_milvus_db_name": "",
+        "rag_milvus_collection": "",
+        "rag_milvus_vector_field": "embedding",
+        "rag_milvus_content_field": "content",
+        "rag_milvus_title_field": "title",
+        "rag_milvus_source_url_field": "source_url",
+        "rag_milvus_chunk_id_field": "chunk_id",
+        "rag_milvus_tags_field": "tags",
+        "rag_milvus_metric_type": "COSINE",
+        "rag_milvus_search_limit": 20,
+        "stage_agent_max_chunks": 12,
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
+def _build_request() -> SimpleNamespace:
+    now = datetime.now(timezone.utc)
+    return SimpleNamespace(
+        job=SimpleNamespace(
+            job_id=1,
+            ws_id=1,
+            session_id=2,
+            requested_by=1,
+            style_mode="rational",
+            rejudge_triggered=False,
+            requested_at=now,
+        ),
+        session=SimpleNamespace(
+            status="judging",
+            scheduled_start_at=now,
+            actual_start_at=now,
+            end_at=now,
+        ),
+        topic=SimpleNamespace(
+            title="test",
+            description="desc",
+            category="game",
+            stance_pro="pro",
+            stance_con="con",
+            context_seed=None,
+        ),
+        messages=[],
+        message_window_size=100,
+        rubric_version="v1",
+    )
+
+
+class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_build_report_by_runtime_should_use_openai_and_set_rag_meta(self) -> None:
+        settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test")
+        request = _build_request()
+        contexts = [
+            RetrievedContext(
+                chunk_id="c1",
+                title="title",
+                source_url="https://teamfighttactics.leagueoflegends.com/en-us/news/patch",
+                content="content",
+                score=0.9,
+            )
+        ]
+        captured: dict[str, object] = {}
+
+        def fake_retrieve_contexts(_req: object, **kwargs: object) -> list[RetrievedContext]:
+            captured["retrieve_kwargs"] = kwargs
+            return contexts
+
+        async def fake_build_openai(**kwargs: object) -> _FakeReport:
+            captured["openai_kwargs"] = kwargs
+            return _FakeReport(payload={"provider": "openai"})
+
+        def fake_build_mock(*_args: object, **_kwargs: object) -> _FakeReport:
+            raise AssertionError("mock builder should not be called")
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=fake_build_mock,
+        )
+
+        openai_kwargs = captured["openai_kwargs"]
+        self.assertEqual(openai_kwargs["request"], request)
+        self.assertEqual(openai_kwargs["effective_style_mode"], "rational")
+        self.assertEqual(openai_kwargs["style_mode_source"], "system_config")
+        self.assertEqual(openai_kwargs["retrieved_contexts"], contexts)
+        self.assertEqual(report.payload["provider"], "openai")
+        self.assertTrue(report.payload["ragEnabled"])
+        self.assertTrue(report.payload["ragUsedByModel"])
+        self.assertEqual(report.payload["ragSnippetCount"], 1)
+        self.assertEqual(report.payload["ragBackend"], "file")
+        self.assertEqual(report.payload["ragSourceWhitelist"], list(settings.rag_source_whitelist))
+        self.assertEqual(len(report.payload["ragSources"]), 1)
+        self.assertIsNone(captured["retrieve_kwargs"]["milvus_config"])
+
+    async def test_build_report_by_runtime_should_fallback_when_openai_failed_and_enabled(self) -> None:
+        settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test", openai_fallback_to_mock=True)
+        request = _build_request()
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            return []
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            raise RuntimeError("openai boom")
+
+        def fake_build_mock(_request: object, **kwargs: object) -> _FakeReport:
+            self.assertEqual(kwargs["system_style_mode"], settings.judge_style_mode)
+            return _FakeReport(payload={"provider": "mock"})
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=fake_build_mock,
+        )
+
+        self.assertEqual(report.payload["provider"], "ai-judge-service-mock-fallback")
+        self.assertEqual(report.payload["fallbackFrom"], "openai")
+        self.assertIn("openai boom", report.payload["fallbackReason"])
+        self.assertFalse(report.payload["ragUsedByModel"])
+
+    async def test_build_report_by_runtime_should_raise_when_openai_failed_and_fallback_disabled(self) -> None:
+        settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test", openai_fallback_to_mock=False)
+        request = _build_request()
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            return []
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            raise RuntimeError("network error")
+
+        def fake_build_mock(*_args: object, **_kwargs: object) -> _FakeReport:
+            raise AssertionError("mock builder should not be called")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            await build_report_by_runtime(
+                request=request,
+                effective_style_mode="rational",
+                style_mode_source="system_config",
+                settings=settings,
+                retrieve_contexts_fn=fake_retrieve_contexts,
+                build_report_with_openai_fn=fake_build_openai,
+                build_mock_report_fn=fake_build_mock,
+            )
+        self.assertIn("openai runtime failed", str(ctx.exception))
+
+    async def test_build_report_by_runtime_should_mark_missing_openai_key(self) -> None:
+        settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="")
+        request = _build_request()
+        calls: dict[str, object] = {}
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            return []
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("openai builder should not be called without api key")
+
+        def fake_build_mock(_request: object, **kwargs: object) -> _FakeReport:
+            calls["system_style_mode"] = kwargs["system_style_mode"]
+            return _FakeReport(payload={"provider": "mock"})
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=fake_build_mock,
+        )
+
+        self.assertEqual(calls["system_style_mode"], settings.judge_style_mode)
+        self.assertEqual(report.payload["provider"], "ai-judge-service-mock-missing-openai-key")
+        self.assertEqual(report.payload["fallbackFrom"], "openai")
+        self.assertEqual(report.payload["fallbackReason"], "missing OPENAI_API_KEY")
+        self.assertFalse(report.payload["ragUsedByModel"])
+
+    async def test_build_report_by_runtime_should_build_milvus_config_when_enabled(self) -> None:
+        settings = _build_settings(
+            provider=PROVIDER_MOCK,
+            rag_backend=RAG_BACKEND_MILVUS,
+            rag_milvus_uri="http://milvus:19530",
+            rag_milvus_collection="judge_kb",
+            rag_milvus_search_limit=33,
+            rag_milvus_metric_type="IP",
+        )
+        request = _build_request()
+        calls: dict[str, object] = {}
+
+        def fake_retrieve_contexts(_req: object, **kwargs: object) -> list[RetrievedContext]:
+            calls["milvus_config"] = kwargs["milvus_config"]
+            return []
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("openai builder should not be called in mock provider")
+
+        def fake_build_mock(*_args: object, **_kwargs: object) -> _FakeReport:
+            return _FakeReport(payload={"provider": "mock"})
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=fake_build_mock,
+        )
+
+        milvus_config = calls["milvus_config"]
+        self.assertIsNotNone(milvus_config)
+        self.assertEqual(milvus_config.uri, "http://milvus:19530")
+        self.assertEqual(milvus_config.collection, "judge_kb")
+        self.assertEqual(milvus_config.metric_type, "IP")
+        self.assertEqual(milvus_config.search_limit, 33)
+        self.assertEqual(report.payload["ragBackend"], RAG_BACKEND_MILVUS)
+
+
+if __name__ == "__main__":
+    unittest.main()
