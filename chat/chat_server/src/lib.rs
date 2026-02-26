@@ -6,6 +6,8 @@ mod handlers;
 mod middlewares;
 mod models;
 mod openapi;
+#[cfg(test)]
+mod test_fixtures;
 
 use anyhow::Context;
 use chat_core::{

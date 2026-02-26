@@ -1,40 +1,17 @@
 use super::*;
+use crate::test_fixtures::{
+    seed_judge_topic_and_session as fixture_seed_judge_topic_and_session,
+    seed_running_judge_job as fixture_seed_running_judge_job,
+};
 use anyhow::Result;
-use chrono::Duration;
 use std::sync::Arc;
 
 async fn seed_topic_and_session(state: &AppState, ws_id: i64, status: &str) -> Result<i64> {
-    let topic_id: (i64,) = sqlx::query_as(
-            r#"
-            INSERT INTO debate_topics(ws_id, title, description, category, stance_pro, stance_con, is_active, created_by)
-            VALUES ($1, 'topic-ai', 'desc', 'game', 'pro', 'con', true, 1)
-            RETURNING id
-            "#,
-        )
-        .bind(ws_id)
-        .fetch_one(&state.pool)
-        .await?;
+    fixture_seed_judge_topic_and_session(state, ws_id, status, "topic-ai").await
+}
 
-    let now = Utc::now();
-    let session_id: (i64,) = sqlx::query_as(
-            r#"
-            INSERT INTO debate_sessions(
-                ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, 500)
-            RETURNING id
-            "#,
-        )
-        .bind(ws_id)
-        .bind(topic_id.0)
-        .bind(status)
-        .bind(now - Duration::minutes(20))
-        .bind(now - Duration::minutes(15))
-        .bind(now - Duration::minutes(1))
-        .fetch_one(&state.pool)
-        .await?;
-
-    Ok(session_id.0)
+async fn seed_running_judge_job(state: &AppState, session_id: i64) -> Result<i64> {
+    fixture_seed_running_judge_job(state, 1, session_id, 1, 0, None).await
 }
 
 async fn join_user_to_session(state: &AppState, session_id: i64, user_id: i64) -> Result<()> {
@@ -49,24 +26,6 @@ async fn join_user_to_session(state: &AppState, session_id: i64, user_id: i64) -
     .execute(&state.pool)
     .await?;
     Ok(())
-}
-
-async fn seed_running_judge_job(state: &AppState, session_id: i64) -> Result<i64> {
-    let job_id: (i64,) = sqlx::query_as(
-            r#"
-            INSERT INTO judge_jobs(
-                ws_id, session_id, requested_by, status, style_mode, requested_at, started_at, created_at, updated_at
-            )
-            VALUES ($1, $2, $3, 'running', 'rational', NOW(), NOW(), NOW(), NOW())
-            RETURNING id
-            "#,
-        )
-        .bind(1_i64)
-        .bind(session_id)
-        .bind(1_i64)
-        .fetch_one(&state.pool)
-        .await?;
-    Ok(job_id.0)
 }
 
 #[test]

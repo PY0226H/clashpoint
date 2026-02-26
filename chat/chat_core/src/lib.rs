@@ -1,10 +1,12 @@
 mod config_loader;
+mod http_error;
 mod utils;
 
 pub mod middlewares;
 pub mod pb;
 
 pub use config_loader::*;
+pub use http_error::*;
 pub use utils::*;
 
 use chrono::{DateTime, Utc};

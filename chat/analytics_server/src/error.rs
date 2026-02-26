@@ -1,15 +1,9 @@
 use axum::http::StatusCode;
-use axum::response::Json;
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use chat_core::json_error_response;
+pub use chat_core::ErrorOutput;
 use thiserror::Error;
 use tracing::warn;
-use utoipa::ToSchema;
-
-#[derive(Debug, ToSchema, Serialize, Deserialize)]
-pub struct ErrorOutput {
-    pub error: String,
-}
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -29,14 +23,6 @@ pub enum AppError {
     AnyError(#[from] anyhow::Error),
 }
 
-impl ErrorOutput {
-    pub fn new(error: impl Into<String>) -> Self {
-        Self {
-            error: error.into(),
-        }
-    }
-}
-
 impl IntoResponse for AppError {
     fn into_response(self) -> Response<axum::body::Body> {
         let status = match &self {
@@ -49,6 +35,6 @@ impl IntoResponse for AppError {
         let msg = self.to_string();
         warn!("Status: {}, error: {}", status, msg);
 
-        (status, Json(ErrorOutput::new(msg))).into_response()
+        json_error_response(status, msg)
     }
 }
