@@ -2,7 +2,6 @@ import asyncio
 
 from fastapi import FastAPI, Header, HTTPException
 
-from .callback_client import callback_failed, callback_report
 from .dispatch_controller import process_dispatch_request
 from .models import JudgeDispatchRequest
 from .runtime_orchestrator import build_report_by_runtime
@@ -11,12 +10,14 @@ from .settings import (
     build_dispatch_runtime_config,
     load_settings,
 )
+from .wiring import build_dispatch_callbacks
 
 
 SETTINGS = load_settings()
 app = FastAPI(title="AI Judge Service", version="0.2.0")
 CALLBACK_CFG = build_callback_client_config(SETTINGS)
 DISPATCH_RUNTIME_CFG = build_dispatch_runtime_config(SETTINGS)
+CALLBACK_REPORT_FN, CALLBACK_FAILED_FN = build_dispatch_callbacks(cfg=CALLBACK_CFG)
 
 
 def _require_internal_key(header_value: str | None) -> None:
@@ -54,15 +55,7 @@ async def dispatch_judge_job(
         request=request,
         runtime_cfg=DISPATCH_RUNTIME_CFG,
         build_report_by_runtime=_build_report_by_runtime_adapter,
-        callback_report=lambda job_id, payload: callback_report(
-            cfg=CALLBACK_CFG,
-            job_id=job_id,
-            payload=payload,
-        ),
-        callback_failed=lambda job_id, error_message: callback_failed(
-            cfg=CALLBACK_CFG,
-            job_id=job_id,
-            error_message=error_message,
-        ),
+        callback_report=CALLBACK_REPORT_FN,
+        callback_failed=CALLBACK_FAILED_FN,
         sleep_fn=asyncio.sleep,
     )
