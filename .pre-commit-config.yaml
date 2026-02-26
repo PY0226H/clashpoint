@@ -41,6 +41,13 @@ repos:
         language: rust
         files: \.*$
         pass_filenames: false
+      - id: backend-file-size-guard
+        name: backend file size guard
+        description: Block newly added oversized backend files and baseline growth.
+        entry: bash scripts/quality/check_oversized_backend_files.sh --threshold 700
+        language: system
+        files: ^(chat/.*/src/.*\.rs|ai_judge_service/app/.*\.py)$
+        pass_filenames: false
       - id: cargo-check
         name: cargo check
         description: Check the package for errors.

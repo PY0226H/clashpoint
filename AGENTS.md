@@ -10,6 +10,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 - python-venv-guard: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. Use whenever a turn includes Python dependency install, Python test run, Python script execution, or service startup. (file: /Users/panyihang/Documents/aicomm/skills/python-venv-guard/SKILL.md)
 - pre-module-mvp-plan-guard: Before starting each development module, read the productization MVP plan, verify planned work alignment, and update the plan document with a pre-development alignment record. (file: /Users/panyihang/Documents/aicomm/skills/pre-module-mvp-plan-guard/SKILL.md)
 - post-module-plan-sync: After each module completion, sync the product MVP plan by writing completed/incomplete matrix and next-step recommendation based on contract/test/linkage probes. (file: /Users/panyihang/Documents/aicomm/skills/post-module-plan-sync/SKILL.md)
+- post-optimization-plan-sync: After each optimization module completion, reread and overwrite-sync backend optimization plan matrix and next-step recommendation, then append optimization sync history. (file: /Users/panyihang/Documents/aicomm/skills/post-optimization-plan-sync/SKILL.md)
 
 ### How to use skills
 - Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
@@ -61,3 +62,10 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
   - follow `docs/explanation/00-讲解规范.md`
   - create a new markdown file under `docs/explanation/`
   - explain only new/modified code paths with architecture, execution flow, tradeoffs, and testing evidence
+
+### Mandatory post-optimization hook
+- For any turn that completes a backend optimization/refactor module, run `post-optimization-plan-sync` before the final user response.
+- The optimization hook must:
+  - read `/Users/panyihang/Documents/aicomm/docs/后端代码结构优化计划.md`
+  - overwrite-sync “优化执行矩阵” and “下一步优化建议” (default rewrite sections `8,9`)
+  - append optimization completion sync history and明确下一步优化阶段

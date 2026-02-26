@@ -56,6 +56,8 @@ jobs:
       - name: install nextest
         uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
+      - name: Check oversized backend files
+        run: bash scripts/quality/check_oversized_backend_files.sh --threshold 700
       - name: Check code format
         run: |
           for dir in ${{ env.SUBDIRS }}; do
