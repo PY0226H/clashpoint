@@ -231,6 +231,7 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             rag_milvus_collection="judge_kb",
             rag_milvus_search_limit=33,
             rag_milvus_metric_type="IP",
+            openai_api_key="sk-test",
         )
         request = _build_request()
         calls: dict[str, object] = {}
@@ -262,6 +263,50 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(milvus_config.metric_type, "IP")
         self.assertEqual(milvus_config.search_limit, 33)
         self.assertEqual(report.payload["ragBackend"], RAG_BACKEND_MILVUS)
+        self.assertEqual(report.payload["ragRequestedBackend"], RAG_BACKEND_MILVUS)
+
+    async def test_build_report_by_runtime_should_fallback_rag_backend_to_file_when_milvus_embedding_key_missing(
+        self,
+    ) -> None:
+        settings = _build_settings(
+            provider=PROVIDER_MOCK,
+            rag_backend=RAG_BACKEND_MILVUS,
+            rag_milvus_uri="http://milvus:19530",
+            rag_milvus_collection="judge_kb",
+            openai_api_key="",
+        )
+        request = _build_request()
+        calls: dict[str, object] = {}
+
+        def fake_retrieve_contexts(_req: object, **kwargs: object) -> list[RetrievedContext]:
+            calls["backend"] = kwargs["backend"]
+            calls["milvus_config"] = kwargs["milvus_config"]
+            return []
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("openai builder should not be called in mock provider")
+
+        def fake_build_mock(*_args: object, **_kwargs: object) -> _FakeReport:
+            return _FakeReport(payload={"provider": "mock"})
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=fake_build_mock,
+        )
+
+        self.assertEqual(calls["backend"], "file")
+        self.assertIsNone(calls["milvus_config"])
+        self.assertEqual(report.payload["ragRequestedBackend"], RAG_BACKEND_MILVUS)
+        self.assertEqual(report.payload["ragBackend"], "file")
+        self.assertEqual(
+            report.payload["ragBackendFallbackReason"],
+            "missing_openai_api_key_for_milvus_embedding",
+        )
 
 
 if __name__ == "__main__":

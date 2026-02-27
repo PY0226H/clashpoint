@@ -5,7 +5,9 @@ from app.rag_retriever import RAG_BACKEND_MILVUS, RetrievedContext
 from app.runtime_rag import (
     apply_rag_payload_fields,
     build_milvus_config,
+    retrieve_runtime_contexts_with_meta,
     retrieve_runtime_contexts,
+    resolve_effective_rag_backend,
 )
 from app.settings import Settings
 
@@ -117,6 +119,46 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertEqual(kwargs["openai_api_key"], "sk-test")
         self.assertEqual(kwargs["milvus_config"].collection, "judge_kb")
 
+    def test_retrieve_runtime_contexts_with_meta_should_fallback_to_file_when_missing_embedding_key(
+        self,
+    ) -> None:
+        settings = _build_settings(
+            rag_backend=RAG_BACKEND_MILVUS,
+            rag_milvus_uri="http://milvus:19530",
+            rag_milvus_collection="judge_kb",
+            rag_knowledge_file="/tmp/knowledge.json",
+            openai_api_key="",
+        )
+        request = SimpleNamespace(job=SimpleNamespace(job_id=1))
+        captured: dict[str, object] = {}
+
+        def fake_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
+            captured["req"] = req
+            captured["kwargs"] = kwargs
+            return []
+
+        result = retrieve_runtime_contexts_with_meta(
+            request=request,
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+        )
+
+        self.assertEqual(result.requested_backend, RAG_BACKEND_MILVUS)
+        self.assertEqual(result.effective_backend, "file")
+        self.assertEqual(
+            result.backend_fallback_reason,
+            "missing_openai_api_key_for_milvus_embedding",
+        )
+        kwargs = captured["kwargs"]
+        self.assertEqual(kwargs["backend"], "file")
+        self.assertIsNone(kwargs["milvus_config"])
+
+    def test_resolve_effective_rag_backend_should_fallback_when_milvus_config_missing(self) -> None:
+        settings = _build_settings(rag_backend=RAG_BACKEND_MILVUS, openai_api_key="sk-test")
+        backend, reason = resolve_effective_rag_backend(settings, milvus_config=None)
+        self.assertEqual(backend, "file")
+        self.assertEqual(reason, "milvus_config_missing")
+
     def test_apply_rag_payload_fields_should_write_payload_with_used_flag(self) -> None:
         settings = _build_settings(rag_backend=RAG_BACKEND_MILVUS, rag_enabled=True)
         report = _FakeReport()
@@ -135,9 +177,17 @@ class RuntimeRagTests(unittest.TestCase):
             settings,
             contexts,
             used_by_model=True,
+            requested_backend="milvus",
+            effective_backend="file",
+            backend_fallback_reason="missing_openai_api_key_for_milvus_embedding",
         )
         self.assertTrue(report.payload["ragEnabled"])
-        self.assertEqual(report.payload["ragBackend"], RAG_BACKEND_MILVUS)
+        self.assertEqual(report.payload["ragBackend"], "file")
+        self.assertEqual(report.payload["ragRequestedBackend"], "milvus")
+        self.assertEqual(
+            report.payload["ragBackendFallbackReason"],
+            "missing_openai_api_key_for_milvus_embedding",
+        )
         self.assertTrue(report.payload["ragUsedByModel"])
         self.assertEqual(report.payload["ragSnippetCount"], 1)
         self.assertEqual(report.payload["ragSourceWhitelist"], list(settings.rag_source_whitelist))
