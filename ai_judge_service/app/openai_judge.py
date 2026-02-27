@@ -12,7 +12,10 @@ from .openai_judge_helpers import (
     _normalize_stage_eval,
     _split_message_chunks,
 )
-from .openai_judge_pipeline import run_openai_judge_pipeline
+from .openai_judge_pipeline import (
+    _build_stage_summaries_with_openai,
+    run_openai_judge_pipeline,
+)
 from .rag_retriever import RetrievedContext, summarize_retrieved_contexts
 
 if TYPE_CHECKING:
@@ -73,6 +76,7 @@ async def build_report_with_openai(
             "displayAgent": "openai" if not pipeline.display_fallback else "fallback",
             "stageCount": len(pipeline.stage_summaries),
             "stageFallbackCount": pipeline.stage_fallback_count,
+            "finalPassFallbackCount": pipeline.final_fallback_count,
             "maxStageAgentChunks": cfg.max_stage_agent_chunks,
         },
         "aggregateSummary": {
