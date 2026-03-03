@@ -10,8 +10,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 - `post-module-interview-journal`: Generate interview-ready development records after each module implementation. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-interview-journal/SKILL.md`)
 - `post-module-explanation-journal`: Generate deep Chinese explanation documents for newly added or modified module code under `docs/explanation`. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-explanation-journal/SKILL.md`)
 - `python-venv-guard`: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. (file: `/Users/panyihang/Documents/aicomm/skills/python-venv-guard/SKILL.md`)
-- `pre-module-mvp-plan-guard`: During MVP development phase, before each development module, read MVP plan, verify scope alignment, and write pre-development alignment record. (file: `/Users/panyihang/Documents/aicomm/skills/pre-module-mvp-plan-guard/SKILL.md`)
-- `post-module-plan-sync`: After each module completion, sync MVP plan matrix and next-step recommendation. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-plan-sync/SKILL.md`)
+- `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, fully read the PRD and align implementation decisions with the product target end-state. (file: `/Users/panyihang/Documents/aicomm/skills/pre-module-prd-goal-guard/SKILL.md`)
 - `post-optimization-plan-sync`: After each backend optimization module, sync optimization matrix and next-step recommendation, then append optimization history. (file: `/Users/panyihang/Documents/aicomm/skills/post-optimization-plan-sync/SKILL.md`)
 
 ### Skill usage rules
@@ -37,20 +36,17 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 - Never use global interpreters (`python`, `python3`, `pip`, `pip3`) for project tasks.
 - Always use `/Users/panyihang/Documents/aicomm/ai_judge_service/.venv/bin/python`.
 
-## Mandatory pre-development hook
-- For any turn that starts module-level implementation/refactor/fix during MVP development phase, run `pre-module-mvp-plan-guard` before coding.
-- If the current work is not in MVP development phase, skip this hook.
-- Must read `/Users/panyihang/Documents/aicomm/docs/产品化开发计划-在线辩论AI裁判平台.md`.
-- Must verify the target module is within MVP roadmap scope.
-- If off-road, record adjustment reason and update the plan first.
-- Must append a pre-development alignment record before coding starts.
+## Mandatory pre-development PRD hook
+- For any turn that starts module-level implementation/refactor/optimization, run `pre-module-prd-goal-guard` before coding.
+- Must fully read `/Users/panyihang/Documents/aicomm/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
+- The purpose is to align with the product's target end-state and avoid wrong directional decisions.
+- If task scope conflicts with PRD target shape, clarify adjustment strategy before coding.
 
 ## Mandatory post-module hook
 For any turn that includes module-level implementation/refactor/fix, run hooks in this order:
 1. `post-module-test-guard`
-2. `post-module-plan-sync`
-3. `post-module-interview-journal`
-4. `post-module-explanation-journal`
+2. `post-module-interview-journal`
+3. `post-module-explanation-journal`
 
 ### Post-module hook requirements
 - Testing hook must:
@@ -61,10 +57,6 @@ For any turn that includes module-level implementation/refactor/fix, run hooks i
   - `docs/interview/01-development-log.md`
   - `docs/interview/02-troubleshooting-log.md`
   - `docs/interview/03-interview-qa-log.md`
-- Plan sync hook must:
-  - update `/Users/panyihang/Documents/aicomm/docs/产品化开发计划-在线辩论AI裁判平台.md`
-  - rewrite sections for “下一开发模块建议” and “已完成/未完成矩阵”
-  - append module completion sync history
 - Explanation journal hook must:
   - follow `docs/explanation/00-讲解规范.md`
   - create a new markdown file under `docs/explanation/`

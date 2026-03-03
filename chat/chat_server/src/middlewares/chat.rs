@@ -19,7 +19,7 @@ pub async fn verify_chat(State(state): State<AppState>, req: Request, next: Next
     };
 
     if !state
-        .is_chat_member(chat_id, user.id as _)
+        .is_chat_member(chat_id, user.id as _, user.ws_id as _)
         .await
         .unwrap_or_default()
     {

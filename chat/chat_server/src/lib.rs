@@ -63,6 +63,9 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
                 .delete(delete_chat_handler)
                 .post(send_message_handler),
         )
+        .route("/:id/leave", post(leave_chat_handler))
+        .route("/:id/members/add", post(add_chat_members_handler))
+        .route("/:id/members/remove", post(remove_chat_members_handler))
         .route(
             "/:id/agents",
             get(list_agent_handler)
@@ -71,6 +74,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         )
         .route("/:id/messages", get(list_message_handler))
         .layer(from_fn_with_state(state.clone(), verify_chat))
+        .route("/:id/join", post(join_chat_handler))
         .route("/", get(list_chat_handler).post(create_chat_handler));
 
     let cors = CorsLayer::new()

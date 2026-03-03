@@ -10,7 +10,7 @@ mod user;
 mod workspace;
 
 pub use agent::{CreateAgent, UpdateAgent};
-pub use chat::{CreateChat, UpdateChat};
+pub use chat::{CreateChat, UpdateChat, UpdateChatMembers};
 pub use debate::{
     CreateDebateMessageInput, DebateMessage, DebatePinnedMessage, DebateSessionSummary,
     DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateMessages,

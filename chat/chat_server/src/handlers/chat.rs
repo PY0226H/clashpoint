@@ -1,4 +1,4 @@
-use crate::{AppError, AppState, CreateChat, UpdateChat};
+use crate::{AppError, AppState, CreateChat, UpdateChat, UpdateChatMembers};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -121,4 +121,115 @@ pub(crate) async fn delete_chat_handler(
 ) -> Result<impl IntoResponse, AppError> {
     state.delete_chat(id, user.ws_id as u64).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chats/{id}/join",
+    params(
+        ("id" = u64, Path, description = "Chat id")
+    ),
+    responses(
+        (status = 200, description = "Joined chat", body = Chat),
+        (status = 400, description = "Invalid operation", body = ErrorOutput),
+        (status = 404, description = "Chat not found", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn join_chat_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<impl IntoResponse, AppError> {
+    let chat = state
+        .join_chat(id, user.ws_id as u64, user.id as u64)
+        .await?;
+    Ok((StatusCode::OK, Json(chat)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chats/{id}/leave",
+    params(
+        ("id" = u64, Path, description = "Chat id")
+    ),
+    responses(
+        (status = 200, description = "Left chat", body = Chat),
+        (status = 400, description = "Invalid operation", body = ErrorOutput),
+        (status = 403, description = "Not chat member", body = ErrorOutput),
+        (status = 404, description = "Chat not found", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn leave_chat_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<impl IntoResponse, AppError> {
+    let chat = state
+        .leave_chat(id, user.ws_id as u64, user.id as u64)
+        .await?;
+    Ok((StatusCode::OK, Json(chat)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chats/{id}/members/add",
+    params(
+        ("id" = u64, Path, description = "Chat id")
+    ),
+    request_body = UpdateChatMembers,
+    responses(
+        (status = 200, description = "Members added", body = Chat),
+        (status = 400, description = "Invalid operation", body = ErrorOutput),
+        (status = 403, description = "Not chat member", body = ErrorOutput),
+        (status = 404, description = "Chat not found", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn add_chat_members_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(input): Json<UpdateChatMembers>,
+) -> Result<impl IntoResponse, AppError> {
+    let chat = state
+        .add_chat_members(id, user.ws_id as u64, user.id as u64, input)
+        .await?;
+    Ok((StatusCode::OK, Json(chat)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chats/{id}/members/remove",
+    params(
+        ("id" = u64, Path, description = "Chat id")
+    ),
+    request_body = UpdateChatMembers,
+    responses(
+        (status = 200, description = "Members removed", body = Chat),
+        (status = 400, description = "Invalid operation", body = ErrorOutput),
+        (status = 403, description = "Not chat member", body = ErrorOutput),
+        (status = 404, description = "Chat not found", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn remove_chat_members_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(input): Json<UpdateChatMembers>,
+) -> Result<impl IntoResponse, AppError> {
+    let chat = state
+        .remove_chat_members(id, user.ws_id as u64, user.id as u64, input)
+        .await?;
+    Ok((StatusCode::OK, Json(chat)))
 }
