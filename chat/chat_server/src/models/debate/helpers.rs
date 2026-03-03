@@ -31,6 +31,10 @@ pub(super) fn can_join_status(status: &str) -> bool {
     matches!(status, "open" | "running")
 }
 
+pub(super) fn can_spectate_status(status: &str) -> bool {
+    matches!(status, "running" | "judging" | "closed")
+}
+
 pub(super) fn normalize_ops_topic_field(
     value: &str,
     field: &str,

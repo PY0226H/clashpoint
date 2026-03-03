@@ -14,9 +14,10 @@ mod helpers;
 mod message_pin;
 mod ops;
 use helpers::{
-    can_join_status, normalize_debate_message_limit, normalize_debate_pin_limit, normalize_limit,
-    normalize_message_content, normalize_ops_manage_session_status, normalize_ops_session_status,
-    normalize_ops_topic_field, normalize_pin_seconds, pin_cost_coins, valid_join_side,
+    can_join_status, can_spectate_status, normalize_debate_message_limit,
+    normalize_debate_pin_limit, normalize_limit, normalize_message_content,
+    normalize_ops_manage_session_status, normalize_ops_session_status, normalize_ops_topic_field,
+    normalize_pin_seconds, pin_cost_coins, valid_join_side,
 };
 
 const DEFAULT_LIMIT: u64 = 20;

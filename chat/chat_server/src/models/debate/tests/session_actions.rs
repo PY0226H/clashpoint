@@ -139,6 +139,100 @@ async fn create_debate_message_should_require_join_and_write_side() -> Result<()
 }
 
 #[tokio::test]
+async fn list_debate_messages_should_allow_spectator_when_running() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let user1 = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    let spectator = state
+        .find_user_by_id(3)
+        .await?
+        .expect("user id 3 should exist");
+
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user1,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+    state
+        .create_debate_message(
+            session_id as u64,
+            &user1,
+            CreateDebateMessageInput {
+                content: "spectator readable message".to_string(),
+            },
+        )
+        .await?;
+
+    let rows = state
+        .list_debate_messages(
+            session_id as u64,
+            &spectator,
+            ListDebateMessages {
+                last_id: None,
+                limit: Some(20),
+            },
+        )
+        .await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].content, "spectator readable message");
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_messages_should_reject_spectator_when_not_running() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let user1 = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    let spectator = state
+        .find_user_by_id(3)
+        .await?
+        .expect("user id 3 should exist");
+
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user1,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+    state
+        .create_debate_message(
+            session_id as u64,
+            &user1,
+            CreateDebateMessageInput {
+                content: "not yet spectator readable".to_string(),
+            },
+        )
+        .await?;
+
+    let err = state
+        .list_debate_messages(
+            session_id as u64,
+            &spectator,
+            ListDebateMessages {
+                last_id: None,
+                limit: Some(20),
+            },
+        )
+        .await
+        .expect_err("open session should reject spectator message read");
+    assert!(matches!(err, AppError::DebateConflict(_)));
+    Ok(())
+}
+
+#[tokio::test]
 async fn pin_debate_message_should_debit_wallet_and_be_idempotent() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
@@ -205,6 +299,64 @@ async fn pin_debate_message_should_debit_wallet_and_be_idempotent() -> Result<()
     .fetch_one(&state.pool)
     .await?;
     assert_eq!(row.0, 180);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_pinned_messages_should_allow_spectator_when_running() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let user1 = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    let spectator = state
+        .find_user_by_id(3)
+        .await?
+        .expect("user id 3 should exist");
+
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user1,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+    set_wallet_balance(&state, 1, 1, 200).await?;
+    let msg = state
+        .create_debate_message(
+            session_id as u64,
+            &user1,
+            CreateDebateMessageInput {
+                content: "pinned spectator message".to_string(),
+            },
+        )
+        .await?;
+    state
+        .pin_debate_message(
+            msg.id as u64,
+            &user1,
+            PinDebateMessageInput {
+                pin_seconds: 45,
+                idempotency_key: "pin-for-spectator".to_string(),
+            },
+        )
+        .await?;
+
+    let rows = state
+        .list_debate_pinned_messages(
+            session_id as u64,
+            &spectator,
+            ListDebatePinnedMessages {
+                active_only: true,
+                limit: Some(20),
+            },
+        )
+        .await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].message_id, msg.id);
     Ok(())
 }
 

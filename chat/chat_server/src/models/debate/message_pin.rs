@@ -91,24 +91,8 @@ impl AppState {
                 "debate session id {session_id}"
             )));
         }
-
-        let participant: Option<(i64,)> = sqlx::query_as(
-            r#"
-            SELECT user_id
-            FROM session_participants
-            WHERE session_id = $1 AND user_id = $2
-            "#,
-        )
-        .bind(session_id as i64)
-        .bind(user.id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if participant.is_none() {
-            return Err(AppError::DebateConflict(format!(
-                "user {} has not joined session {}",
-                user.id, session_id
-            )));
-        }
+        self.ensure_debate_session_readable(&mut tx, session_id as i64, user, &session.status)
+            .await?;
 
         let mut rows: Vec<DebateMessage> = sqlx::query_as(
             r#"
@@ -147,24 +131,8 @@ impl AppState {
                 "debate session id {session_id}"
             )));
         }
-
-        let participant: Option<(i64,)> = sqlx::query_as(
-            r#"
-            SELECT user_id
-            FROM session_participants
-            WHERE session_id = $1 AND user_id = $2
-            "#,
-        )
-        .bind(session_id as i64)
-        .bind(user.id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if participant.is_none() {
-            return Err(AppError::DebateConflict(format!(
-                "user {} has not joined session {}",
-                user.id, session_id
-            )));
-        }
+        self.ensure_debate_session_readable(&mut tx, session_id as i64, user, &session.status)
+            .await?;
 
         let rows: Vec<DebatePinnedMessage> = sqlx::query_as(
             r#"
@@ -441,6 +409,37 @@ impl AppState {
         .fetch_optional(&mut **tx)
         .await?;
         Ok(row)
+    }
+
+    async fn ensure_debate_session_readable(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: i64,
+        user: &User,
+        session_status: &str,
+    ) -> Result<(), AppError> {
+        let participant: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT user_id
+            FROM session_participants
+            WHERE session_id = $1 AND user_id = $2
+            "#,
+        )
+        .bind(session_id)
+        .bind(user.id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if participant.is_some() {
+            return Ok(());
+        }
+        if can_spectate_status(session_status) {
+            return Ok(());
+        }
+
+        Err(AppError::DebateConflict(format!(
+            "user {} has not joined session {}",
+            user.id, session_id
+        )))
     }
 
     async fn load_existing_pin_by_idempotency(

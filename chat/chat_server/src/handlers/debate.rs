@@ -231,7 +231,7 @@ pub(crate) async fn create_debate_message_handler(
     responses(
         (status = 200, description = "Debate messages", body = Vec<crate::DebateMessage>),
         (status = 404, description = "Debate session not found", body = ErrorOutput),
-        (status = 409, description = "User is not participant", body = ErrorOutput),
+        (status = 409, description = "User cannot read in current session status", body = ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -286,7 +286,7 @@ pub(crate) async fn pin_debate_message_handler(
     responses(
         (status = 200, description = "Pinned debate messages", body = Vec<crate::DebatePinnedMessage>),
         (status = 404, description = "Debate session not found", body = ErrorOutput),
-        (status = 409, description = "User is not participant", body = ErrorOutput),
+        (status = 409, description = "User cannot read in current session status", body = ErrorOutput),
     ),
     security(
         ("token" = [])
