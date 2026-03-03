@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chat_core::load_yaml_with_fallback;
 use serde::{Deserialize, Serialize};
+use std::env;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -210,7 +211,7 @@ fn default_ai_judge_dispatch_callback_wait_secs() -> i64 {
 }
 
 fn default_payment_verify_mode() -> String {
-    "mock".to_string()
+    "apple".to_string()
 }
 
 fn default_payment_apple_verify_url_prod() -> String {
@@ -226,7 +227,117 @@ fn default_payment_verify_timeout_ms() -> u64 {
 }
 
 impl AppConfig {
+    fn validate_for_runtime_env(&self, runtime_env: Option<&str>) -> Result<()> {
+        let payment_mode = normalize_payment_verify_mode(&self.payment.verify_mode);
+        if payment_mode == "apple" {
+            if self.payment.apple_verify_url_prod.trim().is_empty() {
+                bail!("payment.apple_verify_url_prod cannot be empty when verify_mode=apple");
+            }
+            if self.payment.apple_verify_url_sandbox.trim().is_empty() {
+                bail!("payment.apple_verify_url_sandbox cannot be empty when verify_mode=apple");
+            }
+        }
+
+        if runtime_env.map(is_production_env).unwrap_or(false) && payment_mode == "mock" {
+            bail!("payment.verify_mode=mock is forbidden when runtime env is production");
+        }
+
+        Ok(())
+    }
+
     pub fn load() -> Result<Self> {
-        load_yaml_with_fallback("chat.yml", "/etc/config/chat.yml", "CHAT_CONFIG")
+        let config: Self =
+            load_yaml_with_fallback("chat.yml", "/etc/config/chat.yml", "CHAT_CONFIG")?;
+        config.validate_for_runtime_env(runtime_env().as_deref())?;
+        Ok(config)
+    }
+}
+
+fn normalize_payment_verify_mode(mode: &str) -> &str {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "mock" | "dev_mock" => "mock",
+        _ => "apple",
+    }
+}
+
+fn runtime_env() -> Option<String> {
+    for key in ["AICOMM_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+        if let Ok(value) = env::var(key) {
+            let normalized = value.trim();
+            if !normalized.is_empty() {
+                return Some(normalized.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
+fn is_production_env(value: &str) -> bool {
+    matches!(value.trim(), "prod" | "production")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config() -> AppConfig {
+        AppConfig {
+            server: ServerConfig {
+                port: 6688,
+                db_url: "postgres://test@localhost:5432/test".to_string(),
+                base_dir: std::path::PathBuf::from("/tmp/chat_server_test"),
+            },
+            auth: AuthConfig {
+                sk: "sk".to_string(),
+                pk: "pk".to_string(),
+            },
+            kafka: KafkaConfig::default(),
+            ai_judge: AiJudgeConfig::default(),
+            payment: PaymentConfig::default(),
+        }
+    }
+
+    #[test]
+    fn normalize_payment_verify_mode_should_be_fail_closed() {
+        assert_eq!(normalize_payment_verify_mode("mock"), "mock");
+        assert_eq!(normalize_payment_verify_mode("dev_mock"), "mock");
+        assert_eq!(normalize_payment_verify_mode("apple"), "apple");
+        assert_eq!(normalize_payment_verify_mode("production"), "apple");
+        assert_eq!(normalize_payment_verify_mode(""), "apple");
+        assert_eq!(normalize_payment_verify_mode("unknown"), "apple");
+    }
+
+    #[test]
+    fn validate_for_runtime_env_should_reject_mock_in_production() {
+        let mut config = base_config();
+        config.payment.verify_mode = "mock".to_string();
+        let err = config
+            .validate_for_runtime_env(Some("production"))
+            .expect_err("mock mode should be rejected in production");
+        assert!(err
+            .to_string()
+            .contains("payment.verify_mode=mock is forbidden"));
+    }
+
+    #[test]
+    fn validate_for_runtime_env_should_accept_mock_in_non_production() {
+        let mut config = base_config();
+        config.payment.verify_mode = "mock".to_string();
+        config
+            .validate_for_runtime_env(Some("development"))
+            .expect("mock mode should be allowed in development");
+    }
+
+    #[test]
+    fn validate_for_runtime_env_should_require_apple_urls_when_apple_mode() {
+        let mut config = base_config();
+        config.payment.verify_mode = "apple".to_string();
+        config.payment.apple_verify_url_prod.clear();
+        let err = config
+            .validate_for_runtime_env(Some("production"))
+            .expect_err("missing production url should fail");
+        assert!(err
+            .to_string()
+            .contains("payment.apple_verify_url_prod cannot be empty"));
     }
 }

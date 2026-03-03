@@ -9,10 +9,30 @@ pub struct ServerConfig {
     pub notification: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IapConfig {
+    #[serde(default = "default_iap_purchase_mode")]
+    pub purchase_mode: String,
+}
+
+impl Default for IapConfig {
+    fn default() -> Self {
+        Self {
+            purchase_mode: default_iap_purchase_mode(),
+        }
+    }
+}
+
+fn default_iap_purchase_mode() -> String {
+    "mock".to_string()
+}
+
 /// app config
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
+    #[serde(default)]
+    pub iap: IapConfig,
 }
 
 impl AppConfig {

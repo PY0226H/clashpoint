@@ -134,11 +134,12 @@ fn select_matching_record_should_match_transaction_original_and_product() {
 }
 
 #[test]
-fn normalize_verify_mode_should_default_to_mock() {
+fn normalize_verify_mode_should_default_to_apple() {
     assert_eq!(normalize_verify_mode("apple"), "apple");
     assert_eq!(normalize_verify_mode(" production "), "apple");
     assert_eq!(normalize_verify_mode("mock"), "mock");
-    assert_eq!(normalize_verify_mode(""), "mock");
+    assert_eq!(normalize_verify_mode(""), "apple");
+    assert_eq!(normalize_verify_mode("unknown"), "apple");
 }
 
 #[tokio::test]

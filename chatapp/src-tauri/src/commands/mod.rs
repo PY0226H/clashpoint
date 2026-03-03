@@ -34,6 +34,41 @@ pub(crate) struct IapPurchasePayload {
     source: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IapPurchaseMode {
+    Mock,
+    Native,
+}
+
+fn normalize_iap_purchase_mode(mode: &str) -> IapPurchaseMode {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "mock" | "dev_mock" => IapPurchaseMode::Mock,
+        _ => IapPurchaseMode::Native,
+    }
+}
+
+fn runtime_env() -> Option<String> {
+    for key in ["AICOMM_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+        if let Ok(value) = std::env::var(key) {
+            let normalized = value.trim();
+            if !normalized.is_empty() {
+                return Some(normalized.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
+fn is_production_env(value: &str) -> bool {
+    matches!(value.trim(), "prod" | "production")
+}
+
+fn runtime_is_production() -> bool {
+    runtime_env()
+        .map(|v| is_production_env(&v))
+        .unwrap_or(false)
+}
+
 fn sanitize_product_id(input: &str) -> String {
     let normalized = input
         .trim()
@@ -55,11 +90,25 @@ fn unix_millis() -> u128 {
 }
 
 /// Bridge command for IAP purchase.
-/// MVP phase returns mock receipt payload that can be sent to `/api/pay/iap/verify`.
+/// `purchase_mode=mock` returns deterministic mock payload for local development.
+/// `purchase_mode=native` is intentionally blocked until native StoreKit bridge is wired.
 #[tauri::command]
-pub(crate) fn iap_purchase_product(product_id: String) -> Result<IapPurchasePayload, String> {
+pub(crate) fn iap_purchase_product(
+    handle: AppHandle,
+    product_id: String,
+) -> Result<IapPurchasePayload, String> {
     if product_id.trim().is_empty() {
         return Err("product_id is required".to_string());
+    }
+
+    let app_config = handle.state::<AppState>().config.load().clone();
+    let mode = normalize_iap_purchase_mode(&app_config.iap.purchase_mode);
+    if runtime_is_production() && mode == IapPurchaseMode::Mock {
+        return Err("mock iap bridge is forbidden in production runtime".to_string());
+    }
+
+    if mode == IapPurchaseMode::Native {
+        return Err("iap purchase mode=native is not implemented on this target yet".to_string());
     }
 
     let safe_product = sanitize_product_id(&product_id);
@@ -74,4 +123,35 @@ pub(crate) fn iap_purchase_product(product_id: String) -> Result<IapPurchasePayl
         receipt_data,
         source: "tauri_mock_bridge".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_iap_purchase_mode_should_be_fail_closed() {
+        assert_eq!(normalize_iap_purchase_mode("mock"), IapPurchaseMode::Mock);
+        assert_eq!(
+            normalize_iap_purchase_mode("dev_mock"),
+            IapPurchaseMode::Mock
+        );
+        assert_eq!(
+            normalize_iap_purchase_mode("native"),
+            IapPurchaseMode::Native
+        );
+        assert_eq!(normalize_iap_purchase_mode(""), IapPurchaseMode::Native);
+        assert_eq!(
+            normalize_iap_purchase_mode("unknown"),
+            IapPurchaseMode::Native
+        );
+    }
+
+    #[test]
+    fn is_production_env_should_match_prod_aliases() {
+        assert!(is_production_env("prod"));
+        assert!(is_production_env("production"));
+        assert!(!is_production_env("staging"));
+        assert!(!is_production_env("dev"));
+    }
 }

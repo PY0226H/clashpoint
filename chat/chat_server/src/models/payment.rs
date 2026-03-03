@@ -205,8 +205,8 @@ impl AppleVerifyEndpoint {
 
 fn normalize_verify_mode(mode: &str) -> &str {
     match mode.trim().to_ascii_lowercase().as_str() {
-        "apple" | "prod" | "production" => "apple",
-        _ => "mock",
+        "mock" | "dev_mock" => "mock",
+        _ => "apple",
     }
 }
 
