@@ -58,14 +58,14 @@ cd ai_judge_service
 - `CALLBACK_TIMEOUT_SECONDS`: 回调超时，默认 `8`
 - `JUDGE_PROCESS_DELAY_MS`: 模拟处理耗时，默认 `0`
 - `JUDGE_STYLE_MODE`: 系统级文风开关，`rational|entertaining|mixed`，默认 `rational`
-- `AI_JUDGE_PROVIDER`: `mock|openai`，默认 `mock`
-- `OPENAI_API_KEY`: 当 `AI_JUDGE_PROVIDER=openai` 时必填
+- `AI_JUDGE_PROVIDER`: `mock|openai`，默认 `openai`（`dev_mock` 也会归一化为 `mock`）
+- `OPENAI_API_KEY`: 当 `AI_JUDGE_PROVIDER=openai` 时建议配置；生产环境必填
 - `AI_JUDGE_OPENAI_MODEL`: 默认 `gpt-4.1-mini`
 - `AI_JUDGE_OPENAI_BASE_URL`: 默认 `https://api.openai.com/v1`
 - `AI_JUDGE_OPENAI_TIMEOUT_SECONDS`: OpenAI 请求超时，默认 `25`
 - `AI_JUDGE_OPENAI_TEMPERATURE`: 默认 `0.1`
 - `AI_JUDGE_OPENAI_MAX_RETRIES`: 每次评估重试次数，默认 `2`
-- `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK`: OpenAI 失败时是否回退到 mock，默认 `true`
+- `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK`: OpenAI 失败时是否回退到 mock，默认 `false`（生产环境禁止为 `true`）
 - `AI_JUDGE_RAG_ENABLED`: 是否启用检索上下文，默认 `true`
 - `AI_JUDGE_RAG_KNOWLEDGE_FILE`: 本地知识库 JSON 文件路径（为空则仅使用 `context_seed`）
 - `AI_JUDGE_RAG_MAX_SNIPPETS`: 检索片段上限，默认 `4`
@@ -87,6 +87,12 @@ cd ai_judge_service
 - `AI_JUDGE_RAG_MILVUS_METRIC_TYPE`: 向量距离类型，默认 `COSINE`
 - `AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT`: Milvus 向量召回候选数，默认 `20`
 - `AI_JUDGE_STAGE_AGENT_MAX_CHUNKS`: 阶段 Agent 最大处理窗口数（超出取最近窗口），默认 `12`
+
+生产环境识别规则：按 `AICOMM_ENV -> APP_ENV -> PYTHON_ENV -> RUST_ENV -> ENV` 顺序读取，值为 `prod|production` 时视为生产。
+生产环境门禁：
+- 禁止 `AI_JUDGE_PROVIDER=mock`
+- 禁止 `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=true`
+- `AI_JUDGE_PROVIDER=openai` 时，`OPENAI_API_KEY` 不能为空
 
 ## 知识文件格式（最小）
 

@@ -190,6 +190,32 @@ class RuntimeProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["fallbackFrom"], "openai")
         self.assertEqual(report.payload["fallbackReason"], "missing OPENAI_API_KEY")
 
+    async def test_build_report_with_provider_should_raise_when_missing_key_and_fallback_disabled(self) -> None:
+        settings = _build_settings(
+            provider=PROVIDER_OPENAI,
+            openai_api_key="",
+            openai_fallback_to_mock=False,
+        )
+        request = _build_request()
+
+        async def fake_openai(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("openai should not be called without key")
+
+        def fake_mock(*_args: object, **_kwargs: object) -> _FakeReport:
+            raise AssertionError("mock should not be called when fallback is disabled")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            await build_report_with_provider(
+                request=request,
+                effective_style_mode="rational",
+                style_mode_source="system_config",
+                settings=settings,
+                retrieved_contexts=[],
+                build_report_with_openai_fn=fake_openai,
+                build_mock_report_fn=fake_mock,
+            )
+        self.assertIn("openai runtime missing OPENAI_API_KEY", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

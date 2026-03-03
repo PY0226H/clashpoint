@@ -223,6 +223,35 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["fallbackReason"], "missing OPENAI_API_KEY")
         self.assertFalse(report.payload["ragUsedByModel"])
 
+    async def test_build_report_by_runtime_should_raise_when_missing_openai_key_and_fallback_disabled(self) -> None:
+        settings = _build_settings(
+            provider=PROVIDER_OPENAI,
+            openai_api_key="",
+            openai_fallback_to_mock=False,
+        )
+        request = _build_request()
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            return []
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("openai builder should not be called without api key")
+
+        def fake_build_mock(*_args: object, **_kwargs: object) -> _FakeReport:
+            raise AssertionError("mock builder should not be called when fallback disabled")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            await build_report_by_runtime(
+                request=request,
+                effective_style_mode="rational",
+                style_mode_source="system_config",
+                settings=settings,
+                retrieve_contexts_fn=fake_retrieve_contexts,
+                build_report_with_openai_fn=fake_build_openai,
+                build_mock_report_fn=fake_build_mock,
+            )
+        self.assertIn("openai runtime missing OPENAI_API_KEY", str(ctx.exception))
+
     async def test_build_report_by_runtime_should_build_milvus_config_when_enabled(self) -> None:
         settings = _build_settings(
             provider=PROVIDER_MOCK,

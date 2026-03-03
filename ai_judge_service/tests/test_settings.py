@@ -7,6 +7,7 @@ from app.settings import (
     build_callback_client_config,
     build_dispatch_runtime_config,
     load_settings,
+    validate_for_runtime_env,
 )
 
 
@@ -15,11 +16,11 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             settings = load_settings()
 
-        self.assertEqual(settings.provider, PROVIDER_MOCK)
+        self.assertEqual(settings.provider, PROVIDER_OPENAI)
         self.assertEqual(settings.ai_internal_key, "dev-ai-internal-key")
         self.assertEqual(settings.chat_server_base_url, "http://127.0.0.1:6688")
         self.assertEqual(settings.openai_base_url, "https://api.openai.com/v1")
-        self.assertTrue(settings.openai_fallback_to_mock)
+        self.assertFalse(settings.openai_fallback_to_mock)
         self.assertTrue(settings.rag_enabled)
         self.assertEqual(
             settings.rag_source_whitelist,
@@ -45,7 +46,7 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_OPENAI_TIMEOUT_SECONDS": "40",
                 "AI_JUDGE_OPENAI_TEMPERATURE": "0.35",
                 "AI_JUDGE_OPENAI_MAX_RETRIES": "5",
-                "AI_JUDGE_OPENAI_FALLBACK_TO_MOCK": "false",
+                "AI_JUDGE_OPENAI_FALLBACK_TO_MOCK": "true",
                 "AI_JUDGE_RAG_ENABLED": "0",
                 "AI_JUDGE_RAG_KNOWLEDGE_FILE": "/tmp/kb.json",
                 "AI_JUDGE_RAG_MAX_SNIPPETS": "8",
@@ -86,7 +87,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.openai_timeout_secs, 40.0)
         self.assertEqual(settings.openai_temperature, 0.35)
         self.assertEqual(settings.openai_max_retries, 5)
-        self.assertFalse(settings.openai_fallback_to_mock)
+        self.assertTrue(settings.openai_fallback_to_mock)
         self.assertFalse(settings.rag_enabled)
         self.assertEqual(settings.rag_knowledge_file, "/tmp/kb.json")
         self.assertEqual(settings.rag_max_snippets, 8)
@@ -115,6 +116,63 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(callback_cfg.callback_timeout_secs, settings.callback_timeout_secs)
         self.assertEqual(runtime_cfg.process_delay_ms, settings.process_delay_ms)
         self.assertEqual(runtime_cfg.judge_style_mode, settings.judge_style_mode)
+
+    def test_load_settings_should_map_invalid_provider_to_openai(self) -> None:
+        with patch.dict(os.environ, {"AI_JUDGE_PROVIDER": "invalid"}, clear=True):
+            settings = load_settings()
+        self.assertEqual(settings.provider, PROVIDER_OPENAI)
+
+    def test_load_settings_should_reject_mock_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AICOMM_ENV": "production",
+                "AI_JUDGE_PROVIDER": "mock",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JUDGE_PROVIDER=mock is forbidden"):
+                load_settings()
+
+    def test_load_settings_should_reject_openai_fallback_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AICOMM_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-xx",
+                "AI_JUDGE_OPENAI_FALLBACK_TO_MOCK": "true",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=true is forbidden",
+            ):
+                load_settings()
+
+    def test_load_settings_should_reject_missing_openai_key_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AICOMM_ENV": "prod",
+                "AI_JUDGE_PROVIDER": "openai",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY cannot be empty"):
+                load_settings()
+
+    def test_validate_for_runtime_env_should_allow_mock_in_non_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_PROVIDER": "mock",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+        validate_for_runtime_env(settings, runtime_env="staging")
 
 
 if __name__ == "__main__":

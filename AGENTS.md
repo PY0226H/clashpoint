@@ -1,9 +1,11 @@
 # AGENTS.md
 
 ## Skills
+
 A skill is a set of local instructions stored in a `SKILL.md` file.
 
 ### Available skills (authoritative list)
+
 - `skill-creator`: Guide for creating effective skills. Use when users want to create or update a skill that extends Codex capabilities. (file: `/Users/panyihang/.codex/skills/.system/skill-creator/SKILL.md`)
 - `skill-installer`: Install Codex skills into `$CODEX_HOME/skills` from a curated list or a GitHub repo path. (file: `/Users/panyihang/.codex/skills/.system/skill-installer/SKILL.md`)
 - `post-module-test-guard`: Generate or update tests for changed module behavior and run repository quality gates after implementation. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-test-guard/SKILL.md`)
@@ -14,6 +16,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 - `post-optimization-plan-sync`: After each backend optimization module, sync optimization matrix and next-step recommendation, then append optimization history. (file: `/Users/panyihang/Documents/aicomm/skills/post-optimization-plan-sync/SKILL.md`)
 
 ### Skill usage rules
+
 - Discovery: The list above is the only session skill source of truth.
 - Trigger: If the user names a skill (with `$SkillName` or plain text), or the task clearly matches a skill description, that skill must be used in the turn.
 - Multiples: If multiple skills match, use the minimal set that covers the task and state execution order.
@@ -21,6 +24,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 - Missing/blocked: If a named skill is unavailable or unreadable, say so briefly and continue with the best fallback.
 
 ### Skill execution workflow (progressive disclosure)
+
 1. Open the target `SKILL.md` and read only what is needed.
 2. Resolve relative paths relative to the skill directory first.
 3. Load only required reference files; do not bulk-load folders.
@@ -28,27 +32,33 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 5. Announce selected skills and reason in one short line.
 
 ### Context hygiene
+
 - Keep context small; summarize long content instead of pasting.
 - Avoid deep reference chasing unless blocked.
 
 ## Mandatory Python environment rule
+
 - For any turn that runs Python commands in this repository, run `python-venv-guard` first.
 - Never use global interpreters (`python`, `python3`, `pip`, `pip3`) for project tasks.
 - Always use `/Users/panyihang/Documents/aicomm/ai_judge_service/.venv/bin/python`.
 
 ## Mandatory pre-development PRD hook
+
 - For any turn that starts module-level implementation/refactor/optimization, run `pre-module-prd-goal-guard` before coding.
 - Must fully read `/Users/panyihang/Documents/aicomm/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
 - The purpose is to align with the product's target end-state and avoid wrong directional decisions.
 - If task scope conflicts with PRD target shape, clarify adjustment strategy before coding.
 
 ## Mandatory post-module hook
+
 For any turn that includes module-level implementation/refactor/fix, run hooks in this order:
+
 1. `post-module-test-guard`
 2. `post-module-interview-journal`
 3. `post-module-explanation-journal`
 
 ### Post-module hook requirements
+
 - Testing hook must:
   - check whether test changes are missing for production/module code changes
   - generate or update tests when needed
@@ -63,6 +73,7 @@ For any turn that includes module-level implementation/refactor/fix, run hooks i
   - explain only new/modified code paths with architecture, execution flow, tradeoffs, and testing evidence
 
 ## Mandatory post-optimization hook
+
 - For any turn that completes a backend optimization/refactor module, run `post-optimization-plan-sync` before the final response.
 - Optimization hook must:
   - read `/Users/panyihang/Documents/aicomm/docs/后端代码结构优化计划.md`

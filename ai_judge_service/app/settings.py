@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from .callback_client import CallbackClientConfig
 from .dispatch_controller import DispatchRuntimeConfig
 from .rag_retriever import parse_rag_backend, parse_source_whitelist
-from .runtime_policy import normalize_provider, parse_env_bool
+from .runtime_policy import (
+    PROVIDER_MOCK,
+    PROVIDER_OPENAI,
+    is_production_env,
+    normalize_provider,
+    parse_env_bool,
+    runtime_env_label,
+)
 
 DEFAULT_RAG_SOURCE_WHITELIST = "https://teamfighttactics.leagueoflegends.com/en-us/news/"
 
@@ -52,8 +59,8 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    provider = normalize_provider(os.getenv("AI_JUDGE_PROVIDER", "mock"))
-    return Settings(
+    provider = normalize_provider(os.getenv("AI_JUDGE_PROVIDER"))
+    settings = Settings(
         ai_internal_key=os.getenv("AI_JUDGE_INTERNAL_KEY", "dev-ai-internal-key"),
         chat_server_base_url=os.getenv("CHAT_SERVER_BASE_URL", "http://127.0.0.1:6688"),
         report_path_template=os.getenv(
@@ -76,7 +83,7 @@ def load_settings() -> Settings:
         openai_max_retries=int(os.getenv("AI_JUDGE_OPENAI_MAX_RETRIES", "2")),
         openai_fallback_to_mock=parse_env_bool(
             os.getenv("AI_JUDGE_OPENAI_FALLBACK_TO_MOCK"),
-            default=True,
+            default=False,
         ),
         rag_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_ENABLED"), default=True),
         rag_knowledge_file=os.getenv("AI_JUDGE_RAG_KNOWLEDGE_FILE", ""),
@@ -111,6 +118,20 @@ def load_settings() -> Settings:
         rag_milvus_search_limit=int(os.getenv("AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT", "20")),
         stage_agent_max_chunks=int(os.getenv("AI_JUDGE_STAGE_AGENT_MAX_CHUNKS", "12")),
     )
+    validate_for_runtime_env(settings, runtime_env=runtime_env_label())
+    return settings
+
+
+def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> None:
+    if is_production_env(runtime_env):
+        if settings.provider == PROVIDER_MOCK:
+            raise ValueError("AI_JUDGE_PROVIDER=mock is forbidden when runtime env is production")
+        if settings.openai_fallback_to_mock:
+            raise ValueError(
+                "AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=true is forbidden when runtime env is production"
+            )
+        if settings.provider == PROVIDER_OPENAI and not settings.openai_api_key.strip():
+            raise ValueError("OPENAI_API_KEY cannot be empty when runtime env is production")
 
 
 def build_callback_client_config(settings: Settings) -> CallbackClientConfig:

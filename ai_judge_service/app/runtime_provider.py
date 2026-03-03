@@ -23,6 +23,18 @@ async def build_report_with_provider(
     build_report_with_openai_fn: BuildOpenAiReportFn = build_report_with_openai,
     build_mock_report_fn: BuildMockReportFn = build_report,
 ) -> tuple[SubmitJudgeReportInput, bool]:
+    if settings.provider == PROVIDER_OPENAI and not settings.openai_api_key.strip():
+        if not settings.openai_fallback_to_mock:
+            raise RuntimeError("openai runtime missing OPENAI_API_KEY")
+        report = build_mock_report_fn(
+            request,
+            system_style_mode=settings.judge_style_mode,
+        )
+        report.payload["provider"] = "ai-judge-service-mock-missing-openai-key"
+        report.payload["fallbackFrom"] = "openai"
+        report.payload["fallbackReason"] = "missing OPENAI_API_KEY"
+        return report, False
+
     if should_use_openai(settings.provider, settings.openai_api_key):
         cfg = OpenAiJudgeConfig(
             api_key=settings.openai_api_key,
@@ -58,8 +70,4 @@ async def build_report_with_provider(
         request,
         system_style_mode=settings.judge_style_mode,
     )
-    if settings.provider == PROVIDER_OPENAI and not settings.openai_api_key.strip():
-        report.payload["provider"] = "ai-judge-service-mock-missing-openai-key"
-        report.payload["fallbackFrom"] = "openai"
-        report.payload["fallbackReason"] = "missing OPENAI_API_KEY"
     return report, False
