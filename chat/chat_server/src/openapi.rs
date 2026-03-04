@@ -13,11 +13,11 @@ use crate::{
     MarkJudgeJobFailedInput, MarkJudgeJobFailedOutput, OpsCreateDebateSessionInput,
     OpsCreateDebateTopicInput, OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds,
     OpsPermissionFlags, OpsRoleAssignment, OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput,
-    PinDebateMessageInput, PinDebateMessageOutput, RequestJudgeJobInput, RequestJudgeJobOutput,
-    RevokeOpsRoleOutput, SigninUser, SubmitDrawVoteInput, SubmitDrawVoteOutput,
-    SubmitJudgeReportInput, SubmitJudgeReportOutput, UpdateChat, UpdateChatMembers,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, VerifyIapOrderInput,
-    VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
+    PinDebateMessageInput, PinDebateMessageOutput, RedisHealthOutput, RequestJudgeJobInput,
+    RequestJudgeJobOutput, RevokeOpsRoleOutput, SigninUser, SubmitDrawVoteInput,
+    SubmitDrawVoteOutput, SubmitJudgeReportInput, SubmitJudgeReportOutput, UpdateChat,
+    UpdateChatMembers, UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
+    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
 };
 use axum::Router;
 use chat_core::{AgentType, Chat, ChatAgent, ChatType, ChatUser, Message, User, Workspace};
@@ -65,6 +65,7 @@ pub(crate) trait OpenApiRouter {
             submit_draw_vote_handler,
             submit_judge_report_handler,
             mark_judge_job_failed_handler,
+            get_redis_health_handler,
             get_judge_dispatch_metrics_handler,
             list_iap_products_handler,
             get_iap_order_by_transaction_handler,
@@ -107,7 +108,7 @@ pub(crate) trait OpenApiRouter {
                 DrawVoteDetail, GetDrawVoteOutput, SubmitDrawVoteInput, SubmitDrawVoteOutput,
                 SubmitJudgeReportInput, SubmitJudgeReportOutput, JudgeStageSummaryInput,
                 MarkJudgeJobFailedInput, MarkJudgeJobFailedOutput,
-                GetJudgeDispatchMetricsOutput,
+                GetJudgeDispatchMetricsOutput, RedisHealthOutput,
                 IapProduct, ListIapProducts, GetIapOrderByTransaction, IapOrderSnapshot,
                 GetIapOrderByTransactionOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
                 WalletBalanceOutput, ListWalletLedger, WalletLedgerItem,

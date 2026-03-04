@@ -12,6 +12,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub kafka: KafkaConfig,
     #[serde(default)]
+    pub redis: RedisConfig,
+    #[serde(default)]
     pub ai_judge: AiJudgeConfig,
     #[serde(default)]
     pub payment: PaymentConfig,
@@ -48,6 +50,38 @@ pub struct KafkaConfig {
     pub consume_topics: Vec<String>,
     #[serde(default = "default_kafka_timeout_ms")]
     pub producer_timeout_ms: u64,
+    #[serde(default)]
+    pub consumer: KafkaConsumerConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KafkaConsumerConfig {
+    #[serde(default)]
+    pub worker_enabled: bool,
+    #[serde(default = "default_kafka_consumer_worker_group_id")]
+    pub worker_group_id: String,
+    #[serde(default = "default_kafka_consumer_max_inflight")]
+    pub max_inflight: u64,
+    #[serde(default = "default_kafka_consumer_retry_policy")]
+    pub retry_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedisConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_redis_url")]
+    pub url: String,
+    #[serde(default = "default_redis_pool_size")]
+    pub pool_size: u32,
+    #[serde(default = "default_redis_key_prefix")]
+    pub key_prefix: String,
+    #[serde(default = "default_redis_default_ttl_secs")]
+    pub default_ttl_secs: u64,
+    #[serde(default = "default_redis_startup_policy")]
+    pub startup_policy: String,
+    #[serde(default = "default_redis_healthcheck_timeout_ms")]
+    pub healthcheck_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +160,32 @@ impl Default for KafkaConfig {
             consume_enabled: false,
             consume_topics: Vec::new(),
             producer_timeout_ms: default_kafka_timeout_ms(),
+            consumer: KafkaConsumerConfig::default(),
+        }
+    }
+}
+
+impl Default for KafkaConsumerConfig {
+    fn default() -> Self {
+        Self {
+            worker_enabled: false,
+            worker_group_id: default_kafka_consumer_worker_group_id(),
+            max_inflight: default_kafka_consumer_max_inflight(),
+            retry_policy: default_kafka_consumer_retry_policy(),
+        }
+    }
+}
+
+impl Default for RedisConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: default_redis_url(),
+            pool_size: default_redis_pool_size(),
+            key_prefix: default_redis_key_prefix(),
+            default_ttl_secs: default_redis_default_ttl_secs(),
+            startup_policy: default_redis_startup_policy(),
+            healthcheck_timeout_ms: default_redis_healthcheck_timeout_ms(),
         }
     }
 }
@@ -160,6 +220,42 @@ fn default_kafka_group_id() -> String {
 
 fn default_kafka_timeout_ms() -> u64 {
     1500
+}
+
+fn default_kafka_consumer_worker_group_id() -> String {
+    "chat-server-worker".to_string()
+}
+
+fn default_kafka_consumer_max_inflight() -> u64 {
+    64
+}
+
+fn default_kafka_consumer_retry_policy() -> String {
+    "exponential".to_string()
+}
+
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379/0".to_string()
+}
+
+fn default_redis_pool_size() -> u32 {
+    32
+}
+
+fn default_redis_key_prefix() -> String {
+    "aicomm".to_string()
+}
+
+fn default_redis_default_ttl_secs() -> u64 {
+    300
+}
+
+fn default_redis_startup_policy() -> String {
+    "fail_open".to_string()
+}
+
+fn default_redis_healthcheck_timeout_ms() -> u64 {
+    500
 }
 
 fn default_ai_judge_internal_key() -> String {
@@ -253,10 +349,27 @@ impl AppConfig {
     }
 }
 
+impl RedisConfig {
+    pub fn startup_fail_closed(&self) -> bool {
+        normalize_redis_startup_policy(&self.startup_policy) == "fail_closed"
+    }
+
+    pub fn startup_policy_label(&self) -> &'static str {
+        normalize_redis_startup_policy(&self.startup_policy)
+    }
+}
+
 fn normalize_payment_verify_mode(mode: &str) -> &str {
     match mode.trim().to_ascii_lowercase().as_str() {
         "mock" | "dev_mock" => "mock",
         _ => "apple",
+    }
+}
+
+fn normalize_redis_startup_policy(mode: &str) -> &'static str {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "fail_closed" | "closed" | "strict" => "fail_closed",
+        _ => "fail_open",
     }
 }
 
@@ -292,6 +405,7 @@ mod tests {
                 pk: "pk".to_string(),
             },
             kafka: KafkaConfig::default(),
+            redis: RedisConfig::default(),
             ai_judge: AiJudgeConfig::default(),
             payment: PaymentConfig::default(),
         }
@@ -339,5 +453,25 @@ mod tests {
         assert!(err
             .to_string()
             .contains("payment.apple_verify_url_prod cannot be empty"));
+    }
+
+    #[test]
+    fn normalize_redis_startup_policy_should_be_fail_open_default() {
+        assert_eq!(normalize_redis_startup_policy(""), "fail_open");
+        assert_eq!(normalize_redis_startup_policy("unknown"), "fail_open");
+        assert_eq!(normalize_redis_startup_policy("fail_open"), "fail_open");
+        assert_eq!(normalize_redis_startup_policy("fail_closed"), "fail_closed");
+        assert_eq!(normalize_redis_startup_policy("strict"), "fail_closed");
+    }
+
+    #[test]
+    fn redis_config_startup_policy_helpers_should_work() {
+        let mut cfg = RedisConfig::default();
+        assert!(!cfg.startup_fail_closed());
+        assert_eq!(cfg.startup_policy_label(), "fail_open");
+
+        cfg.startup_policy = "fail_closed".to_string();
+        assert!(cfg.startup_fail_closed());
+        assert_eq!(cfg.startup_policy_label(), "fail_closed");
     }
 }

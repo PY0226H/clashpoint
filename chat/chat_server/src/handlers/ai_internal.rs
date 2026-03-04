@@ -79,6 +79,25 @@ pub(crate) async fn get_judge_dispatch_metrics_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
+/// Internal endpoint to inspect redis readiness and startup policy status.
+#[utoipa::path(
+    get,
+    path = "/api/internal/ai/infra/redis/health",
+    responses(
+        (status = 200, description = "Redis infra health snapshot", body = crate::RedisHealthOutput),
+        (status = 401, description = "Missing or invalid internal key"),
+    ),
+    security(
+        ("internal_key" = [])
+    )
+)]
+pub(crate) async fn get_redis_health_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.get_redis_health().await;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +118,7 @@ mod tests {
                 pk: include_str!("../../../chat_core/fixtures/decoding.pem").to_string(),
             },
             kafka: crate::config::KafkaConfig::default(),
+            redis: crate::config::RedisConfig::default(),
             ai_judge: crate::config::AiJudgeConfig {
                 internal_key: "secret-key".to_string(),
                 ..Default::default()
@@ -141,6 +161,40 @@ mod tests {
         assert_eq!(payload.tick_success_total, 0);
         assert_eq!(payload.tick_error_total, 0);
         assert_eq!(payload.failed_total, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_redis_health_handler_should_require_internal_key_and_return_snapshot() -> Result<()>
+    {
+        let state = test_state()?;
+        let app = Router::new()
+            .route("/infra/redis/health", get(get_redis_health_handler))
+            .layer(from_fn_with_state(
+                state.clone(),
+                crate::verify_ai_internal_key,
+            ))
+            .with_state(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/infra/redis/health")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri("/infra/redis/health")
+                    .header("x-ai-internal-key", "secret-key")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(authorized.status(), StatusCode::OK);
         Ok(())
     }
 }

@@ -20,6 +20,19 @@ kafka:
   consume_enabled: false
   consume_topics: []
   producer_timeout_ms: 1500
+  consumer:
+    worker_enabled: false
+    worker_group_id: chat-server-worker
+    max_inflight: 64
+    retry_policy: exponential
+redis:
+  enabled: false
+  url: redis://127.0.0.1:6379/0
+  pool_size: 32
+  key_prefix: aicomm
+  default_ttl_secs: 300
+  startup_policy: fail_open
+  healthcheck_timeout_ms: 500
 ai_judge:
   internal_key: dev-ai-internal-key
   style_mode: rational

@@ -6,6 +6,7 @@ mod handlers;
 mod middlewares;
 mod models;
 mod openapi;
+mod redis_store;
 #[cfg(test)]
 mod test_fixtures;
 
@@ -29,6 +30,7 @@ pub(crate) use event_bus::{
     DebateSessionStatusChangedEvent, EventBus,
 };
 pub use models::*;
+pub use redis_store::RedisHealthOutput;
 
 use axum::{
     http::Method,
@@ -50,6 +52,7 @@ pub struct AppStateInner {
     pub(crate) dk: DecodingKey,
     pub(crate) ek: EncodingKey,
     pub(crate) pool: PgPool,
+    pub(crate) redis: redis_store::RedisStore,
     pub(crate) event_bus: EventBus,
     pub(crate) dispatch_metrics: AiJudgeDispatchMetrics,
 }
@@ -153,6 +156,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             "/judge/jobs/:id/failed",
             post(mark_judge_job_failed_handler),
         )
+        .route("/infra/redis/health", get(get_redis_health_handler))
         .route(
             "/judge/dispatch/metrics",
             get(get_judge_dispatch_metrics_handler),
@@ -222,6 +226,9 @@ impl AppState {
         let pool = PgPool::connect(&config.server.db_url)
             .await
             .context("connect to db failed")?;
+        let redis = redis_store::RedisStore::bootstrap(&config.redis)
+            .await
+            .context("init redis store failed")?;
         let event_bus = EventBus::from_config(&config.kafka).context("init event bus failed")?;
         event_bus
             .maybe_spawn_bootstrap_consumer()
@@ -232,6 +239,7 @@ impl AppState {
                 ek,
                 dk,
                 pool,
+                redis,
                 event_bus,
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
             }),
@@ -250,6 +258,10 @@ impl AppState {
         let pool = PgPoolOptions::new()
             .connect_lazy(&config.server.db_url)
             .context("create lazy db pool failed")?;
+        let redis = redis_store::RedisStore::Disabled {
+            config: config.redis.clone(),
+            message: "redis disabled in unit test constructor".to_string(),
+        };
         let event_bus = EventBus::from_config(&config.kafka).context("init event bus failed")?;
         Ok(Self {
             inner: Arc::new(AppStateInner {
@@ -257,10 +269,15 @@ impl AppState {
                 ek,
                 dk,
                 pool,
+                redis,
                 event_bus,
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
             }),
         })
+    }
+
+    pub async fn get_redis_health(&self) -> RedisHealthOutput {
+        self.redis.health_snapshot().await
     }
 }
 
@@ -347,6 +364,7 @@ mod test_util {
             let config = AppConfig::load()?;
             let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
             let ek = EncodingKey::load(&config.auth.sk).context("load sk failed")?;
+            let redis_config = config.redis.clone();
             let maintenance_db_url = to_maintenance_db_url(&config.server.db_url);
             let (tdb, pool) = get_test_pool(Some(maintenance_db_url.as_str())).await;
             let state = Self {
@@ -355,6 +373,10 @@ mod test_util {
                     ek,
                     dk,
                     pool,
+                    redis: redis_store::RedisStore::Disabled {
+                        config: redis_config,
+                        message: "redis disabled in test util".to_string(),
+                    },
                     event_bus: EventBus::Disabled,
                     dispatch_metrics: AiJudgeDispatchMetrics::default(),
                 }),

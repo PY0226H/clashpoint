@@ -66,6 +66,7 @@ mod tests {
                 pk: include_str!("../../../chat_core/fixtures/decoding.pem").to_string(),
             },
             kafka: crate::config::KafkaConfig::default(),
+            redis: crate::config::RedisConfig::default(),
             ai_judge: crate::config::AiJudgeConfig::default(),
             payment: crate::config::PaymentConfig::default(),
         };
