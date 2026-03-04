@@ -5,9 +5,9 @@ use crate::{
     },
     AppError, AppState, CreateDebateMessageInput, GetJudgeReportQuery, JoinDebateSessionInput,
     ListDebateMessages, ListDebatePinnedMessages, ListDebateSessions, ListDebateTopics,
-    ListJudgeReviewOpsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsObservabilityThresholds, OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput,
-    PinDebateMessageInput, RequestJudgeJobInput, SubmitDrawVoteInput,
+    ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery, OpsCreateDebateSessionInput,
+    OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsUpdateDebateSessionInput,
+    OpsUpdateDebateTopicInput, PinDebateMessageInput, RequestJudgeJobInput, SubmitDrawVoteInput,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
 };
 use axum::{
@@ -257,6 +257,80 @@ pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
     let ret = state
         .upsert_ops_observability_anomaly_state(&user, input)
         .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// List Kafka DLQ events for current workspace.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/kafka/dlq",
+    params(
+        ListKafkaDlqEventsQuery
+    ),
+    responses(
+        (status = 200, description = "Kafka DLQ events", body = crate::ListKafkaDlqEventsOutput),
+        (status = 409, description = "Permission conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn list_kafka_dlq_events_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Query(input): Query<ListKafkaDlqEventsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.list_kafka_dlq_events(&user, input).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Replay Kafka DLQ event by id.
+#[utoipa::path(
+    post,
+    path = "/api/debate/ops/kafka/dlq/{id}/replay",
+    params(
+        ("id" = u64, Path, description = "Kafka DLQ event id")
+    ),
+    responses(
+        (status = 200, description = "Replay result", body = crate::KafkaDlqActionOutput),
+        (status = 404, description = "DLQ event not found", body = ErrorOutput),
+        (status = 409, description = "Permission or state conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn replay_kafka_dlq_event_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.replay_kafka_dlq_event(&user, id).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Discard Kafka DLQ event by id.
+#[utoipa::path(
+    post,
+    path = "/api/debate/ops/kafka/dlq/{id}/discard",
+    params(
+        ("id" = u64, Path, description = "Kafka DLQ event id")
+    ),
+    responses(
+        (status = 200, description = "Discard result", body = crate::KafkaDlqActionOutput),
+        (status = 404, description = "DLQ event not found", body = ErrorOutput),
+        (status = 409, description = "Permission or state conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn discard_kafka_dlq_event_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.discard_kafka_dlq_event(&user, id).await?;
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -776,6 +850,35 @@ mod tests {
         Ok(job_id.0)
     }
 
+    async fn insert_kafka_dlq_event(
+        state: &AppState,
+        ws_id: i64,
+        event_id: &str,
+        payload: serde_json::Value,
+    ) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO kafka_dlq_events(
+                ws_id, consumer_group, topic, partition, message_offset,
+                event_id, event_type, aggregate_id, payload,
+                status, failure_count, error_message, first_failed_at, last_failed_at, created_at, updated_at
+            )
+            VALUES (
+                $1, 'chat-server-worker', 'aicomm.ai.judge.job.created.v1', 0, 1,
+                $2, 'ai.judge.job.created', 'session:1', $3,
+                'pending', 1, 'seed', NOW(), NOW(), NOW(), NOW()
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(ws_id)
+        .bind(event_id)
+        .bind(payload)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     #[tokio::test]
     async fn request_judge_job_handler_should_return_style_mode_source() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -1228,6 +1331,144 @@ mod tests {
         let ret: serde_json::Value = serde_json::from_slice(&body)?;
         assert_eq!(ret["thresholds"]["lowSuccessRateThreshold"], 76.0);
         assert!(ret["anomalyState"]["high_retry:8"].is_object());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_handler_should_require_judge_review_permission() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let non_owner = state.find_user_by_id(3).await?.expect("user should exist");
+
+        let result = list_kafka_dlq_events_handler(
+            Extension(non_owner),
+            State(state),
+            Query(ListKafkaDlqEventsQuery {
+                status: None,
+                event_type: None,
+                limit: Some(20),
+                offset: Some(0),
+            }),
+        )
+        .await;
+
+        match result {
+            Ok(_) => panic!("user without ops role should be rejected"),
+            Err(AppError::DebateConflict(msg)) => {
+                assert!(msg.starts_with("ops_permission_denied:judge_review:"));
+            }
+            Err(other) => panic!("unexpected error: {}", other),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn kafka_dlq_handlers_should_list_replay_and_discard() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let viewer = state
+            .find_user_by_id(2)
+            .await?
+            .expect("viewer should exist");
+        let reviewer = state
+            .find_user_by_id(3)
+            .await?
+            .expect("reviewer should exist");
+
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+
+        let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+        let job_id = seed_running_judge_job(&state, session_id).await?;
+        let envelope = crate::event_bus::EventEnvelope::new(
+            "ai.judge.job.created",
+            "chat-server",
+            format!("session:{}", session_id),
+            serde_json::json!({
+                "wsId": 1,
+                "sessionId": session_id,
+                "jobId": job_id,
+                "requestedBy": 1,
+                "styleMode": "rational",
+                "rejudgeTriggered": false,
+                "requestedAt": Utc::now(),
+            }),
+        );
+        let replay_id = insert_kafka_dlq_event(
+            &state,
+            1,
+            "replay-event-1",
+            serde_json::to_value(&envelope)?,
+        )
+        .await?;
+        let discard_id = insert_kafka_dlq_event(
+            &state,
+            1,
+            "discard-event-1",
+            serde_json::to_value(&envelope)?,
+        )
+        .await?;
+
+        let list_resp = list_kafka_dlq_events_handler(
+            Extension(viewer.clone()),
+            State(state.clone()),
+            Query(ListKafkaDlqEventsQuery {
+                status: Some("pending".to_string()),
+                event_type: None,
+                limit: Some(50),
+                offset: Some(0),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = list_resp.into_body().collect().await?.to_bytes();
+        let list_json: serde_json::Value = serde_json::from_slice(&list_body)?;
+        assert!(list_json["items"]
+            .as_array()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false));
+
+        let replay_resp = replay_kafka_dlq_event_handler(
+            Extension(reviewer.clone()),
+            State(state.clone()),
+            Path(replay_id as u64),
+        )
+        .await?
+        .into_response();
+        assert_eq!(replay_resp.status(), StatusCode::OK);
+        let replay_body = replay_resp.into_body().collect().await?.to_bytes();
+        let replay_json: serde_json::Value = serde_json::from_slice(&replay_body)?;
+        assert_eq!(replay_json["status"], "replayed");
+
+        let discard_resp = discard_kafka_dlq_event_handler(
+            Extension(reviewer),
+            State(state),
+            Path(discard_id as u64),
+        )
+        .await?
+        .into_response();
+        assert_eq!(discard_resp.status(), StatusCode::OK);
+        let discard_body = discard_resp.into_body().collect().await?.to_bytes();
+        let discard_json: serde_json::Value = serde_json::from_slice(&discard_body)?;
+        assert_eq!(discard_json["status"], "discarded");
         Ok(())
     }
 }

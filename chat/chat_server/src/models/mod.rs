@@ -4,6 +4,7 @@ mod debate;
 mod file;
 mod judge;
 mod judge_dispatch;
+mod kafka_dlq;
 mod messages;
 mod ops_observability;
 mod payment;
@@ -30,6 +31,9 @@ pub use judge::{
 };
 pub(crate) use judge_dispatch::AiJudgeDispatchMetrics;
 pub use judge_dispatch::GetJudgeDispatchMetricsOutput;
+pub use kafka_dlq::{
+    KafkaDlqActionOutput, KafkaDlqEventItem, ListKafkaDlqEventsOutput, ListKafkaDlqEventsQuery,
+};
 pub use messages::{CreateMessage, ListMessages};
 pub use ops_observability::{
     GetOpsObservabilityConfigOutput, OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds,

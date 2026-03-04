@@ -22,6 +22,8 @@ pub const TOPIC_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned.v1";
 pub const TOPIC_AI_JUDGE_JOB_CREATED: &str = "ai.judge.job.created.v1";
 const LEDGER_STATUS_SUCCEEDED: &str = "succeeded";
 const LEDGER_STATUS_FAILED: &str = "failed";
+const DLQ_STATUS_PENDING: &str = "pending";
+const DLQ_STATUS_REPLAYED: &str = "replayed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -253,6 +255,7 @@ impl EventBus {
         } else {
             bus.config.consumer.worker_group_id.clone()
         };
+        let retry_policy = WorkerRetryPolicy::from_config(&bus.config);
 
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", &bus.config.brokers)
@@ -293,20 +296,37 @@ impl EventBus {
                             partition,
                             offset,
                             payload,
+                            retry_policy,
                         )
                         .await;
                         match outcome {
                             Ok(ret) => {
-                                if let Err(err) = consumer.commit_message(&msg, CommitMode::Async) {
-                                    warn!(
-                                        "kafka commit failed topic={} partition={} offset={}: {}",
-                                        topic, partition, offset, err
-                                    );
+                                if ret.should_commit {
+                                    if let Err(err) =
+                                        consumer.commit_message(&msg, CommitMode::Async)
+                                    {
+                                        warn!(
+                                            "kafka commit failed topic={} partition={} offset={}: {}",
+                                            topic, partition, offset, err
+                                        );
+                                    } else {
+                                        info!(
+                                            "kafka worker consumed topic={} partition={} offset={} key={:?} outcome={}",
+                                            topic, partition, offset, key, ret.outcome
+                                        );
+                                    }
                                 } else {
-                                    info!(
-                                        "kafka worker consumed topic={} partition={} offset={} key={:?} outcome={}",
-                                        topic, partition, offset, key, ret
+                                    warn!(
+                                        "kafka worker retry scheduled topic={} partition={} offset={} key={:?} backoff_ms={} outcome={}",
+                                        topic,
+                                        partition,
+                                        offset,
+                                        key,
+                                        ret.retry_backoff_ms,
+                                        ret.outcome
                                     );
+                                    tokio::time::sleep(Duration::from_millis(ret.retry_backoff_ms))
+                                        .await;
                                 }
                             }
                             Err(err) => {
@@ -348,6 +368,66 @@ enum BusinessProcessOutcome {
     FailedPermanently(String),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WorkerRetryPolicy {
+    max_attempts: i32,
+    base_backoff_ms: u64,
+    max_backoff_ms: u64,
+}
+
+impl WorkerRetryPolicy {
+    fn from_config(config: &KafkaConfig) -> Self {
+        let raw = config.consumer.retry_policy.trim().to_lowercase();
+        let max_attempts = raw
+            .split(':')
+            .nth(1)
+            .and_then(|v| v.parse::<i32>().ok())
+            .map(|v| v.clamp(1, 100))
+            .unwrap_or(5);
+        if raw.starts_with("fixed") {
+            return Self {
+                max_attempts,
+                base_backoff_ms: 500,
+                max_backoff_ms: 500,
+            };
+        }
+        Self {
+            max_attempts,
+            base_backoff_ms: 250,
+            max_backoff_ms: 8000,
+        }
+    }
+
+    fn backoff_ms(self, failure_count: i32) -> u64 {
+        let failure_count = failure_count.max(1) as u32;
+        let pow = failure_count.saturating_sub(1).min(8);
+        let base = self.base_backoff_ms.saturating_mul(1_u64 << pow);
+        base.min(self.max_backoff_ms).max(50)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WorkerEnvelopeMeta {
+    pub consumer_group: String,
+    pub topic: String,
+    pub partition: i32,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum WorkerProcessOutcome {
+    Succeeded,
+    Duplicated,
+    FailedPermanently(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConsumeWorkerResult {
+    outcome: ConsumeProcessOutcome,
+    should_commit: bool,
+    retry_backoff_ms: u64,
+}
+
 fn kafka_worker_enabled(config: &KafkaConfig) -> bool {
     config.consume_enabled || config.consumer.worker_enabled
 }
@@ -363,12 +443,20 @@ async fn consume_worker_message(
     partition: i32,
     offset: i64,
     payload: Option<&str>,
-) -> anyhow::Result<ConsumeProcessOutcome> {
+    retry_policy: WorkerRetryPolicy,
+) -> anyhow::Result<ConsumeWorkerResult> {
     let payload_text = payload.unwrap_or_default();
+    let meta = WorkerEnvelopeMeta {
+        consumer_group: consumer_group.to_string(),
+        topic: topic.to_string(),
+        partition,
+        offset,
+    };
     let envelope = match serde_json::from_str::<EventEnvelope>(payload_text) {
         Ok(v) => v,
         Err(err) => {
-            let row = FailedLedgerRow {
+            let row = FailedConsumeRow {
+                ws_id: None,
                 consumer_group: consumer_group.to_string(),
                 topic: topic.to_string(),
                 partition,
@@ -380,54 +468,160 @@ async fn consume_worker_message(
                 error_message: format!("decode envelope failed: {err}"),
             };
             persist_failed_ledger_row(pool, &row).await?;
-            return Ok(ConsumeProcessOutcome::Failed);
+            let _ = upsert_kafka_dlq_failure(pool, &row).await?;
+            return Ok(ConsumeWorkerResult {
+                outcome: ConsumeProcessOutcome::Failed,
+                should_commit: true,
+                retry_backoff_ms: 0,
+            });
         }
     };
 
-    process_business_event(pool, consumer_group, topic, partition, offset, &envelope).await
+    match process_worker_envelope(pool, &meta, &envelope).await {
+        Ok(WorkerProcessOutcome::Succeeded) => {
+            mark_kafka_dlq_replayed(pool, &meta.consumer_group, &envelope.event_id).await?;
+            Ok(ConsumeWorkerResult {
+                outcome: ConsumeProcessOutcome::Succeeded,
+                should_commit: true,
+                retry_backoff_ms: 0,
+            })
+        }
+        Ok(WorkerProcessOutcome::Duplicated) => {
+            mark_kafka_dlq_replayed(pool, &meta.consumer_group, &envelope.event_id).await?;
+            Ok(ConsumeWorkerResult {
+                outcome: ConsumeProcessOutcome::Duplicated,
+                should_commit: true,
+                retry_backoff_ms: 0,
+            })
+        }
+        Ok(WorkerProcessOutcome::FailedPermanently(error_message)) => {
+            let row = FailedConsumeRow {
+                ws_id: extract_ws_id(&envelope.payload),
+                consumer_group: meta.consumer_group.clone(),
+                topic: meta.topic.clone(),
+                partition: meta.partition,
+                offset: meta.offset,
+                event_id: envelope.event_id.clone(),
+                event_type: envelope.event_type.clone(),
+                aggregate_id: envelope.aggregate_id.clone(),
+                payload: serde_json::to_value(&envelope).unwrap_or(Value::Null),
+                error_message,
+            };
+            let _ = upsert_kafka_dlq_failure(pool, &row).await?;
+            Ok(ConsumeWorkerResult {
+                outcome: ConsumeProcessOutcome::Failed,
+                should_commit: true,
+                retry_backoff_ms: 0,
+            })
+        }
+        Err(err) => {
+            let row = FailedConsumeRow {
+                ws_id: extract_ws_id(&envelope.payload),
+                consumer_group: meta.consumer_group.clone(),
+                topic: meta.topic.clone(),
+                partition: meta.partition,
+                offset: meta.offset,
+                event_id: envelope.event_id.clone(),
+                event_type: envelope.event_type.clone(),
+                aggregate_id: envelope.aggregate_id.clone(),
+                payload: serde_json::to_value(&envelope).unwrap_or(Value::Null),
+                error_message: format!("retryable worker error: {err}"),
+            };
+            let failure_count = upsert_kafka_dlq_failure(pool, &row).await?;
+            let should_commit = failure_count >= retry_policy.max_attempts;
+            let retry_backoff_ms = if should_commit {
+                0
+            } else {
+                retry_policy.backoff_ms(failure_count)
+            };
+            Ok(ConsumeWorkerResult {
+                outcome: ConsumeProcessOutcome::Failed,
+                should_commit,
+                retry_backoff_ms,
+            })
+        }
+    }
 }
 
-async fn process_business_event(
+pub(crate) async fn process_worker_envelope(
     pool: &PgPool,
-    consumer_group: &str,
-    topic: &str,
-    partition: i32,
-    offset: i64,
+    meta: &WorkerEnvelopeMeta,
     envelope: &EventEnvelope,
-) -> anyhow::Result<ConsumeProcessOutcome> {
+) -> anyhow::Result<WorkerProcessOutcome> {
     let mut tx = pool.begin().await?;
-    let ledger_id = sqlx::query_scalar::<_, i64>(
+    let existing = sqlx::query_as::<_, (i64, String)>(
         r#"
-        INSERT INTO kafka_consume_ledger(
-            consumer_group, topic, partition, message_offset,
-            event_id, event_type, aggregate_id, payload,
-            status, error_message, processed_at, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NOW(), NOW(), NOW())
-        ON CONFLICT (consumer_group, event_id) DO NOTHING
-        RETURNING id
+        SELECT id, status
+        FROM kafka_consume_ledger
+        WHERE consumer_group = $1 AND event_id = $2
+        FOR UPDATE
         "#,
     )
-    .bind(consumer_group)
-    .bind(topic)
-    .bind(partition)
-    .bind(offset)
+    .bind(&meta.consumer_group)
     .bind(&envelope.event_id)
-    .bind(&envelope.event_type)
-    .bind(&envelope.aggregate_id)
-    .bind(&envelope.payload)
-    .bind(LEDGER_STATUS_SUCCEEDED)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(ledger_id) = ledger_id else {
-        tx.rollback().await?;
-        return Ok(ConsumeProcessOutcome::Duplicated);
+    let ledger_id = if let Some((id, status)) = existing {
+        if status == LEDGER_STATUS_SUCCEEDED {
+            tx.rollback().await?;
+            return Ok(WorkerProcessOutcome::Duplicated);
+        }
+        id
+    } else {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            INSERT INTO kafka_consume_ledger(
+                consumer_group, topic, partition, message_offset,
+                event_id, event_type, aggregate_id, payload,
+                status, error_message, processed_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NOW(), NOW(), NOW())
+            RETURNING id
+            "#,
+        )
+        .bind(&meta.consumer_group)
+        .bind(&meta.topic)
+        .bind(meta.partition)
+        .bind(meta.offset)
+        .bind(&envelope.event_id)
+        .bind(&envelope.event_type)
+        .bind(&envelope.aggregate_id)
+        .bind(&envelope.payload)
+        .bind(LEDGER_STATUS_SUCCEEDED)
+        .fetch_one(&mut *tx)
+        .await?
     };
 
     match apply_worker_business_logic(&mut tx, envelope).await? {
         BusinessProcessOutcome::Succeeded => {
+            sqlx::query(
+                r#"
+                UPDATE kafka_consume_ledger
+                SET status = $2,
+                    error_message = NULL,
+                    topic = $3,
+                    partition = $4,
+                    message_offset = $5,
+                    event_type = $6,
+                    aggregate_id = $7,
+                    payload = $8,
+                    processed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(ledger_id)
+            .bind(LEDGER_STATUS_SUCCEEDED)
+            .bind(&meta.topic)
+            .bind(meta.partition)
+            .bind(meta.offset)
+            .bind(&envelope.event_type)
+            .bind(&envelope.aggregate_id)
+            .bind(&envelope.payload)
+            .execute(&mut *tx)
+            .await?;
             tx.commit().await?;
-            Ok(ConsumeProcessOutcome::Succeeded)
+            Ok(WorkerProcessOutcome::Succeeded)
         }
         BusinessProcessOutcome::FailedPermanently(error_message) => {
             sqlx::query(
@@ -442,11 +636,11 @@ async fn process_business_event(
             )
             .bind(ledger_id)
             .bind(LEDGER_STATUS_FAILED)
-            .bind(error_message)
+            .bind(&error_message)
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
-            Ok(ConsumeProcessOutcome::Failed)
+            Ok(WorkerProcessOutcome::FailedPermanently(error_message))
         }
     }
 }
@@ -485,7 +679,8 @@ async fn apply_worker_business_logic(
     Ok(BusinessProcessOutcome::Succeeded)
 }
 
-struct FailedLedgerRow {
+struct FailedConsumeRow {
+    ws_id: Option<i64>,
     consumer_group: String,
     topic: String,
     partition: i32,
@@ -497,7 +692,17 @@ struct FailedLedgerRow {
     error_message: String,
 }
 
-async fn persist_failed_ledger_row(pool: &PgPool, row: &FailedLedgerRow) -> anyhow::Result<()> {
+fn extract_ws_id(payload: &Value) -> Option<i64> {
+    let ws_id = payload
+        .get("wsId")
+        .or_else(|| payload.get("ws_id"))
+        .or_else(|| payload.get("wsID"))?;
+    ws_id
+        .as_i64()
+        .or_else(|| ws_id.as_u64().and_then(|v| i64::try_from(v).ok()))
+}
+
+async fn persist_failed_ledger_row(pool: &PgPool, row: &FailedConsumeRow) -> anyhow::Result<()> {
     let _ = sqlx::query(
         r#"
         INSERT INTO kafka_consume_ledger(
@@ -524,6 +729,90 @@ async fn persist_failed_ledger_row(pool: &PgPool, row: &FailedLedgerRow) -> anyh
     .bind(&row.payload)
     .bind(LEDGER_STATUS_FAILED)
     .bind(&row.error_message)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn upsert_kafka_dlq_failure(pool: &PgPool, row: &FailedConsumeRow) -> anyhow::Result<i32> {
+    let failure_count = sqlx::query_scalar::<_, i32>(
+        r#"
+        INSERT INTO kafka_dlq_events(
+            ws_id,
+            consumer_group,
+            topic,
+            partition,
+            message_offset,
+            event_id,
+            event_type,
+            aggregate_id,
+            payload,
+            status,
+            failure_count,
+            error_message,
+            first_failed_at,
+            last_failed_at,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+            $10, 1, $11, NOW(), NOW(), NOW(), NOW()
+        )
+        ON CONFLICT (consumer_group, event_id)
+        DO UPDATE SET
+            ws_id = COALESCE(EXCLUDED.ws_id, kafka_dlq_events.ws_id),
+            topic = EXCLUDED.topic,
+            partition = EXCLUDED.partition,
+            message_offset = EXCLUDED.message_offset,
+            event_type = EXCLUDED.event_type,
+            aggregate_id = EXCLUDED.aggregate_id,
+            payload = EXCLUDED.payload,
+            status = $10,
+            failure_count = kafka_dlq_events.failure_count + 1,
+            error_message = EXCLUDED.error_message,
+            last_failed_at = NOW(),
+            replayed_at = NULL,
+            discarded_at = NULL,
+            updated_at = NOW()
+        RETURNING failure_count
+        "#,
+    )
+    .bind(row.ws_id)
+    .bind(&row.consumer_group)
+    .bind(&row.topic)
+    .bind(row.partition)
+    .bind(row.offset)
+    .bind(&row.event_id)
+    .bind(&row.event_type)
+    .bind(&row.aggregate_id)
+    .bind(&row.payload)
+    .bind(DLQ_STATUS_PENDING)
+    .bind(&row.error_message)
+    .fetch_one(pool)
+    .await?;
+    Ok(failure_count)
+}
+
+async fn mark_kafka_dlq_replayed(
+    pool: &PgPool,
+    consumer_group: &str,
+    event_id: &str,
+) -> anyhow::Result<()> {
+    let _ = sqlx::query(
+        r#"
+        UPDATE kafka_dlq_events
+        SET status = $3,
+            replayed_at = NOW(),
+            updated_at = NOW()
+        WHERE consumer_group = $1
+          AND event_id = $2
+          AND status <> 'discarded'
+        "#,
+    )
+    .bind(consumer_group)
+    .bind(event_id)
+    .bind(DLQ_STATUS_REPLAYED)
     .execute(pool)
     .await?;
     Ok(())

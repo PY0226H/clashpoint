@@ -112,6 +112,15 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             "/ops/observability/anomaly-state",
             put(upsert_ops_observability_anomaly_state_handler),
         )
+        .route("/ops/kafka/dlq", get(list_kafka_dlq_events_handler))
+        .route(
+            "/ops/kafka/dlq/:id/replay",
+            post(replay_kafka_dlq_event_handler),
+        )
+        .route(
+            "/ops/kafka/dlq/:id/discard",
+            post(discard_kafka_dlq_event_handler),
+        )
         .route(
             "/ops/rbac/roles/:user_id",
             put(upsert_ops_role_assignment_handler).delete(revoke_ops_role_assignment_handler),
