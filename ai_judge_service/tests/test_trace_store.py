@@ -1,6 +1,9 @@
 import unittest
 
-from app.trace_store import TraceStore
+from app.trace_store import (
+    TraceStore,
+    build_trace_store_from_settings,
+)
 
 
 class TraceStoreTests(unittest.TestCase):
@@ -50,6 +53,67 @@ class TraceStoreTests(unittest.TestCase):
         assert record is not None
         self.assertEqual(len(record.replays), 1)
         self.assertEqual(record.replays[0].winner, "pro")
+
+    def test_topic_memory_should_store_and_reuse_latest_items(self) -> None:
+        store = TraceStore(ttl_secs=3600, topic_memory_limit=2)
+        store.save_topic_memory(
+            job_id=1,
+            trace_id="t1",
+            topic_domain="finance",
+            rubric_version="v1",
+            winner="pro",
+            rationale="first",
+            evidence_refs=[{"messageId": 1, "reason": "a"}],
+            provider="openai",
+        )
+        store.save_topic_memory(
+            job_id=2,
+            trace_id="t2",
+            topic_domain="finance",
+            rubric_version="v1",
+            winner="con",
+            rationale="second",
+            evidence_refs=[{"messageId": 2, "reason": "b"}],
+            provider="openai",
+        )
+        store.save_topic_memory(
+            job_id=3,
+            trace_id="t3",
+            topic_domain="finance",
+            rubric_version="v1",
+            winner="draw",
+            rationale="third",
+            evidence_refs=[{"messageId": 3, "reason": "c"}],
+            provider="openai",
+        )
+
+        rows = store.list_topic_memory(topic_domain="finance", rubric_version="v1", limit=5)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].job_id, 3)
+        self.assertEqual(rows[1].job_id, 2)
+
+
+class _DummySettings:
+    redis_enabled = True
+    redis_required = False
+    redis_url = "redis://127.0.0.1:6379/0"
+    redis_pool_size = 20
+    redis_key_prefix = "ai_judge:v2"
+    trace_ttl_secs = 86400
+    topic_memory_limit = 5
+
+
+class TraceStoreBuilderTests(unittest.TestCase):
+    def test_build_store_should_fallback_to_memory_when_redis_unavailable(self) -> None:
+        settings = _DummySettings()
+        store = build_trace_store_from_settings(settings=settings)
+        self.assertIsInstance(store, TraceStore)
+
+    def test_build_store_should_raise_when_redis_required_and_unavailable(self) -> None:
+        settings = _DummySettings()
+        settings.redis_required = True
+        with self.assertRaises(RuntimeError):
+            build_trace_store_from_settings(settings=settings)
 
 
 if __name__ == "__main__":

@@ -157,6 +157,8 @@ class OpenAiJudgeReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["agentPipelineVersion"], "multi-agent-v2")
         self.assertEqual(report.payload["agentPipeline"]["executionMode"], "dag")
         self.assertTrue(report.payload["agentPipeline"]["reflectionEnabled"])
+        self.assertEqual(report.payload["agentPipeline"]["reflectionPolicy"], "winner_mismatch_only")
+        self.assertEqual(report.payload["agentPipeline"]["reflectionLowMarginThreshold"], 3)
         self.assertEqual(report.payload["winnerFirst"], "draw")
         self.assertEqual(report.payload["winnerSecond"], "pro")
         self.assertEqual(len(report.payload["verdictEvidenceRefs"]), 1)

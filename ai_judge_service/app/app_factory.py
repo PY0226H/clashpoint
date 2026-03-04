@@ -26,7 +26,7 @@ from .settings import (
     build_dispatch_runtime_config,
     load_settings,
 )
-from .trace_store import TraceStore
+from .trace_store import TraceStoreProtocol, build_trace_store_from_settings
 from .wiring import build_dispatch_callbacks
 
 BuildReportByRuntimeImpl = Callable[..., Awaitable[Any]]
@@ -41,7 +41,7 @@ class AppRuntime:
     callback_report_fn: CallbackReportFn
     callback_failed_fn: CallbackFailedFn
     sleep_fn: SleepFn
-    trace_store: TraceStore
+    trace_store: TraceStoreProtocol
 
 
 def require_internal_key(settings: Settings, header_value: str | None) -> None:
@@ -54,6 +54,7 @@ def require_internal_key(settings: Settings, header_value: str | None) -> None:
 def build_report_by_runtime_adapter(
     *,
     settings: Settings,
+    trace_store: TraceStoreProtocol,
     build_report_by_runtime_fn: BuildReportByRuntimeImpl = build_report_by_runtime,
 ) -> BuildReportByRuntimeFn:
     async def _adapter(
@@ -66,6 +67,7 @@ def build_report_by_runtime_adapter(
             effective_style_mode=effective_style_mode,
             style_mode_source=style_mode_source,
             settings=settings,
+            trace_store=trace_store,
         )
 
     return _adapter
@@ -79,6 +81,7 @@ def create_runtime(
     callback_failed_impl=callback_failed,
     sleep_fn: SleepFn = asyncio.sleep,
 ) -> AppRuntime:
+    trace_store = build_trace_store_from_settings(settings=settings)
     callback_cfg = build_callback_client_config(settings)
     callback_report_fn, callback_failed_fn = build_dispatch_callbacks(
         cfg=callback_cfg,
@@ -90,13 +93,30 @@ def create_runtime(
         dispatch_runtime_cfg=build_dispatch_runtime_config(settings),
         build_report_by_runtime_adapter=build_report_by_runtime_adapter(
             settings=settings,
+            trace_store=trace_store,
             build_report_by_runtime_fn=build_report_by_runtime_fn,
         ),
         callback_report_fn=callback_report_fn,
         callback_failed_fn=callback_failed_fn,
         sleep_fn=sleep_fn,
-        trace_store=TraceStore(ttl_secs=settings.trace_ttl_secs),
+        trace_store=trace_store,
     )
+
+
+def _extract_report_evidence_refs(report_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(report_payload, dict):
+        return []
+
+    payload = report_payload.get("payload")
+    if isinstance(payload, dict):
+        evidence = payload.get("evidenceRefs") or payload.get("verdictEvidenceRefs")
+        if isinstance(evidence, list):
+            return [row for row in evidence if isinstance(row, dict)]
+
+    evidence = report_payload.get("evidenceRefs")
+    if isinstance(evidence, list):
+        return [row for row in evidence if isinstance(row, dict)]
+    return []
 
 
 def create_app(runtime: AppRuntime) -> FastAPI:
@@ -206,6 +226,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_status=callback_status,
                 report_summary=report_payload or {},
             )
+            if runtime.settings.topic_memory_enabled:
+                runtime.trace_store.save_topic_memory(
+                    job_id=request.job.job_id,
+                    trace_id=request.trace_id or "",
+                    topic_domain=getattr(request, "topic_domain", "default"),
+                    rubric_version=request.rubric_version,
+                    winner=response.get("winner"),
+                    rationale=str((report_payload or {}).get("rationale") or ""),
+                    evidence_refs=_extract_report_evidence_refs(report_payload),
+                    provider=response.get("provider"),
+                )
         return response
 
     @app.get("/internal/judge/jobs/{job_id}/trace")

@@ -60,9 +60,18 @@ def _build_settings(**overrides: object) -> Settings:
         "topic_memory_enabled": True,
         "rag_hybrid_enabled": True,
         "rag_rerank_enabled": True,
+        "reflection_policy": "winner_mismatch_only",
+        "reflection_low_margin_threshold": 3,
+        "fault_injection_nodes": (),
         "degrade_max_level": 3,
         "trace_ttl_secs": 86400,
         "idempotency_ttl_secs": 86400,
+        "redis_enabled": False,
+        "redis_required": False,
+        "redis_url": "redis://127.0.0.1:6379/0",
+        "redis_pool_size": 20,
+        "redis_key_prefix": "ai_judge:v2",
+        "topic_memory_limit": 5,
     }
     base.update(overrides)
     return Settings(**base)

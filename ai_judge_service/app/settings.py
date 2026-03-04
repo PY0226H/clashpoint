@@ -16,6 +16,33 @@ from .runtime_policy import (
 )
 
 DEFAULT_RAG_SOURCE_WHITELIST = "https://teamfighttactics.leagueoflegends.com/en-us/news/"
+DEFAULT_REFLECTION_POLICY = "winner_mismatch_only"
+VALID_REFLECTION_POLICIES = {
+    "winner_mismatch_only",
+    "winner_mismatch_or_low_margin",
+}
+VALID_FAULT_INJECTION_NODES = {
+    "stage_judge",
+    "aggregate",
+    "final_pass_1",
+    "final_pass_2",
+    "display",
+}
+
+
+def parse_csv_items(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    items: list[str] = []
+    seen: set[str] = set()
+    normalized = value.replace(";", ",").replace("\n", ",")
+    for raw in normalized.split(","):
+        item = raw.strip().lower()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+    return tuple(items)
 
 
 @dataclass(frozen=True)
@@ -61,9 +88,18 @@ class Settings:
     topic_memory_enabled: bool
     rag_hybrid_enabled: bool
     rag_rerank_enabled: bool
+    reflection_policy: str
+    reflection_low_margin_threshold: int
+    fault_injection_nodes: tuple[str, ...]
     degrade_max_level: int
     trace_ttl_secs: int
     idempotency_ttl_secs: int
+    redis_enabled: bool
+    redis_required: bool
+    redis_url: str
+    redis_pool_size: int
+    redis_key_prefix: str
+    topic_memory_limit: int
 
 
 def load_settings() -> Settings:
@@ -130,21 +166,62 @@ def load_settings() -> Settings:
         topic_memory_enabled=parse_env_bool(os.getenv("AI_JUDGE_TOPIC_MEMORY_ENABLED"), default=True),
         rag_hybrid_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_HYBRID_ENABLED"), default=True),
         rag_rerank_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_RERANK_ENABLED"), default=True),
+        reflection_policy=os.getenv(
+            "AI_JUDGE_REFLECTION_POLICY",
+            DEFAULT_REFLECTION_POLICY,
+        ).strip().lower(),
+        reflection_low_margin_threshold=int(
+            os.getenv("AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD", "3")
+        ),
+        fault_injection_nodes=parse_csv_items(os.getenv("AI_JUDGE_FAULT_INJECTION_NODES")),
         degrade_max_level=int(os.getenv("AI_JUDGE_DEGRADE_MAX_LEVEL", "3")),
         trace_ttl_secs=int(os.getenv("AI_JUDGE_TRACE_TTL_SECS", "86400")),
         idempotency_ttl_secs=int(os.getenv("AI_JUDGE_IDEMPOTENCY_TTL_SECS", "86400")),
+        redis_enabled=parse_env_bool(os.getenv("AI_JUDGE_REDIS_ENABLED"), default=False),
+        redis_required=parse_env_bool(os.getenv("AI_JUDGE_REDIS_REQUIRED"), default=False),
+        redis_url=os.getenv("AI_JUDGE_REDIS_URL", "redis://127.0.0.1:6379/0").strip(),
+        redis_pool_size=int(os.getenv("AI_JUDGE_REDIS_POOL_SIZE", "20")),
+        redis_key_prefix=os.getenv("AI_JUDGE_REDIS_KEY_PREFIX", "ai_judge:v2").strip(),
+        topic_memory_limit=int(os.getenv("AI_JUDGE_TOPIC_MEMORY_LIMIT", "5")),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings
 
 
 def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> None:
+    if settings.reflection_policy not in VALID_REFLECTION_POLICIES:
+        raise ValueError(
+            "AI_JUDGE_REFLECTION_POLICY must be one of "
+            f"{','.join(sorted(VALID_REFLECTION_POLICIES))}"
+        )
+    if settings.reflection_low_margin_threshold < 0 or settings.reflection_low_margin_threshold > 50:
+        raise ValueError("AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD must be between 0 and 50")
+    invalid_fault_nodes = [
+        node for node in settings.fault_injection_nodes if node not in VALID_FAULT_INJECTION_NODES
+    ]
+    if invalid_fault_nodes:
+        raise ValueError(
+            "AI_JUDGE_FAULT_INJECTION_NODES contains invalid node(s): "
+            + ",".join(invalid_fault_nodes)
+        )
+
     if settings.degrade_max_level < 0 or settings.degrade_max_level > 3:
         raise ValueError("AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3")
     if settings.trace_ttl_secs < 60:
         raise ValueError("AI_JUDGE_TRACE_TTL_SECS must be >= 60")
     if settings.idempotency_ttl_secs < 60:
         raise ValueError("AI_JUDGE_IDEMPOTENCY_TTL_SECS must be >= 60")
+    if settings.redis_pool_size < 1:
+        raise ValueError("AI_JUDGE_REDIS_POOL_SIZE must be >= 1")
+    if settings.topic_memory_limit < 1 or settings.topic_memory_limit > 20:
+        raise ValueError("AI_JUDGE_TOPIC_MEMORY_LIMIT must be between 1 and 20")
+    if settings.redis_enabled:
+        if not settings.redis_url:
+            raise ValueError("AI_JUDGE_REDIS_URL cannot be empty when AI_JUDGE_REDIS_ENABLED=true")
+        if not settings.redis_key_prefix:
+            raise ValueError(
+                "AI_JUDGE_REDIS_KEY_PREFIX cannot be empty when AI_JUDGE_REDIS_ENABLED=true"
+            )
 
     if is_production_env(runtime_env):
         if settings.provider == PROVIDER_MOCK:
@@ -155,6 +232,8 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
             )
         if settings.provider == PROVIDER_OPENAI and not settings.openai_api_key.strip():
             raise ValueError("OPENAI_API_KEY cannot be empty when runtime env is production")
+        if settings.fault_injection_nodes:
+            raise ValueError("AI_JUDGE_FAULT_INJECTION_NODES is forbidden when runtime env is production")
 
 
 def build_callback_client_config(settings: Settings) -> CallbackClientConfig:

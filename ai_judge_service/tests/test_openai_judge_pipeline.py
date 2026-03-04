@@ -356,6 +356,135 @@ class OpenAiJudgePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.reflection.enabled)
         self.assertEqual(result.reflection.action, "merge_only")
 
+    async def test_run_pipeline_should_trigger_low_margin_protection(self) -> None:
+        cfg = _build_config()
+        request = _build_request()
+
+        responses = iter(
+            [
+                {
+                    "pro_score": 81,
+                    "con_score": 79,
+                    "winner_hint": "pro",
+                    "pro_summary": "stage pro",
+                    "con_summary": "stage con",
+                    "rationale": "stage rationale",
+                },
+                {
+                    "pro_summary": "agg pro",
+                    "con_summary": "agg con",
+                    "rationale": "agg rationale",
+                    "winner_hint": "pro",
+                },
+                {
+                    "winner": "pro",
+                    "logic_pro": 80,
+                    "logic_con": 79,
+                    "evidence_pro": 80,
+                    "evidence_con": 79,
+                    "rebuttal_pro": 80,
+                    "rebuttal_con": 79,
+                    "clarity_pro": 80,
+                    "clarity_con": 79,
+                    "pro_summary": "first pro",
+                    "con_summary": "first con",
+                    "rationale": "first rationale",
+                },
+                {
+                    "winner": "pro",
+                    "logic_pro": 81,
+                    "logic_con": 80,
+                    "evidence_pro": 81,
+                    "evidence_con": 80,
+                    "rebuttal_pro": 81,
+                    "rebuttal_con": 80,
+                    "clarity_pro": 81,
+                    "clarity_con": 80,
+                    "pro_summary": "second pro",
+                    "con_summary": "second con",
+                    "rationale": "second rationale",
+                },
+                {
+                    "pro_summary_display": "display pro",
+                    "con_summary_display": "display con",
+                    "rationale_display": "display rationale",
+                },
+            ]
+        )
+
+        async def fake_call_openai_json(**_: object) -> dict[str, object]:
+            return next(responses)
+
+        original = openai_judge_pipeline.call_openai_json
+        openai_judge_pipeline.call_openai_json = fake_call_openai_json
+        try:
+            result = await openai_judge_pipeline.run_openai_judge_pipeline(
+                cfg=cfg,
+                request=request,
+                style_mode="rational",
+                retrieved_contexts=[],
+                max_stage_agent_chunks=cfg.max_stage_agent_chunks,
+                reflection_enabled=True,
+                reflection_policy="winner_mismatch_or_low_margin",
+                reflection_low_margin_threshold=3,
+            )
+        finally:
+            openai_judge_pipeline.call_openai_json = original
+
+        self.assertEqual(result.reflection.action, "low_margin_protection")
+        self.assertEqual(result.merged["winner"], "draw")
+        self.assertTrue(result.merged["needs_draw_vote"])
+
+    async def test_run_pipeline_should_support_fault_injection(self) -> None:
+        cfg = _build_config()
+        request = _build_request()
+
+        responses = iter(
+            [
+                {
+                    "winner": "pro",
+                    "logic_pro": 90,
+                    "logic_con": 70,
+                    "evidence_pro": 88,
+                    "evidence_con": 68,
+                    "rebuttal_pro": 86,
+                    "rebuttal_con": 66,
+                    "clarity_pro": 84,
+                    "clarity_con": 64,
+                    "pro_summary": "second pro",
+                    "con_summary": "second con",
+                    "rationale": "second rationale",
+                },
+            ]
+        )
+
+        async def fake_call_openai_json(**_: object) -> dict[str, object]:
+            return next(responses)
+
+        original = openai_judge_pipeline.call_openai_json
+        openai_judge_pipeline.call_openai_json = fake_call_openai_json
+        try:
+            result = await openai_judge_pipeline.run_openai_judge_pipeline(
+                cfg=cfg,
+                request=request,
+                style_mode="rational",
+                retrieved_contexts=[],
+                max_stage_agent_chunks=cfg.max_stage_agent_chunks,
+                fault_injection_nodes=("stage_judge", "aggregate", "final_pass_1", "display"),
+            )
+        finally:
+            openai_judge_pipeline.call_openai_json = original
+
+        self.assertEqual(result.stage_fallback_count, 1)
+        self.assertTrue(result.aggregate_fallback)
+        self.assertEqual(result.final_fallback_count, 1)
+        self.assertTrue(result.display_fallback)
+        node_map = {node.node: node for node in result.graph_nodes}
+        self.assertTrue(node_map["stage_judge"].meta["injected"])
+        self.assertTrue(node_map["aggregate"].meta["injected"])
+        self.assertTrue(node_map["final_pass_1"].meta["injected"])
+        self.assertTrue(node_map["display"].meta["injected"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from .models import JudgeDispatchRequest, SubmitJudgeReportInput
 from .openai_judge import build_report_with_openai
@@ -13,6 +13,9 @@ from .runtime_rag import (
 )
 from .scoring import build_report
 from .settings import Settings
+
+if TYPE_CHECKING:
+    from .trace_store import TopicMemoryRecord, TraceStoreProtocol
 
 RetrieveContextsFn = Callable[..., list[RetrievedContext]]
 BuildOpenAiReportFn = Callable[..., Awaitable[SubmitJudgeReportInput]]
@@ -39,6 +42,42 @@ def _normalize_evidence_refs(report: SubmitJudgeReportInput) -> list[dict]:
     return normalized
 
 
+def _build_topic_memory_contexts(
+    records: list["TopicMemoryRecord"],
+    *,
+    max_chars_per_snippet: int,
+) -> list[RetrievedContext]:
+    contexts: list[RetrievedContext] = []
+    max_chars = max(160, max_chars_per_snippet)
+    for index, record in enumerate(records):
+        evidence_rows: list[str] = []
+        for evidence in record.evidence_refs[:4]:
+            message_id = evidence.get("messageId") or evidence.get("message_id")
+            reason = str(evidence.get("reason") or "").strip()
+            if not message_id and not reason:
+                continue
+            evidence_rows.append(f"- message={message_id} reason={reason}")
+
+        body_parts = [
+            f"winner={record.winner or 'unknown'}",
+            f"rubric={record.rubric_version}",
+            f"rationale={record.rationale.strip()}",
+        ]
+        if evidence_rows:
+            body_parts.append("evidence:\n" + "\n".join(evidence_rows))
+
+        contexts.append(
+            RetrievedContext(
+                chunk_id=f"topic-memory-{record.job_id}-{index + 1}",
+                title=f"TopicMemory #{index + 1}",
+                source_url=f"memory://topic/{record.topic_domain}",
+                content="\n".join(body_parts)[:max_chars],
+                score=max(0.2, 0.95 - index * 0.05),
+            )
+        )
+    return contexts
+
+
 def _resolve_degradation_level(
     *,
     settings: Settings,
@@ -61,6 +100,7 @@ async def build_report_by_runtime(
     effective_style_mode: str,
     style_mode_source: str,
     settings: Settings,
+    trace_store: "TraceStoreProtocol | None" = None,
     retrieve_contexts_fn: RetrieveContextsFn = retrieve_contexts,
     build_report_with_openai_fn: BuildOpenAiReportFn = build_report_with_openai,
     build_mock_report_fn: BuildMockReportFn = build_report,
@@ -75,7 +115,18 @@ async def build_report_by_runtime(
         retrieve_contexts_fn=retrieve_contexts_fn,
     )
     rag_elapsed_ms = (perf_counter() - rag_start) * 1000.0
-    retrieved_contexts = rag_result.retrieved_contexts
+    retrieved_contexts = list(rag_result.retrieved_contexts)
+    topic_memories: list["TopicMemoryRecord"] = []
+    if settings.topic_memory_enabled and trace_store is not None:
+        topic_memories = trace_store.list_topic_memory(
+            topic_domain=getattr(request, "topic_domain", "default"),
+            rubric_version=request.rubric_version,
+            limit=settings.topic_memory_limit,
+        )
+        retrieved_contexts = _build_topic_memory_contexts(
+            topic_memories,
+            max_chars_per_snippet=settings.rag_max_chars_per_snippet,
+        ) + retrieved_contexts
     provider_start = perf_counter()
     report, used_by_model = await build_report_with_provider(
         request=request,
@@ -124,10 +175,19 @@ async def build_report_by_runtime(
         "profile": retrieval_profile,
         "hybridEnabled": settings.rag_hybrid_enabled,
         "rerankEnabled": settings.rag_rerank_enabled,
+        "topicMemoryEnabled": settings.topic_memory_enabled,
+        "topicMemoryReuseCount": len(topic_memories),
         "requestedBackend": rag_result.requested_backend,
         "effectiveBackend": rag_result.effective_backend,
         "snippetCount": len(retrieved_contexts),
         "sourceCount": len(report.payload.get("ragSources", [])),
+    }
+    report.payload["topicMemory"] = {
+        "enabled": settings.topic_memory_enabled,
+        "topicDomain": getattr(request, "topic_domain", "default"),
+        "rubricVersion": request.rubric_version,
+        "reuseCount": len(topic_memories),
+        "jobIds": [row.job_id for row in topic_memories],
     }
     report.payload["evidenceRefs"] = _normalize_evidence_refs(report)
     report.payload["consistency"] = {

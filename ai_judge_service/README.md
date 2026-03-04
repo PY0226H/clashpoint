@@ -89,18 +89,28 @@ cd ai_judge_service
 - `AI_JUDGE_STAGE_AGENT_MAX_CHUNKS`: 阶段 Agent 最大处理窗口数（超出取最近窗口），默认 `12`
 - `AI_JUDGE_GRAPH_V2_ENABLED`: DAG+Reflection v2 开关，默认 `true`
 - `AI_JUDGE_REFLECTION_ENABLED`: 终局反思回路开关，默认 `true`
+- `AI_JUDGE_REFLECTION_POLICY`: 反思策略，`winner_mismatch_only|winner_mismatch_or_low_margin`，默认 `winner_mismatch_only`
+- `AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD`: 低分差保护阈值（平均分差），默认 `3`
+- `AI_JUDGE_FAULT_INJECTION_NODES`: 故障注入节点（逗号分隔），可选 `stage_judge,aggregate,final_pass_1,final_pass_2,display`；生产环境禁止
 - `AI_JUDGE_TOPIC_MEMORY_ENABLED`: 辩题级长期记忆开关，默认 `true`
 - `AI_JUDGE_RAG_HYBRID_ENABLED`: 混合检索策略开关，默认 `true`
 - `AI_JUDGE_RAG_RERANK_ENABLED`: 检索重排开关，默认 `true`
 - `AI_JUDGE_DEGRADE_MAX_LEVEL`: 最大降级等级 `0..3`，默认 `3`
 - `AI_JUDGE_TRACE_TTL_SECS`: trace 与回放记录 TTL，默认 `86400`
 - `AI_JUDGE_IDEMPOTENCY_TTL_SECS`: 幂等键 TTL，默认 `86400`
+- `AI_JUDGE_REDIS_ENABLED`: 启用 Redis 短期记忆（trace/idempotency/stage runtime），默认 `false`
+- `AI_JUDGE_REDIS_REQUIRED`: Redis 不可用时是否启动失败（`true`=fail-closed，`false`=fail-open 回退内存），默认 `false`
+- `AI_JUDGE_REDIS_URL`: Redis 连接串，默认 `redis://127.0.0.1:6379/0`
+- `AI_JUDGE_REDIS_POOL_SIZE`: Redis 连接池大小，默认 `20`
+- `AI_JUDGE_REDIS_KEY_PREFIX`: Redis 键前缀，默认 `ai_judge:v2`
+- `AI_JUDGE_TOPIC_MEMORY_LIMIT`: 辩题级长期记忆复用条数上限，默认 `5`
 
 生产环境识别规则：按 `AICOMM_ENV -> APP_ENV -> PYTHON_ENV -> RUST_ENV -> ENV` 顺序读取，值为 `prod|production` 时视为生产。
 生产环境门禁：
 - 禁止 `AI_JUDGE_PROVIDER=mock`
 - 禁止 `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=true`
 - `AI_JUDGE_PROVIDER=openai` 时，`OPENAI_API_KEY` 不能为空
+- 禁止配置 `AI_JUDGE_FAULT_INJECTION_NODES`
 
 ## 内部运维接口（v2）
 

@@ -34,6 +34,9 @@ class OpenAiJudgeConfig:
     max_stage_agent_chunks: int = 12
     reflection_enabled: bool = True
     graph_v2_enabled: bool = True
+    reflection_policy: str = "winner_mismatch_only"
+    reflection_low_margin_threshold: int = 3
+    fault_injection_nodes: tuple[str, ...] = ()
 
 
 async def build_report_with_openai(
@@ -54,6 +57,9 @@ async def build_report_with_openai(
         retrieved_contexts=retrieved_contexts,
         max_stage_agent_chunks=cfg.max_stage_agent_chunks,
         reflection_enabled=cfg.reflection_enabled,
+        reflection_policy=cfg.reflection_policy,
+        reflection_low_margin_threshold=cfg.reflection_low_margin_threshold,
+        fault_injection_nodes=cfg.fault_injection_nodes,
     )
     reflection = getattr(pipeline, "reflection", None)
     graph_nodes = getattr(pipeline, "graph_nodes", [])
@@ -97,10 +103,16 @@ async def build_report_with_openai(
             "maxStageAgentChunks": cfg.max_stage_agent_chunks,
             "executionMode": "dag",
             "reflectionEnabled": reflection.enabled if reflection is not None else cfg.reflection_enabled,
+            "reflectionPolicy": cfg.reflection_policy,
+            "reflectionLowMarginThreshold": cfg.reflection_low_margin_threshold,
             "reflectionAction": reflection.action if reflection is not None else "unknown",
             "reflectionWinnerMismatch": (
                 reflection.winner_mismatch if reflection is not None else False
             ),
+            "reflectionAvgScoreMargin": (
+                getattr(reflection, "avg_score_margin", None) if reflection is not None else None
+            ),
+            "faultInjectionNodes": list(cfg.fault_injection_nodes),
             "graphNodes": [
                 {
                     "node": node.node,

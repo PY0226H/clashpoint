@@ -28,6 +28,14 @@ from .scoring_core import DebateMessage
 if TYPE_CHECKING:
     from .models import JudgeDispatchRequest
 
+VALID_FAULT_INJECTION_NODES = {
+    "stage_judge",
+    "aggregate",
+    "final_pass_1",
+    "final_pass_2",
+    "display",
+}
+
 
 @dataclass(frozen=True)
 class GraphNodeTrace:
@@ -47,6 +55,7 @@ class ReflectionResult:
     winner_mismatch: bool
     action: str
     reason: str | None = None
+    avg_score_margin: int | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,21 @@ def _build_node_trace(
     )
 
 
+def _normalize_fault_injection_nodes(
+    fault_injection_nodes: tuple[str, ...] | set[str] | None,
+) -> set[str]:
+    if not fault_injection_nodes:
+        return set()
+    normalized = {str(node).strip().lower() for node in fault_injection_nodes if str(node).strip()}
+    return {node for node in normalized if node in VALID_FAULT_INJECTION_NODES}
+
+
+def _calc_avg_score_margin(first: dict[str, Any], second: dict[str, Any]) -> int:
+    margin_first = abs(int(first.get("pro_score", 0)) - int(first.get("con_score", 0)))
+    margin_second = abs(int(second.get("pro_score", 0)) - int(second.get("con_score", 0)))
+    return int(round((margin_first + margin_second) / 2.0))
+
+
 async def _build_stage_summaries_with_openai(
     *,
     cfg: OpenAiConfigProtocol,
@@ -89,6 +113,7 @@ async def _build_stage_summaries_with_openai(
     retrieved_contexts: list[RetrievedContext],
     style_mode: str,
     max_stage_agent_chunks: int,
+    force_fail: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     chunks = _split_message_chunks(
         messages,
@@ -102,6 +127,10 @@ async def _build_stage_summaries_with_openai(
     fallback_count = 0
     stage_count = len(chunks)
     for stage_no, chunk in chunks:
+        if force_fail:
+            fallback_count += 1
+            stage_summaries.append(_build_stage_summary_fallback(chunk, stage_no))
+            continue
         try:
             raw = await call_openai_json(
                 cfg=cfg,
@@ -129,7 +158,11 @@ async def _build_aggregate_summary_with_openai(
     stage_summaries: list[dict[str, Any]],
     retrieved_contexts: list[RetrievedContext],
     style_mode: str,
+    force_fail: bool = False,
 ) -> tuple[dict[str, Any], bool]:
+    if force_fail:
+        return _normalize_aggregate_eval({}, stage_summaries), True
+
     fallback = False
     try:
         raw = await call_openai_json(
@@ -174,7 +207,11 @@ async def _build_final_eval_with_openai(
     retrieved_contexts: list[RetrievedContext],
     style_mode: str,
     pass_no: int,
+    force_fail: bool = False,
 ) -> tuple[dict[str, Any], bool]:
+    if force_fail:
+        return _normalize_eval({}), True
+
     try:
         raw = await _call_openai_final_pass(
             cfg=cfg,
@@ -196,9 +233,11 @@ def _run_reflection_controller(
     second: dict[str, Any],
     enabled: bool,
     policy: str,
+    low_margin_threshold: int = 3,
 ) -> tuple[dict[str, Any], ReflectionResult]:
     merged = _merge_two_pass(first, second)
     winner_mismatch = first["winner"] != second["winner"]
+    avg_score_margin = _calc_avg_score_margin(first, second)
 
     if not enabled:
         return (
@@ -211,6 +250,7 @@ def _run_reflection_controller(
                 winner_mismatch=winner_mismatch,
                 action="merge_only",
                 reason="reflection_disabled",
+                avg_score_margin=avg_score_margin,
             ),
         )
 
@@ -225,6 +265,32 @@ def _run_reflection_controller(
                 winner_mismatch=True,
                 action="draw_protection",
                 reason="winner_mismatch",
+                avg_score_margin=avg_score_margin,
+            ),
+        )
+
+    normalized_policy = str(policy or "winner_mismatch_only").strip().lower()
+    if normalized_policy == "winner_mismatch_or_low_margin" and avg_score_margin <= max(
+        0, int(low_margin_threshold)
+    ):
+        merged["winner"] = "draw"
+        merged["needs_draw_vote"] = True
+        merged["rejudge_triggered"] = True
+        merged["rationale"] = (
+            f"双次评估平均分差 {avg_score_margin} 低于阈值 {max(0, int(low_margin_threshold))}，"
+            "触发低分差保护并输出平局建议。"
+        )
+        return (
+            merged,
+            ReflectionResult(
+                enabled=True,
+                policy=normalized_policy,
+                winner_first=first["winner"],
+                winner_second=second["winner"],
+                winner_mismatch=False,
+                action="low_margin_protection",
+                reason="avg_score_margin_below_threshold",
+                avg_score_margin=avg_score_margin,
             ),
         )
 
@@ -232,12 +298,13 @@ def _run_reflection_controller(
         merged,
         ReflectionResult(
             enabled=True,
-            policy=policy,
+            policy=normalized_policy,
             winner_first=first["winner"],
             winner_second=second["winner"],
             winner_mismatch=False,
             action="consistency_confirmed",
             reason=None,
+            avg_score_margin=avg_score_margin,
         ),
     )
 
@@ -274,6 +341,9 @@ async def run_openai_judge_pipeline(
     retrieved_contexts: list[RetrievedContext],
     max_stage_agent_chunks: int,
     reflection_enabled: bool = True,
+    reflection_policy: str = "winner_mismatch_only",
+    reflection_low_margin_threshold: int = 3,
+    fault_injection_nodes: tuple[str, ...] | set[str] | None = None,
 ) -> OpenAiJudgePipelineResult:
     messages = [
         DebateMessage(
@@ -286,6 +356,7 @@ async def run_openai_judge_pipeline(
     ]
 
     graph_nodes: list[GraphNodeTrace] = []
+    injected_nodes = _normalize_fault_injection_nodes(fault_injection_nodes)
 
     stage_start = perf_counter()
     stage_summaries, stage_fallback_count = await _build_stage_summaries_with_openai(
@@ -295,16 +366,18 @@ async def run_openai_judge_pipeline(
         retrieved_contexts=retrieved_contexts,
         style_mode=style_mode,
         max_stage_agent_chunks=max_stage_agent_chunks,
+        force_fail="stage_judge" in injected_nodes,
     )
     graph_nodes.append(
         _build_node_trace(
             node="stage_judge",
             start_at=stage_start,
-            status="ok",
+            status="degraded" if stage_fallback_count > 0 else "ok",
             fallback=stage_fallback_count > 0,
             meta={
                 "stageCount": len(stage_summaries),
                 "fallbackCount": stage_fallback_count,
+                "injected": "stage_judge" in injected_nodes,
             },
         )
     )
@@ -316,13 +389,15 @@ async def run_openai_judge_pipeline(
         stage_summaries=stage_summaries,
         retrieved_contexts=retrieved_contexts,
         style_mode=style_mode,
+        force_fail="aggregate" in injected_nodes,
     )
     graph_nodes.append(
         _build_node_trace(
             node="aggregate",
             start_at=aggregate_start,
-            status="ok",
+            status="degraded" if aggregate_fallback else "ok",
             fallback=aggregate_fallback,
+            meta={"injected": "aggregate" in injected_nodes},
         )
     )
 
@@ -335,14 +410,18 @@ async def run_openai_judge_pipeline(
         retrieved_contexts=retrieved_contexts,
         style_mode=style_mode,
         pass_no=1,
+        force_fail="final_pass_1" in injected_nodes,
     )
     graph_nodes.append(
         _build_node_trace(
             node="final_pass_1",
             start_at=first_start,
-            status="ok",
+            status="degraded" if first_fallback else "ok",
             fallback=first_fallback,
-            meta={"winner": first.get("winner")},
+            meta={
+                "winner": first.get("winner"),
+                "injected": "final_pass_1" in injected_nodes,
+            },
         )
     )
 
@@ -355,14 +434,18 @@ async def run_openai_judge_pipeline(
         retrieved_contexts=retrieved_contexts,
         style_mode=style_mode,
         pass_no=2,
+        force_fail="final_pass_2" in injected_nodes,
     )
     graph_nodes.append(
         _build_node_trace(
             node="final_pass_2",
             start_at=second_start,
-            status="ok",
+            status="degraded" if second_fallback else "ok",
             fallback=second_fallback,
-            meta={"winner": second.get("winner")},
+            meta={
+                "winner": second.get("winner"),
+                "injected": "final_pass_2" in injected_nodes,
+            },
         )
     )
 
@@ -371,7 +454,8 @@ async def run_openai_judge_pipeline(
         first=first,
         second=second,
         enabled=reflection_enabled,
-        policy=str(getattr(request, "judge_policy_version", "v2-default")),
+        policy=reflection_policy,
+        low_margin_threshold=reflection_low_margin_threshold,
     )
     graph_nodes.append(
         _build_node_trace(
@@ -383,28 +467,36 @@ async def run_openai_judge_pipeline(
                 "enabled": reflection.enabled,
                 "action": reflection.action,
                 "winnerMismatch": reflection.winner_mismatch,
+                "avgScoreMargin": reflection.avg_score_margin,
+                "lowMarginThreshold": max(0, int(reflection_low_margin_threshold)),
+                "policy": reflection.policy,
             },
         )
     )
 
     display_fallback = False
     display_start = perf_counter()
-    try:
-        display_raw = await call_openai_json(
-            cfg=cfg,
-            system_prompt=_build_display_system_prompt(style_mode),
-            user_prompt=_build_display_user_prompt(merged, aggregate_summary),
-        )
-    except Exception:
+    if "display" in injected_nodes:
         display_raw = {}
         display_fallback = True
+    else:
+        try:
+            display_raw = await call_openai_json(
+                cfg=cfg,
+                system_prompt=_build_display_system_prompt(style_mode),
+                user_prompt=_build_display_user_prompt(merged, aggregate_summary),
+            )
+        except Exception:
+            display_raw = {}
+            display_fallback = True
     display = _normalize_display_eval(display_raw, merged)
     graph_nodes.append(
         _build_node_trace(
             node="display",
             start_at=display_start,
-            status="ok",
+            status="degraded" if display_fallback else "ok",
             fallback=display_fallback,
+            meta={"injected": "display" in injected_nodes},
         )
     )
 

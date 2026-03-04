@@ -6,6 +6,7 @@ from app.rag_retriever import RAG_BACKEND_MILVUS, RetrievedContext
 from app.runtime_orchestrator import build_report_by_runtime
 from app.runtime_policy import PROVIDER_MOCK, PROVIDER_OPENAI
 from app.settings import Settings
+from app.trace_store import TopicMemoryRecord
 
 
 class _FakeReport:
@@ -59,9 +60,18 @@ def _build_settings(**overrides: object) -> Settings:
         "topic_memory_enabled": True,
         "rag_hybrid_enabled": True,
         "rag_rerank_enabled": True,
+        "reflection_policy": "winner_mismatch_only",
+        "reflection_low_margin_threshold": 3,
+        "fault_injection_nodes": (),
         "degrade_max_level": 3,
         "trace_ttl_secs": 86400,
         "idempotency_ttl_secs": 86400,
+        "redis_enabled": False,
+        "redis_required": False,
+        "redis_url": "redis://127.0.0.1:6379/0",
+        "redis_pool_size": 20,
+        "redis_key_prefix": "ai_judge:v2",
+        "topic_memory_limit": 5,
     }
     base.update(overrides)
     return Settings(**base)
@@ -152,6 +162,67 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("consistency", report.payload)
         self.assertIn("cost", report.payload)
         self.assertIsNone(captured["retrieve_kwargs"]["milvus_config"])
+        self.assertEqual(report.payload["topicMemory"]["reuseCount"], 0)
+
+    async def test_build_report_by_runtime_should_reuse_topic_memory_as_context(self) -> None:
+        settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test")
+        request = _build_request()
+        request.topic_domain = "finance"
+        request.rubric_version = "v1"
+        rag_contexts = [
+            RetrievedContext(
+                chunk_id="rag-1",
+                title="kb",
+                source_url="https://example.com/kb",
+                content="rag content",
+                score=0.7,
+            )
+        ]
+
+        class _FakeTraceStore:
+            def list_topic_memory(self, *, topic_domain: str, rubric_version: str, limit: int = 3):
+                self.args = (topic_domain, rubric_version, limit)
+                return [
+                    TopicMemoryRecord(
+                        created_at=datetime.now(timezone.utc),
+                        job_id=99,
+                        trace_id="trace-99",
+                        topic_domain="finance",
+                        rubric_version="v1",
+                        winner="pro",
+                        rationale="历史高质量判决",
+                        evidence_refs=[{"messageId": 12, "reason": "证据完整"}],
+                        provider="openai",
+                    )
+                ]
+
+        trace_store = _FakeTraceStore()
+        captured: dict[str, object] = {}
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            return rag_contexts
+
+        async def fake_build_openai(**kwargs: object) -> _FakeReport:
+            captured["openai_kwargs"] = kwargs
+            return _FakeReport(payload={"provider": "openai"})
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            trace_store=trace_store,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=lambda *_args, **_kwargs: _FakeReport(payload={"provider": "mock"}),
+        )
+
+        openai_contexts = captured["openai_kwargs"]["retrieved_contexts"]
+        self.assertEqual(len(openai_contexts), 2)
+        self.assertEqual(openai_contexts[0].source_url, "memory://topic/finance")
+        self.assertEqual(openai_contexts[1].chunk_id, "rag-1")
+        self.assertEqual(report.payload["topicMemory"]["reuseCount"], 1)
+        self.assertEqual(report.payload["retrievalDiagnostics"]["topicMemoryReuseCount"], 1)
 
     async def test_build_report_by_runtime_should_fallback_when_openai_failed_and_enabled(self) -> None:
         settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test", openai_fallback_to_mock=True)

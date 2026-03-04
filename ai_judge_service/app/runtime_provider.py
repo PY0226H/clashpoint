@@ -46,6 +46,9 @@ async def build_report_with_provider(
             max_stage_agent_chunks=settings.stage_agent_max_chunks,
             reflection_enabled=settings.reflection_enabled,
             graph_v2_enabled=settings.graph_v2_enabled,
+            reflection_policy=settings.reflection_policy,
+            reflection_low_margin_threshold=settings.reflection_low_margin_threshold,
+            fault_injection_nodes=settings.fault_injection_nodes,
         )
         try:
             report = await build_report_with_openai_fn(

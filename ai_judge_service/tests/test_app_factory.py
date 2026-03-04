@@ -23,12 +23,17 @@ class _FakeReport:
     def __init__(self) -> None:
         self.winner = "pro"
         self.needs_draw_vote = False
-        self.payload = {"provider": "openai"}
+        self.payload = {
+            "provider": "openai",
+            "evidenceRefs": [{"messageId": 1, "reason": "test"}],
+        }
+        self.rationale = "test rationale"
 
     def model_dump(self, *, mode: str = "python") -> dict:
         return {
             "winner": self.winner,
             "needsDrawVote": self.needs_draw_vote,
+            "rationale": self.rationale,
             "payload": self.payload,
             "mode": mode,
         }
@@ -77,9 +82,18 @@ def _build_settings(**overrides: object) -> Settings:
         "topic_memory_enabled": True,
         "rag_hybrid_enabled": True,
         "rag_rerank_enabled": True,
+        "reflection_policy": "winner_mismatch_only",
+        "reflection_low_margin_threshold": 3,
+        "fault_injection_nodes": (),
         "degrade_max_level": 3,
         "trace_ttl_secs": 86400,
         "idempotency_ttl_secs": 86400,
+        "redis_enabled": False,
+        "redis_required": False,
+        "redis_url": "redis://127.0.0.1:6379/0",
+        "redis_pool_size": 20,
+        "redis_key_prefix": "ai_judge:v2",
+        "topic_memory_limit": 5,
     }
     base.update(overrides)
     return Settings(**base)
@@ -244,6 +258,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         trace = await trace_route.endpoint(job_id=1, x_ai_internal_key="k3")
         self.assertEqual(trace["jobId"], 1)
         self.assertEqual(trace["status"], "completed")
+        topic_memory_rows = runtime.trace_store.list_topic_memory(
+            topic_domain="default",
+            rubric_version="v1",
+            limit=3,
+        )
+        self.assertEqual(len(topic_memory_rows), 1)
+        self.assertEqual(topic_memory_rows[0].job_id, 1)
 
         rag_route = next(
             route for route in app.routes if getattr(route, "path", "") == "/internal/judge/rag/diagnostics"

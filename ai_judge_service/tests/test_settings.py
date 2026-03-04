@@ -32,9 +32,18 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.topic_memory_enabled)
         self.assertTrue(settings.rag_hybrid_enabled)
         self.assertTrue(settings.rag_rerank_enabled)
+        self.assertEqual(settings.reflection_policy, "winner_mismatch_only")
+        self.assertEqual(settings.reflection_low_margin_threshold, 3)
+        self.assertEqual(settings.fault_injection_nodes, ())
         self.assertEqual(settings.degrade_max_level, 3)
         self.assertEqual(settings.trace_ttl_secs, 86400)
         self.assertEqual(settings.idempotency_ttl_secs, 86400)
+        self.assertFalse(settings.redis_enabled)
+        self.assertFalse(settings.redis_required)
+        self.assertEqual(settings.redis_url, "redis://127.0.0.1:6379/0")
+        self.assertEqual(settings.redis_pool_size, 20)
+        self.assertEqual(settings.redis_key_prefix, "ai_judge:v2")
+        self.assertEqual(settings.topic_memory_limit, 5)
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -81,9 +90,18 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_TOPIC_MEMORY_ENABLED": "false",
                 "AI_JUDGE_RAG_HYBRID_ENABLED": "false",
                 "AI_JUDGE_RAG_RERANK_ENABLED": "false",
+                "AI_JUDGE_REFLECTION_POLICY": "winner_mismatch_or_low_margin",
+                "AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD": "6",
+                "AI_JUDGE_FAULT_INJECTION_NODES": "final_pass_1, display",
                 "AI_JUDGE_DEGRADE_MAX_LEVEL": "2",
                 "AI_JUDGE_TRACE_TTL_SECS": "600",
                 "AI_JUDGE_IDEMPOTENCY_TTL_SECS": "900",
+                "AI_JUDGE_REDIS_ENABLED": "true",
+                "AI_JUDGE_REDIS_REQUIRED": "true",
+                "AI_JUDGE_REDIS_URL": "redis://redis:6379/4",
+                "AI_JUDGE_REDIS_POOL_SIZE": "32",
+                "AI_JUDGE_REDIS_KEY_PREFIX": "ai_judge:v2:test",
+                "AI_JUDGE_TOPIC_MEMORY_LIMIT": "7",
             },
             clear=True,
         ):
@@ -122,9 +140,18 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(settings.topic_memory_enabled)
         self.assertFalse(settings.rag_hybrid_enabled)
         self.assertFalse(settings.rag_rerank_enabled)
+        self.assertEqual(settings.reflection_policy, "winner_mismatch_or_low_margin")
+        self.assertEqual(settings.reflection_low_margin_threshold, 6)
+        self.assertEqual(settings.fault_injection_nodes, ("final_pass_1", "display"))
         self.assertEqual(settings.degrade_max_level, 2)
         self.assertEqual(settings.trace_ttl_secs, 600)
         self.assertEqual(settings.idempotency_ttl_secs, 900)
+        self.assertTrue(settings.redis_enabled)
+        self.assertTrue(settings.redis_required)
+        self.assertEqual(settings.redis_url, "redis://redis:6379/4")
+        self.assertEqual(settings.redis_pool_size, 32)
+        self.assertEqual(settings.redis_key_prefix, "ai_judge:v2:test")
+        self.assertEqual(settings.topic_memory_limit, 7)
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -207,6 +234,57 @@ class SettingsTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3"):
+                load_settings()
+
+    def test_load_settings_should_reject_invalid_reflection_policy(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_REFLECTION_POLICY": "invalid",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JUDGE_REFLECTION_POLICY must be one of"):
+                load_settings()
+
+    def test_load_settings_should_reject_fault_injection_nodes_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AICOMM_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_FAULT_INJECTION_NODES": "display",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_FAULT_INJECTION_NODES is forbidden",
+            ):
+                load_settings()
+
+    def test_load_settings_should_reject_empty_redis_url_when_enabled(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_REDIS_ENABLED": "true",
+                "AI_JUDGE_REDIS_URL": "",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JUDGE_REDIS_URL cannot be empty"):
+                load_settings()
+
+    def test_load_settings_should_reject_invalid_topic_memory_limit(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_TOPIC_MEMORY_LIMIT": "100",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JUDGE_TOPIC_MEMORY_LIMIT must be between 1 and 20"):
                 load_settings()
 
 
