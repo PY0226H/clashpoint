@@ -37,7 +37,9 @@ pub use kafka_dlq::{
 };
 pub use messages::{CreateMessage, ListMessages};
 pub use ops_observability::{
-    GetOpsObservabilityConfigOutput, OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds,
+    GetOpsObservabilityConfigOutput, ListOpsAlertNotificationsOutput,
+    ListOpsAlertNotificationsQuery, OpsAlertEvalReport, OpsAlertNotificationItem,
+    OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds,
     UpdateOpsObservabilityAnomalyStateInput,
 };
 pub use payment::{

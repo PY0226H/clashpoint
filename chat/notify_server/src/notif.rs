@@ -21,6 +21,7 @@ pub enum AppEvent {
     DebateMessagePinned(DebateMessagePinned),
     DebateJudgeReportReady(DebateJudgeReportReady),
     DebateDrawVoteResolved(DebateDrawVoteResolved),
+    OpsObservabilityAlert(OpsObservabilityAlert),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +92,19 @@ pub struct DebateDrawVoteResolved {
     pub required_voters: i32,
     pub decided_at: Option<DateTime<Utc>>,
     pub rematch_session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsObservabilityAlert {
+    pub ws_id: i64,
+    pub alert_key: String,
+    pub rule_type: String,
+    pub severity: String,
+    pub status: String,
+    pub title: String,
+    pub message: String,
+    pub metrics: serde_json::Value,
 }
 
 #[derive(Debug)]
@@ -186,6 +200,20 @@ struct DebateDrawVoteResolvedPayload {
     user_ids: Vec<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct OpsObservabilityAlertPayload {
+    ws_id: i64,
+    alert_key: String,
+    rule_type: String,
+    severity: String,
+    status: String,
+    title: String,
+    message: String,
+    #[serde(default)]
+    metrics: serde_json::Value,
+    user_ids: Vec<i64>,
+}
+
 pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     let mut listener = PgListener::connect(&state.config.server.db_url).await?;
     listener.listen("chat_updated").await?;
@@ -196,6 +224,7 @@ pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     listener.listen("debate_message_pinned").await?;
     listener.listen("debate_judge_report_ready").await?;
     listener.listen("debate_draw_vote_resolved").await?;
+    listener.listen("ops_observability_alert").await?;
 
     let mut stream = listener.into_stream();
 
@@ -367,6 +396,24 @@ impl Notification {
                     event: Arc::new(AppEvent::DebateDrawVoteResolved(event)),
                 })
             }
+            "ops_observability_alert" => {
+                let payload: OpsObservabilityAlertPayload = serde_json::from_str(payload)?;
+                let event = OpsObservabilityAlert {
+                    ws_id: payload.ws_id,
+                    alert_key: payload.alert_key,
+                    rule_type: payload.rule_type,
+                    severity: payload.severity,
+                    status: payload.status,
+                    title: payload.title,
+                    message: payload.message,
+                    metrics: payload.metrics,
+                };
+                let user_ids = payload.user_ids.iter().map(|v| *v as u64).collect();
+                Ok(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::OpsObservabilityAlert(event)),
+                })
+            }
             _ => Err(anyhow::anyhow!("Invalid notification type")),
         }
     }
@@ -385,6 +432,7 @@ impl AppEvent {
             AppEvent::DebateMessagePinned(_) => "DebateMessagePinned",
             AppEvent::DebateJudgeReportReady(_) => "DebateJudgeReportReady",
             AppEvent::DebateDrawVoteResolved(_) => "DebateDrawVoteResolved",
+            AppEvent::OpsObservabilityAlert(_) => "OpsObservabilityAlert",
         }
     }
 
@@ -636,6 +684,32 @@ mod tests {
                 assert_eq!(v.decision_source, "vote_timeout");
             }
             _ => panic!("expected DebateDrawVoteResolved event"),
+        }
+    }
+
+    #[test]
+    fn notification_load_should_parse_ops_observability_alert() {
+        let payload = r#"{
+            "ws_id": 1,
+            "alert_key": "high_retry",
+            "rule_type": "high_retry",
+            "severity": "warning",
+            "status": "raised",
+            "title": "判决分发重试偏高",
+            "message": "avg attempts too high",
+            "metrics": {"avgDispatchAttempts": 2.2},
+            "user_ids": [1, 2, 3]
+        }"#;
+        let notif = Notification::load("ops_observability_alert", payload).unwrap();
+        assert_eq!(notif.user_ids, HashSet::from([1_u64, 2_u64, 3_u64]));
+        match notif.event.as_ref() {
+            AppEvent::OpsObservabilityAlert(v) => {
+                assert_eq!(v.ws_id, 1);
+                assert_eq!(v.alert_key, "high_retry");
+                assert_eq!(v.status, "raised");
+                assert_eq!(v.metrics["avgDispatchAttempts"], 2.2);
+            }
+            _ => panic!("expected OpsObservabilityAlert event"),
         }
     }
 }

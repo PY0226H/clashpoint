@@ -5,10 +5,11 @@ use crate::{
     },
     AppError, AppState, CreateDebateMessageInput, GetJudgeReportQuery, JoinDebateSessionInput,
     ListDebateMessages, ListDebatePinnedMessages, ListDebateSessions, ListDebateTopics,
-    ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery, OpsCreateDebateSessionInput,
-    OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsUpdateDebateSessionInput,
-    OpsUpdateDebateTopicInput, PinDebateMessageInput, RequestJudgeJobInput, SubmitDrawVoteInput,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
+    ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
+    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsObservabilityThresholds,
+    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, PinDebateMessageInput,
+    RequestJudgeJobInput, SubmitDrawVoteInput, UpdateOpsObservabilityAnomalyStateInput,
+    UpsertOpsRoleInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -257,6 +258,30 @@ pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
     let ret = state
         .upsert_ops_observability_anomaly_state(&user, input)
         .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// List ops observability alert notifications.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/observability/alerts",
+    params(
+        ListOpsAlertNotificationsQuery
+    ),
+    responses(
+        (status = 200, description = "Ops alert notifications", body = crate::ListOpsAlertNotificationsOutput),
+        (status = 409, description = "Permission conflict", body = ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn list_ops_alert_notifications_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Query(input): Query<ListOpsAlertNotificationsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.list_ops_alert_notifications(&user, input).await?;
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -879,6 +904,27 @@ mod tests {
         Ok(row.0)
     }
 
+    async fn insert_ops_alert_notification(state: &AppState, ws_id: i64, key: &str) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO ops_alert_notifications(
+                ws_id, alert_key, rule_type, severity, alert_status,
+                title, message, metrics_json, recipients_json, delivery_status, created_at, updated_at
+            )
+            VALUES (
+                $1, $2, $2, 'warning', 'raised',
+                't', 'm', '{}'::jsonb, '[1]'::jsonb, 'sent', NOW(), NOW()
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(ws_id)
+        .bind(key)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     #[tokio::test]
     async fn request_judge_job_handler_should_return_style_mode_source() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -1469,6 +1515,33 @@ mod tests {
         let discard_body = discard_resp.into_body().collect().await?.to_bytes();
         let discard_json: serde_json::Value = serde_json::from_slice(&discard_body)?;
         assert_eq!(discard_json["status"], "discarded");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_alert_notifications_handler_should_return_rows() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        insert_ops_alert_notification(&state, 1, "high_retry").await?;
+
+        let response = list_ops_alert_notifications_handler(
+            Extension(owner),
+            State(state),
+            Query(ListOpsAlertNotificationsQuery {
+                status: Some("raised".to_string()),
+                limit: Some(20),
+                offset: Some(0),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await?.to_bytes();
+        let ret: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(ret["total"], 1);
+        assert_eq!(ret["items"].as_array().map(|v| v.len()), Some(1));
+        assert_eq!(ret["items"][0]["alertKey"], "high_retry");
         Ok(())
     }
 }

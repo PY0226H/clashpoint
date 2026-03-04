@@ -118,6 +118,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             "/ops/observability/anomaly-state",
             put(upsert_ops_observability_anomaly_state_handler),
         )
+        .route(
+            "/ops/observability/alerts",
+            get(list_ops_alert_notifications_handler),
+        )
         .route("/ops/kafka/dlq", get(list_kafka_dlq_events_handler))
         .route(
             "/ops/kafka/dlq/:id/replay",
@@ -265,6 +269,7 @@ impl AppState {
         };
         spawn_debate_session_worker(state.clone());
         spawn_ai_judge_dispatch_worker(state.clone(), dispatch_trigger_rx);
+        spawn_ops_observability_alert_worker(state.clone());
         Ok(state)
     }
 
@@ -316,6 +321,7 @@ impl AppState {
 
 const DEBATE_SESSION_WORKER_INTERVAL_SECS: u64 = 2;
 const DEBATE_SESSION_WORKER_BATCH_SIZE: i64 = 200;
+const OPS_OBSERVABILITY_WORKER_INTERVAL_SECS: u64 = 30;
 
 fn spawn_debate_session_worker(state: AppState) {
     tokio::spawn(async move {
@@ -398,6 +404,26 @@ fn spawn_ai_judge_dispatch_worker(
                     }
                 }
             }
+        }
+    });
+}
+
+fn spawn_ops_observability_alert_worker(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            match state.evaluate_ops_observability_alerts_once().await {
+                Ok(report) => {
+                    debug!(
+                        workspaces_scanned = report.workspaces_scanned,
+                        alerts_raised = report.alerts_raised,
+                        alerts_cleared = report.alerts_cleared,
+                        alerts_suppressed = report.alerts_suppressed,
+                        "ops observability alert worker tick success"
+                    );
+                }
+                Err(err) => warn!("ops observability alert worker tick failed: {}", err),
+            }
+            sleep(Duration::from_secs(OPS_OBSERVABILITY_WORKER_INTERVAL_SECS)).await;
         }
     });
 }
