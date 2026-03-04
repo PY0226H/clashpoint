@@ -56,6 +56,47 @@ async fn list_debate_sessions_should_return_joinable_flag() -> Result<()> {
 }
 
 #[tokio::test]
+async fn list_debate_sessions_should_not_mark_future_open_as_joinable() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (topic_id, _) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let now = Utc::now();
+    let future_session_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO debate_sessions(
+            ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+        )
+        VALUES ($1, $2, 'open', $3, NULL, $4, 10)
+        RETURNING id
+        "#,
+    )
+    .bind(1_i64)
+    .bind(topic_id)
+    .bind(now + Duration::minutes(15))
+    .bind(now + Duration::minutes(45))
+    .fetch_one(&state.pool)
+    .await?;
+
+    let rows = state
+        .list_debate_sessions(
+            1,
+            ListDebateSessions {
+                status: Some("open".to_string()),
+                topic_id: None,
+                from: None,
+                to: None,
+                limit: Some(50),
+            },
+        )
+        .await?;
+    let row = rows
+        .into_iter()
+        .find(|v| v.id == future_session_id.0)
+        .expect("future open session should exist");
+    assert!(!row.joinable);
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_debate_topic_by_owner_should_work_and_reject_non_owner() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     state.update_workspace_owner(1, 1).await?;
@@ -161,6 +202,21 @@ async fn create_debate_session_by_owner_should_validate_status_and_topic() -> Re
         .await
         .expect_err("missing topic should fail");
     assert!(matches!(not_found_err, AppError::NotFound(_)));
+
+    let open_future = state
+        .create_debate_session_by_owner(
+            &owner,
+            OpsCreateDebateSessionInput {
+                topic_id: topic_id as u64,
+                status: Some("open".to_string()),
+                scheduled_start_at: now + Duration::minutes(10),
+                end_at: now + Duration::minutes(30),
+                max_participants_per_side: Some(200),
+            },
+        )
+        .await?;
+    assert_eq!(open_future.status, "open");
+    assert!(!open_future.joinable);
     Ok(())
 }
 
@@ -302,5 +358,20 @@ async fn update_debate_session_by_owner_should_validate_and_update() -> Result<(
         .await
         .expect_err("invalid status should fail");
     assert!(matches!(invalid_status_err, AppError::DebateError(_)));
+
+    let open_future = state
+        .update_debate_session_by_owner(
+            &owner,
+            session_id as u64,
+            OpsUpdateDebateSessionInput {
+                status: Some("open".to_string()),
+                scheduled_start_at: Some(now + Duration::minutes(10)),
+                end_at: Some(now + Duration::minutes(40)),
+                max_participants_per_side: Some(10),
+            },
+        )
+        .await?;
+    assert_eq!(open_future.status, "open");
+    assert!(!open_future.joinable);
     Ok(())
 }

@@ -226,6 +226,7 @@ pub struct PinDebateMessageOutput {
 struct DebateSessionForJoin {
     ws_id: i64,
     status: String,
+    scheduled_start_at: DateTime<Utc>,
     end_at: DateTime<Utc>,
     max_participants_per_side: i32,
     pro_count: i32,
@@ -330,7 +331,11 @@ impl AppState {
             SELECT
                 id, ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
                 max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
-                ((status IN ('open', 'running')) AND end_at > NOW()) AS joinable
+                (
+                    (status IN ('open', 'running'))
+                    AND scheduled_start_at <= NOW()
+                    AND end_at > NOW()
+                ) AS joinable
             FROM debate_sessions
             WHERE ws_id = $1
               AND ($2::text IS NULL OR status = $2)
@@ -370,7 +375,7 @@ impl AppState {
 
         let Some(session) = sqlx::query_as::<_, DebateSessionForJoin>(
             r#"
-            SELECT ws_id, status, end_at, max_participants_per_side, pro_count, con_count
+            SELECT ws_id, status, scheduled_start_at, end_at, max_participants_per_side, pro_count, con_count
             FROM debate_sessions
             WHERE id = $1
             FOR UPDATE
@@ -391,7 +396,11 @@ impl AppState {
             )));
         }
 
-        if !can_join_status(&session.status) || session.end_at <= Utc::now() {
+        let now = Utc::now();
+        if !can_join_status(&session.status)
+            || session.scheduled_start_at > now
+            || session.end_at <= now
+        {
             return Err(AppError::DebateConflict(format!(
                 "session {} is not joinable now",
                 session_id

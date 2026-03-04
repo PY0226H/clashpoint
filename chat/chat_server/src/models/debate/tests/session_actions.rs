@@ -93,6 +93,45 @@ async fn join_debate_session_should_reject_side_switch() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_debate_session_should_reject_future_open_session() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (topic_id, _) = seed_topic_and_session(&state, 1, "scheduled", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    let now = Utc::now();
+    let session_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO debate_sessions(
+            ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+        )
+        VALUES ($1, $2, 'open', $3, NULL, $4, 10)
+        RETURNING id
+        "#,
+    )
+    .bind(1_i64)
+    .bind(topic_id)
+    .bind(now + Duration::minutes(10))
+    .bind(now + Duration::minutes(30))
+    .fetch_one(&state.pool)
+    .await?;
+
+    let err = state
+        .join_debate_session(
+            session_id.0 as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await
+        .expect_err("future open session should not be joinable");
+    assert!(matches!(err, AppError::DebateConflict(_)));
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_debate_message_should_require_join_and_write_side() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;

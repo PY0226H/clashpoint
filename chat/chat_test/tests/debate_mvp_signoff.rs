@@ -73,7 +73,7 @@ async fn debate_mvp_signoff_should_cover_core_flow() -> Result<()> {
             &OpsCreateDebateSessionInput {
                 topic_id: topic.id as u64,
                 status: Some("open".to_string()),
-                scheduled_start_at: "2099-01-01T00:00:00Z".parse()?,
+                scheduled_start_at: "2025-01-01T00:00:00Z".parse()?,
                 end_at: "2099-01-01T01:00:00Z".parse()?,
                 max_participants_per_side: Some(200),
             },
@@ -268,7 +268,7 @@ async fn debate_mvp_signoff_should_cover_draw_vote_and_rematch_flow() -> Result<
             &OpsCreateDebateSessionInput {
                 topic_id: topic.id as u64,
                 status: Some("open".to_string()),
-                scheduled_start_at: "2099-02-01T00:00:00Z".parse()?,
+                scheduled_start_at: "2025-02-01T00:00:00Z".parse()?,
                 end_at: "2099-02-01T01:00:00Z".parse()?,
                 max_participants_per_side: Some(500),
             },
@@ -490,7 +490,7 @@ async fn debate_mvp_signoff_should_cover_accept_draw_without_rematch() -> Result
             &OpsCreateDebateSessionInput {
                 topic_id: topic.id as u64,
                 status: Some("open".to_string()),
-                scheduled_start_at: "2099-03-01T00:00:00Z".parse()?,
+                scheduled_start_at: "2025-03-01T00:00:00Z".parse()?,
                 end_at: "2099-03-01T01:00:00Z".parse()?,
                 max_participants_per_side: Some(500),
             },

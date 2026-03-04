@@ -92,6 +92,12 @@ impl AppState {
                 "scheduledStartAt must be before endAt".to_string(),
             ));
         }
+        let now = Utc::now();
+        if matches!(status.as_str(), "open" | "running") && input.end_at <= now {
+            return Err(AppError::DebateError(
+                "open/running session must end in the future".to_string(),
+            ));
+        }
 
         let topic_exists: Option<(i64,)> = sqlx::query_as(
             r#"
@@ -121,7 +127,11 @@ impl AppState {
             RETURNING
                 id, ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
                 max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
-                ((status IN ('open', 'running')) AND end_at > NOW()) AS joinable
+                (
+                    (status IN ('open', 'running'))
+                    AND scheduled_start_at <= NOW()
+                    AND end_at > NOW()
+                ) AS joinable
             "#,
         )
         .bind(user.ws_id)
@@ -232,6 +242,12 @@ impl AppState {
                 "scheduledStartAt must be before endAt".to_string(),
             ));
         }
+        let now = Utc::now();
+        if matches!(next_status.as_str(), "open" | "running") && next_end_at <= now {
+            return Err(AppError::DebateError(
+                "open/running session must end in the future".to_string(),
+            ));
+        }
 
         let next_max_per_side = input
             .max_participants_per_side
@@ -261,7 +277,11 @@ impl AppState {
             RETURNING
                 id, ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
                 max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
-                ((status IN ('open', 'running')) AND end_at > NOW()) AS joinable
+                (
+                    (status IN ('open', 'running'))
+                    AND scheduled_start_at <= NOW()
+                    AND end_at > NOW()
+                ) AS joinable
             "#,
         )
         .bind(session_id as i64)
