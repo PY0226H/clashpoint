@@ -44,6 +44,8 @@ async def build_report_with_provider(
             temperature=settings.openai_temperature,
             max_retries=settings.openai_max_retries,
             max_stage_agent_chunks=settings.stage_agent_max_chunks,
+            reflection_enabled=settings.reflection_enabled,
+            graph_v2_enabled=settings.graph_v2_enabled,
         )
         try:
             report = await build_report_with_openai_fn(

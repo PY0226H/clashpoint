@@ -125,6 +125,9 @@ class OpenAiJudgePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.merged["winner"], "draw")
         self.assertTrue(result.merged["rejudge_triggered"])
         self.assertEqual(result.display["pro_summary"], result.merged["pro_summary"])
+        self.assertEqual(result.reflection.action, "draw_protection")
+        self.assertGreaterEqual(len(result.graph_nodes), 6)
+        self.assertEqual(result.compliance["status"], "ok")
 
     async def test_run_pipeline_should_return_openai_outputs_when_calls_succeed(self) -> None:
         cfg = _build_config()
@@ -206,6 +209,7 @@ class OpenAiJudgePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.merged["needs_draw_vote"])
         self.assertEqual(result.display["pro_summary"], "display pro")
         self.assertEqual(result.display["rationale"], "display rationale")
+        self.assertEqual(result.reflection.action, "consistency_confirmed")
 
     async def test_run_pipeline_should_degrade_when_final_pass_failed(self) -> None:
         cfg = _build_config()
@@ -274,6 +278,83 @@ class OpenAiJudgePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.merged["winner_second"], "con")
         self.assertEqual(result.merged["winner"], "draw")
         self.assertTrue(result.merged["rejudge_triggered"])
+        self.assertEqual(result.reflection.action, "draw_protection")
+
+    async def test_run_pipeline_should_skip_reflection_when_disabled(self) -> None:
+        cfg = _build_config()
+        request = _build_request()
+
+        responses = iter(
+            [
+                {
+                    "pro_score": 80,
+                    "con_score": 70,
+                    "winner_hint": "pro",
+                    "pro_summary": "stage pro",
+                    "con_summary": "stage con",
+                    "rationale": "stage rationale",
+                },
+                {
+                    "pro_summary": "agg pro",
+                    "con_summary": "agg con",
+                    "rationale": "agg rationale",
+                    "winner_hint": "pro",
+                },
+                {
+                    "winner": "pro",
+                    "logic_pro": 86,
+                    "logic_con": 70,
+                    "evidence_pro": 84,
+                    "evidence_con": 68,
+                    "rebuttal_pro": 82,
+                    "rebuttal_con": 66,
+                    "clarity_pro": 80,
+                    "clarity_con": 67,
+                    "pro_summary": "first pro",
+                    "con_summary": "first con",
+                    "rationale": "first rationale",
+                },
+                {
+                    "winner": "pro",
+                    "logic_pro": 88,
+                    "logic_con": 69,
+                    "evidence_pro": 85,
+                    "evidence_con": 67,
+                    "rebuttal_pro": 83,
+                    "rebuttal_con": 65,
+                    "clarity_pro": 79,
+                    "clarity_con": 66,
+                    "pro_summary": "second pro",
+                    "con_summary": "second con",
+                    "rationale": "second rationale",
+                },
+                {
+                    "pro_summary_display": "display pro",
+                    "con_summary_display": "display con",
+                    "rationale_display": "display rationale",
+                },
+            ]
+        )
+
+        async def fake_call_openai_json(**_: object) -> dict[str, object]:
+            return next(responses)
+
+        original = openai_judge_pipeline.call_openai_json
+        openai_judge_pipeline.call_openai_json = fake_call_openai_json
+        try:
+            result = await openai_judge_pipeline.run_openai_judge_pipeline(
+                cfg=cfg,
+                request=request,
+                style_mode="rational",
+                retrieved_contexts=[],
+                max_stage_agent_chunks=cfg.max_stage_agent_chunks,
+                reflection_enabled=False,
+            )
+        finally:
+            openai_judge_pipeline.call_openai_json = original
+
+        self.assertFalse(result.reflection.enabled)
+        self.assertEqual(result.reflection.action, "merge_only")
 
 
 if __name__ == "__main__":

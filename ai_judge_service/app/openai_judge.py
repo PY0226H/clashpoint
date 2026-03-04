@@ -32,6 +32,8 @@ class OpenAiJudgeConfig:
     temperature: float
     max_retries: int
     max_stage_agent_chunks: int = 12
+    reflection_enabled: bool = True
+    graph_v2_enabled: bool = True
 
 
 async def build_report_with_openai(
@@ -51,7 +53,11 @@ async def build_report_with_openai(
         style_mode=effective_style_mode,
         retrieved_contexts=retrieved_contexts,
         max_stage_agent_chunks=cfg.max_stage_agent_chunks,
+        reflection_enabled=cfg.reflection_enabled,
     )
+    reflection = getattr(pipeline, "reflection", None)
+    graph_nodes = getattr(pipeline, "graph_nodes", [])
+    compliance = getattr(pipeline, "compliance", {"status": "ok", "violations": []})
     merged = pipeline.merged
     aggregate_summary = pipeline.aggregate_summary
     display = pipeline.display
@@ -78,7 +84,8 @@ async def build_report_with_openai(
         "ragUsedByModel": bool(retrieved_contexts),
         "ragSnippetCount": len(retrieved_contexts),
         "ragSources": summarize_retrieved_contexts(retrieved_contexts),
-        "agentPipelineVersion": "multi-agent-v1",
+        "agentPipelineVersion": "multi-agent-v2" if cfg.graph_v2_enabled else "multi-agent-v1",
+        "judgePolicyVersion": getattr(request, "judge_policy_version", "v2-default"),
         "agentPipeline": {
             "stageAgent": "openai",
             "aggregateAgent": "openai" if not pipeline.aggregate_fallback else "fallback",
@@ -88,6 +95,23 @@ async def build_report_with_openai(
             "stageFallbackCount": pipeline.stage_fallback_count,
             "finalPassFallbackCount": pipeline.final_fallback_count,
             "maxStageAgentChunks": cfg.max_stage_agent_chunks,
+            "executionMode": "dag",
+            "reflectionEnabled": reflection.enabled if reflection is not None else cfg.reflection_enabled,
+            "reflectionAction": reflection.action if reflection is not None else "unknown",
+            "reflectionWinnerMismatch": (
+                reflection.winner_mismatch if reflection is not None else False
+            ),
+            "graphNodes": [
+                {
+                    "node": node.node,
+                    "status": node.status,
+                    "durationMs": node.duration_ms,
+                    "fallback": node.fallback,
+                    "meta": node.meta,
+                }
+                for node in graph_nodes
+            ],
+            "compliance": compliance,
         },
         "aggregateSummary": {
             "winnerHint": aggregate_summary["winner_hint"],

@@ -125,6 +125,8 @@ class RuntimeProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(openai_kwargs["request"], request)
         self.assertEqual(openai_kwargs["retrieved_contexts"], contexts)
         self.assertEqual(openai_kwargs["cfg"].max_stage_agent_chunks, settings.stage_agent_max_chunks)
+        self.assertEqual(openai_kwargs["cfg"].reflection_enabled, settings.reflection_enabled)
+        self.assertEqual(openai_kwargs["cfg"].graph_v2_enabled, settings.graph_v2_enabled)
 
     async def test_build_report_with_provider_should_fallback_when_openai_failed(self) -> None:
         settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test", openai_fallback_to_mock=True)

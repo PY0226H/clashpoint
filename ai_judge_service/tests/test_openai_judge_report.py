@@ -121,6 +121,21 @@ class OpenAiJudgeReportTests(unittest.IsolatedAsyncioTestCase):
                     "rationale": "rationale display",
                 },
                 display_fallback=False,
+                graph_nodes=[
+                    SimpleNamespace(
+                        node="stage_judge",
+                        status="ok",
+                        duration_ms=10.0,
+                        fallback=False,
+                        meta={"stageCount": 1},
+                    )
+                ],
+                reflection=SimpleNamespace(
+                    enabled=True,
+                    action="draw_protection",
+                    winner_mismatch=True,
+                ),
+                compliance={"status": "ok", "violations": []},
             )
 
         original = openai_judge.run_openai_judge_pipeline
@@ -139,6 +154,9 @@ class OpenAiJudgeReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["max_stage_agent_chunks"], cfg.max_stage_agent_chunks)
         self.assertEqual(captured["style_mode"], "rational")
         self.assertEqual(report.payload["agentPipeline"]["finalPassFallbackCount"], 1)
+        self.assertEqual(report.payload["agentPipelineVersion"], "multi-agent-v2")
+        self.assertEqual(report.payload["agentPipeline"]["executionMode"], "dag")
+        self.assertTrue(report.payload["agentPipeline"]["reflectionEnabled"])
         self.assertEqual(report.payload["winnerFirst"], "draw")
         self.assertEqual(report.payload["winnerSecond"], "pro")
         self.assertEqual(len(report.payload["verdictEvidenceRefs"]), 1)
