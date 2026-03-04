@@ -767,6 +767,244 @@ async fn debate_ops_should_reject_non_owner_management_actions() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn debate_ops_status_updates_should_reflect_in_lobby_and_room() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let server = TestServer::new(state).await?;
+
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let workspace = format!("mvp-ops-reflect-{now_ms}");
+    let owner = server
+        .signup(
+            &workspace,
+            "Owner Reflect",
+            &format!("owner-reflect-{now_ms}@acme.org"),
+            "123456",
+        )
+        .await?;
+    let user = server
+        .signup(
+            &workspace,
+            "User Reflect",
+            &format!("user-reflect-{now_ms}@acme.org"),
+            "123456",
+        )
+        .await?;
+    let spectator = server
+        .signup(
+            &workspace,
+            "Spectator Reflect",
+            &format!("spectator-reflect-{now_ms}@acme.org"),
+            "123456",
+        )
+        .await?;
+
+    let topic: DebateTopic = owner
+        .post(
+            "/api/debate/ops/topics",
+            &OpsCreateDebateTopicInput {
+                title: "Ops 状态反射验收".to_string(),
+                description: "验证运营状态变更会反映到大厅与房间权限".to_string(),
+                category: "game".to_string(),
+                stance_pro: "应立即反映".to_string(),
+                stance_con: "可延迟反映".to_string(),
+                context_seed: Some("ops reflect seed".to_string()),
+                is_active: true,
+            },
+            StatusCode::CREATED,
+        )
+        .await?;
+
+    let session: DebateSessionSummary = owner
+        .post(
+            "/api/debate/ops/sessions",
+            &OpsCreateDebateSessionInput {
+                topic_id: topic.id as u64,
+                status: Some("scheduled".to_string()),
+                scheduled_start_at: "2099-05-01T00:00:00Z".parse()?,
+                end_at: "2099-05-01T01:00:00Z".parse()?,
+                max_participants_per_side: Some(200),
+            },
+            StatusCode::CREATED,
+        )
+        .await?;
+    assert_eq!(session.status, "scheduled");
+    assert!(!session.joinable);
+
+    let lobby_before: Vec<DebateSessionSummary> = owner
+        .get(
+            format!("/api/debate/sessions?topicId={}&limit=50", topic.id).as_str(),
+            StatusCode::OK,
+        )
+        .await?;
+    let before = lobby_before
+        .iter()
+        .find(|v| v.id == session.id)
+        .expect("session should appear in lobby before update");
+    assert_eq!(before.status, "scheduled");
+    assert!(!before.joinable);
+
+    let join_before_err: serde_json::Value = user
+        .post(
+            format!("/api/debate/sessions/{}/join", session.id).as_str(),
+            &serde_json::json!({ "side": "pro" }),
+            StatusCode::CONFLICT,
+        )
+        .await?;
+    assert!(join_before_err.to_string().contains("not joinable now"));
+
+    let opened: DebateSessionSummary = owner
+        .put(
+            format!("/api/debate/ops/sessions/{}", session.id).as_str(),
+            &OpsUpdateDebateSessionInput {
+                status: Some("open".to_string()),
+                scheduled_start_at: Some("2025-05-01T00:00:00Z".parse()?),
+                end_at: Some("2099-05-01T01:00:00Z".parse()?),
+                max_participants_per_side: Some(200),
+            },
+            StatusCode::OK,
+        )
+        .await?;
+    assert_eq!(opened.status, "open");
+    assert!(opened.joinable);
+
+    let lobby_open: Vec<DebateSessionSummary> = owner
+        .get(
+            format!("/api/debate/sessions?topicId={}&limit=50", topic.id).as_str(),
+            StatusCode::OK,
+        )
+        .await?;
+    let open_row = lobby_open
+        .iter()
+        .find(|v| v.id == session.id)
+        .expect("session should appear in lobby after open");
+    assert_eq!(open_row.status, "open");
+    assert!(open_row.joinable);
+
+    let _: JoinDebateSessionOutput = owner
+        .post(
+            format!("/api/debate/sessions/{}/join", session.id).as_str(),
+            &serde_json::json!({ "side": "pro" }),
+            StatusCode::OK,
+        )
+        .await?;
+    let _: JoinDebateSessionOutput = user
+        .post(
+            format!("/api/debate/sessions/{}/join", session.id).as_str(),
+            &serde_json::json!({ "side": "con" }),
+            StatusCode::OK,
+        )
+        .await?;
+
+    let _: DebateMessage = owner
+        .post(
+            format!("/api/debate/sessions/{}/messages", session.id).as_str(),
+            &CreateDebateMessageInput {
+                content: "ops 状态更新后房间权限应同步".to_string(),
+            },
+            StatusCode::CREATED,
+        )
+        .await?;
+
+    let spectator_open_err: serde_json::Value = spectator
+        .get(
+            format!("/api/debate/sessions/{}/messages?limit=20", session.id).as_str(),
+            StatusCode::CONFLICT,
+        )
+        .await?;
+    assert!(spectator_open_err
+        .to_string()
+        .contains("has not joined session"));
+
+    let running: DebateSessionSummary = owner
+        .put(
+            format!("/api/debate/ops/sessions/{}", session.id).as_str(),
+            &OpsUpdateDebateSessionInput {
+                status: Some("running".to_string()),
+                scheduled_start_at: None,
+                end_at: None,
+                max_participants_per_side: None,
+            },
+            StatusCode::OK,
+        )
+        .await?;
+    assert_eq!(running.status, "running");
+    assert!(running.joinable);
+
+    let lobby_running: Vec<DebateSessionSummary> = owner
+        .get(
+            format!("/api/debate/sessions?topicId={}&limit=50", topic.id).as_str(),
+            StatusCode::OK,
+        )
+        .await?;
+    let running_row = lobby_running
+        .iter()
+        .find(|v| v.id == session.id)
+        .expect("session should appear in lobby after running");
+    assert_eq!(running_row.status, "running");
+    assert!(running_row.joinable);
+
+    let spectator_messages_running: Vec<DebateMessage> = spectator
+        .get(
+            format!("/api/debate/sessions/{}/messages?limit=20", session.id).as_str(),
+            StatusCode::OK,
+        )
+        .await?;
+    assert_eq!(spectator_messages_running.len(), 1);
+    assert!(spectator_messages_running[0]
+        .content
+        .contains("ops 状态更新后房间权限应同步"));
+
+    let closed: DebateSessionSummary = owner
+        .put(
+            format!("/api/debate/ops/sessions/{}", session.id).as_str(),
+            &OpsUpdateDebateSessionInput {
+                status: Some("closed".to_string()),
+                scheduled_start_at: None,
+                end_at: None,
+                max_participants_per_side: None,
+            },
+            StatusCode::OK,
+        )
+        .await?;
+    assert_eq!(closed.status, "closed");
+    assert!(!closed.joinable);
+
+    let lobby_closed: Vec<DebateSessionSummary> = owner
+        .get(
+            format!("/api/debate/sessions?topicId={}&limit=50", topic.id).as_str(),
+            StatusCode::OK,
+        )
+        .await?;
+    let closed_row = lobby_closed
+        .iter()
+        .find(|v| v.id == session.id)
+        .expect("session should appear in lobby after closed");
+    assert_eq!(closed_row.status, "closed");
+    assert!(!closed_row.joinable);
+
+    let join_after_closed_err: serde_json::Value = user
+        .post(
+            format!("/api/debate/sessions/{}/join", session.id).as_str(),
+            &serde_json::json!({ "side": "con" }),
+            StatusCode::CONFLICT,
+        )
+        .await?;
+    assert!(join_after_closed_err
+        .to_string()
+        .contains("not joinable now"));
+
+    let spectator_messages_closed: Vec<DebateMessage> = spectator
+        .get(
+            format!("/api/debate/sessions/{}/messages?limit=20", session.id).as_str(),
+            StatusCode::OK,
+        )
+        .await?;
+    assert_eq!(spectator_messages_closed.len(), 1);
+
+    Ok(())
+}
+
 impl TestServer {
     async fn new(state: AppState) -> Result<Self> {
         let app: Router = chat_server::get_router(state).await?;
