@@ -79,6 +79,53 @@ fn extract_rag_meta_should_parse_whitelist_and_sources() {
 }
 
 #[test]
+fn extract_verdict_evidence_refs_should_parse_and_deduplicate() {
+    let payload = serde_json::json!({
+        "verdictEvidenceRefs": [
+            {
+                "messageId": 11,
+                "side": "pro",
+                "role": "winner_support",
+                "reason": "包含数据"
+            },
+            {
+                "messageId": 12,
+                "side": "con",
+                "role": "opponent_point",
+                "reason": "包含反驳"
+            },
+            {
+                "messageId": 11,
+                "side": "pro"
+            }
+        ]
+    });
+
+    let refs = extract_verdict_evidence_refs(&payload);
+    assert_eq!(refs.len(), 2);
+    assert_eq!(refs[0].message_id, 11);
+    assert_eq!(refs[0].side, "pro");
+    assert_eq!(refs[1].message_id, 12);
+    assert_eq!(refs[1].side, "con");
+}
+
+#[test]
+fn extract_verdict_evidence_refs_should_ignore_invalid_items() {
+    let payload = serde_json::json!({
+        "verdictEvidenceRefs": [
+            {"messageId": 0, "side": "pro"},
+            {"messageId": 3, "side": "unknown"},
+            {"message_id": 5, "side": "con"}
+        ]
+    });
+
+    let refs = extract_verdict_evidence_refs(&payload);
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].message_id, 5);
+    assert_eq!(refs[0].side, "con");
+}
+
+#[test]
 fn normalize_stage_summary_limit_should_clamp_into_range() {
     assert_eq!(normalize_stage_summary_limit(None), None);
     assert_eq!(normalize_stage_summary_limit(Some(0)), Some(1));

@@ -205,7 +205,7 @@ struct AiJudgeDispatchTopic {
 #[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchMessage {
     message_id: u64,
-    user_id: u64,
+    speaker_tag: String,
     side: String,
     content: String,
     created_at: DateTime<Utc>,

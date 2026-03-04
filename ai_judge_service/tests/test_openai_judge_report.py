@@ -141,6 +141,8 @@ class OpenAiJudgeReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["agentPipeline"]["finalPassFallbackCount"], 1)
         self.assertEqual(report.payload["winnerFirst"], "draw")
         self.assertEqual(report.payload["winnerSecond"], "pro")
+        self.assertEqual(len(report.payload["verdictEvidenceRefs"]), 1)
+        self.assertEqual(report.payload["verdictEvidenceRefs"][0]["messageId"], 1)
         self.assertTrue(report.needs_draw_vote)
         self.assertTrue(report.rejudge_triggered)
 

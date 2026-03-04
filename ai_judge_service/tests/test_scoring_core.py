@@ -62,6 +62,11 @@ class ScoringCoreTests(unittest.TestCase):
         self.assertEqual(stages[0]["to_message_id"], 100)
         self.assertEqual(stages[2]["from_message_id"], 201)
         self.assertEqual(stages[2]["to_message_id"], 205)
+        refs = report["payload"]["verdictEvidenceRefs"]
+        self.assertTrue(refs)
+        self.assertIn("messageId", refs[0])
+        self.assertIn("role", refs[0])
+        self.assertIn("reason", refs[0])
 
 
 if __name__ == "__main__":

@@ -623,6 +623,10 @@ mod tests {
             ret["report"]["stageSummaries"].as_array().map(Vec::len),
             Some(1)
         );
+        assert_eq!(
+            ret["report"]["verdictEvidence"].as_array().map(Vec::len),
+            Some(0)
+        );
         assert_eq!(ret["report"]["stageSummariesMeta"]["totalCount"], 3);
         assert_eq!(ret["report"]["stageSummariesMeta"]["returnedCount"], 1);
         assert_eq!(ret["report"]["stageSummariesMeta"]["stageOffset"], 0);

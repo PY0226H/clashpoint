@@ -1,5 +1,6 @@
 use super::*;
 use reqwest::Client;
+use std::collections::HashMap;
 use tracing::warn;
 
 impl AppState {
@@ -218,6 +219,27 @@ impl AppState {
         .await?;
         messages.reverse();
 
+        let mut speaker_aliases: HashMap<i64, String> = HashMap::new();
+        let mut speaker_seq: u32 = 1;
+        let mut dispatch_messages = Vec::with_capacity(messages.len());
+        for v in messages.into_iter() {
+            let speaker_tag = speaker_aliases
+                .entry(v.user_id)
+                .or_insert_with(|| {
+                    let alias = format!("speaker-{speaker_seq}");
+                    speaker_seq = speaker_seq.saturating_add(1);
+                    alias
+                })
+                .clone();
+            dispatch_messages.push(AiJudgeDispatchMessage {
+                message_id: v.id as u64,
+                speaker_tag,
+                side: v.side,
+                content: v.content,
+                created_at: v.created_at,
+            });
+        }
+
         Ok(AiJudgeDispatchRequest {
             job: AiJudgeDispatchJob {
                 job_id: job.id as u64,
@@ -242,16 +264,7 @@ impl AppState {
                 stance_con: session_topic.stance_con,
                 context_seed: session_topic.context_seed,
             },
-            messages: messages
-                .into_iter()
-                .map(|v| AiJudgeDispatchMessage {
-                    message_id: v.id as u64,
-                    user_id: v.user_id as u64,
-                    side: v.side,
-                    content: v.content,
-                    created_at: v.created_at,
-                })
-                .collect(),
+            messages: dispatch_messages,
             message_window_size: DISPATCH_MESSAGE_WINDOW_LIMIT,
             rubric_version: "v1-logic-evidence-rebuttal-clarity".to_string(),
         })

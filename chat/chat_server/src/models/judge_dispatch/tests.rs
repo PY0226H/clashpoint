@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use tokio::net::TcpListener;
 
@@ -86,6 +86,35 @@ async fn spawn_mock_dispatch_server_with_status(status: StatusCode) -> Result<St
     Ok(format!("http://{}", addr))
 }
 
+async fn spawn_mock_dispatch_server_capture_payload() -> Result<(String, Arc<Mutex<Vec<Value>>>)> {
+    let payloads = Arc::new(Mutex::new(Vec::new()));
+    let app = {
+        let payloads = payloads.clone();
+        Router::new().route(
+            "/internal/judge/dispatch",
+            post(move |Json(payload): Json<Value>| {
+                let payloads = payloads.clone();
+                async move {
+                    payloads
+                        .lock()
+                        .expect("capture lock poisoned")
+                        .push(payload);
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(serde_json::json!({"accepted": true})),
+                    )
+                }
+            }),
+        )
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok((format!("http://{}", addr), payloads))
+}
+
 async fn seed_messages(state: &AppState, session_id: i64, count: i64) -> Result<()> {
     for idx in 0..count {
         sqlx::query(
@@ -125,6 +154,47 @@ async fn load_dispatch_payload_should_include_recent_messages_ordered_asc() -> R
     assert_eq!(payload.messages.len(), 3);
     assert_eq!(payload.messages[0].content, "msg-0");
     assert_eq!(payload.messages[2].content, "msg-2");
+    assert_eq!(payload.messages[0].speaker_tag, "speaker-1");
+    assert_eq!(payload.messages[2].speaker_tag, "speaker-1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn dispatch_payload_should_blind_user_id_and_use_speaker_tag() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    let (service_base_url, payloads) = spawn_mock_dispatch_server_capture_payload().await?;
+    inner.config.ai_judge.dispatch_max_attempts = 3;
+    inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+    inner.config.ai_judge.dispatch_lock_secs = 1;
+    inner.config.ai_judge.dispatch_batch_size = 20;
+    inner.config.ai_judge.dispatch_callback_wait_secs = 120;
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
+
+    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    seed_messages(&state, session_id, 2).await?;
+    let _job_id = seed_running_job(&state, session_id, 0, None).await?;
+
+    let tick = state.dispatch_pending_judge_jobs_once().await?;
+    assert_eq!(tick.claimed, 1);
+    assert_eq!(tick.dispatched, 1);
+
+    let captured = payloads.lock().expect("capture lock poisoned");
+    assert_eq!(captured.len(), 1);
+    let messages = captured[0]
+        .get("messages")
+        .and_then(Value::as_array)
+        .expect("messages should be array");
+    assert_eq!(messages.len(), 2);
+    assert!(messages[0].get("userId").is_none());
+    assert_eq!(
+        messages[0]
+            .get("speakerTag")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "speaker-1"
+    );
     Ok(())
 }
 

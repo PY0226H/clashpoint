@@ -51,7 +51,7 @@ def build_report(
     messages = [
         DebateMessage(
             message_id=msg.message_id,
-            user_id=msg.user_id,
+            user_id=msg.user_id or 0,
             side=msg.side,
             content=msg.content,
         )

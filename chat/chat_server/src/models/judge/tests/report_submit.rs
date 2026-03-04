@@ -27,7 +27,11 @@ async fn submit_judge_report_should_persist_report_and_mark_job_succeeded() -> R
                 style_mode: Some("mixed".to_string()),
                 needs_draw_vote: false,
                 rejudge_triggered: false,
-                payload: serde_json::json!({"provider":"openai","traceId":"abc"}),
+                payload: serde_json::json!({
+                    "provider":"openai",
+                    "traceId":"abc",
+                    "rubricVersion":"v1-fairness-test"
+                }),
                 winner_first: Some("pro".to_string()),
                 winner_second: Some("pro".to_string()),
                 stage_summaries: vec![
@@ -54,11 +58,12 @@ async fn submit_judge_report_should_persist_report_and_mark_job_succeeded() -> R
     assert!(ret.newly_created);
     assert_eq!(ret.status, "succeeded");
 
-    let row: (String, Option<String>, Option<String>) = sqlx::query_as(
+    let row: (String, Option<String>, Option<String>, String) = sqlx::query_as(
         r#"
-            SELECT status, winner_first, winner_second
+            SELECT status, winner_first, winner_second, rubric_version
             FROM judge_jobs
-            WHERE id = $1
+            JOIN judge_reports ON judge_reports.job_id = judge_jobs.id
+            WHERE judge_jobs.id = $1
             "#,
     )
     .bind(job_id)
@@ -67,6 +72,7 @@ async fn submit_judge_report_should_persist_report_and_mark_job_succeeded() -> R
     assert_eq!(row.0, "succeeded");
     assert_eq!(row.1.as_deref(), Some("pro"));
     assert_eq!(row.2.as_deref(), Some("pro"));
+    assert_eq!(row.3, "v1-fairness-test");
 
     let stage_cnt: (i64,) = sqlx::query_as(
         r#"

@@ -1,10 +1,22 @@
 use super::{
     AppError, DrawVoteDetail, DrawVoteRow, DrawVoteStatsRow, JudgeRagMeta, JudgeRagSourceItem,
     JudgeReportDetail, JudgeReportRow, JudgeStageSummariesMeta, JudgeStageSummaryDetail,
-    JudgeStageSummaryRow, MAX_STAGE_SUMMARY_COUNT, MAX_STAGE_SUMMARY_OFFSET, STYLE_ENTERTAINING,
-    STYLE_MIXED, STYLE_RATIONAL,
+    JudgeStageSummaryRow, JudgeVerdictEvidenceItem, MAX_STAGE_SUMMARY_COUNT,
+    MAX_STAGE_SUMMARY_OFFSET, STYLE_ENTERTAINING, STYLE_MIXED, STYLE_RATIONAL,
 };
 use serde_json::Value;
+use std::collections::HashSet;
+
+const DEFAULT_RUBRIC_VERSION: &str = "v1-logic-evidence-rebuttal-clarity";
+const MAX_VERDICT_EVIDENCE_REFS: usize = 12;
+
+#[derive(Debug, Clone)]
+pub(super) struct VerdictEvidenceRef {
+    pub message_id: u64,
+    pub side: String,
+    pub role: Option<String>,
+    pub reason: Option<String>,
+}
 
 pub(super) fn normalize_style_mode(style_mode: Option<String>) -> Result<String, AppError> {
     let raw = style_mode.unwrap_or_else(|| STYLE_RATIONAL.to_string());
@@ -69,6 +81,7 @@ pub(super) fn validate_non_empty_text(
 
 pub(super) fn map_report_detail(
     v: JudgeReportRow,
+    verdict_evidence: Vec<JudgeVerdictEvidenceItem>,
     stage_summaries: Vec<JudgeStageSummaryDetail>,
     stage_summaries_meta: Option<JudgeStageSummariesMeta>,
 ) -> JudgeReportDetail {
@@ -91,14 +104,73 @@ pub(super) fn map_report_detail(
         con_summary: v.con_summary,
         rationale: v.rationale,
         style_mode: v.style_mode,
+        rubric_version: v.rubric_version,
         needs_draw_vote: v.needs_draw_vote,
         rejudge_triggered: v.rejudge_triggered,
         payload: v.payload,
         rag,
+        verdict_evidence,
         stage_summaries,
         stage_summaries_meta,
         created_at: v.created_at,
     }
+}
+
+pub(super) fn resolve_rubric_version(payload: &Value) -> String {
+    payload
+        .get("rubricVersion")
+        .or_else(|| payload.get("rubric_version"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(128).collect())
+        .unwrap_or_else(|| DEFAULT_RUBRIC_VERSION.to_string())
+}
+
+pub(super) fn extract_verdict_evidence_refs(payload: &Value) -> Vec<VerdictEvidenceRef> {
+    let mut seen_ids: HashSet<u64> = HashSet::new();
+    payload
+        .get("verdictEvidenceRefs")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let message_id = item
+                        .get("messageId")
+                        .or_else(|| item.get("message_id"))
+                        .and_then(Value::as_u64)?;
+                    if message_id == 0 || !seen_ids.insert(message_id) {
+                        return None;
+                    }
+                    let side = item
+                        .get("side")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_ascii_lowercase();
+                    if side != "pro" && side != "con" {
+                        return None;
+                    }
+                    Some(VerdictEvidenceRef {
+                        message_id,
+                        side,
+                        role: optional_trimmed_text(item.get("role")),
+                        reason: optional_trimmed_text(item.get("reason")),
+                    })
+                })
+                .take(MAX_VERDICT_EVIDENCE_REFS)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn optional_trimmed_text(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToString::to_string)
 }
 
 pub(super) fn map_stage_summary(v: JudgeStageSummaryRow) -> JudgeStageSummaryDetail {

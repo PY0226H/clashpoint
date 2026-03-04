@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 impl AppState {
     pub async fn request_judge_job(
@@ -217,7 +218,7 @@ impl AppState {
             SELECT
                 id, job_id, winner, pro_score, con_score,
                 logic_pro, logic_con, evidence_pro, evidence_con, rebuttal_pro, rebuttal_con,
-                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode,
+                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode, rubric_version,
                 needs_draw_vote, rejudge_triggered, payload, created_at
             FROM judge_reports
             WHERE session_id = $1
@@ -230,6 +231,49 @@ impl AppState {
         .await?;
 
         let report = if let Some(report) = report {
+            let verdict_refs = extract_verdict_evidence_refs(&report.payload);
+            let verdict_evidence = if verdict_refs.is_empty() {
+                Vec::new()
+            } else {
+                let message_ids: Vec<i64> = verdict_refs
+                    .iter()
+                    .map(|item| item.message_id as i64)
+                    .collect();
+                let message_rows: Vec<SessionMessageEvidenceRow> = sqlx::query_as(
+                    r#"
+                    SELECT id, side, content, created_at
+                    FROM session_messages
+                    WHERE session_id = $1 AND id = ANY($2)
+                    "#,
+                )
+                .bind(session_id as i64)
+                .bind(&message_ids)
+                .fetch_all(&self.pool)
+                .await?;
+                let by_id: HashMap<u64, SessionMessageEvidenceRow> = message_rows
+                    .into_iter()
+                    .map(|row| (row.id as u64, row))
+                    .collect();
+                verdict_refs
+                    .into_iter()
+                    .filter_map(|item| {
+                        let row = by_id.get(&item.message_id)?;
+                        let side = if row.side.trim().is_empty() {
+                            item.side.clone()
+                        } else {
+                            row.side.clone()
+                        };
+                        Some(JudgeVerdictEvidenceItem {
+                            message_id: row.id as u64,
+                            side,
+                            role: item.role,
+                            reason: item.reason,
+                            content: row.content.clone(),
+                            created_at: row.created_at,
+                        })
+                    })
+                    .collect()
+            };
             let stage_limit = normalize_stage_summary_limit(query.max_stage_count);
             let stage_offset = normalize_stage_summary_offset(query.stage_offset);
             let total_stage_count: i64 = sqlx::query_scalar(
@@ -297,6 +341,7 @@ impl AppState {
             });
             Some(map_report_detail(
                 report,
+                verdict_evidence,
                 stage_summaries.into_iter().map(map_stage_summary).collect(),
                 stage_summaries_meta,
             ))

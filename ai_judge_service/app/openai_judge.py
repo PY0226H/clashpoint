@@ -17,6 +17,7 @@ from .openai_judge_pipeline import (
     run_openai_judge_pipeline,
 )
 from .rag_retriever import RetrievedContext, summarize_retrieved_contexts
+from .scoring_core import DebateMessage, build_verdict_evidence_refs
 
 if TYPE_CHECKING:
     from .models import JudgeDispatchRequest, SubmitJudgeReportInput
@@ -54,6 +55,15 @@ async def build_report_with_openai(
     merged = pipeline.merged
     aggregate_summary = pipeline.aggregate_summary
     display = pipeline.display
+    debate_messages = [
+        DebateMessage(
+            message_id=msg.message_id,
+            user_id=msg.user_id or 0,
+            side=msg.side,
+            content=msg.content,
+        )
+        for msg in request.messages
+    ]
 
     payload = {
         "provider": "openai",
@@ -84,6 +94,10 @@ async def build_report_with_openai(
             "proScoreHint": aggregate_summary["pro_score_hint"],
             "conScoreHint": aggregate_summary["con_score_hint"],
         },
+        "verdictEvidenceRefs": build_verdict_evidence_refs(
+            debate_messages,
+            merged["winner"],
+        ),
     }
 
     return SubmitJudgeReportInput(

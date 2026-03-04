@@ -7,6 +7,7 @@ from typing import Iterable
 LOGIC_KEYWORDS = ("because", "therefore", "if ", "so ", "因此", "所以", "逻辑")
 EVIDENCE_KEYWORDS = ("data", "patch", "version", "source", "stats", "证据", "数据", "来源")
 REBUTTAL_KEYWORDS = ("but", "however", "counter", "instead", "反驳", "但是", "不过")
+MAX_VERDICT_EVIDENCE_REFS = 6
 
 SIDE_PRO = "pro"
 SIDE_CON = "con"
@@ -149,6 +150,84 @@ def _build_stage_summaries(messages: list[DebateMessage], window_size: int, job_
     return out
 
 
+def _evidence_ref_reason(content: str) -> str:
+    if _contains_keyword(content, EVIDENCE_KEYWORDS):
+        return "包含数据或来源类论据。"
+    if _contains_keyword(content, REBUTTAL_KEYWORDS):
+        return "包含反驳信息，可用于交叉验证。"
+    if _contains_keyword(content, LOGIC_KEYWORDS):
+        return "包含逻辑推导链条。"
+    return "代表性发言。"
+
+
+def _evidence_ref_role(side: str, winner: str) -> str:
+    if winner not in (SIDE_PRO, SIDE_CON):
+        return "key_point"
+    if side == winner:
+        return "winner_support"
+    return "opponent_point"
+
+
+def _evidence_ref_score(msg: DebateMessage) -> float:
+    content = msg.content.strip()
+    score = min(len(content), 280) / 280.0
+    if _contains_keyword(content, EVIDENCE_KEYWORDS):
+        score += 3.0
+    if _contains_keyword(content, LOGIC_KEYWORDS):
+        score += 2.0
+    if _contains_keyword(content, REBUTTAL_KEYWORDS):
+        score += 1.0
+    # Tie-breaker: newer messages have slightly higher weight.
+    score += msg.message_id / 1_000_000.0
+    return score
+
+
+def build_verdict_evidence_refs(
+    messages: list[DebateMessage],
+    winner: str,
+    max_refs: int = MAX_VERDICT_EVIDENCE_REFS,
+) -> list[dict]:
+    if max_refs <= 0:
+        return []
+
+    pro_msgs = [m for m in messages if m.side.lower().strip() == SIDE_PRO and m.content.strip()]
+    con_msgs = [m for m in messages if m.side.lower().strip() == SIDE_CON and m.content.strip()]
+    if not pro_msgs and not con_msgs:
+        return []
+
+    pro_ranked = sorted(pro_msgs, key=lambda msg: _evidence_ref_score(msg), reverse=True)
+    con_ranked = sorted(con_msgs, key=lambda msg: _evidence_ref_score(msg), reverse=True)
+
+    max_refs = min(max_refs, 12)
+    if winner in (SIDE_PRO, SIDE_CON):
+        winner_quota = max(1, (max_refs * 2) // 3)
+        loser_quota = max_refs - winner_quota
+        if winner == SIDE_PRO:
+            picked = pro_ranked[:winner_quota] + con_ranked[:loser_quota]
+        else:
+            picked = con_ranked[:winner_quota] + pro_ranked[:loser_quota]
+    else:
+        half = max_refs // 2
+        picked = pro_ranked[:half] + con_ranked[: (max_refs - half)]
+
+    seen_ids: set[int] = set()
+    refs: list[dict] = []
+    for msg in sorted(picked, key=lambda item: item.message_id):
+        if msg.message_id in seen_ids:
+            continue
+        seen_ids.add(msg.message_id)
+        side = msg.side.lower().strip()
+        refs.append(
+            {
+                "messageId": msg.message_id,
+                "side": side,
+                "role": _evidence_ref_role(side, winner),
+                "reason": _evidence_ref_reason(msg.content),
+            }
+        )
+    return refs[:max_refs]
+
+
 def build_report_core(
     *,
     job_id: int,
@@ -209,6 +288,7 @@ def build_report_core(
             "winnerFirst": winner_first,
             "winnerSecond": winner_second,
             "rubricVersion": rubric_version,
+            "verdictEvidenceRefs": build_verdict_evidence_refs(messages, winner),
         },
         "winner_first": winner_first,
         "winner_second": winner_second,

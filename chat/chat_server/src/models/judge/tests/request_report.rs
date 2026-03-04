@@ -1,5 +1,28 @@
 use super::*;
 
+async fn seed_session_message(
+    state: &AppState,
+    session_id: i64,
+    user_id: i64,
+    side: &str,
+    content: &str,
+) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO session_messages(ws_id, session_id, user_id, side, content)
+        VALUES (1, $1, $2, $3, $4)
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(side)
+    .bind(content)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.0)
+}
+
 #[tokio::test]
 async fn request_judge_job_should_create_running_job_with_default_style() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -251,6 +274,8 @@ async fn get_latest_judge_report_should_return_ready_when_report_exists() -> Res
     assert_eq!(report.job_id, job_id.0 as u64);
     assert_eq!(report.winner, "pro");
     assert_eq!(report.pro_score, 82);
+    assert_eq!(report.rubric_version, "v1-logic-evidence-rebuttal-clarity");
+    assert!(report.verdict_evidence.is_empty());
     assert!(report.stage_summaries.is_empty());
     let meta = report
         .stage_summaries_meta
@@ -330,6 +355,8 @@ async fn get_latest_judge_report_should_include_stage_summaries() -> Result<()> 
         .await?;
     assert_eq!(ret.status, "ready");
     let report = ret.report.expect("report should exist");
+    assert_eq!(report.rubric_version, "v1-logic-evidence-rebuttal-clarity");
+    assert!(report.verdict_evidence.is_empty());
     assert_eq!(report.stage_summaries.len(), 2);
     assert_eq!(report.stage_summaries[0].stage_no, 1);
     assert_eq!(report.stage_summaries[0].from_message_id, Some(1));
@@ -521,5 +548,76 @@ async fn get_latest_judge_report_should_apply_stage_offset() -> Result<()> {
     assert!(meta.has_more);
     assert_eq!(meta.next_offset, Some(2));
     assert_eq!(meta.max_stage_count, Some(1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_resolve_verdict_evidence_refs() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let user = state.find_user_by_id(1).await?.expect("user should exist");
+    let job_id = seed_running_judge_job(&state, session_id).await?;
+    let msg1 = seed_session_message(&state, session_id, 1, "pro", "pro evidence with data").await?;
+    let msg2 = seed_session_message(&state, session_id, 2, "con", "con rebuttal however").await?;
+
+    state
+        .submit_judge_report(
+            job_id as u64,
+            SubmitJudgeReportInput {
+                winner: "pro".to_string(),
+                pro_score: 88,
+                con_score: 80,
+                logic_pro: 87,
+                logic_con: 79,
+                evidence_pro: 89,
+                evidence_con: 81,
+                rebuttal_pro: 86,
+                rebuttal_con: 78,
+                clarity_pro: 90,
+                clarity_con: 82,
+                pro_summary: "pro".to_string(),
+                con_summary: "con".to_string(),
+                rationale: "rationale".to_string(),
+                style_mode: Some("rational".to_string()),
+                needs_draw_vote: false,
+                rejudge_triggered: false,
+                payload: serde_json::json!({
+                    "trace":"evidence-refs",
+                    "verdictEvidenceRefs":[
+                        {"messageId": msg1, "side":"pro", "role":"winner_support", "reason":"包含数据"},
+                        {"messageId": msg2, "side":"con", "role":"opponent_point", "reason":"包含反驳"}
+                    ]
+                }),
+                winner_first: Some("pro".to_string()),
+                winner_second: Some("pro".to_string()),
+                stage_summaries: vec![],
+            },
+        )
+        .await?;
+
+    let ret = state
+        .get_latest_judge_report(
+            session_id as u64,
+            &user,
+            GetJudgeReportQuery {
+                max_stage_count: None,
+                stage_offset: None,
+            },
+        )
+        .await?;
+    let report = ret.report.expect("report should exist");
+    assert_eq!(report.verdict_evidence.len(), 2);
+    assert_eq!(report.verdict_evidence[0].message_id, msg1 as u64);
+    assert_eq!(report.verdict_evidence[0].side, "pro");
+    assert_eq!(
+        report.verdict_evidence[0].role.as_deref(),
+        Some("winner_support")
+    );
+    assert_eq!(report.verdict_evidence[1].message_id, msg2 as u64);
+    assert_eq!(report.verdict_evidence[1].side, "con");
+    assert_eq!(
+        report.verdict_evidence[1].reason.as_deref(),
+        Some("包含反驳")
+    );
     Ok(())
 }

@@ -32,7 +32,8 @@ class DispatchTopic(BaseModel):
 
 class DispatchMessage(BaseModel):
     message_id: int
-    user_id: int
+    speaker_tag: str | None = None
+    user_id: int | None = None
     side: str
     content: str
     created_at: datetime

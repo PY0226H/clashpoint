@@ -15,9 +15,9 @@ mod request_report;
 #[cfg(test)]
 use helpers::extract_rag_meta;
 use helpers::{
-    calc_required_voters, can_request_judge, majority_resolution, map_draw_vote_detail,
-    map_report_detail, map_stage_summary, normalize_stage_summary_limit,
-    normalize_stage_summary_offset, normalize_style_mode, normalize_winner,
+    calc_required_voters, can_request_judge, extract_verdict_evidence_refs, majority_resolution,
+    map_draw_vote_detail, map_report_detail, map_stage_summary, normalize_stage_summary_limit,
+    normalize_stage_summary_offset, normalize_style_mode, normalize_winner, resolve_rubric_version,
     validate_non_empty_text, validate_score,
 };
 
@@ -107,13 +107,27 @@ pub struct JudgeReportDetail {
     pub con_summary: String,
     pub rationale: String,
     pub style_mode: String,
+    pub rubric_version: String,
     pub needs_draw_vote: bool,
     pub rejudge_triggered: bool,
     pub payload: Value,
     pub rag: Option<JudgeRagMeta>,
     #[serde(default)]
+    pub verdict_evidence: Vec<JudgeVerdictEvidenceItem>,
+    #[serde(default)]
     pub stage_summaries: Vec<JudgeStageSummaryDetail>,
     pub stage_summaries_meta: Option<JudgeStageSummariesMeta>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeVerdictEvidenceItem {
+    pub message_id: u64,
+    pub side: String,
+    pub role: Option<String>,
+    pub reason: Option<String>,
+    pub content: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -311,6 +325,7 @@ struct JudgeReportRow {
     con_summary: String,
     rationale: String,
     style_mode: String,
+    rubric_version: String,
     needs_draw_vote: bool,
     rejudge_triggered: bool,
     payload: Value,
@@ -325,6 +340,14 @@ struct JudgeStageSummaryRow {
     pro_score: i32,
     con_score: i32,
     summary: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct SessionMessageEvidenceRow {
+    id: i64,
+    side: String,
+    content: String,
     created_at: DateTime<Utc>,
 }
 

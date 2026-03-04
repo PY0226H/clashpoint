@@ -17,6 +17,7 @@ impl AppState {
             None => None,
         };
         let style_mode = normalize_style_mode(input.style_mode)?;
+        let rubric_version = resolve_rubric_version(&input.payload);
         let pro_summary = validate_non_empty_text(&input.pro_summary, "pro_summary", 4000)?;
         let con_summary = validate_non_empty_text(&input.con_summary, "con_summary", 4000)?;
         let rationale = validate_non_empty_text(&input.rationale, "rationale", 4000)?;
@@ -75,7 +76,7 @@ impl AppState {
             SELECT
                 id, job_id, winner, pro_score, con_score,
                 logic_pro, logic_con, evidence_pro, evidence_con, rebuttal_pro, rebuttal_con,
-                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode,
+                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode, rubric_version,
                 needs_draw_vote, rejudge_triggered, payload, created_at
             FROM judge_reports
             WHERE job_id = $1
@@ -109,14 +110,14 @@ impl AppState {
             INSERT INTO judge_reports(
                 ws_id, session_id, job_id, winner, pro_score, con_score,
                 logic_pro, logic_con, evidence_pro, evidence_con, rebuttal_pro, rebuttal_con,
-                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode,
+                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode, rubric_version,
                 needs_draw_vote, rejudge_triggered, payload, created_at, updated_at
             )
             SELECT
                 ws_id, session_id, id, $2, $3, $4,
                 $5, $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16,
-                $17, $18, $19, NOW(), NOW()
+                $11, $12, $13, $14, $15, $16, $17,
+                $18, $19, $20, NOW(), NOW()
             FROM judge_jobs
             WHERE id = $1
             RETURNING id
@@ -138,6 +139,7 @@ impl AppState {
         .bind(con_summary)
         .bind(rationale)
         .bind(style_mode.clone())
+        .bind(rubric_version)
         .bind(input.needs_draw_vote)
         .bind(rejudge_triggered)
         .bind(input.payload)
