@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import {
+  classifyLobbySessionLane,
   compareLobbySessions,
   filterDebateSessions,
   isSessionEnded,
+  isSessionJoinOpen,
   matchesStatusFilter,
   normalizeSessionStatus,
   normalizeSessionTopicId,
+  splitLobbySessionsByLane,
 } from './debate-lobby-utils.js';
 
 assert.equal(normalizeSessionStatus(' Running '), 'running');
@@ -19,6 +22,12 @@ assert.equal(isSessionEnded('judging'), true);
 assert.equal(isSessionEnded('closed'), true);
 assert.equal(isSessionEnded('canceled'), true);
 assert.equal(isSessionEnded('running'), false);
+assert.equal(isSessionJoinOpen('open'), true);
+assert.equal(isSessionJoinOpen('scheduled'), true);
+assert.equal(isSessionJoinOpen('running'), false);
+assert.equal(classifyLobbySessionLane({ status: 'running' }), 'live');
+assert.equal(classifyLobbySessionLane({ status: 'open' }), 'upcoming');
+assert.equal(classifyLobbySessionLane({ status: 'closed' }), 'ended');
 
 assert.equal(matchesStatusFilter({ status: 'closed' }, 'ended'), true);
 assert.equal(matchesStatusFilter({ status: 'judging' }, 'ended'), true);
@@ -95,3 +104,12 @@ assert.deepEqual(
   [3, 1],
 );
 
+const lanes = splitLobbySessionsByLane([
+  { id: 11, status: 'running' },
+  { id: 12, status: 'open' },
+  { id: 13, status: 'scheduled' },
+  { id: 14, status: 'closed' },
+]);
+assert.deepEqual(lanes.live.map((item) => item.id), [11]);
+assert.deepEqual(lanes.upcoming.map((item) => item.id), [12, 13]);
+assert.deepEqual(lanes.ended.map((item) => item.id), [14]);

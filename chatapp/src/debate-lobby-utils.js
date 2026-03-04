@@ -37,7 +37,39 @@ export function isSessionLive(status) {
 
 export function isSessionJoinOpen(status) {
   const normalized = normalizeSessionStatus(status);
-  return normalized === STATUS_OPEN || normalized === STATUS_RUNNING;
+  return normalized === STATUS_OPEN || normalized === STATUS_SCHEDULED;
+}
+
+export function classifyLobbySessionLane(session) {
+  const status = normalizeSessionStatus(session?.status);
+  if (isSessionLive(status)) {
+    return 'live';
+  }
+  if (status === STATUS_OPEN || status === STATUS_SCHEDULED) {
+    return 'upcoming';
+  }
+  if (isSessionEnded(status)) {
+    return 'ended';
+  }
+  return 'unknown';
+}
+
+export function splitLobbySessionsByLane(sessions = []) {
+  const lanes = {
+    live: [],
+    upcoming: [],
+    ended: [],
+    unknown: [],
+  };
+  for (const session of sessions) {
+    const lane = classifyLobbySessionLane(session);
+    if (!lanes[lane]) {
+      lanes.unknown.push(session);
+      continue;
+    }
+    lanes[lane].push(session);
+  }
+  return lanes;
 }
 
 function toTimeMs(value) {
@@ -81,7 +113,7 @@ export function matchesStatusFilter(session, statusFilter) {
     return isSessionLive(status);
   }
   if (filter === 'joinable') {
-    return !!session?.joinable || isSessionJoinOpen(status);
+    return !!session?.joinable || status === STATUS_OPEN || status === STATUS_SCHEDULED;
   }
   if (filter === 'upcoming') {
     return status === STATUS_SCHEDULED;
@@ -127,4 +159,3 @@ export function filterDebateSessions(
     })
     .sort(compareLobbySessions);
 }
-
