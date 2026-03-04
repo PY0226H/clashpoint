@@ -13,12 +13,23 @@ pub struct ServerConfig {
 pub struct IapConfig {
     #[serde(default = "default_iap_purchase_mode")]
     pub purchase_mode: String,
+    #[serde(default)]
+    pub native_bridge: IapNativeBridgeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IapNativeBridgeConfig {
+    #[serde(default)]
+    pub bin: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 impl Default for IapConfig {
     fn default() -> Self {
         Self {
             purchase_mode: default_iap_purchase_mode(),
+            native_bridge: IapNativeBridgeConfig::default(),
         }
     }
 }
