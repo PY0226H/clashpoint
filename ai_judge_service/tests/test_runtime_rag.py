@@ -55,6 +55,14 @@ def _build_settings(**overrides: object) -> Settings:
         "rag_milvus_metric_type": "COSINE",
         "rag_milvus_search_limit": 20,
         "stage_agent_max_chunks": 12,
+        "graph_v2_enabled": True,
+        "reflection_enabled": True,
+        "topic_memory_enabled": True,
+        "rag_hybrid_enabled": True,
+        "rag_rerank_enabled": True,
+        "degrade_max_level": 3,
+        "trace_ttl_secs": 86400,
+        "idempotency_ttl_secs": 86400,
     }
     base.update(overrides)
     return Settings(**base)

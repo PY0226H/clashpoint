@@ -11,6 +11,9 @@ from app.settings import Settings
 class _FakeReport:
     def __init__(self, payload: dict | None = None) -> None:
         self.payload = payload or {}
+        self.winner_first = "pro"
+        self.winner_second = "pro"
+        self.rejudge_triggered = False
 
 
 def _build_settings(**overrides: object) -> Settings:
@@ -51,6 +54,14 @@ def _build_settings(**overrides: object) -> Settings:
         "rag_milvus_metric_type": "COSINE",
         "rag_milvus_search_limit": 20,
         "stage_agent_max_chunks": 12,
+        "graph_v2_enabled": True,
+        "reflection_enabled": True,
+        "topic_memory_enabled": True,
+        "rag_hybrid_enabled": True,
+        "rag_rerank_enabled": True,
+        "degrade_max_level": 3,
+        "trace_ttl_secs": 86400,
+        "idempotency_ttl_secs": 86400,
     }
     base.update(overrides)
     return Settings(**base)
@@ -136,6 +147,10 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["ragBackend"], "file")
         self.assertEqual(report.payload["ragSourceWhitelist"], list(settings.rag_source_whitelist))
         self.assertEqual(len(report.payload["ragSources"]), 1)
+        self.assertIn("judgeTrace", report.payload)
+        self.assertIn("retrievalDiagnostics", report.payload)
+        self.assertIn("consistency", report.payload)
+        self.assertIn("cost", report.payload)
         self.assertIsNone(captured["retrieve_kwargs"]["milvus_config"])
 
     async def test_build_report_by_runtime_should_fallback_when_openai_failed_and_enabled(self) -> None:

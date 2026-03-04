@@ -1,6 +1,5 @@
 import unittest
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from fastapi import HTTPException
 
@@ -9,6 +8,13 @@ from app.app_factory import (
     create_default_app,
     create_runtime,
     require_internal_key,
+)
+from app.models import (
+    DispatchJob,
+    DispatchMessage,
+    DispatchSession,
+    DispatchTopic,
+    JudgeDispatchRequest,
 )
 from app.settings import Settings
 
@@ -20,7 +26,12 @@ class _FakeReport:
         self.payload = {"provider": "openai"}
 
     def model_dump(self, *, mode: str = "python") -> dict:
-        return {"winner": self.winner, "mode": mode}
+        return {
+            "winner": self.winner,
+            "needsDrawVote": self.needs_draw_vote,
+            "payload": self.payload,
+            "mode": mode,
+        }
 
 
 def _build_settings(**overrides: object) -> Settings:
@@ -61,15 +72,23 @@ def _build_settings(**overrides: object) -> Settings:
         "rag_milvus_metric_type": "COSINE",
         "rag_milvus_search_limit": 20,
         "stage_agent_max_chunks": 12,
+        "graph_v2_enabled": True,
+        "reflection_enabled": True,
+        "topic_memory_enabled": True,
+        "rag_hybrid_enabled": True,
+        "rag_rerank_enabled": True,
+        "degrade_max_level": 3,
+        "trace_ttl_secs": 86400,
+        "idempotency_ttl_secs": 86400,
     }
     base.update(overrides)
     return Settings(**base)
 
 
-def _build_request() -> SimpleNamespace:
+def _build_request() -> JudgeDispatchRequest:
     now = datetime.now(timezone.utc)
-    return SimpleNamespace(
-        job=SimpleNamespace(
+    return JudgeDispatchRequest(
+        job=DispatchJob(
             job_id=1,
             ws_id=1,
             session_id=2,
@@ -78,13 +97,13 @@ def _build_request() -> SimpleNamespace:
             rejudge_triggered=False,
             requested_at=now,
         ),
-        session=SimpleNamespace(
+        session=DispatchSession(
             status="judging",
             scheduled_start_at=now,
             actual_start_at=now,
             end_at=now,
         ),
-        topic=SimpleNamespace(
+        topic=DispatchTopic(
             title="test",
             description="desc",
             category="game",
@@ -92,7 +111,16 @@ def _build_request() -> SimpleNamespace:
             stance_con="con",
             context_seed=None,
         ),
-        messages=[SimpleNamespace(message_id=1, user_id=1, side="pro", content="hello")],
+        messages=[
+            DispatchMessage(
+                message_id=1,
+                speaker_tag="pro_1",
+                user_id=None,
+                side="pro",
+                content="hello",
+                created_at=now,
+            )
+        ],
         message_window_size=100,
         rubric_version="v1",
     )
@@ -192,6 +220,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         paths = {route.path for route in app.routes if hasattr(route, "path")}
         self.assertIn("/healthz", paths)
         self.assertIn("/internal/judge/dispatch", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/trace", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
+        self.assertIn("/internal/judge/rag/diagnostics", paths)
 
         dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
         endpoint = dispatch_route.endpoint
@@ -206,6 +237,71 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(callback_report_calls), 1)
         self.assertEqual(callback_report_calls[0][0], 1)
         self.assertEqual(callback_failed_calls, [])
+
+        trace_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/trace"
+        )
+        trace = await trace_route.endpoint(job_id=1, x_ai_internal_key="k3")
+        self.assertEqual(trace["jobId"], 1)
+        self.assertEqual(trace["status"], "completed")
+
+        rag_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/rag/diagnostics"
+        )
+        rag = await rag_route.endpoint(job_id=1, x_ai_internal_key="k3")
+        self.assertEqual(rag["jobId"], 1)
+
+    async def test_dispatch_should_reject_unblinded_user_id(self) -> None:
+        settings = _build_settings(ai_internal_key="k4")
+        request = _build_request()
+        request.messages[0].user_id = 123  # type: ignore[misc]
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+        )
+        app = create_app(runtime)
+        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
+
+        with self.assertRaises(HTTPException) as ctx:
+            await dispatch_route.endpoint(request=request, x_ai_internal_key="k4")
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "unblinded_user_id_in_messages")
+
+    async def test_dispatch_should_support_idempotency_replay(self) -> None:
+        settings = _build_settings(ai_internal_key="k5")
+        request = _build_request()
+        request.idempotency_key = "same-key"
+        call_counter = {"n": 0}
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            call_counter["n"] += 1
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
+
+        first = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5")
+        second = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5")
+        self.assertTrue(first["accepted"])
+        self.assertTrue(second["accepted"])
+        self.assertTrue(second["idempotentReplay"])
+        self.assertEqual(call_counter["n"], 1)
 
     async def test_create_default_app_should_use_loader(self) -> None:
         settings = _build_settings(ai_internal_key="loader-key")

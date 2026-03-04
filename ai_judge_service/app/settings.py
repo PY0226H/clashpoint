@@ -56,6 +56,14 @@ class Settings:
     rag_milvus_metric_type: str
     rag_milvus_search_limit: int
     stage_agent_max_chunks: int
+    graph_v2_enabled: bool
+    reflection_enabled: bool
+    topic_memory_enabled: bool
+    rag_hybrid_enabled: bool
+    rag_rerank_enabled: bool
+    degrade_max_level: int
+    trace_ttl_secs: int
+    idempotency_ttl_secs: int
 
 
 def load_settings() -> Settings:
@@ -117,12 +125,27 @@ def load_settings() -> Settings:
         rag_milvus_metric_type=os.getenv("AI_JUDGE_RAG_MILVUS_METRIC_TYPE", "COSINE"),
         rag_milvus_search_limit=int(os.getenv("AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT", "20")),
         stage_agent_max_chunks=int(os.getenv("AI_JUDGE_STAGE_AGENT_MAX_CHUNKS", "12")),
+        graph_v2_enabled=parse_env_bool(os.getenv("AI_JUDGE_GRAPH_V2_ENABLED"), default=True),
+        reflection_enabled=parse_env_bool(os.getenv("AI_JUDGE_REFLECTION_ENABLED"), default=True),
+        topic_memory_enabled=parse_env_bool(os.getenv("AI_JUDGE_TOPIC_MEMORY_ENABLED"), default=True),
+        rag_hybrid_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_HYBRID_ENABLED"), default=True),
+        rag_rerank_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_RERANK_ENABLED"), default=True),
+        degrade_max_level=int(os.getenv("AI_JUDGE_DEGRADE_MAX_LEVEL", "3")),
+        trace_ttl_secs=int(os.getenv("AI_JUDGE_TRACE_TTL_SECS", "86400")),
+        idempotency_ttl_secs=int(os.getenv("AI_JUDGE_IDEMPOTENCY_TTL_SECS", "86400")),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings
 
 
 def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> None:
+    if settings.degrade_max_level < 0 or settings.degrade_max_level > 3:
+        raise ValueError("AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3")
+    if settings.trace_ttl_secs < 60:
+        raise ValueError("AI_JUDGE_TRACE_TTL_SECS must be >= 60")
+    if settings.idempotency_ttl_secs < 60:
+        raise ValueError("AI_JUDGE_IDEMPOTENCY_TTL_SECS must be >= 60")
+
     if is_production_env(runtime_env):
         if settings.provider == PROVIDER_MOCK:
             raise ValueError("AI_JUDGE_PROVIDER=mock is forbidden when runtime env is production")

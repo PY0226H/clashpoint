@@ -46,6 +46,11 @@ class JudgeDispatchRequest(BaseModel):
     messages: list[DispatchMessage] = Field(default_factory=list)
     message_window_size: int = 100
     rubric_version: str
+    trace_id: str | None = None
+    idempotency_key: str | None = None
+    judge_policy_version: str = "v2-default"
+    topic_domain: str = "default"
+    retrieval_profile: str = "hybrid_v1"
 
 
 class JudgeStageSummaryInput(BaseModel):

@@ -35,6 +35,9 @@ expect_pass() {
 VALID_CHAT="$TMP_DIR/chat.valid.yml"
 VALID_TAURI="$TMP_DIR/app.valid.yml"
 VALID_AI_ENV="$TMP_DIR/ai.valid.env"
+VALID_V2D_REG="$TMP_DIR/v2d.reg.valid.env"
+VALID_V2D_LOAD="$TMP_DIR/v2d.load.valid.env"
+BAD_V2D_REG="$TMP_DIR/v2d.reg.bad.env"
 
 cat >"$VALID_CHAT" <<'EOF'
 payment:
@@ -60,12 +63,65 @@ AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=false
 OPENAI_API_KEY=sk-test
 EOF
 
+cat >"$VALID_V2D_REG" <<'EOF'
+REGRESSION_CHAT_TEST_DEBATE_MVP_SIGNOFF=pass
+REGRESSION_CHAT_SERVER_NEXTEST=pass
+REGRESSION_NOTIFY_SERVER_NEXTEST=pass
+REGRESSION_LAST_RUN_AT=2026-03-04T12:00:00Z
+EOF
+
+cat >"$VALID_V2D_LOAD" <<'EOF'
+LOADTEST_STAGE=preprod
+LOAD_SCENARIOS=L1,L2,L3,L4,SOAK,SPIKE
+L1_RESULT=pass
+L2_RESULT=pass
+L3_RESULT=pass
+L4_RESULT=pass
+SOAK_RESULT=pass
+SPIKE_RESULT=pass
+REALTIME_MESSAGE_SUCCESS_RATE=99.6
+REALTIME_MESSAGE_P95_MS=280
+WS_BROADCAST_P95_MS=900
+PIN_CHAIN_SUCCESS_RATE=99.92
+PIN_CHAIN_P95_MS=430
+AI_JUDGE_P95_SECONDS=240
+EOF
+
+cat >"$BAD_V2D_REG" <<'EOF'
+REGRESSION_CHAT_TEST_DEBATE_MVP_SIGNOFF=fail
+REGRESSION_CHAT_SERVER_NEXTEST=pass
+REGRESSION_NOTIFY_SERVER_NEXTEST=pass
+REGRESSION_LAST_RUN_AT=2026-03-04T12:00:00Z
+EOF
+
 expect_pass "valid production config should pass" \
   "$SCRIPT" \
   --runtime-env production \
   --chat-config "$VALID_CHAT" \
   --tauri-app-config "$VALID_TAURI" \
   --ai-judge-env "$VALID_AI_ENV"
+
+expect_pass "valid production config with v2d gate should pass" \
+  "$SCRIPT" \
+  --runtime-env production \
+  --chat-config "$VALID_CHAT" \
+  --tauri-app-config "$VALID_TAURI" \
+  --ai-judge-env "$VALID_AI_ENV" \
+  --enforce-v2d-stage-acceptance \
+  --v2d-regression-evidence "$VALID_V2D_REG" \
+  --v2d-load-summary "$VALID_V2D_LOAD" \
+  --v2d-report-out "$TMP_DIR/v2d.report.pass.md"
+
+expect_fail "v2d gate fail should fail preflight" \
+  "$SCRIPT" \
+  --runtime-env production \
+  --chat-config "$VALID_CHAT" \
+  --tauri-app-config "$VALID_TAURI" \
+  --ai-judge-env "$VALID_AI_ENV" \
+  --enforce-v2d-stage-acceptance \
+  --v2d-regression-evidence "$BAD_V2D_REG" \
+  --v2d-load-summary "$VALID_V2D_LOAD" \
+  --v2d-report-out "$TMP_DIR/v2d.report.fail.md"
 
 BAD_CHAT_MOCK="$TMP_DIR/chat.mock.yml"
 cat >"$BAD_CHAT_MOCK" <<'EOF'

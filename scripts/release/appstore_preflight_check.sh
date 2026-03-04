@@ -11,6 +11,14 @@ Options:
   --chat-config <path>         chat_server config yaml, default: chat/chat_server/chat.yml
   --tauri-app-config <path>    Tauri app.yml path for IAP native bridge checks
   --ai-judge-env <path>        AI judge env file (KEY=VALUE)
+  --enforce-v2d-stage-acceptance
+                               Enable V2-D stage acceptance gate check
+  --v2d-regression-evidence <path>
+                               V2-D regression evidence env file
+  --v2d-load-summary <path>    V2-D preprod load summary env file
+  --v2d-report-out <path>      V2-D acceptance report output path
+  --v2d-allow-missing-scenarios
+                               Pass through --allow-missing-scenarios to V2-D gate
   --root <path>                Repo root path (default: git top-level or cwd)
   -h, --help                   Show this help
 
@@ -18,6 +26,7 @@ Notes:
   1) Production checks are enabled when runtime env is prod|production.
   2) AI judge values are read from --ai-judge-env first, then process env.
   3) Tauri checks are skipped when --tauri-app-config is not provided.
+  4) V2-D gate is optional and runs only when --enforce-v2d-stage-acceptance is set.
 USAGE
 }
 
@@ -330,6 +339,11 @@ RUNTIME_ENV="production"
 CHAT_CONFIG=""
 TAURI_APP_CONFIG=""
 AI_JUDGE_ENV=""
+ENFORCE_V2D_STAGE_ACCEPTANCE="false"
+V2D_REGRESSION_EVIDENCE=""
+V2D_LOAD_SUMMARY=""
+V2D_REPORT_OUT=""
+V2D_ALLOW_MISSING_SCENARIOS="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -348,6 +362,26 @@ while [[ $# -gt 0 ]]; do
     --ai-judge-env)
       AI_JUDGE_ENV="$2"
       shift 2
+      ;;
+    --enforce-v2d-stage-acceptance)
+      ENFORCE_V2D_STAGE_ACCEPTANCE="true"
+      shift
+      ;;
+    --v2d-regression-evidence)
+      V2D_REGRESSION_EVIDENCE="$2"
+      shift 2
+      ;;
+    --v2d-load-summary)
+      V2D_LOAD_SUMMARY="$2"
+      shift 2
+      ;;
+    --v2d-report-out)
+      V2D_REPORT_OUT="$2"
+      shift 2
+      ;;
+    --v2d-allow-missing-scenarios)
+      V2D_ALLOW_MISSING_SCENARIOS="true"
+      shift
       ;;
     --root)
       ROOT="$2"
@@ -375,6 +409,18 @@ fi
 
 if [[ -z "$CHAT_CONFIG" ]]; then
   CHAT_CONFIG="$ROOT/chat/chat_server/chat.yml"
+fi
+
+if [[ "$ENFORCE_V2D_STAGE_ACCEPTANCE" == "true" ]]; then
+  if [[ -z "$V2D_REGRESSION_EVIDENCE" ]]; then
+    V2D_REGRESSION_EVIDENCE="$ROOT/docs/loadtest/evidence/v2d_regression.env"
+  fi
+  if [[ -z "$V2D_LOAD_SUMMARY" ]]; then
+    V2D_LOAD_SUMMARY="$ROOT/docs/loadtest/evidence/v2d_preprod_summary.env"
+  fi
+  if [[ -z "$V2D_REPORT_OUT" ]]; then
+    V2D_REPORT_OUT="$ROOT/docs/dev_plan/V2-D阶段验收报告-$(date +%F)-from-preflight.md"
+  fi
 fi
 
 RUNTIME_ENV="$(trim "$RUNTIME_ENV")"
@@ -518,6 +564,29 @@ else
     fi
   else
     mark_pass "ai_judge production guard skipped for non-production runtime"
+  fi
+fi
+
+if [[ "$ENFORCE_V2D_STAGE_ACCEPTANCE" == "true" ]]; then
+  v2d_gate_script="$ROOT/scripts/release/v2d_stage_acceptance_gate.sh"
+  if [[ ! -f "$v2d_gate_script" ]]; then
+    mark_fail "v2d gate script not found: $v2d_gate_script"
+  else
+    v2d_args=(
+      --root "$ROOT"
+      --regression-evidence "$V2D_REGRESSION_EVIDENCE"
+      --load-summary "$V2D_LOAD_SUMMARY"
+      --report-out "$V2D_REPORT_OUT"
+    )
+    if [[ "$V2D_ALLOW_MISSING_SCENARIOS" == "true" ]]; then
+      v2d_args+=(--allow-missing-scenarios)
+    fi
+
+    if bash "$v2d_gate_script" "${v2d_args[@]}"; then
+      mark_pass "v2d stage acceptance gate passed"
+    else
+      mark_fail "v2d stage acceptance gate failed"
+    fi
   fi
 fi
 

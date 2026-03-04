@@ -27,6 +27,14 @@ class SettingsTests(unittest.TestCase):
             ("https://teamfighttactics.leagueoflegends.com/en-us/news",),
         )
         self.assertEqual(settings.stage_agent_max_chunks, 12)
+        self.assertTrue(settings.graph_v2_enabled)
+        self.assertTrue(settings.reflection_enabled)
+        self.assertTrue(settings.topic_memory_enabled)
+        self.assertTrue(settings.rag_hybrid_enabled)
+        self.assertTrue(settings.rag_rerank_enabled)
+        self.assertEqual(settings.degrade_max_level, 3)
+        self.assertEqual(settings.trace_ttl_secs, 86400)
+        self.assertEqual(settings.idempotency_ttl_secs, 86400)
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -68,6 +76,14 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_RAG_MILVUS_METRIC_TYPE": "IP",
                 "AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT": "33",
                 "AI_JUDGE_STAGE_AGENT_MAX_CHUNKS": "20",
+                "AI_JUDGE_GRAPH_V2_ENABLED": "false",
+                "AI_JUDGE_REFLECTION_ENABLED": "false",
+                "AI_JUDGE_TOPIC_MEMORY_ENABLED": "false",
+                "AI_JUDGE_RAG_HYBRID_ENABLED": "false",
+                "AI_JUDGE_RAG_RERANK_ENABLED": "false",
+                "AI_JUDGE_DEGRADE_MAX_LEVEL": "2",
+                "AI_JUDGE_TRACE_TTL_SECS": "600",
+                "AI_JUDGE_IDEMPOTENCY_TTL_SECS": "900",
             },
             clear=True,
         ):
@@ -101,6 +117,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.rag_milvus_collection, "col1")
         self.assertEqual(settings.rag_milvus_search_limit, 33)
         self.assertEqual(settings.stage_agent_max_chunks, 20)
+        self.assertFalse(settings.graph_v2_enabled)
+        self.assertFalse(settings.reflection_enabled)
+        self.assertFalse(settings.topic_memory_enabled)
+        self.assertFalse(settings.rag_hybrid_enabled)
+        self.assertFalse(settings.rag_rerank_enabled)
+        self.assertEqual(settings.degrade_max_level, 2)
+        self.assertEqual(settings.trace_ttl_secs, 600)
+        self.assertEqual(settings.idempotency_ttl_secs, 900)
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -173,6 +197,17 @@ class SettingsTests(unittest.TestCase):
         ):
             settings = load_settings()
         validate_for_runtime_env(settings, runtime_env="staging")
+
+    def test_load_settings_should_reject_invalid_degrade_level(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_DEGRADE_MAX_LEVEL": "9",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3"):
+                load_settings()
 
 
 if __name__ == "__main__":

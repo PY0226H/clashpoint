@@ -87,12 +87,28 @@ cd ai_judge_service
 - `AI_JUDGE_RAG_MILVUS_METRIC_TYPE`: 向量距离类型，默认 `COSINE`
 - `AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT`: Milvus 向量召回候选数，默认 `20`
 - `AI_JUDGE_STAGE_AGENT_MAX_CHUNKS`: 阶段 Agent 最大处理窗口数（超出取最近窗口），默认 `12`
+- `AI_JUDGE_GRAPH_V2_ENABLED`: DAG+Reflection v2 开关，默认 `true`
+- `AI_JUDGE_REFLECTION_ENABLED`: 终局反思回路开关，默认 `true`
+- `AI_JUDGE_TOPIC_MEMORY_ENABLED`: 辩题级长期记忆开关，默认 `true`
+- `AI_JUDGE_RAG_HYBRID_ENABLED`: 混合检索策略开关，默认 `true`
+- `AI_JUDGE_RAG_RERANK_ENABLED`: 检索重排开关，默认 `true`
+- `AI_JUDGE_DEGRADE_MAX_LEVEL`: 最大降级等级 `0..3`，默认 `3`
+- `AI_JUDGE_TRACE_TTL_SECS`: trace 与回放记录 TTL，默认 `86400`
+- `AI_JUDGE_IDEMPOTENCY_TTL_SECS`: 幂等键 TTL，默认 `86400`
 
 生产环境识别规则：按 `AICOMM_ENV -> APP_ENV -> PYTHON_ENV -> RUST_ENV -> ENV` 顺序读取，值为 `prod|production` 时视为生产。
 生产环境门禁：
 - 禁止 `AI_JUDGE_PROVIDER=mock`
 - 禁止 `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=true`
 - `AI_JUDGE_PROVIDER=openai` 时，`OPENAI_API_KEY` 不能为空
+
+## 内部运维接口（v2）
+
+均要求 header：`x-ai-internal-key`
+
+- `GET /internal/judge/jobs/{job_id}/trace`：查看单任务 trace、请求快照、回调状态、回放历史
+- `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback）
+- `GET /internal/judge/rag/diagnostics?job_id=...`：查看该任务检索诊断摘要
 
 ## 知识文件格式（最小）
 
