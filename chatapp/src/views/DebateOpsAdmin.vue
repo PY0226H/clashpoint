@@ -6,7 +6,9 @@
         <div class="flex items-start justify-between gap-3">
           <div>
             <h1 class="text-2xl font-bold text-gray-900">Debate Ops Admin</h1>
-            <p class="text-sm text-gray-600 mt-1">创建辩题、排期场次，提供最小运营上新能力。</p>
+            <p class="text-sm text-gray-600 mt-1">
+              创建辩题、排期场次并管理定时窗口，保证“到点开放、过时收口”。
+            </p>
           </div>
           <button
             @click="refreshData"
@@ -87,6 +89,13 @@
                 结束时间
                 <input v-model="sessionForm.endAtLocal" type="datetime-local" class="w-full border rounded px-3 py-2 text-sm mt-1" />
               </label>
+            </div>
+            <div class="rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-800 space-y-1">
+              <div>窗口预判：{{ describeDraftWindowState(sessionForm) }}</div>
+              <div>参与提示：{{ describeDraftJoinability(sessionForm) }}</div>
+              <div v-if="describeDraftRecommendation(sessionForm)" class="font-medium">
+                建议动作：{{ describeDraftRecommendation(sessionForm) }}
+              </div>
             </div>
             <button
               @click="createSession"
@@ -175,6 +184,13 @@
                 <input v-model="sessionEditForm.endAtLocal" type="datetime-local" class="w-full border rounded px-3 py-2 text-sm mt-1" />
               </label>
             </div>
+            <div class="rounded border border-violet-200 bg-violet-50 p-2 text-xs text-violet-800 space-y-1">
+              <div>窗口预判：{{ describeDraftWindowState(sessionEditForm) }}</div>
+              <div>参与提示：{{ describeDraftJoinability(sessionEditForm) }}</div>
+              <div v-if="describeDraftRecommendation(sessionEditForm)" class="font-medium">
+                建议动作：{{ describeDraftRecommendation(sessionEditForm) }}
+              </div>
+            </div>
             <div class="flex flex-wrap gap-2">
               <button
                 @click="updateSession"
@@ -209,6 +225,9 @@
                   <th class="py-2 pr-4">Scheduled</th>
                   <th class="py-2 pr-4">End</th>
                   <th class="py-2 pr-4">Joinable</th>
+                  <th class="py-2 pr-4">Window</th>
+                  <th class="py-2 pr-4">Reason</th>
+                  <th class="py-2 pr-4">Recommend</th>
                   <th class="py-2 pr-4">Action</th>
                 </tr>
               </thead>
@@ -220,6 +239,26 @@
                   <td class="py-2 pr-4">{{ formatDateTime(item.scheduledStartAt) }}</td>
                   <td class="py-2 pr-4">{{ formatDateTime(item.endAt) }}</td>
                   <td class="py-2 pr-4">{{ item.joinable ? 'yes' : 'no' }}</td>
+                  <td class="py-2 pr-4">
+                    <span
+                      class="inline-flex items-center rounded px-2 py-1 text-xs"
+                      :class="windowStateBadgeClass(item)"
+                    >
+                      {{ windowStateLabel(item) }}
+                    </span>
+                  </td>
+                  <td class="py-2 pr-4 text-xs text-gray-700">{{ joinabilityReason(item) }}</td>
+                  <td class="py-2 pr-4">
+                    <button
+                      v-if="hasRecommendedAction(item)"
+                      @click="applyRecommendedAction(item)"
+                      :disabled="quickUpdateSessionId === item.id"
+                      class="px-2 py-1 rounded border border-emerald-300 text-xs bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                    >
+                      {{ quickUpdateSessionId === item.id ? '处理中...' : recommendedActionLabel(item) }}
+                    </button>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </td>
                   <td class="py-2 pr-4">
                     <div class="flex flex-wrap gap-1">
                       <button
@@ -241,7 +280,7 @@
                   </td>
                 </tr>
                 <tr v-if="sessions.length === 0">
-                  <td colspan="7" class="py-4 text-center text-gray-500">暂无场次</td>
+                  <td colspan="10" class="py-4 text-center text-gray-500">暂无场次</td>
                 </tr>
               </tbody>
             </table>
@@ -256,6 +295,9 @@
 import Sidebar from '../components/Sidebar.vue';
 import {
   buildQuickUpdateSessionPayload,
+  getOpsSessionJoinability,
+  getOpsSessionRecommendedAction,
+  getOpsSessionWindowState,
   nextQuickStatusActions as resolveNextQuickStatusActions,
 } from '../debate-ops-utils';
 
@@ -351,6 +393,66 @@ export default {
         return '';
       }
       return date.toISOString();
+    },
+    buildSessionDraftForTiming(form) {
+      return {
+        status: String(form?.status || 'scheduled'),
+        scheduledStartAt: this.toIso(form?.scheduledStartAtLocal),
+        endAt: this.toIso(form?.endAtLocal),
+        joinable: false,
+      };
+    },
+    windowStateLabel(session) {
+      const state = getOpsSessionWindowState(session);
+      if (state === 'upcoming') {
+        return '待开始';
+      }
+      if (state === 'active') {
+        return '窗口中';
+      }
+      if (state === 'expired') {
+        return '已结束';
+      }
+      return '时间异常';
+    },
+    windowStateBadgeClass(session) {
+      const state = getOpsSessionWindowState(session);
+      if (state === 'upcoming') {
+        return 'bg-amber-100 text-amber-800';
+      }
+      if (state === 'active') {
+        return 'bg-emerald-100 text-emerald-800';
+      }
+      if (state === 'expired') {
+        return 'bg-gray-200 text-gray-700';
+      }
+      return 'bg-red-100 text-red-700';
+    },
+    joinabilityReason(session) {
+      return getOpsSessionJoinability(session).text;
+    },
+    recommendedAction(session) {
+      return getOpsSessionRecommendedAction(session);
+    },
+    hasRecommendedAction(session) {
+      return !!this.recommendedAction(session)?.targetStatus;
+    },
+    recommendedActionLabel(session) {
+      const rec = this.recommendedAction(session);
+      return rec?.label || '';
+    },
+    describeDraftWindowState(form) {
+      return this.windowStateLabel(this.buildSessionDraftForTiming(form));
+    },
+    describeDraftJoinability(form) {
+      return this.joinabilityReason(this.buildSessionDraftForTiming(form));
+    },
+    describeDraftRecommendation(form) {
+      const rec = this.recommendedAction(this.buildSessionDraftForTiming(form));
+      if (!rec) {
+        return '';
+      }
+      return `${rec.label}（${rec.reason}）`;
     },
     syncTopicEditFormFromId(topicIdRaw) {
       const selectedTopicId = String(topicIdRaw || '');
@@ -540,6 +642,13 @@ export default {
       } finally {
         this.quickUpdateSessionId = 0;
       }
+    },
+    async applyRecommendedAction(session) {
+      const recommendation = this.recommendedAction(session);
+      if (!recommendation?.targetStatus) {
+        return;
+      }
+      await this.quickUpdateSessionStatus(session, recommendation.targetStatus);
     },
     nextQuickStatusActions(status) {
       return resolveNextQuickStatusActions(status);
