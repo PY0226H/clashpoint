@@ -128,6 +128,7 @@ cd ai_judge_service
 - `GET /internal/judge/jobs/{job_id}/trace`：查看单任务 trace、请求快照、回调状态、回放历史
 - `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback）
 - `GET /internal/judge/jobs/{job_id}/replay/report`：导出 job 级回放报告（输入快照、阶段输出、终局结果、callback 状态、审计字段）
+- `GET /internal/judge/jobs/replay/reports`：按筛选条件查询回放报告列表（`status/winner/callback_status/trace_id/created_after/created_before/has_audit_alert/limit`，可选 `include_report=true` 返回完整报告）
 - `GET /internal/judge/rag/diagnostics?job_id=...`：查看该任务检索诊断摘要
 
 `dispatch` 的 `retrieval_profile`（默认 `hybrid_v1`）当前支持：

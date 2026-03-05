@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import uuid4
 from typing import Any, Awaitable, Callable
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 
 from .callback_client import callback_failed, callback_report
 from .compliance_guard import validate_blinded_dispatch_request
@@ -26,7 +27,7 @@ from .settings import (
     build_dispatch_runtime_config,
     load_settings,
 )
-from .trace_store import TraceStoreProtocol, build_trace_store_from_settings
+from .trace_store import TraceQuery, TraceStoreProtocol, build_trace_store_from_settings
 from .wiring import build_dispatch_callbacks
 
 BuildReportByRuntimeImpl = Callable[..., Awaitable[Any]]
@@ -230,6 +231,43 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
             for item in record.replays
         ],
     }
+
+
+def _build_replay_report_summary(record: Any) -> dict[str, Any]:
+    payload = _build_replay_report_payload(record)
+    callback_result = payload.get("callbackResult")
+    response = callback_result.get("response") if isinstance(callback_result, dict) else {}
+    if not isinstance(response, dict):
+        response = {}
+    pipeline = payload.get("pipeline")
+    if not isinstance(pipeline, dict):
+        pipeline = {}
+    audit_alerts = payload.get("auditAlerts")
+    if not isinstance(audit_alerts, list):
+        audit_alerts = []
+    return {
+        "jobId": payload.get("jobId"),
+        "traceId": payload.get("traceId"),
+        "status": payload.get("status"),
+        "createdAt": record.created_at.isoformat(),
+        "updatedAt": record.updated_at.isoformat(),
+        "winner": pipeline.get("finalWinner"),
+        "needsDrawVote": pipeline.get("needsDrawVote"),
+        "provider": response.get("provider"),
+        "errorCode": response.get("errorCode"),
+        "callbackStatus": callback_result.get("callbackStatus") if isinstance(callback_result, dict) else None,
+        "callbackError": callback_result.get("callbackError") if isinstance(callback_result, dict) else None,
+        "auditAlertCount": len([row for row in audit_alerts if isinstance(row, dict)]),
+        "replayCount": len(payload.get("replays") or []),
+    }
+
+
+def _normalize_query_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def create_app(runtime: AppRuntime) -> FastAPI:
@@ -449,6 +487,53 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="judge_trace_not_found")
         return _build_replay_report_payload(record)
+
+    @app.get("/internal/judge/jobs/replay/reports")
+    async def list_judge_replay_reports(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        winner: str | None = Query(default=None),
+        callback_status: str | None = Query(default=None),
+        trace_id: str | None = Query(default=None),
+        created_after: datetime | None = Query(default=None),
+        created_before: datetime | None = Query(default=None),
+        has_audit_alert: bool | None = Query(default=None),
+        limit: int = Query(default=20, ge=1, le=200),
+        include_report: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_created_after = _normalize_query_datetime(created_after)
+        normalized_created_before = _normalize_query_datetime(created_before)
+        query = TraceQuery(
+            status=status,
+            winner=winner,
+            callback_status=callback_status,
+            trace_id=trace_id,
+            created_after=normalized_created_after,
+            created_before=normalized_created_before,
+            has_audit_alert=has_audit_alert,
+            limit=limit,
+        )
+        records = runtime.trace_store.list_traces(query=query)
+        if include_report:
+            items = [_build_replay_report_payload(record) for record in records]
+        else:
+            items = [_build_replay_report_summary(record) for record in records]
+        return {
+            "count": len(items),
+            "items": items,
+            "filters": {
+                "status": status,
+                "winner": winner,
+                "callbackStatus": callback_status,
+                "traceId": trace_id,
+                "createdAfter": normalized_created_after.isoformat() if normalized_created_after else None,
+                "createdBefore": normalized_created_before.isoformat() if normalized_created_before else None,
+                "hasAuditAlert": has_audit_alert,
+                "limit": limit,
+                "includeReport": include_report,
+            },
+        }
 
     @app.get("/internal/judge/rag/diagnostics")
     async def get_rag_diagnostics(

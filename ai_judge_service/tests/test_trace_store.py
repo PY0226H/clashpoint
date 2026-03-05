@@ -1,6 +1,8 @@
 import unittest
+from datetime import datetime, timezone
 
 from app.trace_store import (
+    TraceQuery,
     TraceStore,
     build_trace_store_from_settings,
 )
@@ -115,6 +117,74 @@ class TraceStoreTests(unittest.TestCase):
         rows = store.list_topic_memory(topic_domain="finance", rubric_version="v1", limit=1)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].audit["qualityScore"], 0.88)
+
+    def test_list_traces_should_support_status_winner_and_audit_filters(self) -> None:
+        store = TraceStore(ttl_secs=3600)
+        for job_id, winner, with_alert in (
+            (101, "pro", True),
+            (102, "con", False),
+            (103, "pro", False),
+        ):
+            store.register_start(
+                job_id=job_id,
+                trace_id=f"trace-{job_id}",
+                request={"job": {"job_id": job_id}},
+            )
+            payload = {"provider": "openai"}
+            if with_alert:
+                payload["auditAlerts"] = [{"type": "compliance_violation"}]
+            store.register_success(
+                job_id=job_id,
+                response={
+                    "accepted": True,
+                    "jobId": job_id,
+                    "winner": winner,
+                    "provider": "openai",
+                },
+                callback_status="reported",
+                report_summary={"winner": winner, "payload": payload},
+            )
+
+        rows = store.list_traces(
+            query=TraceQuery(status="completed", winner="pro", has_audit_alert=True, limit=5)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].job_id, 101)
+
+        rows = store.list_traces(query=TraceQuery(winner="pro", limit=5))
+        self.assertEqual({row.job_id for row in rows}, {101, 103})
+
+    def test_list_traces_should_support_created_at_range_filter(self) -> None:
+        store = TraceStore(ttl_secs=3600)
+        store.register_start(job_id=201, trace_id="trace-201", request={"job": {"job_id": 201}})
+        store.register_success(
+            job_id=201,
+            response={"accepted": True, "jobId": 201, "winner": "pro"},
+            callback_status="reported",
+            report_summary={"winner": "pro", "payload": {}},
+        )
+        store.register_start(job_id=202, trace_id="trace-202", request={"job": {"job_id": 202}})
+        store.register_success(
+            job_id=202,
+            response={"accepted": True, "jobId": 202, "winner": "con"},
+            callback_status="reported",
+            report_summary={"winner": "con", "payload": {}},
+        )
+
+        old = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        new = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        store._traces[201].created_at = old
+        store._traces[202].created_at = new
+
+        rows = store.list_traces(
+            query=TraceQuery(
+                created_after=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                created_before=datetime(2026, 1, 4, tzinfo=timezone.utc),
+                limit=5,
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].job_id, 202)
 
 
 class _DummySettings:

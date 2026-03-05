@@ -258,6 +258,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/jobs/{job_id}/trace", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay/report", paths)
+        self.assertIn("/internal/judge/jobs/replay/reports", paths)
         self.assertIn("/internal/judge/rag/diagnostics", paths)
 
         dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
@@ -304,6 +305,25 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay_report["judgeAudit"]["promptHash"], "hash-1")
         self.assertEqual(replay_report["pipeline"]["finalWinner"], "pro")
         self.assertEqual(len(replay_report["pipeline"]["stageSummaries"]), 1)
+
+        replay_reports_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/replay/reports"
+        )
+        replay_reports = await replay_reports_route.endpoint(
+            x_ai_internal_key="k3",
+            status="completed",
+            winner="pro",
+            callback_status=None,
+            trace_id=None,
+            created_after=None,
+            created_before=None,
+            has_audit_alert=None,
+            limit=20,
+            include_report=False,
+        )
+        self.assertEqual(replay_reports["count"], 1)
+        self.assertEqual(replay_reports["items"][0]["jobId"], 1)
+        self.assertEqual(replay_reports["items"][0]["winner"], "pro")
 
     async def test_dispatch_should_reject_unblinded_user_id(self) -> None:
         settings = _build_settings(ai_internal_key="k4")
@@ -526,6 +546,93 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             limit=3,
         )
         self.assertEqual(topic_memory_rows, [])
+
+    async def test_list_replay_reports_should_filter_and_support_full_report(self) -> None:
+        settings = _build_settings(ai_internal_key="k7")
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/jobs/replay/reports"
+        )
+
+        def register_record(job_id: int, winner: str, *, with_alert: bool) -> None:
+            request = _build_request().model_dump(mode="json")
+            request["job"]["job_id"] = job_id
+            runtime.trace_store.register_start(
+                job_id=job_id,
+                trace_id=f"trace-{job_id}",
+                request=request,
+            )
+            payload = {"provider": "openai", "stage_summaries": []}
+            if with_alert:
+                payload["auditAlerts"] = [{"type": "compliance_violation"}]
+            runtime.trace_store.register_success(
+                job_id=job_id,
+                response={
+                    "accepted": True,
+                    "jobId": job_id,
+                    "winner": winner,
+                    "provider": "openai",
+                },
+                callback_status="reported",
+                report_summary={
+                    "winner": winner,
+                    "needs_draw_vote": winner == "draw",
+                    "payload": payload,
+                    "stage_summaries": [],
+                },
+            )
+
+        register_record(701, "pro", with_alert=True)
+        register_record(702, "con", with_alert=False)
+        register_record(703, "pro", with_alert=False)
+
+        result = await route.endpoint(
+            x_ai_internal_key="k7",
+            status="completed",
+            winner="pro",
+            callback_status=None,
+            trace_id=None,
+            created_after=None,
+            created_before=None,
+            has_audit_alert=True,
+            limit=20,
+            include_report=False,
+        )
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["jobId"], 701)
+        self.assertEqual(result["items"][0]["auditAlertCount"], 1)
+
+        full = await route.endpoint(
+            x_ai_internal_key="k7",
+            status="completed",
+            winner=None,
+            callback_status="reported",
+            trace_id=None,
+            created_after=None,
+            created_before=None,
+            has_audit_alert=None,
+            limit=2,
+            include_report=True,
+        )
+        self.assertEqual(full["count"], 2)
+        self.assertIn("pipeline", full["items"][0])
+        self.assertIn("requestInput", full["items"][0])
 
     async def test_create_default_app_should_use_loader(self) -> None:
         settings = _build_settings(ai_internal_key="loader-key")

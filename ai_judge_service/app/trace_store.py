@@ -93,6 +93,77 @@ class TopicMemoryRecord:
     audit: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class TraceQuery:
+    status: str | None = None
+    winner: str | None = None
+    callback_status: str | None = None
+    trace_id: str | None = None
+    created_after: datetime | None = None
+    created_before: datetime | None = None
+    has_audit_alert: bool | None = None
+    limit: int = 20
+
+
+def _normalize_token(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _record_winner(record: TraceRecord) -> str:
+    if isinstance(record.response, dict):
+        value = record.response.get("winner")
+        if value:
+            return _normalize_token(value)
+    if isinstance(record.report_summary, dict):
+        for key in ("winner", "winnerFirst", "winnerSecond", "winner_first", "winner_second"):
+            value = record.report_summary.get(key)
+            if value:
+                return _normalize_token(value)
+    return ""
+
+
+def _record_has_audit_alert(record: TraceRecord) -> bool:
+    if isinstance(record.response, dict) and isinstance(record.response.get("auditAlert"), dict):
+        return True
+    if not isinstance(record.report_summary, dict):
+        return False
+    payload = record.report_summary.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    alerts = payload.get("auditAlerts")
+    return isinstance(alerts, list) and any(isinstance(item, dict) for item in alerts)
+
+
+def _trace_matches(record: TraceRecord, query: TraceQuery) -> bool:
+    status = _normalize_token(query.status)
+    if status and _normalize_token(record.status) != status:
+        return False
+
+    callback_status = _normalize_token(query.callback_status)
+    if callback_status and _normalize_token(record.callback_status) != callback_status:
+        return False
+
+    trace_id = _normalize_token(query.trace_id)
+    if trace_id and _normalize_token(record.trace_id) != trace_id:
+        return False
+
+    winner = _normalize_token(query.winner)
+    if winner and _record_winner(record) != winner:
+        return False
+
+    if query.created_after is not None and record.created_at < query.created_after:
+        return False
+    if query.created_before is not None and record.created_at > query.created_before:
+        return False
+
+    if query.has_audit_alert is not None and _record_has_audit_alert(record) != query.has_audit_alert:
+        return False
+
+    return True
+
+
 class TraceStoreProtocol(Protocol):
     def register_start(self, *, job_id: int, trace_id: str, request: dict[str, Any]) -> TraceRecord:
         ...
@@ -137,6 +208,9 @@ class TraceStoreProtocol(Protocol):
         ...
 
     def get_trace(self, job_id: int) -> TraceRecord | None:
+        ...
+
+    def list_traces(self, *, query: TraceQuery | None = None) -> list[TraceRecord]:
         ...
 
     def mark_replay(
@@ -318,6 +392,25 @@ class TraceStore(TraceStoreProtocol):
             self._prune_locked(now)
             return self._traces.get(job_id)
 
+    def list_traces(self, *, query: TraceQuery | None = None) -> list[TraceRecord]:
+        now = _utcnow()
+        with self._lock:
+            self._prune_locked(now)
+            q = query or TraceQuery()
+            limit = max(1, min(200, q.limit))
+            records = sorted(
+                self._traces.values(),
+                key=lambda item: item.updated_at,
+                reverse=True,
+            )
+            out: list[TraceRecord] = []
+            for record in records:
+                if _trace_matches(record, q):
+                    out.append(record)
+                if len(out) >= limit:
+                    break
+            return out
+
     def mark_replay(
         self,
         *,
@@ -423,10 +516,22 @@ class RedisTraceStore(TraceStoreProtocol):
     def _idempotency_key(self, key: str) -> str:
         return f"{self._key_prefix}:idempotency:{key}"
 
+    def _jobs_index_key(self) -> str:
+        return f"{self._key_prefix}:jobs:index"
+
     def _topic_key(self, topic_domain: str, rubric_version: str) -> str:
         domain = topic_domain.strip().lower()
         rubric = rubric_version.strip().lower()
         return f"{self._key_prefix}:topic:{domain}:{rubric}"
+
+    def _index_job(self, *, job_id: int, updated_at: datetime) -> None:
+        score = updated_at.timestamp()
+        index_key = self._jobs_index_key()
+        try:
+            self._redis.zadd(index_key, {str(job_id): score})
+            self._redis.expire(index_key, self._ttl_secs)
+        except Exception:
+            return
 
     def _write_json(self, key: str, payload: dict[str, Any], *, ttl_secs: int | None = None) -> None:
         try:
@@ -535,6 +640,7 @@ class RedisTraceStore(TraceStoreProtocol):
             status="running",
         )
         self._write_json(self._runtime_key(job_id), self._serialize_trace(record))
+        self._index_job(job_id=job_id, updated_at=now)
         return record
 
     def register_success(
@@ -554,6 +660,7 @@ class RedisTraceStore(TraceStoreProtocol):
         record.callback_status = callback_status
         record.report_summary = report_summary
         self._write_json(self._runtime_key(job_id), self._serialize_trace(record))
+        self._index_job(job_id=job_id, updated_at=record.updated_at)
 
         raw_stages = report_summary.get("stage_summaries") or report_summary.get("stageSummaries")
         if not isinstance(raw_stages, list):
@@ -581,6 +688,7 @@ class RedisTraceStore(TraceStoreProtocol):
         record.callback_status = callback_status
         record.callback_error = callback_error
         self._write_json(self._runtime_key(job_id), self._serialize_trace(record))
+        self._index_job(job_id=job_id, updated_at=record.updated_at)
 
     def set_idempotency_pending(self, *, key: str, job_id: int, ttl_secs: int | None = None) -> None:
         now = _utcnow()
@@ -632,6 +740,78 @@ class RedisTraceStore(TraceStoreProtocol):
     def get_trace(self, job_id: int) -> TraceRecord | None:
         return self._read_trace(job_id)
 
+    def _list_indexed_job_ids(self, *, scan_limit: int) -> list[int]:
+        index_key = self._jobs_index_key()
+        batch_size = 100
+        offset = 0
+        out: list[int] = []
+        while len(out) < scan_limit:
+            try:
+                rows = self._redis.zrevrange(index_key, offset, offset + batch_size - 1)
+            except Exception:
+                return out
+            if not rows:
+                break
+            for raw in rows:
+                job_id = _coerce_int(_decode_blob(raw), default=0)
+                if job_id > 0:
+                    out.append(job_id)
+            if len(rows) < batch_size:
+                break
+            offset += batch_size
+        return out
+
+    def _scan_runtime_job_ids(self, *, scan_limit: int) -> list[int]:
+        pattern = f"{self._key_prefix}:job:*:runtime"
+        out: list[int] = []
+        try:
+            iterator = self._redis.scan_iter(match=pattern, count=max(50, scan_limit))
+        except Exception:
+            return out
+        for raw in iterator:
+            key = _decode_blob(raw)
+            if not key:
+                continue
+            parts = key.split(":")
+            if len(parts) < 4:
+                continue
+            job_id = _coerce_int(parts[-2], default=0)
+            if job_id > 0:
+                out.append(job_id)
+            if len(out) >= scan_limit:
+                break
+        out.sort(reverse=True)
+        return out
+
+    def list_traces(self, *, query: TraceQuery | None = None) -> list[TraceRecord]:
+        q = query or TraceQuery()
+        limit = max(1, min(200, q.limit))
+        scan_limit = max(100, limit * 8)
+
+        job_ids = self._list_indexed_job_ids(scan_limit=scan_limit)
+        if not job_ids:
+            job_ids = self._scan_runtime_job_ids(scan_limit=scan_limit)
+
+        out: list[TraceRecord] = []
+        seen: set[int] = set()
+        for job_id in job_ids:
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            record = self._read_trace(job_id)
+            if record is None:
+                try:
+                    self._redis.zrem(self._jobs_index_key(), str(job_id))
+                except Exception:
+                    pass
+                continue
+            if not _trace_matches(record, q):
+                continue
+            out.append(record)
+            if len(out) >= limit:
+                break
+        return out
+
     def mark_replay(
         self,
         *,
@@ -654,6 +834,7 @@ class RedisTraceStore(TraceStoreProtocol):
             )
         )
         self._write_json(self._runtime_key(job_id), self._serialize_trace(record))
+        self._index_job(job_id=job_id, updated_at=now)
 
     def save_topic_memory(
         self,
@@ -798,5 +979,6 @@ __all__ = [
     "TraceReplayRecord",
     "IdempotencyRecord",
     "TopicMemoryRecord",
+    "TraceQuery",
     "build_trace_store_from_settings",
 ]
