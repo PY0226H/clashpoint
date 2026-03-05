@@ -72,6 +72,29 @@ def _safe_float(value: Any, *, default: float = 0.0) -> float:
         return default
 
 
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
+    if value < minimum:
+        return minimum
+    if value > maximum:
+        return maximum
+    return value
+
+
+def _clamp_weight(value: float) -> float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
 def _tokenize(text: str) -> set[str]:
     out: set[str] = set()
     for token in TOKEN_RE.findall((text or "").lower()):
@@ -179,6 +202,80 @@ def _score_chunk(chunk: KnowledgeChunk, query_tokens: set[str]) -> float:
     coverage = overlap / max(1, len(query_tokens))
     density = overlap / max(1, len(chunk_tokens))
     return coverage * 0.75 + density * 0.25
+
+
+def _rrf_fuse(
+    candidates: list[list[RetrievedContext]],
+    *,
+    rrf_k: int = 60,
+) -> list[RetrievedContext]:
+    score_map: dict[str, float] = {}
+    context_map: dict[str, RetrievedContext] = {}
+    for rows in candidates:
+        for rank, item in enumerate(rows):
+            score_map[item.chunk_id] = score_map.get(item.chunk_id, 0.0) + (1.0 / (rrf_k + rank + 1))
+            previous = context_map.get(item.chunk_id)
+            if previous is None or item.score > previous.score:
+                context_map[item.chunk_id] = item
+
+    fused: list[RetrievedContext] = []
+    for chunk_id, score in score_map.items():
+        item = context_map.get(chunk_id)
+        if item is None:
+            continue
+        fused.append(
+            RetrievedContext(
+                chunk_id=item.chunk_id,
+                title=item.title,
+                source_url=item.source_url,
+                content=item.content,
+                score=score,
+            )
+        )
+    fused.sort(key=lambda row: (-row.score, row.chunk_id))
+    return fused
+
+
+def _simple_rerank(
+    contexts: list[RetrievedContext],
+    *,
+    query_tokens: set[str],
+    limit: int,
+    query_weight: float = 0.7,
+    base_weight: float = 0.3,
+) -> list[RetrievedContext]:
+    if not contexts:
+        return []
+    if not query_tokens:
+        return contexts[: max(0, limit)]
+
+    q_weight = _clamp_weight(query_weight)
+    b_weight = _clamp_weight(base_weight)
+    if q_weight == 0.0 and b_weight == 0.0:
+        q_weight = 0.7
+        b_weight = 0.3
+    total_weight = q_weight + b_weight
+    if total_weight > 0:
+        q_weight = q_weight / total_weight
+        b_weight = b_weight / total_weight
+
+    reranked: list[RetrievedContext] = []
+    for item in contexts:
+        item_tokens = _tokenize(f"{item.title} {item.content}")
+        overlap = len(query_tokens.intersection(item_tokens))
+        overlap_score = overlap / max(1, len(query_tokens))
+        score = overlap_score * q_weight + min(1.0, max(0.0, item.score)) * b_weight
+        reranked.append(
+            RetrievedContext(
+                chunk_id=item.chunk_id,
+                title=item.title,
+                source_url=item.source_url,
+                content=item.content,
+                score=score,
+            )
+        )
+    reranked.sort(key=lambda row: (-row.score, row.chunk_id))
+    return reranked[: max(0, limit)]
 
 
 def parse_source_whitelist(raw: str | None) -> tuple[str, ...]:
@@ -475,19 +572,79 @@ def retrieve_contexts(
     openai_base_url: str = "https://api.openai.com/v1",
     openai_embedding_model: str = "text-embedding-3-small",
     openai_timeout_secs: float = 8.0,
+    hybrid_enabled: bool = False,
+    rerank_enabled: bool = False,
+    hybrid_rrf_k: int = 60,
+    hybrid_vector_limit_multiplier: int = 1,
+    hybrid_lexical_limit_multiplier: int = 2,
+    rerank_query_weight: float = 0.7,
+    rerank_base_weight: float = 0.3,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[RetrievedContext]:
+    diagnostics_payload: dict[str, Any] = diagnostics if isinstance(diagnostics, dict) else {}
+    rrf_k = _clamp_int(_safe_int(hybrid_rrf_k, default=60), minimum=1, maximum=500)
+    vector_limit_multiplier = _clamp_int(
+        _safe_int(hybrid_vector_limit_multiplier, default=1),
+        minimum=1,
+        maximum=8,
+    )
+    lexical_limit_multiplier = _clamp_int(
+        _safe_int(hybrid_lexical_limit_multiplier, default=2),
+        minimum=1,
+        maximum=8,
+    )
+    rerank_query_w = _clamp_weight(float(rerank_query_weight))
+    rerank_base_w = _clamp_weight(float(rerank_base_weight))
+    if rerank_query_w == 0.0 and rerank_base_w == 0.0:
+        rerank_query_w = 0.7
+        rerank_base_w = 0.3
+    diagnostics_tuning = {
+        "rrfK": rrf_k,
+        "vectorLimitMultiplier": vector_limit_multiplier,
+        "lexicalLimitMultiplier": lexical_limit_multiplier,
+        "rerankQueryWeight": round(rerank_query_w, 4),
+        "rerankBaseWeight": round(rerank_base_w, 4),
+    }
     if not enabled:
+        diagnostics_payload.update(
+            {
+                "strategy": "disabled",
+                "vectorCandidateCount": 0,
+                "lexicalCandidateCount": 0,
+                "fusedCandidateCount": 0,
+                "rerankCandidateCount": 0,
+                "finalCount": 0,
+                "hybridApplied": False,
+                "rerankApplied": False,
+                "tuning": diagnostics_tuning,
+            }
+        )
         return []
 
     limit = max(0, max_snippets)
     if limit == 0:
+        diagnostics_payload.update(
+            {
+                "strategy": "limit_zero",
+                "vectorCandidateCount": 0,
+                "lexicalCandidateCount": 0,
+                "fusedCandidateCount": 0,
+                "rerankCandidateCount": 0,
+                "finalCount": 0,
+                "hybridApplied": False,
+                "rerankApplied": False,
+                "tuning": diagnostics_tuning,
+            }
+        )
         return []
 
     selected_backend = parse_rag_backend(backend)
+    query_tokens = _build_query_tokens(request, query_message_limit)
     if selected_backend == RAG_BACKEND_MILVUS and milvus_config is not None:
-        return _retrieve_contexts_from_milvus(
+        vector_limit = max(limit, milvus_config.search_limit * vector_limit_multiplier)
+        vector_contexts = _retrieve_contexts_from_milvus(
             request,
-            max_snippets=limit,
+            max_snippets=vector_limit,
             max_chars_per_snippet=max_chars_per_snippet,
             query_message_limit=query_message_limit,
             allowed_source_prefixes=allowed_source_prefixes,
@@ -497,14 +654,82 @@ def retrieve_contexts(
             openai_embedding_model=openai_embedding_model,
             openai_timeout_secs=openai_timeout_secs,
         )
-    return _retrieve_contexts_from_file(
+        lexical_contexts: list[RetrievedContext] = []
+        if hybrid_enabled:
+            lexical_contexts = _retrieve_contexts_from_file(
+                request,
+                knowledge_file=knowledge_file,
+                max_snippets=max(limit * lexical_limit_multiplier, limit),
+                max_chars_per_snippet=max_chars_per_snippet,
+                query_message_limit=query_message_limit,
+                allowed_source_prefixes=allowed_source_prefixes,
+            )
+        fused_contexts = (
+            _rrf_fuse([vector_contexts, lexical_contexts], rrf_k=rrf_k)
+            if hybrid_enabled and lexical_contexts
+            else vector_contexts
+        )
+        rerank_candidates = fused_contexts
+        final_contexts = (
+            _simple_rerank(
+                fused_contexts,
+                query_tokens=query_tokens,
+                limit=limit,
+                query_weight=rerank_query_w,
+                base_weight=rerank_base_w,
+            )
+            if rerank_enabled
+            else fused_contexts[:limit]
+        )
+        diagnostics_payload.update(
+            {
+                "strategy": "milvus_hybrid" if hybrid_enabled else "milvus_vector_only",
+                "vectorCandidateCount": len(vector_contexts),
+                "lexicalCandidateCount": len(lexical_contexts),
+                "fusedCandidateCount": len(fused_contexts),
+                "rerankCandidateCount": len(rerank_candidates),
+                "finalCount": len(final_contexts),
+                "hybridApplied": hybrid_enabled and bool(lexical_contexts),
+                "rerankApplied": rerank_enabled,
+                "tuning": diagnostics_tuning,
+            }
+        )
+        return final_contexts
+
+    lexical_limit = max(limit * lexical_limit_multiplier, limit) if rerank_enabled else limit
+    lexical_contexts = _retrieve_contexts_from_file(
         request,
         knowledge_file=knowledge_file,
-        max_snippets=limit,
+        max_snippets=lexical_limit,
         max_chars_per_snippet=max_chars_per_snippet,
         query_message_limit=query_message_limit,
         allowed_source_prefixes=allowed_source_prefixes,
     )
+    final_contexts = (
+        _simple_rerank(
+            lexical_contexts,
+            query_tokens=query_tokens,
+            limit=limit,
+            query_weight=rerank_query_w,
+            base_weight=rerank_base_w,
+        )
+        if rerank_enabled
+        else lexical_contexts[:limit]
+    )
+    diagnostics_payload.update(
+        {
+            "strategy": "file_lexical",
+            "vectorCandidateCount": 0,
+            "lexicalCandidateCount": len(lexical_contexts),
+            "fusedCandidateCount": len(lexical_contexts),
+            "rerankCandidateCount": len(lexical_contexts),
+            "finalCount": len(final_contexts),
+            "hybridApplied": False,
+            "rerankApplied": rerank_enabled,
+            "tuning": diagnostics_tuning,
+        }
+    )
+    return final_contexts
 
 
 def summarize_retrieved_contexts(

@@ -123,6 +123,12 @@ cd ai_judge_service
 - `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback）
 - `GET /internal/judge/rag/diagnostics?job_id=...`：查看该任务检索诊断摘要
 
+`dispatch` 的 `retrieval_profile`（默认 `hybrid_v1`）当前支持：
+- `hybrid_v1`
+- `hybrid_recall_v1`
+- `hybrid_precision_v1`
+- `lexical_fast_v1`
+
 ## 知识文件格式（最小）
 
 `AI_JUDGE_RAG_KNOWLEDGE_FILE` 指向一个 JSON 数组，每个元素示例：
@@ -147,3 +153,19 @@ cd ai_judge_service
 cd ai_judge_service
 .venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
 ```
+
+## RAG 评测基线（M4 phase2）
+
+执行离线 profile 对照评测：
+
+```bash
+cd ai_judge_service
+.venv/bin/python scripts/rag_eval_baseline.py \
+  --dataset-file ./tests/fixtures/rag_eval_cases.json \
+  --knowledge-file ./knowledge.json \
+  --output-file /tmp/rag_eval_result.json
+```
+
+`dataset-file` 为 JSON 数组，每项包含：
+- `request`: `JudgeDispatchRequest` 结构
+- `expectedChunkIds`: 该样本期望命中的 chunk id 列表

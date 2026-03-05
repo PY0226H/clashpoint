@@ -188,6 +188,8 @@ async def build_report_by_runtime(
     }
     report.payload["retrievalDiagnostics"] = {
         "profile": retrieval_profile,
+        "profileResolved": rag_result.retrieval_diagnostics.get("profileResolved"),
+        "profileFallbackReason": rag_result.retrieval_diagnostics.get("profileFallbackReason"),
         "hybridEnabled": settings.rag_hybrid_enabled,
         "rerankEnabled": settings.rag_rerank_enabled,
         "topicMemoryEnabled": settings.topic_memory_enabled,
@@ -201,6 +203,7 @@ async def build_report_by_runtime(
         "effectiveBackend": rag_result.effective_backend,
         "snippetCount": len(retrieved_contexts),
         "sourceCount": len(report.payload.get("ragSources", [])),
+        "ragRetriever": rag_result.retrieval_diagnostics,
     }
     report.payload["topicMemory"] = {
         "enabled": settings.topic_memory_enabled,

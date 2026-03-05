@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from .models import JudgeDispatchRequest, SubmitJudgeReportInput
+from .rag_profiles import DEFAULT_RETRIEVAL_PROFILE, resolve_retrieval_profile
 from .rag_retriever import (
     RAG_BACKEND_FILE,
     RAG_BACKEND_MILVUS,
@@ -23,6 +24,7 @@ class RuntimeRagResult:
     requested_backend: str
     effective_backend: str
     backend_fallback_reason: str | None
+    retrieval_diagnostics: dict[str, Any]
 
 
 def build_milvus_config(settings: Settings) -> RagMilvusConfig | None:
@@ -71,31 +73,82 @@ def retrieve_runtime_contexts_with_meta(
     settings: Settings,
     retrieve_contexts_fn: RetrieveContextsFn = retrieve_contexts,
 ) -> RuntimeRagResult:
+    profile_requested = str(
+        getattr(request, "retrieval_profile", DEFAULT_RETRIEVAL_PROFILE)
+        or DEFAULT_RETRIEVAL_PROFILE
+    )
+    profile, profile_fallback_reason = resolve_retrieval_profile(profile_requested)
+    effective_hybrid_enabled = settings.rag_hybrid_enabled and profile.hybrid_enabled
+    effective_rerank_enabled = settings.rag_rerank_enabled and profile.rerank_enabled
     milvus_config = build_milvus_config(settings)
     effective_backend, backend_fallback_reason = resolve_effective_rag_backend(
         settings,
         milvus_config,
     )
-    retrieved_contexts = retrieve_contexts_fn(
-        request,
-        enabled=settings.rag_enabled,
-        knowledge_file=settings.rag_knowledge_file,
-        max_snippets=settings.rag_max_snippets,
-        max_chars_per_snippet=settings.rag_max_chars_per_snippet,
-        query_message_limit=settings.rag_query_message_limit,
-        allowed_source_prefixes=settings.rag_source_whitelist,
-        backend=effective_backend,
-        milvus_config=milvus_config if effective_backend == RAG_BACKEND_MILVUS else None,
-        openai_api_key=settings.openai_api_key,
-        openai_base_url=settings.openai_base_url,
-        openai_embedding_model=settings.rag_openai_embedding_model,
-        openai_timeout_secs=settings.openai_timeout_secs,
+    retrieve_kwargs: dict[str, Any] = {
+        "enabled": settings.rag_enabled,
+        "knowledge_file": settings.rag_knowledge_file,
+        "max_snippets": settings.rag_max_snippets,
+        "max_chars_per_snippet": settings.rag_max_chars_per_snippet,
+        "query_message_limit": settings.rag_query_message_limit,
+        "allowed_source_prefixes": settings.rag_source_whitelist,
+        "backend": effective_backend,
+        "milvus_config": milvus_config if effective_backend == RAG_BACKEND_MILVUS else None,
+        "openai_api_key": settings.openai_api_key,
+        "openai_base_url": settings.openai_base_url,
+        "openai_embedding_model": settings.rag_openai_embedding_model,
+        "openai_timeout_secs": settings.openai_timeout_secs,
+        "hybrid_enabled": effective_hybrid_enabled,
+        "rerank_enabled": effective_rerank_enabled,
+        "hybrid_rrf_k": profile.hybrid_rrf_k,
+        "hybrid_vector_limit_multiplier": profile.hybrid_vector_limit_multiplier,
+        "hybrid_lexical_limit_multiplier": profile.hybrid_lexical_limit_multiplier,
+        "rerank_query_weight": profile.rerank_query_weight,
+        "rerank_base_weight": profile.rerank_base_weight,
+    }
+    retrieval_diagnostics: dict[str, Any] = {}
+    retrieve_kwargs["diagnostics"] = retrieval_diagnostics
+    try:
+        retrieved_contexts = retrieve_contexts_fn(
+            request,
+            **retrieve_kwargs,
+        )
+    except TypeError:
+        retrieve_kwargs.pop("hybrid_enabled", None)
+        retrieve_kwargs.pop("rerank_enabled", None)
+        retrieve_kwargs.pop("hybrid_rrf_k", None)
+        retrieve_kwargs.pop("hybrid_vector_limit_multiplier", None)
+        retrieve_kwargs.pop("hybrid_lexical_limit_multiplier", None)
+        retrieve_kwargs.pop("rerank_query_weight", None)
+        retrieve_kwargs.pop("rerank_base_weight", None)
+        retrieve_kwargs.pop("diagnostics", None)
+        retrieved_contexts = retrieve_contexts_fn(
+            request,
+            **retrieve_kwargs,
+        )
+    retrieval_diagnostics.setdefault("profileRequested", profile_requested)
+    retrieval_diagnostics.setdefault("profileResolved", profile.name)
+    retrieval_diagnostics.setdefault("profileFallbackReason", profile_fallback_reason)
+    retrieval_diagnostics.setdefault("hybridEnabledBySettings", settings.rag_hybrid_enabled)
+    retrieval_diagnostics.setdefault("rerankEnabledBySettings", settings.rag_rerank_enabled)
+    retrieval_diagnostics.setdefault("hybridEnabledEffective", effective_hybrid_enabled)
+    retrieval_diagnostics.setdefault("rerankEnabledEffective", effective_rerank_enabled)
+    retrieval_diagnostics.setdefault(
+        "profileTuning",
+        {
+            "rrfK": profile.hybrid_rrf_k,
+            "vectorLimitMultiplier": profile.hybrid_vector_limit_multiplier,
+            "lexicalLimitMultiplier": profile.hybrid_lexical_limit_multiplier,
+            "rerankQueryWeight": profile.rerank_query_weight,
+            "rerankBaseWeight": profile.rerank_base_weight,
+        },
     )
     return RuntimeRagResult(
         retrieved_contexts=retrieved_contexts,
         requested_backend=settings.rag_backend,
         effective_backend=effective_backend,
         backend_fallback_reason=backend_fallback_reason,
+        retrieval_diagnostics=retrieval_diagnostics,
     )
 
 

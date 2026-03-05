@@ -1,0 +1,52 @@
+[
+  {
+    "caseId": "sample-1",
+    "expectedChunkIds": ["tft-frontline-001"],
+    "request": {
+      "job": {
+        "job_id": 1,
+        "ws_id": 1,
+        "session_id": 1,
+        "requested_by": 1,
+        "style_mode": "rational",
+        "rejudge_triggered": false,
+        "requested_at": "2026-03-04T00:00:00Z"
+      },
+      "session": {
+        "status": "judging",
+        "scheduled_start_at": "2026-03-04T00:00:00Z",
+        "actual_start_at": "2026-03-04T00:00:00Z",
+        "end_at": "2026-03-04T00:10:00Z"
+      },
+      "topic": {
+        "title": "云顶之弈前排是否版本答案",
+        "description": "讨论前排体系与后排爆发体系",
+        "category": "game",
+        "stance_pro": "前排体系更稳定",
+        "stance_con": "后排爆发更强",
+        "context_seed": "版本改动提升了前排承伤收益"
+      },
+      "messages": [
+        {
+          "message_id": 1,
+          "side": "pro",
+          "content": "前排够硬才能保证后排输出时间。",
+          "created_at": "2026-03-04T00:01:00Z"
+        },
+        {
+          "message_id": 2,
+          "side": "con",
+          "content": "后排爆发可以快速结束战斗。",
+          "created_at": "2026-03-04T00:02:00Z"
+        }
+      ],
+      "message_window_size": 100,
+      "rubric_version": "v1",
+      "trace_id": "trace-sample-1",
+      "idempotency_key": "idem-sample-1",
+      "judge_policy_version": "v2-default",
+      "topic_domain": "game_tft",
+      "retrieval_profile": "hybrid_v1"
+    }
+  }
+]

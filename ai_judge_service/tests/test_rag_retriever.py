@@ -234,6 +234,134 @@ class RagRetrieverTests(unittest.TestCase):
         mock_embed_query_with_openai.assert_called_once()
         mock_fetch_milvus_candidates.assert_called_once()
 
+    def test_retrieve_contexts_file_should_support_rerank_and_diagnostics(self) -> None:
+        request = _build_request()
+        chunks = [
+            {
+                "chunkId": "c1",
+                "title": "前排护甲收益",
+                "sourceUrl": "https://example.com/c1",
+                "content": "前排护甲收益与版本改动有关。",
+                "tags": ["frontline"],
+            },
+            {
+                "chunkId": "c2",
+                "title": "后排爆发收益",
+                "sourceUrl": "https://example.com/c2",
+                "content": "后排爆发在短局中更强。",
+                "tags": ["backline"],
+            },
+        ]
+        diagnostics: dict = {}
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
+            json.dump(chunks, f, ensure_ascii=False)
+            f.flush()
+            contexts = retrieve_contexts(
+                request,
+                enabled=True,
+                knowledge_file=f.name,
+                max_snippets=2,
+                max_chars_per_snippet=120,
+                query_message_limit=50,
+                rerank_enabled=True,
+                diagnostics=diagnostics,
+            )
+        self.assertLessEqual(len(contexts), 2)
+        self.assertEqual(diagnostics["strategy"], "file_lexical")
+        self.assertTrue(diagnostics["rerankApplied"])
+        self.assertEqual(diagnostics["finalCount"], len(contexts))
+        self.assertEqual(diagnostics["tuning"]["lexicalLimitMultiplier"], 2)
+        self.assertEqual(diagnostics["tuning"]["rerankQueryWeight"], 0.7)
+        self.assertEqual(diagnostics["tuning"]["rerankBaseWeight"], 0.3)
+
+    @patch("app.rag_retriever._embed_query_with_openai")
+    @patch("app.rag_retriever._fetch_milvus_candidates")
+    def test_retrieve_contexts_milvus_should_support_hybrid_and_rerank(
+        self,
+        mock_fetch_milvus_candidates,
+        mock_embed_query_with_openai,
+    ) -> None:
+        request = _build_request()
+        mock_embed_query_with_openai.return_value = [0.1, 0.2, 0.3]
+        mock_fetch_milvus_candidates.return_value = [
+            {
+                "distance": 0.93,
+                "entity": {
+                    "chunk_id": "milvus-ok",
+                    "title": "向量召回前排分析",
+                    "source_url": "https://example.com/milvus-ok",
+                    "content": "向量召回命中前排分析内容。",
+                },
+            }
+        ]
+        diagnostics: dict = {}
+        chunks = [
+            {
+                "chunkId": "file-ok",
+                "title": "词法召回前排版本",
+                "sourceUrl": "https://example.com/file-ok",
+                "content": "词法召回命中前排关键词。",
+                "tags": ["frontline", "patch"],
+            }
+        ]
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
+            json.dump(chunks, f, ensure_ascii=False)
+            f.flush()
+            contexts = retrieve_contexts(
+                request,
+                enabled=True,
+                knowledge_file=f.name,
+                max_snippets=4,
+                max_chars_per_snippet=120,
+                query_message_limit=50,
+                backend=RAG_BACKEND_MILVUS,
+                milvus_config=RagMilvusConfig(
+                    uri="http://milvus:19530",
+                    collection="debate_knowledge",
+                ),
+                openai_api_key="sk-test",
+                openai_base_url="https://api.openai.com/v1",
+                openai_embedding_model="text-embedding-3-small",
+                openai_timeout_secs=8,
+                hybrid_enabled=True,
+                rerank_enabled=True,
+                diagnostics=diagnostics,
+            )
+        chunk_ids = [item.chunk_id for item in contexts]
+        self.assertIn("milvus-ok", chunk_ids)
+        self.assertIn("file-ok", chunk_ids)
+        self.assertEqual(diagnostics["strategy"], "milvus_hybrid")
+        self.assertGreaterEqual(diagnostics["vectorCandidateCount"], 1)
+        self.assertGreaterEqual(diagnostics["lexicalCandidateCount"], 1)
+        self.assertTrue(diagnostics["rerankApplied"])
+        self.assertEqual(diagnostics["tuning"]["rrfK"], 60)
+        self.assertEqual(diagnostics["tuning"]["vectorLimitMultiplier"], 1)
+
+    def test_retrieve_contexts_should_clamp_invalid_tuning_values(self) -> None:
+        request = _build_request()
+        diagnostics: dict = {}
+        contexts = retrieve_contexts(
+            request,
+            enabled=True,
+            knowledge_file="",
+            max_snippets=2,
+            max_chars_per_snippet=120,
+            query_message_limit=50,
+            rerank_enabled=True,
+            hybrid_rrf_k=-10,
+            hybrid_vector_limit_multiplier=-2,
+            hybrid_lexical_limit_multiplier=99,
+            rerank_query_weight=2.5,
+            rerank_base_weight=-1.0,
+            diagnostics=diagnostics,
+        )
+        self.assertGreaterEqual(len(contexts), 1)
+        self.assertEqual(diagnostics["tuning"]["rrfK"], 1)
+        self.assertEqual(diagnostics["tuning"]["vectorLimitMultiplier"], 1)
+        self.assertEqual(diagnostics["tuning"]["lexicalLimitMultiplier"], 8)
+        self.assertEqual(diagnostics["tuning"]["rerankQueryWeight"], 1.0)
+        self.assertEqual(diagnostics["tuning"]["rerankBaseWeight"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

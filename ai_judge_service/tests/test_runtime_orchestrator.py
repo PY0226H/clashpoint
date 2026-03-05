@@ -164,6 +164,10 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("retrievalDiagnostics", report.payload)
         self.assertIn("consistency", report.payload)
         self.assertIn("cost", report.payload)
+        rag_diag = report.payload["retrievalDiagnostics"]["ragRetriever"]
+        self.assertEqual(rag_diag["profileResolved"], "hybrid_v1")
+        self.assertTrue(rag_diag["hybridEnabledEffective"])
+        self.assertTrue(rag_diag["rerankEnabledEffective"])
         self.assertIsNone(captured["retrieve_kwargs"]["milvus_config"])
         self.assertEqual(report.payload["topicMemory"]["reuseCount"], 0)
         self.assertIsNone(report.payload["retrievalDiagnostics"]["topicMemoryAvgQualityScore"])
@@ -230,6 +234,8 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["topicMemory"]["qualityScores"], [0.92])
         self.assertEqual(report.payload["retrievalDiagnostics"]["topicMemoryReuseCount"], 1)
         self.assertEqual(report.payload["retrievalDiagnostics"]["topicMemoryAvgQualityScore"], 0.92)
+        rag_diag = report.payload["retrievalDiagnostics"]["ragRetriever"]
+        self.assertEqual(rag_diag["profileResolved"], "hybrid_v1")
 
     async def test_build_report_by_runtime_should_fallback_when_openai_failed_and_enabled(self) -> None:
         settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test", openai_fallback_to_mock=True)

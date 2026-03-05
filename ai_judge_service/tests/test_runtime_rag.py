@@ -137,6 +137,14 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertFalse(kwargs["enabled"])
         self.assertEqual(kwargs["backend"], RAG_BACKEND_MILVUS)
         self.assertEqual(kwargs["openai_api_key"], "sk-test")
+        self.assertTrue(kwargs["hybrid_enabled"])
+        self.assertTrue(kwargs["rerank_enabled"])
+        self.assertEqual(kwargs["hybrid_rrf_k"], 60)
+        self.assertEqual(kwargs["hybrid_vector_limit_multiplier"], 1)
+        self.assertEqual(kwargs["hybrid_lexical_limit_multiplier"], 2)
+        self.assertEqual(kwargs["rerank_query_weight"], 0.7)
+        self.assertEqual(kwargs["rerank_base_weight"], 0.3)
+        self.assertIsInstance(kwargs["diagnostics"], dict)
         self.assertEqual(kwargs["milvus_config"].collection, "judge_kb")
 
     def test_retrieve_runtime_contexts_with_meta_should_fallback_to_file_when_missing_embedding_key(
@@ -155,6 +163,7 @@ class RuntimeRagTests(unittest.TestCase):
         def fake_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
             captured["req"] = req
             captured["kwargs"] = kwargs
+            kwargs["diagnostics"]["strategy"] = "file_fallback"
             return []
 
         result = retrieve_runtime_contexts_with_meta(
@@ -172,6 +181,55 @@ class RuntimeRagTests(unittest.TestCase):
         kwargs = captured["kwargs"]
         self.assertEqual(kwargs["backend"], "file")
         self.assertIsNone(kwargs["milvus_config"])
+        self.assertEqual(result.retrieval_diagnostics["strategy"], "file_fallback")
+        self.assertEqual(result.retrieval_diagnostics["profileResolved"], "hybrid_v1")
+        self.assertIsNone(result.retrieval_diagnostics["profileFallbackReason"])
+
+    def test_retrieve_runtime_contexts_with_meta_should_retry_without_hybrid_kwargs_for_legacy_fn(self) -> None:
+        settings = _build_settings(rag_enabled=True)
+        request = SimpleNamespace(job=SimpleNamespace(job_id=1))
+        calls = {"count": 0}
+
+        def legacy_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
+            calls["count"] += 1
+            if "hybrid_enabled" in kwargs:
+                raise TypeError("legacy fn got unexpected keyword")
+            return []
+
+        result = retrieve_runtime_contexts_with_meta(
+            request=request,
+            settings=settings,
+            retrieve_contexts_fn=legacy_retrieve_contexts,
+        )
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(result.retrieval_diagnostics["profileResolved"], "hybrid_v1")
+        self.assertTrue(result.retrieval_diagnostics["hybridEnabledEffective"])
+        self.assertTrue(result.retrieval_diagnostics["rerankEnabledEffective"])
+
+    def test_retrieve_runtime_contexts_with_meta_should_fallback_unknown_profile_to_default(self) -> None:
+        settings = _build_settings(rag_enabled=True)
+        request = SimpleNamespace(
+            job=SimpleNamespace(job_id=1),
+            retrieval_profile="unknown-profile",
+        )
+        captured: dict[str, object] = {}
+
+        def fake_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
+            captured["req"] = req
+            captured["kwargs"] = kwargs
+            return []
+
+        result = retrieve_runtime_contexts_with_meta(
+            request=request,
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+        )
+        kwargs = captured["kwargs"]
+        self.assertEqual(kwargs["hybrid_rrf_k"], 60)
+        self.assertEqual(kwargs["hybrid_lexical_limit_multiplier"], 2)
+        self.assertEqual(result.retrieval_diagnostics["profileRequested"], "unknown-profile")
+        self.assertEqual(result.retrieval_diagnostics["profileResolved"], "hybrid_v1")
+        self.assertEqual(result.retrieval_diagnostics["profileFallbackReason"], "unknown_profile")
 
     def test_resolve_effective_rag_backend_should_fallback_when_milvus_config_missing(self) -> None:
         settings = _build_settings(rag_backend=RAG_BACKEND_MILVUS, openai_api_key="sk-test")
