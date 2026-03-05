@@ -108,6 +108,9 @@ class Settings:
     topic_memory_min_evidence_refs: int
     topic_memory_min_rationale_chars: int
     topic_memory_min_quality_score: float
+    runtime_retry_max_attempts: int = 2
+    runtime_retry_backoff_ms: int = 200
+    compliance_block_enabled: bool = True
 
 
 def load_settings() -> Settings:
@@ -200,6 +203,16 @@ def load_settings() -> Settings:
         topic_memory_min_quality_score=float(
             os.getenv("AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE", "0.55")
         ),
+        runtime_retry_max_attempts=int(
+            os.getenv("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS", "2")
+        ),
+        runtime_retry_backoff_ms=int(
+            os.getenv("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS", "200")
+        ),
+        compliance_block_enabled=parse_env_bool(
+            os.getenv("AI_JUDGE_COMPLIANCE_BLOCK_ENABLED"),
+            default=True,
+        ),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings
@@ -238,6 +251,10 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS must be between 0 and 2000")
     if settings.topic_memory_min_quality_score < 0.0 or settings.topic_memory_min_quality_score > 1.0:
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE must be between 0 and 1")
+    if settings.runtime_retry_max_attempts < 1 or settings.runtime_retry_max_attempts > 10:
+        raise ValueError("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS must be between 1 and 10")
+    if settings.runtime_retry_backoff_ms < 0 or settings.runtime_retry_backoff_ms > 10000:
+        raise ValueError("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS must be between 0 and 10000")
     if settings.redis_enabled:
         if not settings.redis_url:
             raise ValueError("AI_JUDGE_REDIS_URL cannot be empty when AI_JUDGE_REDIS_ENABLED=true")
@@ -273,4 +290,7 @@ def build_dispatch_runtime_config(settings: Settings) -> DispatchRuntimeConfig:
     return DispatchRuntimeConfig(
         process_delay_ms=settings.process_delay_ms,
         judge_style_mode=settings.judge_style_mode,
+        runtime_retry_max_attempts=settings.runtime_retry_max_attempts,
+        retry_backoff_ms=settings.runtime_retry_backoff_ms,
+        compliance_block_enabled=settings.compliance_block_enabled,
     )

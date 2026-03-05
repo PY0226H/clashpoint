@@ -47,6 +47,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.topic_memory_min_evidence_refs, 1)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 20)
         self.assertEqual(settings.topic_memory_min_quality_score, 0.55)
+        self.assertEqual(settings.runtime_retry_max_attempts, 2)
+        self.assertEqual(settings.runtime_retry_backoff_ms, 200)
+        self.assertTrue(settings.compliance_block_enabled)
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -108,6 +111,9 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS": "2",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS": "60",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE": "0.7",
+                "AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS": "4",
+                "AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS": "500",
+                "AI_JUDGE_COMPLIANCE_BLOCK_ENABLED": "false",
             },
             clear=True,
         ):
@@ -161,6 +167,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.topic_memory_min_evidence_refs, 2)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 60)
         self.assertEqual(settings.topic_memory_min_quality_score, 0.7)
+        self.assertEqual(settings.runtime_retry_max_attempts, 4)
+        self.assertEqual(settings.runtime_retry_backoff_ms, 500)
+        self.assertFalse(settings.compliance_block_enabled)
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -176,6 +185,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(callback_cfg.callback_timeout_secs, settings.callback_timeout_secs)
         self.assertEqual(runtime_cfg.process_delay_ms, settings.process_delay_ms)
         self.assertEqual(runtime_cfg.judge_style_mode, settings.judge_style_mode)
+        self.assertEqual(runtime_cfg.runtime_retry_max_attempts, settings.runtime_retry_max_attempts)
+        self.assertEqual(runtime_cfg.retry_backoff_ms, settings.runtime_retry_backoff_ms)
+        self.assertEqual(runtime_cfg.compliance_block_enabled, settings.compliance_block_enabled)
 
     def test_load_settings_should_map_invalid_provider_to_openai(self) -> None:
         with patch.dict(os.environ, {"AI_JUDGE_PROVIDER": "invalid"}, clear=True):
@@ -243,6 +255,34 @@ class SettingsTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3"):
+                load_settings()
+
+    def test_load_settings_should_reject_invalid_runtime_retry_max_attempts(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS": "0",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS must be between 1 and 10",
+            ):
+                load_settings()
+
+    def test_load_settings_should_reject_invalid_runtime_retry_backoff_ms(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS must be between 0 and 10000",
+            ):
                 load_settings()
 
     def test_load_settings_should_reject_invalid_reflection_policy(self) -> None:

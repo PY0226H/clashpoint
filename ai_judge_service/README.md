@@ -99,6 +99,9 @@ cd ai_judge_service
 - `AI_JUDGE_RAG_HYBRID_ENABLED`: 混合检索策略开关，默认 `true`
 - `AI_JUDGE_RAG_RERANK_ENABLED`: 检索重排开关，默认 `true`
 - `AI_JUDGE_DEGRADE_MAX_LEVEL`: 最大降级等级 `0..3`，默认 `3`
+- `AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS`: runtime 可重试错误最大尝试次数（含首次），默认 `2`
+- `AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS`: runtime 重试退避基线毫秒，默认 `200`
+- `AI_JUDGE_COMPLIANCE_BLOCK_ENABLED`: 检测到合规违规时是否阻断提交并走 failed callback，默认 `true`
 - `AI_JUDGE_TRACE_TTL_SECS`: trace 与回放记录 TTL，默认 `86400`
 - `AI_JUDGE_IDEMPOTENCY_TTL_SECS`: 幂等键 TTL，默认 `86400`
 - `AI_JUDGE_REDIS_ENABLED`: 启用 Redis 短期记忆（trace/idempotency/stage runtime），默认 `false`
@@ -142,6 +145,13 @@ cd ai_judge_service
 `report.payload` 中会回写：
 - `errorCodes`: 当前任务触发的错误码列表（可为空）。
 - `judgeTrace.errorCodes`: 与上面一致，用于链路追踪对齐。
+- `auditAlerts`: 审计告警列表（如 `compliance_violation`）。
+- `judgeAudit`: 审计快照（`promptHash/model/rubricVersion/retrievalSnapshot/degradationLevel`）。
+
+当命中公平性/合规违规并触发阻断时：
+- `dispatch` 返回 `status=marked_failed` 与 `errorCode=consistency_conflict`
+- 响应中包含 `auditAlert`
+- `GET /internal/judge/jobs/{job_id}/replay/report` 的 `auditAlerts` 可用于 Ops 复盘
 
 ## 知识文件格式（最小）
 

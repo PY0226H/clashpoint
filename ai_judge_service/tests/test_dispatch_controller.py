@@ -8,13 +8,27 @@ from app.runtime_errors import JudgeRuntimeError
 
 
 class _FakeReport:
-    def __init__(self, *, winner: str = "pro", needs_draw_vote: bool = False, provider: str = "openai") -> None:
+    def __init__(
+        self,
+        *,
+        winner: str = "pro",
+        needs_draw_vote: bool = False,
+        provider: str = "openai",
+        compliance: dict | None = None,
+    ) -> None:
         self.winner = winner
         self.needs_draw_vote = needs_draw_vote
         self.payload = {"provider": provider}
+        if compliance is not None:
+            self.payload["agentPipeline"] = {"compliance": compliance}
 
     def model_dump(self, *, mode: str = "python") -> dict:
-        return {"winner": self.winner, "needsDrawVote": self.needs_draw_vote, "mode": mode}
+        return {
+            "winner": self.winner,
+            "needsDrawVote": self.needs_draw_vote,
+            "payload": self.payload,
+            "mode": mode,
+        }
 
 
 def _build_request(messages: list[object] | None = None) -> SimpleNamespace:
@@ -32,12 +46,14 @@ def _runtime_cfg(
     process_delay_ms: int = 0,
     runtime_retry_max_attempts: int = 1,
     retry_backoff_ms: int = 0,
+    compliance_block_enabled: bool = True,
 ) -> DispatchRuntimeConfig:
     return DispatchRuntimeConfig(
         process_delay_ms=process_delay_ms,
         judge_style_mode="rational",
         runtime_retry_max_attempts=runtime_retry_max_attempts,
         retry_backoff_ms=retry_backoff_ms,
+        compliance_block_enabled=compliance_block_enabled,
     )
 
 
@@ -206,6 +222,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["provider"], "openai")
         self.assertEqual(result["attemptCount"], 1)
         self.assertEqual(result["retryCount"], 0)
+        self.assertFalse(result["complianceBlocked"])
 
     async def test_process_dispatch_request_should_retry_retryable_error_then_succeed(self) -> None:
         request = _build_request()
@@ -269,6 +286,72 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["errorCode"], "consistency_conflict")
         self.assertEqual(result["attemptCount"], 1)
         self.assertEqual(result["retryCount"], 0)
+
+    async def test_process_dispatch_request_should_block_when_compliance_warned(self) -> None:
+        request = _build_request()
+        failed_calls: list[tuple[int, str]] = []
+
+        async def build_report_by_runtime(*_args: object, **_kwargs: object) -> _FakeReport:
+            return _FakeReport(
+                compliance={
+                    "status": "warn",
+                    "violations": ["display_missing_rationale"],
+                }
+            )
+
+        async def callback_failed(job_id: int, error_message: str) -> None:
+            failed_calls.append((job_id, error_message))
+
+        async def callback_report(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("should not call callback_report when blocked by compliance")
+
+        result = await process_dispatch_request(
+            request=request,
+            runtime_cfg=_runtime_cfg(compliance_block_enabled=True),
+            build_report_by_runtime=build_report_by_runtime,
+            callback_report=callback_report,
+            callback_failed=callback_failed,
+        )
+        self.assertEqual(result["status"], "marked_failed")
+        self.assertEqual(result["errorCode"], "consistency_conflict")
+        self.assertTrue(result["complianceBlocked"])
+        self.assertEqual(result["auditAlert"]["type"], "compliance_violation")
+        self.assertIn("display_missing_rationale", result["auditAlert"]["violations"])
+        self.assertEqual(len(failed_calls), 1)
+        self.assertIn("judge compliance blocked", failed_calls[0][1])
+
+    async def test_process_dispatch_request_should_allow_warn_when_compliance_block_disabled(self) -> None:
+        request = _build_request()
+        callback_payloads: list[tuple[int, dict]] = []
+
+        async def build_report_by_runtime(*_args: object, **_kwargs: object) -> _FakeReport:
+            return _FakeReport(
+                winner="pro",
+                compliance={
+                    "status": "warn",
+                    "violations": ["display_missing_rationale"],
+                },
+            )
+
+        async def callback_report(job_id: int, payload: dict) -> None:
+            callback_payloads.append((job_id, payload))
+
+        async def callback_failed(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("compliance_block_enabled=false should not call callback_failed")
+
+        result = await process_dispatch_request(
+            request=request,
+            runtime_cfg=_runtime_cfg(compliance_block_enabled=False),
+            build_report_by_runtime=build_report_by_runtime,
+            callback_report=callback_report,
+            callback_failed=callback_failed,
+        )
+        self.assertTrue(result["accepted"])
+        self.assertFalse(result["complianceBlocked"])
+        self.assertEqual(len(callback_payloads), 1)
+        payload = callback_payloads[0][1]
+        self.assertIn("auditAlerts", payload["payload"])
+        self.assertEqual(payload["payload"]["auditAlerts"][0]["type"], "compliance_violation")
 
 
 if __name__ == "__main__":

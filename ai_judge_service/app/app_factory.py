@@ -176,6 +176,13 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
     payload = report_summary.get("payload")
     if not isinstance(payload, dict):
         payload = {}
+    response_audit_alert = response.get("auditAlert")
+    payload_audit_alerts = payload.get("auditAlerts")
+    audit_alerts: list[dict[str, Any]] = []
+    if isinstance(payload_audit_alerts, list):
+        audit_alerts.extend([row for row in payload_audit_alerts if isinstance(row, dict)])
+    if isinstance(response_audit_alert, dict):
+        audit_alerts.append(response_audit_alert)
 
     stage_summaries = report_summary.get("stage_summaries") or report_summary.get("stageSummaries")
     if not isinstance(stage_summaries, list):
@@ -207,6 +214,7 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
             "conSummary": report_summary.get("con_summary") or report_summary.get("conSummary"),
         },
         "judgeAudit": payload.get("judgeAudit"),
+        "auditAlerts": audit_alerts,
         "callbackResult": {
             "callbackStatus": record.callback_status,
             "callbackError": record.callback_error,

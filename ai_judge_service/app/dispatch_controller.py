@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from .models import JudgeDispatchRequest
 from .runtime_errors import (
+    ERROR_CONSISTENCY_CONFLICT,
     ERROR_JUDGE_TIMEOUT,
     ERROR_MODEL_OVERLOAD,
     ERROR_RAG_UNAVAILABLE,
@@ -42,6 +43,50 @@ class DispatchRuntimeConfig:
     judge_style_mode: str
     runtime_retry_max_attempts: int = 2
     retry_backoff_ms: int = 200
+    compliance_block_enabled: bool = True
+
+
+def _extract_compliance_snapshot(report: JudgeReportProtocol) -> dict[str, Any] | None:
+    payload = report.payload if isinstance(report.payload, dict) else {}
+    pipeline = payload.get("agentPipeline")
+    if not isinstance(pipeline, dict):
+        return None
+    compliance = pipeline.get("compliance")
+    if not isinstance(compliance, dict):
+        return None
+    status = str(compliance.get("status") or "unknown").strip().lower()
+    raw_violations = compliance.get("violations")
+    violations: list[str] = []
+    if isinstance(raw_violations, list):
+        for item in raw_violations:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            violations.append(text)
+    return {
+        "status": status,
+        "violations": violations,
+    }
+
+
+def _build_compliance_alert(compliance: dict[str, Any]) -> dict[str, Any] | None:
+    status = str(compliance.get("status") or "unknown").strip().lower()
+    violations = [
+        str(item).strip()
+        for item in compliance.get("violations", [])
+        if str(item).strip()
+    ]
+    if status == "ok" and not violations:
+        return None
+    if not violations and status not in {"warn", "blocked", "error"}:
+        return None
+    return {
+        "type": "compliance_violation",
+        "status": status,
+        "severity": "high" if status in {"warn", "blocked", "error"} else "medium",
+        "violations": violations,
+        "blockTriggered": bool(violations) and status != "ok",
+    }
 
 
 async def process_dispatch_request(
@@ -58,7 +103,12 @@ async def process_dispatch_request(
 
     if not request.messages:
         await callback_failed(request.job.job_id, "empty debate messages, cannot judge")
-        return {"accepted": True, "jobId": request.job.job_id, "status": "marked_failed"}
+        return {
+            "accepted": True,
+            "jobId": request.job.job_id,
+            "status": "marked_failed",
+            "complianceBlocked": False,
+        }
 
     effective_style_mode, style_mode_source = resolve_effective_style_mode(
         request.job.style_mode,
@@ -103,10 +153,48 @@ async def process_dispatch_request(
                 "errorCode": error_code or ERROR_MODEL_OVERLOAD,
                 "attemptCount": attempt,
                 "retryCount": max(0, attempt - 1),
+                "complianceBlocked": False,
             }
 
     if report is None:  # pragma: no cover
         raise HTTPException(status_code=502, detail="judge runtime unavailable")
+
+    compliance = _extract_compliance_snapshot(report)
+    compliance_alert = _build_compliance_alert(compliance or {})
+    if compliance_alert:
+        payload = report.payload if isinstance(report.payload, dict) else {}
+        existing_alerts = payload.get("auditAlerts")
+        alerts: list[dict[str, Any]]
+        if isinstance(existing_alerts, list):
+            alerts = [row for row in existing_alerts if isinstance(row, dict)]
+        else:
+            alerts = []
+        alerts.append(compliance_alert)
+        payload["auditAlerts"] = alerts
+        if runtime_cfg.compliance_block_enabled and compliance_alert.get("blockTriggered"):
+            violation_text = ",".join(compliance_alert.get("violations") or [])
+            error_message = (
+                "judge compliance blocked "
+                f"({ERROR_CONSISTENCY_CONFLICT}): status={compliance_alert.get('status')} "
+                f"violations={violation_text or 'unknown'}"
+            )
+            try:
+                await callback_failed(request.job.job_id, error_message)
+            except Exception as callback_err:  # pragma: no cover
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"compliance blocked and callback_failed failed: {callback_err}",
+                ) from callback_err
+            return {
+                "accepted": True,
+                "jobId": request.job.job_id,
+                "status": "marked_failed",
+                "errorCode": ERROR_CONSISTENCY_CONFLICT,
+                "attemptCount": attempt,
+                "retryCount": max(0, attempt - 1),
+                "complianceBlocked": True,
+                "auditAlert": compliance_alert,
+            }
 
     try:
         await callback_report(request.job.job_id, report.model_dump(mode="json"))
@@ -121,4 +209,5 @@ async def process_dispatch_request(
         "provider": report.payload.get("provider"),
         "attemptCount": attempt,
         "retryCount": max(0, attempt - 1),
+        "complianceBlocked": False,
     }

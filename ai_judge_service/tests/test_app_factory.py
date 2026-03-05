@@ -434,6 +434,59 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("status", second)
         self.assertEqual(call_counter["n"], 2)
 
+    async def test_dispatch_should_block_compliance_and_expose_audit_alert_in_replay_report(self) -> None:
+        settings = _build_settings(ai_internal_key="k5e")
+        request = _build_request()
+        callback_failed_calls: list[tuple[int, str]] = []
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            report = _FakeReport()
+            report.payload["agentPipeline"] = {
+                "compliance": {
+                    "status": "warn",
+                    "violations": ["display_missing_rationale"],
+                }
+            }
+            return report
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            raise AssertionError("compliance blocked should not call callback_report")
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            callback_failed_calls.append((job_id, error_message))
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
+        trace_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/trace"
+        )
+        replay_report_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/replay/report"
+        )
+
+        result = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5e")
+        self.assertEqual(result["status"], "marked_failed")
+        self.assertEqual(result["errorCode"], "consistency_conflict")
+        self.assertTrue(result["complianceBlocked"])
+        self.assertEqual(result["auditAlert"]["type"], "compliance_violation")
+        self.assertEqual(len(callback_failed_calls), 1)
+        self.assertIn("judge compliance blocked", callback_failed_calls[0][1])
+
+        trace = await trace_route.endpoint(job_id=1, x_ai_internal_key="k5e")
+        self.assertEqual(trace["status"], "failed")
+
+        replay_report = await replay_report_route.endpoint(job_id=1, x_ai_internal_key="k5e")
+        self.assertEqual(replay_report["status"], "failed")
+        self.assertEqual(replay_report["callbackResult"]["response"]["errorCode"], "consistency_conflict")
+        self.assertEqual(len(replay_report["auditAlerts"]), 1)
+        self.assertEqual(replay_report["auditAlerts"][0]["type"], "compliance_violation")
+
     async def test_dispatch_should_skip_low_quality_topic_memory_but_keep_audit(self) -> None:
         settings = _build_settings(
             ai_internal_key="k6",
