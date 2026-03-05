@@ -129,6 +129,11 @@ cd ai_judge_service
 - `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback）
 - `GET /internal/judge/jobs/{job_id}/replay/report`：导出 job 级回放报告（输入快照、阶段输出、终局结果、callback 状态、审计字段）
 - `GET /internal/judge/jobs/replay/reports`：按筛选条件查询回放报告列表（`status/winner/callback_status/trace_id/created_after/created_before/has_audit_alert/limit`，可选 `include_report=true` 返回完整报告）
+- `GET /internal/judge/jobs/{job_id}/alerts`：查看任务审计告警（支持 `status=raised|acked|resolved`）
+- `POST /internal/judge/jobs/{job_id}/alerts/{alert_id}/ack`：告警确认（`raised -> acked`）
+- `POST /internal/judge/jobs/{job_id}/alerts/{alert_id}/resolve`：告警恢复（`raised|acked -> resolved`）
+- `GET /internal/judge/alerts/outbox`：查看待投递通知事件 outbox（支持 `delivery_status=pending|sent|failed`）
+- `POST /internal/judge/alerts/outbox/{event_id}/delivery`：回写 outbox 投递结果（`delivery_status=sent|failed`）
 - `GET /internal/judge/rag/diagnostics?job_id=...`：查看该任务检索诊断摘要
 
 `dispatch` 的 `retrieval_profile`（默认 `hybrid_v1`）当前支持：
@@ -152,7 +157,12 @@ cd ai_judge_service
 当命中公平性/合规违规并触发阻断时：
 - `dispatch` 返回 `status=marked_failed` 与 `errorCode=consistency_conflict`
 - 响应中包含 `auditAlert`
+- 响应中包含 `auditAlertIds`（可用于后续 ack/resolve）
 - `GET /internal/judge/jobs/{job_id}/replay/report` 的 `auditAlerts` 可用于 Ops 复盘
+
+M6 phase4 告警状态机：
+- 告警状态：`raised -> acked -> resolved`
+- 每次状态变化都会写入 `alerts/outbox`，用于对接通知中心投递链路
 
 ## 知识文件格式（最小）
 

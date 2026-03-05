@@ -120,6 +120,64 @@ def _extract_report_evidence_refs(report_payload: dict[str, Any] | None) -> list
     return []
 
 
+def _extract_runtime_audit_alerts(
+    *,
+    response: dict[str, Any] | None,
+    report_payload: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    response_obj = response if isinstance(response, dict) else {}
+    report_obj = report_payload if isinstance(report_payload, dict) else {}
+
+    response_alert = response_obj.get("auditAlert")
+    if isinstance(response_alert, dict):
+        out.append(response_alert)
+
+    payload = report_obj.get("payload")
+    if isinstance(payload, dict):
+        payload_alerts = payload.get("auditAlerts")
+        if isinstance(payload_alerts, list):
+            out.extend([row for row in payload_alerts if isinstance(row, dict)])
+    return out
+
+
+def _normalize_runtime_audit_alert(row: dict[str, Any]) -> dict[str, Any]:
+    alert_type = str(row.get("type") or "judge_runtime_alert").strip().lower()
+    severity = str(row.get("severity") or "warning").strip().lower()
+    status = str(row.get("status") or "").strip().lower()
+    violations = row.get("violations")
+    violations_list = (
+        [str(item).strip() for item in violations if str(item).strip()]
+        if isinstance(violations, list)
+        else []
+    )
+    title = str(row.get("title") or "").strip()
+    if not title:
+        if alert_type == "compliance_violation":
+            title = "AI Judge Compliance Violation"
+        else:
+            title = "AI Judge Runtime Alert"
+    message = str(row.get("message") or "").strip()
+    if not message:
+        if violations_list:
+            message = f"violations={','.join(violations_list)}"
+        elif status:
+            message = f"status={status}"
+        else:
+            message = "ai_judge alert raised"
+    return {
+        "alertType": alert_type,
+        "severity": severity or "warning",
+        "title": title,
+        "message": message,
+        "details": {
+            "raw": row,
+            "status": status or None,
+            "violations": violations_list,
+        },
+    }
+
+
 def _calc_topic_memory_quality_audit(
     *,
     settings: Settings,
@@ -166,6 +224,52 @@ def _calc_topic_memory_quality_audit(
             "minRationaleChars": settings.topic_memory_min_rationale_chars,
             "minQualityScore": settings.topic_memory_min_quality_score,
         },
+    }
+
+
+def _serialize_alert_item(alert: Any) -> dict[str, Any]:
+    return {
+        "alertId": alert.alert_id,
+        "jobId": alert.job_id,
+        "wsId": alert.ws_id,
+        "traceId": alert.trace_id,
+        "type": alert.alert_type,
+        "severity": alert.severity,
+        "title": alert.title,
+        "message": alert.message,
+        "details": alert.details,
+        "status": alert.status,
+        "createdAt": alert.created_at.isoformat(),
+        "updatedAt": alert.updated_at.isoformat(),
+        "acknowledgedAt": alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+        "resolvedAt": alert.resolved_at.isoformat() if alert.resolved_at else None,
+        "transitions": [
+            {
+                "fromStatus": row.from_status,
+                "toStatus": row.to_status,
+                "actor": row.actor,
+                "reason": row.reason,
+                "changedAt": row.changed_at.isoformat(),
+            }
+            for row in alert.transitions
+        ],
+    }
+
+
+def _serialize_outbox_event(item: Any) -> dict[str, Any]:
+    return {
+        "eventId": item.event_id,
+        "channel": item.channel,
+        "wsId": item.ws_id,
+        "jobId": item.job_id,
+        "traceId": item.trace_id,
+        "alertId": item.alert_id,
+        "status": item.status,
+        "payload": item.payload,
+        "deliveryStatus": item.delivery_status,
+        "errorMessage": item.error_message,
+        "createdAt": item.created_at.isoformat(),
+        "updatedAt": item.updated_at.isoformat(),
     }
 
 
@@ -407,6 +511,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     provider=response.get("provider"),
                     audit=topic_memory_audit,
                 )
+        runtime_alerts = _extract_runtime_audit_alerts(
+            response=response,
+            report_payload=report_payload,
+        )
+        persisted_alert_ids: list[str] = []
+        for row in runtime_alerts:
+            normalized = _normalize_runtime_audit_alert(row)
+            alert = runtime.trace_store.upsert_audit_alert(
+                job_id=request.job.job_id,
+                ws_id=request.job.ws_id,
+                trace_id=request.trace_id or "",
+                alert_type=normalized["alertType"],
+                severity=normalized["severity"],
+                title=normalized["title"],
+                message=normalized["message"],
+                details=normalized["details"],
+            )
+            persisted_alert_ids.append(alert.alert_id)
+        if persisted_alert_ids:
+            response = dict(response)
+            response["auditAlertIds"] = persisted_alert_ids
         return response
 
     @app.get("/internal/judge/jobs/{job_id}/trace")
@@ -533,6 +658,124 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "limit": limit,
                 "includeReport": include_report,
             },
+        }
+
+    @app.get("/internal/judge/jobs/{job_id}/alerts")
+    async def list_judge_job_alerts(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        items = runtime.trace_store.list_audit_alerts(
+            job_id=job_id,
+            status=status,
+            limit=limit,
+        )
+        return {
+            "jobId": job_id,
+            "count": len(items),
+            "items": [_serialize_alert_item(item) for item in items],
+        }
+
+    async def _transition_alert_status(
+        *,
+        job_id: int,
+        alert_id: str,
+        to_status: str,
+        actor: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        row = runtime.trace_store.transition_audit_alert(
+            job_id=job_id,
+            alert_id=alert_id,
+            to_status=to_status,
+            actor=actor,
+            reason=reason,
+        )
+        if row is None:
+            raise HTTPException(status_code=409, detail="invalid_alert_status_transition")
+        return {
+            "ok": True,
+            "jobId": job_id,
+            "alertId": alert_id,
+            "status": row.status,
+            "item": _serialize_alert_item(row),
+        }
+
+    @app.post("/internal/judge/jobs/{job_id}/alerts/{alert_id}/ack")
+    async def ack_judge_job_alert(
+        job_id: int,
+        alert_id: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        actor: str | None = Query(default=None),
+        reason: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        return await _transition_alert_status(
+            job_id=job_id,
+            alert_id=alert_id,
+            to_status="acked",
+            actor=actor,
+            reason=reason,
+        )
+
+    @app.post("/internal/judge/jobs/{job_id}/alerts/{alert_id}/resolve")
+    async def resolve_judge_job_alert(
+        job_id: int,
+        alert_id: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        actor: str | None = Query(default=None),
+        reason: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        return await _transition_alert_status(
+            job_id=job_id,
+            alert_id=alert_id,
+            to_status="resolved",
+            actor=actor,
+            reason=reason,
+        )
+
+    @app.get("/internal/judge/alerts/outbox")
+    async def list_judge_alert_outbox(
+        x_ai_internal_key: str | None = Header(default=None),
+        delivery_status: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        rows = runtime.trace_store.list_alert_outbox(
+            delivery_status=delivery_status,
+            limit=limit,
+        )
+        return {
+            "count": len(rows),
+            "items": [_serialize_outbox_event(item) for item in rows],
+            "filters": {
+                "deliveryStatus": delivery_status,
+                "limit": limit,
+            },
+        }
+
+    @app.post("/internal/judge/alerts/outbox/{event_id}/delivery")
+    async def mark_judge_alert_outbox_delivery(
+        event_id: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        delivery_status: str = Query(default="sent"),
+        error_message: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        item = runtime.trace_store.mark_alert_outbox_delivery(
+            event_id=event_id,
+            delivery_status=delivery_status,
+            error_message=error_message,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="alert_outbox_event_not_found")
+        return {
+            "ok": True,
+            "item": _serialize_outbox_event(item),
         }
 
     @app.get("/internal/judge/rag/diagnostics")

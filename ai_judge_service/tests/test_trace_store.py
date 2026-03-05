@@ -186,6 +186,69 @@ class TraceStoreTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].job_id, 202)
 
+    def test_audit_alert_state_machine_and_outbox_should_work(self) -> None:
+        store = TraceStore(ttl_secs=3600)
+        alert = store.upsert_audit_alert(
+            job_id=301,
+            ws_id=1,
+            trace_id="trace-301",
+            alert_type="compliance_violation",
+            severity="warning",
+            title="AI Judge Compliance Violation",
+            message="violations=display_missing_rationale",
+            details={"violations": ["display_missing_rationale"]},
+        )
+        self.assertEqual(alert.status, "raised")
+
+        rows = store.list_audit_alerts(job_id=301, status="raised", limit=10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].alert_id, alert.alert_id)
+
+        acked = store.transition_audit_alert(
+            job_id=301,
+            alert_id=alert.alert_id,
+            to_status="acked",
+            actor="ops_user_1",
+            reason="reviewed",
+        )
+        self.assertIsNotNone(acked)
+        assert acked is not None
+        self.assertEqual(acked.status, "acked")
+        self.assertEqual(len(acked.transitions), 1)
+
+        resolved = store.transition_audit_alert(
+            job_id=301,
+            alert_id=alert.alert_id,
+            to_status="resolved",
+            actor="ops_user_1",
+            reason="fixed",
+        )
+        self.assertIsNotNone(resolved)
+        assert resolved is not None
+        self.assertEqual(resolved.status, "resolved")
+        self.assertEqual(len(resolved.transitions), 2)
+
+        invalid = store.transition_audit_alert(
+            job_id=301,
+            alert_id=alert.alert_id,
+            to_status="raised",
+            actor="ops_user_1",
+            reason="rollback",
+        )
+        self.assertIsNone(invalid)
+
+        outbox = store.list_alert_outbox(delivery_status="pending", limit=10)
+        self.assertGreaterEqual(len(outbox), 3)
+        first_event = outbox[0]
+        updated = store.mark_alert_outbox_delivery(
+            event_id=first_event.event_id,
+            delivery_status="sent",
+            error_message=None,
+        )
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated.delivery_status, "sent")
+
 
 class _DummySettings:
     redis_enabled = True

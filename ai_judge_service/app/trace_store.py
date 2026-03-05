@@ -93,6 +93,21 @@ class TopicMemoryRecord:
     audit: dict[str, Any] = field(default_factory=dict)
 
 
+ALERT_STATUS_RAISED = "raised"
+ALERT_STATUS_ACKED = "acked"
+ALERT_STATUS_RESOLVED = "resolved"
+ALERT_STATUS_VALUES = {ALERT_STATUS_RAISED, ALERT_STATUS_ACKED, ALERT_STATUS_RESOLVED}
+
+OUTBOX_DELIVERY_PENDING = "pending"
+OUTBOX_DELIVERY_SENT = "sent"
+OUTBOX_DELIVERY_FAILED = "failed"
+OUTBOX_DELIVERY_VALUES = {
+    OUTBOX_DELIVERY_PENDING,
+    OUTBOX_DELIVERY_SENT,
+    OUTBOX_DELIVERY_FAILED,
+}
+
+
 @dataclass
 class TraceQuery:
     status: str | None = None
@@ -103,6 +118,79 @@ class TraceQuery:
     created_before: datetime | None = None
     has_audit_alert: bool | None = None
     limit: int = 20
+
+
+@dataclass
+class AuditAlertTransition:
+    from_status: str
+    to_status: str
+    actor: str | None
+    reason: str | None
+    changed_at: datetime
+
+
+@dataclass
+class AuditAlertRecord:
+    alert_id: str
+    job_id: int
+    ws_id: int
+    trace_id: str
+    alert_type: str
+    severity: str
+    title: str
+    message: str
+    details: dict[str, Any]
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
+    transitions: list[AuditAlertTransition] = field(default_factory=list)
+
+
+@dataclass
+class AlertOutboxEvent:
+    event_id: str
+    channel: str
+    ws_id: int
+    job_id: int
+    trace_id: str
+    alert_id: str
+    status: str
+    payload: dict[str, Any]
+    delivery_status: str
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def _normalize_alert_status(value: Any, *, default: str = ALERT_STATUS_RAISED) -> str:
+    raw = _normalize_token(value)
+    return raw if raw in ALERT_STATUS_VALUES else default
+
+
+def _normalize_delivery_status(value: Any, *, default: str = OUTBOX_DELIVERY_PENDING) -> str:
+    raw = _normalize_token(value)
+    return raw if raw in OUTBOX_DELIVERY_VALUES else default
+
+
+def _allowed_alert_transition(from_status: str, to_status: str) -> bool:
+    src = _normalize_alert_status(from_status)
+    dst = _normalize_alert_status(to_status)
+    if src == dst:
+        return True
+    if src == ALERT_STATUS_RAISED and dst in {ALERT_STATUS_ACKED, ALERT_STATUS_RESOLVED}:
+        return True
+    if src == ALERT_STATUS_ACKED and dst == ALERT_STATUS_RESOLVED:
+        return True
+    return False
+
+
+def _safe_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return "{}"
 
 
 def _normalize_token(value: Any) -> str:
@@ -213,6 +301,57 @@ class TraceStoreProtocol(Protocol):
     def list_traces(self, *, query: TraceQuery | None = None) -> list[TraceRecord]:
         ...
 
+    def upsert_audit_alert(
+        self,
+        *,
+        job_id: int,
+        ws_id: int,
+        trace_id: str,
+        alert_type: str,
+        severity: str,
+        title: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> AuditAlertRecord:
+        ...
+
+    def list_audit_alerts(
+        self,
+        *,
+        job_id: int | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[AuditAlertRecord]:
+        ...
+
+    def transition_audit_alert(
+        self,
+        *,
+        job_id: int,
+        alert_id: str,
+        to_status: str,
+        actor: str | None = None,
+        reason: str | None = None,
+    ) -> AuditAlertRecord | None:
+        ...
+
+    def list_alert_outbox(
+        self,
+        *,
+        delivery_status: str | None = None,
+        limit: int = 50,
+    ) -> list[AlertOutboxEvent]:
+        ...
+
+    def mark_alert_outbox_delivery(
+        self,
+        *,
+        event_id: str,
+        delivery_status: str,
+        error_message: str | None = None,
+    ) -> AlertOutboxEvent | None:
+        ...
+
     def mark_replay(
         self,
         *,
@@ -262,6 +401,12 @@ class TraceStore(TraceStoreProtocol):
         self._traces: dict[int, TraceRecord] = {}
         self._idempotency: dict[str, IdempotencyRecord] = {}
         self._topic_memory: dict[str, list[TopicMemoryRecord]] = {}
+        self._alerts_by_job: dict[int, list[AuditAlertRecord]] = {}
+        self._alerts_by_id: dict[str, AuditAlertRecord] = {}
+        self._alert_outbox: dict[str, AlertOutboxEvent] = {}
+        self._alert_outbox_order: list[str] = []
+        self._alert_seq = 0
+        self._event_seq = 0
 
     def _topic_key(self, topic_domain: str, rubric_version: str) -> str:
         return f"{topic_domain.strip().lower()}::{rubric_version.strip().lower()}"
@@ -291,6 +436,36 @@ class TraceStore(TraceStoreProtocol):
                 self._topic_memory[topic_key] = filtered[: self._topic_memory_limit]
                 continue
             self._topic_memory.pop(topic_key, None)
+
+        expired_alert_job_ids: list[int] = []
+        for job_id, rows in self._alerts_by_job.items():
+            filtered_rows = [
+                row
+                for row in rows
+                if row.updated_at + timedelta(seconds=self._ttl_secs) >= now
+            ]
+            if filtered_rows:
+                self._alerts_by_job[job_id] = filtered_rows
+                continue
+            expired_alert_job_ids.append(job_id)
+        for job_id in expired_alert_job_ids:
+            self._alerts_by_job.pop(job_id, None)
+
+        self._alerts_by_id = {
+            row.alert_id: row
+            for rows in self._alerts_by_job.values()
+            for row in rows
+        }
+
+        expired_event_ids: list[str] = []
+        for event_id, event in self._alert_outbox.items():
+            if event.updated_at + timedelta(seconds=self._ttl_secs) < now:
+                expired_event_ids.append(event_id)
+        for event_id in expired_event_ids:
+            self._alert_outbox.pop(event_id, None)
+        self._alert_outbox_order = [
+            event_id for event_id in self._alert_outbox_order if event_id in self._alert_outbox
+        ]
 
     def register_start(self, *, job_id: int, trace_id: str, request: dict[str, Any]) -> TraceRecord:
         now = _utcnow()
@@ -411,6 +586,246 @@ class TraceStore(TraceStoreProtocol):
                     break
             return out
 
+    def _find_alert_locked(self, *, job_id: int, alert_id: str) -> AuditAlertRecord | None:
+        rows = self._alerts_by_job.get(job_id, [])
+        for row in rows:
+            if row.alert_id == alert_id:
+                return row
+        return None
+
+    def _enqueue_alert_event_locked(
+        self,
+        *,
+        now: datetime,
+        alert: AuditAlertRecord,
+        status: str,
+    ) -> AlertOutboxEvent:
+        self._event_seq += 1
+        event_id = f"evt-{alert.job_id}-{self._event_seq:06d}"
+        payload = {
+            "eventType": "ai_judge.audit_alert.status_changed.v1",
+            "wsId": alert.ws_id,
+            "jobId": alert.job_id,
+            "traceId": alert.trace_id,
+            "alertId": alert.alert_id,
+            "alertType": alert.alert_type,
+            "severity": alert.severity,
+            "status": status,
+            "title": alert.title,
+            "message": alert.message,
+            "details": alert.details,
+            "createdAt": now.isoformat(),
+        }
+        event = AlertOutboxEvent(
+            event_id=event_id,
+            channel="ai_judge_audit_alert",
+            ws_id=alert.ws_id,
+            job_id=alert.job_id,
+            trace_id=alert.trace_id,
+            alert_id=alert.alert_id,
+            status=status,
+            payload=payload,
+            delivery_status=OUTBOX_DELIVERY_PENDING,
+            error_message=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self._alert_outbox[event_id] = event
+        self._alert_outbox_order.insert(0, event_id)
+        return event
+
+    def upsert_audit_alert(
+        self,
+        *,
+        job_id: int,
+        ws_id: int,
+        trace_id: str,
+        alert_type: str,
+        severity: str,
+        title: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> AuditAlertRecord:
+        now = _utcnow()
+        norm_type = _normalize_token(alert_type) or "unknown"
+        norm_severity = _normalize_token(severity) or "warning"
+        norm_details = dict(details or {})
+        fingerprint = _safe_json(
+            {
+                "type": norm_type,
+                "severity": norm_severity,
+                "title": title.strip(),
+                "message": message.strip(),
+                "details": norm_details,
+            }
+        )
+        with self._lock:
+            self._prune_locked(now)
+            rows = self._alerts_by_job.setdefault(job_id, [])
+            for existing in rows:
+                if existing.status == ALERT_STATUS_RESOLVED:
+                    continue
+                existing_fp = _safe_json(
+                    {
+                        "type": existing.alert_type,
+                        "severity": existing.severity,
+                        "title": existing.title,
+                        "message": existing.message,
+                        "details": existing.details,
+                    }
+                )
+                if existing_fp != fingerprint:
+                    continue
+                existing.updated_at = now
+                if trace_id:
+                    existing.trace_id = trace_id
+                self._enqueue_alert_event_locked(
+                    now=now,
+                    alert=existing,
+                    status=existing.status,
+                )
+                return existing
+
+            self._alert_seq += 1
+            alert = AuditAlertRecord(
+                alert_id=f"al-{job_id}-{self._alert_seq:06d}",
+                job_id=job_id,
+                ws_id=max(0, ws_id),
+                trace_id=trace_id,
+                alert_type=norm_type,
+                severity=norm_severity,
+                title=title.strip() or "AI Judge Alert",
+                message=message.strip() or "ai_judge alert raised",
+                details=norm_details,
+                status=ALERT_STATUS_RAISED,
+                created_at=now,
+                updated_at=now,
+            )
+            rows.insert(0, alert)
+            self._alerts_by_id[alert.alert_id] = alert
+            self._enqueue_alert_event_locked(
+                now=now,
+                alert=alert,
+                status=ALERT_STATUS_RAISED,
+            )
+            return alert
+
+    def list_audit_alerts(
+        self,
+        *,
+        job_id: int | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[AuditAlertRecord]:
+        now = _utcnow()
+        with self._lock:
+            self._prune_locked(now)
+            norm_status = _normalize_alert_status(status, default="")
+            out: list[AuditAlertRecord] = []
+            if job_id is not None:
+                rows = self._alerts_by_job.get(job_id, [])
+                for row in rows:
+                    if norm_status and row.status != norm_status:
+                        continue
+                    out.append(row)
+                    if len(out) >= max(1, limit):
+                        break
+                return out
+
+            all_rows = sorted(
+                [row for rows in self._alerts_by_job.values() for row in rows],
+                key=lambda item: item.updated_at,
+                reverse=True,
+            )
+            for row in all_rows:
+                if norm_status and row.status != norm_status:
+                    continue
+                out.append(row)
+                if len(out) >= max(1, limit):
+                    break
+            return out
+
+    def transition_audit_alert(
+        self,
+        *,
+        job_id: int,
+        alert_id: str,
+        to_status: str,
+        actor: str | None = None,
+        reason: str | None = None,
+    ) -> AuditAlertRecord | None:
+        now = _utcnow()
+        target_status = _normalize_alert_status(to_status)
+        with self._lock:
+            self._prune_locked(now)
+            row = self._find_alert_locked(job_id=job_id, alert_id=alert_id)
+            if row is None:
+                return None
+            if not _allowed_alert_transition(row.status, target_status):
+                return None
+            if row.status != target_status:
+                transition = AuditAlertTransition(
+                    from_status=row.status,
+                    to_status=target_status,
+                    actor=(actor or "").strip() or None,
+                    reason=(reason or "").strip() or None,
+                    changed_at=now,
+                )
+                row.transitions.append(transition)
+                row.status = target_status
+                row.updated_at = now
+                if target_status == ALERT_STATUS_ACKED:
+                    row.acknowledged_at = now
+                if target_status == ALERT_STATUS_RESOLVED:
+                    row.resolved_at = now
+            self._enqueue_alert_event_locked(
+                now=now,
+                alert=row,
+                status=row.status,
+            )
+            return row
+
+    def list_alert_outbox(
+        self,
+        *,
+        delivery_status: str | None = None,
+        limit: int = 50,
+    ) -> list[AlertOutboxEvent]:
+        now = _utcnow()
+        with self._lock:
+            self._prune_locked(now)
+            norm_status = _normalize_delivery_status(delivery_status, default="")
+            out: list[AlertOutboxEvent] = []
+            for event_id in self._alert_outbox_order:
+                event = self._alert_outbox.get(event_id)
+                if event is None:
+                    continue
+                if norm_status and event.delivery_status != norm_status:
+                    continue
+                out.append(event)
+                if len(out) >= max(1, limit):
+                    break
+            return out
+
+    def mark_alert_outbox_delivery(
+        self,
+        *,
+        event_id: str,
+        delivery_status: str,
+        error_message: str | None = None,
+    ) -> AlertOutboxEvent | None:
+        now = _utcnow()
+        target = _normalize_delivery_status(delivery_status)
+        with self._lock:
+            self._prune_locked(now)
+            event = self._alert_outbox.get(event_id)
+            if event is None:
+                return None
+            event.delivery_status = target
+            event.error_message = (error_message or "").strip() or None
+            event.updated_at = now
+            return event
+
     def mark_replay(
         self,
         *,
@@ -518,6 +933,12 @@ class RedisTraceStore(TraceStoreProtocol):
 
     def _jobs_index_key(self) -> str:
         return f"{self._key_prefix}:jobs:index"
+
+    def _alerts_key(self, job_id: int) -> str:
+        return f"{self._key_prefix}:job:{job_id}:alerts"
+
+    def _alerts_outbox_key(self) -> str:
+        return f"{self._key_prefix}:alerts:outbox"
 
     def _topic_key(self, topic_domain: str, rubric_version: str) -> str:
         domain = topic_domain.strip().lower()
@@ -629,6 +1050,198 @@ class RedisTraceStore(TraceStoreProtocol):
             return None
         return self._deserialize_trace(payload)
 
+    def _serialize_alert_transition(self, row: AuditAlertTransition) -> dict[str, Any]:
+        return {
+            "from_status": row.from_status,
+            "to_status": row.to_status,
+            "actor": row.actor,
+            "reason": row.reason,
+            "changed_at": row.changed_at.isoformat(),
+        }
+
+    def _deserialize_alert_transition(self, payload: dict[str, Any]) -> AuditAlertTransition:
+        return AuditAlertTransition(
+            from_status=_normalize_alert_status(payload.get("from_status")),
+            to_status=_normalize_alert_status(payload.get("to_status")),
+            actor=(str(payload.get("actor")).strip() if payload.get("actor") is not None else None),
+            reason=(str(payload.get("reason")).strip() if payload.get("reason") is not None else None),
+            changed_at=_parse_datetime(payload.get("changed_at")),
+        )
+
+    def _serialize_alert(self, row: AuditAlertRecord) -> dict[str, Any]:
+        return {
+            "alert_id": row.alert_id,
+            "job_id": row.job_id,
+            "ws_id": row.ws_id,
+            "trace_id": row.trace_id,
+            "alert_type": row.alert_type,
+            "severity": row.severity,
+            "title": row.title,
+            "message": row.message,
+            "details": row.details,
+            "status": row.status,
+            "created_at": row.created_at.isoformat(),
+            "updated_at": row.updated_at.isoformat(),
+            "acknowledged_at": row.acknowledged_at.isoformat() if row.acknowledged_at else None,
+            "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+            "transitions": [self._serialize_alert_transition(v) for v in row.transitions],
+        }
+
+    def _deserialize_alert(self, payload: dict[str, Any]) -> AuditAlertRecord:
+        transitions_raw = payload.get("transitions")
+        transitions: list[AuditAlertTransition] = []
+        if isinstance(transitions_raw, list):
+            for row in transitions_raw:
+                if isinstance(row, dict):
+                    transitions.append(self._deserialize_alert_transition(row))
+        details = payload.get("details")
+        return AuditAlertRecord(
+            alert_id=str(payload.get("alert_id") or ""),
+            job_id=_coerce_int(payload.get("job_id"), default=0),
+            ws_id=_coerce_int(payload.get("ws_id"), default=0),
+            trace_id=str(payload.get("trace_id") or ""),
+            alert_type=_normalize_token(payload.get("alert_type")) or "unknown",
+            severity=_normalize_token(payload.get("severity")) or "warning",
+            title=str(payload.get("title") or "AI Judge Alert"),
+            message=str(payload.get("message") or "ai_judge alert raised"),
+            details=details if isinstance(details, dict) else {},
+            status=_normalize_alert_status(payload.get("status")),
+            created_at=_parse_datetime(payload.get("created_at")),
+            updated_at=_parse_datetime(payload.get("updated_at")),
+            acknowledged_at=(
+                _parse_datetime(payload.get("acknowledged_at"))
+                if payload.get("acknowledged_at")
+                else None
+            ),
+            resolved_at=(
+                _parse_datetime(payload.get("resolved_at"))
+                if payload.get("resolved_at")
+                else None
+            ),
+            transitions=transitions,
+        )
+
+    def _read_alerts(self, *, job_id: int) -> list[AuditAlertRecord]:
+        payload = self._read_json(self._alerts_key(job_id))
+        if payload is None:
+            return []
+        rows = payload.get("alerts")
+        if not isinstance(rows, list):
+            return []
+        out: list[AuditAlertRecord] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            out.append(self._deserialize_alert(row))
+        return out
+
+    def _write_alerts(self, *, job_id: int, rows: list[AuditAlertRecord]) -> None:
+        self._write_json(
+            self._alerts_key(job_id),
+            {
+                "job_id": job_id,
+                "alerts": [self._serialize_alert(row) for row in rows],
+            },
+        )
+
+    def _serialize_outbox_event(self, row: AlertOutboxEvent) -> dict[str, Any]:
+        return {
+            "event_id": row.event_id,
+            "channel": row.channel,
+            "ws_id": row.ws_id,
+            "job_id": row.job_id,
+            "trace_id": row.trace_id,
+            "alert_id": row.alert_id,
+            "status": row.status,
+            "payload": row.payload,
+            "delivery_status": row.delivery_status,
+            "error_message": row.error_message,
+            "created_at": row.created_at.isoformat(),
+            "updated_at": row.updated_at.isoformat(),
+        }
+
+    def _deserialize_outbox_event(self, payload: dict[str, Any]) -> AlertOutboxEvent:
+        body = payload.get("payload")
+        return AlertOutboxEvent(
+            event_id=str(payload.get("event_id") or ""),
+            channel=str(payload.get("channel") or "ai_judge_audit_alert"),
+            ws_id=_coerce_int(payload.get("ws_id"), default=0),
+            job_id=_coerce_int(payload.get("job_id"), default=0),
+            trace_id=str(payload.get("trace_id") or ""),
+            alert_id=str(payload.get("alert_id") or ""),
+            status=_normalize_alert_status(payload.get("status")),
+            payload=body if isinstance(body, dict) else {},
+            delivery_status=_normalize_delivery_status(payload.get("delivery_status")),
+            error_message=(
+                str(payload.get("error_message"))
+                if payload.get("error_message") is not None
+                else None
+            ),
+            created_at=_parse_datetime(payload.get("created_at")),
+            updated_at=_parse_datetime(payload.get("updated_at")),
+        )
+
+    def _read_outbox(self) -> list[AlertOutboxEvent]:
+        payload = self._read_json(self._alerts_outbox_key())
+        if payload is None:
+            return []
+        rows = payload.get("events")
+        if not isinstance(rows, list):
+            return []
+        out: list[AlertOutboxEvent] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            out.append(self._deserialize_outbox_event(row))
+        return out
+
+    def _write_outbox(self, rows: list[AlertOutboxEvent]) -> None:
+        self._write_json(
+            self._alerts_outbox_key(),
+            {"events": [self._serialize_outbox_event(row) for row in rows]},
+        )
+
+    def _enqueue_outbox_event(
+        self,
+        *,
+        now: datetime,
+        alert: AuditAlertRecord,
+        status: str,
+    ) -> AlertOutboxEvent:
+        seq = int(now.timestamp() * 1000)
+        event = AlertOutboxEvent(
+            event_id=f"evt-{alert.job_id}-{seq}-{abs(hash((alert.alert_id, status))) % 10000}",
+            channel="ai_judge_audit_alert",
+            ws_id=alert.ws_id,
+            job_id=alert.job_id,
+            trace_id=alert.trace_id,
+            alert_id=alert.alert_id,
+            status=status,
+            payload={
+                "eventType": "ai_judge.audit_alert.status_changed.v1",
+                "wsId": alert.ws_id,
+                "jobId": alert.job_id,
+                "traceId": alert.trace_id,
+                "alertId": alert.alert_id,
+                "alertType": alert.alert_type,
+                "severity": alert.severity,
+                "status": status,
+                "title": alert.title,
+                "message": alert.message,
+                "details": alert.details,
+                "createdAt": now.isoformat(),
+            },
+            delivery_status=OUTBOX_DELIVERY_PENDING,
+            error_message=None,
+            created_at=now,
+            updated_at=now,
+        )
+        outbox = self._read_outbox()
+        outbox.insert(0, event)
+        outbox = outbox[:500]
+        self._write_outbox(outbox)
+        return event
+
     def register_start(self, *, job_id: int, trace_id: str, request: dict[str, Any]) -> TraceRecord:
         now = _utcnow()
         record = TraceRecord(
@@ -739,6 +1352,193 @@ class RedisTraceStore(TraceStoreProtocol):
 
     def get_trace(self, job_id: int) -> TraceRecord | None:
         return self._read_trace(job_id)
+
+    def upsert_audit_alert(
+        self,
+        *,
+        job_id: int,
+        ws_id: int,
+        trace_id: str,
+        alert_type: str,
+        severity: str,
+        title: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> AuditAlertRecord:
+        now = _utcnow()
+        norm_type = _normalize_token(alert_type) or "unknown"
+        norm_severity = _normalize_token(severity) or "warning"
+        norm_details = dict(details or {})
+        fingerprint = _safe_json(
+            {
+                "type": norm_type,
+                "severity": norm_severity,
+                "title": title.strip(),
+                "message": message.strip(),
+                "details": norm_details,
+            }
+        )
+        rows = self._read_alerts(job_id=job_id)
+        for item in rows:
+            if item.status == ALERT_STATUS_RESOLVED:
+                continue
+            existing_fp = _safe_json(
+                {
+                    "type": item.alert_type,
+                    "severity": item.severity,
+                    "title": item.title,
+                    "message": item.message,
+                    "details": item.details,
+                }
+            )
+            if existing_fp != fingerprint:
+                continue
+            item.updated_at = now
+            if trace_id:
+                item.trace_id = trace_id
+            self._write_alerts(job_id=job_id, rows=rows)
+            self._enqueue_outbox_event(
+                now=now,
+                alert=item,
+                status=item.status,
+            )
+            return item
+
+        next_seq = len(rows) + 1
+        alert = AuditAlertRecord(
+            alert_id=f"al-{job_id}-{next_seq:06d}",
+            job_id=job_id,
+            ws_id=max(0, ws_id),
+            trace_id=trace_id,
+            alert_type=norm_type,
+            severity=norm_severity,
+            title=title.strip() or "AI Judge Alert",
+            message=message.strip() or "ai_judge alert raised",
+            details=norm_details,
+            status=ALERT_STATUS_RAISED,
+            created_at=now,
+            updated_at=now,
+        )
+        rows.insert(0, alert)
+        self._write_alerts(job_id=job_id, rows=rows)
+        self._enqueue_outbox_event(
+            now=now,
+            alert=alert,
+            status=ALERT_STATUS_RAISED,
+        )
+        return alert
+
+    def list_audit_alerts(
+        self,
+        *,
+        job_id: int | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[AuditAlertRecord]:
+        cap = max(1, min(200, limit))
+        norm_status = _normalize_alert_status(status, default="")
+        out: list[AuditAlertRecord] = []
+
+        if job_id is not None:
+            rows = self._read_alerts(job_id=job_id)
+            for row in rows:
+                if norm_status and row.status != norm_status:
+                    continue
+                out.append(row)
+                if len(out) >= cap:
+                    break
+            return out
+
+        scan_limit = max(100, cap * 8)
+        for jid in self._list_indexed_job_ids(scan_limit=scan_limit):
+            rows = self._read_alerts(job_id=jid)
+            for row in rows:
+                if norm_status and row.status != norm_status:
+                    continue
+                out.append(row)
+                if len(out) >= cap:
+                    return out
+        return out
+
+    def transition_audit_alert(
+        self,
+        *,
+        job_id: int,
+        alert_id: str,
+        to_status: str,
+        actor: str | None = None,
+        reason: str | None = None,
+    ) -> AuditAlertRecord | None:
+        target = _normalize_alert_status(to_status)
+        now = _utcnow()
+        rows = self._read_alerts(job_id=job_id)
+        for row in rows:
+            if row.alert_id != alert_id:
+                continue
+            if not _allowed_alert_transition(row.status, target):
+                return None
+            if row.status != target:
+                row.transitions.append(
+                    AuditAlertTransition(
+                        from_status=row.status,
+                        to_status=target,
+                        actor=(actor or "").strip() or None,
+                        reason=(reason or "").strip() or None,
+                        changed_at=now,
+                    )
+                )
+                row.status = target
+                row.updated_at = now
+                if target == ALERT_STATUS_ACKED:
+                    row.acknowledged_at = now
+                if target == ALERT_STATUS_RESOLVED:
+                    row.resolved_at = now
+            self._write_alerts(job_id=job_id, rows=rows)
+            self._enqueue_outbox_event(
+                now=now,
+                alert=row,
+                status=row.status,
+            )
+            return row
+        return None
+
+    def list_alert_outbox(
+        self,
+        *,
+        delivery_status: str | None = None,
+        limit: int = 50,
+    ) -> list[AlertOutboxEvent]:
+        cap = max(1, min(200, limit))
+        norm_status = _normalize_delivery_status(delivery_status, default="")
+        rows = self._read_outbox()
+        out: list[AlertOutboxEvent] = []
+        for row in rows:
+            if norm_status and row.delivery_status != norm_status:
+                continue
+            out.append(row)
+            if len(out) >= cap:
+                break
+        return out
+
+    def mark_alert_outbox_delivery(
+        self,
+        *,
+        event_id: str,
+        delivery_status: str,
+        error_message: str | None = None,
+    ) -> AlertOutboxEvent | None:
+        target = _normalize_delivery_status(delivery_status)
+        now = _utcnow()
+        rows = self._read_outbox()
+        for row in rows:
+            if row.event_id != event_id:
+                continue
+            row.delivery_status = target
+            row.error_message = (error_message or "").strip() or None
+            row.updated_at = now
+            self._write_outbox(rows)
+            return row
+        return None
 
     def _list_indexed_job_ids(self, *, scan_limit: int) -> list[int]:
         index_key = self._jobs_index_key()
@@ -980,5 +1780,8 @@ __all__ = [
     "IdempotencyRecord",
     "TopicMemoryRecord",
     "TraceQuery",
+    "AuditAlertTransition",
+    "AuditAlertRecord",
+    "AlertOutboxEvent",
     "build_trace_store_from_settings",
 ]

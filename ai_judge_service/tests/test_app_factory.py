@@ -259,6 +259,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay/report", paths)
         self.assertIn("/internal/judge/jobs/replay/reports", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/alerts", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/alerts/{alert_id}/ack", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/alerts/{alert_id}/resolve", paths)
+        self.assertIn("/internal/judge/alerts/outbox", paths)
+        self.assertIn("/internal/judge/alerts/outbox/{event_id}/delivery", paths)
         self.assertIn("/internal/judge/rag/diagnostics", paths)
 
         dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
@@ -495,6 +500,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["errorCode"], "consistency_conflict")
         self.assertTrue(result["complianceBlocked"])
         self.assertEqual(result["auditAlert"]["type"], "compliance_violation")
+        self.assertEqual(len(result["auditAlertIds"]), 1)
         self.assertEqual(len(callback_failed_calls), 1)
         self.assertIn("judge compliance blocked", callback_failed_calls[0][1])
 
@@ -506,6 +512,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay_report["callbackResult"]["response"]["errorCode"], "consistency_conflict")
         self.assertEqual(len(replay_report["auditAlerts"]), 1)
         self.assertEqual(replay_report["auditAlerts"][0]["type"], "compliance_violation")
+
+        alerts_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts"
+        )
+        alerts = await alerts_route.endpoint(job_id=1, x_ai_internal_key="k5e", status=None, limit=20)
+        self.assertEqual(alerts["count"], 1)
+        self.assertEqual(alerts["items"][0]["status"], "raised")
 
     async def test_dispatch_should_skip_low_quality_topic_memory_but_keep_audit(self) -> None:
         settings = _build_settings(
@@ -633,6 +646,98 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(full["count"], 2)
         self.assertIn("pipeline", full["items"][0])
         self.assertIn("requestInput", full["items"][0])
+
+    async def test_alert_state_machine_and_outbox_endpoints_should_work(self) -> None:
+        settings = _build_settings(ai_internal_key="k8")
+        request = _build_request()
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            report = _FakeReport()
+            report.payload["agentPipeline"] = {
+                "compliance": {
+                    "status": "warn",
+                    "violations": ["display_missing_rationale"],
+                }
+            }
+            return report
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
+        alerts_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts"
+        )
+        ack_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts/{alert_id}/ack"
+        )
+        resolve_route = next(
+            route
+            for route in app.routes
+            if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts/{alert_id}/resolve"
+        )
+        outbox_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/alerts/outbox"
+        )
+        delivery_route = next(
+            route
+            for route in app.routes
+            if getattr(route, "path", "") == "/internal/judge/alerts/outbox/{event_id}/delivery"
+        )
+
+        dispatch_result = await dispatch_route.endpoint(request=request, x_ai_internal_key="k8")
+        self.assertEqual(dispatch_result["status"], "marked_failed")
+        alert_ids = dispatch_result["auditAlertIds"]
+        self.assertEqual(len(alert_ids), 1)
+        alert_id = alert_ids[0]
+
+        alerts = await alerts_route.endpoint(job_id=1, x_ai_internal_key="k8", status=None, limit=20)
+        self.assertEqual(alerts["count"], 1)
+        self.assertEqual(alerts["items"][0]["status"], "raised")
+
+        acked = await ack_route.endpoint(
+            job_id=1,
+            alert_id=alert_id,
+            x_ai_internal_key="k8",
+            actor="ops_reviewer_1",
+            reason="reviewed",
+        )
+        self.assertEqual(acked["status"], "acked")
+
+        resolved = await resolve_route.endpoint(
+            job_id=1,
+            alert_id=alert_id,
+            x_ai_internal_key="k8",
+            actor="ops_reviewer_1",
+            reason="fixed",
+        )
+        self.assertEqual(resolved["status"], "resolved")
+
+        pending_outbox = await outbox_route.endpoint(
+            x_ai_internal_key="k8",
+            delivery_status="pending",
+            limit=20,
+        )
+        self.assertGreaterEqual(pending_outbox["count"], 3)
+        event_id = pending_outbox["items"][0]["eventId"]
+
+        marked = await delivery_route.endpoint(
+            event_id=event_id,
+            x_ai_internal_key="k8",
+            delivery_status="sent",
+            error_message=None,
+        )
+        self.assertEqual(marked["item"]["deliveryStatus"], "sent")
 
     async def test_create_default_app_should_use_loader(self) -> None:
         settings = _build_settings(ai_internal_key="loader-key")
