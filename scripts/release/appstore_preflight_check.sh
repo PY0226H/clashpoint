@@ -19,6 +19,18 @@ Options:
   --v2d-report-out <path>      V2-D acceptance report output path
   --v2d-allow-missing-scenarios
                                Pass through --allow-missing-scenarios to V2-D gate
+  --enforce-ai-judge-m7-acceptance
+                               Enable AI Judge M7 stage acceptance gate check
+  --ai-judge-m7-regression-evidence <path>
+                               AI Judge M7 regression evidence env file
+  --ai-judge-m7-preprod-summary <path>
+                               AI Judge M7 preprod summary env file
+  --ai-judge-m7-fault-matrix <path>
+                               AI Judge M7 fault matrix env file
+  --ai-judge-m7-report-out <path>
+                               AI Judge M7 acceptance report output path
+  --ai-judge-m7-allow-missing-scenarios
+                               Pass through --allow-missing-scenarios to AI Judge M7 gate
   --root <path>                Repo root path (default: git top-level or cwd)
   -h, --help                   Show this help
 
@@ -27,6 +39,7 @@ Notes:
   2) AI judge values are read from --ai-judge-env first, then process env.
   3) Tauri checks are skipped when --tauri-app-config is not provided.
   4) V2-D gate is optional and runs only when --enforce-v2d-stage-acceptance is set.
+  5) AI Judge M7 gate is optional and runs only when --enforce-ai-judge-m7-acceptance is set.
 USAGE
 }
 
@@ -344,6 +357,12 @@ V2D_REGRESSION_EVIDENCE=""
 V2D_LOAD_SUMMARY=""
 V2D_REPORT_OUT=""
 V2D_ALLOW_MISSING_SCENARIOS="false"
+ENFORCE_AI_JUDGE_M7_ACCEPTANCE="false"
+AI_JUDGE_M7_REGRESSION_EVIDENCE=""
+AI_JUDGE_M7_PREPROD_SUMMARY=""
+AI_JUDGE_M7_FAULT_MATRIX=""
+AI_JUDGE_M7_REPORT_OUT=""
+AI_JUDGE_M7_ALLOW_MISSING_SCENARIOS="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -383,6 +402,30 @@ while [[ $# -gt 0 ]]; do
       V2D_ALLOW_MISSING_SCENARIOS="true"
       shift
       ;;
+    --enforce-ai-judge-m7-acceptance)
+      ENFORCE_AI_JUDGE_M7_ACCEPTANCE="true"
+      shift
+      ;;
+    --ai-judge-m7-regression-evidence)
+      AI_JUDGE_M7_REGRESSION_EVIDENCE="$2"
+      shift 2
+      ;;
+    --ai-judge-m7-preprod-summary)
+      AI_JUDGE_M7_PREPROD_SUMMARY="$2"
+      shift 2
+      ;;
+    --ai-judge-m7-fault-matrix)
+      AI_JUDGE_M7_FAULT_MATRIX="$2"
+      shift 2
+      ;;
+    --ai-judge-m7-report-out)
+      AI_JUDGE_M7_REPORT_OUT="$2"
+      shift 2
+      ;;
+    --ai-judge-m7-allow-missing-scenarios)
+      AI_JUDGE_M7_ALLOW_MISSING_SCENARIOS="true"
+      shift
+      ;;
     --root)
       ROOT="$2"
       shift 2
@@ -420,6 +463,21 @@ if [[ "$ENFORCE_V2D_STAGE_ACCEPTANCE" == "true" ]]; then
   fi
   if [[ -z "$V2D_REPORT_OUT" ]]; then
     V2D_REPORT_OUT="$ROOT/docs/dev_plan/V2-D阶段验收报告-$(date +%F)-from-preflight.md"
+  fi
+fi
+
+if [[ "$ENFORCE_AI_JUDGE_M7_ACCEPTANCE" == "true" ]]; then
+  if [[ -z "$AI_JUDGE_M7_REGRESSION_EVIDENCE" ]]; then
+    AI_JUDGE_M7_REGRESSION_EVIDENCE="$ROOT/docs/loadtest/evidence/ai_judge_m7_regression.env"
+  fi
+  if [[ -z "$AI_JUDGE_M7_PREPROD_SUMMARY" ]]; then
+    AI_JUDGE_M7_PREPROD_SUMMARY="$ROOT/docs/loadtest/evidence/ai_judge_m7_preprod_summary.env"
+  fi
+  if [[ -z "$AI_JUDGE_M7_FAULT_MATRIX" ]]; then
+    AI_JUDGE_M7_FAULT_MATRIX="$ROOT/docs/loadtest/evidence/ai_judge_m7_fault_matrix.env"
+  fi
+  if [[ -z "$AI_JUDGE_M7_REPORT_OUT" ]]; then
+    AI_JUDGE_M7_REPORT_OUT="$ROOT/docs/dev_plan/AI裁判M7阶段验收报告-$(date +%F)-from-preflight.md"
   fi
 fi
 
@@ -586,6 +644,30 @@ if [[ "$ENFORCE_V2D_STAGE_ACCEPTANCE" == "true" ]]; then
       mark_pass "v2d stage acceptance gate passed"
     else
       mark_fail "v2d stage acceptance gate failed"
+    fi
+  fi
+fi
+
+if [[ "$ENFORCE_AI_JUDGE_M7_ACCEPTANCE" == "true" ]]; then
+  ai_judge_m7_gate_script="$ROOT/scripts/release/ai_judge_m7_stage_acceptance_gate.sh"
+  if [[ ! -f "$ai_judge_m7_gate_script" ]]; then
+    mark_fail "ai judge m7 gate script not found: $ai_judge_m7_gate_script"
+  else
+    ai_judge_m7_args=(
+      --root "$ROOT"
+      --regression-evidence "$AI_JUDGE_M7_REGRESSION_EVIDENCE"
+      --preprod-summary "$AI_JUDGE_M7_PREPROD_SUMMARY"
+      --fault-matrix "$AI_JUDGE_M7_FAULT_MATRIX"
+      --report-out "$AI_JUDGE_M7_REPORT_OUT"
+    )
+    if [[ "$AI_JUDGE_M7_ALLOW_MISSING_SCENARIOS" == "true" ]]; then
+      ai_judge_m7_args+=(--allow-missing-scenarios)
+    fi
+
+    if bash "$ai_judge_m7_gate_script" "${ai_judge_m7_args[@]}"; then
+      mark_pass "ai judge m7 stage acceptance gate passed"
+    else
+      mark_fail "ai judge m7 stage acceptance gate failed"
     fi
   fi
 fi
