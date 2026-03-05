@@ -1537,6 +1537,106 @@ mod tests {
     use super::*;
     use crate::UpsertOpsRoleInput;
     use anyhow::Result;
+    use axum::{
+        extract::{Path, Query},
+        http::StatusCode as AxumStatusCode,
+        routing::{get, post},
+        Json, Router,
+    };
+    use serde::Deserialize;
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct MockOutboxListQuery {
+        #[serde(alias = "deliveryStatus")]
+        delivery_status: Option<String>,
+        limit: Option<usize>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct MockOutboxDeliveryQuery {
+        #[serde(alias = "deliveryStatus")]
+        delivery_status: Option<String>,
+        #[serde(alias = "errorMessage")]
+        error_message: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct MockOutboxDeliveryCall {
+        event_id: String,
+        delivery_status: String,
+        error_message: Option<String>,
+    }
+
+    async fn spawn_mock_judge_outbox_server(
+        items: Vec<Value>,
+        callback_status: AxumStatusCode,
+    ) -> Result<(String, Arc<Mutex<Vec<MockOutboxDeliveryCall>>>)> {
+        let callbacks = Arc::new(Mutex::new(Vec::<MockOutboxDeliveryCall>::new()));
+        let outbox_items = Arc::new(items);
+        let app = {
+            let callbacks = callbacks.clone();
+            let outbox_items = outbox_items.clone();
+            Router::new()
+                .route(
+                    "/internal/judge/alerts/outbox",
+                    get(move |Query(query): Query<MockOutboxListQuery>| {
+                        let outbox_items = outbox_items.clone();
+                        async move {
+                            let mut rows = if query.delivery_status.as_deref() == Some("pending") {
+                                (*outbox_items).clone()
+                            } else {
+                                vec![]
+                            };
+                            let limit = query.limit.unwrap_or(50).clamp(1, 200);
+                            rows.truncate(limit);
+                            Json(serde_json::json!({
+                                "count": rows.len(),
+                                "items": rows,
+                                "filters": {
+                                    "deliveryStatus": query.delivery_status,
+                                    "limit": limit
+                                }
+                            }))
+                        }
+                    }),
+                )
+                .route(
+                    "/internal/judge/alerts/outbox/:event_id/delivery",
+                    post(
+                        move |Path(event_id): Path<String>,
+                              Query(query): Query<MockOutboxDeliveryQuery>| {
+                            let callbacks = callbacks.clone();
+                            async move {
+                                callbacks
+                                    .lock()
+                                    .expect("mock callback lock poisoned")
+                                    .push(MockOutboxDeliveryCall {
+                                        event_id: event_id.clone(),
+                                        delivery_status: query
+                                            .delivery_status
+                                            .unwrap_or_else(|| "sent".to_string()),
+                                        error_message: query.error_message,
+                                    });
+                                (
+                                    callback_status,
+                                    Json(serde_json::json!({
+                                        "ok": callback_status.is_success()
+                                    })),
+                                )
+                            }
+                        },
+                    ),
+                )
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok((format!("http://{}", addr), callbacks))
+    }
 
     #[tokio::test]
     async fn get_ops_observability_config_should_return_defaults_when_missing() -> Result<()> {
@@ -1746,6 +1846,194 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert!(cleared_count >= 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bridge_ai_judge_alert_outbox_once_should_deliver_and_callback_sent() -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let (service_base_url, callbacks) = spawn_mock_judge_outbox_server(
+            vec![serde_json::json!({
+                "eventId": "evt-bridge-ok",
+                "wsId": 1,
+                "jobId": 2001,
+                "traceId": "trace-bridge-ok",
+                "alertId": "alert-bridge-ok",
+                "status": "raised",
+                "payload": {
+                    "eventType": "ai_judge.audit_alert.status_changed.v1",
+                    "alertType": "judge_timeout",
+                    "severity": "warning",
+                    "status": "raised",
+                    "title": "判决超时",
+                    "message": "某任务触发超时",
+                    "details": { "timeoutSec": 300 }
+                }
+            })],
+            AxumStatusCode::OK,
+        )
+        .await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.service_base_url = service_base_url;
+        inner.config.ai_judge.alert_outbox_batch_size = 20;
+        inner.config.ai_judge.alert_outbox_timeout_ms = 2_000;
+
+        let report = state.bridge_ai_judge_alert_outbox_once().await?;
+        assert_eq!(report.fetched, 1);
+        assert_eq!(report.delivered, 1);
+        assert_eq!(report.delivery_failed, 0);
+        assert_eq!(report.callback_failed, 0);
+        assert_eq!(report.skipped_duplicate, 0);
+
+        let row: (String, String, String, String) = sqlx::query_as(
+            r#"
+            SELECT alert_key, rule_type, alert_status, delivery_status
+            FROM ops_alert_notifications
+            WHERE ws_id = 1
+              AND alert_key = $1
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(build_ai_judge_outbox_alert_key("evt-bridge-ok"))
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, "ai_judge_outbox:evt-bridge-ok");
+        assert_eq!(row.1, "ai_judge:judge_timeout");
+        assert_eq!(row.2, "raised");
+        assert_eq!(row.3, "sent");
+
+        let calls = callbacks.lock().expect("mock callback lock poisoned");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].event_id, "evt-bridge-ok");
+        assert_eq!(calls[0].delivery_status, "sent");
+        assert!(calls[0].error_message.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bridge_ai_judge_alert_outbox_once_should_dedupe_and_only_callback_for_duplicate_sent(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO ops_alert_notifications(
+                ws_id, alert_key, rule_type, severity, alert_status,
+                title, message, metrics_json, recipients_json,
+                delivery_status, created_at, updated_at
+            )
+            VALUES (
+                1, $1, 'ai_judge:judge_timeout', 'warning', 'raised',
+                'dup-title', 'dup-message', '{}'::jsonb, '[1]'::jsonb,
+                'sent', NOW(), NOW()
+            )
+            "#,
+        )
+        .bind(build_ai_judge_outbox_alert_key("evt-bridge-dup"))
+        .execute(&state.pool)
+        .await?;
+        let (service_base_url, callbacks) = spawn_mock_judge_outbox_server(
+            vec![serde_json::json!({
+                "eventId": "evt-bridge-dup",
+                "wsId": 1,
+                "status": "raised",
+                "payload": {
+                    "alertType": "judge_timeout",
+                    "severity": "warning",
+                    "title": "dup-title",
+                    "message": "dup-message"
+                }
+            })],
+            AxumStatusCode::OK,
+        )
+        .await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.service_base_url = service_base_url;
+        inner.config.ai_judge.alert_outbox_batch_size = 20;
+        inner.config.ai_judge.alert_outbox_timeout_ms = 2_000;
+
+        let report = state.bridge_ai_judge_alert_outbox_once().await?;
+        assert_eq!(report.fetched, 1);
+        assert_eq!(report.delivered, 1);
+        assert_eq!(report.delivery_failed, 0);
+        assert_eq!(report.callback_failed, 0);
+        assert_eq!(report.skipped_duplicate, 1);
+
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_alert_notifications
+            WHERE ws_id = 1
+              AND alert_key = $1
+            "#,
+        )
+        .bind(build_ai_judge_outbox_alert_key("evt-bridge-dup"))
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(count, 1);
+
+        let calls = callbacks.lock().expect("mock callback lock poisoned");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].event_id, "evt-bridge-dup");
+        assert_eq!(calls[0].delivery_status, "sent");
+        assert!(calls[0].error_message.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bridge_ai_judge_alert_outbox_once_should_count_callback_failed_when_mark_failed_errors(
+    ) -> Result<()> {
+        let (_tdb, mut state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let (service_base_url, callbacks) = spawn_mock_judge_outbox_server(
+            vec![serde_json::json!({
+                "eventId": "evt-bridge-bad",
+                "status": "raised",
+                "payload": {
+                    "alertType": "judge_timeout",
+                    "severity": "warning",
+                    "title": "bad",
+                    "message": "missing wsId"
+                }
+            })],
+            AxumStatusCode::INTERNAL_SERVER_ERROR,
+        )
+        .await?;
+        let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+        inner.config.ai_judge.service_base_url = service_base_url;
+        inner.config.ai_judge.alert_outbox_batch_size = 20;
+        inner.config.ai_judge.alert_outbox_timeout_ms = 2_000;
+
+        let report = state.bridge_ai_judge_alert_outbox_once().await?;
+        assert_eq!(report.fetched, 1);
+        assert_eq!(report.delivered, 0);
+        assert_eq!(report.delivery_failed, 1);
+        assert_eq!(report.callback_failed, 1);
+
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_alert_notifications
+            WHERE ws_id = 1
+              AND alert_key = $1
+            "#,
+        )
+        .bind(build_ai_judge_outbox_alert_key("evt-bridge-bad"))
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(count, 0);
+
+        let calls = callbacks.lock().expect("mock callback lock poisoned");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].event_id, "evt-bridge-bad");
+        assert_eq!(calls[0].delivery_status, "failed");
+        assert!(calls[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("missing wsId"));
         Ok(())
     }
 
