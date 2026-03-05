@@ -343,6 +343,12 @@ struct JudgeJobRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
+struct AutoJudgeRequesterRow {
+    ws_id: i64,
+    requester_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromRow)]
 struct JudgeJobForUpdate {
     id: i64,
     ws_id: i64,

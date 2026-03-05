@@ -54,6 +54,100 @@ async fn advance_debate_sessions_should_move_running_to_judging_then_closed() ->
     Ok(())
 }
 
+#[tokio::test]
+async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judging() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
+        .bind(session_id)
+        .execute(&state.pool)
+        .await?;
+
+    let report = state.advance_debate_sessions(100).await?;
+    assert_eq!(report.judging, 1);
+    assert_eq!(session_status(&state, session_id).await?, "judging");
+
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM judge_jobs
+        WHERE session_id = $1
+          AND status = 'running'
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, 1);
+
+    let requester: (i64,) = sqlx::query_as(
+        r#"
+        SELECT requested_by
+        FROM judge_jobs
+        WHERE session_id = $1
+        ORDER BY requested_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let requester_exists: (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM users
+            WHERE id = $1
+        )
+        "#,
+    )
+    .bind(requester.0)
+    .fetch_one(&state.pool)
+    .await?;
+    assert!(requester_exists.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
+        .bind(session_id)
+        .execute(&state.pool)
+        .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO judge_jobs(
+            ws_id, session_id, requested_by, status, style_mode,
+            requested_at, started_at, created_at, updated_at
+        )
+        VALUES (1, $1, 1, 'running', 'rational', NOW(), NULL, NOW(), NOW())
+        "#,
+    )
+    .bind(session_id)
+    .execute(&state.pool)
+    .await?;
+
+    let report = state.advance_debate_sessions(100).await?;
+    assert_eq!(report.judging, 1);
+
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM judge_jobs
+        WHERE session_id = $1
+          AND status = 'running'
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(count.0, 1);
+    Ok(())
+}
+
 #[test]
 fn normalize_debate_message_limit_should_clamp_range() {
     assert_eq!(

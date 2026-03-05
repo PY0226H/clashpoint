@@ -43,6 +43,77 @@ fn detect_ops_review_abnormal_flags(item: &JudgeReviewOpsItem) -> Vec<String> {
 }
 
 impl AppState {
+    pub(crate) async fn request_judge_job_automatically(
+        &self,
+        session_id: u64,
+    ) -> Result<Option<RequestJudgeJobOutput>, AppError> {
+        let requester: Option<AutoJudgeRequesterRow> = sqlx::query_as(
+            r#"
+            SELECT
+                s.ws_id,
+                COALESCE(
+                    (
+                        SELECT sp.user_id
+                        FROM session_participants sp
+                        WHERE sp.session_id = s.id
+                        ORDER BY sp.joined_at ASC
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT w.owner_id
+                        FROM workspaces w
+                        WHERE w.id = s.ws_id
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT u.id
+                        FROM users u
+                        WHERE u.ws_id = s.ws_id
+                        ORDER BY u.id ASC
+                        LIMIT 1
+                    )
+                ) AS requester_id
+            FROM debate_sessions s
+            WHERE s.id = $1
+            "#,
+        )
+        .bind(session_id as i64)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(requester) = requester else {
+            return Err(AppError::NotFound(format!(
+                "debate session id {session_id}"
+            )));
+        };
+        let Some(requester_id) = requester.requester_id else {
+            warn!(
+                session_id,
+                ws_id = requester.ws_id,
+                "auto judge trigger skipped: no available requester in workspace"
+            );
+            return Ok(None);
+        };
+
+        let mut auto_user = User::new(requester_id, "__auto_judge__", "auto_judge@system.local");
+        auto_user.ws_id = requester.ws_id;
+        auto_user.ws_name = "__auto_judge__".to_string();
+
+        let ret = self
+            .request_judge_job_internal(
+                session_id,
+                &auto_user,
+                RequestJudgeJobInput {
+                    style_mode: None,
+                    allow_rejudge: false,
+                },
+                false,
+                false,
+            )
+            .await?;
+        Ok(Some(ret))
+    }
+
     async fn request_judge_job_internal(
         &self,
         session_id: u64,

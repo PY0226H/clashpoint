@@ -606,6 +606,8 @@ impl AppState {
         .await?;
         self.publish_status_changed_batch("running", "judging", &judging_ids, now)
             .await;
+        self.auto_trigger_judge_jobs_for_sessions(&judging_ids)
+            .await;
 
         let closed_ids: Vec<(i64,)> = sqlx::query_as(
             r#"
@@ -666,6 +668,34 @@ impl AppState {
                     "publish kafka debate session status changed failed: {}",
                     err
                 );
+            }
+        }
+    }
+
+    async fn auto_trigger_judge_jobs_for_sessions(&self, session_ids: &[(i64,)]) {
+        for (session_id,) in session_ids.iter() {
+            match self
+                .request_judge_job_automatically(*session_id as u64)
+                .await
+            {
+                Ok(Some(output)) => {
+                    if output.newly_created {
+                        continue;
+                    }
+                    // Existing running job was reused; treat as success and no-op.
+                }
+                Ok(None) => {
+                    warn!(
+                        session_id = *session_id,
+                        "auto judge trigger skipped: no eligible requester"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        session_id = *session_id,
+                        "auto judge trigger failed after session enter judging: {}", err
+                    );
+                }
             }
         }
     }
