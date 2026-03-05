@@ -16,6 +16,7 @@ from app.models import (
     DispatchTopic,
     JudgeDispatchRequest,
 )
+from app.runtime_errors import JudgeRuntimeError
 from app.settings import Settings
 
 
@@ -335,6 +336,75 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second["accepted"])
         self.assertTrue(second["idempotentReplay"])
         self.assertEqual(call_counter["n"], 1)
+
+    async def test_dispatch_should_reject_idempotency_pending_conflict(self) -> None:
+        settings = _build_settings(ai_internal_key="k5c")
+        request = _build_request()
+        request.idempotency_key = "same-key-pending"
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("pending conflict should short-circuit before runtime")
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        runtime.trace_store.set_idempotency_pending(
+            key="same-key-pending",
+            job_id=request.job.job_id,
+            ttl_secs=3600,
+        )
+        app = create_app(runtime)
+        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
+
+        with self.assertRaises(HTTPException) as ctx:
+            await dispatch_route.endpoint(request=request, x_ai_internal_key="k5c")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail, "idempotency_conflict:judge_dispatch")
+
+    async def test_dispatch_should_clear_idempotency_on_failed_and_allow_retry(self) -> None:
+        settings = _build_settings(ai_internal_key="k5d")
+        request = _build_request()
+        request.idempotency_key = "retry-after-failed"
+        call_counter = {"n": 0}
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            call_counter["n"] += 1
+            if call_counter["n"] == 1:
+                raise JudgeRuntimeError(code="consistency_conflict", message="draw protection conflict")
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
+
+        first = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5d")
+        self.assertEqual(first["status"], "marked_failed")
+        self.assertIsNone(runtime.trace_store.get_idempotency("retry-after-failed"))
+
+        second = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5d")
+        self.assertTrue(second["accepted"])
+        self.assertNotIn("status", second)
+        self.assertEqual(call_counter["n"], 2)
 
     async def test_dispatch_should_skip_low_quality_topic_memory_but_keep_audit(self) -> None:
         settings = _build_settings(

@@ -6,6 +6,7 @@ from .models import JudgeDispatchRequest, SubmitJudgeReportInput
 from .openai_judge import OpenAiJudgeConfig, build_report_with_openai
 from .rag_retriever import RetrievedContext
 from .runtime_errors import (
+    ERROR_JUDGE_TIMEOUT,
     ERROR_MODEL_OVERLOAD,
     JudgeRuntimeError,
     classify_openai_failure,
@@ -18,6 +19,14 @@ BuildOpenAiReportFn = Callable[..., Awaitable[SubmitJudgeReportInput]]
 BuildMockReportFn = Callable[..., SubmitJudgeReportInput]
 
 
+def _fault_nodes(settings: Settings) -> set[str]:
+    return {
+        str(node).strip().lower()
+        for node in getattr(settings, "fault_injection_nodes", ())
+        if str(node).strip()
+    }
+
+
 async def build_report_with_provider(
     *,
     request: JudgeDispatchRequest,
@@ -28,6 +37,7 @@ async def build_report_with_provider(
     build_report_with_openai_fn: BuildOpenAiReportFn = build_report_with_openai,
     build_mock_report_fn: BuildMockReportFn = build_report,
 ) -> tuple[SubmitJudgeReportInput, bool]:
+    injected = _fault_nodes(settings)
     if settings.provider == PROVIDER_OPENAI and not settings.openai_api_key.strip():
         error_code = ERROR_MODEL_OVERLOAD
         if not settings.openai_fallback_to_mock:
@@ -61,6 +71,10 @@ async def build_report_with_provider(
             fault_injection_nodes=settings.fault_injection_nodes,
         )
         try:
+            if "provider_timeout" in injected:
+                raise RuntimeError("fault injected provider timeout")
+            if "provider_overload" in injected:
+                raise RuntimeError("fault injected provider overload status=429")
             report = await build_report_with_openai_fn(
                 request=request,
                 effective_style_mode=effective_style_mode,
@@ -70,7 +84,12 @@ async def build_report_with_provider(
             )
             return report, True
         except Exception as err:
-            error_code = classify_openai_failure(str(err))
+            if "provider_timeout" in injected:
+                error_code = ERROR_JUDGE_TIMEOUT
+            elif "provider_overload" in injected:
+                error_code = ERROR_MODEL_OVERLOAD
+            else:
+                error_code = classify_openai_failure(str(err))
             if not settings.openai_fallback_to_mock:
                 raise JudgeRuntimeError(
                     code=error_code,

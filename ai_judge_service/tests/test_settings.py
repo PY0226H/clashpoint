@@ -273,6 +273,20 @@ class SettingsTests(unittest.TestCase):
             ):
                 load_settings()
 
+    def test_load_settings_should_accept_runtime_fault_injection_nodes_in_non_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_FAULT_INJECTION_NODES": "provider_timeout,rag_retrieve_unavailable,topic_memory_unavailable",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+        self.assertEqual(
+            settings.fault_injection_nodes,
+            ("provider_timeout", "rag_retrieve_unavailable", "topic_memory_unavailable"),
+        )
+
     def test_load_settings_should_reject_empty_redis_url_when_enabled(self) -> None:
         with patch.dict(
             os.environ,

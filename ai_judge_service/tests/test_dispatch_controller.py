@@ -27,6 +27,20 @@ def _build_request(messages: list[object] | None = None) -> SimpleNamespace:
     )
 
 
+def _runtime_cfg(
+    *,
+    process_delay_ms: int = 0,
+    runtime_retry_max_attempts: int = 1,
+    retry_backoff_ms: int = 0,
+) -> DispatchRuntimeConfig:
+    return DispatchRuntimeConfig(
+        process_delay_ms=process_delay_ms,
+        judge_style_mode="rational",
+        runtime_retry_max_attempts=runtime_retry_max_attempts,
+        retry_backoff_ms=retry_backoff_ms,
+    )
+
+
 class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_process_dispatch_request_should_mark_failed_when_messages_empty(self) -> None:
         request = _build_request(messages=[])
@@ -43,7 +57,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await process_dispatch_request(
             request=request,
-            runtime_cfg=DispatchRuntimeConfig(process_delay_ms=0, judge_style_mode="rational"),
+            runtime_cfg=_runtime_cfg(),
             build_report_by_runtime=build_report_by_runtime,
             callback_report=callback_report,
             callback_failed=callback_failed,
@@ -67,7 +81,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await process_dispatch_request(
             request=request,
-            runtime_cfg=DispatchRuntimeConfig(process_delay_ms=0, judge_style_mode="rational"),
+            runtime_cfg=_runtime_cfg(),
             build_report_by_runtime=build_report_by_runtime,
             callback_report=callback_report,
             callback_failed=callback_failed,
@@ -95,7 +109,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             await process_dispatch_request(
                 request=request,
-                runtime_cfg=DispatchRuntimeConfig(process_delay_ms=0, judge_style_mode="rational"),
+                runtime_cfg=_runtime_cfg(),
                 build_report_by_runtime=build_report_by_runtime,
                 callback_report=callback_report,
                 callback_failed=callback_failed,
@@ -119,7 +133,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await process_dispatch_request(
             request=request,
-            runtime_cfg=DispatchRuntimeConfig(process_delay_ms=0, judge_style_mode="rational"),
+            runtime_cfg=_runtime_cfg(),
             build_report_by_runtime=build_report_by_runtime,
             callback_report=callback_report,
             callback_failed=callback_failed,
@@ -142,7 +156,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             await process_dispatch_request(
                 request=request,
-                runtime_cfg=DispatchRuntimeConfig(process_delay_ms=0, judge_style_mode="rational"),
+                runtime_cfg=_runtime_cfg(),
                 build_report_by_runtime=build_report_by_runtime,
                 callback_report=callback_report,
                 callback_failed=callback_failed,
@@ -177,7 +191,7 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await process_dispatch_request(
             request=request,
-            runtime_cfg=DispatchRuntimeConfig(process_delay_ms=250, judge_style_mode="rational"),
+            runtime_cfg=_runtime_cfg(process_delay_ms=250),
             build_report_by_runtime=build_report_by_runtime,
             callback_report=callback_report,
             callback_failed=callback_failed,
@@ -190,6 +204,71 @@ class DispatchControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["winner"], "con")
         self.assertEqual(result["needsDrawVote"], True)
         self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["attemptCount"], 1)
+        self.assertEqual(result["retryCount"], 0)
+
+    async def test_process_dispatch_request_should_retry_retryable_error_then_succeed(self) -> None:
+        request = _build_request()
+        build_attempts = {"n": 0}
+        callback_payloads: list[tuple[int, dict]] = []
+        failed_calls: list[tuple[int, str]] = []
+
+        async def build_report_by_runtime(*_args: object, **_kwargs: object) -> _FakeReport:
+            build_attempts["n"] += 1
+            if build_attempts["n"] == 1:
+                raise JudgeRuntimeError(code="judge_timeout", message="timeout")
+            return _FakeReport(winner="pro", provider="openai")
+
+        async def callback_report(job_id: int, payload: dict) -> None:
+            callback_payloads.append((job_id, payload))
+
+        async def callback_failed(job_id: int, error_message: str) -> None:
+            failed_calls.append((job_id, error_message))
+
+        result = await process_dispatch_request(
+            request=request,
+            runtime_cfg=_runtime_cfg(runtime_retry_max_attempts=2, retry_backoff_ms=0),
+            build_report_by_runtime=build_report_by_runtime,
+            callback_report=callback_report,
+            callback_failed=callback_failed,
+        )
+
+        self.assertEqual(build_attempts["n"], 2)
+        self.assertEqual(len(callback_payloads), 1)
+        self.assertEqual(failed_calls, [])
+        self.assertEqual(result["winner"], "pro")
+        self.assertEqual(result["attemptCount"], 2)
+        self.assertEqual(result["retryCount"], 1)
+
+    async def test_process_dispatch_request_should_not_retry_non_retryable_error(self) -> None:
+        request = _build_request()
+        build_attempts = {"n": 0}
+        failed_calls: list[tuple[int, str]] = []
+
+        async def build_report_by_runtime(*_args: object, **_kwargs: object) -> _FakeReport:
+            build_attempts["n"] += 1
+            raise JudgeRuntimeError(code="consistency_conflict", message="winner mismatch")
+
+        async def callback_failed(job_id: int, error_message: str) -> None:
+            failed_calls.append((job_id, error_message))
+
+        async def callback_report(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("should not call callback_report")
+
+        result = await process_dispatch_request(
+            request=request,
+            runtime_cfg=_runtime_cfg(runtime_retry_max_attempts=3, retry_backoff_ms=0),
+            build_report_by_runtime=build_report_by_runtime,
+            callback_report=callback_report,
+            callback_failed=callback_failed,
+        )
+
+        self.assertEqual(build_attempts["n"], 1)
+        self.assertEqual(len(failed_calls), 1)
+        self.assertEqual(result["status"], "marked_failed")
+        self.assertEqual(result["errorCode"], "consistency_conflict")
+        self.assertEqual(result["attemptCount"], 1)
+        self.assertEqual(result["retryCount"], 0)
 
 
 if __name__ == "__main__":

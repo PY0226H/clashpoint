@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.rag_retriever import RAG_BACKEND_MILVUS, RetrievedContext
 from app.runtime_errors import (
     ERROR_CONSISTENCY_CONFLICT,
+    ERROR_JUDGE_TIMEOUT,
     ERROR_MODEL_OVERLOAD,
     ERROR_RAG_UNAVAILABLE,
 )
@@ -312,6 +313,71 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             build_mock_report_fn=lambda *_args, **_kwargs: _FakeReport(payload={"provider": "mock"}),
         )
         self.assertIn(ERROR_CONSISTENCY_CONFLICT, report.payload["errorCodes"])
+
+    async def test_build_report_by_runtime_should_fail_open_when_rag_retrieval_runtime_error(self) -> None:
+        settings = _build_settings(provider=PROVIDER_MOCK)
+        request = _build_request()
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            raise RuntimeError("milvus timeout")
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=lambda **_kwargs: _FakeReport(payload={"provider": "openai"}),
+            build_mock_report_fn=lambda *_args, **_kwargs: _FakeReport(payload={"provider": "mock"}),
+        )
+
+        self.assertEqual(report.payload["provider"], "mock")
+        self.assertEqual(report.payload["judgeTrace"]["degradationLevel"], 2)
+        self.assertEqual(report.payload["retrievalDiagnostics"]["ragRetriever"]["strategy"], "runtime_error")
+        self.assertIn(ERROR_JUDGE_TIMEOUT, report.payload["errorCodes"])
+        self.assertIn(ERROR_RAG_UNAVAILABLE, report.payload["errorCodes"])
+
+    async def test_build_report_by_runtime_should_mark_topic_memory_unavailable_when_fault_injected(self) -> None:
+        settings = _build_settings(
+            provider=PROVIDER_OPENAI,
+            openai_api_key="sk-test",
+            fault_injection_nodes=("topic_memory_unavailable",),
+        )
+        request = _build_request()
+
+        class _FakeTraceStore:
+            def list_topic_memory(self, *, topic_domain: str, rubric_version: str, limit: int = 3):
+                raise AssertionError("list_topic_memory should be bypassed by fault injection")
+
+        def fake_retrieve_contexts(_req: object, **_kwargs: object) -> list[RetrievedContext]:
+            return [
+                RetrievedContext(
+                    chunk_id="rag-1",
+                    title="kb",
+                    source_url="https://example.com/kb",
+                    content="rag content",
+                    score=0.7,
+                )
+            ]
+
+        async def fake_build_openai(**_kwargs: object) -> _FakeReport:
+            return _FakeReport(payload={"provider": "openai"})
+
+        report = await build_report_by_runtime(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            trace_store=_FakeTraceStore(),
+            retrieve_contexts_fn=fake_retrieve_contexts,
+            build_report_with_openai_fn=fake_build_openai,
+            build_mock_report_fn=lambda *_args, **_kwargs: _FakeReport(payload={"provider": "mock"}),
+        )
+
+        self.assertEqual(report.payload["judgeTrace"]["degradationLevel"], 1)
+        self.assertIn("fault injected topic memory unavailable", report.payload["retrievalDiagnostics"]["topicMemoryError"])
+        self.assertTrue(report.payload["retrievalDiagnostics"]["topicMemoryFaultInjected"])
+        self.assertIn(ERROR_RAG_UNAVAILABLE, report.payload["errorCodes"])
 
     async def test_build_report_by_runtime_should_fallback_when_openai_failed_and_enabled(self) -> None:
         settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="sk-test", openai_fallback_to_mock=True)

@@ -5,15 +5,18 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 
 from .models import JudgeDispatchRequest, SubmitJudgeReportInput
 from .openai_judge import build_report_with_openai
-from .rag_retriever import RetrievedContext, retrieve_contexts
+from .rag_retriever import RAG_BACKEND_FILE, RetrievedContext, retrieve_contexts
 from .runtime_errors import (
     ERROR_CONSISTENCY_CONFLICT,
+    ERROR_JUDGE_TIMEOUT,
     ERROR_MODEL_OVERLOAD,
     ERROR_RAG_UNAVAILABLE,
+    classify_rag_failure,
     normalize_runtime_error_code,
 )
 from .runtime_provider import build_report_with_provider
 from .runtime_rag import (
+    RuntimeRagResult,
     apply_rag_payload_fields,
     retrieve_runtime_contexts_with_meta,
 )
@@ -26,6 +29,14 @@ if TYPE_CHECKING:
 RetrieveContextsFn = Callable[..., list[RetrievedContext]]
 BuildOpenAiReportFn = Callable[..., Awaitable[SubmitJudgeReportInput]]
 BuildMockReportFn = Callable[..., SubmitJudgeReportInput]
+
+
+def _fault_nodes(settings: Settings) -> set[str]:
+    return {
+        str(node).strip().lower()
+        for node in getattr(settings, "fault_injection_nodes", ())
+        if str(node).strip()
+    }
 
 
 def _normalize_evidence_refs(report: SubmitJudgeReportInput) -> list[dict]:
@@ -103,6 +114,7 @@ def _resolve_degradation_level(
     settings: Settings,
     rag_result: "RuntimeRagResult",
     report: SubmitJudgeReportInput,
+    topic_memory_error: str | None = None,
 ) -> int:
     level = 0
     rag_diag = rag_result.retrieval_diagnostics if isinstance(rag_result.retrieval_diagnostics, dict) else {}
@@ -110,6 +122,8 @@ def _resolve_degradation_level(
     if settings.rag_rerank_enabled and not rerank_effective:
         level = max(level, 1)
     if rag_result.backend_fallback_reason:
+        level = max(level, 1)
+    if topic_memory_error:
         level = max(level, 1)
     if settings.rag_enabled and not report.payload.get("ragUsedByModel", False):
         level = max(level, 2)
@@ -123,11 +137,18 @@ def _collect_runtime_error_codes(
     settings: Settings,
     rag_result: "RuntimeRagResult",
     report: SubmitJudgeReportInput,
+    topic_memory_error: str | None = None,
 ) -> list[str]:
     codes: list[str] = []
+    rag_diag = rag_result.retrieval_diagnostics if isinstance(rag_result.retrieval_diagnostics, dict) else {}
+    rag_error_code = rag_diag.get("errorCode")
+    if rag_error_code:
+        codes.append(normalize_runtime_error_code(str(rag_error_code)))
     if rag_result.backend_fallback_reason:
         codes.append(ERROR_RAG_UNAVAILABLE)
     if settings.rag_enabled and not report.payload.get("ragUsedByModel", False):
+        codes.append(ERROR_RAG_UNAVAILABLE)
+    if topic_memory_error:
         codes.append(ERROR_RAG_UNAVAILABLE)
 
     agent_pipeline = report.payload.get("agentPipeline")
@@ -151,6 +172,32 @@ def _collect_runtime_error_codes(
     return deduped
 
 
+def _build_rag_failure_result(
+    *,
+    settings: Settings,
+    error_code: str,
+    error_message: str,
+    fault_injected: bool,
+) -> RuntimeRagResult:
+    effective_backend = settings.rag_backend or RAG_BACKEND_FILE
+    return RuntimeRagResult(
+        retrieved_contexts=[],
+        requested_backend=settings.rag_backend,
+        effective_backend=effective_backend,
+        backend_fallback_reason="rag_runtime_error",
+        retrieval_diagnostics={
+            "strategy": "runtime_error",
+            "errorCode": normalize_runtime_error_code(error_code),
+            "errorMessage": str(error_message)[:500],
+            "faultInjected": fault_injected,
+            "hybridEnabledBySettings": settings.rag_hybrid_enabled,
+            "rerankEnabledBySettings": settings.rag_rerank_enabled,
+            "hybridEnabledEffective": False,
+            "rerankEnabledEffective": False,
+        },
+    )
+
+
 async def build_report_by_runtime(
     *,
     request: JudgeDispatchRequest,
@@ -164,26 +211,52 @@ async def build_report_by_runtime(
 ) -> SubmitJudgeReportInput:
     trace_id = getattr(request, "trace_id", None)
     retrieval_profile = getattr(request, "retrieval_profile", "hybrid_v1")
+    injected = _fault_nodes(settings)
     overall_start = perf_counter()
     rag_start = perf_counter()
-    rag_result = retrieve_runtime_contexts_with_meta(
-        request=request,
-        settings=settings,
-        retrieve_contexts_fn=retrieve_contexts_fn,
-    )
+    try:
+        if "rag_retrieve_timeout" in injected:
+            raise RuntimeError("fault injected rag retrieve timeout")
+        if "rag_retrieve_unavailable" in injected:
+            raise RuntimeError("fault injected rag retrieve unavailable")
+        rag_result = retrieve_runtime_contexts_with_meta(
+            request=request,
+            settings=settings,
+            retrieve_contexts_fn=retrieve_contexts_fn,
+        )
+    except Exception as err:
+        if "rag_retrieve_timeout" in injected:
+            rag_code = ERROR_JUDGE_TIMEOUT
+        elif "rag_retrieve_unavailable" in injected:
+            rag_code = ERROR_RAG_UNAVAILABLE
+        else:
+            rag_code = classify_rag_failure(str(err))
+        rag_result = _build_rag_failure_result(
+            settings=settings,
+            error_code=rag_code,
+            error_message=str(err),
+            fault_injected=bool({"rag_retrieve_timeout", "rag_retrieve_unavailable"}.intersection(injected)),
+        )
     rag_elapsed_ms = (perf_counter() - rag_start) * 1000.0
     retrieved_contexts = list(rag_result.retrieved_contexts)
     topic_memories: list["TopicMemoryRecord"] = []
+    topic_memory_error: str | None = None
     if settings.topic_memory_enabled and trace_store is not None:
-        topic_memories = trace_store.list_topic_memory(
-            topic_domain=getattr(request, "topic_domain", "default"),
-            rubric_version=request.rubric_version,
-            limit=settings.topic_memory_limit,
-        )
-        retrieved_contexts = _build_topic_memory_contexts(
-            topic_memories,
-            max_chars_per_snippet=settings.rag_max_chars_per_snippet,
-        ) + retrieved_contexts
+        try:
+            if "topic_memory_unavailable" in injected:
+                raise RuntimeError("fault injected topic memory unavailable")
+            topic_memories = trace_store.list_topic_memory(
+                topic_domain=getattr(request, "topic_domain", "default"),
+                rubric_version=request.rubric_version,
+                limit=settings.topic_memory_limit,
+            )
+            retrieved_contexts = _build_topic_memory_contexts(
+                topic_memories,
+                max_chars_per_snippet=settings.rag_max_chars_per_snippet,
+            ) + retrieved_contexts
+        except Exception as err:
+            topic_memory_error = str(err)[:500]
+            topic_memories = []
     topic_memory_quality_scores = _topic_memory_quality_scores(topic_memories)
     provider_start = perf_counter()
     report, used_by_model = await build_report_with_provider(
@@ -211,11 +284,13 @@ async def build_report_by_runtime(
         settings=settings,
         rag_result=rag_result,
         report=report,
+        topic_memory_error=topic_memory_error,
     )
     degradation_level = _resolve_degradation_level(
         settings=settings,
         rag_result=rag_result,
         report=report,
+        topic_memory_error=topic_memory_error,
     )
     report.payload["judgeTrace"] = {
         "traceId": trace_id,
@@ -230,6 +305,7 @@ async def build_report_by_runtime(
         },
         "fallback": {
             "ragBackendFallbackReason": rag_result.backend_fallback_reason,
+            "topicMemoryError": topic_memory_error,
             "providerFallbackFrom": report.payload.get("fallbackFrom"),
             "providerFallbackReason": report.payload.get("fallbackReason"),
         },
@@ -243,6 +319,8 @@ async def build_report_by_runtime(
         "rerankEnabled": settings.rag_rerank_enabled,
         "topicMemoryEnabled": settings.topic_memory_enabled,
         "topicMemoryReuseCount": len(topic_memories),
+        "topicMemoryError": topic_memory_error,
+        "topicMemoryFaultInjected": "topic_memory_unavailable" in injected and bool(topic_memory_error),
         "topicMemoryAvgQualityScore": (
             round(sum(topic_memory_quality_scores) / len(topic_memory_quality_scores), 4)
             if topic_memory_quality_scores

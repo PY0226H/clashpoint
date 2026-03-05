@@ -6,6 +6,7 @@ from app.runtime_errors import (
     ERROR_RAG_UNAVAILABLE,
     JudgeRuntimeError,
     classify_openai_failure,
+    classify_rag_failure,
     extract_runtime_error_code,
     normalize_runtime_error_code,
 )
@@ -22,6 +23,10 @@ class RuntimeErrorsTests(unittest.TestCase):
         self.assertEqual(classify_openai_failure("openai status=504"), ERROR_JUDGE_TIMEOUT)
         self.assertEqual(classify_openai_failure("openai status=429"), ERROR_MODEL_OVERLOAD)
         self.assertEqual(classify_openai_failure("openai status=503"), ERROR_MODEL_OVERLOAD)
+
+    def test_classify_rag_failure_should_map_timeout_and_unavailable(self) -> None:
+        self.assertEqual(classify_rag_failure("milvus timeout"), ERROR_JUDGE_TIMEOUT)
+        self.assertEqual(classify_rag_failure("redis connection refused"), ERROR_RAG_UNAVAILABLE)
 
     def test_extract_runtime_error_code_should_read_custom_error(self) -> None:
         err = JudgeRuntimeError(code=ERROR_RAG_UNAVAILABLE, message="rag fallback")

@@ -91,7 +91,10 @@ cd ai_judge_service
 - `AI_JUDGE_REFLECTION_ENABLED`: 终局反思回路开关，默认 `true`
 - `AI_JUDGE_REFLECTION_POLICY`: 反思策略，`winner_mismatch_only|winner_mismatch_or_low_margin`，默认 `winner_mismatch_only`
 - `AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD`: 低分差保护阈值（平均分差），默认 `3`
-- `AI_JUDGE_FAULT_INJECTION_NODES`: 故障注入节点（逗号分隔），可选 `stage_judge,aggregate,final_pass_1,final_pass_2,display`；生产环境禁止
+- `AI_JUDGE_FAULT_INJECTION_NODES`: 故障注入节点（逗号分隔），可选
+  - pipeline 节点：`stage_judge,aggregate,final_pass_1,final_pass_2,display`
+  - 运行时故障：`provider_timeout,provider_overload,rag_retrieve_timeout,rag_retrieve_unavailable,topic_memory_unavailable`
+  - 生产环境禁止
 - `AI_JUDGE_TOPIC_MEMORY_ENABLED`: 辩题级长期记忆开关，默认 `true`
 - `AI_JUDGE_RAG_HYBRID_ENABLED`: 混合检索策略开关，默认 `true`
 - `AI_JUDGE_RAG_RERANK_ENABLED`: 检索重排开关，默认 `true`

@@ -133,6 +133,9 @@ class TraceStoreProtocol(Protocol):
     def get_idempotency(self, key: str) -> IdempotencyRecord | None:
         ...
 
+    def clear_idempotency(self, key: str) -> None:
+        ...
+
     def get_trace(self, job_id: int) -> TraceRecord | None:
         ...
 
@@ -304,6 +307,10 @@ class TraceStore(TraceStoreProtocol):
         with self._lock:
             self._prune_locked(now)
             return self._idempotency.get(key)
+
+    def clear_idempotency(self, key: str) -> None:
+        with self._lock:
+            self._idempotency.pop(key, None)
 
     def get_trace(self, job_id: int) -> TraceRecord | None:
         now = _utcnow()
@@ -615,6 +622,12 @@ class RedisTraceStore(TraceStoreProtocol):
         if payload is None:
             return None
         return self._deserialize_idempotency(key, payload)
+
+    def clear_idempotency(self, key: str) -> None:
+        try:
+            self._redis.delete(self._idempotency_key(key))
+        except Exception:
+            return
 
     def get_trace(self, job_id: int) -> TraceRecord | None:
         return self._read_trace(job_id)

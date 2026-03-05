@@ -39,6 +39,21 @@ def classify_openai_failure(reason: str | None) -> str:
     return ERROR_MODEL_OVERLOAD
 
 
+def classify_rag_failure(reason: str | None) -> str:
+    text = str(reason or "").strip().lower()
+    if not text:
+        return ERROR_RAG_UNAVAILABLE
+    if "timeout" in text or "timed out" in text:
+        return ERROR_JUDGE_TIMEOUT
+    if "status=408" in text or "status=504" in text:
+        return ERROR_JUDGE_TIMEOUT
+    if "unavailable" in text or "connection" in text:
+        return ERROR_RAG_UNAVAILABLE
+    if "milvus" in text or "redis" in text:
+        return ERROR_RAG_UNAVAILABLE
+    return ERROR_RAG_UNAVAILABLE
+
+
 @dataclass(frozen=True)
 class JudgeRuntimeError(RuntimeError):
     code: str

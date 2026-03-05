@@ -22,6 +22,11 @@ VALID_REFLECTION_POLICIES = {
     "winner_mismatch_or_low_margin",
 }
 VALID_FAULT_INJECTION_NODES = {
+    "provider_timeout",
+    "provider_overload",
+    "rag_retrieve_timeout",
+    "rag_retrieve_unavailable",
+    "topic_memory_unavailable",
     "stage_judge",
     "aggregate",
     "final_pass_1",

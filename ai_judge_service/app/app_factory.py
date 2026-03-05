@@ -204,6 +204,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 replayed = dict(existed.response)
                 replayed["idempotentReplay"] = True
                 return replayed
+            if existed:
+                raise HTTPException(
+                    status_code=409,
+                    detail="idempotency_conflict:judge_dispatch",
+                )
             runtime.trace_store.set_idempotency_pending(
                 key=request.idempotency_key,
                 job_id=request.job.job_id,
@@ -241,6 +246,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 sleep_fn=runtime.sleep_fn,
             )
         except Exception as err:
+            if request.idempotency_key:
+                runtime.trace_store.clear_idempotency(request.idempotency_key)
             runtime.trace_store.register_failure(
                 job_id=request.job.job_id,
                 response={
@@ -253,15 +260,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
             raise
 
-        if request.idempotency_key:
-            runtime.trace_store.set_idempotency_success(
-                key=request.idempotency_key,
-                job_id=request.job.job_id,
-                response=response,
-                ttl_secs=runtime.settings.idempotency_ttl_secs,
-            )
-
         if response.get("status") == "marked_failed":
+            if request.idempotency_key:
+                runtime.trace_store.clear_idempotency(request.idempotency_key)
             runtime.trace_store.register_failure(
                 job_id=request.job.job_id,
                 response=response,
@@ -269,6 +270,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_error=callback_error or "marked_failed",
             )
         else:
+            if request.idempotency_key:
+                runtime.trace_store.set_idempotency_success(
+                    key=request.idempotency_key,
+                    job_id=request.job.job_id,
+                    response=response,
+                    ttl_secs=runtime.settings.idempotency_ttl_secs,
+                )
             topic_memory_audit: dict[str, Any] | None = None
             report_summary = dict(report_payload or {})
             if runtime.settings.topic_memory_enabled:

@@ -43,6 +43,13 @@ class TraceStoreTests(unittest.TestCase):
         assert cached is not None
         self.assertEqual(cached.response["jobId"], 21)
 
+    def test_clear_idempotency_should_remove_pending_record(self) -> None:
+        store = TraceStore(ttl_secs=3600)
+        store.set_idempotency_pending(key="k2", job_id=22, ttl_secs=3600)
+        self.assertIsNotNone(store.get_idempotency("k2"))
+        store.clear_idempotency("k2")
+        self.assertIsNone(store.get_idempotency("k2"))
+
     def test_mark_replay_should_append_history(self) -> None:
         store = TraceStore(ttl_secs=3600)
         store.register_start(job_id=7, trace_id="trace-7", request={"job": {"job_id": 7}})

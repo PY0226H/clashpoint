@@ -218,6 +218,35 @@ class RuntimeProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(used_by_model)
         self.assertEqual(report.payload["fallbackErrorCode"], ERROR_JUDGE_TIMEOUT)
 
+    async def test_build_report_with_provider_should_support_fault_injected_provider_timeout(self) -> None:
+        settings = _build_settings(
+            provider=PROVIDER_OPENAI,
+            openai_api_key="sk-test",
+            openai_fallback_to_mock=True,
+            fault_injection_nodes=("provider_timeout",),
+        )
+        request = _build_request()
+
+        async def fake_openai(**_kwargs: object) -> _FakeReport:
+            raise AssertionError("openai call should be short-circuited by fault injection")
+
+        def fake_mock(_request: object, **kwargs: object) -> _FakeReport:
+            self.assertEqual(kwargs["system_style_mode"], settings.judge_style_mode)
+            return _FakeReport(payload={"provider": "mock"})
+
+        report, used_by_model = await build_report_with_provider(
+            request=request,
+            effective_style_mode="rational",
+            style_mode_source="system_config",
+            settings=settings,
+            retrieved_contexts=[],
+            build_report_with_openai_fn=fake_openai,
+            build_mock_report_fn=fake_mock,
+        )
+        self.assertFalse(used_by_model)
+        self.assertEqual(report.payload["provider"], "ai-judge-service-mock-fallback")
+        self.assertEqual(report.payload["fallbackErrorCode"], ERROR_JUDGE_TIMEOUT)
+
     async def test_build_report_with_provider_should_mark_missing_key(self) -> None:
         settings = _build_settings(provider=PROVIDER_OPENAI, openai_api_key="")
         request = _build_request()
