@@ -168,6 +168,62 @@ def _calc_topic_memory_quality_audit(
     }
 
 
+def _build_replay_report_payload(record: Any) -> dict[str, Any]:
+    report_summary = record.report_summary if isinstance(record.report_summary, dict) else {}
+    request = record.request if isinstance(record.request, dict) else {}
+    response = record.response if isinstance(record.response, dict) else {}
+
+    payload = report_summary.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+
+    stage_summaries = report_summary.get("stage_summaries") or report_summary.get("stageSummaries")
+    if not isinstance(stage_summaries, list):
+        stage_summaries = []
+
+    return {
+        "jobId": record.job_id,
+        "traceId": record.trace_id,
+        "status": record.status,
+        "requestInput": {
+            "job": request.get("job") or {},
+            "session": request.get("session") or {},
+            "topic": request.get("topic") or {},
+            "messages": request.get("messages") or [],
+            "messageWindowSize": request.get("message_window_size") or request.get("messageWindowSize"),
+            "rubricVersion": request.get("rubric_version") or request.get("rubricVersion"),
+            "judgePolicyVersion": request.get("judge_policy_version") or request.get("judgePolicyVersion"),
+            "retrievalProfile": request.get("retrieval_profile") or request.get("retrievalProfile"),
+        },
+        "pipeline": {
+            "agentPipeline": payload.get("agentPipeline"),
+            "stageSummaries": stage_summaries,
+            "winnerFirst": report_summary.get("winner_first") or report_summary.get("winnerFirst"),
+            "winnerSecond": report_summary.get("winner_second") or report_summary.get("winnerSecond"),
+            "finalWinner": report_summary.get("winner"),
+            "needsDrawVote": report_summary.get("needs_draw_vote") or report_summary.get("needsDrawVote"),
+            "rationale": report_summary.get("rationale"),
+            "proSummary": report_summary.get("pro_summary") or report_summary.get("proSummary"),
+            "conSummary": report_summary.get("con_summary") or report_summary.get("conSummary"),
+        },
+        "judgeAudit": payload.get("judgeAudit"),
+        "callbackResult": {
+            "callbackStatus": record.callback_status,
+            "callbackError": record.callback_error,
+            "response": response,
+        },
+        "replays": [
+            {
+                "replayedAt": item.replayed_at.isoformat(),
+                "winner": item.winner,
+                "needsDrawVote": item.needs_draw_vote,
+                "provider": item.provider,
+            }
+            for item in record.replays
+        ],
+    }
+
+
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
 
@@ -374,6 +430,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "provider": report.payload.get("provider"),
             "judgeTrace": report.payload.get("judgeTrace"),
         }
+
+    @app.get("/internal/judge/jobs/{job_id}/replay/report")
+    async def get_judge_replay_report(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        record = runtime.trace_store.get_trace(job_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="judge_trace_not_found")
+        return _build_replay_report_payload(record)
 
     @app.get("/internal/judge/rag/diagnostics")
     async def get_rag_diagnostics(

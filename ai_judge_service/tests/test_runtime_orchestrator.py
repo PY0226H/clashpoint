@@ -178,6 +178,14 @@ class RuntimeOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.payload["topicMemory"]["reuseCount"], 0)
         self.assertIsNone(report.payload["retrievalDiagnostics"]["topicMemoryAvgQualityScore"])
         self.assertEqual(report.payload["errorCodes"], [])
+        judge_audit = report.payload.get("judgeAudit")
+        self.assertIsInstance(judge_audit, dict)
+        self.assertEqual(judge_audit["rubricVersion"], "v1")
+        self.assertEqual(judge_audit["judgePolicyVersion"], "v2-default")
+        self.assertEqual(judge_audit["degradationLevel"], report.payload["judgeTrace"]["degradationLevel"])
+        self.assertEqual(len(judge_audit["promptHash"]), 64)
+        self.assertEqual(len(judge_audit["retrievalSnapshot"]), 1)
+        self.assertEqual(judge_audit["retrievalSnapshot"][0]["chunkId"], "c1")
 
     async def test_build_report_by_runtime_should_mark_degradation_level_l1_when_rerank_disabled_by_profile(
         self,

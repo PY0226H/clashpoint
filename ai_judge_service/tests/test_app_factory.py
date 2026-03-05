@@ -27,6 +27,13 @@ class _FakeReport:
         self.payload = {
             "provider": "openai",
             "evidenceRefs": [{"messageId": 1, "reason": "test"}],
+            "judgeAudit": {
+                "promptHash": "hash-1",
+                "model": "gpt-4.1-mini",
+                "rubricVersion": "v1",
+                "retrievalSnapshot": [],
+                "degradationLevel": 0,
+            },
         }
         self.rationale = "test rationale with enough chars"
 
@@ -36,6 +43,16 @@ class _FakeReport:
             "needsDrawVote": self.needs_draw_vote,
             "rationale": self.rationale,
             "payload": self.payload,
+            "stage_summaries": [
+                {
+                    "stage_no": 1,
+                    "from_message_id": 1,
+                    "to_message_id": 1,
+                    "pro_score": 30,
+                    "con_score": 28,
+                    "summary": {"stageFocus": "opening"},
+                }
+            ],
             "mode": mode,
         }
 
@@ -240,6 +257,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/dispatch", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/trace", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/replay/report", paths)
         self.assertIn("/internal/judge/rag/diagnostics", paths)
 
         dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
@@ -276,6 +294,16 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         rag = await rag_route.endpoint(job_id=1, x_ai_internal_key="k3")
         self.assertEqual(rag["jobId"], 1)
+
+        replay_report_route = next(
+            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/replay/report"
+        )
+        replay_report = await replay_report_route.endpoint(job_id=1, x_ai_internal_key="k3")
+        self.assertEqual(replay_report["jobId"], 1)
+        self.assertEqual(replay_report["status"], "completed")
+        self.assertEqual(replay_report["judgeAudit"]["promptHash"], "hash-1")
+        self.assertEqual(replay_report["pipeline"]["finalWinner"], "pro")
+        self.assertEqual(len(replay_report["pipeline"]["stageSummaries"]), 1)
 
     async def test_dispatch_should_reject_unblinded_user_id(self) -> None:
         settings = _build_settings(ai_internal_key="k4")

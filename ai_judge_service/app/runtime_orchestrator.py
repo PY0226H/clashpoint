@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from time import perf_counter
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -107,6 +109,60 @@ def _topic_memory_quality_scores(records: list["TopicMemoryRecord"]) -> list[flo
             continue
         out.append(score)
     return out
+
+
+def _build_retrieval_snapshot(
+    retrieved_contexts: list[RetrievedContext],
+    *,
+    max_items: int = 12,
+    preview_chars: int = 160,
+) -> list[dict]:
+    snapshot: list[dict] = []
+    for ctx in retrieved_contexts[: max(1, max_items)]:
+        snapshot.append(
+            {
+                "chunkId": ctx.chunk_id,
+                "title": ctx.title,
+                "sourceUrl": ctx.source_url,
+                "score": round(float(ctx.score), 4),
+                "preview": str(ctx.content or "")[: max(40, preview_chars)],
+            }
+        )
+    return snapshot
+
+
+def _build_prompt_hash(
+    *,
+    request: JudgeDispatchRequest,
+    effective_style_mode: str,
+    retrieved_contexts: list[RetrievedContext],
+) -> str:
+    payload = {
+        "jobId": request.job.job_id,
+        "styleMode": effective_style_mode,
+        "rubricVersion": request.rubric_version,
+        "judgePolicyVersion": getattr(request, "judge_policy_version", "v2-default"),
+        "topicDomain": getattr(request, "topic_domain", "default"),
+        "topicTitle": getattr(request.topic, "title", ""),
+        "messages": [
+            {
+                "messageId": msg.message_id,
+                "side": msg.side,
+                "content": msg.content,
+            }
+            for msg in request.messages
+        ],
+        "contexts": [
+            {
+                "chunkId": ctx.chunk_id,
+                "sourceUrl": ctx.source_url,
+                "content": ctx.content,
+            }
+            for ctx in retrieved_contexts
+        ],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _resolve_degradation_level(
@@ -331,6 +387,23 @@ async def build_report_by_runtime(
         "snippetCount": len(retrieved_contexts),
         "sourceCount": len(report.payload.get("ragSources", [])),
         "ragRetriever": rag_result.retrieval_diagnostics,
+    }
+    retrieval_snapshot = _build_retrieval_snapshot(retrieved_contexts)
+    prompt_hash = _build_prompt_hash(
+        request=request,
+        effective_style_mode=effective_style_mode,
+        retrieved_contexts=retrieved_contexts,
+    )
+    report.payload["judgeAudit"] = {
+        "traceId": trace_id,
+        "promptHash": prompt_hash,
+        "provider": report.payload.get("provider"),
+        "model": report.payload.get("model"),
+        "rubricVersion": request.rubric_version,
+        "judgePolicyVersion": getattr(request, "judge_policy_version", "v2-default"),
+        "retrievalProfile": retrieval_profile,
+        "retrievalSnapshot": retrieval_snapshot,
+        "degradationLevel": degradation_level,
     }
     report.payload["errorCodes"] = error_codes
     report.payload["topicMemory"] = {
