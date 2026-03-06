@@ -60,11 +60,12 @@
                 {{ judgeLoading ? '刷新中...' : '刷新状态' }}
               </button>
               <button
+                v-if="showManualJudgeTrigger"
                 @click="requestJudgeJob"
                 :disabled="judgeRequesting"
-                class="px-3 py-1.5 text-xs rounded bg-purple-600 text-white disabled:opacity-50"
+                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
               >
-                {{ judgeRequesting ? '请求中...' : '发起 AI 判决' }}
+                {{ judgeRequesting ? '请求中...' : '手动补触发（兜底）' }}
               </button>
               <button
                 @click="openJudgeReportPage"
@@ -75,10 +76,9 @@
             </div>
           </div>
 
-          <label class="inline-flex items-center gap-2 text-xs text-gray-700">
-            <input v-model="allowRejudge" type="checkbox" class="rounded border-gray-300" />
-            允许重判（allowRejudge）
-          </label>
+          <div class="text-xs text-gray-600">
+            {{ judgeAutomationHint }}
+          </div>
 
           <div v-if="judgeLatestJob" class="text-xs text-gray-600">
             latest job: #{{ judgeLatestJob.jobId }} · {{ judgeLatestJob.status }} ·
@@ -277,11 +277,13 @@ import {
   extractDebateRoomEvent,
   getDrawVoteRemainingMs,
   getOldestDebateMessageId,
+  judgeAutomationHintText,
   mergeDebateRoomMessages,
   normalizeDebateRoomMessage,
   normalizeDrawVoteStatus,
   normalizeJudgeReportStatus,
   parseDebateRoomWsMessage,
+  shouldShowManualJudgeTrigger,
   shouldPollJudgeReportStatus,
 } from '../debate-room-utils';
 
@@ -328,7 +330,6 @@ export default {
       drawVoteLoading: false,
       voteSubmitting: false,
       drawVoteErrorText: '',
-      allowRejudge: false,
       judgePollTimer: null,
       nowMs: Date.now(),
       clockTimer: null,
@@ -390,6 +391,12 @@ export default {
         return 'text-red-700';
       }
       return 'text-gray-700';
+    },
+    showManualJudgeTrigger() {
+      return shouldShowManualJudgeTrigger(this.judgeStatus);
+    },
+    judgeAutomationHint() {
+      return judgeAutomationHintText(this.judgeStatus);
     },
     wsStatusText() {
       if (this.wsConnected) {
@@ -713,7 +720,7 @@ export default {
       try {
         await this.$store.dispatch('requestJudgeJob', {
           sessionId: this.sessionId,
-          allowRejudge: this.allowRejudge,
+          allowRejudge: false,
         });
         await this.refreshJudgeReport({ silent: true });
       } catch (error) {

@@ -606,8 +606,6 @@ impl AppState {
         .await?;
         self.publish_status_changed_batch("running", "judging", &judging_ids, now)
             .await;
-        self.auto_trigger_judge_jobs_for_sessions(&judging_ids)
-            .await;
 
         let closed_ids: Vec<(i64,)> = sqlx::query_as(
             r#"
@@ -634,6 +632,12 @@ impl AppState {
         .await?;
         self.publish_status_changed_batch("judging", "closed", &closed_ids, now)
             .await;
+        if let Err(err) = self
+            .auto_trigger_judge_jobs_for_recoverable_sessions(batch_size)
+            .await
+        {
+            warn!("auto judge trigger reconcile query failed: {}", err);
+        }
 
         Ok(DebateSessionAdvanceReport {
             opened: opened_ids.len(),
@@ -698,6 +702,43 @@ impl AppState {
                 }
             }
         }
+    }
+
+    async fn auto_trigger_judge_jobs_for_recoverable_sessions(
+        &self,
+        batch_size: i64,
+    ) -> Result<(), AppError> {
+        let recoverable_session_ids: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT s.id
+            FROM debate_sessions s
+            WHERE s.status IN ('judging', 'closed')
+              AND EXISTS(
+                SELECT 1
+                FROM users u
+                WHERE u.ws_id = s.ws_id
+              )
+              AND NOT EXISTS(
+                SELECT 1
+                FROM judge_reports r
+                WHERE r.session_id = s.id
+              )
+              AND NOT EXISTS(
+                SELECT 1
+                FROM judge_jobs j
+                WHERE j.session_id = s.id
+                  AND j.status = 'running'
+              )
+            ORDER BY s.updated_at ASC
+            LIMIT $1
+            "#,
+        )
+        .bind(batch_size.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+        self.auto_trigger_judge_jobs_for_sessions(&recoverable_session_ids)
+            .await;
+        Ok(())
     }
 }
 

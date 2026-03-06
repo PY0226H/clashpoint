@@ -148,6 +148,60 @@ async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -
     Ok(())
 }
 
+#[tokio::test]
+async fn advance_debate_sessions_should_backfill_auto_judge_for_existing_judging_session(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "judging", 10).await?;
+
+    let first = state.advance_debate_sessions(100).await?;
+    assert_eq!(first.judging, 0);
+    assert_eq!(session_status(&state, session_id).await?, "judging");
+
+    let second = state.advance_debate_sessions(100).await?;
+    assert_eq!(second.judging, 0);
+
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM judge_jobs
+        WHERE session_id = $1
+          AND status = 'running'
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(count.0, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn advance_debate_sessions_should_backfill_auto_judge_for_closed_session_without_report(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "closed", 10).await?;
+
+    let report = state.advance_debate_sessions(100).await?;
+    assert_eq!(report.judging, 0);
+    assert_eq!(report.closed, 0);
+    assert_eq!(session_status(&state, session_id).await?, "closed");
+
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM judge_jobs
+        WHERE session_id = $1
+          AND status = 'running'
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(count.0, 1);
+    Ok(())
+}
+
 #[test]
 fn normalize_debate_message_limit_should_clamp_range() {
     assert_eq!(

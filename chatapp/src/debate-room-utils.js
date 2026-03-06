@@ -98,6 +98,24 @@ export function shouldPollJudgeReportStatus(status) {
   return normalizeJudgeReportStatus(status) === 'pending';
 }
 
+export function shouldShowManualJudgeTrigger(status) {
+  return normalizeJudgeReportStatus(status) === 'failed';
+}
+
+export function judgeAutomationHintText(status) {
+  const normalized = normalizeJudgeReportStatus(status);
+  if (normalized === 'ready') {
+    return '系统已自动完成本场判决。';
+  }
+  if (normalized === 'pending') {
+    return '系统已自动触发裁判，正在生成判决结果。';
+  }
+  if (normalized === 'failed') {
+    return '自动触发或执行失败，可使用兜底重试。';
+  }
+  return '辩论结束后系统会自动触发裁判，无需手动发起。';
+}
+
 export function normalizeDrawVoteStatus(status) {
   const normalized = String(status || '').trim().toLowerCase();
   if (!KNOWN_DRAW_VOTE_STATUS.has(normalized)) {

@@ -9,8 +9,10 @@ import {
   mergeDebateRoomMessages,
   normalizeDebateRoomMessage,
   normalizeDrawVoteStatus,
+  judgeAutomationHintText,
   normalizeJudgeReportStatus,
   parseDebateRoomWsMessage,
+  shouldShowManualJudgeTrigger,
   shouldPollJudgeReportStatus,
 } from './debate-room-utils.js';
 
@@ -69,6 +71,16 @@ assert.equal(normalizeJudgeReportStatus('unknown-status'), 'absent');
 assert.equal(normalizeJudgeReportStatus(null), 'absent');
 assert.equal(shouldPollJudgeReportStatus('pending'), true);
 assert.equal(shouldPollJudgeReportStatus('ready'), false);
+assert.equal(shouldShowManualJudgeTrigger('failed'), true);
+assert.equal(shouldShowManualJudgeTrigger('pending'), false);
+assert.equal(shouldShowManualJudgeTrigger('absent'), false);
+assert.equal(judgeAutomationHintText('ready'), '系统已自动完成本场判决。');
+assert.equal(judgeAutomationHintText('pending'), '系统已自动触发裁判，正在生成判决结果。');
+assert.equal(judgeAutomationHintText('failed'), '自动触发或执行失败，可使用兜底重试。');
+assert.equal(
+  judgeAutomationHintText('absent'),
+  '辩论结束后系统会自动触发裁判，无需手动发起。',
+);
 
 assert.equal(normalizeDrawVoteStatus('open'), 'open');
 assert.equal(normalizeDrawVoteStatus('DECIDED'), 'decided');
