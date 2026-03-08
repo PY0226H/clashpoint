@@ -5,6 +5,7 @@ mod chat;
 mod debate;
 pub(crate) mod debate_judge;
 pub(crate) mod debate_ops;
+pub(crate) mod debate_room;
 mod messages;
 mod payment;
 mod ticket;
