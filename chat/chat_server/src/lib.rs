@@ -13,6 +13,7 @@ mod test_fixtures;
 
 use anyhow::Context;
 use chat_core::{
+    get_jwt_verify_metrics_snapshot,
     middlewares::{set_layer, verify_token_header_only, TokenVerify},
     DecodingKey, EncodingKey, User,
 };
@@ -179,6 +180,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         )
         .route("/infra/redis/health", get(get_redis_health_handler))
         .route(
+            "/infra/jwt/legacy-retirement-gate",
+            get(get_jwt_legacy_retirement_gate_handler),
+        )
+        .route(
             "/judge/dispatch/metrics",
             get(get_judge_dispatch_metrics_handler),
         )
@@ -304,6 +309,13 @@ impl AppState {
 
     pub async fn get_redis_health(&self) -> RedisHealthOutput {
         self.redis.health_snapshot().await
+    }
+
+    pub fn get_jwt_legacy_retirement_gate(&self) -> GetJwtLegacyRetirementGateOutput {
+        GetJwtLegacyRetirementGateOutput::from_runtime_and_metrics(
+            self.dk.runtime_config(),
+            get_jwt_verify_metrics_snapshot(),
+        )
     }
 
     pub(crate) fn trigger_judge_dispatch(&self, trigger: JudgeDispatchTrigger) {

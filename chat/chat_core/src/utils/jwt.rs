@@ -6,7 +6,11 @@ use jsonwebtoken::{
 };
 use jwt_simple::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, env};
+use std::{
+    collections::HashSet,
+    env,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use thiserror::Error;
 use tracing::warn;
 
@@ -24,6 +28,26 @@ pub struct JwtRuntimeConfig {
     pub legacy_fallback_enabled: bool,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JwtVerifyMetricsSnapshot {
+    pub verify_attempt_total: u64,
+    pub verify_success_total: u64,
+    pub verify_error_total: u64,
+    pub legacy_fallback_attempt_total: u64,
+    pub legacy_fallback_success_total: u64,
+    pub legacy_fallback_failure_total: u64,
+    pub verify_error_missing_required_claim_total: u64,
+    pub verify_error_invalid_claim_format_total: u64,
+    pub verify_error_invalid_token_total: u64,
+    pub verify_error_expired_signature_total: u64,
+    pub verify_error_immature_signature_total: u64,
+    pub verify_error_invalid_issuer_total: u64,
+    pub verify_error_invalid_audience_total: u64,
+    pub verify_error_invalid_signature_total: u64,
+    pub verify_error_other_total: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum JwtError {
     #[error("jsonwebtoken error: {0}")]
@@ -37,6 +61,201 @@ pub enum JwtError {
 enum JwtImplementation {
     JsonWebToken,
     JwtSimple,
+}
+
+#[derive(Debug)]
+struct JwtVerifyMetrics {
+    verify_attempt_total: AtomicU64,
+    verify_success_total: AtomicU64,
+    verify_error_total: AtomicU64,
+    legacy_fallback_attempt_total: AtomicU64,
+    legacy_fallback_success_total: AtomicU64,
+    legacy_fallback_failure_total: AtomicU64,
+    verify_error_missing_required_claim_total: AtomicU64,
+    verify_error_invalid_claim_format_total: AtomicU64,
+    verify_error_invalid_token_total: AtomicU64,
+    verify_error_expired_signature_total: AtomicU64,
+    verify_error_immature_signature_total: AtomicU64,
+    verify_error_invalid_issuer_total: AtomicU64,
+    verify_error_invalid_audience_total: AtomicU64,
+    verify_error_invalid_signature_total: AtomicU64,
+    verify_error_other_total: AtomicU64,
+}
+
+impl JwtVerifyMetrics {
+    const fn new() -> Self {
+        Self {
+            verify_attempt_total: AtomicU64::new(0),
+            verify_success_total: AtomicU64::new(0),
+            verify_error_total: AtomicU64::new(0),
+            legacy_fallback_attempt_total: AtomicU64::new(0),
+            legacy_fallback_success_total: AtomicU64::new(0),
+            legacy_fallback_failure_total: AtomicU64::new(0),
+            verify_error_missing_required_claim_total: AtomicU64::new(0),
+            verify_error_invalid_claim_format_total: AtomicU64::new(0),
+            verify_error_invalid_token_total: AtomicU64::new(0),
+            verify_error_expired_signature_total: AtomicU64::new(0),
+            verify_error_immature_signature_total: AtomicU64::new(0),
+            verify_error_invalid_issuer_total: AtomicU64::new(0),
+            verify_error_invalid_audience_total: AtomicU64::new(0),
+            verify_error_invalid_signature_total: AtomicU64::new(0),
+            verify_error_other_total: AtomicU64::new(0),
+        }
+    }
+
+    fn observe_attempt(&self) {
+        self.verify_attempt_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self) {
+        self.verify_success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_error_jsonwebtoken(&self, err: &jsonwebtoken::errors::Error) {
+        self.verify_error_total.fetch_add(1, Ordering::Relaxed);
+        match err.kind() {
+            JsonWebTokenErrorKind::MissingRequiredClaim(_) => {
+                self.verify_error_missing_required_claim_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::InvalidClaimFormat(_) => {
+                self.verify_error_invalid_claim_format_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::InvalidToken => {
+                self.verify_error_invalid_token_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::ExpiredSignature => {
+                self.verify_error_expired_signature_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::ImmatureSignature => {
+                self.verify_error_immature_signature_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::InvalidIssuer => {
+                self.verify_error_invalid_issuer_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::InvalidAudience => {
+                self.verify_error_invalid_audience_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            JsonWebTokenErrorKind::InvalidSignature => {
+                self.verify_error_invalid_signature_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                self.verify_error_other_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn observe_error_jwt_simple(&self) {
+        self.verify_error_total.fetch_add(1, Ordering::Relaxed);
+        self.verify_error_other_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_legacy_fallback_attempt(&self) {
+        self.legacy_fallback_attempt_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_legacy_fallback_success(&self) {
+        self.legacy_fallback_success_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_legacy_fallback_failure(&self) {
+        self.legacy_fallback_failure_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> JwtVerifyMetricsSnapshot {
+        JwtVerifyMetricsSnapshot {
+            verify_attempt_total: self.verify_attempt_total.load(Ordering::Relaxed),
+            verify_success_total: self.verify_success_total.load(Ordering::Relaxed),
+            verify_error_total: self.verify_error_total.load(Ordering::Relaxed),
+            legacy_fallback_attempt_total: self
+                .legacy_fallback_attempt_total
+                .load(Ordering::Relaxed),
+            legacy_fallback_success_total: self
+                .legacy_fallback_success_total
+                .load(Ordering::Relaxed),
+            legacy_fallback_failure_total: self
+                .legacy_fallback_failure_total
+                .load(Ordering::Relaxed),
+            verify_error_missing_required_claim_total: self
+                .verify_error_missing_required_claim_total
+                .load(Ordering::Relaxed),
+            verify_error_invalid_claim_format_total: self
+                .verify_error_invalid_claim_format_total
+                .load(Ordering::Relaxed),
+            verify_error_invalid_token_total: self
+                .verify_error_invalid_token_total
+                .load(Ordering::Relaxed),
+            verify_error_expired_signature_total: self
+                .verify_error_expired_signature_total
+                .load(Ordering::Relaxed),
+            verify_error_immature_signature_total: self
+                .verify_error_immature_signature_total
+                .load(Ordering::Relaxed),
+            verify_error_invalid_issuer_total: self
+                .verify_error_invalid_issuer_total
+                .load(Ordering::Relaxed),
+            verify_error_invalid_audience_total: self
+                .verify_error_invalid_audience_total
+                .load(Ordering::Relaxed),
+            verify_error_invalid_signature_total: self
+                .verify_error_invalid_signature_total
+                .load(Ordering::Relaxed),
+            verify_error_other_total: self.verify_error_other_total.load(Ordering::Relaxed),
+        }
+    }
+
+    #[cfg(test)]
+    fn reset(&self) {
+        self.verify_attempt_total.store(0, Ordering::Relaxed);
+        self.verify_success_total.store(0, Ordering::Relaxed);
+        self.verify_error_total.store(0, Ordering::Relaxed);
+        self.legacy_fallback_attempt_total
+            .store(0, Ordering::Relaxed);
+        self.legacy_fallback_success_total
+            .store(0, Ordering::Relaxed);
+        self.legacy_fallback_failure_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_missing_required_claim_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_invalid_claim_format_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_invalid_token_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_expired_signature_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_immature_signature_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_invalid_issuer_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_invalid_audience_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_invalid_signature_total
+            .store(0, Ordering::Relaxed);
+        self.verify_error_other_total.store(0, Ordering::Relaxed);
+    }
+}
+
+static JWT_VERIFY_METRICS: JwtVerifyMetrics = JwtVerifyMetrics::new();
+
+pub fn get_jwt_verify_metrics_snapshot() -> JwtVerifyMetricsSnapshot {
+    JWT_VERIFY_METRICS.snapshot()
+}
+
+#[cfg(test)]
+pub(crate) fn reset_jwt_verify_metrics_for_test() {
+    JWT_VERIFY_METRICS.reset();
 }
 
 impl JwtImplementation {
@@ -184,9 +403,21 @@ pub struct DecodingKey {
 
 impl EncodingKey {
     pub fn load(pem: &str) -> Result<Self, JwtError> {
+        Self::load_with_runtime(
+            pem,
+            JwtImplementation::from_env(),
+            legacy_fallback_enabled_from_env(),
+        )
+    }
+
+    fn load_with_runtime(
+        pem: &str,
+        implementation: JwtImplementation,
+        legacy_fallback_enabled: bool,
+    ) -> Result<Self, JwtError> {
         Ok(Self {
-            implementation: JwtImplementation::from_env(),
-            legacy_fallback_enabled: legacy_fallback_enabled_from_env(),
+            implementation,
+            legacy_fallback_enabled,
             jsonwebtoken: JsonEncodingKey::from_ed_pem(pem.as_bytes())?,
             jwt_simple: Ed25519KeyPair::from_pem(pem)?,
         })
@@ -252,9 +483,21 @@ impl EncodingKey {
 
 impl DecodingKey {
     pub fn load(pem: &str) -> Result<Self, JwtError> {
+        Self::load_with_runtime(
+            pem,
+            JwtImplementation::from_env(),
+            legacy_fallback_enabled_from_env(),
+        )
+    }
+
+    fn load_with_runtime(
+        pem: &str,
+        implementation: JwtImplementation,
+        legacy_fallback_enabled: bool,
+    ) -> Result<Self, JwtError> {
         Ok(Self {
-            implementation: JwtImplementation::from_env(),
-            legacy_fallback_enabled: legacy_fallback_enabled_from_env(),
+            implementation,
+            legacy_fallback_enabled,
             jsonwebtoken: JsonDecodingKey::from_ed_pem(pem.as_bytes())?,
             jwt_simple: Ed25519PublicKey::from_pem(pem)?,
         })
@@ -294,7 +537,8 @@ impl DecodingKey {
     }
 
     fn verify_with_audience(&self, token: &str, audience: &str) -> Result<User, JwtError> {
-        match self.implementation {
+        JWT_VERIFY_METRICS.observe_attempt();
+        let result = match self.implementation {
             JwtImplementation::JsonWebToken => match self.verify_with_jsonwebtoken(token, audience)
             {
                 Ok(user) => Ok(user),
@@ -302,13 +546,28 @@ impl DecodingKey {
                     if self.legacy_fallback_enabled
                         && should_fallback_to_legacy(&primary_error) =>
                 {
+                    JWT_VERIFY_METRICS.observe_legacy_fallback_attempt();
                     self.verify_with_jwt_simple(token, audience)
-                        .map_err(|_| JwtError::JsonWebToken(primary_error))
+                        .map_err(|_| {
+                            JWT_VERIFY_METRICS.observe_legacy_fallback_failure();
+                            JwtError::JsonWebToken(primary_error)
+                        })
+                        .inspect(|_| {
+                            JWT_VERIFY_METRICS.observe_legacy_fallback_success();
+                        })
                 }
                 Err(other) => Err(other),
             },
             JwtImplementation::JwtSimple => self.verify_with_jwt_simple(token, audience),
+        };
+
+        match &result {
+            Ok(_) => JWT_VERIFY_METRICS.observe_success(),
+            Err(JwtError::JsonWebToken(err)) => JWT_VERIFY_METRICS.observe_error_jsonwebtoken(err),
+            Err(JwtError::JwtSimple(_)) => JWT_VERIFY_METRICS.observe_error_jwt_simple(),
         }
+
+        result
     }
 
     #[allow(unused)]
@@ -379,6 +638,15 @@ mod tests {
         Utc::now().timestamp().max(0) as usize
     }
 
+    fn reset_metrics() -> std::sync::MutexGuard<'static, ()> {
+        static METRICS_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = METRICS_TEST_GUARD
+            .lock()
+            .expect("lock jwt metrics test guard");
+        reset_jwt_verify_metrics_for_test();
+        guard
+    }
+
     #[test]
     fn jwt_implementation_parse_should_default_jsonwebtoken() {
         assert_eq!(
@@ -427,6 +695,7 @@ mod tests {
 
     #[test]
     fn runtime_config_should_follow_loaded_impl_and_fallback_defaults() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let ek = EncodingKey::load(encoding_pem)?;
@@ -441,6 +710,7 @@ mod tests {
 
     #[tokio::test]
     async fn jwt_sign_verify_should_work() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let ek = EncodingKey::load(encoding_pem)?;
@@ -458,6 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn audience_scoped_ticket_should_work() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let ek = EncodingKey::load(encoding_pem)?;
@@ -479,6 +750,7 @@ mod tests {
 
     #[tokio::test]
     async fn jwt_verify_should_reject_expired_claims() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let dk = DecodingKey::load(decoding_pem)?;
@@ -510,6 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn jwt_verify_should_reject_not_yet_valid_claims() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let dk = DecodingKey::load(decoding_pem)?;
@@ -541,6 +814,7 @@ mod tests {
 
     #[tokio::test]
     async fn jwt_verify_should_reject_missing_iat_claim() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let dk = DecodingKey::load(decoding_pem)?;
@@ -571,6 +845,7 @@ mod tests {
 
     #[tokio::test]
     async fn jwt_verify_should_reject_aud_type_confusion_claim() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let dk = DecodingKey::load(decoding_pem)?;
@@ -602,6 +877,7 @@ mod tests {
 
     #[tokio::test]
     async fn jwt_verify_should_accept_legacy_jwt_simple_token_during_migration() -> Result<()> {
+        let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
         let dk = DecodingKey::load(decoding_pem)?;
@@ -614,6 +890,54 @@ mod tests {
 
         let verified = dk.verify(&legacy_token)?;
         assert_eq!(verified.id, user.id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_metrics_should_capture_legacy_fallback_success() -> Result<()> {
+        let _guard = reset_metrics();
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let dk =
+            DecodingKey::load_with_runtime(decoding_pem, JwtImplementation::JsonWebToken, true)?;
+        let user = issue_test_user();
+        let legacy_token = Ed25519KeyPair::from_pem(encoding_pem)?.sign(
+            Claims::with_custom_claims(user.clone(), Duration::from_secs(300))
+                .with_issuer(JWT_ISS)
+                .with_audience(JWT_AUD),
+        )?;
+
+        let verified = dk.verify(&legacy_token)?;
+        assert_eq!(verified.id, user.id);
+        let snapshot = get_jwt_verify_metrics_snapshot();
+        assert_eq!(snapshot.verify_attempt_total, 1);
+        assert_eq!(snapshot.verify_success_total, 1);
+        assert_eq!(snapshot.verify_error_total, 0);
+        assert_eq!(snapshot.legacy_fallback_attempt_total, 1);
+        assert_eq!(snapshot.legacy_fallback_success_total, 1);
+        assert_eq!(snapshot.legacy_fallback_failure_total, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_metrics_should_capture_invalid_audience_error() -> Result<()> {
+        let _guard = reset_metrics();
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let ek =
+            EncodingKey::load_with_runtime(encoding_pem, JwtImplementation::JsonWebToken, true)?;
+        let dk =
+            DecodingKey::load_with_runtime(decoding_pem, JwtImplementation::JsonWebToken, true)?;
+        let user = issue_test_user();
+
+        let file_token = ek.sign_file_ticket(user, 300)?;
+        assert!(dk.verify(&file_token).is_err());
+
+        let snapshot = get_jwt_verify_metrics_snapshot();
+        assert_eq!(snapshot.verify_attempt_total, 1);
+        assert_eq!(snapshot.verify_success_total, 0);
+        assert_eq!(snapshot.verify_error_total, 1);
+        assert_eq!(snapshot.verify_error_invalid_audience_total, 1);
         Ok(())
     }
 }

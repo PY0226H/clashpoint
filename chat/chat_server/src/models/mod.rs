@@ -4,6 +4,7 @@ mod debate;
 mod file;
 mod judge;
 mod judge_dispatch;
+mod jwt_infra;
 mod kafka_dlq;
 mod messages;
 mod ops_observability;
@@ -32,6 +33,7 @@ pub use judge::{
 pub(crate) use judge_dispatch::AiJudgeDispatchMetrics;
 pub use judge_dispatch::GetJudgeDispatchMetricsOutput;
 pub(crate) use judge_dispatch::JudgeDispatchTrigger;
+pub use jwt_infra::GetJwtLegacyRetirementGateOutput;
 pub use kafka_dlq::{
     KafkaDlqActionOutput, KafkaDlqEventItem, ListKafkaDlqEventsOutput, ListKafkaDlqEventsQuery,
 };
