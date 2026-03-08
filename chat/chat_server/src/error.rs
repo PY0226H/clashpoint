@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 pub use chat_core::ErrorOutput;
-use chat_core::{json_error_response, AgentError};
+use chat_core::{json_error_response, AgentError, JwtError};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -62,6 +62,9 @@ pub enum AppError {
 
     #[error("ai agent error: {0}")]
     AiAgentError(#[from] AgentError),
+
+    #[error("jwt error: {0}")]
+    JwtError(#[from] JwtError),
 }
 
 impl IntoResponse for AppError {
@@ -86,6 +89,7 @@ impl IntoResponse for AppError {
             Self::CreateMessageError(_) => StatusCode::BAD_REQUEST,
             Self::ChatFileError(_) => StatusCode::BAD_REQUEST,
             Self::AiAgentError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::JwtError(_) => StatusCode::UNAUTHORIZED,
         };
 
         json_error_response(status, self.to_string())

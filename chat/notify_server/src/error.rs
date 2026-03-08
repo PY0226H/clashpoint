@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chat_core::json_error_response;
+use chat_core::{json_error_response, JwtError};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -9,7 +9,7 @@ pub enum AppError {
     IoError(#[from] std::io::Error),
 
     #[error("jwt error: {0}")]
-    JwtError(#[from] jwt_simple::Error),
+    JwtError(#[from] JwtError),
 }
 
 impl IntoResponse for AppError {

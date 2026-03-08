@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chat_core::json_error_response;
 pub use chat_core::ErrorOutput;
+use chat_core::{json_error_response, JwtError};
 use thiserror::Error;
 use tracing::warn;
 
@@ -21,6 +21,9 @@ pub enum AppError {
 
     #[error("general error: {0}")]
     AnyError(#[from] anyhow::Error),
+
+    #[error("jwt error: {0}")]
+    JwtError(#[from] JwtError),
 }
 
 impl IntoResponse for AppError {
@@ -31,6 +34,7 @@ impl IntoResponse for AppError {
             Self::MissingSystemInfo => StatusCode::BAD_REQUEST,
             Self::ClickhouseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::AnyError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::JwtError(_) => StatusCode::UNAUTHORIZED,
         };
         let msg = self.to_string();
         warn!("Status: {}, error: {}", status, msg);

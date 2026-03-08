@@ -9,6 +9,7 @@ axum = { workspace = true }
 axum-extra = { workspace = true }
 chrono = { workspace = true }
 jwt-simple = { workspace = true }
+jsonwebtoken = { workspace = true }
 prost = "0.13.3"
 prost-types = "0.13.3"
 serde = { workspace = true }
