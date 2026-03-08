@@ -1,5 +1,5 @@
 use crate::{
-    handlers::{
+    application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
         release_idempotency_best_effort, try_acquire_idempotency_or_fail_open,
     },

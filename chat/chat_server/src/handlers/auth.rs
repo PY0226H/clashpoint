@@ -1,5 +1,7 @@
 use crate::{
-    handlers::{build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response},
+    application::request_guard::{
+        build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
+    },
     models::{CreateUser, SigninUser},
     AppError, AppState, ErrorOutput,
 };
