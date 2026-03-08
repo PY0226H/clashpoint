@@ -13,7 +13,6 @@ chat-core = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 futures = "0.3.30"
-jwt-simple = { workspace = true }
 redis = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

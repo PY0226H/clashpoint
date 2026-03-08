@@ -25,7 +25,6 @@ chrono = { version = "0.4.38", features = ["serde"] }
 chat-core = { path = "./chat_core" }
 chat-server = { path = "./chat_server" }
 dashmap = "6.1.0"
-jwt-simple = "0.12.10"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs", "use_pem"] }
 notify-server = { path = "./notify_server" }
 reqwest = { version = "0.12.8", default-features = false, features = [

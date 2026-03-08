@@ -255,7 +255,8 @@ mod tests {
         let body = axum::body::to_bytes(authorized.into_body(), usize::MAX).await?;
         let payload: crate::GetJwtLegacyRetirementGateOutput = serde_json::from_slice(&body)?;
         assert_eq!(payload.implementation, "jsonwebtoken");
-        assert!(payload.legacy_fallback_enabled);
+        assert!(!payload.legacy_fallback_enabled);
+        assert!(payload.gate_ready);
         assert!(payload.verify_attempt_total >= payload.verify_success_total);
         Ok(())
     }
