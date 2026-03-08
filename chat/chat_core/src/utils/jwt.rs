@@ -1,13 +1,14 @@
 use crate::User;
 use chrono::Utc;
 use jsonwebtoken::{
-    decode, encode, Algorithm, DecodingKey as JsonDecodingKey, EncodingKey as JsonEncodingKey,
-    Header, Validation,
+    decode, encode, errors::ErrorKind as JsonWebTokenErrorKind, Algorithm,
+    DecodingKey as JsonDecodingKey, EncodingKey as JsonEncodingKey, Header, Validation,
 };
 use jwt_simple::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, env};
 use thiserror::Error;
+use tracing::warn;
 
 const JWT_DURATION: u64 = 60 * 60 * 24 * 7; // 1 week
 const JWT_IMPL_ENV: &str = "JWT_IMPL";
@@ -33,7 +34,24 @@ enum JwtImplementation {
 
 impl JwtImplementation {
     fn from_env() -> Self {
-        Self::parse(env::var(JWT_IMPL_ENV).ok())
+        let raw = env::var(JWT_IMPL_ENV).ok();
+        if let Some(value) = raw
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let normalized = value.to_ascii_lowercase();
+            if !matches!(
+                normalized.as_str(),
+                "jwt_simple" | "jwt-simple" | "jsonwebtoken"
+            ) {
+                warn!(
+                    jwt_impl = value,
+                    "unknown JWT_IMPL value, fallback to jsonwebtoken"
+                );
+            }
+        }
+        Self::parse(raw)
     }
 
     fn parse(raw: Option<String>) -> Self {
@@ -211,12 +229,17 @@ impl DecodingKey {
 
     fn verify_with_audience(&self, token: &str, audience: &str) -> Result<User, JwtError> {
         match self.implementation {
-            JwtImplementation::JsonWebToken => self
-                .verify_with_jsonwebtoken(token, audience)
-                .or_else(|primary_error| {
+            JwtImplementation::JsonWebToken => match self.verify_with_jsonwebtoken(token, audience)
+            {
+                Ok(user) => Ok(user),
+                Err(JwtError::JsonWebToken(primary_error))
+                    if should_fallback_to_legacy(&primary_error) =>
+                {
                     self.verify_with_jwt_simple(token, audience)
-                        .map_err(|_| primary_error)
-                }),
+                        .map_err(|_| JwtError::JsonWebToken(primary_error))
+                }
+                Err(other) => Err(other),
+            },
             JwtImplementation::JwtSimple => self.verify_with_jwt_simple(token, audience),
         }
     }
@@ -235,10 +258,59 @@ impl DecodingKey {
     }
 }
 
+fn should_fallback_to_legacy(err: &jsonwebtoken::errors::Error) -> bool {
+    matches!(
+        err.kind(),
+        JsonWebTokenErrorKind::MissingRequiredClaim(_)
+            | JsonWebTokenErrorKind::InvalidClaimFormat(_)
+            | JsonWebTokenErrorKind::Json(_)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Result;
+    use serde::Serialize;
+
+    #[derive(Debug, Serialize)]
+    struct MissingIatClaims {
+        id: i64,
+        ws_id: i64,
+        ws_name: String,
+        fullname: String,
+        email: String,
+        is_bot: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+        iss: String,
+        aud: String,
+        exp: usize,
+        nbf: usize,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct NumericAudClaims {
+        id: i64,
+        ws_id: i64,
+        ws_name: String,
+        fullname: String,
+        email: String,
+        is_bot: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+        iss: String,
+        aud: usize,
+        exp: usize,
+        nbf: usize,
+        iat: usize,
+    }
+
+    fn issue_test_user() -> User {
+        User::new(1, "Tyr Chen", "tchen@acme.org")
+    }
+
+    fn now_ts() -> usize {
+        Utc::now().timestamp().max(0) as usize
+    }
 
     #[test]
     fn jwt_implementation_parse_should_default_jsonwebtoken() {
@@ -307,6 +379,146 @@ mod tests {
         let notify_user = dk.verify_notify_ticket(&notify_token)?;
         assert_eq!(notify_user.id, user.id);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_should_reject_expired_claims() -> Result<()> {
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let dk = DecodingKey::load(decoding_pem)?;
+        let user = issue_test_user();
+        let now = now_ts();
+        let claims = UserClaims {
+            id: user.id,
+            ws_id: user.ws_id,
+            ws_name: user.ws_name,
+            fullname: user.fullname,
+            email: user.email,
+            is_bot: user.is_bot,
+            created_at: user.created_at,
+            iss: JWT_ISS.to_string(),
+            aud: JWT_AUD.to_string(),
+            exp: now.saturating_sub(3600),
+            nbf: now.saturating_sub(7200),
+            iat: now.saturating_sub(7200),
+        };
+        let token = encode(
+            &Header::new(Algorithm::EdDSA),
+            &claims,
+            &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
+        )?;
+
+        assert!(dk.verify(&token).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_should_reject_not_yet_valid_claims() -> Result<()> {
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let dk = DecodingKey::load(decoding_pem)?;
+        let user = issue_test_user();
+        let now = now_ts();
+        let claims = UserClaims {
+            id: user.id,
+            ws_id: user.ws_id,
+            ws_name: user.ws_name,
+            fullname: user.fullname,
+            email: user.email,
+            is_bot: user.is_bot,
+            created_at: user.created_at,
+            iss: JWT_ISS.to_string(),
+            aud: JWT_AUD.to_string(),
+            exp: now + 600,
+            nbf: now + 300,
+            iat: now,
+        };
+        let token = encode(
+            &Header::new(Algorithm::EdDSA),
+            &claims,
+            &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
+        )?;
+
+        assert!(dk.verify(&token).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_should_reject_missing_iat_claim() -> Result<()> {
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let dk = DecodingKey::load(decoding_pem)?;
+        let user = issue_test_user();
+        let now = now_ts();
+        let claims = MissingIatClaims {
+            id: user.id,
+            ws_id: user.ws_id,
+            ws_name: user.ws_name,
+            fullname: user.fullname,
+            email: user.email,
+            is_bot: user.is_bot,
+            created_at: user.created_at,
+            iss: JWT_ISS.to_string(),
+            aud: JWT_AUD.to_string(),
+            exp: now + 600,
+            nbf: now,
+        };
+        let token = encode(
+            &Header::new(Algorithm::EdDSA),
+            &claims,
+            &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
+        )?;
+
+        assert!(dk.verify(&token).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_should_reject_aud_type_confusion_claim() -> Result<()> {
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let dk = DecodingKey::load(decoding_pem)?;
+        let user = issue_test_user();
+        let now = now_ts();
+        let claims = NumericAudClaims {
+            id: user.id,
+            ws_id: user.ws_id,
+            ws_name: user.ws_name,
+            fullname: user.fullname,
+            email: user.email,
+            is_bot: user.is_bot,
+            created_at: user.created_at,
+            iss: JWT_ISS.to_string(),
+            aud: 123,
+            exp: now + 600,
+            nbf: now,
+            iat: now,
+        };
+        let token = encode(
+            &Header::new(Algorithm::EdDSA),
+            &claims,
+            &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
+        )?;
+
+        assert!(dk.verify(&token).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_should_accept_legacy_jwt_simple_token_during_migration() -> Result<()> {
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let dk = DecodingKey::load(decoding_pem)?;
+        let user = issue_test_user();
+        let legacy_token = Ed25519KeyPair::from_pem(encoding_pem)?.sign(
+            Claims::with_custom_claims(user.clone(), Duration::from_secs(300))
+                .with_issuer(JWT_ISS)
+                .with_audience(JWT_AUD),
+        )?;
+
+        let verified = dk.verify(&legacy_token)?;
+        assert_eq!(verified.id, user.id);
         Ok(())
     }
 }
