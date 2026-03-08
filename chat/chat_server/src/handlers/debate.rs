@@ -7,17 +7,6 @@ use axum::{
 };
 use chat_core::User;
 
-#[cfg(test)]
-use crate::{
-    GetJudgeReportQuery, ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery,
-    ListOpsAlertNotificationsQuery, OpsObservabilityThresholds, RequestJudgeJobInput,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
-};
-#[cfg(test)]
-use axum::extract::Path;
-#[cfg(test)]
-use axum::http::HeaderMap;
-
 pub(crate) use super::debate_room::{
     create_debate_message_handler, join_debate_session_handler, list_debate_messages_handler,
     list_debate_pinned_messages_handler, list_debate_sessions_handler, pin_debate_message_handler,
