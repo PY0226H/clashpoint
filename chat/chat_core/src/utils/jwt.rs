@@ -12,10 +12,17 @@ use tracing::warn;
 
 const JWT_DURATION: u64 = 60 * 60 * 24 * 7; // 1 week
 const JWT_IMPL_ENV: &str = "JWT_IMPL";
+const JWT_LEGACY_FALLBACK_ENABLED_ENV: &str = "JWT_LEGACY_FALLBACK_ENABLED";
 pub const JWT_ISS: &str = "chat_server";
 pub const JWT_AUD: &str = "chat_web";
 pub const JWT_AUD_FILE_TICKET: &str = "chat_file_ticket";
 pub const JWT_AUD_NOTIFY_TICKET: &str = "chat_notify_ticket";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JwtRuntimeConfig {
+    pub implementation: &'static str,
+    pub legacy_fallback_enabled: bool,
+}
 
 #[derive(Debug, Error)]
 pub enum JwtError {
@@ -66,6 +73,47 @@ impl JwtImplementation {
             Some(_) => Self::JsonWebToken,
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::JsonWebToken => "jsonwebtoken",
+            Self::JwtSimple => "jwt_simple",
+        }
+    }
+}
+
+fn parse_legacy_fallback_enabled(raw: Option<String>) -> bool {
+    match raw
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("0") | Some("false") | Some("no") | Some("off") => false,
+        Some("1") | Some("true") | Some("yes") | Some("on") | None | Some("") => true,
+        Some(_) => true,
+    }
+}
+
+fn legacy_fallback_enabled_from_env() -> bool {
+    let raw = env::var(JWT_LEGACY_FALLBACK_ENABLED_ENV).ok();
+    if let Some(value) = raw
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let normalized = value.to_ascii_lowercase();
+        if !matches!(
+            normalized.as_str(),
+            "1" | "true" | "yes" | "on" | "0" | "false" | "no" | "off"
+        ) {
+            warn!(
+                legacy_fallback = value,
+                "unknown JWT_LEGACY_FALLBACK_ENABLED value, fallback to true"
+            );
+        }
+    }
+    parse_legacy_fallback_enabled(raw)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +169,7 @@ impl From<UserClaims> for User {
 
 pub struct EncodingKey {
     implementation: JwtImplementation,
+    legacy_fallback_enabled: bool,
     jsonwebtoken: JsonEncodingKey,
     jwt_simple: Ed25519KeyPair,
 }
@@ -128,6 +177,7 @@ pub struct EncodingKey {
 #[allow(unused)]
 pub struct DecodingKey {
     implementation: JwtImplementation,
+    legacy_fallback_enabled: bool,
     jsonwebtoken: JsonDecodingKey,
     jwt_simple: Ed25519PublicKey,
 }
@@ -136,9 +186,17 @@ impl EncodingKey {
     pub fn load(pem: &str) -> Result<Self, JwtError> {
         Ok(Self {
             implementation: JwtImplementation::from_env(),
+            legacy_fallback_enabled: legacy_fallback_enabled_from_env(),
             jsonwebtoken: JsonEncodingKey::from_ed_pem(pem.as_bytes())?,
             jwt_simple: Ed25519KeyPair::from_pem(pem)?,
         })
+    }
+
+    pub fn runtime_config(&self) -> JwtRuntimeConfig {
+        JwtRuntimeConfig {
+            implementation: self.implementation.as_str(),
+            legacy_fallback_enabled: self.legacy_fallback_enabled,
+        }
     }
 
     pub fn sign(&self, user: impl Into<User>) -> Result<String, JwtError> {
@@ -196,9 +254,17 @@ impl DecodingKey {
     pub fn load(pem: &str) -> Result<Self, JwtError> {
         Ok(Self {
             implementation: JwtImplementation::from_env(),
+            legacy_fallback_enabled: legacy_fallback_enabled_from_env(),
             jsonwebtoken: JsonDecodingKey::from_ed_pem(pem.as_bytes())?,
             jwt_simple: Ed25519PublicKey::from_pem(pem)?,
         })
+    }
+
+    pub fn runtime_config(&self) -> JwtRuntimeConfig {
+        JwtRuntimeConfig {
+            implementation: self.implementation.as_str(),
+            legacy_fallback_enabled: self.legacy_fallback_enabled,
+        }
     }
 
     fn verify_with_jsonwebtoken(&self, token: &str, audience: &str) -> Result<User, JwtError> {
@@ -233,7 +299,8 @@ impl DecodingKey {
             {
                 Ok(user) => Ok(user),
                 Err(JwtError::JsonWebToken(primary_error))
-                    if should_fallback_to_legacy(&primary_error) =>
+                    if self.legacy_fallback_enabled
+                        && should_fallback_to_legacy(&primary_error) =>
                 {
                     self.verify_with_jwt_simple(token, audience)
                         .map_err(|_| JwtError::JsonWebToken(primary_error))
@@ -342,6 +409,34 @@ mod tests {
             JwtImplementation::parse(Some("jsonwebtoken".to_string())),
             JwtImplementation::JsonWebToken
         );
+    }
+
+    #[test]
+    fn legacy_fallback_parse_should_default_true() {
+        assert!(parse_legacy_fallback_enabled(None));
+        assert!(parse_legacy_fallback_enabled(Some("".to_string())));
+        assert!(parse_legacy_fallback_enabled(Some("unknown".to_string())));
+    }
+
+    #[test]
+    fn legacy_fallback_parse_should_support_false_aliases() {
+        assert!(!parse_legacy_fallback_enabled(Some("0".to_string())));
+        assert!(!parse_legacy_fallback_enabled(Some("false".to_string())));
+        assert!(!parse_legacy_fallback_enabled(Some("off".to_string())));
+    }
+
+    #[test]
+    fn runtime_config_should_follow_loaded_impl_and_fallback_defaults() -> Result<()> {
+        let encoding_pem = include_str!("../../fixtures/encoding.pem");
+        let decoding_pem = include_str!("../../fixtures/decoding.pem");
+        let ek = EncodingKey::load(encoding_pem)?;
+        let dk = DecodingKey::load(decoding_pem)?;
+
+        assert_eq!(ek.runtime_config().implementation, "jsonwebtoken");
+        assert_eq!(dk.runtime_config().implementation, "jsonwebtoken");
+        assert!(ek.runtime_config().legacy_fallback_enabled);
+        assert!(dk.runtime_config().legacy_fallback_enabled);
+        Ok(())
     }
 
     #[tokio::test]

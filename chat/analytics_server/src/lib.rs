@@ -118,6 +118,13 @@ impl AppState {
             .await
             .context("create base_dir failed")?;
         let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
+        let jwt_runtime = dk.runtime_config();
+        info!(
+            component = "analytics_server",
+            jwt_decoding_impl = jwt_runtime.implementation,
+            jwt_legacy_fallback_enabled = jwt_runtime.legacy_fallback_enabled,
+            "jwt runtime profile loaded"
+        );
         let mut client = Client::default()
             .with_url(&config.server.db_url)
             .with_database(&config.server.db_name);

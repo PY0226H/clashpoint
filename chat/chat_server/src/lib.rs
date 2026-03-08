@@ -26,7 +26,7 @@ use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedSender},
 };
 use tower_http::cors::{self, CorsLayer};
-use tracing::warn;
+use tracing::{info, warn};
 
 use application::runtime_workers::spawn_background_workers;
 pub use error::{AppError, ErrorOutput};
@@ -244,6 +244,7 @@ impl AppState {
             .context("create base_dir failed")?;
         let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
         let ek = EncodingKey::load(&config.auth.sk).context("load sk failed")?;
+        log_jwt_runtime_profile("chat_server", &dk, &ek);
         let pool = PgPool::connect(&config.server.db_url)
             .await
             .context("connect to db failed")?;
@@ -278,6 +279,7 @@ impl AppState {
 
         let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
         let ek = EncodingKey::load(&config.auth.sk).context("load sk failed")?;
+        log_jwt_runtime_profile("chat_server_unit_test", &dk, &ek);
         let pool = PgPoolOptions::new()
             .connect_lazy(&config.server.db_url)
             .context("create lazy db pool failed")?;
@@ -366,6 +368,7 @@ mod test_util {
             let config = AppConfig::load()?;
             let dk = DecodingKey::load(&config.auth.pk).context("load pk failed")?;
             let ek = EncodingKey::load(&config.auth.sk).context("load sk failed")?;
+            log_jwt_runtime_profile("chat_server_test_util", &dk, &ek);
             let redis_config = config.redis.clone();
             let maintenance_db_url = to_maintenance_db_url(&config.server.db_url);
             let (tdb, pool) = get_test_pool(Some(maintenance_db_url.as_str())).await;
@@ -449,5 +452,25 @@ mod test_util {
         let base = db_url.split('?').next().unwrap_or(db_url);
         let post = base.rfind('/').expect("invalid db_url");
         format!("{}/postgres", &base[..post])
+    }
+}
+
+fn log_jwt_runtime_profile(component: &str, dk: &DecodingKey, ek: &EncodingKey) {
+    let decoding = dk.runtime_config();
+    let encoding = ek.runtime_config();
+    info!(
+        component,
+        jwt_decoding_impl = decoding.implementation,
+        jwt_encoding_impl = encoding.implementation,
+        jwt_legacy_fallback_enabled = decoding.legacy_fallback_enabled,
+        "jwt runtime profile loaded"
+    );
+    if decoding.implementation != encoding.implementation {
+        warn!(
+            component,
+            jwt_decoding_impl = decoding.implementation,
+            jwt_encoding_impl = encoding.implementation,
+            "jwt runtime profile mismatch between decoding and encoding implementation"
+        );
     }
 }

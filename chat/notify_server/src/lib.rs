@@ -26,6 +26,7 @@ use std::{
 };
 use tokio::sync::broadcast;
 use tower_http::cors::{self, CorsLayer};
+use tracing::info;
 use ws::{debate_room_ws_handler, ws_handler};
 
 pub use config::AppConfig;
@@ -137,6 +138,13 @@ impl Deref for AppState {
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
         let dk = DecodingKey::load(&config.auth.pk).expect("Failed to load public key");
+        let jwt_runtime = dk.runtime_config();
+        info!(
+            component = "notify_server",
+            jwt_decoding_impl = jwt_runtime.implementation,
+            jwt_legacy_fallback_enabled = jwt_runtime.legacy_fallback_enabled,
+            "jwt runtime profile loaded"
+        );
         let users = Arc::new(DashMap::new());
         let debate_replays = Arc::new(DashMap::new());
         let db = PgPoolOptions::new()

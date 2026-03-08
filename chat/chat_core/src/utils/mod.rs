@@ -1,3 +1,3 @@
 mod jwt;
 
-pub use jwt::{DecodingKey, EncodingKey, JwtError};
+pub use jwt::{DecodingKey, EncodingKey, JwtError, JwtRuntimeConfig};
