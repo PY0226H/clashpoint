@@ -3,6 +3,7 @@ mod ai_internal;
 mod auth;
 mod chat;
 mod debate;
+pub(crate) mod debate_judge;
 pub(crate) mod debate_ops;
 mod messages;
 mod payment;
