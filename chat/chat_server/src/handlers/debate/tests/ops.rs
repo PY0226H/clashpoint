@@ -1,4 +1,30 @@
-use super::*;
+use super::super::{
+    discard_kafka_dlq_event_handler, get_ops_observability_config_handler, get_ops_rbac_me_handler,
+    list_judge_reviews_ops_handler, list_kafka_dlq_events_handler,
+    list_ops_alert_notifications_handler, list_ops_role_assignments_handler,
+    replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
+    revoke_ops_role_assignment_handler, upsert_ops_observability_anomaly_state_handler,
+    upsert_ops_observability_thresholds_handler, upsert_ops_role_assignment_handler,
+};
+use super::test_support::{
+    insert_kafka_dlq_event, insert_ops_alert_notification, seed_running_judge_job,
+    seed_topic_and_session,
+};
+use crate::{
+    AppError, AppState, ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery,
+    ListOpsAlertNotificationsQuery, OpsObservabilityThresholds,
+    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
+};
+use anyhow::Result;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Extension, Json,
+};
+use chrono::Utc;
+use http_body_util::BodyExt;
+use std::collections::HashMap;
 
 #[tokio::test]
 async fn list_judge_reviews_ops_handler_should_require_workspace_owner() -> Result<()> {

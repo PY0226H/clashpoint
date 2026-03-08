@@ -1,4 +1,15 @@
-use super::*;
+use super::super::{get_latest_judge_report_handler, request_judge_job_handler};
+use super::test_support::{join_user_to_session, seed_running_judge_job, seed_topic_and_session};
+use crate::{AppState, GetJudgeReportQuery, RequestJudgeJobInput};
+use anyhow::Result;
+use axum::{
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Extension, Json,
+};
+use http_body_util::BodyExt;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn request_judge_job_handler_should_return_style_mode_source() -> Result<()> {
