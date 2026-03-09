@@ -210,6 +210,23 @@ fn assert_apple_verify_request_payload(payload: &Value, expected_receipt_data: &
     );
 }
 
+async fn assert_stub_request_paths(
+    requests: &Arc<Mutex<Vec<(String, Value)>>>,
+    expected_paths: &[&str],
+) {
+    let requests = requests.lock().await;
+    assert_request_paths(&requests, expected_paths);
+}
+
+async fn assert_single_prod_request_with_payload(
+    requests: &Arc<Mutex<Vec<(String, Value)>>>,
+    expected_receipt_data: &str,
+) {
+    let requests = requests.lock().await;
+    assert_request_paths(&requests, &["/prod"]);
+    assert_apple_verify_request_payload(&requests[0].1, expected_receipt_data);
+}
+
 fn assert_order_query_not_found(out: &GetIapOrderByTransactionOutput) {
     assert!(!out.found);
     assert!(out.order.is_none());
@@ -338,9 +355,7 @@ async fn verify_receipt_should_use_apple_production_and_mark_verified() -> Resul
         Some(true)
     );
 
-    let requests = requests.lock().await;
-    assert_request_paths(&requests, &["/prod"]);
-    assert_apple_verify_request_payload(&requests[0].1, "receipt_ok_1");
+    assert_single_prod_request_with_payload(&requests, "receipt_ok_1").await;
     server.abort();
     Ok(())
 }
@@ -386,8 +401,7 @@ async fn verify_receipt_should_fallback_to_sandbox_when_prod_returns_21007() -> 
         Some(0)
     );
 
-    let requests = requests.lock().await;
-    assert_request_paths(&requests, &["/prod", "/sandbox"]);
+    assert_stub_request_paths(&requests, &["/prod", "/sandbox"]).await;
     server.abort();
     Ok(())
 }
@@ -412,8 +426,7 @@ async fn verify_receipt_should_return_error_for_retryable_apple_status() -> Resu
 
     assert_retryable_payment_error_contains(&err, 21005);
 
-    let requests = requests.lock().await;
-    assert_request_paths(&requests, &["/prod"]);
+    assert_stub_request_paths(&requests, &["/prod"]).await;
     server.abort();
     Ok(())
 }
@@ -454,8 +467,7 @@ async fn verify_receipt_should_reject_when_transaction_not_found_in_apple_payloa
         Some(false)
     );
 
-    let requests = requests.lock().await;
-    assert_request_paths(&requests, &["/prod"]);
+    assert_stub_request_paths(&requests, &["/prod"]).await;
     server.abort();
     Ok(())
 }
@@ -580,8 +592,7 @@ async fn verify_iap_order_should_allow_retry_after_transient_apple_status() -> R
     let second = state.verify_iap_order(&user, input).await?;
     assert_order_output(&second, "verified", "apple", true, 60);
 
-    let requests = requests.lock().await;
-    assert_request_paths(&requests, &["/prod", "/prod"]);
+    assert_stub_request_paths(&requests, &["/prod", "/prod"]).await;
     server.abort();
     Ok(())
 }
