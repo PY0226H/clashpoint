@@ -1276,44 +1276,54 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::JudgeReview)
             .await?;
         let now_ms = now_millis();
-        let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
-            r#"
-            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
-            FROM ops_observability_configs
-            WHERE ws_id = $1
-            "#,
-        )
-        .bind(user.ws_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        let existing = row
-            .map(|v| parse_anomaly_state(v.anomaly_state_json, now_ms))
-            .unwrap_or_default();
-        let anomaly_state = apply_anomaly_action(existing, &input, now_ms)?;
-        let anomaly_state_json = serde_json::to_value(&anomaly_state)
-            .context("serialize observability anomaly action state failed")?;
         let default_thresholds_json =
             serde_json::to_value(OpsObservabilityThresholds::default())
                 .context("serialize default observability thresholds failed")?;
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO ops_observability_configs(
                 ws_id, thresholds_json, anomaly_state_json, updated_by, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, NOW(), NOW())
-            ON CONFLICT (ws_id)
-            DO UPDATE
-            SET anomaly_state_json = EXCLUDED.anomaly_state_json,
-                updated_by = EXCLUDED.updated_by,
-                updated_at = NOW()
+            VALUES ($1, $2, '{}'::jsonb, $3, NOW(), NOW())
+            ON CONFLICT (ws_id) DO NOTHING
             "#,
         )
         .bind(user.ws_id)
         .bind(default_thresholds_json)
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
+        let anomaly_state_json_raw: Value = sqlx::query_scalar(
+            r#"
+            SELECT anomaly_state_json
+            FROM ops_observability_configs
+            WHERE ws_id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(user.ws_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let existing = parse_anomaly_state(anomaly_state_json_raw, now_ms);
+        let anomaly_state = apply_anomaly_action(existing, &input, now_ms)?;
+        let anomaly_state_json = serde_json::to_value(&anomaly_state)
+            .context("serialize observability anomaly action state failed")?;
+        sqlx::query(
+            r#"
+            UPDATE ops_observability_configs
+            SET anomaly_state_json = $2,
+                updated_by = $3,
+                updated_at = NOW()
+            WHERE ws_id = $1
+            "#,
+        )
+        .bind(user.ws_id)
         .bind(anomaly_state_json)
         .bind(user.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         self.get_ops_observability_config(user).await
     }
 
@@ -1970,6 +1980,7 @@ mod tests {
     use serde::Deserialize;
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
+    use tokio::sync::Barrier;
 
     #[derive(Debug, Clone, Deserialize)]
     struct MockOutboxListQuery {
@@ -2549,6 +2560,60 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_should_keep_both_keys_under_concurrency(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let state_a = state.clone();
+        let owner_a = owner.clone();
+        let barrier_a = barrier.clone();
+        let task_a = tokio::spawn(async move {
+            barrier_a.wait().await;
+            state_a
+                .apply_ops_observability_anomaly_action(
+                    &owner_a,
+                    ApplyOpsObservabilityAnomalyActionInput {
+                        alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                        action: OPS_ANOMALY_ACTION_SUPPRESS.to_string(),
+                        suppress_minutes: Some(5),
+                    },
+                )
+                .await
+        });
+
+        let state_b = state.clone();
+        let owner_b = owner.clone();
+        let barrier_b = barrier.clone();
+        let task_b = tokio::spawn(async move {
+            barrier_b.wait().await;
+            state_b
+                .apply_ops_observability_anomaly_action(
+                    &owner_b,
+                    ApplyOpsObservabilityAnomalyActionInput {
+                        alert_key: OPS_ALERT_RULE_LOW_SUCCESS_RATE.to_string(),
+                        action: OPS_ANOMALY_ACTION_SUPPRESS.to_string(),
+                        suppress_minutes: Some(5),
+                    },
+                )
+                .await
+        });
+
+        barrier.wait().await;
+        task_a.await??;
+        task_b.await??;
+
+        let ret = state.get_ops_observability_config(&owner).await?;
+        assert!(ret.anomaly_state.contains_key(OPS_ALERT_RULE_HIGH_RETRY));
+        assert!(ret
+            .anomaly_state
+            .contains_key(OPS_ALERT_RULE_LOW_SUCCESS_RATE));
         Ok(())
     }
 
