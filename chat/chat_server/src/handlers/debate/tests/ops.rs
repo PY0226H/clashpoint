@@ -1,7 +1,8 @@
 use super::super::{
-    discard_kafka_dlq_event_handler, get_ops_observability_config_handler,
-    get_ops_observability_metrics_dictionary_handler, get_ops_observability_slo_snapshot_handler,
-    get_ops_rbac_me_handler, list_judge_reviews_ops_handler, list_kafka_dlq_events_handler,
+    apply_ops_observability_anomaly_action_handler, discard_kafka_dlq_event_handler,
+    get_ops_observability_config_handler, get_ops_observability_metrics_dictionary_handler,
+    get_ops_observability_slo_snapshot_handler, get_ops_rbac_me_handler,
+    list_judge_reviews_ops_handler, list_kafka_dlq_events_handler,
     list_ops_alert_notifications_handler, list_ops_role_assignments_handler,
     replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
     revoke_ops_role_assignment_handler, upsert_ops_observability_anomaly_state_handler,
@@ -13,8 +14,9 @@ use super::test_support::{
     seed_topic_and_session,
 };
 use crate::{
-    AppState, ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
-    OpsObservabilityThresholds, UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
+    AppState, ApplyOpsObservabilityAnomalyActionInput, ListJudgeReviewOpsQuery,
+    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, OpsObservabilityThresholds,
+    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
 };
 use anyhow::Result;
 use axum::{
@@ -227,9 +229,24 @@ async fn ops_observability_config_handlers_should_require_judge_review_permissio
     .await;
     assert_debate_conflict_prefix(dict_result, "ops_permission_denied:judge_review:");
 
-    let slo_result =
-        get_ops_observability_slo_snapshot_handler(Extension(non_owner), State(state)).await;
+    let slo_result = get_ops_observability_slo_snapshot_handler(
+        Extension(non_owner.clone()),
+        State(state.clone()),
+    )
+    .await;
     assert_debate_conflict_prefix(slo_result, "ops_permission_denied:judge_review:");
+
+    let action_result = apply_ops_observability_anomaly_action_handler(
+        Extension(non_owner),
+        State(state),
+        Json(ApplyOpsObservabilityAnomalyActionInput {
+            alert_key: "high_retry".to_string(),
+            action: "suppress".to_string(),
+            suppress_minutes: Some(5),
+        }),
+    )
+    .await;
+    assert_debate_conflict_prefix(action_result, "ops_permission_denied:judge_review:");
     Ok(())
 }
 
@@ -281,6 +298,46 @@ async fn get_ops_observability_slo_snapshot_handler_should_return_signal_and_rul
     assert!(rules.iter().any(|v| v["alertKey"] == "high_retry"));
     assert!(rules.iter().any(|v| v["alertKey"] == "high_db_latency"));
     assert!(rules.iter().any(|v| v["alertKey"] == "dlq_pending"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_ops_observability_anomaly_action_handler_should_update_single_alert_key(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.update_workspace_owner(1, 1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let suppress_response = apply_ops_observability_anomaly_action_handler(
+        Extension(owner.clone()),
+        State(state.clone()),
+        Json(ApplyOpsObservabilityAnomalyActionInput {
+            alert_key: "high_retry".to_string(),
+            action: "suppress".to_string(),
+            suppress_minutes: Some(5),
+        }),
+    )
+    .await?
+    .into_response();
+    let suppress_json = json_body_with_status(suppress_response, StatusCode::OK).await?;
+    let suppress_until_ms = suppress_json["anomalyState"]["high_retry"]["suppressUntilMs"]
+        .as_i64()
+        .unwrap_or_default();
+    assert!(suppress_until_ms > Utc::now().timestamp_millis());
+
+    let clear_response = apply_ops_observability_anomaly_action_handler(
+        Extension(owner),
+        State(state),
+        Json(ApplyOpsObservabilityAnomalyActionInput {
+            alert_key: "high_retry".to_string(),
+            action: "clear".to_string(),
+            suppress_minutes: None,
+        }),
+    )
+    .await?
+    .into_response();
+    let clear_json = json_body_with_status(clear_response, StatusCode::OK).await?;
+    assert!(clear_json["anomalyState"]["high_retry"].is_null());
     Ok(())
 }
 

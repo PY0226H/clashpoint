@@ -1,8 +1,8 @@
 use crate::{
-    AppError, AppState, ListJudgeReviewOpsQuery, ListKafkaDlqEventsQuery,
-    ListOpsAlertNotificationsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsObservabilityThresholds, OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
+    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ListJudgeReviewOpsQuery,
+    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, OpsCreateDebateSessionInput,
+    OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsUpdateDebateSessionInput,
+    OpsUpdateDebateTopicInput, UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -261,6 +261,31 @@ pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let ret = state
         .upsert_ops_observability_anomaly_state(&user, input)
+        .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Apply anomaly-state action for a single alert key in current workspace.
+#[utoipa::path(
+    post,
+    path = "/api/debate/ops/observability/anomaly-state/actions",
+    request_body = ApplyOpsObservabilityAnomalyActionInput,
+    responses(
+        (status = 200, description = "Updated ops observability config", body = crate::GetOpsObservabilityConfigOutput),
+        (status = 400, description = "Invalid action input", body = crate::ErrorOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn apply_ops_observability_anomaly_action_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Json(input): Json<ApplyOpsObservabilityAnomalyActionInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state
+        .apply_ops_observability_anomaly_action(&user, input)
         .await?;
     Ok((StatusCode::OK, Json(ret)))
 }

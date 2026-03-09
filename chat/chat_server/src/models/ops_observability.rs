@@ -26,6 +26,11 @@ const OPS_ALERT_RULE_HIGH_RETRY: &str = "high_retry";
 const OPS_ALERT_RULE_HIGH_DB_LATENCY: &str = "high_db_latency";
 const OPS_ALERT_RULE_DLQ_PENDING: &str = "dlq_pending";
 const OPS_ALERT_EVAL_WINDOW_MINUTES: i64 = 10;
+const OPS_ANOMALY_ACTION_ACKNOWLEDGE: &str = "acknowledge";
+const OPS_ANOMALY_ACTION_SUPPRESS: &str = "suppress";
+const OPS_ANOMALY_ACTION_CLEAR: &str = "clear";
+const OPS_ANOMALY_SUPPRESS_MINUTES_DEFAULT: i64 = 30;
+const OPS_ANOMALY_SUPPRESS_MINUTES_MAX: i64 = 7 * 24 * 60;
 const AI_JUDGE_OUTBOX_ALERT_KEY_PREFIX: &str = "ai_judge_outbox";
 const AI_JUDGE_OUTBOX_RULE_TYPE_PREFIX: &str = "ai_judge";
 const AI_JUDGE_OUTBOX_DEFAULT_EVENT_TYPE: &str = "ai_judge.audit_alert.status_changed.v1";
@@ -91,6 +96,14 @@ pub struct OpsObservabilityAnomalyStateValue {
 pub struct UpdateOpsObservabilityAnomalyStateInput {
     #[serde(default)]
     pub anomaly_state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyOpsObservabilityAnomalyActionInput {
+    pub alert_key: String,
+    pub action: String,
+    pub suppress_minutes: Option<i64>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -472,6 +485,76 @@ fn parse_anomaly_state(
         serde_json::from_value::<HashMap<String, OpsObservabilityAnomalyStateValue>>(value)
             .unwrap_or_default();
     normalize_anomaly_state(payload, now_ms)
+}
+
+fn normalize_anomaly_action(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "ack" | "acknowledge" => Some(OPS_ANOMALY_ACTION_ACKNOWLEDGE),
+        "suppress" | "mute" => Some(OPS_ANOMALY_ACTION_SUPPRESS),
+        "clear" | "remove" | "unsuppress" => Some(OPS_ANOMALY_ACTION_CLEAR),
+        _ => None,
+    }
+}
+
+fn normalize_anomaly_action_alert_key(raw: &str) -> Option<String> {
+    let key = raw.trim();
+    if key.is_empty() || key.len() > MAX_STATE_KEY_LEN {
+        return None;
+    }
+    Some(key.to_string())
+}
+
+fn normalize_anomaly_suppress_minutes(raw: Option<i64>) -> i64 {
+    raw.unwrap_or(OPS_ANOMALY_SUPPRESS_MINUTES_DEFAULT)
+        .clamp(1, OPS_ANOMALY_SUPPRESS_MINUTES_MAX)
+}
+
+fn apply_anomaly_action(
+    current_state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+    input: &ApplyOpsObservabilityAnomalyActionInput,
+    now_ms: i64,
+) -> Result<HashMap<String, OpsObservabilityAnomalyStateValue>, AppError> {
+    let mut anomaly_state = current_state;
+    let alert_key = normalize_anomaly_action_alert_key(&input.alert_key)
+        .ok_or_else(|| AppError::DebateError("invalid alert key for anomaly action".to_string()))?;
+    let action = normalize_anomaly_action(&input.action).ok_or_else(|| {
+        AppError::DebateError(
+            "invalid anomaly action, expect acknowledge/suppress/clear".to_string(),
+        )
+    })?;
+
+    match action {
+        OPS_ANOMALY_ACTION_ACKNOWLEDGE => {
+            let mut item =
+                anomaly_state
+                    .remove(&alert_key)
+                    .unwrap_or(OpsObservabilityAnomalyStateValue {
+                        acknowledged_at_ms: 0,
+                        suppress_until_ms: 0,
+                    });
+            item.acknowledged_at_ms = now_ms;
+            anomaly_state.insert(alert_key, item);
+        }
+        OPS_ANOMALY_ACTION_SUPPRESS => {
+            let mut item =
+                anomaly_state
+                    .remove(&alert_key)
+                    .unwrap_or(OpsObservabilityAnomalyStateValue {
+                        acknowledged_at_ms: 0,
+                        suppress_until_ms: 0,
+                    });
+            let minutes = normalize_anomaly_suppress_minutes(input.suppress_minutes);
+            item.acknowledged_at_ms = now_ms.max(item.acknowledged_at_ms);
+            item.suppress_until_ms = now_ms.saturating_add(minutes.saturating_mul(60_000));
+            anomaly_state.insert(alert_key, item);
+        }
+        OPS_ANOMALY_ACTION_CLEAR => {
+            anomaly_state.remove(&alert_key);
+        }
+        _ => unreachable!("normalize_anomaly_action guarantees known variants"),
+    }
+
+    Ok(normalize_anomaly_state(anomaly_state, now_ms))
 }
 
 fn build_output(
@@ -1160,6 +1243,55 @@ impl AppState {
         let anomaly_state = normalize_anomaly_state(input.anomaly_state, now_ms);
         let anomaly_state_json = serde_json::to_value(&anomaly_state)
             .context("serialize observability anomaly state failed")?;
+        let default_thresholds_json =
+            serde_json::to_value(OpsObservabilityThresholds::default())
+                .context("serialize default observability thresholds failed")?;
+        sqlx::query(
+            r#"
+            INSERT INTO ops_observability_configs(
+                ws_id, thresholds_json, anomaly_state_json, updated_by, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, NOW(), NOW())
+            ON CONFLICT (ws_id)
+            DO UPDATE
+            SET anomaly_state_json = EXCLUDED.anomaly_state_json,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(user.ws_id)
+        .bind(default_thresholds_json)
+        .bind(anomaly_state_json)
+        .bind(user.id)
+        .execute(&self.pool)
+        .await?;
+        self.get_ops_observability_config(user).await
+    }
+
+    pub async fn apply_ops_observability_anomaly_action(
+        &self,
+        user: &User,
+        input: ApplyOpsObservabilityAnomalyActionInput,
+    ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+        let now_ms = now_millis();
+        let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE ws_id = $1
+            "#,
+        )
+        .bind(user.ws_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let existing = row
+            .map(|v| parse_anomaly_state(v.anomaly_state_json, now_ms))
+            .unwrap_or_default();
+        let anomaly_state = apply_anomaly_action(existing, &input, now_ms)?;
+        let anomaly_state_json = serde_json::to_value(&anomaly_state)
+            .context("serialize observability anomaly action state failed")?;
         let default_thresholds_json =
             serde_json::to_value(OpsObservabilityThresholds::default())
                 .context("serialize default observability thresholds failed")?;
@@ -2335,6 +2467,89 @@ mod tests {
         assert!(normalize_alert_status_filter(Some("cleared".to_string())).is_ok());
         assert!(normalize_alert_status_filter(Some("suppressed".to_string())).is_ok());
         assert!(normalize_alert_status_filter(Some("invalid".to_string())).is_err());
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_should_support_suppress_ack_and_clear(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let now_ms = now_millis();
+
+        let suppress_ret = state
+            .apply_ops_observability_anomaly_action(
+                &owner,
+                ApplyOpsObservabilityAnomalyActionInput {
+                    alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                    action: OPS_ANOMALY_ACTION_SUPPRESS.to_string(),
+                    suppress_minutes: Some(5),
+                },
+            )
+            .await?;
+        let suppress_item = suppress_ret
+            .anomaly_state
+            .get(OPS_ALERT_RULE_HIGH_RETRY)
+            .expect("suppress action should create state");
+        assert!(suppress_item.acknowledged_at_ms >= now_ms);
+        assert!(suppress_item.suppress_until_ms > now_ms);
+
+        let ack_ret = state
+            .apply_ops_observability_anomaly_action(
+                &owner,
+                ApplyOpsObservabilityAnomalyActionInput {
+                    alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                    action: OPS_ANOMALY_ACTION_ACKNOWLEDGE.to_string(),
+                    suppress_minutes: None,
+                },
+            )
+            .await?;
+        let ack_item = ack_ret
+            .anomaly_state
+            .get(OPS_ALERT_RULE_HIGH_RETRY)
+            .expect("ack action should keep state");
+        assert!(ack_item.acknowledged_at_ms >= now_ms);
+        assert!(ack_item.suppress_until_ms > now_ms);
+
+        let clear_ret = state
+            .apply_ops_observability_anomaly_action(
+                &owner,
+                ApplyOpsObservabilityAnomalyActionInput {
+                    alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                    action: OPS_ANOMALY_ACTION_CLEAR.to_string(),
+                    suppress_minutes: None,
+                },
+            )
+            .await?;
+        assert!(!clear_ret
+            .anomaly_state
+            .contains_key(OPS_ALERT_RULE_HIGH_RETRY));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_should_reject_invalid_action() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.update_workspace_owner(1, 1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let err = state
+            .apply_ops_observability_anomaly_action(
+                &owner,
+                ApplyOpsObservabilityAnomalyActionInput {
+                    alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                    action: "invalid".to_string(),
+                    suppress_minutes: None,
+                },
+            )
+            .await
+            .expect_err("invalid action should be rejected");
+        match err {
+            AppError::DebateError(msg) => {
+                assert!(msg.contains("invalid anomaly action"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        Ok(())
     }
 
     #[test]
