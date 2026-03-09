@@ -169,7 +169,7 @@ impl AppState {
             });
         }
 
-        let verify_result = verify_receipt(
+        let verify_result = receipt_verify::verify_receipt(
             &self.config.payment,
             &product.product_id,
             transaction_id,
