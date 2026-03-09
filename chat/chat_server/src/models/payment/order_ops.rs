@@ -1,9 +1,8 @@
 use super::*;
 use chrono::Utc;
-use serde_json::json;
 use sqlx::{Postgres, Transaction};
 
-async fn wallet_balance_in_tx(
+pub(super) async fn wallet_balance_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     ws_id: i64,
     user_id: i64,
@@ -24,68 +23,6 @@ async fn wallet_balance_in_tx(
 
 #[allow(dead_code)]
 impl AppState {
-    pub async fn get_iap_order_by_transaction(
-        &self,
-        user: &User,
-        input: GetIapOrderByTransaction,
-    ) -> Result<GetIapOrderByTransactionOutput, AppError> {
-        validate_identifier(&input.transaction_id, "transaction_id", 128)?;
-        let transaction_id = input.transaction_id.trim();
-        let row: Option<IapOrderSnapshotRow> = sqlx::query_as(
-            r#"
-            SELECT
-                io.id,
-                io.ws_id,
-                io.user_id,
-                io.product_id,
-                io.status,
-                io.verify_mode,
-                io.verify_reason,
-                io.coins,
-                EXISTS (
-                    SELECT 1
-                    FROM wallet_ledger wl
-                    WHERE wl.order_id = io.id
-                      AND wl.ws_id = io.ws_id
-                      AND wl.user_id = io.user_id
-                      AND wl.entry_type = 'iap_credit'
-                ) AS credited
-            FROM iap_orders io
-            WHERE io.platform = 'apple_iap'
-              AND io.transaction_id = $1
-            LIMIT 1
-            "#,
-        )
-        .bind(transaction_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(row) = row else {
-            return Ok(GetIapOrderByTransactionOutput {
-                found: false,
-                order: None,
-            });
-        };
-        if row.ws_id != user.ws_id || row.user_id != user.id {
-            return Err(AppError::PaymentConflict(
-                "transaction_id already belongs to another user".to_string(),
-            ));
-        }
-
-        Ok(GetIapOrderByTransactionOutput {
-            found: true,
-            order: Some(IapOrderSnapshot {
-                order_id: row.id as u64,
-                status: row.status,
-                verify_mode: row.verify_mode,
-                verify_reason: row.verify_reason,
-                product_id: row.product_id,
-                coins: row.coins,
-                credited: row.credited,
-            }),
-        })
-    }
-
     pub async fn verify_iap_order(
         &self,
         user: &User,
@@ -145,28 +82,13 @@ impl AppState {
         .await?;
 
         if let Some(order) = existing_order {
-            if order.ws_id != user.ws_id || order.user_id != user.id {
-                return Err(AppError::PaymentConflict(
-                    "transaction_id already belongs to another user".to_string(),
-                ));
-            }
-            if order.product_id != product.product_id {
-                return Err(AppError::PaymentConflict(
-                    "transaction_id already used with another product".to_string(),
-                ));
-            }
+            super::order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.ws_id, user.id).await?;
             tx.commit().await?;
-            return Ok(VerifyIapOrderOutput {
-                order_id: order.id as u64,
-                status: order.status,
-                verify_mode: order.verify_mode,
-                verify_reason: order.verify_reason,
-                product_id: order.product_id,
-                coins: order.coins,
-                credited: false,
+            return Ok(super::order_flow::build_order_output_without_credit(
+                order,
                 wallet_balance,
-            });
+            ));
         }
 
         let verify_result = receipt_verify::verify_receipt(
@@ -224,101 +146,22 @@ impl AppState {
             .bind(transaction_id)
             .fetch_one(&mut *tx)
             .await?;
-            if order.ws_id != user.ws_id || order.user_id != user.id {
-                return Err(AppError::PaymentConflict(
-                    "transaction_id already belongs to another user".to_string(),
-                ));
-            }
-            if order.product_id != product.product_id {
-                return Err(AppError::PaymentConflict(
-                    "transaction_id already used with another product".to_string(),
-                ));
-            }
+            super::order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.ws_id, user.id).await?;
             tx.commit().await?;
-            return Ok(VerifyIapOrderOutput {
-                order_id: order.id as u64,
-                status: order.status,
-                verify_mode: order.verify_mode,
-                verify_reason: order.verify_reason,
-                product_id: order.product_id,
-                coins: order.coins,
-                credited: false,
+            return Ok(super::order_flow::build_order_output_without_credit(
+                order,
                 wallet_balance,
-            });
+            ));
         };
 
-        let mut credited = false;
-        let wallet_balance = if inserted_order.status == "verified" {
-            sqlx::query(
-                r#"
-                INSERT INTO user_wallets(ws_id, user_id, balance)
-                VALUES ($1, $2, 0)
-                ON CONFLICT (ws_id, user_id) DO NOTHING
-                "#,
-            )
-            .bind(user.ws_id)
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
-
-            let current: (i64,) = sqlx::query_as(
-                r#"
-                SELECT balance
-                FROM user_wallets
-                WHERE ws_id = $1 AND user_id = $2
-                FOR UPDATE
-                "#,
-            )
-            .bind(user.ws_id)
-            .bind(user.id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-            let next_balance = current.0 + inserted_order.coins as i64;
-            sqlx::query(
-                r#"
-                UPDATE user_wallets
-                SET balance = $3, updated_at = NOW()
-                WHERE ws_id = $1 AND user_id = $2
-                "#,
-            )
-            .bind(user.ws_id)
-            .bind(user.id)
-            .bind(next_balance)
-            .execute(&mut *tx)
-            .await?;
-
-            let metadata = json!({
-                "productId": inserted_order.product_id,
-                "transactionId": transaction_id,
-                "verifyMode": inserted_order.verify_mode,
-            });
-            let idempotency_key = format!("iap-order-credit-{}", inserted_order.id);
-            sqlx::query(
-                r#"
-                INSERT INTO wallet_ledger(
-                    ws_id, user_id, order_id, entry_type, amount_delta, balance_after,
-                    idempotency_key, metadata
-                )
-                VALUES ($1, $2, $3, 'iap_credit', $4, $5, $6, $7)
-                "#,
-            )
-            .bind(user.ws_id)
-            .bind(user.id)
-            .bind(inserted_order.id)
-            .bind(inserted_order.coins as i64)
-            .bind(next_balance)
-            .bind(idempotency_key)
-            .bind(metadata)
-            .execute(&mut *tx)
-            .await?;
-
-            credited = true;
-            next_balance
-        } else {
-            wallet_balance_in_tx(&mut tx, user.ws_id, user.id).await?
-        };
+        let (credited, wallet_balance) = super::order_flow::apply_wallet_credit_for_verified_order(
+            &mut tx,
+            user,
+            &inserted_order,
+            transaction_id,
+        )
+        .await?;
 
         tx.commit().await?;
 

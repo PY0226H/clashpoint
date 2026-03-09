@@ -6,7 +6,9 @@ use sha1::{Digest, Sha1};
 use sqlx::FromRow;
 use utoipa::{IntoParams, ToSchema};
 
+mod order_flow;
 mod order_ops;
+mod query_ops;
 mod receipt_verify;
 
 const DEFAULT_LIMIT: u64 = 20;
@@ -153,87 +155,6 @@ fn hash_receipt(receipt: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(receipt.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-#[allow(dead_code)]
-impl AppState {
-    pub async fn list_iap_products(
-        &self,
-        input: ListIapProducts,
-    ) -> Result<Vec<IapProduct>, AppError> {
-        let rows = sqlx::query_as(
-            r#"
-            SELECT product_id, coins, is_active
-            FROM iap_products
-            WHERE (NOT $1::boolean OR is_active = TRUE)
-            ORDER BY coins ASC
-            "#,
-        )
-        .bind(input.active_only)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows)
-    }
-
-    pub async fn get_wallet_balance(
-        &self,
-        ws_id: u64,
-        user_id: u64,
-    ) -> Result<WalletBalanceOutput, AppError> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            r#"
-            SELECT balance
-            FROM user_wallets
-            WHERE ws_id = $1 AND user_id = $2
-            "#,
-        )
-        .bind(ws_id as i64)
-        .bind(user_id as i64)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(WalletBalanceOutput {
-            ws_id,
-            user_id,
-            balance: row.map(|v| v.0).unwrap_or(0),
-        })
-    }
-
-    pub async fn list_wallet_ledger(
-        &self,
-        ws_id: u64,
-        user_id: u64,
-        input: ListWalletLedger,
-    ) -> Result<Vec<WalletLedgerItem>, AppError> {
-        let rows = sqlx::query_as(
-            r#"
-            SELECT
-                id,
-                order_id,
-                entry_type,
-                amount_delta,
-                balance_after,
-                idempotency_key,
-                metadata::text AS metadata,
-                created_at
-            FROM wallet_ledger
-            WHERE ws_id = $1
-              AND user_id = $2
-              AND ($3::bigint IS NULL OR id < $3)
-            ORDER BY id DESC
-            LIMIT $4
-            "#,
-        )
-        .bind(ws_id as i64)
-        .bind(user_id as i64)
-        .bind(input.last_id.map(|v| v as i64))
-        .bind(normalize_limit(input.limit))
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows)
-    }
 }
 
 #[cfg(test)]
