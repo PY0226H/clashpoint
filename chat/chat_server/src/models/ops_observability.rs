@@ -4,7 +4,7 @@ use chat_core::User;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::FromRow;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
@@ -35,6 +35,14 @@ const AI_JUDGE_OUTBOX_ALERT_KEY_PREFIX: &str = "ai_judge_outbox";
 const AI_JUDGE_OUTBOX_RULE_TYPE_PREFIX: &str = "ai_judge";
 const AI_JUDGE_OUTBOX_DEFAULT_EVENT_TYPE: &str = "ai_judge.audit_alert.status_changed.v1";
 const AI_JUDGE_OUTBOX_ERROR_MAX_LEN: usize = 500;
+const SPLIT_READINESS_PRESSURE_PENDING_RUNNING_THRESHOLD: i64 = 20;
+const SPLIT_READINESS_PRESSURE_PENDING_DLQ_THRESHOLD: i64 = 20;
+const SPLIT_READINESS_PRESSURE_AVG_ATTEMPTS_THRESHOLD: f64 = 2.5;
+const SPLIT_READINESS_PRESSURE_P95_MS_THRESHOLD: f64 = 300_000.0;
+const SPLIT_READINESS_PRESSURE_FAILED_RATIO_THRESHOLD: f64 = 0.3;
+const SPLIT_READINESS_PRESSURE_FAILED_RATIO_MIN_DISPATCHED: u64 = 30;
+const SPLIT_READINESS_WS_RUNNING_SESSIONS_THRESHOLD: i64 = 100;
+const SPLIT_READINESS_WS_MESSAGES_10M_THRESHOLD: i64 = 20_000;
 
 fn clamp_float(value: f64, min: f64, max: f64, fallback: f64) -> f64 {
     if !value.is_finite() {
@@ -224,6 +232,27 @@ pub struct GetOpsSloSnapshotOutput {
     pub thresholds: OpsObservabilityThresholds,
     pub signal: OpsSloSignalSnapshot,
     pub rules: Vec<OpsSloRuleSnapshotItem>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsServiceSplitThresholdItem {
+    pub key: String,
+    pub title: String,
+    pub status: String,
+    pub triggered: bool,
+    pub recommendation: String,
+    pub evidence: Value,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOpsServiceSplitReadinessOutput {
+    pub ws_id: u64,
+    pub generated_at_ms: i64,
+    pub overall_status: String,
+    pub next_step: String,
+    pub thresholds: Vec<OpsServiceSplitThresholdItem>,
 }
 
 #[derive(Debug, Clone, Default, ToSchema, Serialize)]
@@ -1096,6 +1125,169 @@ fn build_emit_plan(
 }
 
 impl AppState {
+    pub async fn get_ops_service_split_readiness(
+        &self,
+        user: &User,
+    ) -> Result<GetOpsServiceSplitReadinessOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+        let generated_at_ms = now_millis();
+        let signal = self.load_recent_judge_signal(user.ws_id).await?;
+        let dispatch_metrics = self.get_judge_dispatch_metrics();
+        let pending_running_jobs: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM judge_jobs j
+            WHERE j.ws_id = $1
+              AND j.status = 'running'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM judge_reports r
+                WHERE r.job_id = j.id
+              )
+            "#,
+        )
+        .bind(user.ws_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let running_sessions: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM debate_sessions
+            WHERE ws_id = $1
+              AND status = 'running'
+            "#,
+        )
+        .bind(user.ws_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let recent_messages_10m: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM session_messages
+            WHERE ws_id = $1
+              AND created_at >= NOW() - INTERVAL '10 minutes'
+            "#,
+        )
+        .bind(user.ws_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let failed_ratio = if dispatch_metrics.dispatched_total == 0 {
+            0.0
+        } else {
+            dispatch_metrics.failed_total as f64 / dispatch_metrics.dispatched_total as f64
+        };
+
+        let dispatch_pressure_triggered = pending_running_jobs
+            >= SPLIT_READINESS_PRESSURE_PENDING_RUNNING_THRESHOLD
+            || signal.pending_dlq_count >= SPLIT_READINESS_PRESSURE_PENDING_DLQ_THRESHOLD
+            || signal.avg_dispatch_attempts >= SPLIT_READINESS_PRESSURE_AVG_ATTEMPTS_THRESHOLD
+            || signal.p95_latency_ms >= SPLIT_READINESS_PRESSURE_P95_MS_THRESHOLD
+            || (dispatch_metrics.dispatched_total
+                >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_MIN_DISPATCHED
+                && failed_ratio >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_THRESHOLD);
+        let dispatch_pressure_status = if dispatch_pressure_triggered {
+            "met"
+        } else {
+            "not_met"
+        };
+        let dispatch_pressure_recommendation = if dispatch_pressure_triggered {
+            "进入 R6 评审：评估是否将 judge_dispatch worker 进一步服务化并独立扩缩容。"
+        } else {
+            "保持当前拓扑，持续观察 dispatch 压力信号。"
+        };
+
+        let payment_compliance_status = "insufficient_data";
+        let payment_compliance_triggered = false;
+        let payment_compliance_recommendation =
+            "当前代码侧无合规域信号，需由法务/支付合规评审结论驱动。";
+
+        let ws_scale_triggered = running_sessions >= SPLIT_READINESS_WS_RUNNING_SESSIONS_THRESHOLD
+            || recent_messages_10m >= SPLIT_READINESS_WS_MESSAGES_10M_THRESHOLD;
+        let ws_scale_status = if ws_scale_triggered { "met" } else { "not_met" };
+        let ws_scale_recommendation = if ws_scale_triggered {
+            "进入 R6 评审：评估 WS 链路是否需要独立部署域或扩展策略升级。"
+        } else {
+            "WS 活跃规模未触发阈值，维持现有治理策略并继续监控。"
+        };
+
+        let thresholds = vec![
+            OpsServiceSplitThresholdItem {
+                key: "judge_dispatch_pressure".to_string(),
+                title: "judge_dispatch 资源压力".to_string(),
+                status: dispatch_pressure_status.to_string(),
+                triggered: dispatch_pressure_triggered,
+                recommendation: dispatch_pressure_recommendation.to_string(),
+                evidence: json!({
+                    "pendingRunningJobs": pending_running_jobs.max(0),
+                    "pendingDlqCount": signal.pending_dlq_count.max(0),
+                    "avgDispatchAttempts": signal.avg_dispatch_attempts.max(0.0),
+                    "p95LatencyMs": signal.p95_latency_ms.max(0.0),
+                    "dispatchFailedRatio": failed_ratio.max(0.0),
+                    "metrics": {
+                        "dispatchedTotal": dispatch_metrics.dispatched_total,
+                        "failedTotal": dispatch_metrics.failed_total,
+                        "retryableFailedTotal": dispatch_metrics.retryable_failed_total
+                    },
+                    "thresholds": {
+                        "pendingRunningJobs": SPLIT_READINESS_PRESSURE_PENDING_RUNNING_THRESHOLD,
+                        "pendingDlqCount": SPLIT_READINESS_PRESSURE_PENDING_DLQ_THRESHOLD,
+                        "avgDispatchAttempts": SPLIT_READINESS_PRESSURE_AVG_ATTEMPTS_THRESHOLD,
+                        "p95LatencyMs": SPLIT_READINESS_PRESSURE_P95_MS_THRESHOLD,
+                        "dispatchFailedRatio": SPLIT_READINESS_PRESSURE_FAILED_RATIO_THRESHOLD
+                    }
+                }),
+            },
+            OpsServiceSplitThresholdItem {
+                key: "payment_compliance_isolation".to_string(),
+                title: "支付/合规独立部署域要求".to_string(),
+                status: payment_compliance_status.to_string(),
+                triggered: payment_compliance_triggered,
+                recommendation: payment_compliance_recommendation.to_string(),
+                evidence: json!({
+                    "manualInputRequired": true,
+                    "source": "compliance_review",
+                    "note": "该阈值不由运行时指标自动判定"
+                }),
+            },
+            OpsServiceSplitThresholdItem {
+                key: "ws_online_scale_limit".to_string(),
+                title: "WS 在线规模阈值".to_string(),
+                status: ws_scale_status.to_string(),
+                triggered: ws_scale_triggered,
+                recommendation: ws_scale_recommendation.to_string(),
+                evidence: json!({
+                    "runningSessions": running_sessions.max(0),
+                    "recentMessages10m": recent_messages_10m.max(0),
+                    "thresholds": {
+                        "runningSessions": SPLIT_READINESS_WS_RUNNING_SESSIONS_THRESHOLD,
+                        "recentMessages10m": SPLIT_READINESS_WS_MESSAGES_10M_THRESHOLD
+                    }
+                }),
+            },
+        ];
+
+        let review_required = thresholds.iter().any(|item| item.triggered);
+        let overall_status = if review_required {
+            "review_required"
+        } else {
+            "hold"
+        };
+        let next_step = if review_required {
+            "触发 R6 架构评审：结合 ADR-0002 决定是否继续服务拆分。"
+        } else {
+            "维持当前服务拓扑，按周复核阈值信号。"
+        };
+
+        Ok(GetOpsServiceSplitReadinessOutput {
+            ws_id: user.ws_id as u64,
+            generated_at_ms,
+            overall_status: overall_status.to_string(),
+            next_step: next_step.to_string(),
+            thresholds,
+        })
+    }
+
     pub async fn get_ops_metrics_dictionary(
         &self,
         user: &User,

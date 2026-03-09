@@ -127,6 +127,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             get(get_ops_observability_slo_snapshot_handler),
         )
         .route(
+            "/ops/observability/split-readiness",
+            get(get_ops_service_split_readiness_handler),
+        )
+        .route(
             "/ops/observability/thresholds",
             put(upsert_ops_observability_thresholds_handler),
         )

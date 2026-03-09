@@ -2,12 +2,12 @@ use super::super::{
     apply_ops_observability_anomaly_action_handler, discard_kafka_dlq_event_handler,
     get_ops_observability_config_handler, get_ops_observability_metrics_dictionary_handler,
     get_ops_observability_slo_snapshot_handler, get_ops_rbac_me_handler,
-    list_judge_reviews_ops_handler, list_kafka_dlq_events_handler,
-    list_ops_alert_notifications_handler, list_ops_role_assignments_handler,
-    replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
-    revoke_ops_role_assignment_handler, run_ops_observability_evaluation_once_handler,
-    upsert_ops_observability_anomaly_state_handler, upsert_ops_observability_thresholds_handler,
-    upsert_ops_role_assignment_handler,
+    get_ops_service_split_readiness_handler, list_judge_reviews_ops_handler,
+    list_kafka_dlq_events_handler, list_ops_alert_notifications_handler,
+    list_ops_role_assignments_handler, replay_kafka_dlq_event_handler,
+    request_judge_rejudge_ops_handler, revoke_ops_role_assignment_handler,
+    run_ops_observability_evaluation_once_handler, upsert_ops_observability_anomaly_state_handler,
+    upsert_ops_observability_thresholds_handler, upsert_ops_role_assignment_handler,
 };
 use super::test_support::{
     assert_debate_conflict_prefix, assert_is_debate_conflict, insert_kafka_dlq_event,
@@ -238,6 +238,11 @@ async fn ops_observability_config_handlers_should_require_judge_review_permissio
     .await;
     assert_debate_conflict_prefix(slo_result, "ops_permission_denied:judge_review:");
 
+    let split_result =
+        get_ops_service_split_readiness_handler(Extension(non_owner.clone()), State(state.clone()))
+            .await;
+    assert_debate_conflict_prefix(split_result, "ops_permission_denied:judge_review:");
+
     let action_result = apply_ops_observability_anomaly_action_handler(
         Extension(non_owner.clone()),
         State(state.clone()),
@@ -312,6 +317,38 @@ async fn get_ops_observability_slo_snapshot_handler_should_return_signal_and_rul
 }
 
 #[tokio::test]
+async fn get_ops_service_split_readiness_handler_should_return_thresholds() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.update_workspace_owner(1, 1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let response = get_ops_service_split_readiness_handler(Extension(owner), State(state))
+        .await?
+        .into_response();
+    let ret = json_body_with_status(response, StatusCode::OK).await?;
+    assert!(ret["generatedAtMs"].as_i64().unwrap_or_default() > 0);
+    let thresholds = ret["thresholds"]
+        .as_array()
+        .expect("thresholds should be array");
+    assert_eq!(thresholds.len(), 3);
+    assert!(thresholds
+        .iter()
+        .any(|v| v["key"] == "judge_dispatch_pressure"));
+    assert!(thresholds
+        .iter()
+        .any(|v| v["key"] == "payment_compliance_isolation"));
+    assert!(thresholds
+        .iter()
+        .any(|v| v["key"] == "ws_online_scale_limit"));
+    assert!(
+        ret["overallStatus"] == "hold" || ret["overallStatus"] == "review_required",
+        "unexpected overall status: {}",
+        ret["overallStatus"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn apply_ops_observability_anomaly_action_handler_should_update_single_alert_key(
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -369,6 +406,27 @@ async fn run_ops_observability_evaluation_once_handler_should_return_report() ->
     assert!(ret.get("alertsRaised").is_some());
     assert!(ret.get("alertsCleared").is_some());
     assert!(ret.get("alertsSuppressed").is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_ops_observability_evaluation_once_handler_should_include_rate_limit_headers(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.update_workspace_owner(1, 1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let response = run_ops_observability_evaluation_once_handler(
+        Extension(owner),
+        State(state),
+        Query(RunOpsObservabilityEvaluationQuery { dry_run: None }),
+    )
+    .await?
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key("x-ratelimit-limit"));
+    assert!(response.headers().contains_key("x-ratelimit-remaining"));
+    assert!(response.headers().contains_key("x-ratelimit-reset"));
     Ok(())
 }
 

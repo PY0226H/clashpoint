@@ -1,4 +1,7 @@
 use crate::{
+    application::request_guard::{
+        build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
+    },
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ListJudgeReviewOpsQuery,
     ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, OpsCreateDebateSessionInput,
     OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsUpdateDebateSessionInput,
@@ -12,6 +15,9 @@ use axum::{
     Extension, Json,
 };
 use chat_core::User;
+
+const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
+const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
 /// Create debate topic by authorized ops role.
 #[utoipa::path(
@@ -218,6 +224,26 @@ pub(crate) async fn get_ops_observability_slo_snapshot_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
+/// Evaluate service split readiness by R6 threshold rules.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/observability/split-readiness",
+    responses(
+        (status = 200, description = "Service split readiness snapshot", body = crate::GetOpsServiceSplitReadinessOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn get_ops_service_split_readiness_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.get_ops_service_split_readiness(&user).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
 /// Upsert ops observability thresholds for current workspace.
 #[utoipa::path(
     put,
@@ -300,6 +326,7 @@ pub(crate) async fn apply_ops_observability_anomaly_action_handler(
     ),
     responses(
         (status = 200, description = "Ops alert evaluation report", body = crate::OpsAlertEvalReport),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
     ),
     security(
@@ -311,6 +338,22 @@ pub(crate) async fn run_ops_observability_evaluation_once_handler(
     State(state): State<AppState>,
     Query(query): Query<RunOpsObservabilityEvaluationQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limiter_key = format!("ws:{}:user:{}", user.ws_id, user.id);
+    let decision = enforce_rate_limit(
+        &state,
+        "ops_observability_evaluate_once",
+        &limiter_key,
+        OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW,
+        OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    let rate_headers = build_rate_limit_headers(&decision)?;
+    if !decision.allowed {
+        return Ok(rate_limit_exceeded_response(
+            "ops_observability_evaluate_once",
+            rate_headers,
+        ));
+    }
     let ret = if query.dry_run.unwrap_or(false) {
         state
             .preview_ops_observability_alerts_for_workspace_by_ops(&user)
@@ -320,7 +363,7 @@ pub(crate) async fn run_ops_observability_evaluation_once_handler(
             .evaluate_ops_observability_alerts_for_workspace_by_ops(&user)
             .await?
     };
-    Ok((StatusCode::OK, Json(ret)))
+    Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
 }
 
 /// List ops observability alert notifications.
