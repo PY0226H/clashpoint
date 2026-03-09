@@ -16,7 +16,6 @@ import {
   sendUserRegisterEvent,
 } from '../analytics/event';
 import {
-  ANALYTICS_API_BASE_URL,
   normalizeJudgeRefreshSummaryMetrics,
   normalizeJudgeRefreshSummaryQuery,
 } from '../judge-refresh-summary-utils';
@@ -960,7 +959,7 @@ export default createStore({
     async judgeRealtimeRefresh({ state }, payload) {
       await sendJudgeRealtimeRefreshEvent(state.context, state.token, payload);
     },
-    async fetchJudgeRefreshSummary({ state, dispatch }, payload = {}) {
+    async fetchJudgeRefreshSummary({ state }, payload = {}) {
       const {
         hours,
         limit,
@@ -973,41 +972,24 @@ export default createStore({
       if (debateSessionId != null) {
         params.debateSessionId = debateSessionId;
       }
-      try {
-        const response = await axios.get(`${ANALYTICS_API_BASE_URL}/judge-refresh/summary`, {
-          params,
-          headers: state.token
-            ? { Authorization: `Bearer ${state.token}` }
-            : {},
-        });
-        return response.data;
-      } catch (error) {
-        if (error.response && error.response.status === 403) {
-          console.error('Unauthorized access to analytics API, logging out');
-          await dispatch('logout');
-          window.location.href = '/login';
-          return;
-        }
-        throw error;
-      }
+      const response = await network(
+        this,
+        'get',
+        `/analytics/judge-refresh/summary${buildQueryString(params)}`,
+        null,
+        state.token ? { Authorization: `Bearer ${state.token}` } : {},
+      );
+      return response?.data;
     },
-    async fetchJudgeRefreshSummaryMetrics({ state, dispatch }) {
-      try {
-        const response = await axios.get(`${ANALYTICS_API_BASE_URL}/judge-refresh/summary/metrics`, {
-          headers: state.token
-            ? { Authorization: `Bearer ${state.token}` }
-            : {},
-        });
-        return normalizeJudgeRefreshSummaryMetrics(response.data || {});
-      } catch (error) {
-        if (error.response && error.response.status === 403) {
-          console.error('Unauthorized access to analytics API, logging out');
-          await dispatch('logout');
-          window.location.href = '/login';
-          return;
-        }
-        throw error;
-      }
+    async fetchJudgeRefreshSummaryMetrics({ state }) {
+      const response = await network(
+        this,
+        'get',
+        '/analytics/judge-refresh/summary/metrics',
+        null,
+        state.token ? { Authorization: `Bearer ${state.token}` } : {},
+      );
+      return normalizeJudgeRefreshSummaryMetrics(response?.data || {});
     },
     async refreshAccessTickets({ state, commit }) {
       if (!state.token) {

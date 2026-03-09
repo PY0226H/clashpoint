@@ -16,6 +16,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub ai_judge: AiJudgeConfig,
     #[serde(default)]
+    pub analytics: AnalyticsIngressConfig,
+    #[serde(default)]
     pub worker_runtime: WorkerRuntimeConfig,
     #[serde(default)]
     pub payment: PaymentConfig,
@@ -129,6 +131,16 @@ pub struct AiJudgeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyticsIngressConfig {
+    #[serde(default = "default_analytics_ingress_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_analytics_ingress_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_analytics_ingress_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerRuntimeConfig {
     #[serde(default = "default_worker_runtime_debate_lifecycle_worker_enabled")]
     pub debate_lifecycle_worker_enabled: bool,
@@ -218,6 +230,16 @@ impl Default for KafkaConfig {
             consume_topics: Vec::new(),
             producer_timeout_ms: default_kafka_timeout_ms(),
             consumer: KafkaConsumerConfig::default(),
+        }
+    }
+}
+
+impl Default for AnalyticsIngressConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_analytics_ingress_enabled(),
+            base_url: default_analytics_ingress_base_url(),
+            timeout_ms: default_analytics_ingress_timeout_ms(),
         }
     }
 }
@@ -383,6 +405,18 @@ fn default_ai_judge_alert_outbox_timeout_ms() -> u64 {
     5_000
 }
 
+fn default_analytics_ingress_enabled() -> bool {
+    true
+}
+
+fn default_analytics_ingress_base_url() -> String {
+    "http://127.0.0.1:6690".to_string()
+}
+
+fn default_analytics_ingress_timeout_ms() -> u64 {
+    3_000
+}
+
 fn default_worker_runtime_debate_lifecycle_worker_enabled() -> bool {
     true
 }
@@ -429,6 +463,10 @@ fn default_payment_verify_timeout_ms() -> u64 {
 
 impl AppConfig {
     fn validate_for_runtime_env(&self, runtime_env: Option<&str>) -> Result<()> {
+        if self.analytics.enabled && self.analytics.base_url.trim().is_empty() {
+            bail!("analytics.base_url cannot be empty when analytics.enabled=true");
+        }
+
         let payment_mode = normalize_payment_verify_mode(&self.payment.verify_mode);
         if payment_mode == "apple" {
             if self.payment.apple_verify_url_prod.trim().is_empty() {
@@ -512,6 +550,7 @@ mod tests {
             kafka: KafkaConfig::default(),
             redis: RedisConfig::default(),
             ai_judge: AiJudgeConfig::default(),
+            analytics: AnalyticsIngressConfig::default(),
             worker_runtime: WorkerRuntimeConfig::default(),
             payment: PaymentConfig::default(),
         }
@@ -593,6 +632,27 @@ mod tests {
             "/internal/judge/alerts/outbox/{event_id}/delivery"
         );
         assert_eq!(cfg.alert_outbox_timeout_ms, 5_000);
+    }
+
+    #[test]
+    fn analytics_ingress_defaults_should_be_stable() {
+        let cfg = AnalyticsIngressConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.base_url, "http://127.0.0.1:6690");
+        assert_eq!(cfg.timeout_ms, 3_000);
+    }
+
+    #[test]
+    fn validate_for_runtime_env_should_reject_empty_analytics_base_url_when_enabled() {
+        let mut config = base_config();
+        config.analytics.enabled = true;
+        config.analytics.base_url = "  ".to_string();
+        let err = config
+            .validate_for_runtime_env(Some("development"))
+            .expect_err("empty analytics base url should fail");
+        assert!(err
+            .to_string()
+            .contains("analytics.base_url cannot be empty"));
     }
 
     #[test]

@@ -60,6 +60,7 @@ mod tests {
                 internal_key: "secret-key".to_string(),
                 ..Default::default()
             },
+            analytics: crate::config::AnalyticsIngressConfig::default(),
             worker_runtime: crate::config::WorkerRuntimeConfig::default(),
             payment: crate::config::PaymentConfig::default(),
         };

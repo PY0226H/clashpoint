@@ -169,6 +169,15 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             "/sessions/:id/draw-vote/ballots",
             post(submit_draw_vote_handler),
         );
+    let analytics = Router::new()
+        .route(
+            "/judge-refresh/summary",
+            get(get_analytics_judge_refresh_summary_handler),
+        )
+        .route(
+            "/judge-refresh/summary/metrics",
+            get(get_analytics_judge_refresh_summary_metrics_handler),
+        );
     let pay = Router::new()
         .route("/iap/products", get(list_iap_products_handler))
         .route(
@@ -196,6 +205,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .layer(from_fn_with_state(state.clone(), verify_ai_internal_key));
     let protected_api = Router::new()
         .route("/users", get(list_chat_users_handler))
+        .nest("/analytics", analytics)
         .nest("/debate", debate)
         .nest("/pay", pay)
         .nest("/chats", chat)

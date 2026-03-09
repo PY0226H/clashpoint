@@ -1,5 +1,6 @@
 mod agent;
 mod ai_internal;
+mod analytics_proxy;
 mod auth;
 mod chat;
 mod debate;
@@ -15,6 +16,7 @@ use axum::response::IntoResponse;
 
 pub(crate) use agent::*;
 pub(crate) use ai_internal::*;
+pub(crate) use analytics_proxy::*;
 pub(crate) use auth::*;
 pub(crate) use chat::*;
 pub(crate) use debate::*;

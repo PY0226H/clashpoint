@@ -53,6 +53,10 @@ ai_judge:
   alert_outbox_path: /internal/judge/alerts/outbox
   alert_outbox_delivery_path: /internal/judge/alerts/outbox/{event_id}/delivery
   alert_outbox_timeout_ms: 5000
+analytics:
+  enabled: true
+  base_url: http://127.0.0.1:6690
+  timeout_ms: 3000
 worker_runtime:
   debate_lifecycle_worker_enabled: true
   ai_judge_dispatch_worker_enabled: true

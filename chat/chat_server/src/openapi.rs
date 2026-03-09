@@ -42,6 +42,8 @@ pub(crate) trait OpenApiRouter {
             signin_handler,
             create_access_tickets_handler,
             list_debate_topics_handler,
+            get_analytics_judge_refresh_summary_handler,
+            get_analytics_judge_refresh_summary_metrics_handler,
             crate::handlers::debate_ops::create_debate_topic_ops_handler,
             crate::handlers::debate_ops::update_debate_topic_ops_handler,
             crate::handlers::debate_ops::create_debate_session_ops_handler,
@@ -99,6 +101,8 @@ pub(crate) trait OpenApiRouter {
             schemas(
                 User, Chat, ChatType, ChatAgent, AgentType, ChatUser, Message, Workspace,
                 DebateTopic, DebateSessionSummary, ListDebateTopics, ListDebateSessions,
+                JudgeRefreshSummaryItem, JudgeRefreshSummaryOutput,
+                JudgeRefreshSummaryMetricsOutput,
                 OpsCreateDebateTopicInput, OpsCreateDebateSessionInput,
                 OpsUpdateDebateTopicInput, OpsUpdateDebateSessionInput,
                 UpsertOpsRoleInput, OpsRoleAssignment, ListOpsRoleAssignmentsOutput,
