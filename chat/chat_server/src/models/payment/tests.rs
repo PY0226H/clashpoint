@@ -201,6 +201,10 @@ fn assert_order_query_verified(out: &GetIapOrderByTransactionOutput, expected_pr
     assert!(order.credited);
 }
 
+fn assert_payment_conflict(err: &AppError) {
+    assert!(matches!(err, AppError::PaymentConflict(_)));
+}
+
 #[test]
 fn extract_receipt_records_should_collect_both_paths() {
     let payload = json!({
@@ -506,7 +510,7 @@ async fn verify_iap_order_should_reject_cross_user_transaction_replay() -> Resul
         .verify_iap_order(&user2, verify_input("tx-replay-1", "mock_ok_receipt"))
         .await
         .expect_err("cross user replay should fail");
-    assert!(matches!(err, AppError::PaymentConflict(_)));
+    assert_payment_conflict(&err);
     Ok(())
 }
 
@@ -603,6 +607,6 @@ async fn get_iap_order_by_transaction_should_return_conflict_for_other_user() ->
         )
         .await
         .expect_err("cross user query should fail");
-    assert!(matches!(err, AppError::PaymentConflict(_)));
+    assert_payment_conflict(&err);
     Ok(())
 }
