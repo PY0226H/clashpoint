@@ -3,8 +3,8 @@ use super::receipt_verify::{
     select_matching_record, verify_receipt, ReceiptRecord, ReceiptVerifyResult,
 };
 use super::types::{
-    GetIapOrderByTransaction, ListIapProducts, ListWalletLedger, VerifyIapOrderInput,
-    VerifyIapOrderOutput, WalletLedgerItem,
+    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, ListIapProducts, ListWalletLedger,
+    VerifyIapOrderInput, VerifyIapOrderOutput, WalletLedgerItem,
 };
 use crate::config::PaymentConfig;
 use crate::{AppError, AppState};
@@ -118,6 +118,22 @@ async fn query_wallet_ledger(
         .map_err(Into::into)
 }
 
+async fn query_order_snapshot(
+    state: &AppState,
+    user: &User,
+    transaction_id: &str,
+) -> Result<GetIapOrderByTransactionOutput> {
+    state
+        .get_iap_order_by_transaction(
+            user,
+            GetIapOrderByTransaction {
+                transaction_id: transaction_id.to_string(),
+            },
+        )
+        .await
+        .map_err(Into::into)
+}
+
 fn assert_order_output(
     out: &VerifyIapOrderOutput,
     expected_status: &str,
@@ -170,6 +186,19 @@ fn assert_apple_verify_request_payload(payload: &Value, expected_receipt_data: &
             .and_then(Value::as_bool),
         Some(true)
     );
+}
+
+fn assert_order_query_not_found(out: &GetIapOrderByTransactionOutput) {
+    assert!(!out.found);
+    assert!(out.order.is_none());
+}
+
+fn assert_order_query_verified(out: &GetIapOrderByTransactionOutput, expected_product_id: &str) {
+    assert!(out.found);
+    let order = out.order.as_ref().expect("order should exist");
+    assert_eq!(order.status, "verified");
+    assert_eq!(order.product_id, expected_product_id);
+    assert!(order.credited);
 }
 
 #[test]
@@ -515,15 +544,8 @@ async fn verify_iap_order_should_allow_retry_after_transient_apple_status() -> R
     assert!(matches!(first_err, AppError::PaymentError(_)));
     assert!(first_err.to_string().contains("transient status 21005"));
 
-    let first_query = state
-        .get_iap_order_by_transaction(
-            &user,
-            GetIapOrderByTransaction {
-                transaction_id: "tx-apple-retry-1".to_string(),
-            },
-        )
-        .await?;
-    assert!(!first_query.found);
+    let first_query = query_order_snapshot(&state, &user, "tx-apple-retry-1").await?;
+    assert_order_query_not_found(&first_query);
 
     let second = state.verify_iap_order(&user, input).await?;
     assert_order_output(&second, "verified", "apple", true, 60);
@@ -538,16 +560,8 @@ async fn verify_iap_order_should_allow_retry_after_transient_apple_status() -> R
 async fn get_iap_order_by_transaction_should_return_not_found_for_missing_tx() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let user = load_user(&state, 1).await?;
-    let out = state
-        .get_iap_order_by_transaction(
-            &user,
-            GetIapOrderByTransaction {
-                transaction_id: "tx-not-exist-1".to_string(),
-            },
-        )
-        .await?;
-    assert!(!out.found);
-    assert!(out.order.is_none());
+    let out = query_order_snapshot(&state, &user, "tx-not-exist-1").await?;
+    assert_order_query_not_found(&out);
     Ok(())
 }
 
@@ -563,19 +577,8 @@ async fn get_iap_order_by_transaction_should_return_verified_snapshot() -> Resul
         )
         .await?;
 
-    let out = state
-        .get_iap_order_by_transaction(
-            &user,
-            GetIapOrderByTransaction {
-                transaction_id: "tx-query-verified-1".to_string(),
-            },
-        )
-        .await?;
-    assert!(out.found);
-    let order = out.order.expect("order should exist");
-    assert_eq!(order.status, "verified");
-    assert_eq!(order.product_id, "com.aicomm.coins.60");
-    assert!(order.credited);
+    let out = query_order_snapshot(&state, &user, "tx-query-verified-1").await?;
+    assert_order_query_verified(&out, "com.aicomm.coins.60");
     Ok(())
 }
 
