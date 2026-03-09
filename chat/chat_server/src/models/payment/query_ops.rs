@@ -26,7 +26,7 @@ impl AppState {
         user: &User,
         input: GetIapOrderByTransaction,
     ) -> Result<GetIapOrderByTransactionOutput, AppError> {
-        validate_identifier(&input.transaction_id, "transaction_id", 128)?;
+        super::helpers::validate_identifier(&input.transaction_id, "transaction_id", 128)?;
         let transaction_id = input.transaction_id.trim();
         let row: Option<IapOrderSnapshotRow> = sqlx::query_as(
             r#"
@@ -135,7 +135,7 @@ impl AppState {
         .bind(ws_id as i64)
         .bind(user_id as i64)
         .bind(input.last_id.map(|v| v as i64))
-        .bind(normalize_limit(input.limit))
+        .bind(super::helpers::normalize_limit(input.limit))
         .fetch_all(&self.pool)
         .await?;
 

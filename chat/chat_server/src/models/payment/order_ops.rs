@@ -28,10 +28,10 @@ impl AppState {
         user: &User,
         input: VerifyIapOrderInput,
     ) -> Result<VerifyIapOrderOutput, AppError> {
-        validate_identifier(&input.product_id, "product_id", 64)?;
-        validate_identifier(&input.transaction_id, "transaction_id", 128)?;
+        super::helpers::validate_identifier(&input.product_id, "product_id", 64)?;
+        super::helpers::validate_identifier(&input.transaction_id, "transaction_id", 128)?;
         if let Some(original) = input.original_transaction_id.as_deref() {
-            validate_identifier(original, "original_transaction_id", 128)?;
+            super::helpers::validate_identifier(original, "original_transaction_id", 128)?;
         }
         if input.receipt_data.len() > MAX_RECEIPT_LEN {
             return Err(AppError::PaymentError(format!(
@@ -125,7 +125,7 @@ impl AppState {
         .bind(&product.product_id)
         .bind(transaction_id)
         .bind(original_transaction_id.clone())
-        .bind(hash_receipt(receipt))
+        .bind(super::helpers::hash_receipt(receipt))
         .bind(&status)
         .bind(&verify_mode)
         .bind(verify_reason.clone())
