@@ -3,7 +3,7 @@ use serde_json::json;
 use sqlx::{Postgres, Transaction};
 
 pub(super) fn validate_order_reuse_constraints(
-    order: &IapOrderRow,
+    order: &super::types::IapOrderRow,
     user: &User,
     product_id: &str,
 ) -> Result<(), AppError> {
@@ -21,7 +21,7 @@ pub(super) fn validate_order_reuse_constraints(
 }
 
 pub(super) fn build_order_output_without_credit(
-    order: IapOrderRow,
+    order: super::types::IapOrderRow,
     wallet_balance: i64,
 ) -> VerifyIapOrderOutput {
     VerifyIapOrderOutput {
@@ -39,7 +39,7 @@ pub(super) fn build_order_output_without_credit(
 pub(super) async fn apply_wallet_credit_for_verified_order(
     tx: &mut Transaction<'_, Postgres>,
     user: &User,
-    inserted_order: &IapOrderRow,
+    inserted_order: &super::types::IapOrderRow,
     transaction_id: &str,
 ) -> Result<(bool, i64), AppError> {
     if inserted_order.status != "verified" {

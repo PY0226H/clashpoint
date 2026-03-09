@@ -70,7 +70,7 @@ impl AppState {
 
         let mut tx = self.pool.begin().await?;
 
-        let existing_order: Option<IapOrderRow> = sqlx::query_as(
+        let existing_order: Option<super::types::IapOrderRow> = sqlx::query_as(
             r#"
             SELECT id, ws_id, user_id, product_id, status, verify_mode, verify_reason, coins
             FROM iap_orders
@@ -109,7 +109,7 @@ impl AppState {
         let verify_mode = verify_result.verify_mode;
         let raw_payload = verify_result.raw_payload;
 
-        let inserted_order: Option<IapOrderRow> = sqlx::query_as(
+        let inserted_order: Option<super::types::IapOrderRow> = sqlx::query_as(
             r#"
             INSERT INTO iap_orders(
                 ws_id, user_id, platform, product_id, transaction_id, original_transaction_id,
@@ -136,7 +136,7 @@ impl AppState {
         .await?;
 
         let Some(inserted_order) = inserted_order else {
-            let order: IapOrderRow = sqlx::query_as(
+            let order: super::types::IapOrderRow = sqlx::query_as(
                 r#"
                 SELECT id, ws_id, user_id, product_id, status, verify_mode, verify_reason, coins
                 FROM iap_orders

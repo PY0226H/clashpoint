@@ -28,7 +28,7 @@ impl AppState {
     ) -> Result<GetIapOrderByTransactionOutput, AppError> {
         super::helpers::validate_identifier(&input.transaction_id, "transaction_id", 128)?;
         let transaction_id = input.transaction_id.trim();
-        let row: Option<IapOrderSnapshotRow> = sqlx::query_as(
+        let row: Option<super::types::IapOrderSnapshotRow> = sqlx::query_as(
             r#"
             SELECT
                 io.id,
