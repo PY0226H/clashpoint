@@ -210,6 +210,27 @@ fn assert_apple_verify_request_payload(payload: &Value, expected_receipt_data: &
     );
 }
 
+fn assert_raw_payload_endpoint(payload: &Value, expected_endpoint: &str) {
+    assert_eq!(
+        payload.get("endpoint").and_then(Value::as_str),
+        Some(expected_endpoint)
+    );
+}
+
+fn assert_raw_payload_status_code(payload: &Value, expected_status_code: i64) {
+    assert_eq!(
+        payload.get("statusCode").and_then(Value::as_i64),
+        Some(expected_status_code)
+    );
+}
+
+fn assert_raw_payload_matched_transaction(payload: &Value, expected_matched: bool) {
+    assert_eq!(
+        payload.get("matchedTransaction").and_then(Value::as_bool),
+        Some(expected_matched)
+    );
+}
+
 async fn assert_stub_request_paths(
     requests: &Arc<Mutex<Vec<(String, Value)>>>,
     expected_paths: &[&str],
@@ -344,16 +365,8 @@ async fn verify_receipt_should_use_apple_production_and_mark_verified() -> Resul
     .await?;
 
     assert_verify_receipt_output(&out, "verified", "apple", None);
-    assert_eq!(
-        out.raw_payload.get("endpoint").and_then(Value::as_str),
-        Some("production")
-    );
-    assert_eq!(
-        out.raw_payload
-            .get("matchedTransaction")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_raw_payload_endpoint(&out.raw_payload, "production");
+    assert_raw_payload_matched_transaction(&out.raw_payload, true);
 
     assert_single_prod_request_with_payload(&requests, "receipt_ok_1").await;
     server.abort();
@@ -392,14 +405,8 @@ async fn verify_receipt_should_fallback_to_sandbox_when_prod_returns_21007() -> 
     .await?;
 
     assert_verify_receipt_output(&out, "verified", "apple", None);
-    assert_eq!(
-        out.raw_payload.get("endpoint").and_then(Value::as_str),
-        Some("sandbox")
-    );
-    assert_eq!(
-        out.raw_payload.get("statusCode").and_then(Value::as_i64),
-        Some(0)
-    );
+    assert_raw_payload_endpoint(&out.raw_payload, "sandbox");
+    assert_raw_payload_status_code(&out.raw_payload, 0);
 
     assert_stub_request_paths(&requests, &["/prod", "/sandbox"]).await;
     server.abort();
@@ -460,12 +467,7 @@ async fn verify_receipt_should_reject_when_transaction_not_found_in_apple_payloa
         "apple",
         Some("transaction/product not found in apple receipt"),
     );
-    assert_eq!(
-        out.raw_payload
-            .get("matchedTransaction")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_raw_payload_matched_transaction(&out.raw_payload, false);
 
     assert_stub_request_paths(&requests, &["/prod"]).await;
     server.abort();
