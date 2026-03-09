@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    helpers, order_flow, receipt_verify,
+    types::{IapOrderRow, IapProduct, VerifyIapOrderInput, VerifyIapOrderOutput},
+    MAX_RECEIPT_LEN,
+};
+use crate::{AppError, AppState};
+use chat_core::User;
 use chrono::Utc;
 use sqlx::{Postgres, Transaction};
 
@@ -28,10 +34,10 @@ impl AppState {
         user: &User,
         input: VerifyIapOrderInput,
     ) -> Result<VerifyIapOrderOutput, AppError> {
-        super::helpers::validate_identifier(&input.product_id, "product_id", 64)?;
-        super::helpers::validate_identifier(&input.transaction_id, "transaction_id", 128)?;
+        helpers::validate_identifier(&input.product_id, "product_id", 64)?;
+        helpers::validate_identifier(&input.transaction_id, "transaction_id", 128)?;
         if let Some(original) = input.original_transaction_id.as_deref() {
-            super::helpers::validate_identifier(original, "original_transaction_id", 128)?;
+            helpers::validate_identifier(original, "original_transaction_id", 128)?;
         }
         if input.receipt_data.len() > MAX_RECEIPT_LEN {
             return Err(AppError::PaymentError(format!(
@@ -70,7 +76,7 @@ impl AppState {
 
         let mut tx = self.pool.begin().await?;
 
-        let existing_order: Option<super::types::IapOrderRow> = sqlx::query_as(
+        let existing_order: Option<IapOrderRow> = sqlx::query_as(
             r#"
             SELECT id, ws_id, user_id, product_id, status, verify_mode, verify_reason, coins
             FROM iap_orders
@@ -82,10 +88,10 @@ impl AppState {
         .await?;
 
         if let Some(order) = existing_order {
-            super::order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
+            order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.ws_id, user.id).await?;
             tx.commit().await?;
-            return Ok(super::order_flow::build_order_output_without_credit(
+            return Ok(order_flow::build_order_output_without_credit(
                 order,
                 wallet_balance,
             ));
@@ -109,7 +115,7 @@ impl AppState {
         let verify_mode = verify_result.verify_mode;
         let raw_payload = verify_result.raw_payload;
 
-        let inserted_order: Option<super::types::IapOrderRow> = sqlx::query_as(
+        let inserted_order: Option<IapOrderRow> = sqlx::query_as(
             r#"
             INSERT INTO iap_orders(
                 ws_id, user_id, platform, product_id, transaction_id, original_transaction_id,
@@ -125,7 +131,7 @@ impl AppState {
         .bind(&product.product_id)
         .bind(transaction_id)
         .bind(original_transaction_id.clone())
-        .bind(super::helpers::hash_receipt(receipt))
+        .bind(helpers::hash_receipt(receipt))
         .bind(&status)
         .bind(&verify_mode)
         .bind(verify_reason.clone())
@@ -136,7 +142,7 @@ impl AppState {
         .await?;
 
         let Some(inserted_order) = inserted_order else {
-            let order: super::types::IapOrderRow = sqlx::query_as(
+            let order: IapOrderRow = sqlx::query_as(
                 r#"
                 SELECT id, ws_id, user_id, product_id, status, verify_mode, verify_reason, coins
                 FROM iap_orders
@@ -146,16 +152,16 @@ impl AppState {
             .bind(transaction_id)
             .fetch_one(&mut *tx)
             .await?;
-            super::order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
+            order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.ws_id, user.id).await?;
             tx.commit().await?;
-            return Ok(super::order_flow::build_order_output_without_credit(
+            return Ok(order_flow::build_order_output_without_credit(
                 order,
                 wallet_balance,
             ));
         };
 
-        let (credited, wallet_balance) = super::order_flow::apply_wallet_credit_for_verified_order(
+        let (credited, wallet_balance) = order_flow::apply_wallet_credit_for_verified_order(
             &mut tx,
             user,
             &inserted_order,

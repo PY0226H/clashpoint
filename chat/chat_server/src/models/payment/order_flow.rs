@@ -1,9 +1,14 @@
-use super::*;
+use super::{
+    order_ops,
+    types::{IapOrderRow, VerifyIapOrderOutput},
+};
+use crate::AppError;
+use chat_core::User;
 use serde_json::json;
 use sqlx::{Postgres, Transaction};
 
 pub(super) fn validate_order_reuse_constraints(
-    order: &super::types::IapOrderRow,
+    order: &IapOrderRow,
     user: &User,
     product_id: &str,
 ) -> Result<(), AppError> {
@@ -21,7 +26,7 @@ pub(super) fn validate_order_reuse_constraints(
 }
 
 pub(super) fn build_order_output_without_credit(
-    order: super::types::IapOrderRow,
+    order: IapOrderRow,
     wallet_balance: i64,
 ) -> VerifyIapOrderOutput {
     VerifyIapOrderOutput {
@@ -39,11 +44,11 @@ pub(super) fn build_order_output_without_credit(
 pub(super) async fn apply_wallet_credit_for_verified_order(
     tx: &mut Transaction<'_, Postgres>,
     user: &User,
-    inserted_order: &super::types::IapOrderRow,
+    inserted_order: &IapOrderRow,
     transaction_id: &str,
 ) -> Result<(bool, i64), AppError> {
     if inserted_order.status != "verified" {
-        let balance = super::order_ops::wallet_balance_in_tx(tx, user.ws_id, user.id).await?;
+        let balance = order_ops::wallet_balance_in_tx(tx, user.ws_id, user.id).await?;
         return Ok((false, balance));
     }
 
