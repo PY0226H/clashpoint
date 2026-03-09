@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - release/**
     tags:
       - v*
   pull_request:
@@ -104,12 +105,58 @@ jobs:
             --root "$GITHUB_WORKSPACE" \
             --python-bin python \
             --report-out "$GITHUB_WORKSPACE/docs/dev_plan/供应链安全门禁报告-ci-${GITHUB_SHA}.md"
+      - name: Supply chain allowlist expiry patrol
+        run: |
+          bash scripts/release/supply_chain_allowlist_expiry_check.sh \
+            --root "$GITHUB_WORKSPACE" \
+            --warning-days 7 \
+            --report-out "$GITHUB_WORKSPACE/docs/dev_plan/供应链allowlist到期巡检报告-ci-${GITHUB_SHA}.md"
+      - name: Release preflight hard enforcement
+        if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')
+        run: |
+          CHAT_PRECHECK="$RUNNER_TEMP/chat.release.preflight.yml"
+          AI_ENV_PRECHECK="$RUNNER_TEMP/ai_judge.release.preflight.env"
+          cat >"$CHAT_PRECHECK" <<'YAML'
+          payment:
+            verify_mode: apple
+            apple_verify_url_prod: https://buy.itunes.apple.com/verifyReceipt
+            apple_verify_url_sandbox: https://sandbox.itunes.apple.com/verifyReceipt
+          YAML
+          cat >"$AI_ENV_PRECHECK" <<'ENV'
+          AI_JUDGE_PROVIDER=openai
+          AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=false
+          OPENAI_API_KEY=release-preflight-placeholder
+          ENV
+
+          bash scripts/release/appstore_preflight_check.sh \
+            --runtime-env production \
+            --root "$GITHUB_WORKSPACE" \
+            --chat-config "$CHAT_PRECHECK" \
+            --ai-judge-env "$AI_ENV_PRECHECK" \
+            --enforce-supply-chain-security \
+            --supply-chain-report-out "$GITHUB_WORKSPACE/docs/dev_plan/供应链安全门禁报告-preflight-${GITHUB_SHA}.md" \
+            --supply-chain-cargo-allowlist "$GITHUB_WORKSPACE/scripts/release/security_allowlists/cargo_deny_advisories_allowlist.csv" \
+            --supply-chain-pip-allowlist "$GITHUB_WORKSPACE/scripts/release/security_allowlists/pip_audit_vulns_allowlist.csv"
       - name: Upload supply chain security report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: supply-chain-security-report-${{ github.sha }}
           path: docs/dev_plan/供应链安全门禁报告-ci-${{ github.sha }}.md
+          if-no-files-found: warn
+      - name: Upload supply chain allowlist expiry report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-allowlist-expiry-report-${{ github.sha }}
+          path: docs/dev_plan/供应链allowlist到期巡检报告-ci-${{ github.sha }}.md
+          if-no-files-found: warn
+      - name: Upload release preflight supply chain report
+        if: always() && (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-preflight-report-${{ github.sha }}
+          path: docs/dev_plan/供应链安全门禁报告-preflight-${{ github.sha }}.md
           if-no-files-found: warn
       - name: Generate a changelog
         uses: orhun/git-cliff-action@v2
