@@ -9,6 +9,11 @@ mod dispatch_worker;
 
 const DISPATCH_MESSAGE_WINDOW_LIMIT: i64 = 100;
 const DISPATCH_ERROR_MAX_LEN: usize = 1000;
+const DISPATCH_TRACE_ID_PREFIX: &str = "judge-dispatch";
+const DISPATCH_IDEMPOTENCY_KEY_PREFIX: &str = "judge-dispatch";
+const DISPATCH_JUDGE_POLICY_VERSION: &str = "v2-default";
+const DISPATCH_TOPIC_DOMAIN: &str = "default";
+const DISPATCH_RETRIEVAL_PROFILE: &str = "hybrid_v1";
 
 #[derive(Debug, Clone)]
 pub(crate) struct JudgeDispatchTrigger {
@@ -165,7 +170,6 @@ struct SessionMessageRow {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchRequest {
     job: AiJudgeDispatchJob,
     session: AiJudgeDispatchSession,
@@ -173,10 +177,14 @@ struct AiJudgeDispatchRequest {
     messages: Vec<AiJudgeDispatchMessage>,
     message_window_size: i64,
     rubric_version: String,
+    trace_id: String,
+    idempotency_key: String,
+    judge_policy_version: String,
+    topic_domain: String,
+    retrieval_profile: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchJob {
     job_id: u64,
     ws_id: u64,
@@ -188,7 +196,6 @@ struct AiJudgeDispatchJob {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchSession {
     status: String,
     scheduled_start_at: DateTime<Utc>,
@@ -197,7 +204,6 @@ struct AiJudgeDispatchSession {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchTopic {
     title: String,
     description: String,
@@ -208,7 +214,6 @@ struct AiJudgeDispatchTopic {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchMessage {
     message_id: u64,
     speaker_tag: String,
@@ -307,6 +312,14 @@ fn build_dispatch_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
     format!("{base}/{path}")
+}
+
+fn build_dispatch_trace_id(job_id: i64) -> String {
+    format!("{DISPATCH_TRACE_ID_PREFIX}-{job_id}")
+}
+
+fn build_dispatch_idempotency_key(job_id: i64) -> String {
+    format!("{DISPATCH_IDEMPOTENCY_KEY_PREFIX}-{job_id}")
 }
 
 fn sanitize_error_message(err: &str) -> String {

@@ -203,7 +203,6 @@ pub struct SubmitDrawVoteOutput {
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct JudgeStageSummaryInput {
     pub stage_no: i32,
     pub from_message_id: Option<u64>,
@@ -238,7 +237,6 @@ pub struct JudgeStageSummariesMeta {
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SubmitJudgeReportInput {
     pub winner: String,
     pub pro_score: i32,
@@ -278,7 +276,6 @@ pub struct SubmitJudgeReportOutput {
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MarkJudgeJobFailedInput {
     pub error_message: String,
 }

@@ -190,10 +190,45 @@ async fn dispatch_payload_should_blind_user_id_and_use_speaker_tag() -> Result<(
     assert!(messages[0].get("userId").is_none());
     assert_eq!(
         messages[0]
-            .get("speakerTag")
+            .get("speaker_tag")
             .and_then(Value::as_str)
             .unwrap_or_default(),
         "speaker-1"
+    );
+    assert_eq!(
+        captured[0]
+            .get("trace_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "judge-dispatch-1"
+    );
+    assert_eq!(
+        captured[0]
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "judge-dispatch-1"
+    );
+    assert_eq!(
+        captured[0]
+            .get("judge_policy_version")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "v2-default"
+    );
+    assert_eq!(
+        captured[0]
+            .get("topic_domain")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "default"
+    );
+    assert_eq!(
+        captured[0]
+            .get("retrieval_profile")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "hybrid_v1"
     );
     Ok(())
 }
@@ -608,6 +643,12 @@ fn build_dispatch_url_should_join_base_and_path() {
         build_dispatch_url("http://127.0.0.1:8787", "internal/judge/dispatch"),
         "http://127.0.0.1:8787/internal/judge/dispatch"
     );
+}
+
+#[test]
+fn dispatch_trace_and_idempotency_key_should_be_stable() {
+    assert_eq!(build_dispatch_trace_id(42), "judge-dispatch-42");
+    assert_eq!(build_dispatch_idempotency_key(42), "judge-dispatch-42");
 }
 
 #[test]

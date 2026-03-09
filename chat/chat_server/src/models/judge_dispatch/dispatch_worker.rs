@@ -267,6 +267,11 @@ impl AppState {
             messages: dispatch_messages,
             message_window_size: DISPATCH_MESSAGE_WINDOW_LIMIT,
             rubric_version: "v1-logic-evidence-rebuttal-clarity".to_string(),
+            trace_id: build_dispatch_trace_id(job.id),
+            idempotency_key: build_dispatch_idempotency_key(job.id),
+            judge_policy_version: DISPATCH_JUDGE_POLICY_VERSION.to_string(),
+            topic_domain: DISPATCH_TOPIC_DOMAIN.to_string(),
+            retrieval_profile: DISPATCH_RETRIEVAL_PROFILE.to_string(),
         })
     }
 
@@ -295,6 +300,7 @@ impl AppState {
         let resp = client
             .post(&url)
             .header("x-ai-internal-key", &self.config.ai_judge.internal_key)
+            .header("x-trace-id", &payload.trace_id)
             .json(payload)
             .send()
             .await
