@@ -74,7 +74,7 @@ mod tests {
         let state = test_state()?;
         let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
         let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
-        let user_token = ek.sign(user.clone())?;
+        let user_token = ek.sign_access_token(user.id, user.ws_id, "sid-notify-ticket-test", 0)?;
         let notify_ticket = ek.sign_notify_ticket(user, 300)?;
 
         let app = Router::new()

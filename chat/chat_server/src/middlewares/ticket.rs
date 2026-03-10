@@ -81,7 +81,10 @@ mod tests {
         let mut user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
         user.ws_id = 1;
         user.ws_name = "acme".to_string();
-        let user_token = state.ek.sign(user.clone())?;
+        let user_token =
+            state
+                .ek
+                .sign_access_token(user.id, user.ws_id, "sid-file-ticket-test", 0)?;
         let file_ticket = state.ek.sign_file_ticket(user, 300)?;
 
         let app = Router::new()

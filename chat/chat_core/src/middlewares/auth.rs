@@ -166,7 +166,8 @@ mod tests {
         async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
             self.0
                 .dk
-                .verify(token)
+                .verify_access(token)
+                .map(|decoded| decoded.user)
                 .map_err(|e| e.to_auth_verify_error())
         }
     }
@@ -184,7 +185,10 @@ mod tests {
         let state = AppState(Arc::new(AppStateInner { ek, dk }));
 
         let user = User::new(1, "Tyr Chen", "tchen@acme.org");
-        let token = state.0.ek.sign(user)?;
+        let token = state
+            .0
+            .ek
+            .sign_access_token(user.id, user.ws_id, "sid-auth-test-1", 0)?;
 
         let app = Router::new()
             .route("/", get(handler))
@@ -238,7 +242,10 @@ mod tests {
         let state = AppState(Arc::new(AppStateInner { ek, dk }));
 
         let user = User::new(1, "Tyr Chen", "tchen@acme.org");
-        let token = state.0.ek.sign(user)?;
+        let token = state
+            .0
+            .ek
+            .sign_access_token(user.id, user.ws_id, "sid-auth-test-2", 0)?;
 
         let app = Router::new()
             .route("/", get(handler))
@@ -283,7 +290,10 @@ mod tests {
         let state = AppState(Arc::new(AppStateInner { ek, dk }));
 
         let user = User::new(1, "Tyr Chen", "tchen@acme.org");
-        let token = state.0.ek.sign(user)?;
+        let token = state
+            .0
+            .ek
+            .sign_access_token(user.id, user.ws_id, "sid-auth-test-3", 0)?;
 
         let app = Router::new()
             .route("/", get(auth_state_handler))

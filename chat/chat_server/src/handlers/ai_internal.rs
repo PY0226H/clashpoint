@@ -98,26 +98,6 @@ pub(crate) async fn get_redis_health_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
-/// Internal endpoint to inspect JWT legacy fallback retirement gate metrics.
-/// Deprecated: planned for removal in the next release.
-#[utoipa::path(
-    get,
-    path = "/api/internal/ai/infra/jwt/legacy-retirement-gate",
-    responses(
-        (status = 200, description = "JWT legacy retirement gate snapshot", body = crate::GetJwtLegacyRetirementGateOutput),
-        (status = 401, description = "Missing or invalid internal key"),
-    ),
-    security(
-        ("internal_key" = [])
-    )
-)]
-pub(crate) async fn get_jwt_legacy_retirement_gate_handler(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_jwt_legacy_retirement_gate();
-    Ok((StatusCode::OK, Json(ret)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,50 +197,6 @@ mod tests {
             )
             .await?;
         assert_eq!(authorized.status(), StatusCode::OK);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn get_jwt_legacy_retirement_gate_handler_should_require_internal_key_and_return_snapshot(
-    ) -> Result<()> {
-        let state = test_state()?;
-        let app = Router::new()
-            .route(
-                "/infra/jwt/legacy-retirement-gate",
-                get(get_jwt_legacy_retirement_gate_handler),
-            )
-            .layer(from_fn_with_state(
-                state.clone(),
-                crate::verify_ai_internal_key,
-            ))
-            .with_state(state);
-
-        let unauthorized = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/infra/jwt/legacy-retirement-gate")
-                    .body(Body::empty())?,
-            )
-            .await?;
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-        let authorized = app
-            .oneshot(
-                Request::builder()
-                    .uri("/infra/jwt/legacy-retirement-gate")
-                    .header("x-ai-internal-key", "secret-key")
-                    .body(Body::empty())?,
-            )
-            .await?;
-        assert_eq!(authorized.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(authorized.into_body(), usize::MAX).await?;
-        let payload: crate::GetJwtLegacyRetirementGateOutput = serde_json::from_slice(&body)?;
-        assert_eq!(payload.implementation, "jsonwebtoken");
-        assert!(!payload.legacy_fallback_enabled);
-        assert!(payload.gate_ready);
-        assert!(payload.verify_attempt_total >= payload.verify_success_total);
         Ok(())
     }
 }

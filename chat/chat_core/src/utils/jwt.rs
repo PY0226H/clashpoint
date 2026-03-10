@@ -455,11 +455,6 @@ impl EncodingKey {
         }
     }
 
-    pub fn sign(&self, user: impl Into<User>) -> Result<String, JwtError> {
-        let user = user.into();
-        self.sign_access_token(user.id, user.ws_id, "legacy", 0)
-    }
-
     pub fn sign_access_token(
         &self,
         user_id: i64,
@@ -697,11 +692,6 @@ impl DecodingKey {
         })
     }
 
-    #[allow(unused)]
-    pub fn verify(&self, token: &str) -> Result<User, JwtError> {
-        Ok(self.verify_access(token)?.user)
-    }
-
     pub fn verify_file_ticket(&self, token: &str) -> Result<User, JwtError> {
         self.verify_ticket_with_audience(token, JWT_AUD_FILE_TICKET)
     }
@@ -817,8 +807,8 @@ mod tests {
         let dk = DecodingKey::load(decoding_pem)?;
 
         let user = User::new(1, "Tyr Chen", "tchen@acme.org");
-        let token = ek.sign(user.clone())?;
-        let user2 = dk.verify(&token)?;
+        let token = ek.sign_access_token(user.id, user.ws_id, "sid-sign-verify", 0)?;
+        let user2 = dk.verify_access(&token)?.user;
 
         assert_eq!(user.id, user2.id);
         assert_eq!(user.ws_id, user2.ws_id);
@@ -835,12 +825,12 @@ mod tests {
         let user = User::new(1, "Tyr Chen", "tchen@acme.org");
 
         let file_token = ek.sign_file_ticket(user.clone(), 300)?;
-        assert!(dk.verify(&file_token).is_err());
+        assert!(dk.verify_access(&file_token).is_err());
         let file_user = dk.verify_file_ticket(&file_token)?;
         assert_eq!(file_user.id, user.id);
 
         let notify_token = ek.sign_notify_ticket(user.clone(), 300)?;
-        assert!(dk.verify(&notify_token).is_err());
+        assert!(dk.verify_access(&notify_token).is_err());
         let notify_user = dk.verify_notify_ticket(&notify_token)?;
         assert_eq!(notify_user.id, user.id);
 
@@ -873,7 +863,7 @@ mod tests {
             &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
         )?;
 
-        assert!(dk.verify(&token).is_err());
+        assert!(dk.verify_access(&token).is_err());
         Ok(())
     }
 
@@ -903,7 +893,7 @@ mod tests {
             &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
         )?;
 
-        assert!(dk.verify(&token).is_err());
+        assert!(dk.verify_access(&token).is_err());
         Ok(())
     }
 
@@ -932,7 +922,7 @@ mod tests {
             &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
         )?;
 
-        assert!(dk.verify(&token).is_err());
+        assert!(dk.verify_access(&token).is_err());
         Ok(())
     }
 
@@ -962,7 +952,7 @@ mod tests {
             &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
         )?;
 
-        assert!(dk.verify(&token).is_err());
+        assert!(dk.verify_access(&token).is_err());
         Ok(())
     }
 
@@ -974,8 +964,8 @@ mod tests {
         let ek = EncodingKey::load(encoding_pem)?;
         let dk = DecodingKey::load(decoding_pem)?;
         let user = issue_test_user();
-        let token = ek.sign(user)?;
-        let verified = dk.verify(&token)?;
+        let token = ek.sign_access_token(user.id, user.ws_id, "sid-metrics", 0)?;
+        let verified = dk.verify_access(&token)?.user;
         assert_eq!(verified.id, 1);
         let snapshot = get_jwt_verify_metrics_snapshot();
         assert_eq!(snapshot.verify_attempt_total, 1);
@@ -1011,7 +1001,7 @@ mod tests {
             &claims,
             &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
         )?;
-        assert!(dk.verify(&token).is_err());
+        assert!(dk.verify_access(&token).is_err());
 
         let snapshot = get_jwt_verify_metrics_snapshot();
         assert_eq!(snapshot.verify_attempt_total, 1);

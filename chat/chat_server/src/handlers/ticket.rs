@@ -85,8 +85,8 @@ mod tests {
         let ret: AccessTicketsOutput = serde_json::from_slice(&body)?;
 
         assert_eq!(ret.expires_in_secs, ACCESS_TICKET_TTL_SECS);
-        assert!(state.dk.verify(&ret.file_token).is_err());
-        assert!(state.dk.verify(&ret.notify_token).is_err());
+        assert!(state.dk.verify_access(&ret.file_token).is_err());
+        assert!(state.dk.verify_access(&ret.notify_token).is_err());
         assert_eq!(state.dk.verify_file_ticket(&ret.file_token)?.id, user.id);
         assert_eq!(
             state.dk.verify_notify_ticket(&ret.notify_token)?.id,

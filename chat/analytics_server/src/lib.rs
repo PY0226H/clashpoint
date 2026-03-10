@@ -107,7 +107,8 @@ impl Deref for AppState {
 impl TokenVerify for AppState {
     async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
         self.dk
-            .verify(token)
+            .verify_access(token)
+            .map(|decoded| decoded.user)
             .map_err(|err| err.to_auth_verify_error())
     }
 }
