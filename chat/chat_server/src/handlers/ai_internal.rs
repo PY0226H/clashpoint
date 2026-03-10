@@ -99,6 +99,7 @@ pub(crate) async fn get_redis_health_handler(
 }
 
 /// Internal endpoint to inspect JWT legacy fallback retirement gate metrics.
+/// Deprecated: planned for removal in the next release.
 #[utoipa::path(
     get,
     path = "/api/internal/ai/infra/jwt/legacy-retirement-gate",

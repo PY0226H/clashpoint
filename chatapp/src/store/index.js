@@ -1128,7 +1128,7 @@ export default createStore({
 });
 
 async function loadState(response, self, commit) {
-  const token = response?.data?.accessToken || response?.data?.token;
+  const token = response?.data?.accessToken;
   const user = response?.data?.user;
   if (!token || !user) {
     throw new Error('missing access token or user profile in auth response');

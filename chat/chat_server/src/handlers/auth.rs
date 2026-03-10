@@ -32,7 +32,6 @@ pub struct AuthOutput {
     token_type: String,
     expires_in_secs: u64,
     user: User,
-    token: String,
 }
 
 #[derive(Debug, Serialize, ToSchema, Deserialize)]
@@ -137,7 +136,6 @@ pub(crate) async fn signup_handler(
         token_type: "Bearer".to_string(),
         expires_in_secs: ACCESS_TOKEN_TTL_SECS,
         user,
-        token: issued.access_token,
     });
     Ok((StatusCode::CREATED, resp_headers, body))
 }
@@ -197,7 +195,6 @@ pub(crate) async fn signin_handler(
             token_type: "Bearer".to_string(),
             expires_in_secs: ACCESS_TOKEN_TTL_SECS,
             user,
-            token: issued.access_token,
         }),
     )
         .into_response())
@@ -936,7 +933,6 @@ mod tests {
         let ret: AuthOutput = serde_json::from_slice(&body)?;
         assert!(!ret.access_token.is_empty());
         assert_eq!(ret.token_type, "Bearer");
-        assert_eq!(ret.token, ret.access_token);
         Ok(())
     }
 

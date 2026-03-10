@@ -17,8 +17,9 @@ use tokio::net::TcpListener;
 const WILD_ADDR: &str = "0.0.0.0:0";
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AuthToken {
-    token: String,
+    access_token: String,
 }
 
 struct TestServer {
@@ -1124,7 +1125,7 @@ impl TestServer {
         Ok(ApiSession {
             addr: self.addr,
             http: self.http.clone(),
-            token: auth.token,
+            token: auth.access_token,
         })
     }
 }

@@ -28,8 +28,9 @@ test1:
 */
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AuthToken {
-    token: String,
+    access_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,7 +169,7 @@ impl ChatServer {
 
         assert_eq!(res.status(), 200);
         let ret: AuthToken = res.json().await?;
-        Ok(ret.token)
+        Ok(ret.access_token)
     }
 
     async fn create_chat(&self) -> Result<Chat> {
