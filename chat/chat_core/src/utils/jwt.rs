@@ -12,11 +12,16 @@ use std::{
 };
 use thiserror::Error;
 use tracing::warn;
+use uuid::Uuid;
 
-const JWT_DURATION: u64 = 60 * 60 * 24 * 7; // 1 week
+use crate::middlewares::AuthVerifyError;
+
+const JWT_ACCESS_DURATION: u64 = 60 * 15; // 15 minutes
+const JWT_REFRESH_DURATION: u64 = 60 * 60 * 24 * 30; // 30 days
 const JWT_IMPL_ENV: &str = "JWT_IMPL";
 pub const JWT_ISS: &str = "chat_server";
 pub const JWT_AUD: &str = "chat_web";
+pub const JWT_AUD_REFRESH: &str = "chat_refresh";
 pub const JWT_AUD_FILE_TICKET: &str = "chat_file_ticket";
 pub const JWT_AUD_NOTIFY_TICKET: &str = "chat_notify_ticket";
 
@@ -50,6 +55,17 @@ pub struct JwtVerifyMetricsSnapshot {
 pub enum JwtError {
     #[error("jsonwebtoken error: {0}")]
     JsonWebToken(#[from] jsonwebtoken::errors::Error),
+}
+
+impl JwtError {
+    pub fn to_auth_verify_error(&self) -> AuthVerifyError {
+        match self {
+            Self::JsonWebToken(err) => match err.kind() {
+                JsonWebTokenErrorKind::ExpiredSignature => AuthVerifyError::AccessExpired,
+                _ => AuthVerifyError::AccessInvalid,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,7 +284,46 @@ impl JwtImplementation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct UserClaims {
+struct AccessClaims {
+    pub sub: String,
+    pub ws_id: i64,
+    pub sid: String,
+    pub jti: String,
+    pub ver: i64,
+    pub iss: String,
+    pub aud: String,
+    pub exp: usize,
+    pub nbf: usize,
+    pub iat: usize,
+}
+
+impl AccessClaims {
+    fn from_parts(
+        user_id: i64,
+        ws_id: i64,
+        sid: impl Into<String>,
+        jti: impl Into<String>,
+        ver: i64,
+        ttl_secs: u64,
+    ) -> Self {
+        let now = Utc::now().timestamp().max(0) as usize;
+        Self {
+            sub: user_id.to_string(),
+            ws_id,
+            sid: sid.into(),
+            jti: jti.into(),
+            ver: ver.max(0),
+            iss: JWT_ISS.to_string(),
+            aud: JWT_AUD.to_string(),
+            exp: now + ttl_secs as usize,
+            nbf: now,
+            iat: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TicketClaims {
     pub id: i64,
     pub ws_id: i64,
     pub ws_name: String,
@@ -283,7 +338,7 @@ struct UserClaims {
     pub iat: usize,
 }
 
-impl UserClaims {
+impl TicketClaims {
     fn from_user(user: User, audience: &str, ttl_secs: u64) -> Self {
         let now = Utc::now().timestamp().max(0) as usize;
         Self {
@@ -303,8 +358,60 @@ impl UserClaims {
     }
 }
 
-impl From<UserClaims> for User {
-    fn from(value: UserClaims) -> Self {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshClaims {
+    pub sub: String,
+    pub sid: String,
+    pub family_id: String,
+    pub jti: String,
+    pub iss: String,
+    pub aud: String,
+    pub exp: usize,
+    pub nbf: usize,
+    pub iat: usize,
+}
+
+impl RefreshClaims {
+    fn from_parts(
+        user_id: i64,
+        sid: impl Into<String>,
+        family_id: impl Into<String>,
+        jti: impl Into<String>,
+        ttl_secs: u64,
+    ) -> Self {
+        let now = Utc::now().timestamp().max(0) as usize;
+        Self {
+            sub: user_id.to_string(),
+            sid: sid.into(),
+            family_id: family_id.into(),
+            jti: jti.into(),
+            iss: JWT_ISS.to_string(),
+            aud: JWT_AUD_REFRESH.to_string(),
+            exp: now + ttl_secs as usize,
+            nbf: now,
+            iat: now,
+        }
+    }
+}
+
+pub struct DecodedAccessToken {
+    pub user: User,
+    pub sid: String,
+    pub jti: String,
+    pub ver: i64,
+    pub exp: usize,
+}
+
+pub struct DecodedRefreshToken {
+    pub user_id: i64,
+    pub sid: String,
+    pub family_id: String,
+    pub jti: String,
+    pub exp: usize,
+}
+
+impl From<TicketClaims> for User {
+    fn from(value: TicketClaims) -> Self {
         Self {
             id: value.id,
             ws_id: value.ws_id,
@@ -349,7 +456,67 @@ impl EncodingKey {
     }
 
     pub fn sign(&self, user: impl Into<User>) -> Result<String, JwtError> {
-        self.sign_with_audience(user, JWT_AUD, JWT_DURATION)
+        let user = user.into();
+        self.sign_access_token(user.id, user.ws_id, "legacy", 0)
+    }
+
+    pub fn sign_access_token(
+        &self,
+        user_id: i64,
+        ws_id: i64,
+        sid: impl Into<String>,
+        token_version: i64,
+    ) -> Result<String, JwtError> {
+        self.sign_access_token_with_jti(
+            user_id,
+            ws_id,
+            sid,
+            token_version,
+            Uuid::now_v7().to_string(),
+            JWT_ACCESS_DURATION,
+        )
+    }
+
+    pub fn sign_access_token_with_jti(
+        &self,
+        user_id: i64,
+        ws_id: i64,
+        sid: impl Into<String>,
+        token_version: i64,
+        jti: impl Into<String>,
+        ttl_secs: u64,
+    ) -> Result<String, JwtError> {
+        let claims = AccessClaims::from_parts(user_id, ws_id, sid, jti, token_version, ttl_secs);
+        let header = Header::new(Algorithm::EdDSA);
+        Ok(encode(&header, &claims, &self.jsonwebtoken)?)
+    }
+
+    pub fn sign_refresh_token(
+        &self,
+        user_id: i64,
+        sid: impl Into<String>,
+        family_id: impl Into<String>,
+    ) -> Result<String, JwtError> {
+        self.sign_refresh_token_with_jti(
+            user_id,
+            sid,
+            family_id,
+            Uuid::now_v7().to_string(),
+            JWT_REFRESH_DURATION,
+        )
+    }
+
+    pub fn sign_refresh_token_with_jti(
+        &self,
+        user_id: i64,
+        sid: impl Into<String>,
+        family_id: impl Into<String>,
+        jti: impl Into<String>,
+        ttl_secs: u64,
+    ) -> Result<String, JwtError> {
+        let claims = RefreshClaims::from_parts(user_id, sid, family_id, jti, ttl_secs);
+        let header = Header::new(Algorithm::EdDSA);
+        Ok(encode(&header, &claims, &self.jsonwebtoken)?)
     }
 
     pub fn sign_with_audience(
@@ -359,7 +526,7 @@ impl EncodingKey {
         ttl_secs: u64,
     ) -> Result<String, JwtError> {
         let user = user.into();
-        let claims = UserClaims::from_user(user, audience, ttl_secs);
+        let claims = TicketClaims::from_user(user, audience, ttl_secs);
         let header = Header::new(Algorithm::EdDSA);
         Ok(encode(&header, &claims, &self.jsonwebtoken)?)
     }
@@ -385,7 +552,15 @@ impl EncodingKey {
         user: impl Into<User>,
         ttl_secs: u64,
     ) -> Result<String, JwtError> {
-        self.sign_with_audience(user, JWT_AUD, ttl_secs)
+        let user = user.into();
+        self.sign_access_token_with_jti(
+            user.id,
+            user.ws_id,
+            "short-lived",
+            0,
+            Uuid::now_v7().to_string(),
+            ttl_secs,
+        )
     }
 }
 
@@ -408,7 +583,11 @@ impl DecodingKey {
         }
     }
 
-    fn verify_with_jsonwebtoken(&self, token: &str, audience: &str) -> Result<User, JwtError> {
+    fn verify_ticket_with_jsonwebtoken(
+        &self,
+        token: &str,
+        audience: &str,
+    ) -> Result<User, JwtError> {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.set_issuer(&[JWT_ISS]);
         validation.set_audience(&[audience]);
@@ -420,13 +599,13 @@ impl DecodingKey {
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
-        let claims = decode::<UserClaims>(token, &self.jsonwebtoken, &validation)?;
+        let claims = decode::<TicketClaims>(token, &self.jsonwebtoken, &validation)?;
         Ok(claims.claims.into())
     }
 
-    fn verify_with_audience(&self, token: &str, audience: &str) -> Result<User, JwtError> {
+    fn verify_ticket_with_audience(&self, token: &str, audience: &str) -> Result<User, JwtError> {
         JWT_VERIFY_METRICS.observe_attempt();
-        let result = self.verify_with_jsonwebtoken(token, audience);
+        let result = self.verify_ticket_with_jsonwebtoken(token, audience);
 
         match &result {
             Ok(_) => JWT_VERIFY_METRICS.observe_success(),
@@ -436,17 +615,99 @@ impl DecodingKey {
         result
     }
 
+    pub fn verify_access(&self, token: &str) -> Result<DecodedAccessToken, JwtError> {
+        JWT_VERIFY_METRICS.observe_attempt();
+        let result = self.verify_access_inner(token);
+        match &result {
+            Ok(_) => JWT_VERIFY_METRICS.observe_success(),
+            Err(JwtError::JsonWebToken(err)) => JWT_VERIFY_METRICS.observe_error_jsonwebtoken(err),
+        }
+        result
+    }
+
+    fn verify_access_inner(&self, token: &str) -> Result<DecodedAccessToken, JwtError> {
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[JWT_ISS]);
+        validation.set_audience(&[JWT_AUD]);
+        validation.required_spec_claims = HashSet::from_iter(
+            [
+                "iss", "aud", "sub", "ws_id", "sid", "jti", "ver", "exp", "nbf", "iat",
+            ]
+            .iter()
+            .map(ToString::to_string),
+        );
+        validation.validate_exp = true;
+        validation.validate_nbf = true;
+        let claims = decode::<AccessClaims>(token, &self.jsonwebtoken, &validation)?;
+        let user_id =
+            claims.claims.sub.parse::<i64>().map_err(|_| {
+                jsonwebtoken::errors::Error::from(JsonWebTokenErrorKind::InvalidToken)
+            })?;
+        Ok(DecodedAccessToken {
+            user: User {
+                id: user_id,
+                ws_id: claims.claims.ws_id,
+                ws_name: String::new(),
+                fullname: String::new(),
+                email: String::new(),
+                password_hash: None,
+                is_bot: false,
+                created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0)
+                    .unwrap_or_else(Utc::now),
+            },
+            sid: claims.claims.sid,
+            jti: claims.claims.jti,
+            ver: claims.claims.ver.max(0),
+            exp: claims.claims.exp,
+        })
+    }
+
+    pub fn verify_refresh(&self, token: &str) -> Result<DecodedRefreshToken, JwtError> {
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[JWT_ISS]);
+        validation.set_audience(&[JWT_AUD_REFRESH]);
+        validation.required_spec_claims = HashSet::from_iter(
+            [
+                "iss",
+                "aud",
+                "sub",
+                "sid",
+                "family_id",
+                "jti",
+                "exp",
+                "nbf",
+                "iat",
+            ]
+            .iter()
+            .map(ToString::to_string),
+        );
+        validation.validate_exp = true;
+        validation.validate_nbf = true;
+        let claims = decode::<RefreshClaims>(token, &self.jsonwebtoken, &validation)?;
+        let user_id =
+            claims.claims.sub.parse::<i64>().map_err(|_| {
+                jsonwebtoken::errors::Error::from(JsonWebTokenErrorKind::InvalidToken)
+            })?;
+        Ok(DecodedRefreshToken {
+            user_id,
+            sid: claims.claims.sid,
+            family_id: claims.claims.family_id,
+            jti: claims.claims.jti,
+            exp: claims.claims.exp,
+        })
+    }
+
     #[allow(unused)]
     pub fn verify(&self, token: &str) -> Result<User, JwtError> {
-        self.verify_with_audience(token, JWT_AUD)
+        Ok(self.verify_access(token)?.user)
     }
 
     pub fn verify_file_ticket(&self, token: &str) -> Result<User, JwtError> {
-        self.verify_with_audience(token, JWT_AUD_FILE_TICKET)
+        self.verify_ticket_with_audience(token, JWT_AUD_FILE_TICKET)
     }
 
     pub fn verify_notify_ticket(&self, token: &str) -> Result<User, JwtError> {
-        self.verify_with_audience(token, JWT_AUD_NOTIFY_TICKET)
+        self.verify_ticket_with_audience(token, JWT_AUD_NOTIFY_TICKET)
     }
 }
 
@@ -458,13 +719,11 @@ mod tests {
 
     #[derive(Debug, Serialize)]
     struct MissingIatClaims {
-        id: i64,
+        sub: String,
         ws_id: i64,
-        ws_name: String,
-        fullname: String,
-        email: String,
-        is_bot: bool,
-        created_at: chrono::DateTime<chrono::Utc>,
+        sid: String,
+        jti: String,
+        ver: i64,
         iss: String,
         aud: String,
         exp: usize,
@@ -473,13 +732,11 @@ mod tests {
 
     #[derive(Debug, Serialize)]
     struct NumericAudClaims {
-        id: i64,
+        sub: String,
         ws_id: i64,
-        ws_name: String,
-        fullname: String,
-        email: String,
-        is_bot: bool,
-        created_at: chrono::DateTime<chrono::Utc>,
+        sid: String,
+        jti: String,
+        ver: i64,
         iss: String,
         aud: usize,
         exp: usize,
@@ -564,8 +821,7 @@ mod tests {
         let user2 = dk.verify(&token)?;
 
         assert_eq!(user.id, user2.id);
-        assert_eq!(user.fullname, user2.fullname);
-        assert_eq!(user.email, user2.email);
+        assert_eq!(user.ws_id, user2.ws_id);
         Ok(())
     }
 
@@ -599,14 +855,12 @@ mod tests {
         let dk = DecodingKey::load(decoding_pem)?;
         let user = issue_test_user();
         let now = now_ts();
-        let claims = UserClaims {
-            id: user.id,
+        let claims = AccessClaims {
+            sub: user.id.to_string(),
             ws_id: user.ws_id,
-            ws_name: user.ws_name,
-            fullname: user.fullname,
-            email: user.email,
-            is_bot: user.is_bot,
-            created_at: user.created_at,
+            sid: "sid-expired".to_string(),
+            jti: "jti-expired".to_string(),
+            ver: 0,
             iss: JWT_ISS.to_string(),
             aud: JWT_AUD.to_string(),
             exp: now.saturating_sub(3600),
@@ -631,14 +885,12 @@ mod tests {
         let dk = DecodingKey::load(decoding_pem)?;
         let user = issue_test_user();
         let now = now_ts();
-        let claims = UserClaims {
-            id: user.id,
+        let claims = AccessClaims {
+            sub: user.id.to_string(),
             ws_id: user.ws_id,
-            ws_name: user.ws_name,
-            fullname: user.fullname,
-            email: user.email,
-            is_bot: user.is_bot,
-            created_at: user.created_at,
+            sid: "sid-nbf".to_string(),
+            jti: "jti-nbf".to_string(),
+            ver: 0,
             iss: JWT_ISS.to_string(),
             aud: JWT_AUD.to_string(),
             exp: now + 600,
@@ -664,13 +916,11 @@ mod tests {
         let user = issue_test_user();
         let now = now_ts();
         let claims = MissingIatClaims {
-            id: user.id,
+            sub: user.id.to_string(),
             ws_id: user.ws_id,
-            ws_name: user.ws_name,
-            fullname: user.fullname,
-            email: user.email,
-            is_bot: user.is_bot,
-            created_at: user.created_at,
+            sid: "sid-missing-iat".to_string(),
+            jti: "jti-missing-iat".to_string(),
+            ver: 0,
             iss: JWT_ISS.to_string(),
             aud: JWT_AUD.to_string(),
             exp: now + 600,
@@ -695,13 +945,11 @@ mod tests {
         let user = issue_test_user();
         let now = now_ts();
         let claims = NumericAudClaims {
-            id: user.id,
+            sub: user.id.to_string(),
             ws_id: user.ws_id,
-            ws_name: user.ws_name,
-            fullname: user.fullname,
-            email: user.email,
-            is_bot: user.is_bot,
-            created_at: user.created_at,
+            sid: "sid-aud".to_string(),
+            jti: "jti-aud".to_string(),
+            ver: 0,
             iss: JWT_ISS.to_string(),
             aud: 123,
             exp: now + 600,
@@ -728,7 +976,7 @@ mod tests {
         let user = issue_test_user();
         let token = ek.sign(user)?;
         let verified = dk.verify(&token)?;
-        assert_eq!(verified.email, "tchen@acme.org");
+        assert_eq!(verified.id, 1);
         let snapshot = get_jwt_verify_metrics_snapshot();
         assert_eq!(snapshot.verify_attempt_total, 1);
         assert_eq!(snapshot.verify_success_total, 1);
@@ -744,12 +992,26 @@ mod tests {
         let _guard = reset_metrics();
         let encoding_pem = include_str!("../../fixtures/encoding.pem");
         let decoding_pem = include_str!("../../fixtures/decoding.pem");
-        let ek = EncodingKey::load_with_runtime(encoding_pem, JwtImplementation::JsonWebToken)?;
         let dk = DecodingKey::load_with_runtime(decoding_pem, JwtImplementation::JsonWebToken)?;
-        let user = issue_test_user();
-
-        let file_token = ek.sign_file_ticket(user, 300)?;
-        assert!(dk.verify(&file_token).is_err());
+        let now = Utc::now().timestamp() as usize;
+        let claims = AccessClaims {
+            sub: "1".to_string(),
+            ws_id: 1,
+            sid: "sid-invalid-aud".to_string(),
+            jti: "jti-invalid-aud".to_string(),
+            ver: 0,
+            iss: JWT_ISS.to_string(),
+            aud: JWT_AUD_FILE_TICKET.to_string(),
+            exp: now + 300,
+            nbf: now.saturating_sub(1),
+            iat: now,
+        };
+        let token = encode(
+            &Header::new(Algorithm::EdDSA),
+            &claims,
+            &JsonEncodingKey::from_ed_pem(encoding_pem.as_bytes())?,
+        )?;
+        assert!(dk.verify(&token).is_err());
 
         let snapshot = get_jwt_verify_metrics_snapshot();
         assert_eq!(snapshot.verify_attempt_total, 1);

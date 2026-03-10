@@ -2,8 +2,6 @@ mod auth;
 mod request_id;
 mod server_time;
 
-use std::fmt;
-
 use crate::User;
 
 use self::{request_id::set_request_id, server_time::ServerTimeLayer};
@@ -18,9 +16,30 @@ use tracing::Level;
 
 pub use auth::{extract_user, extract_user_header_only, verify_token, verify_token_header_only};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthVerifyError {
+    AccessInvalid,
+    AccessExpired,
+    TokenVersionMismatch,
+    SessionRevoked,
+    Internal,
+}
+
+impl AuthVerifyError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::AccessInvalid => "auth_access_invalid",
+            Self::AccessExpired => "auth_access_expired",
+            Self::TokenVersionMismatch => "auth_token_version_mismatch",
+            Self::SessionRevoked => "auth_session_revoked",
+            Self::Internal => "auth_access_invalid",
+        }
+    }
+}
+
 pub trait TokenVerify {
-    type Error: fmt::Debug;
-    fn verify(&self, token: &str) -> Result<User, Self::Error>;
+    #[allow(async_fn_in_trait)]
+    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError>;
 }
 
 const REQUEST_ID_HEADER: &str = "x-request-id";

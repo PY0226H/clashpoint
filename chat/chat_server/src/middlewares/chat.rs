@@ -53,7 +53,36 @@ mod tests {
         let (_tdb, state) = AppState::new_for_test().await?;
 
         let user = state.find_user_by_id(1).await?.expect("user should exist");
-        let token = state.ek.sign(user)?;
+        let sid = "test-chat-sid";
+        let family_id = "test-chat-family";
+        let refresh_jti = "test-chat-refresh-jti";
+        let access_jti = "test-chat-access-jti";
+        sqlx::query(
+            r#"
+            INSERT INTO auth_refresh_sessions (
+                ws_id, user_id, sid, family_id, current_jti, expires_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, NOW() + interval '1 day', NOW(), NOW())
+            ON CONFLICT (sid) DO UPDATE
+            SET current_jti = EXCLUDED.current_jti,
+                family_id = EXCLUDED.family_id,
+                revoked_at = NULL,
+                revoke_reason = NULL,
+                expires_at = EXCLUDED.expires_at,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(user.ws_id)
+        .bind(user.id)
+        .bind(sid)
+        .bind(family_id)
+        .bind(refresh_jti)
+        .execute(&state.pool)
+        .await?;
+
+        let token = state
+            .ek
+            .sign_access_token_with_jti(user.id, user.ws_id, sid, 0, access_jti, 900)?;
 
         let app = Router::new()
             .route("/chat/:id/messages", get(handler))

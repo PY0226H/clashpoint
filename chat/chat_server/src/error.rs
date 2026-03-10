@@ -65,6 +65,9 @@ pub enum AppError {
 
     #[error("jwt error: {0}")]
     JwtError(#[from] JwtError),
+
+    #[error("{0}")]
+    AuthError(String),
 }
 
 impl IntoResponse for AppError {
@@ -90,6 +93,7 @@ impl IntoResponse for AppError {
             Self::ChatFileError(_) => StatusCode::BAD_REQUEST,
             Self::AiAgentError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::JwtError(_) => StatusCode::UNAUTHORIZED,
+            Self::AuthError(_) => StatusCode::UNAUTHORIZED,
         };
 
         json_error_response(status, self.to_string())

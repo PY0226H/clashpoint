@@ -1,9 +1,10 @@
-use super::TokenVerify;
+use super::{AuthVerifyError, TokenVerify};
+use crate::json_error_response;
 use axum::{
     extract::{FromRequestParts, Query, Request, State},
     http::{request::Parts, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use axum_extra::{
     headers::{authorization::Bearer, Authorization},
@@ -48,12 +49,12 @@ where
     match extract_token(&state, &mut parts, allow_query).await {
         Ok(token) => {
             let mut req = Request::from_parts(parts, body);
-            match set_user(&state, &token, &mut req) {
+            match set_user(&state, &token, &mut req).await {
                 Ok(_) => next.run(req).await,
-                Err(msg) => (StatusCode::FORBIDDEN, msg).into_response(),
+                Err(code) => json_error_response(StatusCode::UNAUTHORIZED, code),
             }
         }
-        Err(msg) => (StatusCode::UNAUTHORIZED, msg).into_response(),
+        Err(_msg) => json_error_response(StatusCode::UNAUTHORIZED, "auth_access_invalid"),
     }
 }
 
@@ -87,7 +88,7 @@ where
     let (mut parts, body) = req.into_parts();
     let req = if let Ok(token) = extract_token(&state, &mut parts, allow_query).await {
         let mut req = Request::from_parts(parts, body);
-        let _ = set_user(&state, &token, &mut req);
+        let _ = set_user(&state, &token, &mut req).await;
         req
     } else {
         Request::from_parts(parts, body)
@@ -121,21 +122,25 @@ where
     }
 }
 
-fn set_user<T>(state: &T, token: &str, req: &mut Request) -> Result<(), String>
+async fn set_user<T>(state: &T, token: &str, req: &mut Request) -> Result<(), &'static str>
 where
     T: TokenVerify + Clone + Send + Sync + 'static,
 {
-    match state.verify(token) {
+    match state.verify(token).await {
         Ok(user) => {
             req.extensions_mut().insert(user);
             Ok(())
         }
-        Err(e) => {
-            let msg = format!("verify token failed: {:?}", e);
-            warn!(msg);
-            Err(msg)
+        Err(err) => {
+            let code = map_auth_verify_error(err);
+            warn!(code = code, ?err, "verify token failed");
+            Err(code)
         }
     }
+}
+
+fn map_auth_verify_error(err: AuthVerifyError) -> &'static str {
+    err.code()
 }
 
 #[cfg(test)]
@@ -143,7 +148,9 @@ mod tests {
     use super::*;
     use crate::{DecodingKey, EncodingKey, User};
     use anyhow::Result;
-    use axum::{body::Body, middleware::from_fn_with_state, routing::get, Router};
+    use axum::{
+        body::Body, middleware::from_fn_with_state, response::IntoResponse, routing::get, Router,
+    };
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -156,10 +163,11 @@ mod tests {
     }
 
     impl TokenVerify for AppState {
-        type Error = ();
-
-        fn verify(&self, token: &str) -> Result<User, Self::Error> {
-            self.0.dk.verify(token).map_err(|_| ())
+        async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+            self.0
+                .dk
+                .verify(token)
+                .map_err(|e| e.to_auth_verify_error())
         }
     }
 
@@ -209,14 +217,14 @@ mod tests {
             .header("Authorization", "Bearer bad-token")
             .body(Body::empty())?;
         let res = app.clone().oneshot(req).await?;
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
         // bad token in query params
         let req = Request::builder()
             .uri("/?token=bad-token")
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
         Ok(())
     }

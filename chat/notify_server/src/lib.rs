@@ -12,7 +12,10 @@ use axum::{
     routing::get,
     Router,
 };
-use chat_core::{middlewares::TokenVerify, DecodingKey, User};
+use chat_core::{
+    middlewares::{AuthVerifyError, TokenVerify},
+    DecodingKey, User,
+};
 use dashmap::DashMap;
 use middlewares::verify_notify_ticket;
 use serde_json::Value;
@@ -120,10 +123,10 @@ async fn health_handler() -> &'static str {
 }
 
 impl TokenVerify for AppState {
-    type Error = AppError;
-
-    fn verify(&self, token: &str) -> Result<User, Self::Error> {
-        Ok(self.dk.verify(token)?)
+    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+        self.dk
+            .verify(token)
+            .map_err(|err| err.to_auth_verify_error())
     }
 }
 

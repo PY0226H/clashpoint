@@ -58,7 +58,7 @@ async function loadOpsSnapshotForGuard() {
 
 // Navigation guard for authenticated routes and ops permissions
 router.beforeEach(async (to, from, next) => {
-  const isAuthenticated = !!localStorage.getItem('user');
+  const isAuthenticated = !!store.getters.getUser;
   if (to.matched.some((record) => record.meta.requiresAuth) && !isAuthenticated) {
     return next({ name: 'Login' });
   }

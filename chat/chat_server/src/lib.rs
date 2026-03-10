@@ -14,7 +14,7 @@ mod test_fixtures;
 use anyhow::Context;
 use chat_core::{
     get_jwt_verify_metrics_snapshot,
-    middlewares::{set_layer, verify_token_header_only, TokenVerify},
+    middlewares::{set_layer, verify_token_header_only, AuthVerifyError, TokenVerify},
     DecodingKey, EncodingKey, User,
 };
 use handlers::*;
@@ -233,6 +233,13 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .layer(from_fn_with_state(state.clone(), verify_ai_internal_key));
     let protected_api = Router::new()
         .route("/users", get(list_chat_users_handler))
+        .route("/auth/logout", post(logout_handler))
+        .route("/auth/logout-all", post(logout_all_handler))
+        .route("/auth/sessions", get(list_auth_sessions_handler))
+        .route(
+            "/auth/sessions/:sid",
+            axum::routing::delete(revoke_auth_session_handler),
+        )
         .nest("/analytics", analytics)
         .nest("/debate", debate)
         .nest("/pay", pay)
@@ -253,6 +260,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         // routes doesn't need token verification
         .route("/signin", post(signin_handler))
         .route("/signup", post(signup_handler))
+        .route("/auth/refresh", post(refresh_handler))
         .layer(cors);
 
     let app = Router::new()
@@ -279,10 +287,37 @@ impl Deref for AppState {
 }
 
 impl TokenVerify for AppState {
-    type Error = AppError;
+    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+        let decoded = self
+            .dk
+            .verify_access(token)
+            .map_err(|err| err.to_auth_verify_error())?;
+        let current_ver = load_user_token_version(self, decoded.user.id)
+            .await
+            .map_err(map_auth_app_error)?;
+        if decoded.ver != current_ver {
+            return Err(AuthVerifyError::TokenVersionMismatch);
+        }
+        ensure_access_session_active(self, decoded.user.id, &decoded.sid)
+            .await
+            .map_err(map_auth_app_error)?;
+        Ok(decoded.user)
+    }
+}
 
-    fn verify(&self, token: &str) -> Result<User, Self::Error> {
-        Ok(self.dk.verify(token)?)
+fn map_auth_app_error(err: AppError) -> AuthVerifyError {
+    match err {
+        AppError::AuthError(code) => match code.as_str() {
+            "auth_access_expired" => AuthVerifyError::AccessExpired,
+            "auth_token_version_mismatch" => AuthVerifyError::TokenVersionMismatch,
+            "auth_session_revoked" => AuthVerifyError::SessionRevoked,
+            "auth_access_invalid"
+            | "auth_refresh_invalid"
+            | "auth_refresh_missing"
+            | "auth_refresh_replayed" => AuthVerifyError::AccessInvalid,
+            _ => AuthVerifyError::Internal,
+        },
+        _ => AuthVerifyError::Internal,
     }
 }
 

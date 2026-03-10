@@ -1,6 +1,5 @@
 import { createStore } from 'vuex';
 import axios from 'axios';
-import { jwtDecode } from "jwt-decode";
 import { getUrlBase } from '../utils';
 import { initSSE } from '../utils';
 import {
@@ -25,24 +24,45 @@ import { pickActiveChannelId } from '../channel-utils';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
-// Wrap axios calls in a function that handles 403 errors
-const network = async (store, method, url, data = null, headers = {}) => {
+const AUTH_BYPASS_PATHS = new Set([
+  '/signin',
+  '/signup',
+  '/auth/refresh',
+]);
+
+const withAuthHeader = (store, url, headers = {}) => {
+  const merged = { ...headers };
+  if (!merged.Authorization && store.state.token && !AUTH_BYPASS_PATHS.has(url)) {
+    merged.Authorization = `Bearer ${store.state.token}`;
+  }
+  return merged;
+};
+
+// Wrap axios calls with refresh-once retry for 401 responses.
+const network = async (store, method, url, data = null, headers = {}, allowRefreshRetry = true) => {
+  const config = {
+    method,
+    url: `${getUrlBase()}${url}`,
+    headers: withAuthHeader(store, url, headers),
+    data,
+    withCredentials: true,
+  };
   try {
-    const config = {
-      method,
-      url: `${getUrlBase()}${url}`,
-      headers,
-      data
-    };
-    const response = await axios(config);
-    return response;
+    return await axios(config);
   } catch (error) {
-    if (error.response && error.response.status === 403) {
-      console.error('Unauthorized access, logging out');
-      await store.dispatch('logout');
-      // TODO: client side redirect to login page (can we use router instead?)
-      window.location.href = '/login';
-      return;
+    const status = error?.response?.status;
+    if (status === 401 && allowRefreshRetry && !AUTH_BYPASS_PATHS.has(url)) {
+      try {
+        await store.dispatch('refreshSession');
+        return await axios({
+          ...config,
+          headers: withAuthHeader(store, url, headers),
+        });
+      } catch (_refreshError) {
+        await store.dispatch('logout', { skipRemote: true });
+        window.location.href = '/login';
+        return;
+      }
     }
     throw error;
   }
@@ -137,7 +157,6 @@ export default createStore({
       console.log("context:", state.context);
 
       const storedUser = localStorage.getItem('user');
-      const storedToken = localStorage.getItem('token');
       const storedWorkspace = localStorage.getItem('workspace');
       const storedChannels = localStorage.getItem('channels');
       // we do not store messages in local storage, so this is always empty
@@ -147,9 +166,6 @@ export default createStore({
 
       if (storedUser) {
         state.user = JSON.parse(storedUser);
-      }
-      if (storedToken) {
-        state.token = storedToken;
       }
       if (storedWorkspace) {
         state.workspace = JSON.parse(storedWorkspace);
@@ -260,10 +276,16 @@ export default createStore({
         throw error;
       }
     },
-    logout({ commit }) {
+    async logout({ state, commit }, { skipRemote = false } = {}) {
+      if (!skipRemote && state.token) {
+        try {
+          await network(this, 'post', '/auth/logout', null, {}, false);
+        } catch (error) {
+          console.warn('remote logout failed:', error);
+        }
+      }
       // Clear local storage and state
       localStorage.removeItem('user');
-      localStorage.removeItem('token');
       localStorage.removeItem('workspace');
       localStorage.removeItem('channels');
       localStorage.removeItem('messages');
@@ -279,7 +301,7 @@ export default createStore({
       commit('setOpsRbacMe', null);
 
       // close SSE
-      this.dispatch('closeSSE');
+      await this.dispatch('closeSSE');
     },
     setActiveChannel({ commit }, channel) {
       commit('setActiveChannel', channel);
@@ -919,11 +941,16 @@ export default createStore({
     addMessage({ commit }, { channelId, message }) {
       commit('addMessage', { channelId, message });
     },
-    loadUserState({ commit }) {
+    async loadUserState({ commit, dispatch }) {
       commit('loadUserState');
-      // if user is already logged in, then init SSE
-      if (this.state.token) {
-        this.dispatch('initSSE');
+      if (!this.state.user) {
+        return;
+      }
+      try {
+        await dispatch('refreshSession');
+        await dispatch('initSSE');
+      } catch (_error) {
+        await dispatch('logout', { skipRemote: true });
       }
     },
     async appStart({ state }) {
@@ -990,6 +1017,16 @@ export default createStore({
         state.token ? { Authorization: `Bearer ${state.token}` } : {},
       );
       return normalizeJudgeRefreshSummaryMetrics(response?.data || {});
+    },
+    async refreshSession({ commit, dispatch }) {
+      const response = await network(this, 'post', '/auth/refresh', null, {}, false);
+      const accessToken = response?.data?.accessToken;
+      if (!accessToken) {
+        throw new Error('missing accessToken from refresh response');
+      }
+      commit('setToken', accessToken);
+      await dispatch('refreshAccessTickets');
+      return accessToken;
     },
     async refreshAccessTickets({ state, commit }) {
       if (!state.token) {
@@ -1091,8 +1128,11 @@ export default createStore({
 });
 
 async function loadState(response, self, commit) {
-  const token = response.data.token;
-  const user = jwtDecode(token);
+  const token = response?.data?.accessToken || response?.data?.token;
+  const user = response?.data?.user;
+  if (!token || !user) {
+    throw new Error('missing access token or user profile in auth response');
+  }
   const workspace = { id: user.wsId, name: user.wsName };
 
   try {
@@ -1126,9 +1166,8 @@ async function loadState(response, self, commit) {
       })(),
     );
 
-    // Store user info, token, and workspace in localStorage
+    // Store non-sensitive session bootstrap data only.
     localStorage.setItem('user', JSON.stringify(user));
-    localStorage.setItem('token', token);
     localStorage.setItem('workspace', JSON.stringify(workspace));
     localStorage.setItem('users', JSON.stringify(usersMap));
     localStorage.setItem('channels', JSON.stringify(channels));
@@ -1141,6 +1180,7 @@ async function loadState(response, self, commit) {
     // Commit the mutations to update the state
     commit('setUser', user);
     commit('setToken', token);
+    commit('setAccessTickets', null);
     commit('setWorkspace', workspace);
     commit('setChannels', channels);
     commit('setUsers', usersMap);

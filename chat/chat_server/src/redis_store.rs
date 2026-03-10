@@ -230,6 +230,129 @@ impl RedisStore {
             }
         }
     }
+
+    pub async fn get_value(&self, scope: &str, raw_key: &str) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::Disabled { .. } => Ok(None),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let redis_key = self.namespaced_key(scope, raw_key);
+                let ret: Option<String> = redis::cmd("GET")
+                    .arg(&redis_key)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis GET failed")?;
+                Ok(ret)
+            }
+        }
+    }
+
+    pub async fn set_value_with_ttl(
+        &self,
+        scope: &str,
+        raw_key: &str,
+        value: &str,
+        ttl_secs: u64,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Disabled { .. } => Ok(()),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let redis_key = self.namespaced_key(scope, raw_key);
+                let _: String = redis::cmd("SET")
+                    .arg(&redis_key)
+                    .arg(value)
+                    .arg("EX")
+                    .arg(ttl_secs.max(1) as i64)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis SET EX failed")?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn delete_key(&self, scope: &str, raw_key: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Disabled { .. } => Ok(()),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let redis_key = self.namespaced_key(scope, raw_key);
+                let _: i64 = redis::cmd("DEL")
+                    .arg(&redis_key)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis DEL key failed")?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn add_set_member(
+        &self,
+        scope: &str,
+        raw_key: &str,
+        member: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Disabled { .. } => Ok(()),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let redis_key = self.namespaced_key(scope, raw_key);
+                let _: i64 = redis::cmd("SADD")
+                    .arg(&redis_key)
+                    .arg(member)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis SADD failed")?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn remove_set_member(
+        &self,
+        scope: &str,
+        raw_key: &str,
+        member: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Disabled { .. } => Ok(()),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let redis_key = self.namespaced_key(scope, raw_key);
+                let _: i64 = redis::cmd("SREM")
+                    .arg(&redis_key)
+                    .arg(member)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis SREM failed")?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn set_key_expire(
+        &self,
+        scope: &str,
+        raw_key: &str,
+        ttl_secs: u64,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Disabled { .. } => Ok(()),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let redis_key = self.namespaced_key(scope, raw_key);
+                let _: i64 = redis::cmd("EXPIRE")
+                    .arg(&redis_key)
+                    .arg(ttl_secs.max(1) as i64)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis EXPIRE key failed")?;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl RedisStoreInner {

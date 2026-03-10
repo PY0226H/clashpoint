@@ -12,7 +12,7 @@ pub use events::*;
 
 use anyhow::Context;
 use chat_core::{
-    middlewares::{extract_user_header_only, set_layer, TokenVerify},
+    middlewares::{extract_user_header_only, set_layer, AuthVerifyError, TokenVerify},
     DecodingKey, User,
 };
 use clickhouse::Client;
@@ -105,10 +105,10 @@ impl Deref for AppState {
 }
 
 impl TokenVerify for AppState {
-    type Error = AppError;
-
-    fn verify(&self, token: &str) -> Result<User, Self::Error> {
-        Ok(self.dk.verify(token)?)
+    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+        self.dk
+            .verify(token)
+            .map_err(|err| err.to_auth_verify_error())
     }
 }
 
