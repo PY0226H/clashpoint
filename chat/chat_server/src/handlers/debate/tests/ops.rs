@@ -480,6 +480,92 @@ async fn upsert_ops_service_split_review_handler_should_emit_transition_alert_on
 }
 
 #[tokio::test]
+async fn upsert_ops_service_split_review_handler_should_emit_cleared_alert_once_on_review_required_to_hold(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.update_workspace_owner(1, 1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    upsert_ops_service_split_review_handler(
+        Extension(owner.clone()),
+        State(state.clone()),
+        Json(UpsertOpsServiceSplitReviewInput {
+            payment_compliance_required: Some(true),
+            review_note: Some("enter review required".to_string()),
+        }),
+    )
+    .await?;
+
+    upsert_ops_service_split_review_handler(
+        Extension(owner.clone()),
+        State(state.clone()),
+        Json(UpsertOpsServiceSplitReviewInput {
+            payment_compliance_required: Some(false),
+            review_note: Some("back to hold".to_string()),
+        }),
+    )
+    .await?;
+
+    let cleared_count_after_first: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM ops_alert_notifications
+        WHERE ws_id = 1
+          AND alert_key = 'split_readiness_review_required'
+          AND alert_status = 'cleared'
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(
+        cleared_count_after_first, 1,
+        "review_required -> hold transition should emit one cleared alert"
+    );
+
+    upsert_ops_service_split_review_handler(
+        Extension(owner),
+        State(state.clone()),
+        Json(UpsertOpsServiceSplitReviewInput {
+            payment_compliance_required: Some(false),
+            review_note: Some("still hold".to_string()),
+        }),
+    )
+    .await?;
+
+    let cleared_count_after_second: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM ops_alert_notifications
+        WHERE ws_id = 1
+          AND alert_key = 'split_readiness_review_required'
+          AND alert_status = 'cleared'
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(
+        cleared_count_after_second, 1,
+        "non-transition hold update should not emit duplicate cleared alert"
+    );
+
+    let is_active: bool = sqlx::query_scalar(
+        r#"
+        SELECT is_active
+        FROM ops_alert_states
+        WHERE ws_id = 1
+          AND alert_key = 'split_readiness_review_required'
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    assert!(
+        !is_active,
+        "split readiness alert state should become inactive after cleared transition"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_ops_service_split_review_audits_handler_should_return_latest_first() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     state.update_workspace_owner(1, 1).await?;

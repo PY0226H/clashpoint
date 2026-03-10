@@ -1244,6 +1244,25 @@ fn build_split_review_required_alert(
     }
 }
 
+fn build_split_review_cleared_alert(
+    snapshot: &GetOpsServiceSplitReadinessOutput,
+    triggered_by: i64,
+) -> EvaluatedAlert {
+    EvaluatedAlert {
+        alert_key: OPS_ALERT_RULE_SPLIT_REVIEW_REQUIRED_KEY.to_string(),
+        rule_type: OPS_ALERT_RULE_SPLIT_REVIEW_REQUIRED_TYPE.to_string(),
+        severity: ALERT_SEVERITY_WARNING.to_string(),
+        title: "服务拆分评审已解除".to_string(),
+        message: "split-readiness 从 review_required 回落到 hold，当前可保持现有拓扑。".to_string(),
+        metrics: json!({
+            "overallStatus": snapshot.overall_status,
+            "nextStep": snapshot.next_step,
+            "triggeredBy": triggered_by,
+        }),
+        is_active: false,
+    }
+}
+
 impl AppState {
     pub async fn upsert_ops_service_split_review(
         &self,
@@ -1299,6 +1318,17 @@ impl AppState {
                 status: ALERT_STATUS_RAISED,
                 mark_active: true,
                 evaluated: build_split_review_required_alert(&after_snapshot, user.id),
+            };
+            self.emit_observability_alert(user.ws_id, plan, &recipients)
+                .await?;
+        } else if before_snapshot.overall_status == "review_required"
+            && after_snapshot.overall_status != "review_required"
+        {
+            let recipients = self.list_alert_recipients(user.ws_id).await?;
+            let plan = EmitAlertPlan {
+                status: ALERT_STATUS_CLEARED,
+                mark_active: false,
+                evaluated: build_split_review_cleared_alert(&after_snapshot, user.id),
             };
             self.emit_observability_alert(user.ws_id, plan, &recipients)
                 .await?;
