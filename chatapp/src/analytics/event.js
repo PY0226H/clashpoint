@@ -1,6 +1,6 @@
-import { AnalyticsEventSchema } from "../gen/messages_pb";
+import { AnalyticsEventSchema } from "../gen/messages_pb.js";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { ANALYTICS_API_BASE_URL } from "../judge-refresh-summary-utils";
+import { ANALYTICS_API_BASE_URL } from "../judge-refresh-summary-utils.js";
 
 const URL = `${ANALYTICS_API_BASE_URL}/event`;
 

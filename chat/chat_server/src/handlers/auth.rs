@@ -267,6 +267,18 @@ pub struct BindPhoneV2Output {
     pub user: User,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPasswordV2Input {
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPasswordV2Output {
+    pub updated: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmsScene {
     SignupPhone,
@@ -1127,6 +1139,29 @@ pub(crate) async fn bind_phone_v2_handler(
             user: bound_user,
         }),
     ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/v2/password/set",
+    request_body = SetPasswordV2Input,
+    responses(
+        (status = 200, description = "Password updated", body = SetPasswordV2Output),
+        (status = 401, description = "Auth error", body = ErrorOutput),
+    ),
+    security(("token" = []))
+)]
+pub(crate) async fn set_password_v2_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Json(input): Json<SetPasswordV2Input>,
+) -> Result<impl IntoResponse, AppError> {
+    let password = input.password.trim();
+    if password.len() < 6 {
+        return Err(AppError::AuthError("auth_password_invalid".to_string()));
+    }
+    state.set_user_password(user.id, password).await?;
+    Ok((StatusCode::OK, Json(SetPasswordV2Output { updated: true })))
 }
 
 #[utoipa::path(
@@ -2656,6 +2691,118 @@ mod tests {
         assert!(bind_ret.access_token.is_some());
         let user = bind_ret.user.expect("user");
         assert_eq!(user.phone_e164.as_deref(), Some("+8613800138044"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_password_v2_should_enable_phone_password_signin_for_wechat_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+
+        let challenge_response = wechat_challenge_v2_handler(State(state.clone()))
+            .await?
+            .into_response();
+        let challenge_body = challenge_response.into_body().collect().await?.to_bytes();
+        let challenge: WechatChallengeV2Output = serde_json::from_slice(&challenge_body)?;
+
+        let signin_response = wechat_signin_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(WechatSigninV2Input {
+                state: challenge.state,
+                code: "mock_wechat_user_03:union03:Tester3".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin_response.into_body().collect().await?.to_bytes();
+        let signin_ret: WechatSigninV2Output = serde_json::from_slice(&signin_body)?;
+        let ticket = signin_ret.wechat_ticket.expect("wechat ticket");
+
+        let sms_response = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138055".to_string(),
+                scene: "bind_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let sms_body = sms_response.into_body().collect().await?.to_bytes();
+        let sms_ret: SendSmsCodeV2Output = serde_json::from_slice(&sms_body)?;
+        let sms_code = sms_ret.debug_code.expect("debug code");
+
+        let bind_response = wechat_bind_phone_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(WechatBindPhoneV2Input {
+                wechat_ticket: ticket,
+                phone: "13800138055".to_string(),
+                sms_code,
+                password: None,
+                fullname: "Wechat Later Password".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let bind_body = bind_response.into_body().collect().await?.to_bytes();
+        let bind_ret: WechatSigninV2Output = serde_json::from_slice(&bind_body)?;
+        let user = bind_ret.user.expect("user");
+
+        let set_password_response = set_password_v2_handler(
+            Extension(user),
+            State(state.clone()),
+            Json(SetPasswordV2Input {
+                password: "654321".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(set_password_response.status(), StatusCode::OK);
+        let set_password_body = set_password_response
+            .into_body()
+            .collect()
+            .await?
+            .to_bytes();
+        let set_password_ret: SetPasswordV2Output = serde_json::from_slice(&set_password_body)?;
+        assert!(set_password_ret.updated);
+
+        let signin_with_password_response = signin_password_v2_handler(
+            State(state),
+            HeaderMap::new(),
+            Json(SigninPasswordV2Input {
+                account: "13800138055".to_string(),
+                account_type: "phone".to_string(),
+                password: "654321".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(signin_with_password_response.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_password_v2_should_reject_too_short_password() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .find_user_by_email("tchen@acme.org")
+            .await?
+            .expect("seed user");
+
+        let ret = set_password_v2_handler(
+            Extension(user),
+            State(state),
+            Json(SetPasswordV2Input {
+                password: "1".to_string(),
+            }),
+        )
+        .await;
+        match ret {
+            Ok(_) => panic!("short password should be rejected"),
+            Err(AppError::AuthError(code)) => assert_eq!(code, "auth_password_invalid"),
+            Err(_) => panic!("expect auth error"),
+        }
         Ok(())
     }
 

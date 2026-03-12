@@ -231,6 +231,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/auth/logout", post(logout_handler))
         .route("/auth/logout-all", post(logout_all_handler))
         .route("/auth/sessions", get(list_auth_sessions_handler))
+        .route("/auth/v2/password/set", post(set_password_v2_handler))
         .route("/auth/v2/phone/bind", post(bind_phone_v2_handler))
         .route(
             "/auth/sessions/:sid",

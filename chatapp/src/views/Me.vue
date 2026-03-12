@@ -37,6 +37,43 @@
         </div>
 
         <div class="bg-white border rounded-lg p-4">
+          <div class="text-sm font-semibold text-gray-900 mb-3">账号密码</div>
+          <form class="space-y-3" @submit.prevent="submitSetPassword">
+            <label class="block text-sm text-gray-700">
+              新密码
+              <input
+                v-model="newPassword"
+                type="password"
+                minlength="6"
+                required
+                class="mt-1 block w-full px-3 py-2 border rounded-md"
+                placeholder="至少 6 位"
+              />
+            </label>
+            <label class="block text-sm text-gray-700">
+              确认新密码
+              <input
+                v-model="confirmPassword"
+                type="password"
+                minlength="6"
+                required
+                class="mt-1 block w-full px-3 py-2 border rounded-md"
+              />
+            </label>
+            <div class="flex items-center gap-3">
+              <button
+                type="submit"
+                :disabled="passwordSaving"
+                class="px-3 py-2 rounded bg-emerald-600 text-white text-sm disabled:opacity-50"
+              >
+                {{ passwordSaving ? '保存中...' : '设置密码' }}
+              </button>
+              <span v-if="passwordSuccessText" class="text-sm text-emerald-700">{{ passwordSuccessText }}</span>
+            </div>
+          </form>
+        </div>
+
+        <div class="bg-white border rounded-lg p-4">
           <div class="text-sm font-semibold text-gray-900 mb-3">快捷入口</div>
           <div class="flex flex-wrap gap-2">
             <button
@@ -66,6 +103,7 @@
 
 <script>
 import Sidebar from '../components/Sidebar.vue';
+import { validateSetPasswordInput } from '../auth-password-utils.js';
 
 export default {
   components: {
@@ -76,6 +114,10 @@ export default {
       loading: false,
       errorText: '',
       walletBalance: 0,
+      newPassword: '',
+      confirmPassword: '',
+      passwordSaving: false,
+      passwordSuccessText: '',
     };
   },
   computed: {
@@ -94,6 +136,40 @@ export default {
         this.errorText = error?.response?.data?.error || error?.message || '刷新失败';
       } finally {
         this.loading = false;
+      }
+    },
+    resolvePasswordErrorText(code) {
+      if (code === 'required') {
+        return '请先输入新密码';
+      }
+      if (code === 'too_short') {
+        return '密码至少需要 6 位';
+      }
+      if (code === 'mismatch') {
+        return '两次输入的密码不一致';
+      }
+      return '设置密码失败';
+    },
+    async submitSetPassword() {
+      this.errorText = '';
+      this.passwordSuccessText = '';
+      const result = validateSetPasswordInput(this.newPassword, this.confirmPassword);
+      if (!result.valid) {
+        this.errorText = this.resolvePasswordErrorText(result.code);
+        return;
+      }
+      this.passwordSaving = true;
+      try {
+        await this.$store.dispatch('setPasswordV2', {
+          password: this.newPassword,
+        });
+        this.newPassword = '';
+        this.confirmPassword = '';
+        this.passwordSuccessText = '密码已更新';
+      } catch (error) {
+        this.errorText = error?.response?.data?.error || error?.message || '设置密码失败';
+      } finally {
+        this.passwordSaving = false;
       }
     },
     async goTo(path) {

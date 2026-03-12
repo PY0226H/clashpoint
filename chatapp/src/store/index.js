@@ -388,6 +388,13 @@ export default createStore({
       }
       return ret;
     },
+    async setPasswordV2(_ctx, { password }) {
+      const payload = {
+        password: String(password || '').trim(),
+      };
+      const response = await network(this, 'post', '/auth/v2/password/set', payload);
+      return response?.data || { updated: false };
+    },
     async logout({ state, commit }, { skipRemote = false } = {}) {
       if (!skipRemote && state.token) {
         try {

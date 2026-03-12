@@ -242,6 +242,27 @@ impl AppState {
         Ok(user)
     }
 
+    pub async fn set_user_password(&self, user_id: i64, password: &str) -> Result<(), AppError> {
+        let password_hash = hash_password(password)?;
+        let updated_rows = sqlx::query(
+            r#"
+            UPDATE users
+            SET password_hash = $2
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(password_hash)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        if updated_rows == 0 {
+            return Err(AppError::NotFound(format!("user {user_id}")));
+        }
+        Ok(())
+    }
+
     pub async fn fetch_chat_user_by_ids(&self, ids: &[i64]) -> Result<Vec<ChatUser>, AppError> {
         let users = sqlx::query_as(
             r#"
