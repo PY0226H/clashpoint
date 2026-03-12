@@ -388,9 +388,10 @@ export default createStore({
       }
       return ret;
     },
-    async setPasswordV2(_ctx, { password }) {
+    async setPasswordV2(_ctx, { password, smsCode }) {
       const payload = {
         password: String(password || '').trim(),
+        smsCode: String(smsCode || '').trim(),
       };
       const response = await network(this, 'post', '/auth/v2/password/set', payload);
       return response?.data || { updated: false };

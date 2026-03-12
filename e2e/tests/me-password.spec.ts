@@ -2,7 +2,10 @@ import { expect, test } from '@playwright/test';
 
 async function bootstrapAuthState(page) {
   await page.addInitScript(() => {
-    localStorage.setItem('user', JSON.stringify({ id: 1001, email: 'e2e@acme.org' }));
+    localStorage.setItem(
+      'user',
+      JSON.stringify({ id: 1001, email: 'e2e@acme.org', phoneE164: '+8613800138000' }),
+    );
     localStorage.setItem('channels', JSON.stringify([]));
     localStorage.setItem('users', JSON.stringify({}));
   });
@@ -68,12 +71,14 @@ test.describe('Me password set flow', () => {
 
     await page.locator('input[type="password"]').first().fill('  654321  ');
     await page.locator('input[type="password"]').nth(1).fill('654321');
+    await page.getByPlaceholder('6位验证码').fill(' 112233 ');
     await page.getByRole('button', { name: '设置密码' }).click();
 
     await expect(page.getByText('密码已更新')).toBeVisible();
-    expect(payload).toEqual({ password: '654321' });
+    expect(payload).toEqual({ password: '654321', smsCode: '112233' });
     await expect(page.locator('input[type="password"]').first()).toHaveValue('');
     await expect(page.locator('input[type="password"]').nth(1)).toHaveValue('');
+    await expect(page.getByPlaceholder('6位验证码')).toHaveValue('');
   });
 
   test('should block submit when confirm password mismatches', async ({ page }) => {
@@ -91,6 +96,7 @@ test.describe('Me password set flow', () => {
 
     await page.locator('input[type="password"]').first().fill('123456');
     await page.locator('input[type="password"]').nth(1).fill('654321');
+    await page.getByPlaceholder('6位验证码').fill('112233');
     await page.getByRole('button', { name: '设置密码' }).click();
 
     await expect(page.getByText('两次输入的密码不一致')).toBeVisible();

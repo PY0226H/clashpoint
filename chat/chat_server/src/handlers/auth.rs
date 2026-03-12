@@ -271,6 +271,8 @@ pub struct BindPhoneV2Output {
 #[serde(rename_all = "camelCase")]
 pub struct SetPasswordV2Input {
     pub password: String,
+    #[serde(default)]
+    pub sms_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1160,6 +1162,26 @@ pub(crate) async fn set_password_v2_handler(
     if password.len() < 6 {
         return Err(AppError::AuthError("auth_password_invalid".to_string()));
     }
+    let phone_e164 = user
+        .phone_e164
+        .as_deref()
+        .map(str::trim)
+        .filter(|phone| !phone.is_empty())
+        .ok_or_else(|| AppError::AuthError("auth_phone_bind_required".to_string()))?;
+    let sms_code = input
+        .sms_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .ok_or_else(|| AppError::AuthError("auth_sms_code_invalid".to_string()))?;
+    verify_sms_code(
+        &state,
+        SmsScene::BindPhone,
+        phone_e164,
+        sms_code,
+        Some(user.id),
+    )
+    .await?;
     state.set_user_password(user.id, password).await?;
     Ok((StatusCode::OK, Json(SetPasswordV2Output { updated: true })))
 }
@@ -2749,11 +2771,31 @@ mod tests {
         let bind_ret: WechatSigninV2Output = serde_json::from_slice(&bind_body)?;
         let user = bind_ret.user.expect("user");
 
+        let set_password_sms_response = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138055".to_string(),
+                scene: "bind_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let set_password_sms_body = set_password_sms_response
+            .into_body()
+            .collect()
+            .await?
+            .to_bytes();
+        let set_password_sms_ret: SendSmsCodeV2Output =
+            serde_json::from_slice(&set_password_sms_body)?;
+        let set_password_sms_code = set_password_sms_ret.debug_code.expect("debug code");
+
         let set_password_response = set_password_v2_handler(
             Extension(user),
             State(state.clone()),
             Json(SetPasswordV2Input {
                 password: "654321".to_string(),
+                sms_code: Some(set_password_sms_code),
             }),
         )
         .await?
@@ -2795,12 +2837,90 @@ mod tests {
             State(state),
             Json(SetPasswordV2Input {
                 password: "1".to_string(),
+                sms_code: None,
             }),
         )
         .await;
         match ret {
             Ok(_) => panic!("short password should be rejected"),
             Err(AppError::AuthError(code)) => assert_eq!(code, "auth_password_invalid"),
+            Err(_) => panic!("expect auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_password_v2_should_require_sms_code() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let sms_response = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138188".to_string(),
+                scene: "signup_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let sms_body = sms_response.into_body().collect().await?.to_bytes();
+        let sms_ret: SendSmsCodeV2Output = serde_json::from_slice(&sms_body)?;
+        let sms_code = sms_ret.debug_code.expect("debug code");
+
+        let signup_response = signup_phone_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SignupPhoneV2Input {
+                phone: "13800138188".to_string(),
+                sms_code,
+                password: "123456".to_string(),
+                fullname: "No Sms Code".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let signup_body = signup_response.into_body().collect().await?.to_bytes();
+        let signup_ret: AuthOutput = serde_json::from_slice(&signup_body)?;
+
+        let ret = set_password_v2_handler(
+            Extension(signup_ret.user),
+            State(state),
+            Json(SetPasswordV2Input {
+                password: "654321".to_string(),
+                sms_code: None,
+            }),
+        )
+        .await;
+        match ret {
+            Ok(_) => panic!("missing sms code should be rejected"),
+            Err(AppError::AuthError(code)) => assert_eq!(code, "auth_sms_code_invalid"),
+            Err(_) => panic!("expect auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_password_v2_should_require_bound_phone() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "NoPhone".to_string(),
+                email: format!("nop{}@acme.org", Uuid::new_v4()),
+                password: "123456".to_string(),
+            })
+            .await?;
+
+        let ret = set_password_v2_handler(
+            Extension(user),
+            State(state),
+            Json(SetPasswordV2Input {
+                password: "654321".to_string(),
+                sms_code: Some("112233".to_string()),
+            }),
+        )
+        .await;
+        match ret {
+            Ok(_) => panic!("missing bound phone should be rejected"),
+            Err(AppError::AuthError(code)) => assert_eq!(code, "auth_phone_bind_required"),
             Err(_) => panic!("expect auth error"),
         }
         Ok(())

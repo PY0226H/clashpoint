@@ -124,7 +124,20 @@ Content-Type: application/json
 
 @wechatAccessToken = {{wechatBindNoPassword.response.body.accessToken}}
 
-### set password after wechat bind
+### send sms for set password
+
+# @name setPasswordSms
+POST http://localhost:6688/api/auth/v2/sms/send
+Content-Type: application/json
+
+{
+    "phone": "13800138123",
+    "scene": "bind_phone"
+}
+
+@setPasswordSmsCode = {{setPasswordSms.response.body.debugCode}}
+
+### set password after wechat bind (requires sms verify)
 
 # @name setPasswordAfterWechat
 POST http://localhost:6688/api/auth/v2/password/set
@@ -132,7 +145,8 @@ Authorization: Bearer {{wechatAccessToken}}
 Content-Type: application/json
 
 {
-    "password": "654321"
+    "password": "654321",
+    "smsCode": "{{setPasswordSmsCode}}"
 }
 
 ### signin by phone + password after set password
