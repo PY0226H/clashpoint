@@ -13,8 +13,8 @@ use std::sync::{
 };
 use tokio::net::TcpListener;
 
-async fn seed_topic_and_session(state: &AppState, ws_id: i64, status: &str) -> Result<i64> {
-    fixture_seed_judge_topic_and_session(state, ws_id, status, "topic-dispatch").await
+async fn seed_topic_and_session(state: &AppState, status: &str) -> Result<i64> {
+    fixture_seed_judge_topic_and_session(state, status, "topic-dispatch").await
 }
 
 async fn seed_running_job(
@@ -23,7 +23,7 @@ async fn seed_running_job(
     attempts: i32,
     lock_secs_offset: Option<i64>,
 ) -> Result<i64> {
-    fixture_seed_running_judge_job(state, 1, session_id, 1, attempts, lock_secs_offset).await
+    fixture_seed_running_judge_job(state, session_id, 1, attempts, lock_secs_offset).await
 }
 
 async fn spawn_mock_dispatch_server() -> Result<(String, Arc<AtomicUsize>)> {
@@ -119,8 +119,8 @@ async fn seed_messages(state: &AppState, session_id: i64, count: i64) -> Result<
     for idx in 0..count {
         sqlx::query(
             r#"
-            INSERT INTO session_messages(ws_id, session_id, user_id, side, content)
-            VALUES (1, $1, 1, 'pro', $2)
+            INSERT INTO session_messages(session_id, user_id, side, content)
+            VALUES ($1, 1, 'pro', $2)
             "#,
         )
         .bind(session_id)
@@ -134,7 +134,7 @@ async fn seed_messages(state: &AppState, session_id: i64, count: i64) -> Result<
 #[tokio::test]
 async fn load_dispatch_payload_should_include_recent_messages_ordered_asc() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
     seed_messages(&state, session_id, 3).await?;
 
@@ -171,7 +171,7 @@ async fn dispatch_payload_should_blind_user_id_and_use_speaker_tag() -> Result<(
     inner.config.ai_judge.service_base_url = service_base_url;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     seed_messages(&state, session_id, 2).await?;
     let _job_id = seed_running_job(&state, session_id, 0, None).await?;
 
@@ -181,13 +181,6 @@ async fn dispatch_payload_should_blind_user_id_and_use_speaker_tag() -> Result<(
 
     let captured = payloads.lock().expect("capture lock poisoned");
     assert_eq!(captured.len(), 1);
-    assert!(
-        captured[0]
-            .get("job")
-            .and_then(|v| v.get("ws_id"))
-            .is_none(),
-        "dispatch payload should not include legacy ws_id in job"
-    );
     let messages = captured[0]
         .get("messages")
         .and_then(Value::as_array)
@@ -250,7 +243,7 @@ async fn dispatch_pending_judge_jobs_once_should_mark_failed_after_max_attempts(
     inner.config.ai_judge.service_base_url = "http://127.0.0.1:9".to_string();
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -287,7 +280,7 @@ async fn dispatch_pending_judge_jobs_once_should_not_redispatch_within_callback_
     inner.config.ai_judge.service_base_url = service_base_url;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     seed_messages(&state, session_id, 2).await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
@@ -326,7 +319,7 @@ async fn dispatch_pending_judge_jobs_once_should_mark_timeout_failed_when_attemp
     inner.config.ai_judge.dispatch_batch_size = 20;
     inner.config.ai_judge.dispatch_callback_wait_secs = 60;
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 2, Some(-10)).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -368,7 +361,7 @@ async fn dispatch_pending_judge_jobs_once_should_mark_failed_when_response_rejec
         .await?;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -412,7 +405,7 @@ async fn dispatch_pending_judge_jobs_once_should_mark_terminal_failed_immediatel
         .await?;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -456,7 +449,7 @@ async fn dispatch_pending_judge_jobs_once_should_mark_failed_when_response_job_i
         .await?;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -495,7 +488,7 @@ async fn dispatch_pending_judge_jobs_once_should_mark_terminal_failed_on_http_40
         spawn_mock_dispatch_server_with_status(StatusCode::BAD_REQUEST).await?;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -534,7 +527,7 @@ async fn dispatch_pending_judge_jobs_once_should_keep_running_on_http_500_when_r
         spawn_mock_dispatch_server_with_status(StatusCode::INTERNAL_SERVER_ERROR).await?;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -574,7 +567,7 @@ async fn dispatch_pending_judge_jobs_once_should_keep_running_on_http_429_when_r
         spawn_mock_dispatch_server_with_status(StatusCode::TOO_MANY_REQUESTS).await?;
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;
@@ -613,7 +606,7 @@ async fn dispatch_pending_judge_jobs_once_should_count_failed_network_when_dispa
     inner.config.ai_judge.service_base_url = "http://127.0.0.1:9".to_string();
     inner.config.ai_judge.dispatch_path = "/internal/judge/dispatch".to_string();
 
-    let session_id = seed_topic_and_session(&state, 2, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_job(&state, session_id, 0, None).await?;
 
     let tick = state.dispatch_pending_judge_jobs_once().await?;

@@ -6,12 +6,12 @@ use crate::test_fixtures::{
 use anyhow::Result;
 use std::sync::Arc;
 
-async fn seed_topic_and_session(state: &AppState, ws_id: i64, status: &str) -> Result<i64> {
-    fixture_seed_judge_topic_and_session(state, ws_id, status, "topic-ai").await
+async fn seed_topic_and_session(state: &AppState, status: &str) -> Result<i64> {
+    fixture_seed_judge_topic_and_session(state, status, "topic-ai").await
 }
 
 async fn seed_running_judge_job(state: &AppState, session_id: i64) -> Result<i64> {
-    fixture_seed_running_judge_job(state, 1, session_id, 1, 0, None).await
+    fixture_seed_running_judge_job(state, session_id, 1, 0, None).await
 }
 
 async fn join_user_to_session(state: &AppState, session_id: i64, user_id: i64) -> Result<()> {

@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[tokio::test]
 async fn request_judge_job_handler_should_return_style_mode_source() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -44,7 +44,7 @@ async fn request_judge_job_handler_should_ignore_request_style_mode() -> Result<
     let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
     inner.config.ai_judge.style_mode = "entertaining".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -71,7 +71,7 @@ async fn request_judge_job_handler_should_ignore_request_style_mode() -> Result<
 async fn get_latest_judge_report_handler_should_apply_max_stage_count_and_return_meta() -> Result<()>
 {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
     let job_id = seed_running_judge_job(&state, session_id).await?;
 

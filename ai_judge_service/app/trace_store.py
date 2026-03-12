@@ -1098,10 +1098,7 @@ class RedisTraceStore(TraceStoreProtocol):
         return AuditAlertRecord(
             alert_id=str(payload.get("alert_id") or ""),
             job_id=_coerce_int(payload.get("job_id"), default=0),
-            scope_id=_coerce_int(
-                payload.get("scope_id", payload.get("ws_id")),
-                default=0,
-            ),
+            scope_id=_coerce_int(payload.get("scope_id"), default=0),
             trace_id=str(payload.get("trace_id") or ""),
             alert_type=_normalize_token(payload.get("alert_type")) or "unknown",
             severity=_normalize_token(payload.get("severity")) or "warning",
@@ -1168,10 +1165,7 @@ class RedisTraceStore(TraceStoreProtocol):
         return AlertOutboxEvent(
             event_id=str(payload.get("event_id") or ""),
             channel=str(payload.get("channel") or "ai_judge_audit_alert"),
-            scope_id=_coerce_int(
-                payload.get("scope_id", payload.get("ws_id")),
-                default=0,
-            ),
+            scope_id=_coerce_int(payload.get("scope_id"), default=0),
             job_id=_coerce_int(payload.get("job_id"), default=0),
             trace_id=str(payload.get("trace_id") or ""),
             alert_id=str(payload.get("alert_id") or ""),

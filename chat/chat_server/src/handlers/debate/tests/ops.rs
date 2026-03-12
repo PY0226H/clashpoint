@@ -59,7 +59,7 @@ async fn request_judge_rejudge_ops_handler_should_accept_when_report_exists() ->
     let (_tdb, state) = AppState::new_for_test().await?;
     state.grant_platform_admin(1).await?;
     let owner = state.find_user_by_id(1).await?.expect("owner should exist");
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
     state
         .submit_judge_report(
@@ -443,8 +443,7 @@ async fn upsert_ops_service_split_review_handler_should_emit_transition_alert_on
         r#"
         SELECT COUNT(1)::bigint
         FROM ops_alert_notifications
-        WHERE ws_id = 1
-          AND alert_key = 'split_readiness_review_required'
+        WHERE alert_key = 'split_readiness_review_required'
           AND alert_status = 'raised'
         "#,
     )
@@ -469,8 +468,7 @@ async fn upsert_ops_service_split_review_handler_should_emit_transition_alert_on
         r#"
         SELECT COUNT(1)::bigint
         FROM ops_alert_notifications
-        WHERE ws_id = 1
-          AND alert_key = 'split_readiness_review_required'
+        WHERE alert_key = 'split_readiness_review_required'
           AND alert_status = 'raised'
         "#,
     )
@@ -514,8 +512,7 @@ async fn upsert_ops_service_split_review_handler_should_emit_cleared_alert_once_
         r#"
         SELECT COUNT(1)::bigint
         FROM ops_alert_notifications
-        WHERE ws_id = 1
-          AND alert_key = 'split_readiness_review_required'
+        WHERE alert_key = 'split_readiness_review_required'
           AND alert_status = 'cleared'
         "#,
     )
@@ -540,8 +537,7 @@ async fn upsert_ops_service_split_review_handler_should_emit_cleared_alert_once_
         r#"
         SELECT COUNT(1)::bigint
         FROM ops_alert_notifications
-        WHERE ws_id = 1
-          AND alert_key = 'split_readiness_review_required'
+        WHERE alert_key = 'split_readiness_review_required'
           AND alert_status = 'cleared'
         "#,
     )
@@ -556,8 +552,7 @@ async fn upsert_ops_service_split_review_handler_should_emit_cleared_alert_once_
         r#"
         SELECT is_active
         FROM ops_alert_states
-        WHERE ws_id = 1
-          AND alert_key = 'split_readiness_review_required'
+        WHERE alert_key = 'split_readiness_review_required'
         "#,
     )
     .fetch_one(&state.pool)
@@ -716,13 +711,12 @@ async fn run_ops_observability_evaluation_once_handler_with_dry_run_should_not_e
             },
         )
         .await?;
-    insert_kafka_dlq_event(&state, 1, "dry-run-dlq-1", serde_json::json!({"k":"v"})).await?;
+    insert_kafka_dlq_event(&state, "dry-run-dlq-1", serde_json::json!({"k":"v"})).await?;
 
     let before_count: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(1)::bigint
         FROM ops_alert_notifications
-        WHERE ws_id = 1
         "#,
     )
     .fetch_one(&state.pool)
@@ -745,7 +739,6 @@ async fn run_ops_observability_evaluation_once_handler_with_dry_run_should_not_e
         r#"
         SELECT COUNT(1)::bigint
         FROM ops_alert_notifications
-        WHERE ws_id = 1
         "#,
     )
     .fetch_one(&state.pool)
@@ -865,7 +858,7 @@ async fn kafka_dlq_handlers_should_list_replay_and_discard() -> Result<()> {
         )
         .await?;
 
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
     let envelope = crate::event_bus::EventEnvelope::new(
         "ai.judge.job.created",
@@ -881,20 +874,10 @@ async fn kafka_dlq_handlers_should_list_replay_and_discard() -> Result<()> {
             "requestedAt": Utc::now(),
         }),
     );
-    let replay_id = insert_kafka_dlq_event(
-        &state,
-        1,
-        "replay-event-1",
-        serde_json::to_value(&envelope)?,
-    )
-    .await?;
-    let discard_id = insert_kafka_dlq_event(
-        &state,
-        1,
-        "discard-event-1",
-        serde_json::to_value(&envelope)?,
-    )
-    .await?;
+    let replay_id =
+        insert_kafka_dlq_event(&state, "replay-event-1", serde_json::to_value(&envelope)?).await?;
+    let discard_id =
+        insert_kafka_dlq_event(&state, "discard-event-1", serde_json::to_value(&envelope)?).await?;
 
     let list_resp = list_kafka_dlq_events_handler(
         Extension(viewer.clone()),
@@ -938,7 +921,7 @@ async fn list_ops_alert_notifications_handler_should_return_rows() -> Result<()>
     let (_tdb, state) = AppState::new_for_test().await?;
     state.grant_platform_admin(1).await?;
     let owner = state.find_user_by_id(1).await?.expect("owner should exist");
-    insert_ops_alert_notification(&state, 1, "high_retry").await?;
+    insert_ops_alert_notification(&state, "high_retry").await?;
 
     let response = list_ops_alert_notifications_handler(
         Extension(owner),

@@ -42,12 +42,11 @@ impl AppState {
 
         let msg: DebateMessage = sqlx::query_as(
             r#"
-            INSERT INTO session_messages(ws_id, session_id, user_id, side, content)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO session_messages(session_id, user_id, side, content)
+            VALUES ($1, $2, $3, $4)
             RETURNING id, session_id, user_id, side, content, created_at
             "#,
         )
-        .bind(1_i64)
         .bind(session_id as i64)
         .bind(user.id)
         .bind(side)
@@ -299,14 +298,13 @@ impl AppState {
         let pin: PinRecord = sqlx::query_as(
             r#"
             INSERT INTO session_pinned_messages(
-                ws_id, session_id, message_id, user_id, ledger_id,
+                session_id, message_id, user_id, ledger_id,
                 cost_coins, pin_seconds, pinned_at, expires_at, status
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
             RETURNING id, session_id, message_id, pin_seconds, expires_at, cost_coins
             "#,
         )
-        .bind(1_i64)
         .bind(msg.session_id)
         .bind(msg.id)
         .bind(user.id)

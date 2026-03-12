@@ -4,30 +4,27 @@ use chrono::Duration;
 
 async fn seed_topic_and_session(
     state: &AppState,
-    ws_id: i64,
     status: &str,
     max_per_side: i32,
 ) -> Result<(i64, i64)> {
     let topic_id: (i64,) = sqlx::query_as(
             r#"
-            INSERT INTO debate_topics(ws_id, title, description, category, stance_pro, stance_con, context_seed, is_active, created_by)
-            VALUES ($1, 'Should we nerf weapon X?', 'balance discussion', 'game', 'nerf', 'keep', 'meta notes', true, 1)
+            INSERT INTO debate_topics(title, description, category, stance_pro, stance_con, context_seed, is_active, created_by)
+            VALUES ('Should we nerf weapon X?', 'balance discussion', 'game', 'nerf', 'keep', 'meta notes', true, 1)
             RETURNING id
             "#,
         )
-        .bind(ws_id)
         .fetch_one(&state.pool)
         .await?;
 
     let now = Utc::now();
     let session_id: (i64,) = sqlx::query_as(
             r#"
-            INSERT INTO debate_sessions(ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO debate_sessions(topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
             "#,
         )
-        .bind(ws_id)
         .bind(topic_id.0)
         .bind(status)
         .bind(now - Duration::minutes(5))
@@ -48,12 +45,7 @@ async fn session_status(state: &AppState, session_id: i64) -> Result<String> {
     Ok(row.0)
 }
 
-async fn set_wallet_balance(
-    state: &AppState,
-    _ws_id: i64,
-    user_id: i64,
-    balance: i64,
-) -> Result<()> {
+async fn set_wallet_balance(state: &AppState, user_id: i64, balance: i64) -> Result<()> {
     sqlx::query(
         r#"
             INSERT INTO user_wallets(user_id, balance)

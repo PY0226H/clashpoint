@@ -5,10 +5,10 @@ async fn list_debate_topics_should_filter_by_category() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     sqlx::query(
             r#"
-            INSERT INTO debate_topics(ws_id, title, description, category, stance_pro, stance_con, is_active, created_by)
+            INSERT INTO debate_topics(title, description, category, stance_pro, stance_con, is_active, created_by)
             VALUES
-                (1, 'topic-game', 'desc', 'game', 'pro', 'con', true, 1),
-                (1, 'topic-sports', 'desc', 'sports', 'pro', 'con', true, 1)
+                ('topic-game', 'desc', 'game', 'pro', 'con', true, 1),
+                ('topic-sports', 'desc', 'sports', 'pro', 'con', true, 1)
             "#,
         )
         .execute(&state.pool)
@@ -29,7 +29,7 @@ async fn list_debate_topics_should_filter_by_category() -> Result<()> {
 #[tokio::test]
 async fn list_debate_sessions_should_return_joinable_flag() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
 
     let rows = state
         .list_debate_sessions(ListDebateSessions {
@@ -52,18 +52,17 @@ async fn list_debate_sessions_should_return_joinable_flag() -> Result<()> {
 #[tokio::test]
 async fn list_debate_sessions_should_not_mark_future_open_as_joinable() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (topic_id, _) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (topic_id, _) = seed_topic_and_session(&state, "open", 10).await?;
     let now = Utc::now();
     let future_session_id: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO debate_sessions(
-            ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+            topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
         )
-        VALUES ($1, $2, 'open', $3, NULL, $4, 10)
+        VALUES ($1, 'open', $2, NULL, $3, 10)
         RETURNING id
         "#,
     )
-    .bind(1_i64)
     .bind(topic_id)
     .bind(now + Duration::minutes(15))
     .bind(now + Duration::minutes(45))
@@ -181,7 +180,7 @@ async fn create_debate_session_by_owner_should_validate_status_and_topic() -> Re
         .find_user_by_id(1)
         .await?
         .expect("owner user should exist");
-    let (topic_id, _) = seed_topic_and_session(&state, 1, "scheduled", 50).await?;
+    let (topic_id, _) = seed_topic_and_session(&state, "scheduled", 50).await?;
 
     let now = Utc::now();
     let session = state
@@ -324,7 +323,7 @@ async fn update_debate_session_by_owner_should_validate_and_update() -> Result<(
         .await?
         .expect("owner user should exist");
 
-    let (topic_id, session_id) = seed_topic_and_session(&state, 1, "scheduled", 5).await?;
+    let (topic_id, session_id) = seed_topic_and_session(&state, "scheduled", 5).await?;
     for user_id in [1_i64, 2_i64] {
         sqlx::query(
             "INSERT INTO session_participants(session_id, user_id, side) VALUES ($1, $2, 'pro')",

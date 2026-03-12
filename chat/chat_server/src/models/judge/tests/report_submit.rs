@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn submit_judge_report_should_persist_report_and_mark_job_succeeded() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
     let ret = state
@@ -91,7 +91,7 @@ async fn submit_judge_report_should_persist_report_and_mark_job_succeeded() -> R
 #[tokio::test]
 async fn submit_judge_report_should_be_idempotent_by_job_id() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
     let input = SubmitJudgeReportInput {
         winner: "con".to_string(),
@@ -129,7 +129,7 @@ async fn submit_judge_report_should_be_idempotent_by_job_id() -> Result<()> {
 #[tokio::test]
 async fn mark_judge_job_failed_should_update_status_and_be_idempotent() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
     let first = state
         .mark_judge_job_failed(
@@ -156,7 +156,7 @@ async fn mark_judge_job_failed_should_update_status_and_be_idempotent() -> Resul
 #[tokio::test]
 async fn mark_judge_job_failed_should_reject_when_report_exists() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
     state
@@ -204,7 +204,7 @@ async fn mark_judge_job_failed_should_reject_when_report_exists() -> Result<()> 
 #[tokio::test]
 async fn submit_judge_report_should_create_draw_vote_when_needed() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     join_user_to_session(&state, session_id, 2).await?;
     join_user_to_session(&state, session_id, 3).await?;

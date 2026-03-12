@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn advance_debate_sessions_should_open_due_scheduled_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "scheduled", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "scheduled", 10).await?;
 
     let report = state.advance_debate_sessions(100).await?;
     assert_eq!(report.opened, 1);
@@ -14,7 +14,7 @@ async fn advance_debate_sessions_should_open_due_scheduled_session() -> Result<(
 #[tokio::test]
 async fn advance_debate_sessions_should_move_open_to_running_when_has_participants() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
 
     sqlx::query("UPDATE debate_sessions SET pro_count = 1 WHERE id = $1")
         .bind(session_id)
@@ -30,7 +30,7 @@ async fn advance_debate_sessions_should_move_open_to_running_when_has_participan
 #[tokio::test]
 async fn advance_debate_sessions_should_move_running_to_judging_then_closed() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
 
     sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
         .bind(session_id)
@@ -57,7 +57,7 @@ async fn advance_debate_sessions_should_move_running_to_judging_then_closed() ->
 #[tokio::test]
 async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judging() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
     sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
         .bind(session_id)
         .execute(&state.pool)
@@ -111,7 +111,7 @@ async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judgin
 #[tokio::test]
 async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
     sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
         .bind(session_id)
         .execute(&state.pool)
@@ -120,10 +120,10 @@ async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -
     sqlx::query(
         r#"
         INSERT INTO judge_jobs(
-            ws_id, session_id, requested_by, status, style_mode,
+            session_id, requested_by, status, style_mode,
             requested_at, started_at, created_at, updated_at
         )
-        VALUES (1, $1, 1, 'running', 'rational', NOW(), NULL, NOW(), NOW())
+        VALUES ($1, 1, 'running', 'rational', NOW(), NULL, NOW(), NOW())
         "#,
     )
     .bind(session_id)
@@ -152,7 +152,7 @@ async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -
 async fn advance_debate_sessions_should_backfill_auto_judge_for_existing_judging_session(
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "judging", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "judging", 10).await?;
 
     let first = state.advance_debate_sessions(100).await?;
     assert_eq!(first.judging, 0);
@@ -180,7 +180,7 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_existing_judging
 async fn advance_debate_sessions_should_backfill_auto_judge_for_closed_session_without_report(
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "closed", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "closed", 10).await?;
 
     let report = state.advance_debate_sessions(100).await?;
     assert_eq!(report.judging, 0);

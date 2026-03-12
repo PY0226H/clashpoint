@@ -208,9 +208,9 @@ mod tests {
     async fn resolve_file_path_should_reject_symlink_escape() -> Result<()> {
         use std::os::unix::fs::symlink;
 
-        let workspace_dir = temp_base_dir("symlink");
-        let base_dir = workspace_dir.join("base");
-        let outside_dir = workspace_dir.join("outside");
+        let temp_root_dir = temp_base_dir("symlink");
+        let base_dir = temp_root_dir.join("base");
+        let outside_dir = temp_root_dir.join("outside");
         fs::create_dir_all(&base_dir).await?;
         fs::create_dir_all(&outside_dir).await?;
         let outside_file = outside_dir.join("secret.txt");
@@ -220,7 +220,7 @@ mod tests {
         let result = resolve_file_path(&base_dir, "link/secret.txt").await;
         assert!(matches!(result, Err(AppError::NotFound(_))));
 
-        fs::remove_dir_all(workspace_dir).await?;
+        fs::remove_dir_all(temp_root_dir).await?;
         Ok(())
     }
 }

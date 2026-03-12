@@ -3360,24 +3360,25 @@ mod tests {
     }
 
     #[test]
-    fn normalize_ai_judge_outbox_event_should_ignore_legacy_wsid_alias() {
+    fn normalize_ai_judge_outbox_event_should_ignore_unknown_scope_fields() {
         let item = AiJudgeOutboxItem {
             event_id: "evt-3".to_string(),
             scope_id: None,
             job_id: Some(3001),
-            trace_id: Some("trace-legacy-wsid".to_string()),
-            alert_id: Some("alert-legacy-wsid".to_string()),
+            trace_id: Some("trace-unknown-scope".to_string()),
+            alert_id: Some("alert-unknown-scope".to_string()),
             status: Some("raised".to_string()),
             payload: serde_json::json!({
                 "eventType": "ai_judge.audit_alert.status_changed.v1",
-                "wsId": 99,
+                "legacyScopeId": 99,
                 "alertType": "judge_timeout",
                 "severity": "warning",
                 "title": "legacy",
-                "message": "legacy wsid should be ignored"
+                "message": "unknown scope field should be ignored"
             }),
         };
-        let ret = normalize_ai_judge_outbox_event(item).expect("legacy wsid should not be parsed");
+        let ret = normalize_ai_judge_outbox_event(item)
+            .expect("unknown scope field should not be parsed");
         assert_eq!(ret.metrics["scopeId"], Value::from(PLATFORM_SCOPE_ID));
     }
 }

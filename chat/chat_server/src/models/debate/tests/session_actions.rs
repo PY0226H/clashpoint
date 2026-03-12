@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn join_debate_session_should_work_and_be_idempotent() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user = state
         .find_user_by_id(1)
         .await?
@@ -39,7 +39,7 @@ async fn join_debate_session_should_work_and_be_idempotent() -> Result<()> {
 #[tokio::test]
 async fn join_debate_session_should_reject_invalid_side() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user = state
         .find_user_by_id(1)
         .await?
@@ -62,7 +62,7 @@ async fn join_debate_session_should_reject_invalid_side() -> Result<()> {
 #[tokio::test]
 async fn join_debate_session_should_reject_side_switch() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user = state
         .find_user_by_id(1)
         .await?
@@ -95,7 +95,7 @@ async fn join_debate_session_should_reject_side_switch() -> Result<()> {
 #[tokio::test]
 async fn join_debate_session_should_reject_future_open_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (topic_id, _) = seed_topic_and_session(&state, 1, "scheduled", 10).await?;
+    let (topic_id, _) = seed_topic_and_session(&state, "scheduled", 10).await?;
     let user = state
         .find_user_by_id(1)
         .await?
@@ -104,13 +104,12 @@ async fn join_debate_session_should_reject_future_open_session() -> Result<()> {
     let session_id: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO debate_sessions(
-            ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+            topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
         )
-        VALUES ($1, $2, 'open', $3, NULL, $4, 10)
+        VALUES ($1, 'open', $2, NULL, $3, 10)
         RETURNING id
         "#,
     )
-    .bind(1_i64)
     .bind(topic_id)
     .bind(now + Duration::minutes(10))
     .bind(now + Duration::minutes(30))
@@ -134,7 +133,7 @@ async fn join_debate_session_should_reject_future_open_session() -> Result<()> {
 #[tokio::test]
 async fn create_debate_message_should_require_join_and_write_side() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user = state
         .find_user_by_id(1)
         .await?
@@ -180,7 +179,7 @@ async fn create_debate_message_should_require_join_and_write_side() -> Result<()
 #[tokio::test]
 async fn list_debate_messages_should_allow_spectator_when_running() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
     let user1 = state
         .find_user_by_id(1)
         .await?
@@ -227,7 +226,7 @@ async fn list_debate_messages_should_allow_spectator_when_running() -> Result<()
 #[tokio::test]
 async fn list_debate_messages_should_reject_spectator_when_not_running() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user1 = state
         .find_user_by_id(1)
         .await?
@@ -274,7 +273,7 @@ async fn list_debate_messages_should_reject_spectator_when_not_running() -> Resu
 #[tokio::test]
 async fn pin_debate_message_should_debit_wallet_and_be_idempotent() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user = state
         .find_user_by_id(1)
         .await?
@@ -289,7 +288,7 @@ async fn pin_debate_message_should_debit_wallet_and_be_idempotent() -> Result<()
             },
         )
         .await?;
-    set_wallet_balance(&state, 1, 1, 200).await?;
+    set_wallet_balance(&state, 1, 200).await?;
     let msg = state
         .create_debate_message(
             session_id as u64,
@@ -332,7 +331,7 @@ async fn pin_debate_message_should_debit_wallet_and_be_idempotent() -> Result<()
         r#"
             SELECT balance
             FROM user_wallets
-            WHERE ws_id = 1 AND user_id = 1
+            WHERE user_id = 1
             "#,
     )
     .fetch_one(&state.pool)
@@ -344,7 +343,7 @@ async fn pin_debate_message_should_debit_wallet_and_be_idempotent() -> Result<()
 #[tokio::test]
 async fn list_debate_pinned_messages_should_allow_spectator_when_running() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "running", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
     let user1 = state
         .find_user_by_id(1)
         .await?
@@ -363,7 +362,7 @@ async fn list_debate_pinned_messages_should_allow_spectator_when_running() -> Re
             },
         )
         .await?;
-    set_wallet_balance(&state, 1, 1, 200).await?;
+    set_wallet_balance(&state, 1, 200).await?;
     let msg = state
         .create_debate_message(
             session_id as u64,
@@ -402,7 +401,7 @@ async fn list_debate_pinned_messages_should_allow_spectator_when_running() -> Re
 #[tokio::test]
 async fn pin_debate_message_should_reject_insufficient_balance_and_non_owner() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let (_topic_id, session_id) = seed_topic_and_session(&state, 1, "open", 10).await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let user1 = state
         .find_user_by_id(1)
         .await?
@@ -454,7 +453,7 @@ async fn pin_debate_message_should_reject_insufficient_balance_and_non_owner() -
         .expect_err("non owner pin should fail");
     assert!(matches!(non_owner_err, AppError::DebateConflict(_)));
 
-    set_wallet_balance(&state, 1, 1, 5).await?;
+    set_wallet_balance(&state, 1, 5).await?;
     let no_balance_err = state
         .pin_debate_message(
             msg.id as u64,

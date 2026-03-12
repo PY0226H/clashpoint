@@ -5,7 +5,7 @@
     "request": {
       "job": {
         "job_id": 1,
-        "ws_id": 1,
+        "scope_id": 1,
         "session_id": 1,
         "requested_by": 1,
         "style_mode": "rational",

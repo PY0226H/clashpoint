@@ -204,8 +204,6 @@ struct DebateDrawVoteResolvedPayload {
 struct OpsObservabilityAlertPayload {
     #[serde(default)]
     scope_id: Option<i64>,
-    #[serde(default)]
-    ws_id: Option<i64>,
     alert_key: String,
     rule_type: String,
     severity: String,
@@ -402,7 +400,7 @@ impl Notification {
             "ops_observability_alert" => {
                 let payload: OpsObservabilityAlertPayload = serde_json::from_str(payload)?;
                 let event = OpsObservabilityAlert {
-                    scope_id: payload.scope_id.or(payload.ws_id).unwrap_or(1),
+                    scope_id: payload.scope_id.unwrap_or(1),
                     alert_key: payload.alert_key,
                     rule_type: payload.rule_type,
                     severity: payload.severity,
@@ -711,6 +709,33 @@ mod tests {
                 assert_eq!(v.alert_key, "high_retry");
                 assert_eq!(v.status, "raised");
                 assert_eq!(v.metrics["avgDispatchAttempts"], 2.2);
+            }
+            _ => panic!("expected OpsObservabilityAlert event"),
+        }
+    }
+
+    #[test]
+    fn notification_load_should_ignore_unknown_scope_field_for_ops_observability_alert() {
+        let payload = r#"{
+            "legacyScopeId": 99,
+            "alert_key": "high_retry",
+            "rule_type": "high_retry",
+            "severity": "warning",
+            "status": "raised",
+            "title": "legacy scope id",
+            "message": "legacy field should be ignored",
+            "metrics": {"avgDispatchAttempts": 2.2},
+            "user_ids": [1]
+        }"#;
+        let notif = Notification::load("ops_observability_alert", payload).unwrap();
+        assert_eq!(notif.user_ids, HashSet::from([1_u64]));
+        match notif.event.as_ref() {
+            AppEvent::OpsObservabilityAlert(v) => {
+                assert_eq!(
+                    v.scope_id, 1,
+                    "unknown scope field should not drive scope_id"
+                );
+                assert_eq!(v.alert_key, "high_retry");
             }
             _ => panic!("expected OpsObservabilityAlert event"),
         }

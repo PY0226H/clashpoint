@@ -27,16 +27,15 @@ impl AppState {
         let row = sqlx::query_as(
             r#"
             INSERT INTO debate_topics(
-                ws_id, title, description, category, stance_pro, stance_con,
+                title, description, category, stance_pro, stance_con,
                 context_seed, is_active, created_by
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING
                 id, title, description, category, stance_pro, stance_con,
                 context_seed, is_active, created_by, created_at, updated_at
             "#,
         )
-        .bind(1_i64)
         .bind(title)
         .bind(description)
         .bind(category)
@@ -106,9 +105,9 @@ impl AppState {
         let row = sqlx::query_as(
             r#"
             INSERT INTO debate_sessions(
-                ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+                topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
             )
-            VALUES ($1, $2, $3, $4, NULL, $5, $6)
+            VALUES ($1, $2, $3, NULL, $4, $5)
             RETURNING
                 id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
                 max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
@@ -119,7 +118,6 @@ impl AppState {
                 ) AS joinable
             "#,
         )
-        .bind(1_i64)
         .bind(input.topic_id as i64)
         .bind(status)
         .bind(input.scheduled_start_at)

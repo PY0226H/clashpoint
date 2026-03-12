@@ -192,14 +192,13 @@ impl AppState {
         let job: JudgeJobRow = sqlx::query_as(
             r#"
             INSERT INTO judge_jobs(
-                ws_id, session_id, requested_by, status, style_mode, rejudge_triggered,
+                session_id, requested_by, status, style_mode, rejudge_triggered,
                 requested_at, started_at, created_at, updated_at
             )
-            VALUES ($1, $2, $3, 'running', $4, $5, NOW(), NULL, NOW(), NOW())
+            VALUES ($1, $2, 'running', $3, $4, NOW(), NULL, NOW(), NOW())
             RETURNING id, status, style_mode, rejudge_triggered, requested_at
             "#,
         )
-        .bind(1_i64)
         .bind(session_id as i64)
         .bind(user.id)
         .bind(&style_mode)

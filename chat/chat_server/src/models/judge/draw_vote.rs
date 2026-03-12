@@ -130,12 +130,12 @@ impl AppState {
             let insert_result: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 r#"
                 INSERT INTO debate_sessions(
-                    ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
+                    topic_id, status, scheduled_start_at, actual_start_at, end_at,
                     max_participants_per_side, pro_count, con_count, hot_score,
                     parent_session_id, rematch_round, created_at, updated_at
                 )
                 VALUES (
-                    1, $1, 'scheduled', $2, NULL, $3,
+                    $1, 'scheduled', $2, NULL, $3,
                     $4, 0, 0, 0,
                     $5, $6, NOW(), NOW()
                 )
@@ -217,11 +217,11 @@ impl AppState {
         sqlx::query(
             r#"
             INSERT INTO judge_draw_votes(
-                ws_id, session_id, report_id, threshold_percent, eligible_voters, required_voters,
+                session_id, report_id, threshold_percent, eligible_voters, required_voters,
                 voting_ends_at, status, resolution, created_at, updated_at
             )
             VALUES (
-                1, $1, $2, $3, $4, $5,
+                $1, $2, $3, $4, $5,
                 NOW() + ($6::bigint * INTERVAL '1 second'),
                 'open', 'pending', NOW(), NOW()
             )
@@ -429,9 +429,9 @@ impl AppState {
         sqlx::query(
             r#"
             INSERT INTO judge_draw_vote_ballots(
-                vote_id, ws_id, session_id, report_id, user_id, agree_draw, voted_at
+                vote_id, session_id, report_id, user_id, agree_draw, voted_at
             )
-            VALUES ($1, 1, $2, $3, $4, $5, NOW())
+            VALUES ($1, $2, $3, $4, $5, NOW())
             ON CONFLICT (vote_id, user_id)
             DO UPDATE
             SET agree_draw = EXCLUDED.agree_draw,

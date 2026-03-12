@@ -60,9 +60,9 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO auth_refresh_sessions (
-                ws_id, user_id, sid, family_id, current_jti, expires_at, created_at, updated_at
+                user_id, sid, family_id, current_jti, expires_at, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, NOW() + interval '1 day', NOW(), NOW())
+            VALUES ($1, $2, $3, $4, NOW() + interval '1 day', NOW(), NOW())
             ON CONFLICT (sid) DO UPDATE
             SET current_jti = EXCLUDED.current_jti,
                 family_id = EXCLUDED.family_id,
@@ -72,7 +72,6 @@ mod tests {
                 updated_at = NOW()
             "#,
         )
-        .bind(1_i64)
         .bind(user.id)
         .bind(sid)
         .bind(family_id)

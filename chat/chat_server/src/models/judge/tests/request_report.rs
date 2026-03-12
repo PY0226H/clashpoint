@@ -9,8 +9,8 @@ async fn seed_session_message(
 ) -> Result<i64> {
     let row: (i64,) = sqlx::query_as(
         r#"
-        INSERT INTO session_messages(ws_id, session_id, user_id, side, content)
-        VALUES (1, $1, $2, $3, $4)
+        INSERT INTO session_messages(session_id, user_id, side, content)
+        VALUES ($1, $2, $3, $4)
         RETURNING id
         "#,
     )
@@ -26,7 +26,7 @@ async fn seed_session_message(
 #[tokio::test]
 async fn request_judge_job_should_create_running_job_with_default_style() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -51,7 +51,7 @@ async fn request_judge_job_should_create_running_job_with_default_style() -> Res
 #[tokio::test]
 async fn request_judge_job_should_be_idempotent_with_running_job() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -92,7 +92,7 @@ async fn request_judge_job_should_use_system_style_mode_instead_of_request_value
     let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
     inner.config.ai_judge.style_mode = "entertaining".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -118,7 +118,7 @@ async fn request_judge_job_should_fallback_to_rational_when_system_style_invalid
     let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
     inner.config.ai_judge.style_mode = "invalid-style".to_string();
 
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -141,7 +141,7 @@ async fn request_judge_job_should_fallback_to_rational_when_system_style_invalid
 #[tokio::test]
 async fn request_judge_job_should_reject_user_not_joined() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
     let err = state
@@ -162,7 +162,7 @@ async fn request_judge_job_should_reject_user_not_joined() -> Result<()> {
 #[tokio::test]
 async fn request_judge_job_should_reject_non_judging_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "running").await?;
+    let session_id = seed_topic_and_session(&state, "running").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -184,7 +184,7 @@ async fn request_judge_job_should_reject_non_judging_session() -> Result<()> {
 #[tokio::test]
 async fn get_latest_judge_report_should_return_pending_when_job_running() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "judging").await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
@@ -218,42 +218,40 @@ async fn get_latest_judge_report_should_return_pending_when_job_running() -> Res
 #[tokio::test]
 async fn get_latest_judge_report_should_return_ready_when_report_exists() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
 
     let job_id: (i64,) = sqlx::query_as(
-            r#"
+        r#"
             INSERT INTO judge_jobs(
-                ws_id, session_id, requested_by, status, style_mode, requested_at, started_at, finished_at
+                session_id, requested_by, status, style_mode, requested_at, started_at, finished_at
             )
-            VALUES ($1, $2, $3, 'succeeded', 'rational', NOW(), NOW(), NOW())
+            VALUES ($1, $2, 'succeeded', 'rational', NOW(), NOW(), NOW())
             RETURNING id
             "#,
-        )
-        .bind(1_i64)
-        .bind(session_id)
-        .bind(1_i64)
-        .fetch_one(&state.pool)
-        .await?;
+    )
+    .bind(session_id)
+    .bind(1_i64)
+    .fetch_one(&state.pool)
+    .await?;
 
     sqlx::query(
         r#"
             INSERT INTO judge_reports(
-                ws_id, session_id, job_id, winner, pro_score, con_score,
+                session_id, job_id, winner, pro_score, con_score,
                 logic_pro, logic_con, evidence_pro, evidence_con, rebuttal_pro, rebuttal_con,
                 clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode,
                 needs_draw_vote, rejudge_triggered, payload
             )
             VALUES (
-                $1, $2, $3, 'pro', 82, 74,
+                $1, $2, 'pro', 82, 74,
                 80, 72, 85, 76, 79, 71,
                 84, 77, 'pro summary', 'con summary', 'rationale', 'rational',
                 false, false, '{"trace":"ok"}'::jsonb
             )
             "#,
     )
-    .bind(1_i64)
     .bind(session_id)
     .bind(job_id.0)
     .execute(&state.pool)
@@ -293,7 +291,7 @@ async fn get_latest_judge_report_should_return_ready_when_report_exists() -> Res
 #[tokio::test]
 async fn get_latest_judge_report_should_include_stage_summaries() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
@@ -380,7 +378,7 @@ async fn get_latest_judge_report_should_include_stage_summaries() -> Result<()> 
 #[tokio::test]
 async fn get_latest_judge_report_should_limit_stage_summaries_by_query() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
@@ -467,7 +465,7 @@ async fn get_latest_judge_report_should_limit_stage_summaries_by_query() -> Resu
 #[tokio::test]
 async fn get_latest_judge_report_should_apply_stage_offset() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
@@ -554,7 +552,7 @@ async fn get_latest_judge_report_should_apply_stage_offset() -> Result<()> {
 #[tokio::test]
 async fn get_latest_judge_report_should_resolve_verdict_evidence_refs() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let user = state.find_user_by_id(1).await?.expect("user should exist");
     let job_id = seed_running_judge_job(&state, session_id).await?;
     let msg1 = seed_session_message(&state, session_id, 1, "pro", "pro evidence with data").await?;
@@ -628,7 +626,7 @@ async fn list_judge_reviews_by_owner_should_filter_anomaly_and_evidence() -> Res
     state.grant_platform_admin(1).await?;
     let owner = state.find_user_by_id(1).await?.expect("owner should exist");
 
-    let normal_session = seed_topic_and_session(&state, 1, "closed").await?;
+    let normal_session = seed_topic_and_session(&state, "closed").await?;
     let normal_job = seed_running_judge_job(&state, normal_session).await?;
     let normal_msg =
         seed_session_message(&state, normal_session, 1, "pro", "normal evidence line").await?;
@@ -665,7 +663,7 @@ async fn list_judge_reviews_by_owner_should_filter_anomaly_and_evidence() -> Res
         )
         .await?;
 
-    let abnormal_session = seed_topic_and_session(&state, 1, "closed").await?;
+    let abnormal_session = seed_topic_and_session(&state, "closed").await?;
     let abnormal_job = seed_running_judge_job(&state, abnormal_session).await?;
     state
         .submit_judge_report(
@@ -739,7 +737,7 @@ async fn request_judge_rejudge_by_owner_should_enforce_owner_and_report_requirem
         .await?
         .expect("non owner should exist");
 
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
 
     let non_owner_err = state
         .request_judge_rejudge_by_owner(session_id as u64, &non_owner)
@@ -819,7 +817,7 @@ async fn list_judge_reviews_by_owner_should_allow_ops_viewer_but_forbid_rejudge(
         )
         .await?;
 
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
     state
         .submit_judge_report(

@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn submit_draw_vote_should_decide_after_threshold_reached() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     join_user_to_session(&state, session_id, 2).await?;
     join_user_to_session(&state, session_id, 3).await?;
@@ -82,7 +82,7 @@ async fn submit_draw_vote_should_decide_after_threshold_reached() -> Result<()> 
 #[tokio::test]
 async fn get_draw_vote_status_should_auto_expire_to_open_rematch() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     join_user_to_session(&state, session_id, 2).await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
@@ -159,7 +159,7 @@ async fn get_draw_vote_status_should_auto_expire_to_open_rematch() -> Result<()>
 #[tokio::test]
 async fn submit_draw_vote_should_open_rematch_when_disagree_majority() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     join_user_to_session(&state, session_id, 2).await?;
     join_user_to_session(&state, session_id, 3).await?;
@@ -247,7 +247,7 @@ async fn submit_draw_vote_should_open_rematch_when_disagree_majority() -> Result
 #[tokio::test]
 async fn submit_draw_vote_should_reject_non_participant() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
@@ -296,7 +296,7 @@ async fn submit_draw_vote_should_reject_non_participant() -> Result<()> {
 #[tokio::test]
 async fn get_draw_vote_status_should_create_expected_next_round_rematch() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
 
@@ -332,12 +332,12 @@ async fn get_draw_vote_status_should_create_expected_next_round_rematch() -> Res
     let unexpected_round_session: (i64,) = sqlx::query_as(
         r#"
             INSERT INTO debate_sessions(
-                ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
+                topic_id, status, scheduled_start_at, actual_start_at, end_at,
                 max_participants_per_side, pro_count, con_count, hot_score,
                 parent_session_id, rematch_round, created_at, updated_at
             )
             SELECT
-                ws_id, topic_id, 'scheduled', NOW() + INTERVAL '30 minute', NULL, NOW() + INTERVAL '90 minute',
+                topic_id, 'scheduled', NOW() + INTERVAL '30 minute', NULL, NOW() + INTERVAL '90 minute',
                 max_participants_per_side, 0, 0, 0,
                 id, 2, NOW(), NOW()
             FROM debate_sessions
@@ -391,7 +391,7 @@ async fn get_draw_vote_status_should_create_expected_next_round_rematch() -> Res
 async fn get_draw_vote_status_should_not_duplicate_rematch_on_concurrent_expire_finalize(
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     join_user_to_session(&state, session_id, 2).await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;
@@ -470,7 +470,7 @@ async fn get_draw_vote_status_should_not_duplicate_rematch_on_concurrent_expire_
 #[tokio::test]
 async fn get_draw_vote_status_should_keep_single_rematch_under_high_concurrency() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let session_id = seed_topic_and_session(&state, 1, "closed").await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
     join_user_to_session(&state, session_id, 1).await?;
     join_user_to_session(&state, session_id, 2).await?;
     let job_id = seed_running_judge_job(&state, session_id).await?;

@@ -116,15 +116,14 @@ impl AppState {
         let inserted_order: Option<IapOrderRow> = sqlx::query_as(
             r#"
             INSERT INTO iap_orders(
-                ws_id, user_id, platform, product_id, transaction_id, original_transaction_id,
+                user_id, platform, product_id, transaction_id, original_transaction_id,
                 receipt_hash, status, verify_mode, verify_reason, coins, raw_payload, verified_at
             )
-            VALUES ($1, $2, 'apple_iap', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, 'apple_iap', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (platform, transaction_id) DO NOTHING
             RETURNING id, user_id, product_id, status, verify_mode, verify_reason, coins
             "#,
         )
-        .bind(1_i64)
         .bind(user.id)
         .bind(&product.product_id)
         .bind(transaction_id)

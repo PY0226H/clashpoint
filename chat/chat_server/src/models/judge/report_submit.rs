@@ -108,13 +108,13 @@ impl AppState {
         let report_id: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO judge_reports(
-                ws_id, session_id, job_id, winner, pro_score, con_score,
+                session_id, job_id, winner, pro_score, con_score,
                 logic_pro, logic_con, evidence_pro, evidence_con, rebuttal_pro, rebuttal_con,
                 clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode, rubric_version,
                 needs_draw_vote, rejudge_triggered, payload, created_at, updated_at
             )
             SELECT
-                ws_id, session_id, id, $2, $3, $4,
+                session_id, id, $2, $3, $4,
                 $5, $6, $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16, $17,
                 $18, $19, $20, NOW(), NOW()
@@ -154,11 +154,11 @@ impl AppState {
             sqlx::query(
                 r#"
                 INSERT INTO judge_stage_summaries(
-                    ws_id, session_id, job_id, stage_no, from_message_id, to_message_id,
+                    session_id, job_id, stage_no, from_message_id, to_message_id,
                     pro_score, con_score, summary, created_at
                 )
                 SELECT
-                    ws_id, session_id, id, $2, $3, $4, $5, $6, $7, NOW()
+                    session_id, id, $2, $3, $4, $5, $6, $7, NOW()
                 FROM judge_jobs
                 WHERE id = $1
                 "#,

@@ -8,7 +8,7 @@ class DispatchJob(BaseModel):
     job_id: int
     scope_id: int = Field(
         default=1,
-        validation_alias=AliasChoices("scope_id", "scopeId", "ws_id", "wsId"),
+        validation_alias=AliasChoices("scope_id", "scopeId"),
         serialization_alias="scopeId",
     )
     session_id: int
@@ -16,11 +16,6 @@ class DispatchJob(BaseModel):
     style_mode: str
     rejudge_triggered: bool = False
     requested_at: datetime
-
-    @property
-    def ws_id(self) -> int:
-        """Backward-compatible alias for legacy call-sites."""
-        return self.scope_id
 
 
 class DispatchSession(BaseModel):
