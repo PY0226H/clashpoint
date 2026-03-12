@@ -353,7 +353,8 @@ struct AiJudgeOutboxListResponse {
 #[serde(rename_all = "camelCase")]
 struct AiJudgeOutboxItem {
     event_id: String,
-    ws_id: Option<u64>,
+    #[serde(default, alias = "wsId", alias = "ws_id")]
+    scope_id: Option<u64>,
     job_id: Option<u64>,
     trace_id: Option<String>,
     alert_id: Option<String>,
@@ -367,7 +368,8 @@ struct AiJudgeOutboxItem {
 struct AiJudgeOutboxPayload {
     #[serde(default)]
     event_type: String,
-    ws_id: Option<u64>,
+    #[serde(default, alias = "wsId", alias = "ws_id")]
+    scope_id: Option<u64>,
     job_id: Option<u64>,
     trace_id: Option<String>,
     alert_id: Option<String>,
@@ -404,8 +406,8 @@ struct OpsAlertStateRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
-struct OpsObservabilityEvalWorkspaceRow {
-    ws_id: i64,
+struct OpsObservabilityEvalScopeRow {
+    scope_id: i64,
     thresholds_json: Value,
     anomaly_state_json: Value,
 }
@@ -933,9 +935,9 @@ fn normalize_ai_judge_outbox_event(
 
     let payload: AiJudgeOutboxPayload =
         serde_json::from_value(item.payload.clone()).unwrap_or_default();
-    let ws_id = item
-        .ws_id
-        .or(payload.ws_id)
+    let scope_id = item
+        .scope_id
+        .or(payload.scope_id)
         .and_then(|value| i64::try_from(value).ok())
         .unwrap_or(PLATFORM_SCOPE_ID);
     let status_raw = item
@@ -973,7 +975,7 @@ fn normalize_ai_judge_outbox_event(
         .and_then(|v| i64::try_from(v).ok());
     let metrics = serde_json::json!({
         "eventId": event_id,
-        "wsId": ws_id,
+        "scopeId": scope_id,
         "eventType": event_type,
         "alertId": alert_id,
         "alertType": alert_type,
@@ -1813,13 +1815,13 @@ impl AppState {
         })
     }
 
-    async fn list_observability_eval_workspaces(
+    async fn list_observability_eval_scopes(
         &self,
-    ) -> Result<Vec<OpsObservabilityEvalWorkspaceRow>, AppError> {
-        let rows: Vec<OpsObservabilityEvalWorkspaceRow> = sqlx::query_as(
+    ) -> Result<Vec<OpsObservabilityEvalScopeRow>, AppError> {
+        let rows: Vec<OpsObservabilityEvalScopeRow> = sqlx::query_as(
             r#"
             SELECT
-                1::bigint AS ws_id,
+                1::bigint AS scope_id,
                 COALESCE(c.thresholds_json, '{}'::jsonb) AS thresholds_json,
                 COALESCE(c.anomaly_state_json, '{}'::jsonb) AS anomaly_state_json
             FROM (SELECT 1) AS scope
@@ -2230,10 +2232,10 @@ impl AppState {
     ) -> Result<OpsAlertEvalReport, AppError> {
         let now_ms = now_millis();
         let mut report = OpsAlertEvalReport::default();
-        let rows = self.list_observability_eval_workspaces().await?;
+        let rows = self.list_observability_eval_scopes().await?;
         report.scopes_scanned = rows.len() as u64;
         for row in rows {
-            let _scope_id = row.ws_id;
+            let _scope_id = row.scope_id;
             let thresholds = parse_thresholds(row.thresholds_json.clone());
             let anomaly_state = parse_anomaly_state(row.anomaly_state_json.clone(), now_ms);
             let signal = self.load_recent_judge_signal().await?;
@@ -2253,7 +2255,7 @@ impl AppState {
         Ok(report)
     }
 
-    pub async fn evaluate_ops_observability_alerts_for_workspace_by_ops(
+    pub async fn evaluate_ops_observability_alerts_by_ops(
         &self,
         user: &User,
     ) -> Result<OpsAlertEvalReport, AppError> {
@@ -2297,7 +2299,7 @@ impl AppState {
         Ok(report)
     }
 
-    pub async fn preview_ops_observability_alerts_for_workspace_by_ops(
+    pub async fn preview_ops_observability_alerts_by_ops(
         &self,
         user: &User,
     ) -> Result<OpsAlertEvalReport, AppError> {
@@ -2705,23 +2707,22 @@ mod tests {
         let topic_id: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO debate_topics(
-                ws_id, title, description, category, stance_pro, stance_con, is_active, created_by
+                title, description, category, stance_pro, stance_con, is_active, created_by
             )
-            VALUES ($1, 'obs-topic', 'desc', 'game', 'pro', 'con', true, $2)
+            VALUES ('obs-topic', 'desc', 'game', 'pro', 'con', true, $1)
             RETURNING id
             "#,
         )
-        .bind(1_i64)
         .bind(owner.id)
         .fetch_one(&state.pool)
         .await?;
         let session_id: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO debate_sessions(
-                ws_id, topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+                topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
             )
             VALUES (
-                $1, $2, 'closed',
+                $1, 'closed',
                 NOW() - INTERVAL '30 minutes',
                 NOW() - INTERVAL '25 minutes',
                 NOW() - INTERVAL '10 minutes',
@@ -2730,7 +2731,6 @@ mod tests {
             RETURNING id
             "#,
         )
-        .bind(1_i64)
         .bind(topic_id.0)
         .fetch_one(&state.pool)
         .await?;
@@ -2738,11 +2738,11 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO judge_jobs(
-                ws_id, session_id, requested_by, status, style_mode,
+                session_id, requested_by, status, style_mode,
                 requested_at, started_at, finished_at, dispatch_attempts, created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, 'failed', 'rational',
+                $1, $2, 'failed', 'rational',
                 NOW() - INTERVAL '2 minutes',
                 NOW() - INTERVAL '2 minutes',
                 NOW() - INTERVAL '1 minutes',
@@ -2750,7 +2750,6 @@ mod tests {
             )
             "#,
         )
-        .bind(1_i64)
         .bind(session_id.0)
         .bind(owner.id)
         .execute(&state.pool)
@@ -2763,7 +2762,7 @@ mod tests {
             r#"
             SELECT COUNT(1)::bigint
             FROM ops_alert_notifications
-            WHERE ws_id = 1 AND alert_status = 'raised'
+            WHERE alert_status = 'raised'
             "#,
         )
         .fetch_one(&state.pool)
@@ -2790,7 +2789,7 @@ mod tests {
             r#"
             SELECT COUNT(1)::bigint
             FROM ops_alert_notifications
-            WHERE ws_id = 1 AND alert_status = 'cleared'
+            WHERE alert_status = 'cleared'
             "#,
         )
         .fetch_one(&state.pool)
@@ -2806,7 +2805,7 @@ mod tests {
         let (service_base_url, callbacks) = spawn_mock_judge_outbox_server(
             vec![serde_json::json!({
                 "eventId": "evt-bridge-ok",
-                "wsId": 1,
+                "scopeId": 1,
                 "jobId": 2001,
                 "traceId": "trace-bridge-ok",
                 "alertId": "alert-bridge-ok",
@@ -2840,8 +2839,7 @@ mod tests {
             r#"
             SELECT alert_key, rule_type, alert_status, delivery_status
             FROM ops_alert_notifications
-            WHERE ws_id = 1
-              AND alert_key = $1
+            WHERE alert_key = $1
             ORDER BY id DESC
             LIMIT 1
             "#,
@@ -2870,12 +2868,12 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO ops_alert_notifications(
-                ws_id, alert_key, rule_type, severity, alert_status,
+                alert_key, rule_type, severity, alert_status,
                 title, message, metrics_json, recipients_json,
                 delivery_status, created_at, updated_at
             )
             VALUES (
-                1, $1, 'ai_judge:judge_timeout', 'warning', 'raised',
+                $1, 'ai_judge:judge_timeout', 'warning', 'raised',
                 'dup-title', 'dup-message', '{}'::jsonb, '[1]'::jsonb,
                 'sent', NOW(), NOW()
             )
@@ -2887,7 +2885,7 @@ mod tests {
         let (service_base_url, callbacks) = spawn_mock_judge_outbox_server(
             vec![serde_json::json!({
                 "eventId": "evt-bridge-dup",
-                "wsId": 1,
+                "scopeId": 1,
                 "status": "raised",
                 "payload": {
                     "alertType": "judge_timeout",
@@ -2915,8 +2913,7 @@ mod tests {
             r#"
             SELECT COUNT(1)::bigint
             FROM ops_alert_notifications
-            WHERE ws_id = 1
-              AND alert_key = $1
+            WHERE alert_key = $1
             "#,
         )
         .bind(build_ai_judge_outbox_alert_key("evt-bridge-dup"))
@@ -2945,7 +2942,7 @@ mod tests {
                     "alertType": "judge_timeout",
                     "severity": "warning",
                     "title": "bad",
-                    "message": "missing wsId"
+                    "message": "missing scopeId"
                 }
             })],
             AxumStatusCode::INTERNAL_SERVER_ERROR,
@@ -2966,8 +2963,7 @@ mod tests {
             r#"
             SELECT COUNT(1)::bigint
             FROM ops_alert_notifications
-            WHERE ws_id = 1
-              AND alert_key = $1
+            WHERE alert_key = $1
             "#,
         )
         .bind(build_ai_judge_outbox_alert_key("evt-bridge-bad"))
@@ -3106,7 +3102,7 @@ mod tests {
             r#"
             SELECT payment_compliance_required, review_note
             FROM ops_service_split_reviews
-            WHERE ws_id = 1
+            WHERE singleton_id = 1
             "#,
         )
         .fetch_one(&state.pool)
@@ -3317,7 +3313,7 @@ mod tests {
     fn normalize_ai_judge_outbox_event_should_map_status_and_fields() {
         let item = AiJudgeOutboxItem {
             event_id: "evt-1".to_string(),
-            ws_id: Some(1),
+            scope_id: Some(1),
             job_id: Some(99),
             trace_id: Some("trace-1".to_string()),
             alert_id: Some("alert-1".to_string()),
@@ -3333,7 +3329,7 @@ mod tests {
         };
         let ret = normalize_ai_judge_outbox_event(item).expect("event should be normalized");
         assert_eq!(ret.event_id, "evt-1");
-        assert_eq!(ret.metrics["wsId"], Value::from(1));
+        assert_eq!(ret.metrics["scopeId"], Value::from(1));
         assert_eq!(ret.alert_status, ALERT_STATUS_SUPPRESSED);
         assert_eq!(ret.alert_type, "model_overload");
         assert_eq!(ret.severity, "critical");
@@ -3349,17 +3345,17 @@ mod tests {
     }
 
     #[test]
-    fn normalize_ai_judge_outbox_event_should_default_ws_id_when_missing() {
+    fn normalize_ai_judge_outbox_event_should_default_scope_id_when_missing() {
         let item = AiJudgeOutboxItem {
             event_id: "evt-2".to_string(),
-            ws_id: None,
+            scope_id: None,
             job_id: None,
             trace_id: None,
             alert_id: None,
             status: Some("raised".to_string()),
             payload: Value::Null,
         };
-        let ret = normalize_ai_judge_outbox_event(item).expect("missing ws id should fallback");
-        assert_eq!(ret.metrics["wsId"], Value::from(PLATFORM_SCOPE_ID));
+        let ret = normalize_ai_judge_outbox_event(item).expect("missing scope id should fallback");
+        assert_eq!(ret.metrics["scopeId"], Value::from(PLATFORM_SCOPE_ID));
     }
 }

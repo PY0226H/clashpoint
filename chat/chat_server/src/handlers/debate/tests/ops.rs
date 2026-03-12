@@ -872,7 +872,7 @@ async fn kafka_dlq_handlers_should_list_replay_and_discard() -> Result<()> {
         "chat-server",
         format!("session:{}", session_id),
         serde_json::json!({
-            "wsId": 1,
+            "scopeId": 1,
             "sessionId": session_id,
             "jobId": job_id,
             "requestedBy": 1,

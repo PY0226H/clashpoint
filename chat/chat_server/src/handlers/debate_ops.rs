@@ -386,7 +386,7 @@ pub(crate) async fn run_ops_observability_evaluation_once_handler(
     State(state): State<AppState>,
     Query(query): Query<RunOpsObservabilityEvaluationQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limiter_key = format!("ws:{}:user:{}", 1_i64, user.id);
+    let limiter_key = format!("user:{}", user.id);
     let decision = enforce_rate_limit(
         &state,
         "ops_observability_evaluate_once",
@@ -403,12 +403,10 @@ pub(crate) async fn run_ops_observability_evaluation_once_handler(
         ));
     }
     let ret = if query.dry_run.unwrap_or(false) {
-        state
-            .preview_ops_observability_alerts_for_workspace_by_ops(&user)
-            .await?
+        state.preview_ops_observability_alerts_by_ops(&user).await?
     } else {
         state
-            .evaluate_ops_observability_alerts_for_workspace_by_ops(&user)
+            .evaluate_ops_observability_alerts_by_ops(&user)
             .await?
     };
     Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())

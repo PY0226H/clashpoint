@@ -760,7 +760,6 @@ async fn upsert_kafka_dlq_failure(pool: &PgPool, row: &FailedConsumeRow) -> anyh
     let failure_count = sqlx::query_scalar::<_, i32>(
         r#"
         INSERT INTO kafka_dlq_events(
-            ws_id,
             consumer_group,
             topic,
             partition,
@@ -778,12 +777,11 @@ async fn upsert_kafka_dlq_failure(pool: &PgPool, row: &FailedConsumeRow) -> anyh
             updated_at
         )
         VALUES (
-            1, $1, $2, $3, $4, $5, $6, $7, $8,
+            $1, $2, $3, $4, $5, $6, $7, $8,
             $9, 1, $10, NOW(), NOW(), NOW(), NOW()
         )
         ON CONFLICT (consumer_group, event_id)
         DO UPDATE SET
-            ws_id = 1,
             topic = EXCLUDED.topic,
             partition = EXCLUDED.partition,
             message_offset = EXCLUDED.message_offset,
