@@ -1,5 +1,5 @@
 -- Workspace removal W4:
--- Drop legacy ws_id columns reintroduced by single-tenant compat shim.
+-- Drop legacy tenant key columns reintroduced by single-tenant compat shim.
 
 ALTER TABLE users
   DROP COLUMN IF EXISTS ws_id;
