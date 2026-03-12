@@ -64,6 +64,12 @@ ORDER BY
         server_ts
 );
 
+-- Incremental rollout note:
+-- For existing clusters, apply:
+--   protos/clickhouse_auth_identity_v2_migration.sql
+-- to add auth identity v2 columns idempotently and create
+-- analytics.auth_identity_events_v2 (new-semantics-first read-side view).
+
 -- Create aggregated sessions table
 CREATE TABLE analytics.sessions(
     date date,

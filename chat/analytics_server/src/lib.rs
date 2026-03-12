@@ -18,7 +18,7 @@ use chat_core::{
 use clickhouse::Client;
 use clickhouse::Row;
 use handlers::{
-    create_event_handler, get_judge_refresh_summary_handler,
+    create_event_handler, get_auth_event_summary_handler, get_judge_refresh_summary_handler,
     get_judge_refresh_summary_metrics_handler, GetJudgeRefreshSummaryOutput,
     JudgeRefreshSummaryMetrics,
 };
@@ -75,6 +75,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .allow_headers(cors::Any);
     let api = Router::new()
         .route("/event", post(create_event_handler))
+        .route("/auth/summary", get(get_auth_event_summary_handler))
         .route(
             "/judge-refresh/summary",
             get(get_judge_refresh_summary_handler),

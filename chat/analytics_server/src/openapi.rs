@@ -16,12 +16,15 @@ pub(crate) trait OpenApiRouter {
 #[openapi(
         paths(
             create_event_handler,
+            get_auth_event_summary_handler,
             get_judge_refresh_summary_handler,
             get_judge_refresh_summary_metrics_handler,
         ),
         components(
             schemas(
                 ErrorOutput,
+                GetAuthEventSummaryOutput,
+                AuthEventSummaryItem,
                 GetJudgeRefreshSummaryOutput,
                 GetJudgeRefreshSummaryMetricsOutput,
                 JudgeRefreshSummaryItem,
