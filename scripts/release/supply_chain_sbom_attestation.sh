@@ -265,7 +265,7 @@ IFS=',' read -r -a rust_targets <<<"$RUST_TARGETS_CSV"
 {
   echo "{"
   echo "  \"generatedAt\": \"$(json_escape "$GENERATED_AT")\","
-  echo "  \"format\": \"aicomm-rust-sbom-v1\","
+  echo "  \"format\": \"echoisle-rust-sbom-v1\","
   echo "  \"targets\": ["
 
   target_first="true"
@@ -360,7 +360,7 @@ else
   {
     echo "{"
     echo "  \"generatedAt\": \"$(json_escape "$GENERATED_AT")\","
-    echo "  \"format\": \"aicomm-python-sbom-v1\","
+    echo "  \"format\": \"echoisle-python-sbom-v1\","
     echo "  \"requirementsFile\": \"$(json_escape "$PYTHON_REQUIREMENTS")\","
     echo "  \"components\": ["
 

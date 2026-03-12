@@ -21,17 +21,17 @@ This package provides that bridge with StoreKit2 purchase flow.
 ## Build
 
 ```bash
-cd /Users/panyihang/Documents/aicomm/chatapp/native/iap-storekit-bridge
+cd /Users/panyihang/Documents/EchoIsle/chatapp/native/iap-storekit-bridge
 xcrun swift build -c release
 ```
 
 Binary path:
 
-`/Users/panyihang/Documents/aicomm/chatapp/native/iap-storekit-bridge/.build/release/iap-storekit-bridge`
+`/Users/panyihang/Documents/EchoIsle/chatapp/native/iap-storekit-bridge/.build/release/iap-storekit-bridge`
 
 Quick launcher (auto build when missing):
 
-`/Users/panyihang/Documents/aicomm/chatapp/native/iap-storekit-bridge/run.sh`
+`/Users/panyihang/Documents/EchoIsle/chatapp/native/iap-storekit-bridge/run.sh`
 
 ## Run
 
@@ -50,12 +50,12 @@ Simulated payload (for local debug / CI):
 Or by env:
 
 ```bash
-AICOMM_IAP_SIMULATE=1 ./.build/release/iap-storekit-bridge --product-id com.acme.coins.100
+ECHOISLE_IAP_SIMULATE=1 ./.build/release/iap-storekit-bridge --product-id com.acme.coins.100
 ```
 
 ## Receipt behavior
 
-- If `AICOMM_IAP_RECEIPT_B64` is set and non-empty, bridge uses it directly.
+- If `ECHOISLE_IAP_RECEIPT_B64` is set and non-empty, bridge uses it directly.
 - Otherwise bridge tries `Bundle.main.appStoreReceiptURL` and base64 encodes the file.
 
 ## Tauri config snippet
@@ -66,16 +66,16 @@ AICOMM_IAP_SIMULATE=1 ./.build/release/iap-storekit-bridge --product-id com.acme
 iap:
   purchase_mode: "native"
   allowed_product_ids:
-    - "com.aicomm.coins.60"
-    - "com.aicomm.coins.120"
+    - "com.echoisle.coins.60"
+    - "com.echoisle.coins.120"
   native_bridge:
-    bin: "/Users/panyihang/Documents/aicomm/chatapp/native/iap-storekit-bridge/run.sh"
+    bin: "/Users/panyihang/Documents/EchoIsle/chatapp/native/iap-storekit-bridge/run.sh"
     args: []
 ```
 
 Production constraints (`chatapp/src-tauri`):
 
-- `AICOMM_IAP_NATIVE_BRIDGE_RESPONSE_JSON` is forbidden in production runtime.
+- `ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON` is forbidden in production runtime.
 - `iap.native_bridge.args` cannot include `--simulate` in production runtime.
 - `iap.native_bridge.bin` must be an absolute path in production runtime.
 - `iap.allowed_product_ids` must be non-empty in production runtime.

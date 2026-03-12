@@ -40,7 +40,7 @@ class RuntimePolicyTests(unittest.TestCase):
             os.environ,
             {
                 "APP_ENV": "staging",
-                "AICOMM_ENV": "production",
+                "ECHOISLE_ENV": "production",
             },
             clear=True,
         ):

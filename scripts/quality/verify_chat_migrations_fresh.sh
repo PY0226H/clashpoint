@@ -73,7 +73,7 @@ if ! command -v psql >/dev/null 2>&1; then
 fi
 
 if [[ -z "$DB_NAME" ]]; then
-  DB_NAME="aicomm_migrate_verify_$(date +%Y%m%d_%H%M%S)_$$"
+  DB_NAME="echoisle_migrate_verify_$(date +%Y%m%d_%H%M%S)_$$"
 fi
 
 base_no_query="${MAINTENANCE_URL%%\?*}"

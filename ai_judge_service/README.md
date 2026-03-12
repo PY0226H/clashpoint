@@ -114,7 +114,7 @@ cd ai_judge_service
 - `AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS`: topic memory 入库最小理由长度，默认 `20`
 - `AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE`: topic memory 入库最小质量分（`0..1`），默认 `0.55`
 
-生产环境识别规则：按 `AICOMM_ENV -> APP_ENV -> PYTHON_ENV -> RUST_ENV -> ENV` 顺序读取，值为 `prod|production` 时视为生产。
+生产环境识别规则：按 `ECHOISLE_ENV -> APP_ENV -> PYTHON_ENV -> RUST_ENV -> ENV` 顺序读取，值为 `prod|production` 时视为生产。
 生产环境门禁：
 - 禁止 `AI_JUDGE_PROVIDER=mock`
 - 禁止 `AI_JUDGE_OPENAI_FALLBACK_TO_MOCK=true`
@@ -207,7 +207,7 @@ cd ai_judge_service
 M7 预发阶段验收门禁（phase3，回归证据 + Soak/Spike + 故障注入矩阵）：
 
 ```bash
-cd /Users/panyihang/Documents/aicomm
+cd /Users/panyihang/Documents/EchoIsle
 bash scripts/release/ai_judge_m7_stage_acceptance_gate.sh \
   --regression-evidence docs/loadtest/evidence/ai_judge_m7_regression.env \
   --preprod-summary docs/loadtest/evidence/ai_judge_m7_preprod_summary.env \

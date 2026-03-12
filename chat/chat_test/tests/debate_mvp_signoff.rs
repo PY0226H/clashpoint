@@ -138,7 +138,7 @@ async fn debate_mvp_signoff_should_cover_core_flow() -> Result<()> {
         .post(
             "/api/pay/iap/verify",
             &VerifyIapOrderInput {
-                product_id: "com.aicomm.coins.60".to_string(),
+                product_id: "com.echoisle.coins.60".to_string(),
                 transaction_id: tx_id.clone(),
                 original_transaction_id: None,
                 receipt_data: format!("mock_ok_{now_ms}"),

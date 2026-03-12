@@ -1,4 +1,4 @@
-# AiComm
+# EchoIsle
 
 在线辩论 + AI 裁判平台（MVP 阶段）。
 
@@ -10,7 +10,7 @@
 ## 目录结构
 
 ```text
-aicomm/
+echoisle/
 ├── chat/                    # Rust 多服务后端
 ├── chatapp/                 # Vue + Tauri 前端
 ├── ai_judge_service/        # Python AI 裁判服务
@@ -32,7 +32,7 @@ aicomm/
 ## 2) 数据库配置
 
 根目录 `.env` 示例见：
-- `aicomm/.env.example`
+- `echoisle/.env.example`
 
 默认本地库名是 `chat`，连接示例：
 ```env

@@ -1,4 +1,4 @@
-# AiComm 应用启动和关闭指南
+# EchoIsle 应用启动和关闭指南
 
 ## 目录
 - [系统要求](#系统要求)
@@ -297,7 +297,7 @@ docker rm chat notify bot analytics
 ```bash
 #!/bin/bash
 
-echo "正在关闭 AiComm 应用..."
+echo "正在关闭 EchoIsle 应用..."
 
 # 方法1: 使用端口关闭
 echo "关闭 chat_server (端口 6688)..."
@@ -456,7 +456,7 @@ RUST_LOG=debug cargo run
 
 ## 联系和支持
 
-- **GitHub**: https://github.com/tyr-rust-bootcamp/aicomm
+- **GitHub**: https://github.com/PY0226H/EchoIsle
 - **问题反馈**: 在 GitHub Issues 中提交问题
 
 ---

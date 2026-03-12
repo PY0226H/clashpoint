@@ -23,7 +23,7 @@ import {
 
 function buildItem(overrides = {}) {
   return {
-    productId: 'com.aicomm.coins.60',
+    productId: 'com.echoisle.coins.60',
     transactionId: 'tx-1',
     originalTransactionId: null,
     receiptData: 'mock_ok_receipt:1',

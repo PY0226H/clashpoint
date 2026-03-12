@@ -198,7 +198,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "AICOMM_ENV": "production",
+                "ECHOISLE_ENV": "production",
                 "AI_JUDGE_PROVIDER": "mock",
             },
             clear=True,
@@ -210,7 +210,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "AICOMM_ENV": "production",
+                "ECHOISLE_ENV": "production",
                 "AI_JUDGE_PROVIDER": "openai",
                 "OPENAI_API_KEY": "sk-xx",
                 "AI_JUDGE_OPENAI_FALLBACK_TO_MOCK": "true",
@@ -227,7 +227,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "AICOMM_ENV": "prod",
+                "ECHOISLE_ENV": "prod",
                 "AI_JUDGE_PROVIDER": "openai",
             },
             clear=True,
@@ -300,7 +300,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "AICOMM_ENV": "production",
+                "ECHOISLE_ENV": "production",
                 "AI_JUDGE_PROVIDER": "openai",
                 "OPENAI_API_KEY": "sk-test",
                 "AI_JUDGE_FAULT_INJECTION_NODES": "display",

@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# AiComm 应用启动脚本
+# EchoIsle 应用启动脚本
 # 使用方法: ./start.sh
 
 set -e
 
 echo "=========================================="
-echo "  AiComm 应用启动脚本"
+echo "  EchoIsle 应用启动脚本"
 echo "=========================================="
 echo ""
 
@@ -95,7 +95,7 @@ else
 fi
 
 # 创建日志目录
-mkdir -p /tmp/aicomm_logs
+mkdir -p /tmp/echoisle_logs
 
 echo ""
 echo "5. 启动服务..."
@@ -103,25 +103,25 @@ echo "5. 启动服务..."
 # 启动 chat_server
 echo "   启动 chat_server (端口 6688)..."
 cd chat/chat_server
-nohup cargo run > /tmp/aicomm_logs/chat_server.log 2>&1 &
+nohup cargo run > /tmp/echoisle_logs/chat_server.log 2>&1 &
 CHAT_PID=$!
-echo $CHAT_PID > /tmp/aicomm_logs/chat_server.pid
+echo $CHAT_PID > /tmp/echoisle_logs/chat_server.pid
 cd ../..
 
 # 启动 notify_server
 echo "   启动 notify_server (端口 6687)..."
 cd chat/notify_server
-nohup cargo run > /tmp/aicomm_logs/notify_server.log 2>&1 &
+nohup cargo run > /tmp/echoisle_logs/notify_server.log 2>&1 &
 NOTIFY_PID=$!
-echo $NOTIFY_PID > /tmp/aicomm_logs/notify_server.pid
+echo $NOTIFY_PID > /tmp/echoisle_logs/notify_server.pid
 cd ../..
 
 # 启动前端
 echo "   启动前端应用 (端口 1420)..."
 cd chatapp
-nohup yarn dev > /tmp/aicomm_logs/chatapp.log 2>&1 &
+nohup yarn dev > /tmp/echoisle_logs/chatapp.log 2>&1 &
 APP_PID=$!
-echo $APP_PID > /tmp/aicomm_logs/chatapp.pid
+echo $APP_PID > /tmp/echoisle_logs/chatapp.pid
 cd ..
 
 echo ""
@@ -136,21 +136,21 @@ echo "7. 检查服务状态..."
 if wait_for_port 6688 45; then
     echo -e "${GREEN}✓${NC} chat_server 运行中 (PID: $CHAT_PID, 端口: 6688)"
 else
-    echo -e "${RED}✗${NC} chat_server 启动失败，查看日志: tail -f /tmp/aicomm_logs/chat_server.log"
+    echo -e "${RED}✗${NC} chat_server 启动失败，查看日志: tail -f /tmp/echoisle_logs/chat_server.log"
 fi
 
 # 检查 notify_server
 if wait_for_port 6687 30; then
     echo -e "${GREEN}✓${NC} notify_server 运行中 (PID: $NOTIFY_PID, 端口: 6687)"
 else
-    echo -e "${RED}✗${NC} notify_server 启动失败，查看日志: tail -f /tmp/aicomm_logs/notify_server.log"
+    echo -e "${RED}✗${NC} notify_server 启动失败，查看日志: tail -f /tmp/echoisle_logs/notify_server.log"
 fi
 
 # 检查前端
 if wait_for_port 1420 30; then
     echo -e "${GREEN}✓${NC} 前端应用运行中 (PID: $APP_PID, 端口: 1420)"
 else
-    echo -e "${RED}✗${NC} 前端应用启动失败，查看日志: tail -f /tmp/aicomm_logs/chatapp.log"
+    echo -e "${RED}✗${NC} 前端应用启动失败，查看日志: tail -f /tmp/echoisle_logs/chatapp.log"
 fi
 
 echo ""
@@ -161,10 +161,10 @@ echo ""
 echo "访问地址: http://localhost:1420/"
 echo ""
 echo "日志文件位置:"
-echo "  - Chat Server:   /tmp/aicomm_logs/chat_server.log"
-echo "  - Notify Server: /tmp/aicomm_logs/notify_server.log"
-echo "  - Frontend:      /tmp/aicomm_logs/chatapp.log"
+echo "  - Chat Server:   /tmp/echoisle_logs/chat_server.log"
+echo "  - Notify Server: /tmp/echoisle_logs/notify_server.log"
+echo "  - Frontend:      /tmp/echoisle_logs/chatapp.log"
 echo ""
-echo "查看日志: tail -f /tmp/aicomm_logs/chat_server.log"
+echo "查看日志: tail -f /tmp/echoisle_logs/chat_server.log"
 echo "关闭服务: ./stop.sh"
 echo ""

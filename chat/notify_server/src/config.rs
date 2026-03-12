@@ -59,7 +59,7 @@ fn default_redis_pool_size() -> u32 {
 }
 
 fn default_redis_key_prefix() -> String {
-    "aicomm_notify".to_string()
+    "echoisle_notify".to_string()
 }
 
 fn default_redis_default_ttl_secs() -> u64 {

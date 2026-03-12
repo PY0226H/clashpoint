@@ -86,7 +86,7 @@ async fn start_apple_verify_stub(
 
 fn verify_input(tx: &str, receipt_data: &str) -> VerifyIapOrderInput {
     VerifyIapOrderInput {
-        product_id: "com.aicomm.coins.60".to_string(),
+        product_id: "com.echoisle.coins.60".to_string(),
         transaction_id: tx.to_string(),
         original_transaction_id: None,
         receipt_data: receipt_data.to_string(),
@@ -274,7 +274,7 @@ fn extract_receipt_records_should_collect_both_paths() {
             {
                 "transaction_id": "tx-1",
                 "original_transaction_id": "otx-1",
-                "product_id": "com.aicomm.coins.60"
+                "product_id": "com.echoisle.coins.60"
             }
         ],
         "receipt": {
@@ -282,7 +282,7 @@ fn extract_receipt_records_should_collect_both_paths() {
                 {
                     "transaction_id": "tx-2",
                     "original_transaction_id": "otx-2",
-                    "product_id": "com.aicomm.coins.120"
+                    "product_id": "com.echoisle.coins.120"
                 }
             ]
         }
@@ -300,20 +300,20 @@ fn select_matching_record_should_match_transaction_original_and_product() {
         ReceiptRecord {
             transaction_id: "tx-a".to_string(),
             original_transaction_id: Some("otx-a".to_string()),
-            product_id: Some("com.aicomm.coins.60".to_string()),
+            product_id: Some("com.echoisle.coins.60".to_string()),
         },
         ReceiptRecord {
             transaction_id: "tx-b".to_string(),
             original_transaction_id: None,
-            product_id: Some("com.aicomm.coins.120".to_string()),
+            product_id: Some("com.echoisle.coins.120".to_string()),
         },
     ];
 
-    let matched = select_matching_record(&records, "com.aicomm.coins.60", "tx-a", Some("otx-a"));
+    let matched = select_matching_record(&records, "com.echoisle.coins.60", "tx-a", Some("otx-a"));
     assert!(matched.is_some());
 
     let not_matched =
-        select_matching_record(&records, "com.aicomm.coins.60", "tx-b", Some("otx-b"));
+        select_matching_record(&records, "com.echoisle.coins.60", "tx-b", Some("otx-b"));
     assert!(not_matched.is_none());
 }
 
@@ -344,7 +344,7 @@ async fn verify_receipt_should_use_apple_production_and_mark_verified() -> Resul
         "latest_receipt_info": [
             {
                 "transaction_id": "tx-apple-ok-1",
-                "product_id": "com.aicomm.coins.60"
+                "product_id": "com.echoisle.coins.60"
             }
         ]
     })])
@@ -352,7 +352,7 @@ async fn verify_receipt_should_use_apple_production_and_mark_verified() -> Resul
 
     let out = verify_receipt(
         &config,
-        "com.aicomm.coins.60",
+        "com.echoisle.coins.60",
         "tx-apple-ok-1",
         None,
         "receipt_ok_1",
@@ -382,7 +382,7 @@ async fn verify_receipt_should_fallback_to_sandbox_when_prod_returns_21007() -> 
                 "in_app": [
                     {
                         "transaction_id": "tx-apple-21007-1",
-                        "product_id": "com.aicomm.coins.60"
+                        "product_id": "com.echoisle.coins.60"
                     }
                 ]
             }
@@ -392,7 +392,7 @@ async fn verify_receipt_should_fallback_to_sandbox_when_prod_returns_21007() -> 
 
     let out = verify_receipt(
         &config,
-        "com.aicomm.coins.60",
+        "com.echoisle.coins.60",
         "tx-apple-21007-1",
         None,
         "receipt_21007_1",
@@ -418,7 +418,7 @@ async fn verify_receipt_should_return_error_for_retryable_apple_status() -> Resu
 
     let err = verify_receipt(
         &config,
-        "com.aicomm.coins.60",
+        "com.echoisle.coins.60",
         "tx-apple-retryable-1",
         None,
         "receipt_retryable_1",
@@ -441,7 +441,7 @@ async fn verify_receipt_should_reject_when_transaction_not_found_in_apple_payloa
         "latest_receipt_info": [
             {
                 "transaction_id": "tx-other",
-                "product_id": "com.aicomm.coins.120"
+                "product_id": "com.echoisle.coins.120"
             }
         ]
     })])
@@ -449,7 +449,7 @@ async fn verify_receipt_should_reject_when_transaction_not_found_in_apple_payloa
 
     let out = verify_receipt(
         &config,
-        "com.aicomm.coins.60",
+        "com.echoisle.coins.60",
         "tx-apple-miss-1",
         None,
         "receipt_miss_1",
@@ -563,7 +563,7 @@ async fn verify_iap_order_should_allow_retry_after_transient_apple_status() -> R
             "latest_receipt_info": [
                 {
                     "transaction_id": "tx-apple-retry-1",
-                    "product_id": "com.aicomm.coins.60"
+                    "product_id": "com.echoisle.coins.60"
                 }
             ]
         }),
@@ -590,7 +590,7 @@ async fn verify_iap_order_should_allow_retry_after_transient_apple_status() -> R
     assert_order_output(&second, "verified", "apple", true, 60);
 
     let second_query = query_order_snapshot(&state, &user, "tx-apple-retry-1").await?;
-    assert_order_query_verified(&second_query, "com.aicomm.coins.60");
+    assert_order_query_verified(&second_query, "com.echoisle.coins.60");
 
     assert_stub_request_paths(&requests, &["/prod", "/prod"]).await;
     server.abort();
@@ -619,7 +619,7 @@ async fn get_iap_order_by_transaction_should_return_verified_snapshot() -> Resul
         .await?;
 
     let out = query_order_snapshot(&state, &user, "tx-query-verified-1").await?;
-    assert_order_query_verified(&out, "com.aicomm.coins.60");
+    assert_order_query_verified(&out, "com.echoisle.coins.60");
     Ok(())
 }
 

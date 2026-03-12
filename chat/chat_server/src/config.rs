@@ -286,7 +286,7 @@ fn default_kafka_brokers() -> String {
 }
 
 fn default_kafka_topic_prefix() -> String {
-    "aicomm".to_string()
+    "echoisle".to_string()
 }
 
 fn default_kafka_client_id() -> String {
@@ -322,7 +322,7 @@ fn default_redis_pool_size() -> u32 {
 }
 
 fn default_redis_key_prefix() -> String {
-    "aicomm".to_string()
+    "echoisle".to_string()
 }
 
 fn default_redis_default_ttl_secs() -> u64 {
@@ -517,7 +517,7 @@ fn normalize_redis_startup_policy(mode: &str) -> &'static str {
 }
 
 fn runtime_env() -> Option<String> {
-    for key in ["AICOMM_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+    for key in ["ECHOISLE_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
         if let Ok(value) = env::var(key) {
             let normalized = value.trim();
             if !normalized.is_empty() {

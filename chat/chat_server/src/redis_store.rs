@@ -377,7 +377,7 @@ mod tests {
     fn namespaced_key_should_include_prefix_and_scope() {
         let config = RedisConfig {
             enabled: false,
-            key_prefix: "aicomm".to_string(),
+            key_prefix: "echoisle".to_string(),
             ..RedisConfig::default()
         };
         let store = RedisStore::Disabled {
@@ -386,7 +386,7 @@ mod tests {
         };
         assert_eq!(
             store.namespaced_key("rate_limit", "signin:alice@example.com"),
-            "aicomm:rate_limit:signin:alice@example.com"
+            "echoisle:rate_limit:signin:alice@example.com"
         );
     }
 

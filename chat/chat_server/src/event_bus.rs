@@ -856,24 +856,24 @@ mod tests {
     #[test]
     fn kafka_topic_name_should_apply_prefix() {
         let cfg = KafkaConfig {
-            topic_prefix: "aicomm".to_string(),
+            topic_prefix: "echoisle".to_string(),
             ..Default::default()
         };
         assert_eq!(
             cfg.topic_name(TOPIC_DEBATE_PARTICIPANT_JOINED),
-            "aicomm.debate.participant.joined.v1"
+            "echoisle.debate.participant.joined.v1"
         );
         assert_eq!(
             cfg.topic_name(TOPIC_DEBATE_SESSION_STATUS_CHANGED),
-            "aicomm.debate.session.status.changed.v1"
+            "echoisle.debate.session.status.changed.v1"
         );
         assert_eq!(
             cfg.topic_name(TOPIC_DEBATE_MESSAGE_PINNED),
-            "aicomm.debate.message.pinned.v1"
+            "echoisle.debate.message.pinned.v1"
         );
         assert_eq!(
             cfg.topic_name(TOPIC_AI_JUDGE_JOB_CREATED),
-            "aicomm.ai.judge.job.created.v1"
+            "echoisle.ai.judge.job.created.v1"
         );
     }
 
@@ -894,8 +894,8 @@ mod tests {
 
     #[test]
     fn fallback_event_id_should_include_topic_partition_offset() {
-        let id = fallback_event_id("aicomm.ai.judge.job.created.v1", 2, 18);
-        assert_eq!(id, "aicomm.ai.judge.job.created.v1:2:18");
+        let id = fallback_event_id("echoisle.ai.judge.job.created.v1", 2, 18);
+        assert_eq!(id, "echoisle.ai.judge.job.created.v1:2:18");
     }
 
     #[test]

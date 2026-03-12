@@ -85,7 +85,7 @@ pub(super) async fn insert_kafka_dlq_event(
                 status, failure_count, error_message, first_failed_at, last_failed_at, created_at, updated_at
             )
             VALUES (
-                'chat-server-worker', 'aicomm.ai.judge.job.created.v1', 0, 1,
+                'chat-server-worker', 'echoisle.ai.judge.job.created.v1', 0, 1,
                 $1, 'ai.judge.job.created', 'session:1', $2,
                 'pending', 1, 'seed', NOW(), NOW(), NOW(), NOW()
             )

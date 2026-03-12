@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# AiComm 应用关闭脚本
+# EchoIsle 应用关闭脚本
 # 使用方法: ./stop.sh
 
 echo "=========================================="
-echo "  AiComm 应用关闭脚本"
+echo "  EchoIsle 应用关闭脚本"
 echo "=========================================="
 echo ""
 
@@ -49,9 +49,9 @@ stop_service() {
 }
 
 # 关闭各个服务
-stop_service "chat_server" "6688" "/tmp/aicomm_logs/chat_server.pid"
-stop_service "notify_server" "6687" "/tmp/aicomm_logs/notify_server.pid"
-stop_service "前端应用" "1420" "/tmp/aicomm_logs/chatapp.pid"
+stop_service "chat_server" "6688" "/tmp/echoisle_logs/chat_server.pid"
+stop_service "notify_server" "6687" "/tmp/echoisle_logs/notify_server.pid"
+stop_service "前端应用" "1420" "/tmp/echoisle_logs/chatapp.pid"
 
 # 额外清理：使用进程名关闭（备用）
 echo ""
@@ -75,6 +75,6 @@ echo "=========================================="
 echo -e "${GREEN}关闭完成！${NC}"
 echo "=========================================="
 echo ""
-echo "提示: 日志文件保留在 /tmp/aicomm_logs/ 目录"
-echo "      如需清理日志: rm -rf /tmp/aicomm_logs/"
+echo "提示: 日志文件保留在 /tmp/echoisle_logs/ 目录"
+echo "      如需清理日志: rm -rf /tmp/echoisle_logs/"
 echo ""

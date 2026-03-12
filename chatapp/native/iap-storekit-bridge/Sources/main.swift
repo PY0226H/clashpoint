@@ -156,7 +156,7 @@ private func verifiedTransaction(
 
 @available(iOS 15.0, macOS 13.0, *)
 private func loadReceiptData() throws -> String {
-    if let override = ProcessInfo.processInfo.environment["AICOMM_IAP_RECEIPT_B64"] {
+    if let override = ProcessInfo.processInfo.environment["ECHOISLE_IAP_RECEIPT_B64"] {
         let normalized = override.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalized.isEmpty {
             return normalized
@@ -211,7 +211,7 @@ struct Main {
     static func main() async {
         do {
             let args = try parseArgs(Array(CommandLine.arguments.dropFirst()))
-            let shouldSimulate = args.simulate || ProcessInfo.processInfo.environment["AICOMM_IAP_SIMULATE"] == "1"
+            let shouldSimulate = args.simulate || ProcessInfo.processInfo.environment["ECHOISLE_IAP_SIMULATE"] == "1"
 
             let payload: PurchasePayload
             if shouldSimulate {

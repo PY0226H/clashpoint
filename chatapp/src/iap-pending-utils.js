@@ -1,4 +1,4 @@
-const PENDING_IAP_STORAGE_KEY = 'aicomm.pendingIapQueue.v1';
+const PENDING_IAP_STORAGE_KEY = 'echoisle.pendingIapQueue.v1';
 const DEFAULT_PENDING_IAP_RETRY_POLICY = Object.freeze({
   baseDelayMs: 30_000,
   maxDelayMs: 30 * 60_000,

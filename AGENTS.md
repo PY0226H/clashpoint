@@ -8,13 +8,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 
 - `skill-creator`: Guide for creating effective skills. Use when users want to create or update a skill that extends Codex capabilities. (file: `/Users/panyihang/.codex/skills/.system/skill-creator/SKILL.md`)
 - `skill-installer`: Install Codex skills into `$CODEX_HOME/skills` from a curated list or a GitHub repo path. (file: `/Users/panyihang/.codex/skills/.system/skill-installer/SKILL.md`)
-- `post-module-test-guard`: Generate or update tests for changed module behavior and run repository quality gates after implementation. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-test-guard/SKILL.md`)
-- `post-module-interview-journal`: Generate interview-ready development records after each module implementation. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-interview-journal/SKILL.md`)
-- `post-module-explanation-journal`: Generate deep Chinese explanation documents for newly added or modified module code under `docs/explanation`. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-explanation-journal/SKILL.md`)
-- `post-module-plan-sync`: After each module implementation/refactor/fix, sync the currently active development plan document with module status, next-step suggestions, and completion history. (file: `/Users/panyihang/Documents/aicomm/skills/post-module-plan-sync/SKILL.md`)
-- `python-venv-guard`: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. (file: `/Users/panyihang/Documents/aicomm/skills/python-venv-guard/SKILL.md`)
-- `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, fully read the PRD and align implementation decisions with the product target end-state. (file: `/Users/panyihang/Documents/aicomm/skills/pre-module-prd-goal-guard/SKILL.md`)
-- `post-optimization-plan-sync`: After each backend optimization module, sync optimization matrix and next-step recommendation, then append optimization history. (file: `/Users/panyihang/Documents/aicomm/skills/post-optimization-plan-sync/SKILL.md`)
+- `post-module-test-guard`: Generate or update tests for changed module behavior and run repository quality gates after implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/SKILL.md`)
+- `post-module-interview-journal`: Generate interview-ready development records after each module implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-interview-journal/SKILL.md`)
+- `post-module-explanation-journal`: Generate deep Chinese explanation documents for newly added or modified module code under `docs/explanation`. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-explanation-journal/SKILL.md`)
+- `post-module-plan-sync`: After each module implementation/refactor/fix, sync the currently active development plan document with module status, next-step suggestions, and completion history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-plan-sync/SKILL.md`)
+- `python-venv-guard`: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. (file: `/Users/panyihang/Documents/EchoIsle/skills/python-venv-guard/SKILL.md`)
+- `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, fully read the PRD and align implementation decisions with the product target end-state. (file: `/Users/panyihang/Documents/EchoIsle/skills/pre-module-prd-goal-guard/SKILL.md`)
+- `post-optimization-plan-sync`: After each backend optimization module, sync optimization matrix and next-step recommendation, then append optimization history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-optimization-plan-sync/SKILL.md`)
 
 ### Skill usage rules
 
@@ -41,12 +41,12 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 
 - For any turn that runs Python commands in this repository, run `python-venv-guard` first.
 - Never use global interpreters (`python`, `python3`, `pip`, `pip3`) for project tasks.
-- Always use `/Users/panyihang/Documents/aicomm/ai_judge_service/.venv/bin/python`.
+- Always use `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python`.
 
 ## Mandatory pre-development PRD hook
 
 - For any turn that starts module-level implementation/refactor/optimization, run `pre-module-prd-goal-guard` before coding.
-- Must fully read `/Users/panyihang/Documents/aicomm/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
+- Must fully read `/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
 - The purpose is to align with the product's target end-state and avoid wrong directional decisions.
 - If task scope conflicts with PRD target shape, clarify adjustment strategy before coding.
 

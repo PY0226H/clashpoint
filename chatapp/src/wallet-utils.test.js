@@ -15,13 +15,13 @@ test('normalizeWalletLedgerLimit should clamp into [1, 100]', () => {
 });
 
 test('buildMockTransactionId should include product and prefix', () => {
-  const tx = buildMockTransactionId('com.aicomm.coins.60');
+  const tx = buildMockTransactionId('com.echoisle.coins.60');
   assert.equal(typeof tx, 'string');
-  assert.equal(tx.startsWith('mock-tx-com.aicomm.coins.60-'), true);
+  assert.equal(tx.startsWith('mock-tx-com.echoisle.coins.60-'), true);
 });
 
 test('buildMockReceiptData should include product and mock prefix', () => {
-  const receipt = buildMockReceiptData('com.aicomm.coins.60');
+  const receipt = buildMockReceiptData('com.echoisle.coins.60');
   assert.equal(typeof receipt, 'string');
-  assert.equal(receipt.startsWith('mock_ok_receipt:com.aicomm.coins.60:'), true);
+  assert.equal(receipt.startsWith('mock_ok_receipt:com.echoisle.coins.60:'), true);
 });

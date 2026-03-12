@@ -74,8 +74,8 @@ cat >"$VALID_TAURI" <<'EOF'
 iap:
   purchase_mode: native
   allowed_product_ids:
-    - com.aicomm.coins.60
-    - com.aicomm.coins.120
+    - com.echoisle.coins.60
+    - com.echoisle.coins.120
   native_bridge:
     bin: /usr/local/bin/iap-storekit-bridge
     args: []
@@ -422,7 +422,7 @@ cat >"$BAD_TAURI_SIMULATE" <<'EOF'
 iap:
   purchase_mode: native
   allowed_product_ids:
-    - com.aicomm.coins.60
+    - com.echoisle.coins.60
   native_bridge:
     bin: /usr/local/bin/iap-storekit-bridge
     args:

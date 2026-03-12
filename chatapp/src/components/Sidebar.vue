@@ -105,7 +105,7 @@ export default {
   },
   computed: {
     displayName() {
-      return this.$store.getters.getUser?.fullname || 'AIComm';
+      return this.$store.getters.getUser?.fullname || 'EchoIsle';
     },
     channels() {
       return this.$store.getters.getChannels;

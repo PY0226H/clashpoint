@@ -335,7 +335,7 @@ fn now_epoch_secs() -> u64 {
 }
 
 fn runtime_env_is_production() -> bool {
-    for key in ["AICOMM_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+    for key in ["ECHOISLE_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
         if let Ok(value) = std::env::var(key) {
             let normalized = value.trim().to_ascii_lowercase();
             if normalized == "prod" || normalized == "production" {
@@ -2398,7 +2398,7 @@ fn ttl_from_exp(exp: usize) -> u64 {
 }
 
 fn refresh_cookie_secure_enabled() -> bool {
-    for key in ["AICOMM_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+    for key in ["ECHOISLE_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
         if let Ok(value) = std::env::var(key) {
             let normalized = value.trim().to_ascii_lowercase();
             if normalized == "prod" || normalized == "production" {

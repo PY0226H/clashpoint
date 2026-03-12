@@ -40,7 +40,7 @@ def should_use_openai(provider: str, openai_api_key: str | None) -> bool:
 
 
 def runtime_env_label() -> str | None:
-    for key in ("AICOMM_ENV", "APP_ENV", "PYTHON_ENV", "RUST_ENV", "ENV"):
+    for key in ("ECHOISLE_ENV", "APP_ENV", "PYTHON_ENV", "RUST_ENV", "ENV"):
         value = os.getenv(key)
         if value is None:
             continue

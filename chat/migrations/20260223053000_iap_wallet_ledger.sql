@@ -13,9 +13,9 @@ CREATE INDEX IF NOT EXISTS idx_iap_products_active
 
 INSERT INTO iap_products(product_id, coins, is_active)
   VALUES
-    ('com.aicomm.coins.60', 60, true),
-    ('com.aicomm.coins.300', 300, true),
-    ('com.aicomm.coins.680', 680, true)
+    ('com.echoisle.coins.60', 60, true),
+    ('com.echoisle.coins.300', 300, true),
+    ('com.echoisle.coins.680', 680, true)
 ON CONFLICT (product_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS iap_orders(

@@ -22,14 +22,14 @@ test('isTauriRuntime should detect runtime markers', () => {
 
 test('normalizeIapPurchasePayload should normalize snake/camel keys', () => {
   const payload = normalizeIapPurchasePayload({
-    product_id: 'com.aicomm.coins.60',
+    product_id: 'com.echoisle.coins.60',
     transaction_id: 'tx-001',
     original_transaction_id: '',
     receipt_data: 'mock_ok_receipt:abc',
     source: 'tauri_mock_bridge',
   });
   assert.deepEqual(payload, {
-    productId: 'com.aicomm.coins.60',
+    productId: 'com.echoisle.coins.60',
     transactionId: 'tx-001',
     originalTransactionId: null,
     receiptData: 'mock_ok_receipt:abc',
@@ -64,7 +64,7 @@ test('normalizeIapNativeBridgeDiagnostics should normalize snake/camel keys', ()
     runtime_env: 'production',
     runtime_is_production: true,
     purchase_mode: 'native',
-    allowed_product_ids: ['com.aicomm.coins.60'],
+    allowed_product_ids: ['com.echoisle.coins.60'],
     invalid_allowed_product_ids: [],
     allowed_product_ids_configured: true,
     native_bridge_bin: '/bin/sh',
@@ -82,7 +82,7 @@ test('normalizeIapNativeBridgeDiagnostics should normalize snake/camel keys', ()
     runtimeEnv: 'production',
     runtimeIsProduction: true,
     purchaseMode: 'native',
-    allowedProductIds: ['com.aicomm.coins.60'],
+    allowedProductIds: ['com.echoisle.coins.60'],
     invalidAllowedProductIds: [],
     allowedProductIdsConfigured: true,
     nativeBridgeBin: '/bin/sh',

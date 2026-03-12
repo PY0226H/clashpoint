@@ -61,7 +61,7 @@ mod tests {
             .expect("time should move forward")
             .as_nanos();
         env::temp_dir().join(format!(
-            "aicomm-config-loader-{tag}-{}-{nanos}.yml",
+            "echoisle-config-loader-{tag}-{}-{nanos}.yml",
             process::id()
         ))
     }
@@ -83,7 +83,7 @@ mod tests {
         let local = unique_path("local-priority-local");
         let etc = unique_path("local-priority-etc");
         let env_path = unique_path("local-priority-env");
-        let env_key = format!("AICOMM_TEST_CONFIG_LOCAL_PRIORITY_{}", process::id());
+        let env_key = format!("ECHOISLE_TEST_CONFIG_LOCAL_PRIORITY_{}", process::id());
         write_yaml(&local, 1);
         write_yaml(&etc, 2);
         write_yaml(&env_path, 3);
@@ -107,7 +107,7 @@ mod tests {
         let cfg: TestConfig = load_yaml_with_fallback(
             &local_missing,
             &etc,
-            "AICOMM_TEST_CONFIG_UNUSED_ENV_ETC_FALLBACK",
+            "ECHOISLE_TEST_CONFIG_UNUSED_ENV_ETC_FALLBACK",
         )
         .expect("load etc");
         assert_eq!(cfg, TestConfig { value: 2 });
@@ -120,7 +120,7 @@ mod tests {
         let local_missing = unique_path("env-fallback-local-missing");
         let etc_missing = unique_path("env-fallback-etc-missing");
         let env_path = unique_path("env-fallback-env");
-        let env_key = format!("AICOMM_TEST_CONFIG_ENV_FALLBACK_{}", process::id());
+        let env_key = format!("ECHOISLE_TEST_CONFIG_ENV_FALLBACK_{}", process::id());
         write_yaml(&env_path, 3);
         env::set_var(&env_key, env_path.as_os_str());
 
@@ -136,7 +136,7 @@ mod tests {
     fn load_yaml_with_fallback_should_error_when_all_sources_missing() {
         let local_missing = unique_path("none-local-missing");
         let etc_missing = unique_path("none-etc-missing");
-        let env_key = format!("AICOMM_TEST_CONFIG_MISSING_{}", process::id());
+        let env_key = format!("ECHOISLE_TEST_CONFIG_MISSING_{}", process::id());
         cleanup_env(&env_key);
 
         let err =

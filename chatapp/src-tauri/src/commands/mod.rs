@@ -97,7 +97,7 @@ fn normalize_iap_purchase_mode(mode: &str) -> IapPurchaseMode {
 }
 
 fn runtime_env() -> Option<String> {
-    for key in ["AICOMM_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+    for key in ["ECHOISLE_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
         if let Ok(value) = std::env::var(key) {
             let normalized = value.trim();
             if !normalized.is_empty() {
@@ -435,7 +435,8 @@ fn validate_native_bridge_policy(
 
     if has_json_override {
         return Err(
-            "AICOMM_IAP_NATIVE_BRIDGE_RESPONSE_JSON is forbidden in production runtime".to_string(),
+            "ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON is forbidden in production runtime"
+                .to_string(),
         );
     }
 
@@ -465,7 +466,7 @@ fn validate_native_bridge_policy(
 pub(crate) fn iap_get_native_bridge_diagnostics(handle: AppHandle) -> IapNativeBridgeDiagnostics {
     let app_config = handle.state::<AppState>().config.load().clone();
     let env = runtime_env();
-    let json_override_present = std::env::var("AICOMM_IAP_NATIVE_BRIDGE_RESPONSE_JSON")
+    let json_override_present = std::env::var("ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON")
         .ok()
         .as_deref()
         .map(str::trim)
@@ -482,7 +483,7 @@ fn run_native_bridge_purchase(
     let normalized_product_id = normalize_requested_product_id(product_id)?;
     let (allowed_product_ids, invalid_allowed_product_ids) =
         normalize_and_validate_allowed_product_ids(&iap_config.allowed_product_ids);
-    let json_override = std::env::var("AICOMM_IAP_NATIVE_BRIDGE_RESPONSE_JSON").ok();
+    let json_override = std::env::var("ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON").ok();
     let has_json_override = json_override
         .as_deref()
         .map(str::trim)
@@ -517,7 +518,7 @@ fn run_native_bridge_purchase(
     command
         .arg("--product-id")
         .arg(normalized_product_id.as_str());
-    command.env("AICOMM_IAP_PRODUCT_ID", normalized_product_id.as_str());
+    command.env("ECHOISLE_IAP_PRODUCT_ID", normalized_product_id.as_str());
 
     let output = command
         .output()
@@ -599,8 +600,8 @@ mod tests {
 
     #[test]
     fn normalize_requested_product_id_should_validate_format() {
-        let ok = normalize_requested_product_id("com.aicomm.coins.60").expect("should pass");
-        assert_eq!(ok, "com.aicomm.coins.60");
+        let ok = normalize_requested_product_id("com.echoisle.coins.60").expect("should pass");
+        assert_eq!(ok, "com.echoisle.coins.60");
 
         let err1 = normalize_requested_product_id(" ").expect_err("empty should fail");
         assert!(err1.contains("required"));
@@ -613,12 +614,12 @@ mod tests {
     #[test]
     fn normalize_and_validate_allowed_product_ids_should_split_valid_and_invalid() {
         let (allowed, invalid) = normalize_and_validate_allowed_product_ids(&[
-            " com.aicomm.coins.60 ".to_string(),
-            "com.aicomm.coins.60".to_string(),
+            " com.echoisle.coins.60 ".to_string(),
+            "com.echoisle.coins.60".to_string(),
             "invalid product".to_string(),
             "".to_string(),
         ]);
-        assert_eq!(allowed, vec!["com.aicomm.coins.60".to_string()]);
+        assert_eq!(allowed, vec!["com.echoisle.coins.60".to_string()]);
         assert_eq!(invalid, vec!["invalid product".to_string()]);
     }
 
@@ -761,7 +762,7 @@ mod tests {
     fn build_iap_native_bridge_diagnostics_should_report_ready_when_native_bin_is_valid() {
         let cfg = IapConfig {
             purchase_mode: "native".to_string(),
-            allowed_product_ids: vec!["com.aicomm.coins.60".to_string()],
+            allowed_product_ids: vec!["com.echoisle.coins.60".to_string()],
             native_bridge: crate::config::IapNativeBridgeConfig {
                 bin: "/bin/sh".to_string(),
                 args: vec![],
@@ -772,7 +773,7 @@ mod tests {
         assert!(diag.allowed_product_ids_configured);
         assert_eq!(
             diag.allowed_product_ids,
-            vec!["com.aicomm.coins.60".to_string()]
+            vec!["com.echoisle.coins.60".to_string()]
         );
         assert!(diag.invalid_allowed_product_ids.is_empty());
         assert!(diag.native_bridge_bin_exists);
@@ -785,7 +786,7 @@ mod tests {
     fn build_iap_native_bridge_diagnostics_should_report_policy_error_in_production() {
         let cfg = IapConfig {
             purchase_mode: "native".to_string(),
-            allowed_product_ids: vec!["com.aicomm.coins.60".to_string()],
+            allowed_product_ids: vec!["com.echoisle.coins.60".to_string()],
             native_bridge: crate::config::IapNativeBridgeConfig {
                 bin: "relative/bin".to_string(),
                 args: vec!["--simulate".to_string()],
@@ -799,7 +800,7 @@ mod tests {
             .production_policy_error
             .as_deref()
             .unwrap_or_default()
-            .contains("AICOMM_IAP_NATIVE_BRIDGE_RESPONSE_JSON"));
+            .contains("ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON"));
     }
 
     #[test]
@@ -837,7 +838,7 @@ mod tests {
     fn validate_native_bridge_policy_should_block_json_override_in_production() {
         let cfg = IapConfig {
             purchase_mode: "native".to_string(),
-            allowed_product_ids: vec!["com.aicomm.coins.60".to_string()],
+            allowed_product_ids: vec!["com.echoisle.coins.60".to_string()],
             native_bridge: crate::config::IapNativeBridgeConfig {
                 bin: "/tmp/native-bridge".to_string(),
                 args: vec![],
@@ -847,14 +848,14 @@ mod tests {
             normalize_and_validate_allowed_product_ids(&cfg.allowed_product_ids);
         let err = validate_native_bridge_policy(&cfg, true, true, &allowed, &invalid)
             .expect_err("should reject override");
-        assert!(err.contains("AICOMM_IAP_NATIVE_BRIDGE_RESPONSE_JSON"));
+        assert!(err.contains("ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON"));
     }
 
     #[test]
     fn validate_native_bridge_policy_should_block_simulate_arg_in_production() {
         let cfg = IapConfig {
             purchase_mode: "native".to_string(),
-            allowed_product_ids: vec!["com.aicomm.coins.60".to_string()],
+            allowed_product_ids: vec!["com.echoisle.coins.60".to_string()],
             native_bridge: crate::config::IapNativeBridgeConfig {
                 bin: "/tmp/native-bridge".to_string(),
                 args: vec!["--simulate".to_string()],
@@ -871,7 +872,7 @@ mod tests {
     fn validate_native_bridge_policy_should_require_absolute_path_in_production() {
         let cfg = IapConfig {
             purchase_mode: "native".to_string(),
-            allowed_product_ids: vec!["com.aicomm.coins.60".to_string()],
+            allowed_product_ids: vec!["com.echoisle.coins.60".to_string()],
             native_bridge: crate::config::IapNativeBridgeConfig {
                 bin: "scripts/native-bridge".to_string(),
                 args: vec![],
@@ -888,7 +889,7 @@ mod tests {
     fn validate_native_bridge_policy_should_allow_absolute_path_in_production() {
         let cfg = IapConfig {
             purchase_mode: "native".to_string(),
-            allowed_product_ids: vec!["com.aicomm.coins.60".to_string()],
+            allowed_product_ids: vec!["com.echoisle.coins.60".to_string()],
             native_bridge: crate::config::IapNativeBridgeConfig {
                 bin: "/usr/local/bin/native-bridge".to_string(),
                 args: vec![],
@@ -919,8 +920,8 @@ mod tests {
 
     #[test]
     fn ensure_product_id_allowed_should_reject_non_allowlisted_product() {
-        let allowed = vec!["com.aicomm.coins.60".to_string()];
-        let err = ensure_product_id_allowed("com.aicomm.coins.120", &allowed)
+        let allowed = vec!["com.echoisle.coins.60".to_string()];
+        let err = ensure_product_id_allowed("com.echoisle.coins.120", &allowed)
             .expect_err("not allowlisted should fail");
         assert!(err.contains("not in iap.allowed_product_ids"));
     }
