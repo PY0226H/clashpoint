@@ -37,21 +37,39 @@ message AppExitEvent {
 
 /// 用户登录事件
 message UserLoginEvent {
-  /// 用户邮箱(Email 是 PII，需要脱敏)
+  /// 兼容字段：仅在邮箱登录时写入，后续将逐步淘汰
   string email = 1;
+  /// 登录账号类型：email/phone/wechat/unknown
+  string account_type = 2;
+  /// 账号标识的哈希值（避免直接落明文 PII）
+  string account_identifier_hash = 3;
+  /// 认证成功后的用户 ID（字符串化）
+  string user_id = 4;
 }
 
 /// 用户登出事件
 message UserLogoutEvent {
-  /// 用户邮箱(Email 是 PII，需要脱敏)
+  /// 兼容字段：仅在邮箱登录时写入，后续将逐步淘汰
   string email = 1;
+  /// 登出账号类型：email/phone/wechat/unknown
+  string account_type = 2;
+  /// 账号标识的哈希值（避免直接落明文 PII）
+  string account_identifier_hash = 3;
+  /// 登出时用户 ID（字符串化）
+  string user_id = 4;
 }
 
 /// 用户注册事件
 message UserRegisterEvent {
-  /// 用户邮箱(Email 是 PII，需要脱敏)
+  /// 兼容字段：仅在邮箱注册时写入，后续将逐步淘汰
   string email = 1;
   reserved 2;
+  /// 注册账号类型：email/phone/wechat/unknown
+  string account_type = 3;
+  /// 账号标识的哈希值（避免直接落明文 PII）
+  string account_identifier_hash = 4;
+  /// 注册成功后的用户 ID（字符串化）
+  string user_id = 5;
 }
 
 /// chat 创建事件

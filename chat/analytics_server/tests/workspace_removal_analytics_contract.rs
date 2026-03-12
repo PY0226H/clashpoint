@@ -29,6 +29,9 @@ fn user_register_event_should_convert_without_workspace_field() {
         context: Some(test_context()),
         event_type: Some(EventType::UserRegister(UserRegisterEvent {
             email: "user@example.com".to_string(),
+            account_type: "email".to_string(),
+            account_identifier_hash: "abc123".to_string(),
+            user_id: "u-1".to_string(),
         })),
     };
 
@@ -36,6 +39,12 @@ fn user_register_event_should_convert_without_workspace_field() {
 
     assert_eq!(row.event_type, "user_register");
     assert_eq!(row.register_email.as_deref(), Some("user@example.com"));
+    assert_eq!(row.register_account_type.as_deref(), Some("email"));
+    assert_eq!(
+        row.register_account_identifier_hash.as_deref(),
+        Some("abc123")
+    );
+    assert_eq!(row.register_user_id.as_deref(), Some("u-1"));
 }
 
 #[test]

@@ -22,10 +22,19 @@ CREATE TABLE analytics.analytics_events(
     exit_code Nullable(String),
     -- UserLoginEvent
     login_email Nullable(String),
+    login_account_type Nullable(String),
+    login_account_identifier_hash Nullable(String),
+    login_user_id Nullable(String),
     -- UserLogoutEvent
     logout_email Nullable(String),
+    logout_account_type Nullable(String),
+    logout_account_identifier_hash Nullable(String),
+    logout_user_id Nullable(String),
     -- UserRegisterEvent
     register_email Nullable(String),
+    register_account_type Nullable(String),
+    register_account_identifier_hash Nullable(String),
+    register_user_id Nullable(String),
     -- ChatCreatedEvent
     -- MessageSentEvent
     message_chat_id Nullable(String),
@@ -166,8 +175,16 @@ INSERT INTO analytics.analytics_events(client_id, session_id, app_version, syste
     VALUES ('client_001', 'session_001', '1.0.0', 'macOS', 'x86_64', 'en-US', 'America/New_York', now(), now(), 'AppStart');
 
 -- Insert sample data for UserLoginEvent
-INSERT INTO analytics.analytics_events(client_id, session_id, app_version, system_os, system_arch, system_locale, system_timezone, user_id, ip, client_ts, server_ts, event_type, login_email)
-    VALUES ('client_002', 'session_002', '1.0.1', 'Windows', 'x86_64', 'en-GB', 'Europe/London', 'user_123', '192.168.1.1', now(), now(), 'UserLogin', 'user@example.com');
+INSERT INTO analytics.analytics_events(
+    client_id, session_id, app_version, system_os, system_arch, system_locale, system_timezone,
+    user_id, ip, client_ts, server_ts, event_type,
+    login_email, login_account_type, login_account_identifier_hash, login_user_id
+)
+    VALUES (
+      'client_002', 'session_002', '1.0.1', 'Windows', 'x86_64', 'en-GB', 'Europe/London',
+      'user_123', '192.168.1.1', now(), now(), 'UserLogin',
+      'user@example.com', 'email', 'abc123', 'user_123'
+    );
 
 -- Insert sample data for MessageSentEvent
 INSERT INTO analytics.analytics_events(client_id, session_id, app_version, system_os, system_arch, system_locale, system_timezone, user_id, client_ts, server_ts, event_type, message_chat_id, message_type, message_size, message_total_files)

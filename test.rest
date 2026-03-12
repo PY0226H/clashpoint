@@ -36,39 +36,42 @@ Content-Type: application/json
 
 ### signin user (invalid)
 
-POST http://localhost:6688/api/signin
+POST http://localhost:6688/api/auth/v2/signin/password
 Content-Type: application/json
 
 {
-    "email": "tchen@acme.org",
+    "account": "tchen@acme.org",
+    "accountType": "email",
     "password": "a123456"
 }
 
 ### signin user (valid)
 
 # @name signin
-POST http://localhost:6688/api/signin
+POST http://localhost:6688/api/auth/v2/signin/password
 Content-Type: application/json
 
 {
-    "email": "tchen@acme.org",
+    "account": "tchen@acme.org",
+    "accountType": "email",
     "password": "123456"
 }
 
-@token = {{signin.response.body.token}}
+@token = {{signin.response.body.accessToken}}
 
 ### signin user (valid)
 
 # @name signin1
-POST http://localhost:6688/api/signin
+POST http://localhost:6688/api/auth/v2/signin/password
 Content-Type: application/json
 
 {
-    "email": "bob@acme.org",
+    "account": "bob@acme.org",
+    "accountType": "email",
     "password": "123456"
 }
 
-@token1 = {{signin1.response.body.token}}
+@token1 = {{signin1.response.body.accessToken}}
 
 ### create chat
 POST http://localhost:6688/api/chats

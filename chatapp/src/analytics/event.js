@@ -28,40 +28,37 @@ export async function sendAppExitEvent(context, token, exitCode) {
     await sendEvent(event, token);
 }
 
-export async function sendUserLoginEvent(context, token, email) {
+export async function sendUserLoginEvent(context, token, payload) {
+    const authFields = await buildUserAuthFields(payload);
     const event = create(AnalyticsEventSchema, {
         context,
         eventType: {
             case: "userLogin",
-            value: {
-                email,
-            }
+            value: authFields
         }
     });
     await sendEvent(event, token);
 }
 
-export async function sendUserLogoutEvent(context, token, email) {
+export async function sendUserLogoutEvent(context, token, payload) {
+    const authFields = await buildUserAuthFields(payload);
     const event = create(AnalyticsEventSchema, {
         context,
         eventType: {
             case: "userLogout",
-            value: {
-                email,
-            }
+            value: authFields
         }
     });
     await sendEvent(event, token);
 }
 
-export async function sendUserRegisterEvent(context, token, email) {
+export async function sendUserRegisterEvent(context, token, payload) {
+    const authFields = await buildUserAuthFields(payload);
     const event = create(AnalyticsEventSchema, {
         context,
         eventType: {
             case: "userRegister",
-            value: {
-                email,
-            }
+            value: authFields
         }
     });
     await sendEvent(event, token);
@@ -184,5 +181,56 @@ async function sendEvent(event, token) {
         });
     } catch (error) {
         console.error("sendEvent error:", error);
+    }
+}
+
+function normalizeAuthPayload(payload) {
+    if (typeof payload === "string") {
+        const email = payload.trim().toLowerCase();
+        return {
+            accountType: email ? "email" : "unknown",
+            accountIdentifier: email,
+            userId: "",
+            legacyEmail: email,
+        };
+    }
+    const accountType = String(payload?.accountType || "unknown").trim().toLowerCase() || "unknown";
+    const accountIdentifier = String(payload?.accountIdentifier || "").trim();
+    const userId = payload?.userId == null ? "" : String(payload.userId).trim();
+    const legacyEmail = accountType === "email" ? accountIdentifier.toLowerCase() : "";
+    return {
+        accountType,
+        accountIdentifier,
+        userId,
+        legacyEmail,
+    };
+}
+
+async function buildUserAuthFields(payload) {
+    const normalized = normalizeAuthPayload(payload);
+    const accountIdentifierHash = await sha1Hex(normalized.accountIdentifier);
+    return {
+        email: normalized.legacyEmail,
+        accountType: normalized.accountType,
+        accountIdentifierHash,
+        userId: normalized.userId,
+    };
+}
+
+async function sha1Hex(input) {
+    const raw = String(input || "").trim().toLowerCase();
+    if (!raw) {
+        return "";
+    }
+    try {
+        if (!globalThis?.crypto?.subtle) {
+            return "";
+        }
+        const data = new TextEncoder().encode(raw);
+        const digest = await globalThis.crypto.subtle.digest("SHA-1", data);
+        const bytes = Array.from(new Uint8Array(digest));
+        return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch (_err) {
+        return "";
     }
 }

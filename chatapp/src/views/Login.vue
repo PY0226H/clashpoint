@@ -134,27 +134,37 @@ export default {
       this.tips = '';
       try {
         let user = null;
+        let accountType = 'unknown';
+        let accountIdentifier = '';
         if (this.mode === 'email_password') {
-          this.$store.dispatch('userLogin', { email: this.email });
           user = await this.$store.dispatch('signinPasswordV2', {
             account: this.email,
             accountType: 'email',
             password: this.password,
           });
+          accountType = 'email';
+          accountIdentifier = this.email;
         } else if (this.mode === 'phone_password') {
-          this.$store.dispatch('userLogin', { email: this.phone });
           user = await this.$store.dispatch('signinPasswordV2', {
             account: this.phone,
             accountType: 'phone',
             password: this.password,
           });
+          accountType = 'phone';
+          accountIdentifier = this.phone;
         } else {
-          this.$store.dispatch('userLogin', { email: this.phone });
           user = await this.$store.dispatch('signinOtpV2', {
             phone: this.phone,
             smsCode: this.smsCode,
           });
+          accountType = 'phone';
+          accountIdentifier = this.phone;
         }
+        await this.$store.dispatch('userLogin', {
+          accountType,
+          accountIdentifier,
+          userId: user?.id,
+        });
         if (user?.phoneBindRequired) {
           this.$router.push('/bind-phone');
           return;
@@ -190,6 +200,11 @@ export default {
           });
           return;
         }
+        await this.$store.dispatch('userLogin', {
+          accountType: 'wechat',
+          accountIdentifier: ret?.user?.id ? String(ret.user.id) : '',
+          userId: ret?.user?.id,
+        });
         if (ret?.user?.phoneBindRequired) {
           this.$router.push('/bind-phone');
           return;

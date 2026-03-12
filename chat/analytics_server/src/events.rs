@@ -36,10 +36,19 @@ pub struct AnalyticsEventRow {
     pub exit_code: Option<String>,
     // UserLoginEvent
     pub login_email: Option<String>,
+    pub login_account_type: Option<String>,
+    pub login_account_identifier_hash: Option<String>,
+    pub login_user_id: Option<String>,
     // UserLogoutEvent
     pub logout_email: Option<String>,
+    pub logout_account_type: Option<String>,
+    pub logout_account_identifier_hash: Option<String>,
+    pub logout_user_id: Option<String>,
     // UserRegisterEvent
     pub register_email: Option<String>,
+    pub register_account_type: Option<String>,
+    pub register_account_identifier_hash: Option<String>,
+    pub register_user_id: Option<String>,
     // MessageSentEvent
     pub message_chat_id: Option<String>,
     pub message_type: Option<String>,
@@ -216,7 +225,10 @@ impl EventConsume for AppExitEvent {
 impl EventConsume for UserLoginEvent {
     fn consume(self, row: &mut AnalyticsEventRow) -> Result<(), AppError> {
         row.event_type = "user_login".to_string();
-        row.login_email = Some(self.email);
+        row.login_email = non_empty(self.email);
+        row.login_account_type = non_empty(self.account_type);
+        row.login_account_identifier_hash = non_empty(self.account_identifier_hash);
+        row.login_user_id = non_empty(self.user_id);
         Ok(())
     }
 }
@@ -224,7 +236,10 @@ impl EventConsume for UserLoginEvent {
 impl EventConsume for UserLogoutEvent {
     fn consume(self, row: &mut AnalyticsEventRow) -> Result<(), AppError> {
         row.event_type = "user_logout".to_string();
-        row.logout_email = Some(self.email);
+        row.logout_email = non_empty(self.email);
+        row.logout_account_type = non_empty(self.account_type);
+        row.logout_account_identifier_hash = non_empty(self.account_identifier_hash);
+        row.logout_user_id = non_empty(self.user_id);
         Ok(())
     }
 }
@@ -232,7 +247,10 @@ impl EventConsume for UserLogoutEvent {
 impl EventConsume for UserRegisterEvent {
     fn consume(self, row: &mut AnalyticsEventRow) -> Result<(), AppError> {
         row.event_type = "user_register".to_string();
-        row.register_email = Some(self.email);
+        row.register_email = non_empty(self.email);
+        row.register_account_type = non_empty(self.account_type);
+        row.register_account_identifier_hash = non_empty(self.account_identifier_hash);
+        row.register_user_id = non_empty(self.user_id);
         Ok(())
     }
 }
@@ -294,6 +312,15 @@ impl EventConsume for JudgeRealtimeRefreshEvent {
             Some(self.error_message)
         };
         Ok(())
+    }
+}
+
+fn non_empty(input: String) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 

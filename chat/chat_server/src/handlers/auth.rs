@@ -247,7 +247,8 @@ pub struct WechatBindPhoneV2Input {
     pub wechat_ticket: String,
     pub phone: String,
     pub sms_code: String,
-    pub password: String,
+    #[serde(default)]
+    pub password: Option<String>,
     #[serde(default)]
     pub fullname: String,
 }
@@ -304,6 +305,13 @@ impl AccountType {
             "email" => Some(Self::Email),
             "phone" => Some(Self::Phone),
             _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Email => "email",
+            Self::Phone => "phone",
         }
     }
 }
@@ -463,6 +471,17 @@ fn normalize_email(input: &str) -> Option<String> {
         return None;
     }
     Some(normalized)
+}
+
+fn build_signin_password_rate_limit_key(
+    account_type: AccountType,
+    normalized_account: &str,
+) -> String {
+    format!(
+        "{}:{}",
+        account_type.as_str(),
+        hash_with_sha1(normalized_account),
+    )
 }
 
 fn generate_sms_code() -> String {
@@ -817,7 +836,13 @@ pub(crate) async fn signin_password_v2_handler(
 ) -> Result<Response, AppError> {
     let account_type = AccountType::parse(&input.account_type)
         .ok_or_else(|| AppError::AuthError("auth_access_invalid".to_string()))?;
-    let limiter_account = input.account.trim().to_ascii_lowercase();
+    let normalized_account = match account_type {
+        AccountType::Email => normalize_email(&input.account)
+            .ok_or_else(|| AppError::AuthError("auth_access_invalid".to_string()))?,
+        AccountType::Phone => normalize_cn_phone_e164(&input.account)
+            .ok_or_else(|| AppError::AuthError("auth_access_invalid".to_string()))?,
+    };
+    let limiter_account = build_signin_password_rate_limit_key(account_type, &normalized_account);
     let decision = enforce_rate_limit(
         &state,
         "signin_v2_password",
@@ -834,20 +859,16 @@ pub(crate) async fn signin_password_v2_handler(
 
     let user = match account_type {
         AccountType::Email => {
-            let email = normalize_email(&input.account)
-                .ok_or_else(|| AppError::AuthError("auth_access_invalid".to_string()))?;
             state
                 .verify_user(&SigninUser {
-                    email,
+                    email: normalized_account,
                     password: input.password.clone(),
                 })
                 .await?
         }
         AccountType::Phone => {
-            let phone_e164 = normalize_cn_phone_e164(&input.account)
-                .ok_or_else(|| AppError::AuthError("auth_access_invalid".to_string()))?;
             state
-                .verify_user_by_phone_password(&phone_e164, &input.password)
+                .verify_user_by_phone_password(&normalized_account, &input.password)
                 .await?
         }
     };
@@ -1030,12 +1051,19 @@ pub(crate) async fn wechat_bind_phone_v2_handler(
         } else {
             input.fullname.trim().to_string()
         };
+        let password = input
+            .password
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("wechat-auto-{}", Uuid::now_v7()));
         let new_user = state
             .create_user_with_phone(&CreateUserWithPhoneInput {
                 fullname,
                 email: None,
                 phone_e164: phone_e164.clone(),
-                password: input.password.clone(),
+                password,
                 phone_bind_required: false,
             })
             .await?;
@@ -2556,7 +2584,7 @@ mod tests {
                 wechat_ticket: ticket,
                 phone: "13800138033".to_string(),
                 sms_code,
-                password: "123456".to_string(),
+                password: Some("123456".to_string()),
                 fullname: "Wechat User".to_string(),
             }),
         )
@@ -2568,5 +2596,88 @@ mod tests {
         assert!(!bind_ret.bind_required);
         assert!(bind_ret.access_token.is_some());
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn wechat_bind_phone_v2_should_allow_empty_password_for_new_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+
+        let challenge_response = wechat_challenge_v2_handler(State(state.clone()))
+            .await?
+            .into_response();
+        let challenge_body = challenge_response.into_body().collect().await?.to_bytes();
+        let challenge: WechatChallengeV2Output = serde_json::from_slice(&challenge_body)?;
+
+        let signin_response = wechat_signin_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(WechatSigninV2Input {
+                state: challenge.state,
+                code: "mock_wechat_user_02:union02:Tester2".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin_response.into_body().collect().await?.to_bytes();
+        let signin_ret: WechatSigninV2Output = serde_json::from_slice(&signin_body)?;
+        let ticket = signin_ret.wechat_ticket.expect("wechat ticket");
+
+        let sms_response = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138044".to_string(),
+                scene: "bind_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        let sms_body = sms_response.into_body().collect().await?.to_bytes();
+        let sms_ret: SendSmsCodeV2Output = serde_json::from_slice(&sms_body)?;
+        let sms_code = sms_ret.debug_code.expect("debug code");
+
+        let bind_response = wechat_bind_phone_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(WechatBindPhoneV2Input {
+                wechat_ticket: ticket,
+                phone: "13800138044".to_string(),
+                sms_code,
+                password: None,
+                fullname: "Wechat NoPassword".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(bind_response.status(), StatusCode::OK);
+        let bind_body = bind_response.into_body().collect().await?.to_bytes();
+        let bind_ret: WechatSigninV2Output = serde_json::from_slice(&bind_body)?;
+        assert!(!bind_ret.bind_required);
+        assert!(bind_ret.access_token.is_some());
+        let user = bind_ret.user.expect("user");
+        assert_eq!(user.phone_e164.as_deref(), Some("+8613800138044"));
+        Ok(())
+    }
+
+    #[test]
+    fn signin_password_rate_limit_key_should_hash_normalized_account() {
+        let email_key = build_signin_password_rate_limit_key(AccountType::Email, "user@acme.org");
+        assert_eq!(
+            email_key,
+            format!("email:{}", hash_with_sha1("user@acme.org"))
+        );
+        let phone_normalized_a = normalize_cn_phone_e164("13800138000").expect("normalize phone");
+        let phone_normalized_b =
+            normalize_cn_phone_e164("+86 13800138000").expect("normalize phone");
+        assert_eq!(phone_normalized_a, phone_normalized_b);
+        let phone_key =
+            build_signin_password_rate_limit_key(AccountType::Phone, &phone_normalized_a);
+        assert_eq!(
+            phone_key,
+            format!("phone:{}", hash_with_sha1("+8613800138000"))
+        );
+        let phone_key_b =
+            build_signin_password_rate_limit_key(AccountType::Phone, &phone_normalized_b);
+        assert_eq!(phone_key, phone_key_b);
     }
 }

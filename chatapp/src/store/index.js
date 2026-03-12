@@ -345,13 +345,16 @@ export default createStore({
         fullname,
       },
     ) {
-      const response = await network(this, 'post', '/auth/v2/wechat/bind-phone', {
+      const payload = {
         wechatTicket,
         phone,
         smsCode,
-        password,
         fullname,
-      });
+      };
+      if (password && String(password).trim()) {
+        payload.password = String(password).trim();
+      }
+      const response = await network(this, 'post', '/auth/v2/wechat/bind-phone', payload);
       const data = response?.data || {};
       const authLike = {
         data: {
@@ -1066,14 +1069,18 @@ export default createStore({
     async appExit({ state }) {
       await sendAppExitEvent(state.context, state.token);
     },
-    async userLogin({ state }, { email }) {
-      await sendUserLoginEvent(state.context, state.token, email);
+    async userLogin({ state }, payload = {}) {
+      await sendUserLoginEvent(state.context, state.token, payload);
     },
     async userLogout({ state }) {
-      await sendUserLogoutEvent(state.context, state.token, state.user.email);
+      await sendUserLogoutEvent(
+        state.context,
+        state.token,
+        buildAuthEventPayloadFromUser(state.user),
+      );
     },
-    async userRegister({ state }, { email }) {
-      await sendUserRegisterEvent(state.context, state.token, email);
+    async userRegister({ state }, payload = {}) {
+      await sendUserRegisterEvent(state.context, state.token, payload);
     },
     async chatCreated({ state }) {
       await sendChatCreatedEvent(state.context, state.token);
@@ -1335,5 +1342,22 @@ async function setContext(state) {
     userId,
     userAgent,
     clientTs,
+  };
+}
+
+function buildAuthEventPayloadFromUser(user) {
+  if (!user) {
+    return {
+      accountType: 'unknown',
+      accountIdentifier: '',
+      userId: '',
+    };
+  }
+  const phone = String(user.phoneE164 || '').trim();
+  const email = String(user.email || '').trim();
+  return {
+    accountType: phone ? 'phone' : (email ? 'email' : 'unknown'),
+    accountIdentifier: phone || email || '',
+    userId: user.id == null ? '' : String(user.id),
   };
 }

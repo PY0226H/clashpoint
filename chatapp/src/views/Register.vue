@@ -43,8 +43,15 @@
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700">密码</label>
-          <input v-model="password" type="password" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
+          <label class="block text-sm font-medium text-gray-700">
+            {{ wechatTicket ? '密码（可选）' : '密码' }}
+          </label>
+          <input
+            v-model="password"
+            type="password"
+            :required="!wechatTicket"
+            class="mt-1 block w-full px-3 py-2 border rounded-md"
+          />
         </div>
 
         <div>
@@ -120,6 +127,8 @@ export default {
       this.tips = '';
       try {
         let user = null;
+        let accountType = 'unknown';
+        let accountIdentifier = '';
         if (this.wechatTicket) {
           const ret = await this.$store.dispatch('wechatBindPhoneV2', {
             wechatTicket: this.wechatTicket,
@@ -129,16 +138,18 @@ export default {
             fullname: this.fullName,
           });
           user = ret?.user;
+          accountType = 'wechat';
+          accountIdentifier = this.phone;
         } else if (this.mode === 'phone_signup') {
-          this.$store.dispatch('userRegister', { email: this.phone });
           user = await this.$store.dispatch('signupPhoneV2', {
             phone: this.phone,
             smsCode: this.smsCode,
             password: this.password,
             fullname: this.fullName,
           });
+          accountType = 'phone';
+          accountIdentifier = this.phone;
         } else {
-          this.$store.dispatch('userRegister', { email: this.email });
           user = await this.$store.dispatch('signupEmailV2', {
             email: this.email,
             phone: this.phone,
@@ -146,7 +157,14 @@ export default {
             password: this.password,
             fullname: this.fullName,
           });
+          accountType = 'email';
+          accountIdentifier = this.email;
         }
+        await this.$store.dispatch('userRegister', {
+          accountType,
+          accountIdentifier,
+          userId: user?.id,
+        });
         if (user?.phoneBindRequired) {
           this.$router.push('/bind-phone');
           return;

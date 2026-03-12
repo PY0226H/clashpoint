@@ -82,23 +82,50 @@ pub mod app_exit_event {
 /// / 用户登录事件
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UserLoginEvent {
-    /// / 用户邮箱(Email 是 PII，需要脱敏)
+    /// / 兼容字段：仅在邮箱登录时写入，后续将逐步淘汰
     #[prost(string, tag = "1")]
     pub email: ::prost::alloc::string::String,
+    /// / 登录账号类型：email/phone/wechat/unknown
+    #[prost(string, tag = "2")]
+    pub account_type: ::prost::alloc::string::String,
+    /// / 账号标识的哈希值（避免直接落明文 PII）
+    #[prost(string, tag = "3")]
+    pub account_identifier_hash: ::prost::alloc::string::String,
+    /// / 认证成功后的用户 ID（字符串化）
+    #[prost(string, tag = "4")]
+    pub user_id: ::prost::alloc::string::String,
 }
 /// / 用户登出事件
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UserLogoutEvent {
-    /// / 用户邮箱(Email 是 PII，需要脱敏)
+    /// / 兼容字段：仅在邮箱登录时写入，后续将逐步淘汰
     #[prost(string, tag = "1")]
     pub email: ::prost::alloc::string::String,
+    /// / 登出账号类型：email/phone/wechat/unknown
+    #[prost(string, tag = "2")]
+    pub account_type: ::prost::alloc::string::String,
+    /// / 账号标识的哈希值（避免直接落明文 PII）
+    #[prost(string, tag = "3")]
+    pub account_identifier_hash: ::prost::alloc::string::String,
+    /// / 登出时用户 ID（字符串化）
+    #[prost(string, tag = "4")]
+    pub user_id: ::prost::alloc::string::String,
 }
 /// / 用户注册事件
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UserRegisterEvent {
-    /// / 用户邮箱(Email 是 PII，需要脱敏)
+    /// / 兼容字段：仅在邮箱注册时写入，后续将逐步淘汰
     #[prost(string, tag = "1")]
     pub email: ::prost::alloc::string::String,
+    /// / 注册账号类型：email/phone/wechat/unknown
+    #[prost(string, tag = "3")]
+    pub account_type: ::prost::alloc::string::String,
+    /// / 账号标识的哈希值（避免直接落明文 PII）
+    #[prost(string, tag = "4")]
+    pub account_identifier_hash: ::prost::alloc::string::String,
+    /// / 注册成功后的用户 ID（字符串化）
+    #[prost(string, tag = "5")]
+    pub user_id: ::prost::alloc::string::String,
 }
 /// / chat 创建事件
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]

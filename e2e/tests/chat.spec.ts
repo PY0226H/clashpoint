@@ -32,11 +32,9 @@ test('test', async ({ page }) => {
   // Recording...
   await page.goto('http://localhost:1420/login');
 
-  // find input[id="email"] and fill it with 'tchen@acme.org'
-  await page.locator('input[id="email"]').fill('tchen@acme.org');
-
-  // find input[id="password"] and fill it with '123456'
-  await page.locator('input[id="password"]').fill('123456');
+  // fill email/password in v2 login form
+  await page.locator('input[type="email"]').fill('tchen@acme.org');
+  await page.locator('input[type="password"]').fill('123456');
 
   // find button[type="submit"] and click it
   await page.locator('button[type="submit"]').click();

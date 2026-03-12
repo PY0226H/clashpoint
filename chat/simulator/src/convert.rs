@@ -18,7 +18,12 @@ const SESSION_LENGTH_MINUTES: Range<i64> = 10..120;
 
 impl From<LoginData> for UserLoginEvent {
     fn from(data: LoginData) -> Self {
-        UserLoginEvent { email: data.email }
+        UserLoginEvent {
+            email: data.email,
+            account_type: "email".to_string(),
+            account_identifier_hash: String::new(),
+            user_id: String::new(),
+        }
     }
 }
 
