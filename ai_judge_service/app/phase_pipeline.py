@@ -48,6 +48,32 @@ REBUTTAL_MARKERS = (
     "however",
     "rebut",
 )
+LOGIC_MARKERS = (
+    "因为",
+    "所以",
+    "因此",
+    "由此",
+    "如果",
+    "结论",
+    "推导",
+    "if",
+    "therefore",
+    "hence",
+)
+EVIDENCE_MARKERS = (
+    "数据",
+    "版本",
+    "来源",
+    "证据",
+    "统计",
+    "官网",
+    "更新",
+    "数值",
+    "patch",
+    "meta",
+    "evidence",
+    "source",
+)
 CONFLICT_POSITIVE_MARKERS = (
     "稳定",
     "优势",
@@ -1395,6 +1421,145 @@ def _count_rebuttals(messages: list[PhaseDispatchMessage]) -> int:
     return total
 
 
+def _marker_density(messages: list[PhaseDispatchMessage], markers: tuple[str, ...]) -> float:
+    if not messages:
+        return 0.0
+    matched = 0
+    for msg in messages:
+        lowered = msg.content.lower()
+        if any(marker in lowered for marker in markers):
+            matched += 1
+    return matched / float(len(messages))
+
+
+def _digit_density(messages: list[PhaseDispatchMessage]) -> float:
+    if not messages:
+        return 0.0
+    matched = 0
+    for msg in messages:
+        if any(ch.isdigit() for ch in msg.content):
+            matched += 1
+    return matched / float(len(messages))
+
+
+def _punctuation_density(messages: list[PhaseDispatchMessage]) -> float:
+    if not messages:
+        return 0.0
+    matched = 0
+    for msg in messages:
+        if any(ch in msg.content for ch in ("，", "。", "！", "？", ",", ".", "!", "?", ";", "；")):
+            matched += 1
+    return matched / float(len(messages))
+
+
+def _average_message_length(messages: list[PhaseDispatchMessage]) -> float:
+    if not messages:
+        return 0.0
+    total_chars = sum(len(str(msg.content or "").strip()) for msg in messages)
+    return total_chars / float(len(messages))
+
+
+def _token_diversity(messages: list[PhaseDispatchMessage]) -> float:
+    tokens: list[str] = []
+    for msg in messages:
+        tokens.extend(_tokenize(msg.content))
+    if not tokens:
+        return 0.0
+    return len(set(tokens)) / float(len(tokens))
+
+
+def _compute_side_dimensions(
+    *,
+    side_messages: list[PhaseDispatchMessage],
+    opponent_messages: list[PhaseDispatchMessage],
+    retrieval_items: list[dict[str, Any]],
+) -> dict[str, float]:
+    logic_density = _marker_density(side_messages, LOGIC_MARKERS)
+    evidence_density = _marker_density(side_messages, EVIDENCE_MARKERS)
+    rebuttal_rate = _count_rebuttals(side_messages) / float(max(1, len(side_messages)))
+    digit_density = _digit_density(side_messages)
+    punctuation_density = _punctuation_density(side_messages)
+    avg_length = _average_message_length(side_messages)
+    length_norm = _clamp(avg_length / 180.0, 0.0, 1.0)
+    diversity = _token_diversity(side_messages)
+
+    retrieval_support = _clamp(len(retrieval_items) / 6.0, 0.0, 1.0)
+    opponent_tokens = set(_tokenize("\n".join(msg.content for msg in opponent_messages)))
+    rebuttal_overlaps: list[float] = []
+    for msg in side_messages:
+        lowered = msg.content.lower()
+        if not any(marker in lowered for marker in REBUTTAL_MARKERS):
+            continue
+        msg_tokens = set(_tokenize(msg.content))
+        if not msg_tokens:
+            continue
+        rebuttal_overlaps.append(len(msg_tokens & opponent_tokens) / float(max(1, len(msg_tokens))))
+    rebuttal_overlap = sum(rebuttal_overlaps) / float(max(1, len(rebuttal_overlaps)))
+
+    logic = _clamp((0.45 * logic_density + 0.25 * length_norm + 0.30 * diversity) * 100.0, 0.0, 100.0)
+    evidence = _clamp(
+        (0.50 * retrieval_support + 0.30 * evidence_density + 0.20 * digit_density) * 100.0,
+        0.0,
+        100.0,
+    )
+    rebuttal = _clamp((0.45 * rebuttal_rate + 0.55 * rebuttal_overlap) * 100.0, 0.0, 100.0)
+    expression = _clamp(
+        (0.40 * length_norm + 0.35 * punctuation_density + 0.25 * diversity) * 100.0,
+        0.0,
+        100.0,
+    )
+
+    return {
+        "logic": round(logic, 2),
+        "evidence": round(evidence, 2),
+        "rebuttal": round(rebuttal, 2),
+        "expression": round(expression, 2),
+    }
+
+
+def _collect_side_evidence_refs(
+    *,
+    messages: list[PhaseDispatchMessage],
+    retrieval_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    selected_ids: list[int] = []
+    seen_ids: set[int] = set()
+    priority_markers = REBUTTAL_MARKERS + LOGIC_MARKERS + EVIDENCE_MARKERS
+    for msg in messages:
+        lowered = msg.content.lower()
+        if not any(marker in lowered for marker in priority_markers):
+            continue
+        if msg.message_id in seen_ids:
+            continue
+        seen_ids.add(msg.message_id)
+        selected_ids.append(msg.message_id)
+        if len(selected_ids) >= 6:
+            break
+    if len(selected_ids) < 3:
+        for msg in messages:
+            if msg.message_id in seen_ids:
+                continue
+            seen_ids.add(msg.message_id)
+            selected_ids.append(msg.message_id)
+            if len(selected_ids) >= 3:
+                break
+
+    chunk_ids: list[str] = []
+    seen_chunk_ids: set[str] = set()
+    for item in retrieval_items[:8]:
+        chunk_id = str(item.get("chunkId") or item.get("chunk_id") or "").strip()
+        if not chunk_id or chunk_id in seen_chunk_ids:
+            continue
+        seen_chunk_ids.add(chunk_id)
+        chunk_ids.append(chunk_id)
+        if len(chunk_ids) >= 6:
+            break
+    return {
+        "messageIds": selected_ids,
+        "chunkIds": chunk_ids,
+    }
+
+
 def _compute_phase_scores(
     request: PhaseDispatchRequest,
     *,
@@ -1408,6 +1573,25 @@ def _compute_phase_scores(
     con_count = len([msg for msg in request.messages if msg.side == "con"])
     participation_delta = (pro_count - con_count) / float(total_messages)
 
+    pro_dimensions = _compute_side_dimensions(
+        side_messages=pro_messages,
+        opponent_messages=con_messages,
+        retrieval_items=pro_retrieval_items,
+    )
+    con_dimensions = _compute_side_dimensions(
+        side_messages=con_messages,
+        opponent_messages=pro_messages,
+        retrieval_items=con_retrieval_items,
+    )
+    dimension_weights = {
+        "logic": 0.30,
+        "evidence": 0.30,
+        "rebuttal": 0.25,
+        "expression": 0.15,
+    }
+    pro_weighted = sum(pro_dimensions[key] * weight for key, weight in dimension_weights.items())
+    con_weighted = sum(con_dimensions[key] * weight for key, weight in dimension_weights.items())
+
     pro_rebuttal_rate = _count_rebuttals(pro_messages) / float(max(1, len(pro_messages)))
     con_rebuttal_rate = _count_rebuttals(con_messages) / float(max(1, len(con_messages)))
     rebuttal_delta = pro_rebuttal_rate - con_rebuttal_rate
@@ -1416,8 +1600,9 @@ def _compute_phase_scores(
     con_hits = len(con_retrieval_items)
     rag_delta = (pro_hits - con_hits) / float(max(1, max(pro_hits, con_hits, 1)))
 
-    agent1_pro = round(_clamp(50.0 + participation_delta * 10.0 + rebuttal_delta * 8.0, 0.0, 100.0), 2)
-    agent1_con = round(_clamp(50.0 - participation_delta * 10.0 - rebuttal_delta * 8.0, 0.0, 100.0), 2)
+    balance_adjustment = participation_delta * 4.0 + rebuttal_delta * 3.0
+    agent1_pro = round(_clamp(pro_weighted + balance_adjustment, 0.0, 100.0), 2)
+    agent1_con = round(_clamp(con_weighted - balance_adjustment, 0.0, 100.0), 2)
 
     agent2_pro = round(
         _clamp(
@@ -1444,13 +1629,33 @@ def _compute_phase_scores(
     agent1 = {
         "pro": agent1_pro,
         "con": agent1_con,
+        "weights": dimension_weights,
         "dimensions": {
+            "pro": pro_dimensions,
+            "con": con_dimensions,
+        },
+        "evidenceRefs": {
+            "pro": _collect_side_evidence_refs(
+                messages=pro_messages,
+                retrieval_items=pro_retrieval_items,
+            ),
+            "con": _collect_side_evidence_refs(
+                messages=con_messages,
+                retrieval_items=con_retrieval_items,
+            ),
+        },
+        "balanceSignals": {
             "proCoverage": round(pro_count / float(total_messages), 4),
             "conCoverage": round(con_count / float(total_messages), 4),
             "proRebuttalRate": round(pro_rebuttal_rate, 4),
             "conRebuttalRate": round(con_rebuttal_rate, 4),
+            "participationDelta": round(participation_delta, 4),
+            "rebuttalDelta": round(rebuttal_delta, 4),
         },
-        "rationale": "agent1 uses participation balance and rebuttal density as baseline signals.",
+        "rationale": (
+            "agent1 uses weighted rubric dimensions (logic/evidence/rebuttal/expression) "
+            "with light participation+rebuttal balance adjustment."
+        ),
     }
     agent2 = {
         "pro": agent2_pro,

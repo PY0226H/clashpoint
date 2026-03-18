@@ -90,6 +90,35 @@ class PhasePipelineTests(unittest.TestCase):
         self.assertIn("rag_no_hit_con", payload["errorCodes"])
         self.assertEqual(payload["degradationLevel"], 2)
 
+    def test_build_phase_report_payload_should_emit_agent1_four_dimension_scorecard(self) -> None:
+        request = _build_phase_request_for_pipeline()
+        settings = _build_settings(
+            rag_enabled=False,
+            rag_knowledge_file="",
+            rag_source_whitelist=(),
+        )
+
+        payload = asyncio.run(
+            build_phase_report_payload(
+                request=request,
+                settings=settings,
+            )
+        )
+
+        agent1 = payload["agent1Score"]
+        self.assertIn("weights", agent1)
+        self.assertEqual(set(agent1["dimensions"]["pro"].keys()), {"logic", "evidence", "rebuttal", "expression"})
+        self.assertEqual(set(agent1["dimensions"]["con"].keys()), {"logic", "evidence", "rebuttal", "expression"})
+        for side in ("pro", "con"):
+            for key in ("logic", "evidence", "rebuttal", "expression"):
+                value = float(agent1["dimensions"][side][key])
+                self.assertGreaterEqual(value, 0.0)
+                self.assertLessEqual(value, 100.0)
+            refs = agent1["evidenceRefs"][side]
+            self.assertGreaterEqual(len(refs["messageIds"]), 1)
+            self.assertIn("chunkIds", refs)
+        self.assertIn("balanceSignals", agent1)
+
     def test_build_phase_report_payload_should_attach_retrieval_items_when_knowledge_available(self) -> None:
         request = _build_phase_request_for_pipeline()
         with tempfile.NamedTemporaryFile("w+", suffix=".json", encoding="utf-8") as tmp:
