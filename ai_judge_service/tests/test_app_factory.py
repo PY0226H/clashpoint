@@ -213,6 +213,14 @@ def _build_final_request() -> FinalDispatchRequest:
     )
 
 
+async def _noop_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+    return None
+
+
+async def _noop_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+    return None
+
+
 class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_require_internal_key_should_validate_header(self) -> None:
         settings = _build_settings(ai_internal_key="expected")
@@ -417,6 +425,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_v3_phase_dispatch_should_support_idempotency_replay(self) -> None:
         settings = _build_settings(ai_internal_key="k4p")
         request = _build_phase_request()
+        phase_callback_calls: list[tuple[int, dict]] = []
 
         async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
             return _FakeReport()
@@ -427,11 +436,16 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
             return None
 
+        async def fake_callback_phase_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            phase_callback_calls.append((job_id, payload))
+
         runtime = create_runtime(
             settings=settings,
             build_report_by_runtime_fn=fake_runtime_builder,
             callback_report_impl=fake_callback_report,
             callback_failed_impl=fake_callback_failed,
+            callback_phase_report_impl=fake_callback_phase_report,
+            callback_final_report_impl=_noop_callback_report,
         )
         app = create_app(runtime)
         route = next(
@@ -453,10 +467,18 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt["dispatchType"], "phase")
         self.assertEqual(receipt["phaseNo"], 1)
         self.assertEqual(receipt["messageCount"], 2)
+        self.assertEqual(receipt["status"], "reported")
+        self.assertEqual(receipt["response"]["callbackStatus"], "reported")
+        self.assertEqual(len(phase_callback_calls), 1)
+        self.assertEqual(phase_callback_calls[0][0], 101)
+        self.assertIn("sessionId", phase_callback_calls[0][1])
+        self.assertIn("agent1Score", phase_callback_calls[0][1])
+        self.assertIn("proSummaryGrounded", phase_callback_calls[0][1])
 
     async def test_v3_final_dispatch_should_support_idempotency_replay_and_persist_receipt(self) -> None:
         settings = _build_settings(ai_internal_key="k4fr")
         request = _build_final_request()
+        final_callback_calls: list[tuple[int, dict]] = []
 
         async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
             return _FakeReport()
@@ -467,11 +489,16 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
             return None
 
+        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_callback_calls.append((job_id, payload))
+
         runtime = create_runtime(
             settings=settings,
             build_report_by_runtime_fn=fake_runtime_builder,
             callback_report_impl=fake_callback_report,
             callback_failed_impl=fake_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=fake_callback_final_report,
         )
         app = create_app(runtime)
         route = next(
@@ -494,6 +521,105 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt["dispatchType"], "final")
         self.assertEqual(receipt["phaseStartNo"], 1)
         self.assertEqual(receipt["phaseEndNo"], 2)
+        self.assertEqual(receipt["status"], "reported")
+        self.assertEqual(receipt["response"]["callbackStatus"], "reported")
+        self.assertEqual(len(final_callback_calls), 1)
+        self.assertEqual(final_callback_calls[0][0], 202)
+        self.assertIn("sessionId", final_callback_calls[0][1])
+        self.assertIn("finalRationale", final_callback_calls[0][1])
+        self.assertIn("dimensionScores", final_callback_calls[0][1])
+
+    async def test_v3_phase_dispatch_should_retry_callback_and_fail_open_for_worker_retry(self) -> None:
+        settings = _build_settings(
+            ai_internal_key="k4pf",
+            runtime_retry_max_attempts=3,
+            runtime_retry_backoff_ms=0,
+        )
+        request = _build_phase_request()
+        callback_attempts = {"n": 0}
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_phase_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            callback_attempts["n"] += 1
+            raise RuntimeError(f"phase callback boom-{job_id}")
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=_noop_callback_report,
+            callback_failed_impl=_noop_callback_failed,
+            callback_phase_report_impl=fake_callback_phase_report,
+            callback_final_report_impl=_noop_callback_report,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
+        )
+        receipt_route = next(
+            item
+            for item in app.routes
+            if getattr(item, "path", "") == "/internal/judge/v3/phase/jobs/{job_id}/receipt"
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await route.endpoint(request=request, x_ai_internal_key="k4pf")
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("phase_callback_failed", str(ctx.exception.detail))
+        self.assertEqual(callback_attempts["n"], 3)
+        self.assertIsNone(runtime.trace_store.get_idempotency(request.idempotency_key))
+
+        receipt = await receipt_route.endpoint(job_id=101, x_ai_internal_key="k4pf")
+        self.assertEqual(receipt["status"], "callback_failed")
+        self.assertEqual(receipt["response"]["callbackStatus"], "failed")
+        self.assertIn("v3 callback failed after", receipt["response"]["callbackError"])
+
+    async def test_v3_final_dispatch_should_retry_callback_and_fail_open_for_worker_retry(self) -> None:
+        settings = _build_settings(
+            ai_internal_key="k4ff",
+            runtime_retry_max_attempts=2,
+            runtime_retry_backoff_ms=0,
+        )
+        request = _build_final_request()
+        callback_attempts = {"n": 0}
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            callback_attempts["n"] += 1
+            raise RuntimeError(f"final callback boom-{job_id}")
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=_noop_callback_report,
+            callback_failed_impl=_noop_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=fake_callback_final_report,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
+        )
+        receipt_route = next(
+            item
+            for item in app.routes
+            if getattr(item, "path", "") == "/internal/judge/v3/final/jobs/{job_id}/receipt"
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await route.endpoint(request=request, x_ai_internal_key="k4ff")
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("final_callback_failed", str(ctx.exception.detail))
+        self.assertEqual(callback_attempts["n"], 2)
+        self.assertIsNone(runtime.trace_store.get_idempotency(request.idempotency_key))
+
+        receipt = await receipt_route.endpoint(job_id=202, x_ai_internal_key="k4ff")
+        self.assertEqual(receipt["status"], "callback_failed")
+        self.assertEqual(receipt["response"]["callbackStatus"], "failed")
+        self.assertIn("v3 callback failed after", receipt["response"]["callbackError"])
 
     async def test_v3_phase_dispatch_should_validate_message_count(self) -> None:
         settings = _build_settings(ai_internal_key="k4v")
@@ -514,6 +640,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             build_report_by_runtime_fn=fake_runtime_builder,
             callback_report_impl=fake_callback_report,
             callback_failed_impl=fake_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=_noop_callback_report,
         )
         app = create_app(runtime)
         route = next(
@@ -545,6 +673,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             build_report_by_runtime_fn=fake_runtime_builder,
             callback_report_impl=fake_callback_report,
             callback_failed_impl=fake_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=_noop_callback_report,
         )
         app = create_app(runtime)
         route = next(
