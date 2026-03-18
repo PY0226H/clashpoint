@@ -737,7 +737,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             response=response,
         )
 
-        phase_report_payload = build_phase_report_payload_v3(
+        phase_report_payload = await build_phase_report_payload_v3(
             request=request,
             settings=runtime.settings,
         )

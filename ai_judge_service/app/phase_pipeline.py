@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
@@ -16,10 +18,17 @@ from .models import (
     PhaseDispatchMessage,
     PhaseDispatchRequest,
 )
+from .openai_judge_client import call_openai_json
+from .runtime_errors import classify_openai_failure
+from .runtime_policy import should_use_openai
 from .runtime_rag import RuntimeRagResult, retrieve_runtime_contexts_with_meta
 from .settings import Settings
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
+SUMMARY_PROMPT_VERSION = "v3.a2a3.summary.v1"
+DEFAULT_SUMMARY_COVERAGE_MIN_RATIO = 1.0
+MAX_SUMMARY_TEXT_CHARS = 8000
+MAX_SUMMARY_MESSAGE_CHARS = 640
 REBUTTAL_MARKERS = (
     "但是",
     "然而",
@@ -31,6 +40,25 @@ REBUTTAL_MARKERS = (
     "however",
     "rebut",
 )
+
+
+@dataclass(frozen=True)
+class _SummaryConfig:
+    api_key: str
+    model: str
+    base_url: str
+    timeout_secs: float
+    temperature: float
+    max_retries: int
+
+
+@dataclass(frozen=True)
+class SideSummaryResult:
+    summary: dict[str, Any]
+    source: str
+    coverage_ratio: float
+    fallback_reason: str | None
+    error_codes: list[str]
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -64,9 +92,186 @@ def _build_grounded_summary(
     side_messages = _select_side_messages(request, side)
     lines = [f"[{msg.message_id}] {msg.content}" for msg in side_messages]
     return {
-        "text": "\n".join(lines)[:8000],
+        "text": "\n".join(lines)[:MAX_SUMMARY_TEXT_CHARS],
         "messageIds": [msg.message_id for msg in side_messages],
     }
+
+
+def _summary_coverage_threshold(settings: Settings) -> float:
+    raw_value = getattr(settings, "phase_summary_coverage_min_ratio", DEFAULT_SUMMARY_COVERAGE_MIN_RATIO)
+    try:
+        threshold = float(raw_value)
+    except (TypeError, ValueError):
+        threshold = DEFAULT_SUMMARY_COVERAGE_MIN_RATIO
+    return _clamp(threshold, 0.0, 1.0)
+
+
+def _build_summary_system_prompt(*, side: str, topic_domain: str) -> str:
+    return (
+        "你是辩论阶段总结Agent。"
+        "只允许基于输入消息做保真总结，禁止补充窗口外信息。"
+        "禁止改写消息立场，禁止编造观点。"
+        "输出必须是JSON对象，字段为 summary_text 和 message_ids。"
+        f"当前阵营: {side}，topic_domain: {topic_domain}。"
+    )
+
+
+def _build_summary_user_prompt(
+    *,
+    request: PhaseDispatchRequest,
+    side: str,
+    side_messages: list[PhaseDispatchMessage],
+) -> str:
+    lines: list[str] = []
+    for msg in side_messages:
+        content = str(msg.content or "").strip().replace("\n", " ")
+        lines.append(f"[{msg.message_id}] {content[:MAX_SUMMARY_MESSAGE_CHARS]}")
+    payload = "\n".join(lines)
+    return (
+        "请输出保真总结并覆盖输入消息中的所有观点、反驳与关键论据。\n"
+        "要求:\n"
+        "1) 仅使用输入消息，不得引入外部信息。\n"
+        "2) message_ids 只能填写输入中出现过的消息ID。\n"
+        "3) summary_text 使用中文。\n"
+        "4) 仅输出JSON，不要输出其他文本。\n\n"
+        f"phase_no={request.phase_no}, side={side}, message_count={len(side_messages)}\n"
+        "messages:\n"
+        f"{payload}"
+    )
+
+
+def _normalize_summary_message_ids(
+    *,
+    raw_ids: Any,
+    valid_ids: list[int],
+) -> tuple[list[int], bool]:
+    valid_set = set(valid_ids)
+    normalized: list[int] = []
+    seen: set[int] = set()
+    has_invalid = False
+    values = raw_ids if isinstance(raw_ids, list) else []
+    for value in values:
+        try:
+            message_id = int(value)
+        except (TypeError, ValueError):
+            has_invalid = True
+            continue
+        if message_id not in valid_set:
+            has_invalid = True
+            continue
+        if message_id in seen:
+            continue
+        seen.add(message_id)
+        normalized.append(message_id)
+    return normalized, has_invalid
+
+
+def _compute_summary_coverage(*, expected_ids: list[int], covered_ids: list[int]) -> float:
+    if not expected_ids:
+        return 1.0
+    expected_set = set(expected_ids)
+    covered_set = set(covered_ids)
+    return len(expected_set & covered_set) / float(len(expected_set))
+
+
+async def _build_side_summary_with_guard(
+    request: PhaseDispatchRequest,
+    *,
+    side: str,
+    side_messages: list[PhaseDispatchMessage],
+    settings: Settings,
+) -> SideSummaryResult:
+    fallback_summary = _build_grounded_summary(request, side=side)
+    expected_ids = fallback_summary["messageIds"]
+    threshold = _summary_coverage_threshold(settings)
+
+    if not should_use_openai(settings.provider, settings.openai_api_key):
+        return SideSummaryResult(
+            summary=fallback_summary,
+            source="extractive_fallback",
+            coverage_ratio=1.0,
+            fallback_reason="provider_disabled_or_missing_key",
+            error_codes=[],
+        )
+
+    cfg = _SummaryConfig(
+        api_key=settings.openai_api_key,
+        model=settings.openai_model,
+        base_url=settings.openai_base_url,
+        timeout_secs=settings.openai_timeout_secs,
+        temperature=min(0.2, max(0.0, settings.openai_temperature)),
+        max_retries=settings.openai_max_retries,
+    )
+    try:
+        raw = await call_openai_json(
+            cfg=cfg,
+            system_prompt=_build_summary_system_prompt(
+                side=side,
+                topic_domain=request.topic_domain,
+            ),
+            user_prompt=_build_summary_user_prompt(
+                request=request,
+                side=side,
+                side_messages=side_messages,
+            ),
+        )
+    except Exception as err:
+        return SideSummaryResult(
+            summary=fallback_summary,
+            source="extractive_fallback",
+            coverage_ratio=0.0,
+            fallback_reason="openai_call_failed",
+            error_codes=[f"summary_model_error_{side}", classify_openai_failure(str(err))],
+        )
+
+    summary_text = str(
+        raw.get("summary_text")
+        or raw.get("summaryText")
+        or raw.get("summary")
+        or raw.get("text")
+        or ""
+    ).strip()
+    message_ids, has_invalid_ids = _normalize_summary_message_ids(
+        raw_ids=raw.get("message_ids") or raw.get("messageIds"),
+        valid_ids=expected_ids,
+    )
+    coverage_ratio = _compute_summary_coverage(expected_ids=expected_ids, covered_ids=message_ids)
+
+    if not summary_text:
+        return SideSummaryResult(
+            summary=fallback_summary,
+            source="extractive_fallback",
+            coverage_ratio=coverage_ratio,
+            fallback_reason="summary_text_empty",
+            error_codes=[f"summary_schema_invalid_{side}"],
+        )
+    if has_invalid_ids:
+        return SideSummaryResult(
+            summary=fallback_summary,
+            source="extractive_fallback",
+            coverage_ratio=coverage_ratio,
+            fallback_reason="summary_message_ids_invalid",
+            error_codes=[f"summary_schema_invalid_{side}"],
+        )
+    if coverage_ratio < threshold:
+        return SideSummaryResult(
+            summary=fallback_summary,
+            source="extractive_fallback",
+            coverage_ratio=coverage_ratio,
+            fallback_reason="summary_coverage_below_threshold",
+            error_codes=[f"summary_coverage_low_{side}"],
+        )
+
+    return SideSummaryResult(
+        summary={
+            "text": summary_text[:MAX_SUMMARY_TEXT_CHARS],
+            "messageIds": message_ids,
+        },
+        source="llm",
+        coverage_ratio=coverage_ratio,
+        fallback_reason=None,
+        error_codes=[],
+    )
 
 
 def _tokenize(text: str) -> list[str]:
@@ -321,12 +526,16 @@ def _resolve_degradation_level(
         level = max(level, 1)
     if not pro_items and not con_items:
         level = max(level, 2)
+    if any(code.startswith("summary_") for code in error_codes):
+        level = max(level, 1)
     if any(code.startswith("rag_") for code in error_codes):
+        level = max(level, 2)
+    if any(code in {"judge_timeout", "model_overload"} for code in error_codes):
         level = max(level, 2)
     return level
 
 
-def build_phase_report_payload(
+async def build_phase_report_payload(
     *,
     request: PhaseDispatchRequest,
     settings: Settings,
@@ -336,8 +545,22 @@ def build_phase_report_payload(
     summary_started = perf_counter()
     pro_messages = _select_side_messages(request, "pro")
     con_messages = _select_side_messages(request, "con")
-    pro_summary = _build_grounded_summary(request, side="pro")
-    con_summary = _build_grounded_summary(request, side="con")
+    pro_summary_result, con_summary_result = await asyncio.gather(
+        _build_side_summary_with_guard(
+            request,
+            side="pro",
+            side_messages=pro_messages,
+            settings=settings,
+        ),
+        _build_side_summary_with_guard(
+            request,
+            side="con",
+            side_messages=con_messages,
+            settings=settings,
+        ),
+    )
+    pro_summary = pro_summary_result.summary
+    con_summary = con_summary_result.summary
     summary_latency_ms = (perf_counter() - summary_started) * 1000.0
 
     retrieval_started = perf_counter()
@@ -376,7 +599,10 @@ def build_phase_report_payload(
         con_retrieval_items=con_items,
     )
 
-    error_codes = _extract_retrieval_error_codes(rag_result=pro_rag_result, side="pro")
+    error_codes: list[str] = []
+    error_codes.extend(pro_summary_result.error_codes)
+    error_codes.extend(con_summary_result.error_codes)
+    error_codes.extend(_extract_retrieval_error_codes(rag_result=pro_rag_result, side="pro"))
     error_codes.extend(_extract_retrieval_error_codes(rag_result=con_rag_result, side="con"))
     deduped_error_codes: list[str] = []
     seen_codes: set[str] = set()
@@ -430,8 +656,22 @@ def build_phase_report_payload(
         "degradationLevel": degradation_level,
         "judgeTrace": {
             "traceId": request.trace_id,
-            "pipelineVersion": "v3-phase-m4-baseline",
+            "pipelineVersion": "v3-phase-m4-summary-llm-v1",
             "idempotencyKey": request.idempotency_key,
+            "summaryPromptVersion": SUMMARY_PROMPT_VERSION,
+            "summaryAudit": {
+                "coverageThreshold": _summary_coverage_threshold(settings),
+                "pro": {
+                    "source": pro_summary_result.source,
+                    "coverageRatio": round(pro_summary_result.coverage_ratio, 4),
+                    "fallbackReason": pro_summary_result.fallback_reason,
+                },
+                "con": {
+                    "source": con_summary_result.source,
+                    "coverageRatio": round(con_summary_result.coverage_ratio, 4),
+                    "fallbackReason": con_summary_result.fallback_reason,
+                },
+            },
             "retrievalDiagnostics": {
                 "pro": pro_rag_result.retrieval_diagnostics,
                 "con": con_rag_result.retrieval_diagnostics,

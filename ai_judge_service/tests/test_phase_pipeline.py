@@ -1,7 +1,9 @@
+import asyncio
 import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 from app.models import PhaseDispatchRequest
 from app.phase_pipeline import build_phase_report_payload
@@ -66,9 +68,11 @@ class PhasePipelineTests(unittest.TestCase):
             rag_source_whitelist=(),
         )
 
-        payload = build_phase_report_payload(
-            request=request,
-            settings=settings,
+        payload = asyncio.run(
+            build_phase_report_payload(
+                request=request,
+                settings=settings,
+            )
         )
 
         self.assertEqual(payload["sessionId"], 77)
@@ -118,9 +122,11 @@ class PhasePipelineTests(unittest.TestCase):
                 rag_query_message_limit=20,
             )
 
-            payload = build_phase_report_payload(
-                request=request,
-                settings=settings,
+            payload = asyncio.run(
+                build_phase_report_payload(
+                    request=request,
+                    settings=settings,
+                )
             )
 
         pro_items = payload["proRetrievalBundle"]["items"]
@@ -135,8 +141,38 @@ class PhasePipelineTests(unittest.TestCase):
             self.assertIn("conflict", item)
 
         self.assertEqual(set(payload["promptHashes"].keys()), {"a2", "a3", "a4", "a5", "a6", "a7"})
-        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-phase-m4-baseline")
+        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-phase-m4-summary-llm-v1")
         self.assertIn("retrievalDiagnostics", payload["judgeTrace"])
+
+    def test_build_phase_report_payload_should_fallback_when_summary_coverage_low(self) -> None:
+        request = _build_phase_request_for_pipeline()
+        settings = _build_settings(
+            provider="openai",
+            openai_api_key="test-key",
+            rag_enabled=False,
+            rag_knowledge_file="",
+            rag_source_whitelist=(),
+        )
+        mocked = AsyncMock(
+            side_effect=[
+                {"summary_text": "仅覆盖第一条", "message_ids": [1]},
+                {"summary_text": "仅覆盖一条反方", "message_ids": [2]},
+            ]
+        )
+        with patch("app.phase_pipeline.call_openai_json", mocked):
+            payload = asyncio.run(
+                build_phase_report_payload(
+                    request=request,
+                    settings=settings,
+                )
+            )
+
+        self.assertIn("summary_coverage_low_pro", payload["errorCodes"])
+        self.assertIn("summary_coverage_low_con", payload["errorCodes"])
+        self.assertEqual(payload["proSummaryGrounded"]["messageIds"], [1, 3])
+        self.assertEqual(payload["conSummaryGrounded"]["messageIds"], [2, 4])
+        self.assertEqual(payload["judgeTrace"]["summaryAudit"]["pro"]["source"], "extractive_fallback")
+        self.assertEqual(payload["judgeTrace"]["summaryAudit"]["con"]["source"], "extractive_fallback")
 
 
 if __name__ == "__main__":
