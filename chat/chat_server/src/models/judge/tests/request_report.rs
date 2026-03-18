@@ -435,6 +435,7 @@ async fn get_latest_judge_report_should_return_v3_final_report_when_available() 
     assert_eq!(diagnostics.status, "succeeded");
     assert!(!diagnostics.contract_violation_blocked);
     assert!(diagnostics.error_message.is_none());
+    assert!(diagnostics.contract_failure_type.is_none());
     Ok(())
 }
 
@@ -472,11 +473,89 @@ async fn get_latest_judge_report_should_surface_final_contract_block_diagnostics
     assert_eq!(diagnostics.final_job_id, final_job_id as u64);
     assert_eq!(diagnostics.status, "failed");
     assert_eq!(diagnostics.error_code.as_deref(), Some("http_5xx"));
+    assert_eq!(
+        diagnostics.contract_failure_type.as_deref(),
+        Some("final_contract_blocked")
+    );
     assert!(diagnostics.contract_violation_blocked);
     assert!(diagnostics
         .error_message
         .unwrap_or_default()
         .contains("final_contract_blocked"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_map_contract_failure_type_for_accepted_false() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let user = state.find_user_by_id(1).await?.expect("user should exist");
+    seed_failed_final_job(
+        &state,
+        session_id,
+        1,
+        2,
+        "[response_accepted_false] final dispatch response rejected: accepted=false, status=queued",
+    )
+    .await?;
+
+    let ret = state
+        .get_latest_judge_report(
+            session_id as u64,
+            &user,
+            GetJudgeReportQuery {
+                max_stage_count: None,
+                stage_offset: None,
+            },
+        )
+        .await?;
+    assert_eq!(ret.status, "failed");
+    let diagnostics = ret
+        .final_dispatch_diagnostics
+        .expect("final dispatch diagnostics should exist");
+    assert_eq!(
+        diagnostics.contract_failure_type.as_deref(),
+        Some("response_accepted_false")
+    );
+    assert!(!diagnostics.contract_violation_blocked);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_map_contract_failure_type_for_job_id_mismatch() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let user = state.find_user_by_id(1).await?.expect("user should exist");
+    seed_failed_final_job(
+        &state,
+        session_id,
+        1,
+        2,
+        "[response_job_id_mismatch] final dispatch response job_id mismatch: expected=100, got=101",
+    )
+    .await?;
+
+    let ret = state
+        .get_latest_judge_report(
+            session_id as u64,
+            &user,
+            GetJudgeReportQuery {
+                max_stage_count: None,
+                stage_offset: None,
+            },
+        )
+        .await?;
+    assert_eq!(ret.status, "failed");
+    let diagnostics = ret
+        .final_dispatch_diagnostics
+        .expect("final dispatch diagnostics should exist");
+    assert_eq!(
+        diagnostics.contract_failure_type.as_deref(),
+        Some("response_job_id_mismatch")
+    );
+    assert!(!diagnostics.contract_violation_blocked);
     Ok(())
 }
 

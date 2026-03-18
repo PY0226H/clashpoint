@@ -61,11 +61,49 @@ fn detect_contract_violation_blocked(error_message: &str) -> bool {
         || normalized.contains("phase_artifact_incomplete")
 }
 
+fn infer_contract_failure_type(
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> Option<String> {
+    let code = error_code.unwrap_or_default().trim();
+    if code == "response_accepted_false" {
+        return Some("response_accepted_false".to_string());
+    }
+    if code == "response_job_id_mismatch" {
+        return Some("response_job_id_mismatch".to_string());
+    }
+
+    let normalized = error_message
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.contains("final_contract_blocked") {
+        return Some("final_contract_blocked".to_string());
+    }
+    if normalized.contains("final_contract_violation")
+        || normalized.contains("phase_artifact_incomplete")
+    {
+        return Some("phase_artifact_incomplete".to_string());
+    }
+    if normalized.contains("accepted=false") {
+        return Some("response_accepted_false".to_string());
+    }
+    if normalized.contains("job_id mismatch") {
+        return Some("response_job_id_mismatch".to_string());
+    }
+    None
+}
+
 fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDispatchDiagnostics {
     let error_code = row
         .error_message
         .as_deref()
         .and_then(extract_dispatch_error_code);
+    let contract_failure_type =
+        infer_contract_failure_type(error_code.as_deref(), row.error_message.as_deref());
     let contract_violation_blocked = row
         .error_message
         .as_deref()
@@ -80,6 +118,7 @@ fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDi
         last_dispatch_at: row.last_dispatch_at,
         error_message: row.error_message,
         error_code,
+        contract_failure_type,
         contract_violation_blocked,
     }
 }

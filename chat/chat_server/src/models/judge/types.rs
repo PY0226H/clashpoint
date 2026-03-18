@@ -130,6 +130,7 @@ pub struct JudgeFinalDispatchDiagnostics {
     pub last_dispatch_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,
     pub error_code: Option<String>,
+    pub contract_failure_type: Option<String>,
     pub contract_violation_blocked: bool,
 }
 
