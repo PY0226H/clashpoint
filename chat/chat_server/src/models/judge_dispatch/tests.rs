@@ -167,6 +167,58 @@ async fn spawn_mock_phase_dispatch_server_with_status(status: StatusCode) -> Res
     Ok(format!("http://{}", addr))
 }
 
+async fn spawn_mock_final_dispatch_server_capture_payload(
+) -> Result<(String, Arc<Mutex<Vec<Value>>>)> {
+    let payloads = Arc::new(Mutex::new(Vec::new()));
+    let app = {
+        let payloads = payloads.clone();
+        Router::new().route(
+            "/internal/judge/v3/final/dispatch",
+            post(move |Json(payload): Json<Value>| {
+                let payloads = payloads.clone();
+                async move {
+                    payloads
+                        .lock()
+                        .expect("capture lock poisoned")
+                        .push(payload.clone());
+                    let job_id = payload
+                        .get("job_id")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(serde_json::json!({"accepted": true, "jobId": job_id})),
+                    )
+                }
+            }),
+        )
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok((format!("http://{}", addr), payloads))
+}
+
+async fn spawn_mock_final_dispatch_server_with_status(status: StatusCode) -> Result<String> {
+    let app = Router::new().route(
+        "/internal/judge/v3/final/dispatch",
+        post(move |Json(_payload): Json<Value>| async move {
+            (
+                axum::http::StatusCode::from_u16(status.as_u16()).expect("valid status"),
+                Json(serde_json::json!({"error":"mock"})),
+            )
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
 async fn seed_messages(state: &AppState, session_id: i64, count: i64) -> Result<()> {
     for idx in 0..count {
         sqlx::query(
@@ -219,6 +271,40 @@ async fn seed_queued_phase_job(
     .fetch_one(&state.pool)
     .await?;
     Ok(phase_job_id.0)
+}
+
+async fn seed_queued_final_job(
+    state: &AppState,
+    session_id: i64,
+    phase_start_no: i32,
+    phase_end_no: i32,
+) -> Result<i64> {
+    let final_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_final_jobs(
+            session_id, phase_start_no, phase_end_no,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, dispatch_attempts
+        )
+        VALUES (
+            $1, $2, $3,
+            'queued', $4, $5, 'v3', 'v3-default',
+            'default', 0
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(phase_start_no)
+    .bind(phase_end_no)
+    .bind(format!("judge-final-{}-{}", session_id, phase_end_no))
+    .bind(format!(
+        "judge_final:{}:{}:{}:v3:v3-default",
+        session_id, phase_start_no, phase_end_no
+    ))
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(final_job_id.0)
 }
 
 #[tokio::test]
@@ -434,6 +520,166 @@ async fn dispatch_pending_judge_phase_jobs_once_should_mark_failed_on_http_400()
         "#,
     )
     .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, "failed");
+    assert!(row.1.unwrap_or_default().contains("status=400"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn enqueue_due_judge_final_jobs_once_should_enqueue_for_closed_session() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.dispatch_batch_size = 20;
+
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    seed_messages(&state, session_id, 4).await?;
+    let ids: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id
+        FROM session_messages
+        WHERE session_id = $1
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(session_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let first_phase = seed_queued_phase_job(&state, session_id, 1, ids[0].0, ids[1].0, 2).await?;
+    let second_phase = seed_queued_phase_job(&state, session_id, 2, ids[2].0, ids[3].0, 2).await?;
+    for phase_job_id in [first_phase, second_phase] {
+        sqlx::query(
+            r#"
+            UPDATE judge_phase_jobs
+            SET status = 'dispatched',
+                dispatch_attempts = 1,
+                dispatch_locked_until = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(phase_job_id)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    let first = state.enqueue_due_judge_final_jobs_once().await?;
+    assert_eq!(first, 1);
+    let second = state.enqueue_due_judge_final_jobs_once().await?;
+    assert_eq!(second, 0);
+
+    let row: (i64, i32, i32, String, String, String) = sqlx::query_as(
+        r#"
+        SELECT
+            session_id, phase_start_no, phase_end_no,
+            status, rubric_version, judge_policy_version
+        FROM judge_final_jobs
+        WHERE session_id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, session_id);
+    assert_eq!(row.1, 1);
+    assert_eq!(row.2, 2);
+    assert_eq!(row.3, "queued");
+    assert_eq!(row.4, "v3");
+    assert_eq!(row.5, "v3-default");
+    Ok(())
+}
+
+#[tokio::test]
+async fn dispatch_pending_judge_final_jobs_once_should_dispatch_and_mark_dispatched() -> Result<()>
+{
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    let (service_base_url, payloads) = spawn_mock_final_dispatch_server_capture_payload().await?;
+    inner.config.ai_judge.dispatch_max_attempts = 3;
+    inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+    inner.config.ai_judge.dispatch_lock_secs = 1;
+    inner.config.ai_judge.dispatch_batch_size = 20;
+    inner.config.ai_judge.service_base_url = service_base_url;
+
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_queued_final_job(&state, session_id, 1, 3).await?;
+
+    let tick = state.dispatch_pending_judge_final_jobs_once().await?;
+    assert_eq!(tick.claimed, 1);
+    assert_eq!(tick.dispatched, 1);
+    assert_eq!(tick.failed, 0);
+
+    let row: (String, i32) = sqlx::query_as(
+        r#"
+        SELECT status, dispatch_attempts
+        FROM judge_final_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, "dispatched");
+    assert_eq!(row.1, 1);
+
+    let captured = payloads.lock().expect("capture lock poisoned");
+    assert_eq!(captured.len(), 1);
+    let payload = &captured[0];
+    assert_eq!(
+        payload
+            .get("session_id")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        session_id as u64
+    );
+    assert_eq!(
+        payload
+            .get("phase_start_no")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        1
+    );
+    assert_eq!(
+        payload
+            .get("phase_end_no")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn dispatch_pending_judge_final_jobs_once_should_mark_failed_on_http_400() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.dispatch_max_attempts = 1;
+    inner.config.ai_judge.dispatch_timeout_ms = 1_000;
+    inner.config.ai_judge.dispatch_lock_secs = 1;
+    inner.config.ai_judge.dispatch_batch_size = 20;
+    inner.config.ai_judge.service_base_url =
+        spawn_mock_final_dispatch_server_with_status(StatusCode::BAD_REQUEST).await?;
+
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_queued_final_job(&state, session_id, 1, 2).await?;
+
+    let tick = state.dispatch_pending_judge_final_jobs_once().await?;
+    assert_eq!(tick.claimed, 1);
+    assert_eq!(tick.dispatched, 0);
+    assert_eq!(tick.failed, 1);
+    assert_eq!(tick.marked_failed, 1);
+    assert_eq!(tick.terminal_failed, 1);
+    assert_eq!(tick.failed_http_4xx, 1);
+
+    let row: (String, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT status, error_message
+        FROM judge_final_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id)
     .fetch_one(&state.pool)
     .await?;
     assert_eq!(row.0, "failed");

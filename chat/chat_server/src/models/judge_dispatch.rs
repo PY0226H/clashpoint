@@ -16,6 +16,8 @@ const DISPATCH_TOPIC_DOMAIN: &str = "default";
 const DISPATCH_RETRIEVAL_PROFILE: &str = "hybrid_v1";
 const PHASE_DISPATCH_PATH: &str = "/internal/judge/v3/phase/dispatch";
 const PHASE_DISPATCH_SCOPE_ID: u64 = 1;
+const FINAL_DISPATCH_PATH: &str = "/internal/judge/v3/final/dispatch";
+const FINAL_DISPATCH_SCOPE_ID: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub(crate) struct JudgeDispatchTrigger {
@@ -44,6 +46,23 @@ pub struct JudgeDispatchTickReport {
 #[derive(Debug, Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JudgePhaseDispatchTickReport {
+    pub claimed: usize,
+    pub dispatched: usize,
+    pub failed: usize,
+    pub marked_failed: usize,
+    pub terminal_failed: usize,
+    pub retryable_failed: usize,
+    pub failed_contract: usize,
+    pub failed_http_4xx: usize,
+    pub failed_http_429: usize,
+    pub failed_http_5xx: usize,
+    pub failed_network: usize,
+    pub failed_internal: usize,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeFinalDispatchTickReport {
     pub claimed: usize,
     pub dispatched: usize,
     pub failed: usize,
@@ -182,6 +201,20 @@ struct PendingPhaseDispatchJob {
 }
 
 #[derive(Debug, Clone, FromRow)]
+struct PendingFinalDispatchJob {
+    id: i64,
+    session_id: i64,
+    phase_start_no: i32,
+    phase_end_no: i32,
+    trace_id: String,
+    idempotency_key: String,
+    rubric_version: String,
+    judge_policy_version: String,
+    topic_domain: String,
+    dispatch_attempts: i32,
+}
+
+#[derive(Debug, Clone, FromRow)]
 struct SessionTopicRow {
     status: String,
     scheduled_start_at: DateTime<Utc>,
@@ -233,6 +266,20 @@ struct AiJudgePhaseDispatchRequest {
     judge_policy_version: String,
     topic_domain: String,
     retrieval_profile: String,
+    trace_id: String,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AiJudgeFinalDispatchRequest {
+    job_id: u64,
+    scope_id: u64,
+    session_id: u64,
+    phase_start_no: i32,
+    phase_end_no: i32,
+    rubric_version: String,
+    judge_policy_version: String,
+    topic_domain: String,
     trace_id: String,
     idempotency_key: String,
 }
