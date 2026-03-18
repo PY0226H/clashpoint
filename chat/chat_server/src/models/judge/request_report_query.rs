@@ -211,6 +211,37 @@ impl AppState {
         .bind(session_id as i64)
         .fetch_optional(&self.pool)
         .await?;
+        let final_report_v3: Option<JudgeFinalReportRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                final_job_id,
+                winner,
+                pro_score,
+                con_score,
+                dimension_scores,
+                final_rationale,
+                verdict_evidence_refs,
+                phase_rollup_summary,
+                retrieval_snapshot_rollup,
+                winner_first,
+                winner_second,
+                rejudge_triggered,
+                needs_draw_vote,
+                judge_trace,
+                audit_alerts,
+                error_codes,
+                degradation_level,
+                created_at
+            FROM judge_final_reports
+            WHERE session_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id as i64)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let report = if let Some(report) = report {
             let verdict_refs = extract_verdict_evidence_refs(&report.payload);
@@ -331,7 +362,9 @@ impl AppState {
             None
         };
 
-        let status = if report.is_some() {
+        let final_report_v3 = final_report_v3.map(map_final_report_detail);
+
+        let status = if report.is_some() || final_report_v3.is_some() {
             "ready".to_string()
         } else if let Some(job) = latest_job.as_ref() {
             if job.status == "failed" {
@@ -354,6 +387,7 @@ impl AppState {
                 requested_at: job.requested_at,
             }),
             report,
+            final_report_v3,
         })
     }
 }

@@ -18,9 +18,9 @@ pub use types::*;
 use helpers::extract_rag_meta;
 use helpers::{
     calc_required_voters, can_request_judge, extract_verdict_evidence_refs, majority_resolution,
-    map_draw_vote_detail, map_report_detail, map_stage_summary, normalize_stage_summary_limit,
-    normalize_stage_summary_offset, normalize_style_mode, normalize_winner, resolve_rubric_version,
-    validate_non_empty_text, validate_score,
+    map_draw_vote_detail, map_final_report_detail, map_report_detail, map_stage_summary,
+    normalize_stage_summary_limit, normalize_stage_summary_offset, normalize_style_mode,
+    normalize_winner, resolve_rubric_version, validate_non_empty_text, validate_score,
 };
 use sqlx::{Postgres, Transaction};
 use tracing::warn;

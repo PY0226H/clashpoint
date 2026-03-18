@@ -90,6 +90,37 @@ pub struct JudgeReportDetail {
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct JudgeFinalReportDetail {
+    pub final_report_id: u64,
+    pub final_job_id: u64,
+    pub winner: String,
+    pub pro_score: f64,
+    pub con_score: f64,
+    #[serde(default)]
+    pub dimension_scores: Value,
+    pub final_rationale: String,
+    #[serde(default)]
+    pub verdict_evidence_refs: Vec<Value>,
+    #[serde(default)]
+    pub phase_rollup_summary: Vec<Value>,
+    #[serde(default)]
+    pub retrieval_snapshot_rollup: Vec<Value>,
+    pub winner_first: Option<String>,
+    pub winner_second: Option<String>,
+    pub rejudge_triggered: bool,
+    pub needs_draw_vote: bool,
+    #[serde(default)]
+    pub judge_trace: Value,
+    #[serde(default)]
+    pub audit_alerts: Vec<Value>,
+    #[serde(default)]
+    pub error_codes: Vec<String>,
+    pub degradation_level: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JudgeVerdictEvidenceItem {
     pub message_id: u64,
     pub side: String,
@@ -106,6 +137,7 @@ pub struct GetJudgeReportOutput {
     pub status: String,
     pub latest_job: Option<JudgeJobSnapshot>,
     pub report: Option<JudgeReportDetail>,
+    pub final_report_v3: Option<JudgeFinalReportDetail>,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]

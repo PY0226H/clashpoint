@@ -23,6 +23,39 @@ async fn seed_session_message(
     Ok(row.0)
 }
 
+async fn seed_dispatched_final_job(
+    state: &AppState,
+    session_id: i64,
+    phase_start_no: i32,
+    phase_end_no: i32,
+) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_final_jobs(
+            session_id, phase_start_no, phase_end_no,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, dispatch_attempts
+        )
+        VALUES (
+            $1, $2, $3,
+            'dispatched', $4, $5, 'v3', 'v3-default',
+            'default', 1
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(phase_start_no)
+    .bind(phase_end_no)
+    .bind(format!("trace-final-{session_id}-{phase_end_no}"))
+    .bind(format!(
+        "judge_final:{session_id}:{phase_start_no}:{phase_end_no}:v3:v3-default"
+    ))
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.0)
+}
+
 #[tokio::test]
 async fn request_judge_job_should_create_running_job_with_default_style() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -285,6 +318,81 @@ async fn get_latest_judge_report_should_return_ready_when_report_exists() -> Res
     assert!(!meta.has_more);
     assert_eq!(meta.next_offset, None);
     assert_eq!(meta.max_stage_count, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_return_v3_final_report_when_available() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let user = state.find_user_by_id(1).await?.expect("user should exist");
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    state
+        .submit_judge_final_report(
+            final_job_id as u64,
+            SubmitJudgeFinalReportInput {
+                session_id: session_id as u64,
+                winner: "draw".to_string(),
+                pro_score: 81.5,
+                con_score: 81.0,
+                dimension_scores: serde_json::json!({
+                    "logic": 82.0,
+                    "evidence": 80.0,
+                    "rebuttal": 79.0,
+                    "clarity": 83.0
+                }),
+                final_rationale: "终局展示文案".to_string(),
+                verdict_evidence_refs: vec![serde_json::json!({
+                    "phaseNo": 1,
+                    "side": "pro",
+                    "type": "agent2_hit",
+                    "item": "chunk-1"
+                })],
+                phase_rollup_summary: vec![serde_json::json!({"phaseNo": 1, "winnerHint": "pro"})],
+                retrieval_snapshot_rollup: vec![
+                    serde_json::json!({"phaseNo": 1, "chunkId": "c-1"}),
+                ],
+                winner_first: Some("pro".to_string()),
+                winner_second: Some("con".to_string()),
+                rejudge_triggered: true,
+                needs_draw_vote: true,
+                judge_trace: serde_json::json!({
+                    "pipelineVersion": "v3-final-a9a10-rollup-v2",
+                    "factLock": {"winner":"draw"}
+                }),
+                audit_alerts: vec![serde_json::json!({"type":"consistency_conflict"})],
+                error_codes: vec!["consistency_conflict".to_string()],
+                degradation_level: 1,
+            },
+        )
+        .await?;
+
+    let ret = state
+        .get_latest_judge_report(
+            session_id as u64,
+            &user,
+            GetJudgeReportQuery {
+                max_stage_count: None,
+                stage_offset: None,
+            },
+        )
+        .await?;
+    assert_eq!(ret.status, "ready");
+    assert!(ret.report.is_none());
+    let final_report = ret.final_report_v3.expect("v3 final report should exist");
+    assert_eq!(final_report.final_job_id, final_job_id as u64);
+    assert_eq!(final_report.winner, "draw");
+    assert!(final_report.needs_draw_vote);
+    assert_eq!(final_report.winner_first.as_deref(), Some("pro"));
+    assert_eq!(final_report.winner_second.as_deref(), Some("con"));
+    assert_eq!(
+        final_report.error_codes,
+        vec!["consistency_conflict".to_string()]
+    );
+    assert_eq!(final_report.degradation_level, 1);
+    assert_eq!(final_report.verdict_evidence_refs.len(), 1);
+    assert_eq!(final_report.phase_rollup_summary.len(), 1);
     Ok(())
 }
 

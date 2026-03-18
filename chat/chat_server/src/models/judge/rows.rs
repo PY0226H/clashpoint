@@ -75,6 +75,29 @@ pub(super) struct JudgeReportRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgeFinalReportRow {
+    pub id: i64,
+    pub final_job_id: i64,
+    pub winner: String,
+    pub pro_score: f64,
+    pub con_score: f64,
+    pub dimension_scores: Value,
+    pub final_rationale: String,
+    pub verdict_evidence_refs: Value,
+    pub phase_rollup_summary: Value,
+    pub retrieval_snapshot_rollup: Value,
+    pub winner_first: Option<String>,
+    pub winner_second: Option<String>,
+    pub rejudge_triggered: bool,
+    pub needs_draw_vote: bool,
+    pub judge_trace: Value,
+    pub audit_alerts: Value,
+    pub error_codes: Value,
+    pub degradation_level: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub(super) struct JudgeStageSummaryRow {
     pub stage_no: i32,
     pub from_message_id: Option<i64>,

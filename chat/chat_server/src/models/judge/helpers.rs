@@ -1,8 +1,9 @@
 use super::{
-    AppError, DrawVoteDetail, DrawVoteRow, DrawVoteStatsRow, JudgeRagMeta, JudgeRagSourceItem,
-    JudgeReportDetail, JudgeReportRow, JudgeStageSummariesMeta, JudgeStageSummaryDetail,
-    JudgeStageSummaryRow, JudgeVerdictEvidenceItem, MAX_STAGE_SUMMARY_COUNT,
-    MAX_STAGE_SUMMARY_OFFSET, STYLE_ENTERTAINING, STYLE_MIXED, STYLE_RATIONAL,
+    AppError, DrawVoteDetail, DrawVoteRow, DrawVoteStatsRow, JudgeFinalReportDetail,
+    JudgeFinalReportRow, JudgeRagMeta, JudgeRagSourceItem, JudgeReportDetail, JudgeReportRow,
+    JudgeStageSummariesMeta, JudgeStageSummaryDetail, JudgeStageSummaryRow,
+    JudgeVerdictEvidenceItem, MAX_STAGE_SUMMARY_COUNT, MAX_STAGE_SUMMARY_OFFSET,
+    STYLE_ENTERTAINING, STYLE_MIXED, STYLE_RATIONAL,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -113,6 +114,48 @@ pub(super) fn map_report_detail(
         stage_summaries,
         stage_summaries_meta,
         created_at: v.created_at,
+    }
+}
+
+pub(super) fn map_final_report_detail(v: JudgeFinalReportRow) -> JudgeFinalReportDetail {
+    JudgeFinalReportDetail {
+        final_report_id: v.id as u64,
+        final_job_id: v.final_job_id as u64,
+        winner: v.winner,
+        pro_score: v.pro_score,
+        con_score: v.con_score,
+        dimension_scores: v.dimension_scores,
+        final_rationale: v.final_rationale,
+        verdict_evidence_refs: value_array_or_empty(v.verdict_evidence_refs),
+        phase_rollup_summary: value_array_or_empty(v.phase_rollup_summary),
+        retrieval_snapshot_rollup: value_array_or_empty(v.retrieval_snapshot_rollup),
+        winner_first: v.winner_first,
+        winner_second: v.winner_second,
+        rejudge_triggered: v.rejudge_triggered,
+        needs_draw_vote: v.needs_draw_vote,
+        judge_trace: v.judge_trace,
+        audit_alerts: value_array_or_empty(v.audit_alerts),
+        error_codes: value_string_array_or_empty(v.error_codes),
+        degradation_level: v.degradation_level,
+        created_at: v.created_at,
+    }
+}
+
+fn value_array_or_empty(v: Value) -> Vec<Value> {
+    match v {
+        Value::Array(rows) => rows,
+        _ => Vec::new(),
+    }
+}
+
+fn value_string_array_or_empty(v: Value) -> Vec<String> {
+    match v {
+        Value::Array(rows) => rows
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::trim).map(ToString::to_string))
+            .filter(|item| !item.is_empty())
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
