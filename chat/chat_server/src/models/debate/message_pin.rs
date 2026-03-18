@@ -120,6 +120,90 @@ impl AppState {
             %idempotency_key,
             "debate session reached ai judge phase checkpoint"
         );
+        self.enqueue_judge_phase_job(
+            session_id,
+            checkpoint.phase_no,
+            latest_message_id,
+            message_count,
+            &trace_id,
+            &idempotency_key,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn enqueue_judge_phase_job(
+        &self,
+        session_id: i64,
+        phase_no: i32,
+        latest_message_id: i64,
+        message_count: i64,
+        trace_id: &str,
+        idempotency_key: &str,
+    ) -> Result<(), AppError> {
+        let message_start_id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM session_messages
+            WHERE session_id = $1
+            ORDER BY id DESC
+            OFFSET $2
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .bind(JUDGE_PHASE_WINDOW_SIZE - 1)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let message_count_i32 = i32::try_from(message_count)
+            .map_err(|_| AppError::DebateError(format!("invalid message_count={message_count}")))?;
+        let inserted_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            INSERT INTO judge_phase_jobs(
+                session_id, phase_no, message_start_id, message_end_id, message_count,
+                status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                topic_domain, retrieval_profile, created_at, updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5,
+                'queued', $6, $7, $8, $9,
+                $10, $11, NOW(), NOW()
+            )
+            ON CONFLICT (session_id, phase_no) DO NOTHING
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(phase_no)
+        .bind(message_start_id)
+        .bind(latest_message_id)
+        .bind(message_count_i32)
+        .bind(trace_id)
+        .bind(idempotency_key)
+        .bind(JUDGE_PHASE_RUBRIC_VERSION)
+        .bind(JUDGE_PHASE_POLICY_VERSION)
+        .bind("default")
+        .bind("hybrid_v1")
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(phase_job_id) = inserted_id {
+            tracing::info!(
+                session_id,
+                phase_no,
+                phase_job_id,
+                message_start_id,
+                message_end_id = latest_message_id,
+                "judge phase job enqueued"
+            );
+        } else {
+            tracing::debug!(
+                session_id,
+                phase_no,
+                "judge phase job already exists, skip duplicate enqueue"
+            );
+        }
         Ok(())
     }
 

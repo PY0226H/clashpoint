@@ -14,6 +14,8 @@ const DISPATCH_IDEMPOTENCY_KEY_PREFIX: &str = "judge-dispatch";
 const DISPATCH_JUDGE_POLICY_VERSION: &str = "v2-default";
 const DISPATCH_TOPIC_DOMAIN: &str = "default";
 const DISPATCH_RETRIEVAL_PROFILE: &str = "hybrid_v1";
+const PHASE_DISPATCH_PATH: &str = "/internal/judge/v3/phase/dispatch";
+const PHASE_DISPATCH_SCOPE_ID: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub(crate) struct JudgeDispatchTrigger {
@@ -29,6 +31,23 @@ pub struct JudgeDispatchTickReport {
     pub failed: usize,
     pub marked_failed: usize,
     pub timed_out_failed: usize,
+    pub terminal_failed: usize,
+    pub retryable_failed: usize,
+    pub failed_contract: usize,
+    pub failed_http_4xx: usize,
+    pub failed_http_429: usize,
+    pub failed_http_5xx: usize,
+    pub failed_network: usize,
+    pub failed_internal: usize,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgePhaseDispatchTickReport {
+    pub claimed: usize,
+    pub dispatched: usize,
+    pub failed: usize,
+    pub marked_failed: usize,
     pub terminal_failed: usize,
     pub retryable_failed: usize,
     pub failed_contract: usize,
@@ -146,6 +165,23 @@ struct PendingDispatchJob {
 }
 
 #[derive(Debug, Clone, FromRow)]
+struct PendingPhaseDispatchJob {
+    id: i64,
+    session_id: i64,
+    phase_no: i32,
+    message_start_id: i64,
+    message_end_id: i64,
+    message_count: i32,
+    trace_id: String,
+    idempotency_key: String,
+    rubric_version: String,
+    judge_policy_version: String,
+    topic_domain: String,
+    retrieval_profile: String,
+    dispatch_attempts: i32,
+}
+
+#[derive(Debug, Clone, FromRow)]
 struct SessionTopicRow {
     status: String,
     scheduled_start_at: DateTime<Utc>,
@@ -181,6 +217,24 @@ struct AiJudgeDispatchRequest {
     judge_policy_version: String,
     topic_domain: String,
     retrieval_profile: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AiJudgePhaseDispatchRequest {
+    job_id: u64,
+    scope_id: u64,
+    session_id: u64,
+    phase_no: i32,
+    message_start_id: u64,
+    message_end_id: u64,
+    message_count: i32,
+    messages: Vec<AiJudgeDispatchMessage>,
+    rubric_version: String,
+    judge_policy_version: String,
+    topic_domain: String,
+    retrieval_profile: String,
+    trace_id: String,
+    idempotency_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

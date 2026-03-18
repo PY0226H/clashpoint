@@ -94,6 +94,34 @@ async fn run_ai_judge_dispatch_tick(
                 );
             }
         }
+
+        match state.dispatch_pending_judge_phase_jobs_once().await {
+            Ok(report) => {
+                debug!(
+                    trigger_source,
+                    trigger_job_id,
+                    claimed = report.claimed,
+                    dispatched = report.dispatched,
+                    failed = report.failed,
+                    marked_failed = report.marked_failed,
+                    terminal_failed = report.terminal_failed,
+                    retryable_failed = report.retryable_failed,
+                    failed_contract = report.failed_contract,
+                    failed_http_4xx = report.failed_http_4xx,
+                    failed_http_429 = report.failed_http_429,
+                    failed_http_5xx = report.failed_http_5xx,
+                    failed_network = report.failed_network,
+                    failed_internal = report.failed_internal,
+                    "ai judge phase dispatch worker tick success"
+                );
+            }
+            Err(err) => {
+                warn!(
+                    trigger_source,
+                    trigger_job_id, "ai judge phase dispatch worker tick failed: {}", err
+                );
+            }
+        }
     }
 }
 

@@ -177,6 +177,99 @@ async fn create_debate_message_should_require_join_and_write_side() -> Result<()
 }
 
 #[tokio::test]
+async fn create_debate_message_should_enqueue_phase_job_on_100_boundary() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+
+    for idx in 0..100 {
+        state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: format!("phase-100-msg-{idx}"),
+                },
+            )
+            .await?;
+    }
+
+    let row: (i64, i32, i32, String) = sqlx::query_as(
+        r#"
+        SELECT session_id, phase_no, message_count, status
+        FROM judge_phase_jobs
+        WHERE session_id = $1
+        ORDER BY phase_no DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, session_id);
+    assert_eq!(row.1, 1);
+    assert_eq!(row.2, 100);
+    assert_eq!(row.3, "queued");
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_debate_message_should_not_enqueue_phase_job_before_boundary() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+
+    for idx in 0..99 {
+        state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: format!("phase-99-msg-{idx}"),
+                },
+            )
+            .await?;
+    }
+
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(1)
+        FROM judge_phase_jobs
+        WHERE session_id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_debate_messages_should_allow_spectator_when_running() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
