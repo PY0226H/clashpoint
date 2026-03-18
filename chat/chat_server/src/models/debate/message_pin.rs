@@ -66,7 +66,61 @@ impl AppState {
         .await?;
 
         tx.commit().await?;
+        if let Err(err) = self
+            .maybe_log_phase_trigger_checkpoint(msg.session_id, msg.id)
+            .await
+        {
+            tracing::warn!(
+                session_id = msg.session_id,
+                message_id = msg.id,
+                "evaluate phase trigger checkpoint failed: {}",
+                err
+            );
+        }
         Ok(msg)
+    }
+
+    async fn maybe_log_phase_trigger_checkpoint(
+        &self,
+        session_id: i64,
+        latest_message_id: i64,
+    ) -> Result<(), AppError> {
+        let message_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM session_messages
+            WHERE session_id = $1
+            "#,
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let Some(checkpoint) =
+            evaluate_phase_trigger_checkpoint(message_count, JUDGE_PHASE_WINDOW_SIZE)
+        else {
+            return Ok(());
+        };
+
+        let trace_id = build_phase_trigger_trace_id(session_id, checkpoint.phase_no);
+        let idempotency_key = build_phase_trigger_idempotency_key(
+            session_id,
+            checkpoint.phase_no,
+            JUDGE_PHASE_RUBRIC_VERSION,
+            JUDGE_PHASE_POLICY_VERSION,
+        );
+        tracing::info!(
+            session_id,
+            message_count,
+            latest_message_id,
+            phase_no = checkpoint.phase_no,
+            message_start_index = checkpoint.message_start_index,
+            message_end_index = checkpoint.message_end_index,
+            %trace_id,
+            %idempotency_key,
+            "debate session reached ai judge phase checkpoint"
+        );
+        Ok(())
     }
 
     pub async fn list_debate_messages(

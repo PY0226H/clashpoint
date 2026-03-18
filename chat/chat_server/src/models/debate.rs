@@ -14,7 +14,8 @@ mod helpers;
 mod message_pin;
 mod ops;
 use helpers::{
-    can_join_status, can_spectate_status, normalize_debate_message_limit,
+    build_phase_trigger_idempotency_key, build_phase_trigger_trace_id, can_join_status,
+    can_spectate_status, evaluate_phase_trigger_checkpoint, normalize_debate_message_limit,
     normalize_debate_pin_limit, normalize_limit, normalize_message_content,
     normalize_ops_manage_session_status, normalize_ops_session_status, normalize_ops_topic_field,
     normalize_pin_seconds, pin_cost_coins, valid_join_side,
@@ -35,6 +36,9 @@ const PIN_MIN_SECONDS: i32 = 30;
 const PIN_MAX_SECONDS: i32 = 600;
 const PIN_BILLING_UNIT_SECONDS: i32 = 30;
 const PIN_COST_PER_UNIT_COINS: i64 = 10;
+const JUDGE_PHASE_WINDOW_SIZE: i64 = 100;
+const JUDGE_PHASE_RUBRIC_VERSION: &str = "v3";
+const JUDGE_PHASE_POLICY_VERSION: &str = "v3-default";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

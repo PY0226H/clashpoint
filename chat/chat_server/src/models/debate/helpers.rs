@@ -113,3 +113,78 @@ pub(super) fn pin_cost_coins(pin_seconds: i32) -> i64 {
     let units = (pin_seconds + PIN_BILLING_UNIT_SECONDS - 1) / PIN_BILLING_UNIT_SECONDS;
     units as i64 * PIN_COST_PER_UNIT_COINS
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PhaseTriggerCheckpoint {
+    pub phase_no: i32,
+    pub message_start_index: i64,
+    pub message_end_index: i64,
+}
+
+pub(super) fn evaluate_phase_trigger_checkpoint(
+    message_count: i64,
+    window_size: i64,
+) -> Option<PhaseTriggerCheckpoint> {
+    if message_count <= 0 || window_size <= 0 || message_count % window_size != 0 {
+        return None;
+    }
+    let phase_no = (message_count / window_size) as i32;
+    let message_start_index = ((phase_no as i64 - 1) * window_size) + 1;
+    Some(PhaseTriggerCheckpoint {
+        phase_no,
+        message_start_index,
+        message_end_index: message_count,
+    })
+}
+
+pub(super) fn build_phase_trigger_idempotency_key(
+    session_id: i64,
+    phase_no: i32,
+    rubric_version: &str,
+    judge_policy_version: &str,
+) -> String {
+    format!(
+        "judge_phase:{}:{}:{}:{}",
+        session_id, phase_no, rubric_version, judge_policy_version
+    )
+}
+
+pub(super) fn build_phase_trigger_trace_id(session_id: i64, phase_no: i32) -> String {
+    format!("judge-phase-{}-{}", session_id, phase_no)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluate_phase_trigger_checkpoint_should_only_fire_on_window_boundary() {
+        assert_eq!(
+            evaluate_phase_trigger_checkpoint(100, 100),
+            Some(PhaseTriggerCheckpoint {
+                phase_no: 1,
+                message_start_index: 1,
+                message_end_index: 100,
+            })
+        );
+        assert_eq!(
+            evaluate_phase_trigger_checkpoint(200, 100),
+            Some(PhaseTriggerCheckpoint {
+                phase_no: 2,
+                message_start_index: 101,
+                message_end_index: 200,
+            })
+        );
+        assert_eq!(evaluate_phase_trigger_checkpoint(199, 100), None);
+        assert_eq!(evaluate_phase_trigger_checkpoint(0, 100), None);
+    }
+
+    #[test]
+    fn phase_trigger_key_builders_should_be_stable() {
+        assert_eq!(
+            build_phase_trigger_idempotency_key(88, 3, "v3", "v3-default"),
+            "judge_phase:88:3:v3:v3-default"
+        );
+        assert_eq!(build_phase_trigger_trace_id(88, 3), "judge-phase-88-3");
+    }
+}
