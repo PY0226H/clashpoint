@@ -22,6 +22,7 @@ from .openai_judge_client import call_openai_json
 from .runtime_errors import classify_openai_failure
 from .runtime_policy import should_use_openai
 from .runtime_rag import RuntimeRagResult, retrieve_runtime_contexts_with_meta
+from .rag_retriever import RetrievedContext
 from .settings import Settings
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
@@ -39,6 +40,31 @@ REBUTTAL_MARKERS = (
     "but",
     "however",
     "rebut",
+)
+CONFLICT_POSITIVE_MARKERS = (
+    "稳定",
+    "优势",
+    "提升",
+    "可行",
+    "收益",
+    "强势",
+    "stable",
+    "advantage",
+    "improve",
+    "strong",
+)
+CONFLICT_NEGATIVE_MARKERS = (
+    "崩盘",
+    "劣势",
+    "风险",
+    "过晚",
+    "丢失",
+    "失败",
+    "弱势",
+    "collapse",
+    "risk",
+    "weak",
+    "late",
 )
 
 
@@ -58,6 +84,16 @@ class SideSummaryResult:
     source: str
     coverage_ratio: float
     fallback_reason: str | None
+    error_codes: list[str]
+
+
+@dataclass(frozen=True)
+class SideRetrievalResult:
+    bundle: dict[str, Any]
+    diagnostics: dict[str, Any]
+    requested_backend: str
+    effective_backend: str
+    backend_fallback_reason: str | None
     error_codes: list[str]
 
 
@@ -336,8 +372,11 @@ def _build_side_rag_request(
     *,
     side: str,
     side_messages: list[PhaseDispatchMessage],
+    query_text: str | None = None,
 ) -> JudgeDispatchRequest:
     now = datetime.now(timezone.utc)
+    query = str(query_text or "").strip()
+    topic_description = f"phase_{request.phase_no}" if not query else f"phase_{request.phase_no}:{query[:200]}"
     dispatch_messages = [
         DispatchMessage(
             message_id=msg.message_id,
@@ -367,11 +406,11 @@ def _build_side_rag_request(
         ),
         topic=DispatchTopic(
             title=f"{request.topic_domain}:{side}",
-            description=f"phase_{request.phase_no}",
+            description=topic_description,
             category=request.topic_domain,
             stance_pro="pro",
             stance_con="con",
-            context_seed=None,
+            context_seed=query or None,
         ),
         messages=dispatch_messages,
         message_window_size=request.message_count,
@@ -384,13 +423,142 @@ def _build_side_rag_request(
     )
 
 
+def _normalize_conflict_key(text: str) -> str:
+    return " ".join(_tokenize(text))[:160]
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def _rrf_fuse_context_lists(
+    ranked_lists: list[list[RetrievedContext]],
+    *,
+    rrf_k: int,
+) -> list[RetrievedContext]:
+    if not ranked_lists:
+        return []
+    k = max(1, int(rrf_k))
+    score_map: dict[str, float] = {}
+    context_map: dict[str, RetrievedContext] = {}
+    for rows in ranked_lists:
+        for rank, row in enumerate(rows):
+            score_map[row.chunk_id] = score_map.get(row.chunk_id, 0.0) + (1.0 / (k + rank + 1))
+            previous = context_map.get(row.chunk_id)
+            if previous is None or row.score > previous.score:
+                context_map[row.chunk_id] = row
+
+    fused: list[RetrievedContext] = []
+    for chunk_id, score in score_map.items():
+        context = context_map.get(chunk_id)
+        if context is None:
+            continue
+        fused.append(
+            RetrievedContext(
+                chunk_id=context.chunk_id,
+                title=context.title,
+                source_url=context.source_url,
+                content=context.content,
+                score=score,
+            )
+        )
+    fused.sort(key=lambda row: (-row.score, row.chunk_id))
+    return fused
+
+
+def _rerank_contexts_for_queries(
+    contexts: list[RetrievedContext],
+    *,
+    queries: list[str],
+    limit: int,
+) -> list[RetrievedContext]:
+    if not contexts:
+        return []
+    clipped_limit = max(0, int(limit))
+    if clipped_limit == 0:
+        return []
+    query_tokens = _tokenize(" ".join(queries))
+    if not query_tokens:
+        return contexts[:clipped_limit]
+
+    # 轻量 rerank：RRF 得分与 query-token overlap 加权。
+    max_base = max(1e-6, max((row.score for row in contexts), default=1.0))
+    reranked: list[RetrievedContext] = []
+    for row in contexts:
+        row_tokens = _tokenize(f"{row.title} {row.content}")
+        overlap = len(set(query_tokens).intersection(set(row_tokens))) / float(max(1, len(query_tokens)))
+        base = row.score / max_base
+        score = overlap * 0.65 + base * 0.35
+        reranked.append(
+            RetrievedContext(
+                chunk_id=row.chunk_id,
+                title=row.title,
+                source_url=row.source_url,
+                content=row.content,
+                score=score,
+            )
+        )
+    reranked.sort(key=lambda row: (-row.score, row.chunk_id))
+    return reranked[:clipped_limit]
+
+
 def _build_retrieval_items(
-    rag_result: RuntimeRagResult,
+    contexts: list[RetrievedContext],
     *,
     max_chars: int,
 ) -> list[dict[str, Any]]:
+    if not contexts:
+        return []
+
+    # 后处理去重：优先 chunk_id，兜底 source+title
+    deduped: list[RetrievedContext] = []
+    seen_chunk_ids: set[str] = set()
+    seen_source_title: set[tuple[str, str]] = set()
+    for row in contexts:
+        chunk_id = str(row.chunk_id or "").strip()
+        title = str(row.title or "").strip()
+        source = str(row.source_url or "").strip().lower()
+        fallback_key = (source, title.lower())
+        if chunk_id and chunk_id in seen_chunk_ids:
+            continue
+        if fallback_key in seen_source_title:
+            continue
+        if chunk_id:
+            seen_chunk_ids.add(chunk_id)
+        seen_source_title.add(fallback_key)
+        deduped.append(row)
+
+    title_group_sources: dict[str, set[str]] = {}
+    title_group_items: dict[str, list[RetrievedContext]] = {}
+    for row in deduped:
+        key = _normalize_conflict_key(row.title or row.content)
+        if not key:
+            continue
+        title_group_sources.setdefault(key, set()).add((row.source_url or "").strip().lower())
+        title_group_items.setdefault(key, []).append(row)
+
+    conflicting_chunk_ids: set[str] = set()
+    for key, rows in title_group_items.items():
+        sources = title_group_sources.get(key, set())
+        # 冲突标注策略：
+        # 1) 同主题 key 在多个来源出现（来源冲突）
+        # 2) 同主题中出现显著正负语义分歧
+        has_multi_source = len({s for s in sources if s}) >= 2
+        has_positive = any(
+            _contains_any(f"{row.title} {row.content}", CONFLICT_POSITIVE_MARKERS)
+            for row in rows
+        )
+        has_negative = any(
+            _contains_any(f"{row.title} {row.content}", CONFLICT_NEGATIVE_MARKERS)
+            for row in rows
+        )
+        if has_multi_source or (has_positive and has_negative):
+            for row in rows:
+                conflicting_chunk_ids.add(row.chunk_id)
+
     out: list[dict[str, Any]] = []
-    for row in rag_result.retrieved_contexts:
+    for row in deduped:
         out.append(
             {
                 "chunkId": row.chunk_id,
@@ -398,39 +566,119 @@ def _build_retrieval_items(
                 "sourceUrl": row.source_url,
                 "score": round(float(row.score), 4),
                 "snippet": str(row.content or "")[: max(120, max_chars)],
-                "conflict": False,
+                "conflict": row.chunk_id in conflicting_chunk_ids,
             }
         )
     return out
 
 
-def _extract_retrieval_error_codes(
+def _retrieve_side_with_query_plan(
+    request: PhaseDispatchRequest,
     *,
-    rag_result: RuntimeRagResult,
     side: str,
-) -> list[str]:
-    diagnostics = (
-        rag_result.retrieval_diagnostics
-        if isinstance(rag_result.retrieval_diagnostics, dict)
-        else {}
-    )
-    out: list[str] = []
-    error_code = diagnostics.get("errorCode")
-    if error_code:
-        out.append(str(error_code).strip().lower())
-    if rag_result.backend_fallback_reason:
-        out.append("rag_backend_fallback")
-    if not rag_result.retrieved_contexts:
-        out.append(f"rag_no_hit_{side}")
+    side_messages: list[PhaseDispatchMessage],
+    queries: list[str],
+    settings: Settings,
+) -> SideRetrievalResult:
+    query_results: list[RuntimeRagResult] = []
+    per_query_diagnostics: list[dict[str, Any]] = []
+    ranked_lists: list[list[RetrievedContext]] = []
+    requested_backend = settings.rag_backend
+    effective_backend = settings.rag_backend
+    backend_fallback_reason: str | None = None
 
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for code in out:
-        if not code or code in seen:
+    for query in queries:
+        rag_request = _build_side_rag_request(
+            request,
+            side=side,
+            side_messages=side_messages,
+            query_text=query,
+        )
+        rag_result = retrieve_runtime_contexts_with_meta(
+            request=rag_request,
+            settings=settings,
+        )
+        query_results.append(rag_result)
+        requested_backend = rag_result.requested_backend
+        effective_backend = rag_result.effective_backend
+        if rag_result.backend_fallback_reason and not backend_fallback_reason:
+            backend_fallback_reason = rag_result.backend_fallback_reason
+        ranked_lists.append(list(rag_result.retrieved_contexts))
+        per_query_diagnostics.append(
+            {
+                "query": query,
+                "requestedBackend": rag_result.requested_backend,
+                "effectiveBackend": rag_result.effective_backend,
+                "backendFallbackReason": rag_result.backend_fallback_reason,
+                "diagnostics": rag_result.retrieval_diagnostics,
+                "candidateCount": len(rag_result.retrieved_contexts),
+            }
+        )
+
+    rrf_k = 60
+    if per_query_diagnostics:
+        first_diag = per_query_diagnostics[0].get("diagnostics")
+        if isinstance(first_diag, dict):
+            tuning = first_diag.get("profileTuning")
+            if isinstance(tuning, dict):
+                try:
+                    rrf_k = max(1, int(tuning.get("rrfK", 60)))
+                except (TypeError, ValueError):
+                    rrf_k = 60
+
+    fused_contexts = _rrf_fuse_context_lists(ranked_lists, rrf_k=rrf_k)
+    final_contexts = _rerank_contexts_for_queries(
+        fused_contexts,
+        queries=queries,
+        limit=settings.rag_max_snippets,
+    )
+    items = _build_retrieval_items(
+        final_contexts,
+        max_chars=settings.rag_max_chars_per_snippet,
+    )
+
+    error_codes: list[str] = []
+    for result in query_results:
+        diagnostics = (
+            result.retrieval_diagnostics
+            if isinstance(result.retrieval_diagnostics, dict)
+            else {}
+        )
+        error_code = diagnostics.get("errorCode")
+        if error_code:
+            error_codes.append(str(error_code).strip().lower())
+        if result.backend_fallback_reason:
+            error_codes.append("rag_backend_fallback")
+    if not items:
+        error_codes.append(f"rag_no_hit_{side}")
+
+    deduped_codes: list[str] = []
+    seen_codes: set[str] = set()
+    for code in error_codes:
+        if not code or code in seen_codes:
             continue
-        seen.add(code)
-        deduped.append(code)
-    return deduped
+        seen_codes.add(code)
+        deduped_codes.append(code)
+
+    diagnostics = {
+        "queryCount": len(queries),
+        "perQuery": per_query_diagnostics,
+        "fusion": {
+            "method": "rrf+rerank",
+            "rrfK": rrf_k,
+            "rankListCount": len(ranked_lists),
+            "fusedCount": len(fused_contexts),
+            "finalCount": len(final_contexts),
+        },
+    }
+    return SideRetrievalResult(
+        bundle={"queries": queries, "items": items},
+        diagnostics=diagnostics,
+        requested_backend=requested_backend,
+        effective_backend=effective_backend,
+        backend_fallback_reason=backend_fallback_reason,
+        error_codes=deduped_codes,
+    )
 
 
 def _count_rebuttals(messages: list[PhaseDispatchMessage]) -> int:
@@ -567,29 +815,26 @@ async def build_phase_report_payload(
     pro_queries = _build_side_queries(request, side="pro", side_messages=pro_messages)
     con_queries = _build_side_queries(request, side="con", side_messages=con_messages)
 
-    pro_rag_request = _build_side_rag_request(request, side="pro", side_messages=pro_messages)
-    con_rag_request = _build_side_rag_request(request, side="con", side_messages=con_messages)
-
-    pro_rag_result = retrieve_runtime_contexts_with_meta(
-        request=pro_rag_request,
+    pro_retrieval_result = _retrieve_side_with_query_plan(
+        request,
+        side="pro",
+        side_messages=pro_messages,
+        queries=pro_queries,
         settings=settings,
     )
-    con_rag_result = retrieve_runtime_contexts_with_meta(
-        request=con_rag_request,
+    con_retrieval_result = _retrieve_side_with_query_plan(
+        request,
+        side="con",
+        side_messages=con_messages,
+        queries=con_queries,
         settings=settings,
     )
     retrieval_latency_ms = (perf_counter() - retrieval_started) * 1000.0
 
-    pro_items = _build_retrieval_items(
-        pro_rag_result,
-        max_chars=settings.rag_max_chars_per_snippet,
-    )
-    con_items = _build_retrieval_items(
-        con_rag_result,
-        max_chars=settings.rag_max_chars_per_snippet,
-    )
-    pro_bundle = {"queries": pro_queries, "items": pro_items}
-    con_bundle = {"queries": con_queries, "items": con_items}
+    pro_bundle = pro_retrieval_result.bundle
+    con_bundle = con_retrieval_result.bundle
+    pro_items = pro_bundle.get("items", [])
+    con_items = con_bundle.get("items", [])
 
     agent1_score, agent2_score, agent3_score = _compute_phase_scores(
         request,
@@ -602,8 +847,8 @@ async def build_phase_report_payload(
     error_codes: list[str] = []
     error_codes.extend(pro_summary_result.error_codes)
     error_codes.extend(con_summary_result.error_codes)
-    error_codes.extend(_extract_retrieval_error_codes(rag_result=pro_rag_result, side="pro"))
-    error_codes.extend(_extract_retrieval_error_codes(rag_result=con_rag_result, side="con"))
+    error_codes.extend(pro_retrieval_result.error_codes)
+    error_codes.extend(con_retrieval_result.error_codes)
     deduped_error_codes: list[str] = []
     seen_codes: set[str] = set()
     for code in error_codes:
@@ -673,13 +918,16 @@ async def build_phase_report_payload(
                 },
             },
             "retrievalDiagnostics": {
-                "pro": pro_rag_result.retrieval_diagnostics,
-                "con": con_rag_result.retrieval_diagnostics,
+                "pro": pro_retrieval_result.diagnostics,
+                "con": con_retrieval_result.diagnostics,
             },
             "retrievalBackend": {
-                "requested": settings.rag_backend,
-                "effectivePro": pro_rag_result.effective_backend,
-                "effectiveCon": con_rag_result.effective_backend,
+                "requestedPro": pro_retrieval_result.requested_backend,
+                "requestedCon": con_retrieval_result.requested_backend,
+                "effectivePro": pro_retrieval_result.effective_backend,
+                "effectiveCon": con_retrieval_result.effective_backend,
+                "fallbackReasonPro": pro_retrieval_result.backend_fallback_reason,
+                "fallbackReasonCon": con_retrieval_result.backend_fallback_reason,
             },
         },
     }

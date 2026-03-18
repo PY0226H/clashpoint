@@ -144,6 +144,67 @@ class PhasePipelineTests(unittest.TestCase):
         self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-phase-m4-summary-llm-v1")
         self.assertIn("retrievalDiagnostics", payload["judgeTrace"])
 
+    def test_build_phase_report_payload_should_mark_conflicts_and_dedupe_after_query_fusion(self) -> None:
+        request = _build_phase_request_for_pipeline()
+        with tempfile.NamedTemporaryFile("w+", suffix=".json", encoding="utf-8") as tmp:
+            json.dump(
+                [
+                    {
+                        "chunk_id": "chunk-1",
+                        "title": "龙族运营要点",
+                        "source_url": "https://example.com/source/a",
+                        "content": "龙族前期经济稳定，收益提升，后续转型可行。",
+                        "tags": ["龙族", "经济"],
+                    },
+                    {
+                        "chunk_id": "chunk-2",
+                        "title": "龙族运营要点",
+                        "source_url": "https://example.com/source/b",
+                        "content": "高压对局下龙族容易崩盘，存在明显风险。",
+                        "tags": ["龙族", "风险"],
+                    },
+                    {
+                        "chunk_id": "chunk-3",
+                        "title": "转型窗口",
+                        "source_url": "https://example.com/source/c",
+                        "content": "转型窗口过晚会掉血，需要提前规划。",
+                        "tags": ["转型", "节奏"],
+                    },
+                ],
+                tmp,
+                ensure_ascii=False,
+            )
+            tmp.flush()
+            settings = _build_settings(
+                rag_enabled=True,
+                rag_knowledge_file=tmp.name,
+                rag_source_whitelist=(),
+                rag_max_snippets=6,
+                rag_query_message_limit=20,
+            )
+            payload = asyncio.run(
+                build_phase_report_payload(
+                    request=request,
+                    settings=settings,
+                )
+            )
+
+        for side in ("proRetrievalBundle", "conRetrievalBundle"):
+            items = payload[side]["items"]
+            chunk_ids = [item["chunkId"] for item in items if item.get("chunkId")]
+            self.assertEqual(len(chunk_ids), len(set(chunk_ids)))
+
+        merged_items = payload["proRetrievalBundle"]["items"] + payload["conRetrievalBundle"]["items"]
+        self.assertTrue(any(item.get("conflict") for item in merged_items))
+        self.assertEqual(
+            payload["judgeTrace"]["retrievalDiagnostics"]["pro"]["fusion"]["method"],
+            "rrf+rerank",
+        )
+        self.assertGreaterEqual(
+            payload["judgeTrace"]["retrievalDiagnostics"]["pro"]["queryCount"],
+            1,
+        )
+
     def test_build_phase_report_payload_should_fallback_when_summary_coverage_low(self) -> None:
         request = _build_phase_request_for_pipeline()
         settings = _build_settings(
