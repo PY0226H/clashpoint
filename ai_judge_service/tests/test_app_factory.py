@@ -14,7 +14,9 @@ from app.models import (
     DispatchMessage,
     DispatchSession,
     DispatchTopic,
+    FinalDispatchRequest,
     JudgeDispatchRequest,
+    PhaseDispatchRequest,
 )
 from app.runtime_errors import JudgeRuntimeError
 from app.settings import Settings
@@ -161,6 +163,56 @@ def _build_request() -> JudgeDispatchRequest:
     )
 
 
+def _build_phase_request() -> PhaseDispatchRequest:
+    now = datetime.now(timezone.utc)
+    return PhaseDispatchRequest(
+        job_id=101,
+        scope_id=1,
+        session_id=2,
+        phase_no=1,
+        message_start_id=1,
+        message_end_id=2,
+        message_count=2,
+        messages=[
+            {
+                "message_id": 1,
+                "side": "pro",
+                "content": "pro message",
+                "created_at": now,
+                "speaker_tag": "pro_1",
+            },
+            {
+                "message_id": 2,
+                "side": "con",
+                "content": "con message",
+                "created_at": now,
+                "speaker_tag": "con_1",
+            },
+        ],
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        retrieval_profile="hybrid_v1",
+        trace_id="trace-phase-101",
+        idempotency_key="phase-key-101",
+    )
+
+
+def _build_final_request() -> FinalDispatchRequest:
+    return FinalDispatchRequest(
+        job_id=202,
+        scope_id=1,
+        session_id=2,
+        phase_start_no=1,
+        phase_end_no=2,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-202",
+        idempotency_key="final-key-202",
+    )
+
+
 class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_require_internal_key_should_validate_header(self) -> None:
         settings = _build_settings(ai_internal_key="expected")
@@ -255,6 +307,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         paths = {route.path for route in app.routes if hasattr(route, "path")}
         self.assertIn("/healthz", paths)
         self.assertIn("/internal/judge/dispatch", paths)
+        self.assertIn("/internal/judge/v3/phase/dispatch", paths)
+        self.assertIn("/internal/judge/v3/final/dispatch", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/trace", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay/report", paths)
@@ -357,6 +411,98 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             await dispatch_route.endpoint(request=request, x_ai_internal_key="k4")
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertEqual(ctx.exception.detail, "unblinded_user_id_in_messages")
+
+    async def test_v3_phase_dispatch_should_support_idempotency_replay(self) -> None:
+        settings = _build_settings(ai_internal_key="k4p")
+        request = _build_phase_request()
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
+        )
+
+        first = await route.endpoint(request=request, x_ai_internal_key="k4p")
+        second = await route.endpoint(request=request, x_ai_internal_key="k4p")
+        self.assertTrue(first["accepted"])
+        self.assertEqual(first["dispatchType"], "phase")
+        self.assertEqual(first["status"], "queued")
+        self.assertTrue(second["idempotentReplay"])
+
+    async def test_v3_phase_dispatch_should_validate_message_count(self) -> None:
+        settings = _build_settings(ai_internal_key="k4v")
+        request = _build_phase_request()
+        request.message_count = 3
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await route.endpoint(request=request, x_ai_internal_key="k4v")
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "message_count_mismatch")
+
+    async def test_v3_final_dispatch_should_validate_phase_range(self) -> None:
+        settings = _build_settings(ai_internal_key="k4f")
+        request = _build_final_request()
+        request.phase_start_no = 3
+        request.phase_end_no = 2
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await route.endpoint(request=request, x_ai_internal_key="k4f")
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "invalid_phase_range")
 
     async def test_dispatch_should_support_idempotency_replay(self) -> None:
         settings = _build_settings(ai_internal_key="k5")

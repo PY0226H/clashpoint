@@ -289,3 +289,193 @@ pub struct MarkJudgeJobFailedOutput {
     pub error_message: String,
     pub newly_marked: bool,
 }
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgePhaseDispatchMessage {
+    pub message_id: u64,
+    pub side: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+    pub speaker_tag: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgePhaseDispatchRequest {
+    pub job_id: u64,
+    pub scope_id: u64,
+    pub session_id: u64,
+    pub phase_no: i32,
+    pub message_start_id: u64,
+    pub message_end_id: u64,
+    pub message_count: i32,
+    pub messages: Vec<JudgePhaseDispatchMessage>,
+    pub rubric_version: String,
+    pub judge_policy_version: String,
+    pub topic_domain: String,
+    pub retrieval_profile: String,
+    pub trace_id: String,
+    pub idempotency_key: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeFinalDispatchRequest {
+    pub job_id: u64,
+    pub scope_id: u64,
+    pub session_id: u64,
+    pub phase_start_no: i32,
+    pub phase_end_no: i32,
+    pub rubric_version: String,
+    pub judge_policy_version: String,
+    pub topic_domain: String,
+    pub trace_id: String,
+    pub idempotency_key: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeGroundedSummaryPayload {
+    pub text: String,
+    pub message_ids: Vec<u64>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeRetrievalBundleItemPayload {
+    pub chunk_id: String,
+    pub title: String,
+    pub source_url: String,
+    pub score: Option<f64>,
+    pub snippet: Option<String>,
+    #[serde(default)]
+    pub conflict: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeRetrievalBundlePayload {
+    pub queries: Vec<String>,
+    pub items: Vec<JudgeRetrievalBundleItemPayload>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgePhaseAgent1ScorePayload {
+    pub pro: f64,
+    pub con: f64,
+    #[serde(default)]
+    pub dimensions: Value,
+    pub rationale: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgePhaseAgent2ScorePayload {
+    pub pro: f64,
+    pub con: f64,
+    #[serde(default)]
+    pub hit_items: Vec<String>,
+    #[serde(default)]
+    pub miss_items: Vec<String>,
+    pub rationale: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgePhaseAgent3WeightedScorePayload {
+    pub pro: f64,
+    pub con: f64,
+    pub w1: f64,
+    pub w2: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJudgePhaseReportInput {
+    pub session_id: u64,
+    pub phase_no: i32,
+    pub message_start_id: u64,
+    pub message_end_id: u64,
+    pub message_count: i32,
+    pub pro_summary_grounded: JudgeGroundedSummaryPayload,
+    pub con_summary_grounded: JudgeGroundedSummaryPayload,
+    pub pro_retrieval_bundle: JudgeRetrievalBundlePayload,
+    pub con_retrieval_bundle: JudgeRetrievalBundlePayload,
+    pub agent1_score: JudgePhaseAgent1ScorePayload,
+    pub agent2_score: JudgePhaseAgent2ScorePayload,
+    pub agent3_weighted_score: JudgePhaseAgent3WeightedScorePayload,
+    #[serde(default)]
+    pub prompt_hashes: Value,
+    #[serde(default)]
+    pub token_usage: Value,
+    #[serde(default)]
+    pub latency_ms: Value,
+    #[serde(default)]
+    pub error_codes: Vec<String>,
+    #[serde(default)]
+    pub degradation_level: i32,
+    #[serde(default)]
+    pub judge_trace: Value,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJudgePhaseReportOutput {
+    pub session_id: u64,
+    pub phase_no: i32,
+    pub status: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJudgeFinalReportInput {
+    pub session_id: u64,
+    pub winner: String,
+    pub pro_score: f64,
+    pub con_score: f64,
+    #[serde(default)]
+    pub dimension_scores: Value,
+    pub final_rationale: String,
+    #[serde(default)]
+    pub verdict_evidence_refs: Vec<Value>,
+    #[serde(default)]
+    pub phase_rollup_summary: Vec<Value>,
+    #[serde(default)]
+    pub retrieval_snapshot_rollup: Vec<Value>,
+    pub winner_first: Option<String>,
+    pub winner_second: Option<String>,
+    #[serde(default)]
+    pub rejudge_triggered: bool,
+    #[serde(default)]
+    pub needs_draw_vote: bool,
+    #[serde(default)]
+    pub judge_trace: Value,
+    #[serde(default)]
+    pub audit_alerts: Vec<Value>,
+    #[serde(default)]
+    pub error_codes: Vec<String>,
+    #[serde(default)]
+    pub degradation_level: i32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJudgeFinalReportOutput {
+    pub session_id: u64,
+    pub status: String,
+}

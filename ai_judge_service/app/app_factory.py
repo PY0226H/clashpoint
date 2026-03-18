@@ -18,7 +18,7 @@ from .dispatch_controller import (
     SleepFn,
     process_dispatch_request,
 )
-from .models import JudgeDispatchRequest
+from .models import FinalDispatchRequest, JudgeDispatchRequest, PhaseDispatchRequest
 from .scoring import resolve_effective_style_mode
 from .runtime_orchestrator import build_report_by_runtime
 from .settings import (
@@ -374,6 +374,49 @@ def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     return value
 
 
+def _resolve_idempotency_or_raise(
+    *,
+    runtime: AppRuntime,
+    key: str,
+    job_id: int,
+    conflict_detail: str,
+) -> dict[str, Any] | None:
+    existed = runtime.trace_store.get_idempotency(key)
+    if existed and existed.job_id != job_id:
+        raise HTTPException(status_code=409, detail=conflict_detail)
+    if existed and existed.response:
+        replayed = dict(existed.response)
+        replayed["idempotentReplay"] = True
+        return replayed
+    if existed:
+        raise HTTPException(status_code=409, detail=conflict_detail)
+    runtime.trace_store.set_idempotency_pending(
+        key=key,
+        job_id=job_id,
+        ttl_secs=runtime.settings.idempotency_ttl_secs,
+    )
+    return None
+
+
+def _validate_phase_dispatch_request(request: PhaseDispatchRequest) -> None:
+    if request.message_count <= 0:
+        raise HTTPException(status_code=422, detail="invalid_message_count")
+    if request.message_end_id < request.message_start_id:
+        raise HTTPException(status_code=422, detail="invalid_message_range")
+    if request.message_count != len(request.messages):
+        raise HTTPException(status_code=422, detail="message_count_mismatch")
+    for message in request.messages:
+        if message.message_id < request.message_start_id or message.message_id > request.message_end_id:
+            raise HTTPException(status_code=422, detail="message_id_out_of_range")
+
+
+def _validate_final_dispatch_request(request: FinalDispatchRequest) -> None:
+    if request.phase_start_no <= 0 or request.phase_end_no <= 0:
+        raise HTTPException(status_code=422, detail="invalid_phase_no")
+    if request.phase_start_no > request.phase_end_no:
+        raise HTTPException(status_code=422, detail="invalid_phase_range")
+
+
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
 
@@ -532,6 +575,78 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         if persisted_alert_ids:
             response = dict(response)
             response["auditAlertIds"] = persisted_alert_ids
+        return response
+
+    @app.post("/internal/judge/v3/phase/dispatch")
+    async def dispatch_judge_phase(
+        request: PhaseDispatchRequest,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        _validate_phase_dispatch_request(request)
+
+        replayed = _resolve_idempotency_or_raise(
+            runtime=runtime,
+            key=request.idempotency_key,
+            job_id=request.job_id,
+            conflict_detail="idempotency_conflict:phase_dispatch",
+        )
+        if replayed is not None:
+            return replayed
+
+        response = {
+            "accepted": True,
+            "dispatchType": "phase",
+            "status": "queued",
+            "jobId": request.job_id,
+            "scopeId": request.scope_id,
+            "sessionId": request.session_id,
+            "phaseNo": request.phase_no,
+            "messageCount": request.message_count,
+            "traceId": request.trace_id,
+        }
+        runtime.trace_store.set_idempotency_success(
+            key=request.idempotency_key,
+            job_id=request.job_id,
+            response=response,
+            ttl_secs=runtime.settings.idempotency_ttl_secs,
+        )
+        return response
+
+    @app.post("/internal/judge/v3/final/dispatch")
+    async def dispatch_judge_final(
+        request: FinalDispatchRequest,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        _validate_final_dispatch_request(request)
+
+        replayed = _resolve_idempotency_or_raise(
+            runtime=runtime,
+            key=request.idempotency_key,
+            job_id=request.job_id,
+            conflict_detail="idempotency_conflict:final_dispatch",
+        )
+        if replayed is not None:
+            return replayed
+
+        response = {
+            "accepted": True,
+            "dispatchType": "final",
+            "status": "queued",
+            "jobId": request.job_id,
+            "scopeId": request.scope_id,
+            "sessionId": request.session_id,
+            "phaseStartNo": request.phase_start_no,
+            "phaseEndNo": request.phase_end_no,
+            "traceId": request.trace_id,
+        }
+        runtime.trace_store.set_idempotency_success(
+            key=request.idempotency_key,
+            job_id=request.job_id,
+            response=response,
+            ttl_secs=runtime.settings.idempotency_ttl_secs,
+        )
         return response
 
     @app.get("/internal/judge/jobs/{job_id}/trace")

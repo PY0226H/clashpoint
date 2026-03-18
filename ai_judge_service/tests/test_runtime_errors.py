@@ -2,7 +2,10 @@ import unittest
 
 from app.runtime_errors import (
     ERROR_JUDGE_TIMEOUT,
+    ERROR_FINAL_ROLLUP_INCOMPLETE,
     ERROR_MODEL_OVERLOAD,
+    ERROR_PHASE_ARTIFACT_INCOMPLETE,
+    ERROR_PHASE_IDEMPOTENCY_CONFLICT,
     ERROR_RAG_UNAVAILABLE,
     JudgeRuntimeError,
     classify_openai_failure,
@@ -17,6 +20,18 @@ class RuntimeErrorsTests(unittest.TestCase):
         self.assertEqual(normalize_runtime_error_code(""), ERROR_MODEL_OVERLOAD)
         self.assertEqual(normalize_runtime_error_code("unknown"), ERROR_MODEL_OVERLOAD)
         self.assertEqual(normalize_runtime_error_code(ERROR_RAG_UNAVAILABLE), ERROR_RAG_UNAVAILABLE)
+        self.assertEqual(
+            normalize_runtime_error_code(ERROR_PHASE_ARTIFACT_INCOMPLETE),
+            ERROR_PHASE_ARTIFACT_INCOMPLETE,
+        )
+        self.assertEqual(
+            normalize_runtime_error_code(ERROR_PHASE_IDEMPOTENCY_CONFLICT),
+            ERROR_PHASE_IDEMPOTENCY_CONFLICT,
+        )
+        self.assertEqual(
+            normalize_runtime_error_code(ERROR_FINAL_ROLLUP_INCOMPLETE),
+            ERROR_FINAL_ROLLUP_INCOMPLETE,
+        )
 
     def test_classify_openai_failure_should_map_timeout_and_overload(self) -> None:
         self.assertEqual(classify_openai_failure("timeout while waiting"), ERROR_JUDGE_TIMEOUT)
