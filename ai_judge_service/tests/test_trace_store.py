@@ -118,6 +118,39 @@ class TraceStoreTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].audit["qualityScore"], 0.88)
 
+    def test_dispatch_receipt_should_store_and_read_back(self) -> None:
+        store = TraceStore(ttl_secs=3600)
+        store.save_dispatch_receipt(
+            dispatch_type="final",
+            job_id=9201,
+            scope_id=1,
+            session_id=3001,
+            trace_id="trace-final-9201",
+            idempotency_key="judge_final:3001:1:2:v3:v3-default",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            retrieval_profile=None,
+            phase_no=None,
+            phase_start_no=1,
+            phase_end_no=2,
+            message_start_id=None,
+            message_end_id=None,
+            message_count=None,
+            status="queued",
+            request={"job_id": 9201},
+            response={"accepted": True, "jobId": 9201},
+        )
+
+        row = store.get_dispatch_receipt(dispatch_type="final", job_id=9201)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row.dispatch_type, "final")
+        self.assertEqual(row.session_id, 3001)
+        self.assertEqual(row.phase_start_no, 1)
+        self.assertEqual(row.phase_end_no, 2)
+        self.assertEqual(row.response["jobId"], 9201)
+
     def test_list_traces_should_support_status_winner_and_audit_filters(self) -> None:
         store = TraceStore(ttl_secs=3600)
         for job_id, winner, with_alert in (

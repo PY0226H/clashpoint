@@ -273,6 +273,32 @@ def _serialize_outbox_event(item: Any) -> dict[str, Any]:
     }
 
 
+def _serialize_dispatch_receipt(item: Any) -> dict[str, Any]:
+    return {
+        "dispatchType": item.dispatch_type,
+        "jobId": item.job_id,
+        "scopeId": item.scope_id,
+        "sessionId": item.session_id,
+        "traceId": item.trace_id,
+        "idempotencyKey": item.idempotency_key,
+        "rubricVersion": item.rubric_version,
+        "judgePolicyVersion": item.judge_policy_version,
+        "topicDomain": item.topic_domain,
+        "retrievalProfile": item.retrieval_profile,
+        "phaseNo": item.phase_no,
+        "phaseStartNo": item.phase_start_no,
+        "phaseEndNo": item.phase_end_no,
+        "messageStartId": item.message_start_id,
+        "messageEndId": item.message_end_id,
+        "messageCount": item.message_count,
+        "status": item.status,
+        "request": item.request,
+        "response": item.response,
+        "createdAt": item.created_at.isoformat(),
+        "updatedAt": item.updated_at.isoformat(),
+    }
+
+
 def _build_replay_report_payload(record: Any) -> dict[str, Any]:
     report_summary = record.report_summary if isinstance(record.report_summary, dict) else {}
     request = record.request if isinstance(record.request, dict) else {}
@@ -605,6 +631,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "messageCount": request.message_count,
             "traceId": request.trace_id,
         }
+        runtime.trace_store.save_dispatch_receipt(
+            dispatch_type="phase",
+            job_id=request.job_id,
+            scope_id=request.scope_id,
+            session_id=request.session_id,
+            trace_id=request.trace_id,
+            idempotency_key=request.idempotency_key,
+            rubric_version=request.rubric_version,
+            judge_policy_version=request.judge_policy_version,
+            topic_domain=request.topic_domain,
+            retrieval_profile=request.retrieval_profile,
+            phase_no=request.phase_no,
+            phase_start_no=None,
+            phase_end_no=None,
+            message_start_id=request.message_start_id,
+            message_end_id=request.message_end_id,
+            message_count=request.message_count,
+            status="queued",
+            request=request.model_dump(mode="json"),
+            response=response,
+        )
         runtime.trace_store.set_idempotency_success(
             key=request.idempotency_key,
             job_id=request.job_id,
@@ -641,6 +688,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "phaseEndNo": request.phase_end_no,
             "traceId": request.trace_id,
         }
+        runtime.trace_store.save_dispatch_receipt(
+            dispatch_type="final",
+            job_id=request.job_id,
+            scope_id=request.scope_id,
+            session_id=request.session_id,
+            trace_id=request.trace_id,
+            idempotency_key=request.idempotency_key,
+            rubric_version=request.rubric_version,
+            judge_policy_version=request.judge_policy_version,
+            topic_domain=request.topic_domain,
+            retrieval_profile=None,
+            phase_no=None,
+            phase_start_no=request.phase_start_no,
+            phase_end_no=request.phase_end_no,
+            message_start_id=None,
+            message_end_id=None,
+            message_count=None,
+            status="queued",
+            request=request.model_dump(mode="json"),
+            response=response,
+        )
         runtime.trace_store.set_idempotency_success(
             key=request.idempotency_key,
             job_id=request.job_id,
@@ -648,6 +716,34 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ttl_secs=runtime.settings.idempotency_ttl_secs,
         )
         return response
+
+    @app.get("/internal/judge/v3/phase/jobs/{job_id}/receipt")
+    async def get_phase_dispatch_receipt(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        item = runtime.trace_store.get_dispatch_receipt(
+            dispatch_type="phase",
+            job_id=job_id,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="phase_dispatch_receipt_not_found")
+        return _serialize_dispatch_receipt(item)
+
+    @app.get("/internal/judge/v3/final/jobs/{job_id}/receipt")
+    async def get_final_dispatch_receipt(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        item = runtime.trace_store.get_dispatch_receipt(
+            dispatch_type="final",
+            job_id=job_id,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="final_dispatch_receipt_not_found")
+        return _serialize_dispatch_receipt(item)
 
     @app.get("/internal/judge/jobs/{job_id}/trace")
     async def get_judge_job_trace(

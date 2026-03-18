@@ -309,6 +309,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/dispatch", paths)
         self.assertIn("/internal/judge/v3/phase/dispatch", paths)
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
+        self.assertIn("/internal/judge/v3/phase/jobs/{job_id}/receipt", paths)
+        self.assertIn("/internal/judge/v3/final/jobs/{job_id}/receipt", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/trace", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
         self.assertIn("/internal/judge/jobs/{job_id}/replay/report", paths)
@@ -442,6 +444,56 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["dispatchType"], "phase")
         self.assertEqual(first["status"], "queued")
         self.assertTrue(second["idempotentReplay"])
+        receipt_route = next(
+            item
+            for item in app.routes
+            if getattr(item, "path", "") == "/internal/judge/v3/phase/jobs/{job_id}/receipt"
+        )
+        receipt = await receipt_route.endpoint(job_id=101, x_ai_internal_key="k4p")
+        self.assertEqual(receipt["dispatchType"], "phase")
+        self.assertEqual(receipt["phaseNo"], 1)
+        self.assertEqual(receipt["messageCount"], 2)
+
+    async def test_v3_final_dispatch_should_support_idempotency_replay_and_persist_receipt(self) -> None:
+        settings = _build_settings(ai_internal_key="k4fr")
+        request = _build_final_request()
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=fake_callback_report,
+            callback_failed_impl=fake_callback_failed,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
+        )
+
+        first = await route.endpoint(request=request, x_ai_internal_key="k4fr")
+        second = await route.endpoint(request=request, x_ai_internal_key="k4fr")
+        self.assertTrue(first["accepted"])
+        self.assertEqual(first["dispatchType"], "final")
+        self.assertEqual(first["status"], "queued")
+        self.assertTrue(second["idempotentReplay"])
+
+        receipt_route = next(
+            item
+            for item in app.routes
+            if getattr(item, "path", "") == "/internal/judge/v3/final/jobs/{job_id}/receipt"
+        )
+        receipt = await receipt_route.endpoint(job_id=202, x_ai_internal_key="k4fr")
+        self.assertEqual(receipt["dispatchType"], "final")
+        self.assertEqual(receipt["phaseStartNo"], 1)
+        self.assertEqual(receipt["phaseEndNo"], 2)
 
     async def test_v3_phase_dispatch_should_validate_message_count(self) -> None:
         settings = _build_settings(ai_internal_key="k4v")

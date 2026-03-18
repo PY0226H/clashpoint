@@ -107,6 +107,10 @@ OUTBOX_DELIVERY_VALUES = {
     OUTBOX_DELIVERY_FAILED,
 }
 
+DISPATCH_TYPE_PHASE = "phase"
+DISPATCH_TYPE_FINAL = "final"
+DISPATCH_TYPE_VALUES = {DISPATCH_TYPE_PHASE, DISPATCH_TYPE_FINAL}
+
 
 @dataclass
 class TraceQuery:
@@ -164,6 +168,31 @@ class AlertOutboxEvent:
     updated_at: datetime
 
 
+@dataclass
+class DispatchReceiptRecord:
+    dispatch_type: str
+    job_id: int
+    scope_id: int
+    session_id: int
+    trace_id: str
+    idempotency_key: str
+    rubric_version: str
+    judge_policy_version: str
+    topic_domain: str
+    retrieval_profile: str | None
+    phase_no: int | None
+    phase_start_no: int | None
+    phase_end_no: int | None
+    message_start_id: int | None
+    message_end_id: int | None
+    message_count: int | None
+    status: str
+    request: dict[str, Any]
+    response: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
 def _normalize_alert_status(value: Any, *, default: str = ALERT_STATUS_RAISED) -> str:
     raw = _normalize_token(value)
     return raw if raw in ALERT_STATUS_VALUES else default
@@ -197,6 +226,13 @@ def _normalize_token(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip().lower()
+
+
+def _normalize_dispatch_type(value: Any) -> str:
+    raw = _normalize_token(value)
+    if raw in DISPATCH_TYPE_VALUES:
+        return raw
+    return ""
 
 
 def _record_winner(record: TraceRecord) -> str:
@@ -386,6 +422,39 @@ class TraceStoreProtocol(Protocol):
     ) -> list[TopicMemoryRecord]:
         ...
 
+    def save_dispatch_receipt(
+        self,
+        *,
+        dispatch_type: str,
+        job_id: int,
+        scope_id: int,
+        session_id: int,
+        trace_id: str,
+        idempotency_key: str,
+        rubric_version: str,
+        judge_policy_version: str,
+        topic_domain: str,
+        retrieval_profile: str | None,
+        phase_no: int | None,
+        phase_start_no: int | None,
+        phase_end_no: int | None,
+        message_start_id: int | None,
+        message_end_id: int | None,
+        message_count: int | None,
+        status: str,
+        request: dict[str, Any],
+        response: dict[str, Any] | None,
+    ) -> DispatchReceiptRecord:
+        ...
+
+    def get_dispatch_receipt(
+        self,
+        *,
+        dispatch_type: str,
+        job_id: int,
+    ) -> DispatchReceiptRecord | None:
+        ...
+
 
 class TraceStore(TraceStoreProtocol):
     """In-memory trace + idempotency + topic memory store.
@@ -401,6 +470,7 @@ class TraceStore(TraceStoreProtocol):
         self._traces: dict[int, TraceRecord] = {}
         self._idempotency: dict[str, IdempotencyRecord] = {}
         self._topic_memory: dict[str, list[TopicMemoryRecord]] = {}
+        self._dispatch_receipts: dict[str, DispatchReceiptRecord] = {}
         self._alerts_by_job: dict[int, list[AuditAlertRecord]] = {}
         self._alerts_by_id: dict[str, AuditAlertRecord] = {}
         self._alert_outbox: dict[str, AlertOutboxEvent] = {}
@@ -410,6 +480,9 @@ class TraceStore(TraceStoreProtocol):
 
     def _topic_key(self, topic_domain: str, rubric_version: str) -> str:
         return f"{topic_domain.strip().lower()}::{rubric_version.strip().lower()}"
+
+    def _dispatch_receipt_key(self, dispatch_type: str, job_id: int) -> str:
+        return f"{dispatch_type}:{job_id}"
 
     def _prune_locked(self, now: datetime) -> None:
         expired_jobs = [
@@ -425,6 +498,14 @@ class TraceStore(TraceStoreProtocol):
         ]
         for key in expired_keys:
             self._idempotency.pop(key, None)
+
+        expired_dispatch_receipt_keys = [
+            key
+            for key, record in self._dispatch_receipts.items()
+            if record.updated_at + timedelta(seconds=self._ttl_secs) < now
+        ]
+        for key in expired_dispatch_receipt_keys:
+            self._dispatch_receipts.pop(key, None)
 
         for topic_key, rows in list(self._topic_memory.items()):
             filtered = [
@@ -907,6 +988,80 @@ class TraceStore(TraceStoreProtocol):
             rows = self._topic_memory.get(self._topic_key(domain, rubric), [])
             return list(rows[: max(1, limit)])
 
+    def save_dispatch_receipt(
+        self,
+        *,
+        dispatch_type: str,
+        job_id: int,
+        scope_id: int,
+        session_id: int,
+        trace_id: str,
+        idempotency_key: str,
+        rubric_version: str,
+        judge_policy_version: str,
+        topic_domain: str,
+        retrieval_profile: str | None,
+        phase_no: int | None,
+        phase_start_no: int | None,
+        phase_end_no: int | None,
+        message_start_id: int | None,
+        message_end_id: int | None,
+        message_count: int | None,
+        status: str,
+        request: dict[str, Any],
+        response: dict[str, Any] | None,
+    ) -> DispatchReceiptRecord:
+        normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
+        if not normalized_dispatch_type:
+            raise ValueError(f"unsupported dispatch_type: {dispatch_type}")
+        now = _utcnow()
+        receipt_key = self._dispatch_receipt_key(normalized_dispatch_type, max(0, job_id))
+        with self._lock:
+            self._prune_locked(now)
+            existing = self._dispatch_receipts.get(receipt_key)
+            created_at = existing.created_at if existing is not None else now
+            row = DispatchReceiptRecord(
+                dispatch_type=normalized_dispatch_type,
+                job_id=max(0, job_id),
+                scope_id=max(0, scope_id),
+                session_id=max(0, session_id),
+                trace_id=trace_id.strip(),
+                idempotency_key=idempotency_key.strip(),
+                rubric_version=rubric_version.strip(),
+                judge_policy_version=judge_policy_version.strip(),
+                topic_domain=topic_domain.strip().lower() or "default",
+                retrieval_profile=(retrieval_profile.strip() if isinstance(retrieval_profile, str) else None),
+                phase_no=phase_no,
+                phase_start_no=phase_start_no,
+                phase_end_no=phase_end_no,
+                message_start_id=message_start_id,
+                message_end_id=message_end_id,
+                message_count=message_count,
+                status=status.strip().lower() or "queued",
+                request=dict(request),
+                response=(dict(response) if isinstance(response, dict) else None),
+                created_at=created_at,
+                updated_at=now,
+            )
+            self._dispatch_receipts[receipt_key] = row
+            return row
+
+    def get_dispatch_receipt(
+        self,
+        *,
+        dispatch_type: str,
+        job_id: int,
+    ) -> DispatchReceiptRecord | None:
+        normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
+        if not normalized_dispatch_type:
+            return None
+        now = _utcnow()
+        with self._lock:
+            self._prune_locked(now)
+            return self._dispatch_receipts.get(
+                self._dispatch_receipt_key(normalized_dispatch_type, max(0, job_id))
+            )
+
 
 class RedisTraceStore(TraceStoreProtocol):
     def __init__(
@@ -944,6 +1099,9 @@ class RedisTraceStore(TraceStoreProtocol):
         domain = topic_domain.strip().lower()
         rubric = rubric_version.strip().lower()
         return f"{self._key_prefix}:topic:{domain}:{rubric}"
+
+    def _dispatch_receipt_key(self, dispatch_type: str, job_id: int) -> str:
+        return f"{self._key_prefix}:dispatch:{dispatch_type}:{job_id}"
 
     def _index_job(self, *, job_id: int, updated_at: datetime) -> None:
         score = updated_at.timestamp()
@@ -1033,6 +1191,89 @@ class RedisTraceStore(TraceStoreProtocol):
             callback_error=(str(payload.get("callback_error")) if payload.get("callback_error") is not None else None),
             report_summary=report_summary if isinstance(report_summary, dict) else None,
             replays=replays,
+        )
+
+    def _serialize_dispatch_receipt(self, record: DispatchReceiptRecord) -> dict[str, Any]:
+        return {
+            "dispatch_type": record.dispatch_type,
+            "job_id": record.job_id,
+            "scope_id": record.scope_id,
+            "session_id": record.session_id,
+            "trace_id": record.trace_id,
+            "idempotency_key": record.idempotency_key,
+            "rubric_version": record.rubric_version,
+            "judge_policy_version": record.judge_policy_version,
+            "topic_domain": record.topic_domain,
+            "retrieval_profile": record.retrieval_profile,
+            "phase_no": record.phase_no,
+            "phase_start_no": record.phase_start_no,
+            "phase_end_no": record.phase_end_no,
+            "message_start_id": record.message_start_id,
+            "message_end_id": record.message_end_id,
+            "message_count": record.message_count,
+            "status": record.status,
+            "request": record.request,
+            "response": record.response,
+            "created_at": record.created_at.isoformat(),
+            "updated_at": record.updated_at.isoformat(),
+        }
+
+    def _deserialize_dispatch_receipt(self, payload: dict[str, Any]) -> DispatchReceiptRecord | None:
+        dispatch_type = _normalize_dispatch_type(payload.get("dispatch_type"))
+        if not dispatch_type:
+            return None
+        request = payload.get("request")
+        response = payload.get("response")
+        return DispatchReceiptRecord(
+            dispatch_type=dispatch_type,
+            job_id=_coerce_int(payload.get("job_id"), default=0),
+            scope_id=_coerce_int(payload.get("scope_id"), default=0),
+            session_id=_coerce_int(payload.get("session_id"), default=0),
+            trace_id=str(payload.get("trace_id") or ""),
+            idempotency_key=str(payload.get("idempotency_key") or ""),
+            rubric_version=str(payload.get("rubric_version") or ""),
+            judge_policy_version=str(payload.get("judge_policy_version") or ""),
+            topic_domain=str(payload.get("topic_domain") or "default"),
+            retrieval_profile=(
+                str(payload.get("retrieval_profile"))
+                if payload.get("retrieval_profile") is not None
+                else None
+            ),
+            phase_no=(
+                _coerce_int(payload.get("phase_no"), default=0)
+                if payload.get("phase_no") is not None
+                else None
+            ),
+            phase_start_no=(
+                _coerce_int(payload.get("phase_start_no"), default=0)
+                if payload.get("phase_start_no") is not None
+                else None
+            ),
+            phase_end_no=(
+                _coerce_int(payload.get("phase_end_no"), default=0)
+                if payload.get("phase_end_no") is not None
+                else None
+            ),
+            message_start_id=(
+                _coerce_int(payload.get("message_start_id"), default=0)
+                if payload.get("message_start_id") is not None
+                else None
+            ),
+            message_end_id=(
+                _coerce_int(payload.get("message_end_id"), default=0)
+                if payload.get("message_end_id") is not None
+                else None
+            ),
+            message_count=(
+                _coerce_int(payload.get("message_count"), default=0)
+                if payload.get("message_count") is not None
+                else None
+            ),
+            status=str(payload.get("status") or "queued"),
+            request=request if isinstance(request, dict) else {},
+            response=response if isinstance(response, dict) else None,
+            created_at=_parse_datetime(payload.get("created_at")),
+            updated_at=_parse_datetime(payload.get("updated_at")),
         )
 
     def _deserialize_idempotency(self, key: str, payload: dict[str, Any]) -> IdempotencyRecord:
@@ -1722,6 +1963,80 @@ class RedisTraceStore(TraceStoreProtocol):
             )
         return out
 
+    def save_dispatch_receipt(
+        self,
+        *,
+        dispatch_type: str,
+        job_id: int,
+        scope_id: int,
+        session_id: int,
+        trace_id: str,
+        idempotency_key: str,
+        rubric_version: str,
+        judge_policy_version: str,
+        topic_domain: str,
+        retrieval_profile: str | None,
+        phase_no: int | None,
+        phase_start_no: int | None,
+        phase_end_no: int | None,
+        message_start_id: int | None,
+        message_end_id: int | None,
+        message_count: int | None,
+        status: str,
+        request: dict[str, Any],
+        response: dict[str, Any] | None,
+    ) -> DispatchReceiptRecord:
+        normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
+        if not normalized_dispatch_type:
+            raise ValueError(f"unsupported dispatch_type: {dispatch_type}")
+        job_id = max(0, job_id)
+        key = self._dispatch_receipt_key(normalized_dispatch_type, job_id)
+        now = _utcnow()
+        existing = self._read_json(key)
+        created_at = _parse_datetime(existing.get("created_at")) if isinstance(existing, dict) else now
+        row = DispatchReceiptRecord(
+            dispatch_type=normalized_dispatch_type,
+            job_id=job_id,
+            scope_id=max(0, scope_id),
+            session_id=max(0, session_id),
+            trace_id=trace_id.strip(),
+            idempotency_key=idempotency_key.strip(),
+            rubric_version=rubric_version.strip(),
+            judge_policy_version=judge_policy_version.strip(),
+            topic_domain=topic_domain.strip().lower() or "default",
+            retrieval_profile=(retrieval_profile.strip() if isinstance(retrieval_profile, str) else None),
+            phase_no=phase_no,
+            phase_start_no=phase_start_no,
+            phase_end_no=phase_end_no,
+            message_start_id=message_start_id,
+            message_end_id=message_end_id,
+            message_count=message_count,
+            status=status.strip().lower() or "queued",
+            request=dict(request),
+            response=(dict(response) if isinstance(response, dict) else None),
+            created_at=created_at,
+            updated_at=now,
+        )
+        self._write_json(
+            key,
+            self._serialize_dispatch_receipt(row),
+        )
+        return row
+
+    def get_dispatch_receipt(
+        self,
+        *,
+        dispatch_type: str,
+        job_id: int,
+    ) -> DispatchReceiptRecord | None:
+        normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
+        if not normalized_dispatch_type:
+            return None
+        payload = self._read_json(self._dispatch_receipt_key(normalized_dispatch_type, max(0, job_id)))
+        if payload is None:
+            return None
+        return self._deserialize_dispatch_receipt(payload)
+
 
 def _build_redis_client(*, url: str, pool_size: int) -> Any | None:
     try:
@@ -1783,5 +2098,6 @@ __all__ = [
     "AuditAlertTransition",
     "AuditAlertRecord",
     "AlertOutboxEvent",
+    "DispatchReceiptRecord",
     "build_trace_store_from_settings",
 ]

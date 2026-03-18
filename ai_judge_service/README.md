@@ -135,6 +135,8 @@ cd ai_judge_service
 - `GET /internal/judge/alerts/outbox`：查看待投递通知事件 outbox（支持 `delivery_status=pending|sent|failed`）
 - `POST /internal/judge/alerts/outbox/{event_id}/delivery`：回写 outbox 投递结果（`delivery_status=sent|failed`）
 - `GET /internal/judge/rag/diagnostics?job_id=...`：查看该任务检索诊断摘要
+- `GET /internal/judge/v3/phase/jobs/{job_id}/receipt`：查看 phase dispatch 请求落库快照（入参、状态、回执）
+- `GET /internal/judge/v3/final/jobs/{job_id}/receipt`：查看 final dispatch 请求落库快照（入参、状态、回执）
 
 `dispatch` 的 `retrieval_profile`（默认 `hybrid_v1`）当前支持：
 - `hybrid_v1`
