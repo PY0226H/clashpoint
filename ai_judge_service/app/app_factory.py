@@ -24,6 +24,7 @@ from .dispatch_controller import (
     process_dispatch_request,
 )
 from .models import FinalDispatchRequest, JudgeDispatchRequest, PhaseDispatchRequest
+from .phase_pipeline import build_phase_report_payload as build_phase_report_payload_v3
 from .scoring import resolve_effective_style_mode
 from .runtime_orchestrator import build_report_by_runtime
 from .settings import (
@@ -459,87 +460,6 @@ def _validate_final_dispatch_request(request: FinalDispatchRequest) -> None:
         raise HTTPException(status_code=422, detail="invalid_phase_range")
 
 
-def _clamp_score(value: float) -> float:
-    return max(0.0, min(100.0, value))
-
-
-def _build_side_summary(
-    *,
-    request: PhaseDispatchRequest,
-    side: str,
-) -> dict[str, Any]:
-    side_messages = [msg for msg in request.messages if msg.side == side]
-    if side_messages:
-        message_ids = [msg.message_id for msg in side_messages]
-        lines = [f"[{msg.message_id}] {msg.content}" for msg in side_messages]
-        text = "\n".join(lines)
-    else:
-        fallback_messages = list(request.messages[:3])
-        message_ids = [msg.message_id for msg in fallback_messages]
-        lines = [f"[{msg.message_id}] {msg.content}" for msg in fallback_messages]
-        text = "当前窗口该方暂无发言，引用窗口上下文保留可追溯性。\n" + "\n".join(lines)
-    return {
-        "text": text[:4000],
-        "messageIds": message_ids,
-    }
-
-
-def _build_phase_report_payload(request: PhaseDispatchRequest) -> dict[str, Any]:
-    total = max(1, request.message_count)
-    pro_count = len([msg for msg in request.messages if msg.side == "pro"])
-    con_count = len([msg for msg in request.messages if msg.side == "con"])
-    balance = (pro_count - con_count) / float(total)
-    agent1_pro = round(_clamp_score(50.0 + balance * 8.0), 2)
-    agent1_con = round(_clamp_score(50.0 - balance * 8.0), 2)
-    agent2_pro = round(_clamp_score(50.0 + balance * 12.0), 2)
-    agent2_con = round(_clamp_score(50.0 - balance * 12.0), 2)
-    w1 = 0.35
-    w2 = 0.65
-    agent3_pro = round(_clamp_score(agent1_pro * w1 + agent2_pro * w2), 2)
-    agent3_con = round(_clamp_score(agent1_con * w1 + agent2_con * w2), 2)
-
-    return {
-        "sessionId": request.session_id,
-        "phaseNo": request.phase_no,
-        "messageStartId": request.message_start_id,
-        "messageEndId": request.message_end_id,
-        "messageCount": request.message_count,
-        "proSummaryGrounded": _build_side_summary(request=request, side="pro"),
-        "conSummaryGrounded": _build_side_summary(request=request, side="con"),
-        "proRetrievalBundle": {"queries": [], "items": []},
-        "conRetrievalBundle": {"queries": [], "items": []},
-        "agent1Score": {
-            "pro": agent1_pro,
-            "con": agent1_con,
-            "dimensions": {},
-            "rationale": "v3 placeholder scorer (agent1) based on side message balance.",
-        },
-        "agent2Score": {
-            "pro": agent2_pro,
-            "con": agent2_con,
-            "hitItems": [],
-            "missItems": [],
-            "rationale": "v3 placeholder scorer (agent2) based on side message balance.",
-        },
-        "agent3WeightedScore": {
-            "pro": agent3_pro,
-            "con": agent3_con,
-            "w1": w1,
-            "w2": w2,
-        },
-        "promptHashes": {},
-        "tokenUsage": {"total": 0},
-        "latencyMs": {"total": 0},
-        "errorCodes": ["v3_placeholder_pipeline"],
-        "degradationLevel": 3,
-        "judgeTrace": {
-            "traceId": request.trace_id,
-            "pipelineVersion": "v3-placeholder",
-            "idempotencyKey": request.idempotency_key,
-        },
-    }
-
-
 def _build_final_report_payload(request: FinalDispatchRequest) -> dict[str, Any]:
     return {
         "sessionId": request.session_id,
@@ -817,7 +737,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             response=response,
         )
 
-        phase_report_payload = _build_phase_report_payload(request)
+        phase_report_payload = build_phase_report_payload_v3(
+            request=request,
+            settings=runtime.settings,
+        )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
                 runtime=runtime,
