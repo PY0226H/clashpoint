@@ -27,7 +27,13 @@ from .settings import Settings
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 SUMMARY_PROMPT_VERSION = "v3.a2a3.summary.v1"
-AGENT2_PROMPT_VERSION = "v3.a6a7.bidirectional.v1"
+AGENT2_PROMPT_VERSION = "v3.a6a7.bidirectional.v2"
+AGENT2_DIMENSION_WEIGHTS = {
+    "coverage": 0.35,
+    "depth": 0.30,
+    "evidenceFit": 0.25,
+    "keyPointHitRate": 0.10,
+}
 DEFAULT_SUMMARY_COVERAGE_MIN_RATIO = 1.0
 MAX_SUMMARY_TEXT_CHARS = 8000
 MAX_SUMMARY_MESSAGE_CHARS = 640
@@ -102,6 +108,10 @@ class SideRetrievalResult:
 class Agent2PathResult:
     target_side: str
     score: float
+    raw_score: float
+    calibrated_score: float
+    dimension_scores: dict[str, float]
+    calibration_notes: list[str]
     hit_points: list[str]
     miss_points: list[str]
     rationale: str
@@ -749,6 +759,157 @@ def _extract_heuristic_points(
     return _normalize_text_list(candidates, limit=limit, max_chars=160)
 
 
+def _safe_score(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return _clamp(numeric, 0.0, 100.0)
+
+
+def _split_sentences(text: str, *, limit: int = 120) -> list[str]:
+    pieces: list[str] = []
+    for part in re.split(r"[。！？!?；;\n]+", text or ""):
+        sentence = part.strip()
+        if sentence:
+            pieces.append(sentence[:240])
+        if len(pieces) >= max(1, limit):
+            break
+    return pieces
+
+
+def _parse_dimension_scores(raw: dict[str, Any]) -> dict[str, float]:
+    dimension_raw = raw.get("dimension_scores") or raw.get("dimensionScores") or raw.get("dimensions")
+    if not isinstance(dimension_raw, dict):
+        return {}
+
+    aliases = {
+        "coverage": ("coverage", "coverage_score", "coverageScore"),
+        "depth": ("depth", "rebuttal_depth", "rebuttalDepth"),
+        "evidenceFit": ("evidence_fit", "evidenceFit", "evidence"),
+        "keyPointHitRate": ("key_point_hit_rate", "keyPointHitRate", "hit_rate", "hitRate"),
+    }
+    parsed: dict[str, float] = {}
+    for key, candidates in aliases.items():
+        for candidate in candidates:
+            score = _safe_score(dimension_raw.get(candidate))
+            if score is None:
+                continue
+            parsed[key] = round(score, 2)
+            break
+    return parsed
+
+
+def _build_heuristic_dimension_scores(
+    *,
+    key_points: list[str],
+    hit_points: list[str],
+    hit_ratio: float,
+    target_summary: dict[str, Any],
+    target_messages: list[PhaseDispatchMessage],
+    source_bundle: dict[str, Any],
+) -> dict[str, float]:
+    safe_hit_ratio = _clamp(hit_ratio, 0.0, 1.0)
+    key_point_hit_rate = len(hit_points) / float(max(1, len(_normalize_text_list(key_points, limit=12))))
+
+    target_text = str(target_summary.get("text") or "")
+    target_text += "\n" + "\n".join(msg.content for msg in target_messages)
+    sentence_token_sets = [
+        set(_tokenize(sentence))
+        for sentence in _split_sentences(target_text)
+        if sentence.strip()
+    ]
+
+    depth_samples: list[float] = []
+    for point in hit_points:
+        point_tokens = set(_tokenize(point))
+        if not point_tokens:
+            continue
+        best_overlap = 0.0
+        for sentence_tokens in sentence_token_sets:
+            if not sentence_tokens:
+                continue
+            overlap = len(point_tokens & sentence_tokens) / float(max(1, len(point_tokens)))
+            if overlap > best_overlap:
+                best_overlap = overlap
+        depth_samples.append(best_overlap)
+    depth_overlap = sum(depth_samples) / float(max(1, len(depth_samples)))
+    rebuttal_density = _count_rebuttals(target_messages) / float(max(1, len(target_messages)))
+    depth_score = _clamp((depth_overlap * 0.75 + rebuttal_density * 0.25) * 100.0, 0.0, 100.0)
+
+    target_tokens = set(_tokenize(target_text))
+    evidence_overlaps: list[float] = []
+    for item in (source_bundle.get("items") or [])[:8]:
+        evidence_text = " ".join(
+            [
+                str((item or {}).get("title") or ""),
+                str((item or {}).get("snippet") or ""),
+            ]
+        ).strip()
+        evidence_tokens = set(_tokenize(evidence_text))
+        if not evidence_tokens:
+            continue
+        overlap = len(evidence_tokens & target_tokens) / float(max(1, len(evidence_tokens)))
+        evidence_overlaps.append(overlap)
+    if evidence_overlaps:
+        ranked = sorted(evidence_overlaps, reverse=True)
+        top_overlap = ranked[0]
+        avg_overlap = sum(ranked[: min(3, len(ranked))]) / float(min(3, len(ranked)))
+        evidence_fit = _clamp((top_overlap * 0.6 + avg_overlap * 0.4) * 100.0, 0.0, 100.0)
+    else:
+        evidence_fit = 50.0
+
+    return {
+        "coverage": round(safe_hit_ratio * 100.0, 2),
+        "depth": round(depth_score, 2),
+        "evidenceFit": round(evidence_fit, 2),
+        "keyPointHitRate": round(_clamp(key_point_hit_rate * 100.0, 0.0, 100.0), 2),
+    }
+
+
+def _compose_calibrated_agent2_score(
+    *,
+    llm_score: float | None,
+    llm_dimensions: dict[str, float],
+    heuristic_dimensions: dict[str, float],
+    key_points: list[str],
+    hit_ratio: float,
+) -> tuple[float, float, dict[str, float], list[str]]:
+    notes: list[str] = []
+    dimensions: dict[str, float] = {}
+    for key in ("coverage", "depth", "evidenceFit", "keyPointHitRate"):
+        if key in llm_dimensions:
+            dimensions[key] = round(_clamp(llm_dimensions[key], 0.0, 100.0), 2)
+        else:
+            dimensions[key] = round(_clamp(heuristic_dimensions.get(key, 50.0), 0.0, 100.0), 2)
+            notes.append(f"dimension_fallback_{key}")
+
+    raw_score = 0.0
+    for key, weight in AGENT2_DIMENSION_WEIGHTS.items():
+        raw_score += dimensions[key] * weight
+    if llm_score is not None:
+        raw_score = raw_score * 0.6 + llm_score * 0.4
+        notes.append("blend_llm_score")
+
+    calibrated = 50.0 + (raw_score - 50.0) * 0.88
+    normalized_points = _normalize_text_list(key_points, limit=12)
+    if len(normalized_points) < 3:
+        calibrated -= 5.0
+        notes.append("few_key_points_penalty")
+    if hit_ratio < 0.25:
+        calibrated = min(calibrated, 60.0)
+        notes.append("low_hit_ratio_cap")
+    if dimensions["evidenceFit"] < 35.0:
+        calibrated -= 4.0
+        notes.append("low_evidence_fit_penalty")
+    if hit_ratio > 0.85 and dimensions["depth"] > 75.0 and dimensions["evidenceFit"] > 70.0:
+        calibrated += 2.0
+        notes.append("high_quality_bonus")
+
+    final_score = round(_clamp(calibrated, 0.0, 100.0), 2)
+    return final_score, round(raw_score, 2), dimensions, notes
+
+
 def _score_hit_points(
     *,
     key_points: list[str],
@@ -820,7 +981,8 @@ def _build_agent2_a7_system_prompt(*, target_side: str) -> str:
     return (
         "你是辩论命中度评估器。"
         "根据理想反驳与真实内容比较，输出命中分。"
-        "输出JSON字段：score, hit_points, miss_points, rationale。"
+        "输出JSON字段：score, hit_points, miss_points, rationale, dimension_scores。"
+        "dimension_scores必须包含coverage/depth/evidence_fit/key_point_hit_rate四项，范围0-100。"
         f"target_side={target_side}。"
     )
 
@@ -842,7 +1004,8 @@ def _build_agent2_a7_user_prompt(
         "要求：\n"
         "1) score范围0到100。\n"
         "2) hit_points/miss_points 只写关键点短语。\n"
-        "3) 仅输出JSON。\n\n"
+        "3) dimension_scores包含coverage/depth/evidence_fit/key_point_hit_rate，逐项给0-100分。\n"
+        "4) 仅输出JSON。\n\n"
         f"ideal_rebuttal:\n{ideal_rebuttal[:1800]}\n\n"
         f"key_points:\n{key_points_text}\n\n"
         f"target_summary:\n{str(target_summary.get('text') or '')[:1800]}\n\n"
@@ -855,6 +1018,7 @@ def _build_agent2_path_rationale(
     target_side: str,
     hit_ratio: float,
     source: str,
+    score: float | None = None,
     fallback_reason: str | None = None,
 ) -> str:
     ratio = round(hit_ratio, 4)
@@ -862,6 +1026,8 @@ def _build_agent2_path_rationale(
         f"agent2 path for {target_side} uses ideal rebuttal hit scoring; "
         f"hit_ratio={ratio}, source={source}."
     )
+    if score is not None:
+        base = f"{base} calibrated_score={round(score, 2)}."
     if fallback_reason:
         return f"{base} fallback_reason={fallback_reason}."
     return base
@@ -883,20 +1049,40 @@ def _build_agent2_heuristic_path(
         source_bundle=source_bundle,
         limit=6,
     )
-    score, hit_points, miss_points, hit_ratio = _score_hit_points(
+    _, hit_points, miss_points, hit_ratio = _score_hit_points(
         key_points=key_points,
         target_summary=target_summary,
         target_messages=target_messages,
     )
+    heuristic_dimensions = _build_heuristic_dimension_scores(
+        key_points=key_points,
+        hit_points=hit_points,
+        hit_ratio=hit_ratio,
+        target_summary=target_summary,
+        target_messages=target_messages,
+        source_bundle=source_bundle,
+    )
+    calibrated_score, raw_score, dimensions, notes = _compose_calibrated_agent2_score(
+        llm_score=None,
+        llm_dimensions={},
+        heuristic_dimensions=heuristic_dimensions,
+        key_points=key_points,
+        hit_ratio=hit_ratio,
+    )
     return Agent2PathResult(
         target_side=target_side,
-        score=score,
+        score=calibrated_score,
+        raw_score=raw_score,
+        calibrated_score=calibrated_score,
+        dimension_scores=dimensions,
+        calibration_notes=notes,
         hit_points=hit_points,
         miss_points=miss_points,
         rationale=_build_agent2_path_rationale(
             target_side=target_side,
             hit_ratio=hit_ratio,
             source=source,
+            score=calibrated_score,
             fallback_reason=fallback_reason,
         ),
         ideal_rebuttal="; ".join(key_points)[:1200],
@@ -977,7 +1163,7 @@ async def _run_agent2_path(
             ),
         )
         score_raw = a7_raw.get("score") or a7_raw.get("hit_score") or a7_raw.get("hitScore")
-        score = _clamp(float(score_raw), 0.0, 100.0) if score_raw is not None else None
+        llm_score = _safe_score(score_raw)
         hit_points = _normalize_text_list(
             a7_raw.get("hit_points") or a7_raw.get("hitPoints"),
             limit=8,
@@ -987,27 +1173,46 @@ async def _run_agent2_path(
             limit=8,
         )
         rationale = str(a7_raw.get("rationale") or "").strip()
+        llm_dimensions = _parse_dimension_scores(a7_raw)
 
-        heuristic_score, heuristic_hit, heuristic_miss, hit_ratio = _score_hit_points(
+        _, heuristic_hit, heuristic_miss, hit_ratio = _score_hit_points(
             key_points=key_points,
             target_summary=target_summary,
             target_messages=target_messages,
         )
-        if score is None:
-            score = heuristic_score
         if not hit_points and not miss_points:
             hit_points = heuristic_hit
             miss_points = heuristic_miss
+        heuristic_dimensions = _build_heuristic_dimension_scores(
+            key_points=key_points,
+            hit_points=hit_points,
+            hit_ratio=hit_ratio,
+            target_summary=target_summary,
+            target_messages=target_messages,
+            source_bundle=source_bundle,
+        )
+        calibrated_score, raw_score, dimensions, notes = _compose_calibrated_agent2_score(
+            llm_score=llm_score,
+            llm_dimensions=llm_dimensions,
+            heuristic_dimensions=heuristic_dimensions,
+            key_points=key_points,
+            hit_ratio=hit_ratio,
+        )
         if not rationale:
             rationale = _build_agent2_path_rationale(
                 target_side=target_side,
                 hit_ratio=hit_ratio,
                 source="llm",
+                score=calibrated_score,
             )
 
         return Agent2PathResult(
             target_side=target_side,
-            score=round(float(score), 2),
+            score=calibrated_score,
+            raw_score=raw_score,
+            calibrated_score=calibrated_score,
+            dimension_scores=dimensions,
+            calibration_notes=notes,
             hit_points=hit_points,
             miss_points=miss_points,
             rationale=rationale[:2000],
@@ -1094,6 +1299,8 @@ async def _build_agent2_bidirectional_score(
 
     pro_score = pro_path.score if not pro_failed else float(baseline_agent2_score["pro"])
     con_score = con_path.score if not con_failed else float(baseline_agent2_score["con"])
+    pro_used_baseline = bool(pro_failed)
+    con_used_baseline = bool(con_failed)
     if pro_failed or con_failed:
         error_codes.append("agent2_partial_degraded")
     if pro_failed and con_failed:
@@ -1111,18 +1318,39 @@ async def _build_agent2_bidirectional_score(
         "missItems": miss_items[:8],
         "rationale": (
             "agent2 bidirectional paths evaluated ideal rebuttal hit score."
-            f" pro_source={pro_path.source}, con_source={con_path.source}"
+            f" pro_source={pro_path.source}, con_source={con_path.source},"
+            f" pro_baseline_fallback={pro_used_baseline}, con_baseline_fallback={con_used_baseline}"
         ),
     }
     audit = {
         "promptVersion": AGENT2_PROMPT_VERSION,
+        "weights": AGENT2_DIMENSION_WEIGHTS,
+        "resilience": {
+            "pro": {
+                "usedBaselineFallback": pro_used_baseline,
+                "baselineScore": round(float(baseline_agent2_score["pro"]), 2),
+                "effectiveScore": round(float(pro_score), 2),
+                "pathErrorCodes": pro_path.error_codes,
+            },
+            "con": {
+                "usedBaselineFallback": con_used_baseline,
+                "baselineScore": round(float(baseline_agent2_score["con"]), 2),
+                "effectiveScore": round(float(con_score), 2),
+                "pathErrorCodes": con_path.error_codes,
+            },
+        },
         "paths": {
             "pro": {
                 "sourceSide": "con",
                 "targetSide": "pro",
                 "source": pro_path.source,
                 "fallbackReason": pro_path.fallback_reason,
+                "pathStatus": "failed_baseline_fallback" if pro_used_baseline else "ok",
                 "score": pro_path.score,
+                "rawScore": pro_path.raw_score,
+                "calibratedScore": pro_path.calibrated_score,
+                "dimensionScores": pro_path.dimension_scores,
+                "calibrationNotes": pro_path.calibration_notes,
                 "idealRebuttal": pro_path.ideal_rebuttal,
                 "keyPoints": pro_path.key_points,
                 "hitPoints": pro_path.hit_points,
@@ -1134,7 +1362,12 @@ async def _build_agent2_bidirectional_score(
                 "targetSide": "con",
                 "source": con_path.source,
                 "fallbackReason": con_path.fallback_reason,
+                "pathStatus": "failed_baseline_fallback" if con_used_baseline else "ok",
                 "score": con_path.score,
+                "rawScore": con_path.raw_score,
+                "calibratedScore": con_path.calibrated_score,
+                "dimensionScores": con_path.dimension_scores,
+                "calibrationNotes": con_path.calibration_notes,
                 "idealRebuttal": con_path.ideal_rebuttal,
                 "keyPoints": con_path.key_points,
                 "hitPoints": con_path.hit_points,
@@ -1402,7 +1635,7 @@ async def build_phase_report_payload(
         "degradationLevel": degradation_level,
         "judgeTrace": {
             "traceId": request.trace_id,
-            "pipelineVersion": "v3-phase-m5-agent2-bidirectional-v1",
+            "pipelineVersion": "v3-phase-m5-agent2-bidirectional-v2",
             "idempotencyKey": request.idempotency_key,
             "summaryPromptVersion": SUMMARY_PROMPT_VERSION,
             "agent2PromptVersion": AGENT2_PROMPT_VERSION,
