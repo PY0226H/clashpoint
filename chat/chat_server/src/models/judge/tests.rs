@@ -148,5 +148,6 @@ fn normalize_stage_summary_offset_should_clamp_into_range() {
 }
 
 mod draw_vote;
+mod phase_final_report_submit;
 mod report_submit;
 mod request_report;

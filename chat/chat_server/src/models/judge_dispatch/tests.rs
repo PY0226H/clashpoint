@@ -552,7 +552,7 @@ async fn enqueue_due_judge_final_jobs_once_should_enqueue_for_closed_session() -
         sqlx::query(
             r#"
             UPDATE judge_phase_jobs
-            SET status = 'dispatched',
+            SET status = 'succeeded',
                 dispatch_attempts = 1,
                 dispatch_locked_until = NULL,
                 updated_at = NOW()

@@ -217,6 +217,14 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
     let internal_ai = Router::new()
         .route("/judge/jobs/:id/report", post(submit_judge_report_handler))
         .route(
+            "/judge/v3/phase/jobs/:id/report",
+            post(submit_judge_phase_report_handler),
+        )
+        .route(
+            "/judge/v3/final/jobs/:id/report",
+            post(submit_judge_final_report_handler),
+        )
+        .route(
             "/judge/jobs/:id/failed",
             post(mark_judge_job_failed_handler),
         )

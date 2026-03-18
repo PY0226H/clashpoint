@@ -31,6 +31,24 @@ pub(super) struct JudgeJobForUpdate {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgePhaseJobForUpdate {
+    pub id: i64,
+    pub session_id: i64,
+    pub phase_no: i32,
+    pub message_start_id: i64,
+    pub message_end_id: i64,
+    pub message_count: i32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgeFinalJobForUpdate {
+    pub id: i64,
+    pub session_id: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub(super) struct JudgeReportRow {
     pub id: i64,
     pub job_id: i64,

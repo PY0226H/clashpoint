@@ -168,8 +168,8 @@ impl AppState {
                     WHERE f.session_id = s.id
                   )
                 GROUP BY s.id
-                HAVING COUNT(*) FILTER (WHERE p.status = 'queued') = 0
-                   AND COUNT(*) FILTER (WHERE p.status = 'dispatched') > 0
+                HAVING COUNT(*) FILTER (WHERE p.status <> 'succeeded') = 0
+                   AND COUNT(*) > 0
                 ORDER BY MAX(p.updated_at) ASC
                 LIMIT $1
             )

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 
 mod draw_vote;
 mod helpers;
+mod phase_final_report_submit;
 mod report_submit;
 mod request_report;
 mod request_report_query;
