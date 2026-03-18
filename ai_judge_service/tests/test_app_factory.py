@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -667,6 +668,72 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["judgeTrace"]["factLock"]["conScore"], payload["conScore"])
         ref_types = {str(item.get("type")) for item in payload["verdictEvidenceRefs"]}
         self.assertTrue({"agent2_hit", "agent2_miss"} & ref_types)
+
+    async def test_v3_final_dispatch_should_block_on_contract_violation_and_raise_alert(self) -> None:
+        settings = _build_settings(ai_internal_key="k4fb")
+        request = _build_final_request().model_copy(
+            update={
+                "job_id": 404,
+                "trace_id": "trace-final-404",
+                "idempotency_key": "final-key-404",
+            }
+        )
+        final_callback_calls: list[tuple[int, dict]] = []
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_callback_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=_noop_callback_report,
+            callback_failed_impl=_noop_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=fake_callback_final_report,
+        )
+        app = create_app(runtime)
+        route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
+        )
+        receipt_route = next(
+            item
+            for item in app.routes
+            if getattr(item, "path", "") == "/internal/judge/v3/final/jobs/{job_id}/receipt"
+        )
+        alerts_route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/jobs/{job_id}/alerts"
+        )
+
+        with patch(
+            "app.app_factory._build_final_report_payload",
+            return_value={
+                "sessionId": request.session_id,
+                "winner": "pro",
+                "proScore": 85.0,
+                "conScore": 70.0,
+            },
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                await route.endpoint(request=request, x_ai_internal_key="k4fb")
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("final_contract_blocked", str(ctx.exception.detail))
+        self.assertEqual(final_callback_calls, [])
+        self.assertIsNone(runtime.trace_store.get_idempotency(request.idempotency_key))
+
+        receipt = await receipt_route.endpoint(job_id=404, x_ai_internal_key="k4fb")
+        self.assertEqual(receipt["status"], "callback_failed")
+        self.assertEqual(receipt["response"]["callbackStatus"], "blocked")
+        self.assertIn("final_contract_violation", receipt["response"]["callbackError"])
+        self.assertEqual(len(receipt["response"]["auditAlertIds"]), 1)
+
+        alerts = await alerts_route.endpoint(job_id=404, x_ai_internal_key="k4fb", status=None, limit=20)
+        self.assertEqual(alerts["count"], 1)
+        self.assertEqual(alerts["items"][0]["type"], "final_contract_violation")
+        self.assertEqual(alerts["items"][0]["severity"], "critical")
 
     async def test_v3_phase_dispatch_should_retry_callback_and_fail_open_for_worker_retry(self) -> None:
         settings = _build_settings(

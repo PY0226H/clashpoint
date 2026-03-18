@@ -618,6 +618,59 @@ def _build_final_display_payload(
     }
 
 
+def _validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    winner = str(payload.get("winner") or "").strip().lower()
+    if winner not in {"pro", "con", "draw"}:
+        missing.append("winner")
+
+    if not isinstance(payload.get("proScore"), (int, float)):
+        missing.append("proScore")
+    if not isinstance(payload.get("conScore"), (int, float)):
+        missing.append("conScore")
+
+    final_rationale = str(payload.get("finalRationale") or "").strip()
+    if not final_rationale:
+        missing.append("finalRationale")
+
+    dimension_scores = payload.get("dimensionScores")
+    if not isinstance(dimension_scores, dict):
+        missing.append("dimensionScores")
+    else:
+        for key in ("logic", "evidence", "rebuttal", "clarity"):
+            if not isinstance(dimension_scores.get(key), (int, float)):
+                missing.append(f"dimensionScores.{key}")
+
+    for key in ("verdictEvidenceRefs", "phaseRollupSummary", "retrievalSnapshotRollup"):
+        if not isinstance(payload.get(key), list):
+            missing.append(key)
+
+    winner_first = str(payload.get("winnerFirst") or "").strip().lower()
+    winner_second = str(payload.get("winnerSecond") or "").strip().lower()
+    if winner_first not in {"pro", "con", "draw"}:
+        missing.append("winnerFirst")
+    if winner_second not in {"pro", "con", "draw"}:
+        missing.append("winnerSecond")
+
+    if not isinstance(payload.get("rejudgeTriggered"), bool):
+        missing.append("rejudgeTriggered")
+    if not isinstance(payload.get("needsDrawVote"), bool):
+        missing.append("needsDrawVote")
+    if not isinstance(payload.get("errorCodes"), list):
+        missing.append("errorCodes")
+    if not isinstance(payload.get("degradationLevel"), int):
+        missing.append("degradationLevel")
+
+    judge_trace = payload.get("judgeTrace")
+    if not isinstance(judge_trace, dict):
+        missing.append("judgeTrace")
+    else:
+        trace_id = str(judge_trace.get("traceId") or "").strip()
+        if not trace_id:
+            missing.append("judgeTrace.traceId")
+    return missing
+
+
 def _build_final_report_payload(
     *,
     runtime: AppRuntime,
@@ -1288,6 +1341,64 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             request=request,
         )
+        contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
+        if contract_missing_fields:
+            error_text = (
+                "final_contract_violation: missing_fields="
+                + ",".join(contract_missing_fields[:12])
+            )
+            alert = runtime.trace_store.upsert_audit_alert(
+                job_id=request.job_id,
+                scope_id=request.scope_id,
+                trace_id=request.trace_id,
+                alert_type="final_contract_violation",
+                severity="critical",
+                title="AI Judge Final Contract Violation",
+                message=error_text,
+                details={
+                    "dispatchType": "final",
+                    "sessionId": request.session_id,
+                    "phaseRange": {
+                        "startNo": request.phase_start_no,
+                        "endNo": request.phase_end_no,
+                    },
+                    "missingFields": contract_missing_fields,
+                    "errorCode": "phase_artifact_incomplete",
+                },
+            )
+            runtime.trace_store.save_dispatch_receipt(
+                dispatch_type="final",
+                job_id=request.job_id,
+                scope_id=request.scope_id,
+                session_id=request.session_id,
+                trace_id=request.trace_id,
+                idempotency_key=request.idempotency_key,
+                rubric_version=request.rubric_version,
+                judge_policy_version=request.judge_policy_version,
+                topic_domain=request.topic_domain,
+                retrieval_profile=None,
+                phase_no=None,
+                phase_start_no=request.phase_start_no,
+                phase_end_no=request.phase_end_no,
+                message_start_id=None,
+                message_end_id=None,
+                message_count=None,
+                status="callback_failed",
+                request=request_payload,
+                response={
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "blocked",
+                    "callbackError": error_text,
+                    "auditAlertIds": [alert.alert_id],
+                    "reportPayload": final_report_payload,
+                },
+            )
+            runtime.trace_store.clear_idempotency(request.idempotency_key)
+            raise HTTPException(
+                status_code=502,
+                detail="final_contract_blocked: missing_critical_fields",
+            )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
                 runtime=runtime,
