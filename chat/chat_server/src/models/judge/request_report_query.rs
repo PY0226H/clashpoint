@@ -42,6 +42,48 @@ fn detect_ops_review_abnormal_flags(item: &JudgeReviewOpsItem) -> Vec<String> {
     flags
 }
 
+fn extract_dispatch_error_code(error_message: &str) -> Option<String> {
+    let trimmed = error_message.trim();
+    let coded = trimmed.strip_prefix('[')?;
+    let end = coded.find(']')?;
+    let code = coded[..end].trim();
+    if code.is_empty() {
+        None
+    } else {
+        Some(code.to_string())
+    }
+}
+
+fn detect_contract_violation_blocked(error_message: &str) -> bool {
+    let normalized = error_message.to_ascii_lowercase();
+    normalized.contains("final_contract_blocked")
+        || normalized.contains("final_contract_violation")
+        || normalized.contains("phase_artifact_incomplete")
+}
+
+fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDispatchDiagnostics {
+    let error_code = row
+        .error_message
+        .as_deref()
+        .and_then(extract_dispatch_error_code);
+    let contract_violation_blocked = row
+        .error_message
+        .as_deref()
+        .map(detect_contract_violation_blocked)
+        .unwrap_or(false);
+    JudgeFinalDispatchDiagnostics {
+        final_job_id: row.id as u64,
+        status: row.status,
+        phase_start_no: row.phase_start_no,
+        phase_end_no: row.phase_end_no,
+        dispatch_attempts: row.dispatch_attempts,
+        last_dispatch_at: row.last_dispatch_at,
+        error_message: row.error_message,
+        error_code,
+        contract_violation_blocked,
+    }
+}
+
 impl AppState {
     pub async fn list_judge_reviews_by_owner(
         &self,
@@ -188,6 +230,25 @@ impl AppState {
             FROM judge_jobs
             WHERE session_id = $1
             ORDER BY requested_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id as i64)
+        .fetch_optional(&self.pool)
+        .await?;
+        let latest_final_job: Option<JudgeFinalJobSnapshotRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                status,
+                phase_start_no,
+                phase_end_no,
+                dispatch_attempts,
+                last_dispatch_at,
+                error_message
+            FROM judge_final_jobs
+            WHERE session_id = $1
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
@@ -363,15 +424,24 @@ impl AppState {
         };
 
         let final_report_v3 = final_report_v3.map(map_final_report_detail);
+        let final_dispatch_diagnostics = latest_final_job.map(map_final_dispatch_diagnostics);
 
         let status = if report.is_some() || final_report_v3.is_some() {
             "ready".to_string()
+        } else if final_dispatch_diagnostics
+            .as_ref()
+            .map(|item| item.status.as_str() == "failed")
+            .unwrap_or(false)
+        {
+            "failed".to_string()
         } else if let Some(job) = latest_job.as_ref() {
             if job.status == "failed" {
                 "failed".to_string()
             } else {
                 "pending".to_string()
             }
+        } else if final_dispatch_diagnostics.is_some() {
+            "pending".to_string()
         } else {
             "absent".to_string()
         };
@@ -386,6 +456,7 @@ impl AppState {
                 rejudge_triggered: job.rejudge_triggered,
                 requested_at: job.requested_at,
             }),
+            final_dispatch_diagnostics,
             report,
             final_report_v3,
         })

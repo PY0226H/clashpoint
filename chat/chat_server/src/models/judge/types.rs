@@ -121,6 +121,20 @@ pub struct JudgeFinalReportDetail {
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct JudgeFinalDispatchDiagnostics {
+    pub final_job_id: u64,
+    pub status: String,
+    pub phase_start_no: i32,
+    pub phase_end_no: i32,
+    pub dispatch_attempts: i32,
+    pub last_dispatch_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub error_code: Option<String>,
+    pub contract_violation_blocked: bool,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JudgeVerdictEvidenceItem {
     pub message_id: u64,
     pub side: String,
@@ -136,6 +150,7 @@ pub struct GetJudgeReportOutput {
     pub session_id: u64,
     pub status: String,
     pub latest_job: Option<JudgeJobSnapshot>,
+    pub final_dispatch_diagnostics: Option<JudgeFinalDispatchDiagnostics>,
     pub report: Option<JudgeReportDetail>,
     pub final_report_v3: Option<JudgeFinalReportDetail>,
 }

@@ -56,6 +56,41 @@ async fn seed_dispatched_final_job(
     Ok(row.0)
 }
 
+async fn seed_failed_final_job(
+    state: &AppState,
+    session_id: i64,
+    phase_start_no: i32,
+    phase_end_no: i32,
+    error_message: &str,
+) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_final_jobs(
+            session_id, phase_start_no, phase_end_no,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, $2, $3,
+            'failed', $4, $5, 'v3', 'v3-default',
+            'default', 2, NOW(), $6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(phase_start_no)
+    .bind(phase_end_no)
+    .bind(format!("trace-final-failed-{session_id}-{phase_end_no}"))
+    .bind(format!(
+        "judge_final_failed:{session_id}:{phase_start_no}:{phase_end_no}:v3:v3-default"
+    ))
+    .bind(error_message)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.0)
+}
+
 #[tokio::test]
 async fn request_judge_job_should_create_running_job_with_default_style() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -393,6 +428,55 @@ async fn get_latest_judge_report_should_return_v3_final_report_when_available() 
     assert_eq!(final_report.degradation_level, 1);
     assert_eq!(final_report.verdict_evidence_refs.len(), 1);
     assert_eq!(final_report.phase_rollup_summary.len(), 1);
+    let diagnostics = ret
+        .final_dispatch_diagnostics
+        .expect("final dispatch diagnostics should exist");
+    assert_eq!(diagnostics.final_job_id, final_job_id as u64);
+    assert_eq!(diagnostics.status, "succeeded");
+    assert!(!diagnostics.contract_violation_blocked);
+    assert!(diagnostics.error_message.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_surface_final_contract_block_diagnostics() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let user = state.find_user_by_id(1).await?.expect("user should exist");
+    let final_job_id = seed_failed_final_job(
+        &state,
+        session_id,
+        1,
+        3,
+        "[http_5xx] final dispatch request failed: status=502 Bad Gateway, body={\"detail\":\"final_contract_blocked: missing_critical_fields\"}",
+    )
+    .await?;
+
+    let ret = state
+        .get_latest_judge_report(
+            session_id as u64,
+            &user,
+            GetJudgeReportQuery {
+                max_stage_count: None,
+                stage_offset: None,
+            },
+        )
+        .await?;
+    assert_eq!(ret.status, "failed");
+    assert!(ret.report.is_none());
+    assert!(ret.final_report_v3.is_none());
+
+    let diagnostics = ret
+        .final_dispatch_diagnostics
+        .expect("final dispatch diagnostics should exist");
+    assert_eq!(diagnostics.final_job_id, final_job_id as u64);
+    assert_eq!(diagnostics.status, "failed");
+    assert_eq!(diagnostics.error_code.as_deref(), Some("http_5xx"));
+    assert!(diagnostics.contract_violation_blocked);
+    assert!(diagnostics
+        .error_message
+        .unwrap_or_default()
+        .contains("final_contract_blocked"));
     Ok(())
 }
 
