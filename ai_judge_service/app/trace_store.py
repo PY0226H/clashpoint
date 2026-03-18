@@ -455,6 +455,16 @@ class TraceStoreProtocol(Protocol):
     ) -> DispatchReceiptRecord | None:
         ...
 
+    def list_dispatch_receipts(
+        self,
+        *,
+        dispatch_type: str,
+        session_id: int | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[DispatchReceiptRecord]:
+        ...
+
 
 class TraceStore(TraceStoreProtocol):
     """In-memory trace + idempotency + topic memory store.
@@ -1061,6 +1071,40 @@ class TraceStore(TraceStoreProtocol):
             return self._dispatch_receipts.get(
                 self._dispatch_receipt_key(normalized_dispatch_type, max(0, job_id))
             )
+
+    def list_dispatch_receipts(
+        self,
+        *,
+        dispatch_type: str,
+        session_id: int | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[DispatchReceiptRecord]:
+        normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
+        if not normalized_dispatch_type:
+            return []
+        cap = max(1, min(1000, int(limit)))
+        norm_status = _normalize_token(status)
+        now = _utcnow()
+        with self._lock:
+            self._prune_locked(now)
+            rows = sorted(
+                self._dispatch_receipts.values(),
+                key=lambda item: item.updated_at,
+                reverse=True,
+            )
+            out: list[DispatchReceiptRecord] = []
+            for row in rows:
+                if row.dispatch_type != normalized_dispatch_type:
+                    continue
+                if session_id is not None and row.session_id != int(session_id):
+                    continue
+                if norm_status and _normalize_token(row.status) != norm_status:
+                    continue
+                out.append(row)
+                if len(out) >= cap:
+                    break
+            return out
 
 
 class RedisTraceStore(TraceStoreProtocol):
@@ -2036,6 +2080,46 @@ class RedisTraceStore(TraceStoreProtocol):
         if payload is None:
             return None
         return self._deserialize_dispatch_receipt(payload)
+
+    def list_dispatch_receipts(
+        self,
+        *,
+        dispatch_type: str,
+        session_id: int | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[DispatchReceiptRecord]:
+        normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
+        if not normalized_dispatch_type:
+            return []
+
+        cap = max(1, min(1000, int(limit)))
+        norm_status = _normalize_token(status)
+        target_session_id = int(session_id) if session_id is not None else None
+
+        pattern = f"{self._key_prefix}:dispatch:{normalized_dispatch_type}:*"
+        out: list[DispatchReceiptRecord] = []
+        try:
+            iterator = self._redis.scan_iter(match=pattern, count=max(100, cap * 2))
+        except Exception:
+            return []
+        for raw in iterator:
+            key = _decode_blob(raw)
+            if not key:
+                continue
+            payload = self._read_json(key)
+            if payload is None:
+                continue
+            row = self._deserialize_dispatch_receipt(payload)
+            if row is None:
+                continue
+            if target_session_id is not None and row.session_id != target_session_id:
+                continue
+            if norm_status and _normalize_token(row.status) != norm_status:
+                continue
+            out.append(row)
+        out.sort(key=lambda item: item.updated_at, reverse=True)
+        return out[:cap]
 
 
 def _build_redis_client(*, url: str, pool_size: int) -> Any | None:

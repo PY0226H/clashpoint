@@ -529,6 +529,145 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("finalRationale", final_callback_calls[0][1])
         self.assertIn("dimensionScores", final_callback_calls[0][1])
 
+    async def test_v3_final_dispatch_should_aggregate_phase_payloads_from_receipts(self) -> None:
+        settings = _build_settings(ai_internal_key="k4fa")
+        phase_request_1 = _build_phase_request()
+        phase_request_2_data = _build_phase_request().model_dump(mode="json")
+        phase_request_2_data.update(
+            {
+                "job_id": 102,
+                "phase_no": 2,
+                "message_start_id": 3,
+                "message_end_id": 4,
+                "messages": [
+                    {
+                        "message_id": 3,
+                        "side": "pro",
+                        "content": "pro message phase 2",
+                        "created_at": datetime.now(timezone.utc),
+                        "speaker_tag": "pro_2",
+                    },
+                    {
+                        "message_id": 4,
+                        "side": "con",
+                        "content": "con message phase 2",
+                        "created_at": datetime.now(timezone.utc),
+                        "speaker_tag": "con_2",
+                    },
+                ],
+                "trace_id": "trace-phase-102",
+                "idempotency_key": "phase-key-102",
+            }
+        )
+        phase_request_2 = PhaseDispatchRequest.model_validate(phase_request_2_data)
+        final_request = _build_final_request().model_copy(
+            update={
+                "job_id": 303,
+                "trace_id": "trace-final-303",
+                "idempotency_key": "final-key-303",
+            }
+        )
+        final_callback_calls: list[tuple[int, dict]] = []
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_callback_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=_noop_callback_report,
+            callback_failed_impl=_noop_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=fake_callback_final_report,
+        )
+        app = create_app(runtime)
+        phase_route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
+        )
+        final_route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
+        )
+
+        first_phase = await phase_route.endpoint(request=phase_request_1, x_ai_internal_key="k4fa")
+        second_phase = await phase_route.endpoint(request=phase_request_2, x_ai_internal_key="k4fa")
+        final_resp = await final_route.endpoint(request=final_request, x_ai_internal_key="k4fa")
+
+        self.assertTrue(first_phase["accepted"])
+        self.assertTrue(second_phase["accepted"])
+        self.assertTrue(final_resp["accepted"])
+        self.assertEqual(len(final_callback_calls), 1)
+
+        payload = final_callback_calls[0][1]
+        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-final-a9a10-rollup-v2")
+        self.assertEqual(payload["judgeTrace"]["phaseCountExpected"], 2)
+        self.assertEqual(payload["judgeTrace"]["phaseCountUsed"], 2)
+        self.assertEqual(payload["judgeTrace"]["missingPhaseNos"], [])
+        self.assertEqual(len(payload["phaseRollupSummary"]), 2)
+        self.assertIn(payload["winner"], {"pro", "con", "draw"})
+        self.assertIn("winnerFirst", payload)
+        self.assertIn("winnerSecond", payload)
+        self.assertEqual(set(payload["dimensionScores"].keys()), {"logic", "evidence", "rebuttal", "clarity"})
+        self.assertGreaterEqual(len(payload["verdictEvidenceRefs"]), 1)
+        self.assertEqual(payload["errorCodes"], [])
+
+    async def test_v3_final_dispatch_should_lock_facts_when_display_style_rewrite_enabled(self) -> None:
+        settings = _build_settings(ai_internal_key="k4fd", judge_style_mode="entertaining")
+        phase_request = _build_phase_request().model_copy(
+            update={
+                "job_id": 131,
+                "trace_id": "trace-phase-131",
+                "idempotency_key": "phase-key-131",
+            }
+        )
+        final_request = _build_final_request().model_copy(
+            update={
+                "job_id": 331,
+                "phase_end_no": 1,
+                "trace_id": "trace-final-331",
+                "idempotency_key": "final-key-331",
+            }
+        )
+        final_callback_calls: list[tuple[int, dict]] = []
+
+        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
+            return _FakeReport()
+
+        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_callback_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=settings,
+            build_report_by_runtime_fn=fake_runtime_builder,
+            callback_report_impl=_noop_callback_report,
+            callback_failed_impl=_noop_callback_failed,
+            callback_phase_report_impl=_noop_callback_report,
+            callback_final_report_impl=fake_callback_final_report,
+        )
+        app = create_app(runtime)
+        phase_route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
+        )
+        final_route = next(
+            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
+        )
+
+        await phase_route.endpoint(request=phase_request, x_ai_internal_key="k4fd")
+        await final_route.endpoint(request=final_request, x_ai_internal_key="k4fd")
+
+        self.assertEqual(len(final_callback_calls), 1)
+        payload = final_callback_calls[0][1]
+        self.assertTrue(payload["finalRationale"].startswith("Final buzzer:"))
+        self.assertEqual(payload["judgeTrace"]["displayStyleMode"], "entertaining")
+        self.assertIn("A9 final aggregated", payload["judgeTrace"]["a9RationaleRaw"])
+        self.assertEqual(payload["judgeTrace"]["factLock"]["winner"], payload["winner"])
+        self.assertEqual(payload["judgeTrace"]["factLock"]["proScore"], payload["proScore"])
+        self.assertEqual(payload["judgeTrace"]["factLock"]["conScore"], payload["conScore"])
+        ref_types = {str(item.get("type")) for item in payload["verdictEvidenceRefs"]}
+        self.assertTrue({"agent2_hit", "agent2_miss"} & ref_types)
+
     async def test_v3_phase_dispatch_should_retry_callback_and_fail_open_for_worker_retry(self) -> None:
         settings = _build_settings(
             ai_internal_key="k4pf",
