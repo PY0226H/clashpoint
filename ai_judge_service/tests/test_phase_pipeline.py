@@ -141,8 +141,9 @@ class PhasePipelineTests(unittest.TestCase):
             self.assertIn("conflict", item)
 
         self.assertEqual(set(payload["promptHashes"].keys()), {"a2", "a3", "a4", "a5", "a6", "a7"})
-        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-phase-m4-summary-llm-v1")
+        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-phase-m5-agent2-bidirectional-v1")
         self.assertIn("retrievalDiagnostics", payload["judgeTrace"])
+        self.assertIn("agent2Audit", payload["judgeTrace"])
 
     def test_build_phase_report_payload_should_mark_conflicts_and_dedupe_after_query_fusion(self) -> None:
         request = _build_phase_request_for_pipeline()
@@ -204,6 +205,50 @@ class PhasePipelineTests(unittest.TestCase):
             payload["judgeTrace"]["retrievalDiagnostics"]["pro"]["queryCount"],
             1,
         )
+
+    def test_build_phase_report_payload_should_run_bidirectional_agent2_with_llm(self) -> None:
+        request = _build_phase_request_for_pipeline()
+        settings = _build_settings(
+            provider="openai",
+            openai_api_key="test-key",
+            rag_enabled=False,
+            rag_knowledge_file="",
+            rag_source_whitelist=(),
+        )
+        mocked = AsyncMock(
+            side_effect=[
+                {"summary_text": "正方总结", "message_ids": [1, 3]},
+                {"summary_text": "反方总结", "message_ids": [2, 4]},
+                {"ideal_rebuttal": "理想反方反驳", "key_points": ["高压崩盘", "转型风险"]},
+                {
+                    "score": 78,
+                    "hit_points": ["高压崩盘"],
+                    "miss_points": ["转型风险"],
+                    "rationale": "命中部分核心点",
+                },
+                {"ideal_rebuttal": "理想正方反驳", "key_points": ["运营细节", "经济稳定"]},
+                {
+                    "score": 66,
+                    "hit_points": ["运营细节"],
+                    "miss_points": ["经济稳定"],
+                    "rationale": "命中一个关键点",
+                },
+            ]
+        )
+        with patch("app.phase_pipeline.call_openai_json", mocked):
+            payload = asyncio.run(
+                build_phase_report_payload(
+                    request=request,
+                    settings=settings,
+                )
+            )
+
+        self.assertEqual(payload["agent2Score"]["pro"], 66.0)
+        self.assertEqual(payload["agent2Score"]["con"], 78.0)
+        self.assertEqual(payload["judgeTrace"]["agent2Audit"]["paths"]["pro"]["source"], "llm")
+        self.assertEqual(payload["judgeTrace"]["agent2Audit"]["paths"]["con"]["source"], "llm")
+        self.assertAlmostEqual(payload["agent3WeightedScore"]["w1"], 0.35, places=2)
+        self.assertAlmostEqual(payload["agent3WeightedScore"]["w2"], 0.65, places=2)
 
     def test_build_phase_report_payload_should_fallback_when_summary_coverage_low(self) -> None:
         request = _build_phase_request_for_pipeline()

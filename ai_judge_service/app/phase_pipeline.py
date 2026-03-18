@@ -27,6 +27,7 @@ from .settings import Settings
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 SUMMARY_PROMPT_VERSION = "v3.a2a3.summary.v1"
+AGENT2_PROMPT_VERSION = "v3.a6a7.bidirectional.v1"
 DEFAULT_SUMMARY_COVERAGE_MIN_RATIO = 1.0
 MAX_SUMMARY_TEXT_CHARS = 8000
 MAX_SUMMARY_MESSAGE_CHARS = 640
@@ -94,6 +95,20 @@ class SideRetrievalResult:
     requested_backend: str
     effective_backend: str
     backend_fallback_reason: str | None
+    error_codes: list[str]
+
+
+@dataclass(frozen=True)
+class Agent2PathResult:
+    target_side: str
+    score: float
+    hit_points: list[str]
+    miss_points: list[str]
+    rationale: str
+    ideal_rebuttal: str
+    key_points: list[str]
+    source: str
+    fallback_reason: str | None
     error_codes: list[str]
 
 
@@ -681,6 +696,463 @@ def _retrieve_side_with_query_plan(
     )
 
 
+def _build_llm_cfg(settings: Settings, *, temperature: float) -> _SummaryConfig:
+    return _SummaryConfig(
+        api_key=settings.openai_api_key,
+        model=settings.openai_model,
+        base_url=settings.openai_base_url,
+        timeout_secs=settings.openai_timeout_secs,
+        temperature=min(max(temperature, 0.0), 0.5),
+        max_retries=settings.openai_max_retries,
+    )
+
+
+def _normalize_text_list(raw: Any, *, limit: int = 8, max_chars: int = 180) -> list[str]:
+    values = raw if isinstance(raw, list) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        normalized = " ".join(text.split())[:max_chars]
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(normalized)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _extract_heuristic_points(
+    *,
+    source_summary: dict[str, Any],
+    source_bundle: dict[str, Any],
+    limit: int = 6,
+) -> list[str]:
+    candidates: list[str] = []
+    summary_text = str(source_summary.get("text") or "").strip()
+    if summary_text:
+        for piece in re.split(r"[。！？\n;；]+", summary_text):
+            item = piece.strip()
+            if item:
+                candidates.append(item)
+    for item in source_bundle.get("items") or []:
+        title = str((item or {}).get("title") or "").strip()
+        snippet = str((item or {}).get("snippet") or "").strip()
+        if title:
+            candidates.append(title)
+        if snippet:
+            candidates.append(snippet[:120])
+    return _normalize_text_list(candidates, limit=limit, max_chars=160)
+
+
+def _score_hit_points(
+    *,
+    key_points: list[str],
+    target_summary: dict[str, Any],
+    target_messages: list[PhaseDispatchMessage],
+) -> tuple[float, list[str], list[str], float]:
+    normalized_points = _normalize_text_list(key_points, limit=8, max_chars=180)
+    if not normalized_points:
+        return 50.0, [], [], 0.0
+
+    target_text = str(target_summary.get("text") or "")
+    target_text += "\n" + "\n".join(msg.content for msg in target_messages)
+    corpus_tokens = set(_tokenize(target_text))
+
+    hit_points: list[str] = []
+    miss_points: list[str] = []
+    for point in normalized_points:
+        tokens = set(_tokenize(point))
+        if not tokens:
+            miss_points.append(point)
+            continue
+        overlap_ratio = len(tokens & corpus_tokens) / float(max(1, len(tokens)))
+        if overlap_ratio >= 0.2:
+            hit_points.append(point)
+        else:
+            miss_points.append(point)
+    hit_ratio = len(hit_points) / float(max(1, len(normalized_points)))
+    score = round(_clamp(40.0 + hit_ratio * 60.0, 0.0, 100.0), 2)
+    return score, hit_points, miss_points, hit_ratio
+
+
+def _build_agent2_a6_system_prompt(*, source_side: str, target_side: str, topic_domain: str) -> str:
+    return (
+        "你是顶级辩手。"
+        "你的任务是基于给定素材，为对方阵营生成理想反驳。"
+        "仅可使用输入素材，不得编造新事实。"
+        "输出JSON字段：ideal_rebuttal, key_points。"
+        f"source_side={source_side}, target_side={target_side}, topic_domain={topic_domain}。"
+    )
+
+
+def _build_agent2_a6_user_prompt(
+    *,
+    source_summary: dict[str, Any],
+    source_messages: list[PhaseDispatchMessage],
+    source_bundle: dict[str, Any],
+) -> str:
+    message_lines = "\n".join(
+        f"[{msg.message_id}] {str(msg.content or '').strip()[:200]}"
+        for msg in source_messages[-6:]
+    )
+    retrieval_lines = "\n".join(
+        f"- {str((item or {}).get('title') or '')}: {str((item or {}).get('snippet') or '')[:140]}"
+        for item in (source_bundle.get("items") or [])[:6]
+    )
+    return (
+        "请为对方阵营生成理想反驳答案，并提炼关键点（3-8条）。\n"
+        "要求：\n"
+        "1) 不得引入输入之外的事实。\n"
+        "2) key_points必须可用于后续命中评估。\n"
+        "3) 仅输出JSON。\n\n"
+        f"source_summary:\n{str(source_summary.get('text') or '')[:1800]}\n\n"
+        f"source_messages:\n{message_lines}\n\n"
+        f"source_retrieval:\n{retrieval_lines}"
+    )
+
+
+def _build_agent2_a7_system_prompt(*, target_side: str) -> str:
+    return (
+        "你是辩论命中度评估器。"
+        "根据理想反驳与真实内容比较，输出命中分。"
+        "输出JSON字段：score, hit_points, miss_points, rationale。"
+        f"target_side={target_side}。"
+    )
+
+
+def _build_agent2_a7_user_prompt(
+    *,
+    ideal_rebuttal: str,
+    key_points: list[str],
+    target_summary: dict[str, Any],
+    target_messages: list[PhaseDispatchMessage],
+) -> str:
+    message_lines = "\n".join(
+        f"[{msg.message_id}] {str(msg.content or '').strip()[:200]}"
+        for msg in target_messages[-6:]
+    )
+    key_points_text = "\n".join(f"- {item}" for item in key_points)
+    return (
+        "请评估真实内容命中了理想反驳多少关键点，并给出0-100分。\n"
+        "要求：\n"
+        "1) score范围0到100。\n"
+        "2) hit_points/miss_points 只写关键点短语。\n"
+        "3) 仅输出JSON。\n\n"
+        f"ideal_rebuttal:\n{ideal_rebuttal[:1800]}\n\n"
+        f"key_points:\n{key_points_text}\n\n"
+        f"target_summary:\n{str(target_summary.get('text') or '')[:1800]}\n\n"
+        f"target_messages:\n{message_lines}"
+    )
+
+
+def _build_agent2_path_rationale(
+    *,
+    target_side: str,
+    hit_ratio: float,
+    source: str,
+    fallback_reason: str | None = None,
+) -> str:
+    ratio = round(hit_ratio, 4)
+    base = (
+        f"agent2 path for {target_side} uses ideal rebuttal hit scoring; "
+        f"hit_ratio={ratio}, source={source}."
+    )
+    if fallback_reason:
+        return f"{base} fallback_reason={fallback_reason}."
+    return base
+
+
+def _build_agent2_heuristic_path(
+    *,
+    target_side: str,
+    source_summary: dict[str, Any],
+    source_bundle: dict[str, Any],
+    target_summary: dict[str, Any],
+    target_messages: list[PhaseDispatchMessage],
+    source: str,
+    fallback_reason: str | None,
+    error_codes: list[str],
+) -> Agent2PathResult:
+    key_points = _extract_heuristic_points(
+        source_summary=source_summary,
+        source_bundle=source_bundle,
+        limit=6,
+    )
+    score, hit_points, miss_points, hit_ratio = _score_hit_points(
+        key_points=key_points,
+        target_summary=target_summary,
+        target_messages=target_messages,
+    )
+    return Agent2PathResult(
+        target_side=target_side,
+        score=score,
+        hit_points=hit_points,
+        miss_points=miss_points,
+        rationale=_build_agent2_path_rationale(
+            target_side=target_side,
+            hit_ratio=hit_ratio,
+            source=source,
+            fallback_reason=fallback_reason,
+        ),
+        ideal_rebuttal="; ".join(key_points)[:1200],
+        key_points=key_points,
+        source=source,
+        fallback_reason=fallback_reason,
+        error_codes=error_codes,
+    )
+
+
+async def _run_agent2_path(
+    *,
+    topic_domain: str,
+    source_side: str,
+    target_side: str,
+    source_summary: dict[str, Any],
+    source_messages: list[PhaseDispatchMessage],
+    source_bundle: dict[str, Any],
+    target_summary: dict[str, Any],
+    target_messages: list[PhaseDispatchMessage],
+    settings: Settings,
+) -> Agent2PathResult:
+    if not should_use_openai(settings.provider, settings.openai_api_key):
+        return _build_agent2_heuristic_path(
+            target_side=target_side,
+            source_summary=source_summary,
+            source_bundle=source_bundle,
+            target_summary=target_summary,
+            target_messages=target_messages,
+            source="heuristic",
+            fallback_reason="provider_disabled_or_missing_key",
+            error_codes=[],
+        )
+
+    cfg_a6 = _build_llm_cfg(settings, temperature=0.2)
+    cfg_a7 = _build_llm_cfg(settings, temperature=0.1)
+    try:
+        a6_raw = await call_openai_json(
+            cfg=cfg_a6,
+            system_prompt=_build_agent2_a6_system_prompt(
+                source_side=source_side,
+                target_side=target_side,
+                topic_domain=topic_domain,
+            ),
+            user_prompt=_build_agent2_a6_user_prompt(
+                source_summary=source_summary,
+                source_messages=source_messages,
+                source_bundle=source_bundle,
+            ),
+        )
+        ideal_rebuttal = str(
+            a6_raw.get("ideal_rebuttal")
+            or a6_raw.get("idealRebuttal")
+            or a6_raw.get("rebuttal")
+            or ""
+        ).strip()
+        key_points = _normalize_text_list(
+            a6_raw.get("key_points") or a6_raw.get("keyPoints"),
+            limit=8,
+        )
+        if not key_points:
+            key_points = _extract_heuristic_points(
+                source_summary=source_summary,
+                source_bundle=source_bundle,
+                limit=6,
+            )
+        if not ideal_rebuttal:
+            ideal_rebuttal = "; ".join(key_points)[:1200]
+
+        a7_raw = await call_openai_json(
+            cfg=cfg_a7,
+            system_prompt=_build_agent2_a7_system_prompt(target_side=target_side),
+            user_prompt=_build_agent2_a7_user_prompt(
+                ideal_rebuttal=ideal_rebuttal,
+                key_points=key_points,
+                target_summary=target_summary,
+                target_messages=target_messages,
+            ),
+        )
+        score_raw = a7_raw.get("score") or a7_raw.get("hit_score") or a7_raw.get("hitScore")
+        score = _clamp(float(score_raw), 0.0, 100.0) if score_raw is not None else None
+        hit_points = _normalize_text_list(
+            a7_raw.get("hit_points") or a7_raw.get("hitPoints"),
+            limit=8,
+        )
+        miss_points = _normalize_text_list(
+            a7_raw.get("miss_points") or a7_raw.get("missPoints"),
+            limit=8,
+        )
+        rationale = str(a7_raw.get("rationale") or "").strip()
+
+        heuristic_score, heuristic_hit, heuristic_miss, hit_ratio = _score_hit_points(
+            key_points=key_points,
+            target_summary=target_summary,
+            target_messages=target_messages,
+        )
+        if score is None:
+            score = heuristic_score
+        if not hit_points and not miss_points:
+            hit_points = heuristic_hit
+            miss_points = heuristic_miss
+        if not rationale:
+            rationale = _build_agent2_path_rationale(
+                target_side=target_side,
+                hit_ratio=hit_ratio,
+                source="llm",
+            )
+
+        return Agent2PathResult(
+            target_side=target_side,
+            score=round(float(score), 2),
+            hit_points=hit_points,
+            miss_points=miss_points,
+            rationale=rationale[:2000],
+            ideal_rebuttal=ideal_rebuttal[:2000],
+            key_points=key_points,
+            source="llm",
+            fallback_reason=None,
+            error_codes=[],
+        )
+    except Exception as err:
+        return _build_agent2_heuristic_path(
+            target_side=target_side,
+            source_summary=source_summary,
+            source_bundle=source_bundle,
+            target_summary=target_summary,
+            target_messages=target_messages,
+            source="heuristic",
+            fallback_reason="llm_path_failed",
+            error_codes=[
+                f"agent2_path_failed_{target_side}",
+                classify_openai_failure(str(err)),
+            ],
+        )
+
+
+def _fuse_agent3_score(
+    *,
+    agent1_score: dict[str, Any],
+    agent2_score: dict[str, Any],
+    w1: float,
+    w2: float,
+) -> dict[str, Any]:
+    return {
+        "pro": round(_clamp(agent1_score["pro"] * w1 + agent2_score["pro"] * w2, 0.0, 100.0), 2),
+        "con": round(_clamp(agent1_score["con"] * w1 + agent2_score["con"] * w2, 0.0, 100.0), 2),
+        "w1": round(w1, 4),
+        "w2": round(w2, 4),
+    }
+
+
+async def _build_agent2_bidirectional_score(
+    *,
+    topic_domain: str,
+    pro_summary: dict[str, Any],
+    con_summary: dict[str, Any],
+    pro_messages: list[PhaseDispatchMessage],
+    con_messages: list[PhaseDispatchMessage],
+    pro_bundle: dict[str, Any],
+    con_bundle: dict[str, Any],
+    baseline_agent2_score: dict[str, Any],
+    settings: Settings,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    con_path, pro_path = await asyncio.gather(
+        _run_agent2_path(
+            topic_domain=topic_domain,
+            source_side="pro",
+            target_side="con",
+            source_summary=pro_summary,
+            source_messages=pro_messages,
+            source_bundle=pro_bundle,
+            target_summary=con_summary,
+            target_messages=con_messages,
+            settings=settings,
+        ),
+        _run_agent2_path(
+            topic_domain=topic_domain,
+            source_side="con",
+            target_side="pro",
+            source_summary=con_summary,
+            source_messages=con_messages,
+            source_bundle=con_bundle,
+            target_summary=pro_summary,
+            target_messages=pro_messages,
+            settings=settings,
+        ),
+    )
+
+    error_codes: list[str] = []
+    error_codes.extend(con_path.error_codes)
+    error_codes.extend(pro_path.error_codes)
+
+    pro_failed = any(code.startswith("agent2_path_failed_pro") for code in pro_path.error_codes)
+    con_failed = any(code.startswith("agent2_path_failed_con") for code in con_path.error_codes)
+
+    pro_score = pro_path.score if not pro_failed else float(baseline_agent2_score["pro"])
+    con_score = con_path.score if not con_failed else float(baseline_agent2_score["con"])
+    if pro_failed or con_failed:
+        error_codes.append("agent2_partial_degraded")
+    if pro_failed and con_failed:
+        error_codes.append("agent2_both_paths_failed")
+
+    hit_items = [f"pro:{item}" for item in pro_path.hit_points[:4]]
+    hit_items.extend(f"con:{item}" for item in con_path.hit_points[:4])
+    miss_items = [f"pro:{item}" for item in pro_path.miss_points[:4]]
+    miss_items.extend(f"con:{item}" for item in con_path.miss_points[:4])
+
+    agent2_score = {
+        "pro": round(float(pro_score), 2),
+        "con": round(float(con_score), 2),
+        "hitItems": hit_items[:8],
+        "missItems": miss_items[:8],
+        "rationale": (
+            "agent2 bidirectional paths evaluated ideal rebuttal hit score."
+            f" pro_source={pro_path.source}, con_source={con_path.source}"
+        ),
+    }
+    audit = {
+        "promptVersion": AGENT2_PROMPT_VERSION,
+        "paths": {
+            "pro": {
+                "sourceSide": "con",
+                "targetSide": "pro",
+                "source": pro_path.source,
+                "fallbackReason": pro_path.fallback_reason,
+                "score": pro_path.score,
+                "idealRebuttal": pro_path.ideal_rebuttal,
+                "keyPoints": pro_path.key_points,
+                "hitPoints": pro_path.hit_points,
+                "missPoints": pro_path.miss_points,
+                "rationale": pro_path.rationale,
+            },
+            "con": {
+                "sourceSide": "pro",
+                "targetSide": "con",
+                "source": con_path.source,
+                "fallbackReason": con_path.fallback_reason,
+                "score": con_path.score,
+                "idealRebuttal": con_path.ideal_rebuttal,
+                "keyPoints": con_path.key_points,
+                "hitPoints": con_path.hit_points,
+                "missPoints": con_path.miss_points,
+                "rationale": con_path.rationale,
+            },
+        },
+    }
+    deduped_codes: list[str] = []
+    seen_codes: set[str] = set()
+    for code in error_codes:
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+        deduped_codes.append(code)
+    return agent2_score, audit, deduped_codes
+
+
 def _count_rebuttals(messages: list[PhaseDispatchMessage]) -> int:
     total = 0
     for msg in messages:
@@ -776,6 +1248,10 @@ def _resolve_degradation_level(
         level = max(level, 2)
     if any(code.startswith("summary_") for code in error_codes):
         level = max(level, 1)
+    if any(code.startswith("agent2_") for code in error_codes):
+        level = max(level, 1)
+    if "agent2_both_paths_failed" in error_codes:
+        level = max(level, 2)
     if any(code.startswith("rag_") for code in error_codes):
         level = max(level, 2)
     if any(code in {"judge_timeout", "model_overload"} for code in error_codes):
@@ -836,12 +1312,36 @@ async def build_phase_report_payload(
     pro_items = pro_bundle.get("items", [])
     con_items = con_bundle.get("items", [])
 
-    agent1_score, agent2_score, agent3_score = _compute_phase_scores(
+    baseline_agent1_score, baseline_agent2_score, _ = _compute_phase_scores(
         request,
         pro_messages=pro_messages,
         con_messages=con_messages,
         pro_retrieval_items=pro_items,
         con_retrieval_items=con_items,
+    )
+    agent2_score, agent2_audit, agent2_error_codes = await _build_agent2_bidirectional_score(
+        topic_domain=request.topic_domain,
+        pro_summary=pro_summary,
+        con_summary=con_summary,
+        pro_messages=pro_messages,
+        con_messages=con_messages,
+        pro_bundle=pro_bundle,
+        con_bundle=con_bundle,
+        baseline_agent2_score=baseline_agent2_score,
+        settings=settings,
+    )
+
+    if "agent2_both_paths_failed" in agent2_error_codes:
+        fusion_w1, fusion_w2 = 1.0, 0.0
+    elif "agent2_partial_degraded" in agent2_error_codes:
+        fusion_w1, fusion_w2 = 0.7, 0.3
+    else:
+        fusion_w1, fusion_w2 = 0.35, 0.65
+    agent3_score = _fuse_agent3_score(
+        agent1_score=baseline_agent1_score,
+        agent2_score=agent2_score,
+        w1=fusion_w1,
+        w2=fusion_w2,
     )
 
     error_codes: list[str] = []
@@ -849,6 +1349,7 @@ async def build_phase_report_payload(
     error_codes.extend(con_summary_result.error_codes)
     error_codes.extend(pro_retrieval_result.error_codes)
     error_codes.extend(con_retrieval_result.error_codes)
+    error_codes.extend(agent2_error_codes)
     deduped_error_codes: list[str] = []
     seen_codes: set[str] = set()
     for code in error_codes:
@@ -868,8 +1369,8 @@ async def build_phase_report_payload(
         "a2": _hash_payload(pro_summary),
         "a3": _hash_payload(con_summary),
         "a4": _hash_payload({"proQueries": pro_queries, "conQueries": con_queries}),
-        "a5": _hash_payload(agent1_score),
-        "a6": _hash_payload(agent2_score),
+        "a5": _hash_payload(baseline_agent1_score),
+        "a6": _hash_payload(agent2_audit),
         "a7": _hash_payload(agent3_score),
     }
 
@@ -883,7 +1384,7 @@ async def build_phase_report_payload(
         "conSummaryGrounded": con_summary,
         "proRetrievalBundle": pro_bundle,
         "conRetrievalBundle": con_bundle,
-        "agent1Score": agent1_score,
+        "agent1Score": baseline_agent1_score,
         "agent2Score": agent2_score,
         "agent3WeightedScore": agent3_score,
         "promptHashes": prompt_hashes,
@@ -901,9 +1402,11 @@ async def build_phase_report_payload(
         "degradationLevel": degradation_level,
         "judgeTrace": {
             "traceId": request.trace_id,
-            "pipelineVersion": "v3-phase-m4-summary-llm-v1",
+            "pipelineVersion": "v3-phase-m5-agent2-bidirectional-v1",
             "idempotencyKey": request.idempotency_key,
             "summaryPromptVersion": SUMMARY_PROMPT_VERSION,
+            "agent2PromptVersion": AGENT2_PROMPT_VERSION,
+            "agent2Audit": agent2_audit,
             "summaryAudit": {
                 "coverageThreshold": _summary_coverage_threshold(settings),
                 "pro": {
