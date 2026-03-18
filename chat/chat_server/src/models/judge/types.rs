@@ -131,7 +131,25 @@ pub struct JudgeFinalDispatchDiagnostics {
     pub error_message: Option<String>,
     pub error_code: Option<String>,
     pub contract_failure_type: Option<String>,
+    pub contract_failure_hint: Option<String>,
+    pub contract_failure_action: Option<String>,
     pub contract_violation_blocked: bool,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeFinalDispatchFailureTypeCount {
+    pub failure_type: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeFinalDispatchFailureStats {
+    pub total_failed_jobs: u32,
+    pub unknown_failed_jobs: u32,
+    #[serde(default)]
+    pub by_type: Vec<JudgeFinalDispatchFailureTypeCount>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -152,6 +170,7 @@ pub struct GetJudgeReportOutput {
     pub status: String,
     pub latest_job: Option<JudgeJobSnapshot>,
     pub final_dispatch_diagnostics: Option<JudgeFinalDispatchDiagnostics>,
+    pub final_dispatch_failure_stats: Option<JudgeFinalDispatchFailureStats>,
     pub report: Option<JudgeReportDetail>,
     pub final_report_v3: Option<JudgeFinalReportDetail>,
 }

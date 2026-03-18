@@ -436,6 +436,9 @@ async fn get_latest_judge_report_should_return_v3_final_report_when_available() 
     assert!(!diagnostics.contract_violation_blocked);
     assert!(diagnostics.error_message.is_none());
     assert!(diagnostics.contract_failure_type.is_none());
+    assert!(diagnostics.contract_failure_hint.is_none());
+    assert!(diagnostics.contract_failure_action.is_none());
+    assert!(ret.final_dispatch_failure_stats.is_none());
     Ok(())
 }
 
@@ -477,11 +480,28 @@ async fn get_latest_judge_report_should_surface_final_contract_block_diagnostics
         diagnostics.contract_failure_type.as_deref(),
         Some("final_contract_blocked")
     );
+    assert_eq!(
+        diagnostics.contract_failure_action.as_deref(),
+        Some("check_phase_artifacts_then_retry")
+    );
+    assert!(diagnostics
+        .contract_failure_hint
+        .as_deref()
+        .unwrap_or_default()
+        .contains("合同校验阻断"));
     assert!(diagnostics.contract_violation_blocked);
     assert!(diagnostics
         .error_message
         .unwrap_or_default()
         .contains("final_contract_blocked"));
+    let stats = ret
+        .final_dispatch_failure_stats
+        .expect("failure stats should exist");
+    assert_eq!(stats.total_failed_jobs, 1);
+    assert_eq!(stats.unknown_failed_jobs, 0);
+    assert_eq!(stats.by_type.len(), 1);
+    assert_eq!(stats.by_type[0].failure_type, "final_contract_blocked");
+    assert_eq!(stats.by_type[0].count, 1);
     Ok(())
 }
 
@@ -518,7 +538,17 @@ async fn get_latest_judge_report_should_map_contract_failure_type_for_accepted_f
         diagnostics.contract_failure_type.as_deref(),
         Some("response_accepted_false")
     );
+    assert_eq!(
+        diagnostics.contract_failure_action.as_deref(),
+        Some("check_ai_judge_acceptance_then_retry")
+    );
     assert!(!diagnostics.contract_violation_blocked);
+    let stats = ret
+        .final_dispatch_failure_stats
+        .expect("failure stats should exist");
+    assert_eq!(stats.total_failed_jobs, 1);
+    assert_eq!(stats.unknown_failed_jobs, 0);
+    assert_eq!(stats.by_type[0].failure_type, "response_accepted_false");
     Ok(())
 }
 
@@ -555,7 +585,64 @@ async fn get_latest_judge_report_should_map_contract_failure_type_for_job_id_mis
         diagnostics.contract_failure_type.as_deref(),
         Some("response_job_id_mismatch")
     );
+    assert_eq!(
+        diagnostics.contract_failure_action.as_deref(),
+        Some("check_dispatch_contract_alignment")
+    );
     assert!(!diagnostics.contract_violation_blocked);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_fallback_unknown_contract_failure_type_for_failed_job(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let user = state.find_user_by_id(1).await?.expect("user should exist");
+    seed_failed_final_job(
+        &state,
+        session_id,
+        1,
+        2,
+        "[http_5xx] final dispatch request failed: status=502 Bad Gateway, body={\"detail\":\"runtime_timeout_without_contract_code\"}",
+    )
+    .await?;
+
+    let ret = state
+        .get_latest_judge_report(
+            session_id as u64,
+            &user,
+            GetJudgeReportQuery {
+                max_stage_count: None,
+                stage_offset: None,
+            },
+        )
+        .await?;
+    assert_eq!(ret.status, "failed");
+    let diagnostics = ret
+        .final_dispatch_diagnostics
+        .expect("final dispatch diagnostics should exist");
+    assert_eq!(
+        diagnostics.contract_failure_type.as_deref(),
+        Some("unknown_contract_failure")
+    );
+    assert_eq!(
+        diagnostics.contract_failure_action.as_deref(),
+        Some("inspect_error_then_retry_or_escalate")
+    );
+    assert!(diagnostics
+        .contract_failure_hint
+        .as_deref()
+        .unwrap_or_default()
+        .contains("未识别"));
+
+    let stats = ret
+        .final_dispatch_failure_stats
+        .expect("failure stats should exist");
+    assert_eq!(stats.total_failed_jobs, 1);
+    assert_eq!(stats.unknown_failed_jobs, 1);
+    assert_eq!(stats.by_type[0].failure_type, "unknown_contract_failure");
+    assert_eq!(stats.by_type[0].count, 1);
     Ok(())
 }
 

@@ -2,6 +2,12 @@ use super::*;
 use crate::models::OpsPermission;
 use std::collections::HashMap;
 
+const CONTRACT_FAILURE_FINAL_BLOCKED: &str = "final_contract_blocked";
+const CONTRACT_FAILURE_PHASE_INCOMPLETE: &str = "phase_artifact_incomplete";
+const CONTRACT_FAILURE_ACCEPTED_FALSE: &str = "response_accepted_false";
+const CONTRACT_FAILURE_JOB_ID_MISMATCH: &str = "response_job_id_mismatch";
+const CONTRACT_FAILURE_UNKNOWN: &str = "unknown_contract_failure";
+
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
     requested.clamp(1, MAX_OPS_JUDGE_REVIEW_LIMIT) as i64
@@ -66,11 +72,11 @@ fn infer_contract_failure_type(
     error_message: Option<&str>,
 ) -> Option<String> {
     let code = error_code.unwrap_or_default().trim();
-    if code == "response_accepted_false" {
-        return Some("response_accepted_false".to_string());
+    if code == CONTRACT_FAILURE_ACCEPTED_FALSE {
+        return Some(CONTRACT_FAILURE_ACCEPTED_FALSE.to_string());
     }
-    if code == "response_job_id_mismatch" {
-        return Some("response_job_id_mismatch".to_string());
+    if code == CONTRACT_FAILURE_JOB_ID_MISMATCH {
+        return Some(CONTRACT_FAILURE_JOB_ID_MISMATCH.to_string());
     }
 
     let normalized = error_message
@@ -81,46 +87,143 @@ fn infer_contract_failure_type(
         return None;
     }
     if normalized.contains("final_contract_blocked") {
-        return Some("final_contract_blocked".to_string());
+        return Some(CONTRACT_FAILURE_FINAL_BLOCKED.to_string());
     }
     if normalized.contains("final_contract_violation")
         || normalized.contains("phase_artifact_incomplete")
     {
-        return Some("phase_artifact_incomplete".to_string());
+        return Some(CONTRACT_FAILURE_PHASE_INCOMPLETE.to_string());
     }
     if normalized.contains("accepted=false") {
-        return Some("response_accepted_false".to_string());
+        return Some(CONTRACT_FAILURE_ACCEPTED_FALSE.to_string());
     }
     if normalized.contains("job_id mismatch") {
-        return Some("response_job_id_mismatch".to_string());
+        return Some(CONTRACT_FAILURE_JOB_ID_MISMATCH.to_string());
     }
     None
 }
 
+fn resolve_contract_failure_type(
+    status: &str,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> Option<String> {
+    if let Some(mapped) = infer_contract_failure_type(error_code, error_message) {
+        return Some(mapped);
+    }
+    if status.trim().eq_ignore_ascii_case("failed") {
+        return Some(CONTRACT_FAILURE_UNKNOWN.to_string());
+    }
+    None
+}
+
+fn resolve_contract_failure_hint_and_action(
+    contract_failure_type: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    match contract_failure_type {
+        Some(CONTRACT_FAILURE_FINAL_BLOCKED) | Some(CONTRACT_FAILURE_PHASE_INCOMPLETE) => (
+            Some("终局派发被合同校验阻断，请先补齐阶段产物后重试。".to_string()),
+            Some("check_phase_artifacts_then_retry".to_string()),
+        ),
+        Some(CONTRACT_FAILURE_ACCEPTED_FALSE) => (
+            Some("AI 服务返回 accepted=false，请检查请求参数或服务可用性后重试。".to_string()),
+            Some("check_ai_judge_acceptance_then_retry".to_string()),
+        ),
+        Some(CONTRACT_FAILURE_JOB_ID_MISMATCH) => (
+            Some("AI 服务返回 job_id 不一致，请核对 dispatch 契约版本。".to_string()),
+            Some("check_dispatch_contract_alignment".to_string()),
+        ),
+        Some(CONTRACT_FAILURE_UNKNOWN) => (
+            Some("终局派发失败语义未识别，请结合 errorMessage 排障后重试或升级处理。".to_string()),
+            Some("inspect_error_then_retry_or_escalate".to_string()),
+        ),
+        Some(_) => (
+            Some("终局派发失败，请结合 errorMessage 排障。".to_string()),
+            Some("inspect_error_then_retry".to_string()),
+        ),
+        None => (None, None),
+    }
+}
+
 fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDispatchDiagnostics {
-    let error_code = row
-        .error_message
+    let status = row.status;
+    let error_message = row.error_message;
+    let error_code = error_message
         .as_deref()
         .and_then(extract_dispatch_error_code);
-    let contract_failure_type =
-        infer_contract_failure_type(error_code.as_deref(), row.error_message.as_deref());
-    let contract_violation_blocked = row
-        .error_message
+    let contract_failure_type = resolve_contract_failure_type(
+        status.as_str(),
+        error_code.as_deref(),
+        error_message.as_deref(),
+    );
+    let (contract_failure_hint, contract_failure_action) =
+        resolve_contract_failure_hint_and_action(contract_failure_type.as_deref());
+    let contract_violation_blocked = error_message
         .as_deref()
         .map(detect_contract_violation_blocked)
         .unwrap_or(false);
     JudgeFinalDispatchDiagnostics {
         final_job_id: row.id as u64,
-        status: row.status,
+        status,
         phase_start_no: row.phase_start_no,
         phase_end_no: row.phase_end_no,
         dispatch_attempts: row.dispatch_attempts,
         last_dispatch_at: row.last_dispatch_at,
-        error_message: row.error_message,
+        error_message,
         error_code,
         contract_failure_type,
+        contract_failure_hint,
+        contract_failure_action,
         contract_violation_blocked,
     }
+}
+
+fn build_final_dispatch_failure_stats(
+    rows: Vec<(String, Option<String>)>,
+) -> Option<JudgeFinalDispatchFailureStats> {
+    if rows.is_empty() {
+        return None;
+    }
+    let mut counters: HashMap<String, u32> = HashMap::new();
+    for (status, error_message) in rows {
+        let error_code = error_message
+            .as_deref()
+            .and_then(extract_dispatch_error_code);
+        let failure_type = resolve_contract_failure_type(
+            status.as_str(),
+            error_code.as_deref(),
+            error_message.as_deref(),
+        )
+        .unwrap_or_else(|| CONTRACT_FAILURE_UNKNOWN.to_string());
+        let entry = counters.entry(failure_type).or_insert(0);
+        *entry = entry.saturating_add(1);
+    }
+
+    let mut by_type: Vec<JudgeFinalDispatchFailureTypeCount> = counters
+        .into_iter()
+        .map(|(failure_type, count)| JudgeFinalDispatchFailureTypeCount {
+            failure_type,
+            count,
+        })
+        .collect();
+    by_type.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.failure_type.cmp(&b.failure_type))
+    });
+
+    let total_failed_jobs: u32 = by_type.iter().map(|item| item.count).sum();
+    let unknown_failed_jobs = by_type
+        .iter()
+        .find(|item| item.failure_type == CONTRACT_FAILURE_UNKNOWN)
+        .map(|item| item.count)
+        .unwrap_or(0);
+
+    Some(JudgeFinalDispatchFailureStats {
+        total_failed_jobs,
+        unknown_failed_jobs,
+        by_type,
+    })
 }
 
 impl AppState {
@@ -294,6 +397,18 @@ impl AppState {
         .bind(session_id as i64)
         .fetch_optional(&self.pool)
         .await?;
+        let failed_final_dispatch_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            r#"
+            SELECT status, error_message
+            FROM judge_final_jobs
+            WHERE session_id = $1
+              AND status = 'failed'
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(session_id as i64)
+        .fetch_all(&self.pool)
+        .await?;
 
         let report: Option<JudgeReportRow> = sqlx::query_as(
             r#"
@@ -464,6 +579,8 @@ impl AppState {
 
         let final_report_v3 = final_report_v3.map(map_final_report_detail);
         let final_dispatch_diagnostics = latest_final_job.map(map_final_dispatch_diagnostics);
+        let final_dispatch_failure_stats =
+            build_final_dispatch_failure_stats(failed_final_dispatch_rows);
 
         let status = if report.is_some() || final_report_v3.is_some() {
             "ready".to_string()
@@ -496,6 +613,7 @@ impl AppState {
                 requested_at: job.requested_at,
             }),
             final_dispatch_diagnostics,
+            final_dispatch_failure_stats,
             report,
             final_report_v3,
         })

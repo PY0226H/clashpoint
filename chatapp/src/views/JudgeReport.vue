@@ -209,6 +209,61 @@
             </div>
           </div>
 
+          <div v-if="finalDispatchDiagnostics" class="bg-white rounded-lg border p-4 space-y-3">
+            <div class="text-xs uppercase text-gray-500">Final Dispatch Diagnostics</div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div>
+                <div class="text-xs uppercase text-gray-500">Final Job</div>
+                <div class="font-semibold text-gray-900">{{ finalDispatchDiagnostics.finalJobId }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Dispatch Status</div>
+                <div class="font-semibold text-gray-900">{{ finalDispatchDiagnostics.status }}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Failure Type</div>
+                <div class="font-semibold text-gray-900">
+                  {{ finalDispatchDiagnostics.contractFailureType || '-' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-gray-500">Action</div>
+                <div class="font-semibold text-gray-900">
+                  {{ finalDispatchActionText(finalDispatchDiagnostics.contractFailureAction) }}
+                </div>
+              </div>
+            </div>
+            <div
+              v-if="finalDispatchDiagnostics.contractFailureHint"
+              class="text-sm border rounded p-3 bg-amber-50 border-amber-200 text-amber-800"
+            >
+              {{ finalDispatchDiagnostics.contractFailureHint }}
+            </div>
+            <div
+              v-if="finalDispatchDiagnostics.errorMessage"
+              class="text-xs text-gray-600 bg-gray-50 border rounded p-2 break-all"
+            >
+              error: {{ finalDispatchDiagnostics.errorMessage }}
+            </div>
+
+            <div v-if="finalDispatchFailureStats" class="space-y-2">
+              <div class="text-xs uppercase text-gray-500">Failure Stats (Session)</div>
+              <div class="text-xs text-gray-600">
+                totalFailedJobs: {{ finalDispatchFailureStats.totalFailedJobs }} |
+                unknownFailedJobs: {{ finalDispatchFailureStats.unknownFailedJobs }}
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <span
+                  v-for="item in finalDispatchFailureStats.byType || []"
+                  :key="item.failureType"
+                  class="text-xs px-2 py-1 rounded border bg-gray-50 text-gray-700"
+                >
+                  {{ item.failureType }}: {{ item.count }}
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div v-if="!report" class="bg-white rounded-lg border p-4 text-sm text-gray-600">
             当前还没有可展示的判决报告（可能仍在处理中）。
           </div>
@@ -450,6 +505,12 @@ export default {
     report() {
       return this.reportData?.report || null;
     },
+    finalDispatchDiagnostics() {
+      return this.reportData?.finalDispatchDiagnostics || null;
+    },
+    finalDispatchFailureStats() {
+      return this.reportData?.finalDispatchFailureStats || null;
+    },
     stageSummaries() {
       return this.report?.stageSummaries || [];
     },
@@ -538,6 +599,15 @@ export default {
     },
     drawVoteResolutionText(resolution) {
       return drawVoteResolutionLabel(resolution);
+    },
+    finalDispatchActionText(action) {
+      if (!action) return '-';
+      if (action === 'check_phase_artifacts_then_retry') return '检查阶段产物后重试';
+      if (action === 'check_ai_judge_acceptance_then_retry') return '检查 AI 接口响应后重试';
+      if (action === 'check_dispatch_contract_alignment') return '检查 dispatch 契约一致性';
+      if (action === 'inspect_error_then_retry_or_escalate') return '先排障再重试，必要时升级处理';
+      if (action === 'inspect_error_then_retry') return '查看错误后重试';
+      return action;
     },
     errorMessage(err) {
       return err?.response?.data?.error || err?.message || '请求失败';
