@@ -46,6 +46,369 @@
           </div>
         </div>
 
+        <div class="bg-white border rounded-lg p-4 space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-sm font-semibold text-gray-900">Trace / Replay 运维闭环</div>
+              <div class="text-xs text-gray-500 mt-1">
+                trace scanned: {{ traceReplayMeta.scannedCount }} · returned: {{ traceReplayMeta.returnedCount }} ·
+                failed: {{ traceReplayMeta.failedCount }} · replayEligible: {{ traceReplayMeta.replayEligibleCount }}
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                @click="refreshTraceReplayOps"
+                :disabled="traceReplayLoading || !canJudgeReview"
+                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+              >
+                {{ traceReplayLoading ? '刷新中...' : '刷新 Trace/Replay' }}
+              </button>
+              <button
+                @click="refreshReplayActionsOps"
+                :disabled="replayActionsLoading || !canJudgeReview"
+                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+              >
+                {{ replayActionsLoading ? '刷新中...' : '刷新 Replay Actions' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="traceReplayErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+            {{ traceReplayErrorText }}
+          </div>
+          <div v-if="replayActionsErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+            {{ replayActionsErrorText }}
+          </div>
+          <div v-if="replayExecuteNoticeText" class="bg-emerald-50 text-emerald-700 border border-emerald-200 rounded p-2 text-xs">
+            {{ replayExecuteNoticeText }}
+          </div>
+          <div v-if="replayBatchNoticeText" class="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded p-2 text-xs whitespace-pre-line">
+            {{ replayBatchNoticeText }}
+          </div>
+
+          <div class="rounded border border-slate-200 p-3 space-y-2">
+            <div class="text-xs font-semibold text-slate-800">Trace/Replay 查询</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-8 gap-2">
+              <label class="text-xs text-gray-600">
+                开始时间
+                <input v-model="traceReplayFilter.fromLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                结束时间
+                <input v-model="traceReplayFilter.toLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                Session
+                <input v-model.trim="traceReplayFilter.sessionId" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                Scope
+                <select v-model="traceReplayFilter.scope" class="w-full border rounded px-2 py-1 mt-1">
+                  <option value="">all</option>
+                  <option value="phase">phase</option>
+                  <option value="final">final</option>
+                </select>
+              </label>
+              <label class="text-xs text-gray-600">
+                Status
+                <select v-model="traceReplayFilter.status" class="w-full border rounded px-2 py-1 mt-1">
+                  <option value="">all</option>
+                  <option value="queued">queued</option>
+                  <option value="dispatched">dispatched</option>
+                  <option value="succeeded">succeeded</option>
+                  <option value="failed">failed</option>
+                </select>
+              </label>
+              <label class="text-xs text-gray-600">
+                Limit
+                <input v-model.number="traceReplayFilter.limit" type="number" min="1" max="500" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <div class="flex items-end">
+                <button
+                  @click="refreshTraceReplayOps"
+                  :disabled="traceReplayLoading || !canJudgeReview"
+                  class="px-3 py-2 rounded bg-slate-700 text-white text-xs disabled:opacity-50"
+                >
+                  查询
+                </button>
+              </div>
+            </div>
+
+            <div class="rounded border border-slate-100 bg-slate-50 px-2 py-2">
+              <div class="text-[11px] text-slate-600 mb-2">批量筛选与回放</div>
+              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2 items-end">
+                <label class="text-xs text-gray-600">
+                  失败类型
+                  <select v-model="traceReplayViewFilter.failureType" class="w-full border rounded px-2 py-1 mt-1">
+                    <option value="">all</option>
+                    <option value="contract_failure_only">仅合同类失败</option>
+                    <option value="unknown_contract_failure">unknown_contract_failure</option>
+                    <option
+                      v-for="failureType in traceReplayFailureTypeOptions"
+                      :key="`trace-failure-type-${failureType}`"
+                      :value="failureType"
+                    >
+                      {{ failureType }}
+                    </option>
+                  </select>
+                </label>
+                <label class="text-xs text-gray-600">
+                  Replay候选
+                  <select v-model="traceReplayViewFilter.replayEligibleOnly" class="w-full border rounded px-2 py-1 mt-1">
+                    <option :value="false">all</option>
+                    <option :value="true">only replayable</option>
+                  </select>
+                </label>
+                <label class="text-xs text-gray-600">
+                  Replay历史
+                  <select v-model="traceReplayViewFilter.withoutReplayActionOnly" class="w-full border rounded px-2 py-1 mt-1">
+                    <option :value="false">all</option>
+                    <option :value="true">仅未回放</option>
+                  </select>
+                </label>
+                <div class="text-xs text-gray-700">
+                  当前筛选 {{ traceReplayFilteredRows.length }} 条 · 批量候选 {{ traceReplayBatchCandidateRows.length }} 条 · 已选 {{ traceReplayBatchSelectedCount }} 条
+                </div>
+                <div class="flex flex-wrap gap-1">
+                  <button
+                    @click="toggleSelectAllTraceReplayBatchCandidates"
+                    :disabled="traceReplayBatchCandidateRows.length === 0"
+                    class="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-xs disabled:opacity-50"
+                  >
+                    {{ traceReplayBatchAllSelected ? '取消全选' : '全选候选' }}
+                  </button>
+                  <button
+                    @click="clearTraceReplaySelection"
+                    :disabled="traceReplayBatchSelectedCount === 0"
+                    class="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-xs disabled:opacity-50"
+                  >
+                    清空已选
+                  </button>
+                  <button
+                    @click="executeReplayBatch"
+                    :disabled="!canJudgeRejudge || replayBatchExecuting || traceReplayBatchSelectedCount === 0"
+                    class="px-2 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs disabled:opacity-50"
+                  >
+                    {{ replayBatchExecuting ? '批量回放中...' : '批量执行回放' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-xs">
+                <thead>
+                  <tr class="text-left text-gray-500 border-b">
+                    <th class="py-2 pr-3 w-8">
+                      <input
+                        type="checkbox"
+                        class="rounded border-gray-300"
+                        :checked="traceReplayBatchAllSelected"
+                        :disabled="traceReplayBatchCandidateRows.length === 0"
+                        @change="toggleSelectAllTraceReplayBatchCandidates"
+                      />
+                    </th>
+                    <th class="py-2 pr-3">Created</th>
+                    <th class="py-2 pr-3">Scope</th>
+                    <th class="py-2 pr-3">Session</th>
+                    <th class="py-2 pr-3">Job</th>
+                    <th class="py-2 pr-3">Status</th>
+                    <th class="py-2 pr-3">Report</th>
+                    <th class="py-2 pr-3">Replay</th>
+                    <th class="py-2 pr-3">Error</th>
+                    <th class="py-2 pr-3">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in traceReplayFilteredRows"
+                    :key="traceReplayRowKey(row)"
+                    class="border-b last:border-b-0"
+                  >
+                    <td class="py-2 pr-3 text-gray-700">
+                      <input
+                        type="checkbox"
+                        class="rounded border-gray-300"
+                        :disabled="!traceReplayRowBatchSelectable(row)"
+                        :checked="isTraceReplaySelected(row)"
+                        @change="toggleTraceReplaySelection(row)"
+                      />
+                    </td>
+                    <td class="py-2 pr-3 text-gray-700">{{ formatDateTime(row.createdAt) }}</td>
+                    <td class="py-2 pr-3 text-gray-900">{{ row.scope }}</td>
+                    <td class="py-2 pr-3 text-gray-900">#{{ row.sessionId }}</td>
+                    <td class="py-2 pr-3 text-gray-900">#{{ row.jobId }}</td>
+                    <td class="py-2 pr-3 text-gray-900">{{ row.status }}</td>
+                    <td class="py-2 pr-3 text-gray-700">#{{ row.reportId || '-' }}</td>
+                    <td class="py-2 pr-3 text-gray-700">
+                      {{ row.replayActionCount || 0 }}
+                      <span v-if="row.latestReplayAt"> · {{ formatDateTime(row.latestReplayAt) }}</span>
+                    </td>
+                    <td class="py-2 pr-3 text-gray-700 max-w-[280px]" :title="row.errorMessage || ''">
+                      <div class="truncate">{{ row.errorCode || row.contractFailureType || '-' }}</div>
+                      <div v-if="traceReplayFailureHint(row)" class="text-[11px] text-amber-700 truncate" :title="traceReplayFailureHint(row)">
+                        {{ traceReplayFailureHint(row) }}
+                      </div>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <div class="flex flex-wrap gap-1">
+                        <button
+                          @click="applyTraceReplayFilterFromRow(row)"
+                          class="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100"
+                        >
+                          看动作
+                        </button>
+                        <button
+                          @click="openReplayPreview(row)"
+                          :disabled="replayPreviewLoading && replayPreviewTargetKey === `${row.scope}:${row.jobId}`"
+                          class="px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                        >
+                          {{
+                            replayPreviewLoading && replayPreviewTargetKey === `${row.scope}:${row.jobId}`
+                              ? '加载中...'
+                              : '预览'
+                          }}
+                        </button>
+                        <button
+                          @click="executeReplayFromTraceRow(row)"
+                          :disabled="!canJudgeRejudge || !replayExecutionAllowed(row) || replayExecutingJobKey === `${row.scope}:${row.jobId}`"
+                          :title="replayExecutionDisabledReason(row)"
+                          class="px-2 py-1 rounded border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          {{
+                            replayExecutingJobKey === `${row.scope}:${row.jobId}`
+                              ? '执行中...'
+                              : '执行回放'
+                          }}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-if="traceReplayFilteredRows.length === 0">
+                    <td colspan="10" class="py-4 text-center text-gray-500">暂无 trace/replay 数据</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div
+            v-if="replayPreviewData || replayPreviewErrorText || replayPreviewLoading"
+            class="rounded border border-indigo-200 bg-indigo-50 p-3 space-y-2"
+          >
+            <div class="text-xs font-semibold text-indigo-900">Replay 预览</div>
+            <div v-if="replayPreviewErrorText" class="text-xs text-rose-700">{{ replayPreviewErrorText }}</div>
+            <div v-else-if="replayPreviewLoading" class="text-xs text-indigo-700">加载预览中...</div>
+            <template v-else-if="replayPreviewData">
+              <div class="text-xs text-indigo-800">
+                {{ replayPreviewData.meta.scope }}#{{ replayPreviewData.meta.jobId }} ·
+                status={{ replayPreviewData.meta.status }} ·
+                replayEligible={{ replayPreviewData.meta.replayEligible ? 'yes' : 'no' }}
+              </div>
+              <pre class="bg-white border rounded p-2 text-[11px] text-slate-800 overflow-auto max-h-56">{{ replayPreviewSnapshotText }}</pre>
+            </template>
+            <div class="flex justify-end">
+              <button
+                @click="clearReplayPreview"
+                class="px-2 py-1 rounded border border-indigo-300 bg-white hover:bg-indigo-100 text-xs"
+              >
+                关闭预览
+              </button>
+            </div>
+          </div>
+
+          <div class="rounded border border-slate-200 p-3 space-y-2">
+            <div class="text-xs font-semibold text-slate-800">
+              Replay Actions（scanned: {{ replayActionMeta.scannedCount }} · returned: {{ replayActionMeta.returnedCount }} · hasMore: {{ replayActionMeta.hasMore ? 'yes' : 'no' }})
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-9 gap-2">
+              <label class="text-xs text-gray-600">
+                开始时间
+                <input v-model="replayActionsFilter.fromLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                结束时间
+                <input v-model="replayActionsFilter.toLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                Scope
+                <select v-model="replayActionsFilter.scope" class="w-full border rounded px-2 py-1 mt-1">
+                  <option value="">all</option>
+                  <option value="phase">phase</option>
+                  <option value="final">final</option>
+                </select>
+              </label>
+              <label class="text-xs text-gray-600">
+                Session
+                <input v-model.trim="replayActionsFilter.sessionId" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                Job
+                <input v-model.trim="replayActionsFilter.jobId" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                RequestedBy
+                <input v-model.trim="replayActionsFilter.requestedBy" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                Limit
+                <input v-model.number="replayActionsFilter.limit" type="number" min="1" max="500" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <label class="text-xs text-gray-600">
+                Offset
+                <input v-model.number="replayActionsFilter.offset" type="number" min="0" max="10000" class="w-full border rounded px-2 py-1 mt-1" />
+              </label>
+              <div class="flex items-end">
+                <button
+                  @click="refreshReplayActionsOps"
+                  :disabled="replayActionsLoading || !canJudgeReview"
+                  class="px-3 py-2 rounded bg-slate-700 text-white text-xs disabled:opacity-50"
+                >
+                  查询
+                </button>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-xs">
+                <thead>
+                  <tr class="text-left text-gray-500 border-b">
+                    <th class="py-2 pr-3">Created</th>
+                    <th class="py-2 pr-3">Scope</th>
+                    <th class="py-2 pr-3">Job</th>
+                    <th class="py-2 pr-3">Session</th>
+                    <th class="py-2 pr-3">RequestedBy</th>
+                    <th class="py-2 pr-3">Status</th>
+                    <th class="py-2 pr-3">Reason</th>
+                    <th class="py-2 pr-3">Trace</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="item in replayActionRows"
+                    :key="item.auditId"
+                    class="border-b last:border-b-0"
+                  >
+                    <td class="py-2 pr-3 text-gray-700">{{ formatDateTime(item.createdAt) }}</td>
+                    <td class="py-2 pr-3 text-gray-900">{{ item.scope }}</td>
+                    <td class="py-2 pr-3 text-gray-900">#{{ item.jobId }}</td>
+                    <td class="py-2 pr-3 text-gray-900">#{{ item.sessionId }}</td>
+                    <td class="py-2 pr-3 text-gray-900">#{{ item.requestedBy }}</td>
+                    <td class="py-2 pr-3 text-gray-700">{{ item.previousStatus }} -> {{ item.newStatus }}</td>
+                    <td class="py-2 pr-3 text-gray-700 max-w-[220px] truncate" :title="item.reason || ''">{{ item.reason || '-' }}</td>
+                    <td class="py-2 pr-3 text-gray-700 max-w-[260px] truncate" :title="`${item.previousTraceId || '-'} -> ${item.newTraceId || '-'}`">
+                      {{ item.previousTraceId || '-' }} -> {{ item.newTraceId || '-' }}
+                    </td>
+                  </tr>
+                  <tr v-if="replayActionRows.length === 0">
+                    <td colspan="8" class="py-4 text-center text-gray-500">暂无 replay actions 数据</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <div class="bg-white border rounded-lg p-4 space-y-3">
           <div class="flex items-start justify-between gap-3">
             <div>
@@ -1035,6 +1398,10 @@ export default {
     return {
       loading: false,
       reviewLoading: false,
+      traceReplayLoading: false,
+      replayActionsLoading: false,
+      replayPreviewLoading: false,
+      replayBatchExecuting: false,
       roleLoading: false,
       observabilityLoading: false,
       observabilityMetricsLoading: false,
@@ -1046,6 +1413,11 @@ export default {
       rejudgeReviewSessionId: 0,
       errorText: '',
       reviewErrorText: '',
+      traceReplayErrorText: '',
+      replayActionsErrorText: '',
+      replayPreviewErrorText: '',
+      replayExecuteNoticeText: '',
+      replayBatchNoticeText: '',
       roleErrorText: '',
       observabilityErrorText: '',
       observabilityMetricsErrorText: '',
@@ -1055,11 +1427,26 @@ export default {
       topics: [],
       sessions: [],
       reviewRows: [],
+      traceReplayRows: [],
+      replayActionRows: [],
       roleAssignments: [],
       observabilityRows: [],
       reviewMeta: {
         scannedCount: 0,
         returnedCount: 0,
+      },
+      traceReplayMeta: {
+        scannedCount: 0,
+        returnedCount: 0,
+        phaseCount: 0,
+        finalCount: 0,
+        failedCount: 0,
+        replayEligibleCount: 0,
+      },
+      replayActionMeta: {
+        scannedCount: 0,
+        returnedCount: 0,
+        hasMore: false,
       },
       observabilityUpdatedAt: null,
       observabilityMetricsUpdatedAt: null,
@@ -1087,6 +1474,34 @@ export default {
         anomalyOnly: true,
         limit: 50,
       },
+      traceReplayFilter: {
+        fromLocal: toLocalInputValue(minus24Hours),
+        toLocal: toLocalInputValue(now),
+        sessionId: '',
+        scope: '',
+        status: '',
+        limit: 50,
+      },
+      traceReplayViewFilter: {
+        failureType: '',
+        replayEligibleOnly: false,
+        withoutReplayActionOnly: false,
+      },
+      selectedTraceReplayRowKeys: [],
+      replayActionsFilter: {
+        fromLocal: toLocalInputValue(minus24Hours),
+        toLocal: toLocalInputValue(now),
+        scope: '',
+        sessionId: '',
+        jobId: '',
+        requestedBy: '',
+        limit: 50,
+        offset: 0,
+      },
+      replayPreviewData: null,
+      replayPreviewSnapshotText: '',
+      replayPreviewTargetKey: '',
+      replayExecutingJobKey: '',
       observabilityFilter: {
         hours: 24,
         limit: 20,
@@ -1129,6 +1544,54 @@ export default {
     },
     canRoleManage() {
       return !!this.opsRbacMe?.permissions?.roleManage;
+    },
+    traceReplayFailureTypeOptions() {
+      const values = new Set();
+      for (const row of this.traceReplayRows) {
+        const value = String(row?.contractFailureType || row?.errorCode || '').trim();
+        if (value) {
+          values.add(value);
+        }
+      }
+      return Array.from(values).sort((a, b) => a.localeCompare(b));
+    },
+    traceReplayFilteredRows() {
+      const filter = this.traceReplayViewFilter || {};
+      const failureType = String(filter.failureType || '').trim();
+      const replayEligibleOnly = !!filter.replayEligibleOnly;
+      const withoutReplayActionOnly = !!filter.withoutReplayActionOnly;
+      return this.traceReplayRows.filter((row) => {
+        if (replayEligibleOnly && !this.traceReplayRowBatchSelectable(row)) {
+          return false;
+        }
+        if (withoutReplayActionOnly && Number(row?.replayActionCount || 0) > 0) {
+          return false;
+        }
+        if (!failureType) {
+          return true;
+        }
+        if (failureType === 'contract_failure_only') {
+          return !!row?.contractFailureType;
+        }
+        return failureType === String(row?.contractFailureType || row?.errorCode || '').trim();
+      });
+    },
+    traceReplayBatchCandidateRows() {
+      return this.traceReplayFilteredRows.filter((row) => this.traceReplayRowBatchSelectable(row));
+    },
+    traceReplayBatchSelectedRows() {
+      const selected = new Set(this.selectedTraceReplayRowKeys || []);
+      return this.traceReplayBatchCandidateRows.filter((row) => selected.has(this.traceReplayRowBatchKey(row)));
+    },
+    traceReplayBatchSelectedCount() {
+      return this.traceReplayBatchSelectedRows.length;
+    },
+    traceReplayBatchAllSelected() {
+      const candidates = this.traceReplayBatchCandidateRows;
+      if (candidates.length === 0) {
+        return false;
+      }
+      return this.traceReplayBatchSelectedCount === candidates.length;
     },
     observabilityAnomaliesRaw() {
       return buildJudgeObservabilityAnomalies({
@@ -1684,6 +2147,332 @@ export default {
         this.reviewLoading = false;
       }
     },
+    toPositiveNumber(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        return null;
+      }
+      return n;
+    },
+    traceReplayRowKey(row) {
+      const scope = String(row?.scope || '');
+      const jobId = Number(row?.jobId || 0);
+      const traceId = String(row?.traceId || '');
+      if (!scope || !jobId) {
+        return '';
+      }
+      return `${scope}:${jobId}:${traceId}`;
+    },
+    traceReplayRowBatchKey(row) {
+      const scope = String(row?.scope || '');
+      const jobId = Number(row?.jobId || 0);
+      if (!scope || !jobId) {
+        return '';
+      }
+      return `${scope}:${jobId}`;
+    },
+    traceReplayRowBatchSelectable(row) {
+      return !!(row && this.replayExecutionAllowed(row));
+    },
+    isTraceReplaySelected(row) {
+      const key = this.traceReplayRowBatchKey(row);
+      if (!key) {
+        return false;
+      }
+      return (this.selectedTraceReplayRowKeys || []).includes(key);
+    },
+    toggleTraceReplaySelection(row) {
+      const key = this.traceReplayRowBatchKey(row);
+      if (!key || !this.traceReplayRowBatchSelectable(row)) {
+        return;
+      }
+      const selected = new Set(this.selectedTraceReplayRowKeys || []);
+      if (selected.has(key)) {
+        selected.delete(key);
+      } else {
+        selected.add(key);
+      }
+      this.selectedTraceReplayRowKeys = Array.from(selected);
+    },
+    toggleSelectAllTraceReplayBatchCandidates() {
+      const candidates = this.traceReplayBatchCandidateRows || [];
+      if (candidates.length === 0) {
+        this.selectedTraceReplayRowKeys = [];
+        return;
+      }
+      if (this.traceReplayBatchAllSelected) {
+        this.selectedTraceReplayRowKeys = [];
+        return;
+      }
+      this.selectedTraceReplayRowKeys = candidates
+        .map((row) => this.traceReplayRowBatchKey(row))
+        .filter((value) => !!value);
+    },
+    clearTraceReplaySelection() {
+      this.selectedTraceReplayRowKeys = [];
+    },
+    reconcileTraceReplaySelection() {
+      if (!Array.isArray(this.selectedTraceReplayRowKeys) || this.selectedTraceReplayRowKeys.length === 0) {
+        return;
+      }
+      const candidateKeys = new Set(
+        (this.traceReplayBatchCandidateRows || [])
+          .map((row) => this.traceReplayRowBatchKey(row))
+          .filter((value) => !!value),
+      );
+      this.selectedTraceReplayRowKeys = this.selectedTraceReplayRowKeys.filter((key) => candidateKeys.has(key));
+    },
+    traceReplayFailureHint(row) {
+      if (!row) {
+        return '';
+      }
+      const contractFailureType = String(row.contractFailureType || '').trim();
+      if (contractFailureType === 'final_contract_blocked') {
+        return '终局合同字段缺失，建议先排查 final report 契约完整性';
+      }
+      if (contractFailureType === 'phase_artifact_incomplete') {
+        return '阶段产物不完整，建议先核查 phase summary/retrieval 落盘';
+      }
+      if (contractFailureType === 'response_accepted_false') {
+        return '下游回调拒绝，建议检查回调 accepted/status 语义';
+      }
+      if (contractFailureType === 'response_job_id_mismatch') {
+        return '回调 job_id 不一致，建议核查幂等键与回调路由';
+      }
+      if (contractFailureType === 'unknown_contract_failure') {
+        return '未知合同失败类型，建议先看 error_message 原文与 trace';
+      }
+      const errorCode = String(row.errorCode || '').trim().toLowerCase();
+      if (errorCode === 'judge_timeout') {
+        return '判决超时，建议先看模型耗时和限流配置';
+      }
+      if (errorCode === 'rag_unavailable') {
+        return '检索不可用，建议排查向量库与检索后端可达性';
+      }
+      if (errorCode === 'model_overload') {
+        return '模型负载过高，建议降并发或切换到低成本配置';
+      }
+      if (errorCode === 'consistency_conflict') {
+        return '一致性冲突，建议核查双次评估与 draw 保护路径';
+      }
+      if (errorCode === 'http_5xx') {
+        return '上游/下游 5xx，建议先看网关与依赖可用性';
+      }
+      return '';
+    },
+    buildTraceReplayPayload() {
+      return {
+        from: this.toIso(this.traceReplayFilter.fromLocal),
+        to: this.toIso(this.traceReplayFilter.toLocal),
+        sessionId: this.toPositiveNumber(this.traceReplayFilter.sessionId),
+        scope: this.traceReplayFilter.scope || null,
+        status: this.traceReplayFilter.status || null,
+        limit: Number(this.traceReplayFilter.limit || 50),
+      };
+    },
+    async refreshTraceReplayOps() {
+      if (!this.canJudgeReview) {
+        this.traceReplayRows = [];
+        this.clearTraceReplaySelection();
+        this.traceReplayMeta = {
+          scannedCount: 0,
+          returnedCount: 0,
+          phaseCount: 0,
+          finalCount: 0,
+          failedCount: 0,
+          replayEligibleCount: 0,
+        };
+        this.traceReplayErrorText = '当前账号没有 trace/replay 审阅权限';
+        return;
+      }
+      this.traceReplayLoading = true;
+      this.traceReplayErrorText = '';
+      try {
+        const payload = this.buildTraceReplayPayload();
+        const response = await this.$store.dispatch('listJudgeTraceReplayOps', payload);
+        this.traceReplayRows = Array.isArray(response?.items) ? response.items : [];
+        this.traceReplayMeta = {
+          scannedCount: Number(response?.scannedCount || 0),
+          returnedCount: Number(response?.returnedCount || this.traceReplayRows.length),
+          phaseCount: Number(response?.phaseCount || 0),
+          finalCount: Number(response?.finalCount || 0),
+          failedCount: Number(response?.failedCount || 0),
+          replayEligibleCount: Number(response?.replayEligibleCount || 0),
+        };
+        this.reconcileTraceReplaySelection();
+      } catch (error) {
+        this.traceReplayErrorText = this.resolveErrorText(error, '加载 trace/replay 列表失败');
+      } finally {
+        this.traceReplayLoading = false;
+      }
+    },
+    buildReplayActionsPayload() {
+      return {
+        from: this.toIso(this.replayActionsFilter.fromLocal),
+        to: this.toIso(this.replayActionsFilter.toLocal),
+        scope: this.replayActionsFilter.scope || null,
+        sessionId: this.toPositiveNumber(this.replayActionsFilter.sessionId),
+        jobId: this.toPositiveNumber(this.replayActionsFilter.jobId),
+        requestedBy: this.toPositiveNumber(this.replayActionsFilter.requestedBy),
+        limit: Number(this.replayActionsFilter.limit || 50),
+        offset: Math.max(0, Number(this.replayActionsFilter.offset || 0)),
+      };
+    },
+    async refreshReplayActionsOps() {
+      if (!this.canJudgeReview) {
+        this.replayActionRows = [];
+        this.replayActionMeta = {
+          scannedCount: 0,
+          returnedCount: 0,
+          hasMore: false,
+        };
+        this.replayActionsErrorText = '当前账号没有 replay action 审阅权限';
+        return;
+      }
+      this.replayActionsLoading = true;
+      this.replayActionsErrorText = '';
+      try {
+        const payload = this.buildReplayActionsPayload();
+        const response = await this.$store.dispatch('listJudgeReplayActionsOps', payload);
+        this.replayActionRows = Array.isArray(response?.items) ? response.items : [];
+        this.replayActionMeta = {
+          scannedCount: Number(response?.scannedCount || 0),
+          returnedCount: Number(response?.returnedCount || this.replayActionRows.length),
+          hasMore: !!response?.hasMore,
+        };
+      } catch (error) {
+        this.replayActionsErrorText = this.resolveErrorText(error, '加载 replay actions 失败');
+      } finally {
+        this.replayActionsLoading = false;
+      }
+    },
+    applyTraceReplayFilterFromRow(row) {
+      if (!row) {
+        return;
+      }
+      this.replayActionsFilter.scope = String(row.scope || '');
+      this.replayActionsFilter.sessionId = String(row.sessionId || '');
+      this.replayActionsFilter.jobId = String(row.jobId || '');
+      this.replayActionsFilter.offset = 0;
+      this.refreshReplayActionsOps();
+    },
+    clearReplayPreview() {
+      this.replayPreviewData = null;
+      this.replayPreviewSnapshotText = '';
+      this.replayPreviewErrorText = '';
+      this.replayPreviewTargetKey = '';
+    },
+    async openReplayPreview(row) {
+      if (!row?.scope || !row?.jobId) {
+        return;
+      }
+      this.replayPreviewLoading = true;
+      this.replayPreviewErrorText = '';
+      this.replayPreviewTargetKey = `${row.scope}:${row.jobId}`;
+      try {
+        const response = await this.$store.dispatch('getJudgeReplayPreviewOps', {
+          scope: row.scope,
+          jobId: row.jobId,
+        });
+        this.replayPreviewData = response || null;
+        this.replayPreviewSnapshotText = JSON.stringify(response?.requestSnapshot || {}, null, 2);
+      } catch (error) {
+        this.replayPreviewErrorText = this.resolveErrorText(error, '获取 replay 预览失败');
+      } finally {
+        this.replayPreviewLoading = false;
+      }
+    },
+    replayExecutionAllowed(row) {
+      if (!row) {
+        return false;
+      }
+      return String(row.status || '').toLowerCase() === 'failed';
+    },
+    replayExecutionDisabledReason(row) {
+      if (!row) {
+        return '';
+      }
+      if (this.replayExecutionAllowed(row)) {
+        return '';
+      }
+      return '仅 failed 任务允许执行回放';
+    },
+    async executeReplayFromTraceRow(row) {
+      if (!this.canJudgeRejudge) {
+        this.traceReplayErrorText = '当前账号没有回放执行权限';
+        return;
+      }
+      if (!row?.scope || !row?.jobId || !this.replayExecutionAllowed(row)) {
+        return;
+      }
+      const key = `${row.scope}:${row.jobId}`;
+      this.replayExecutingJobKey = key;
+      this.replayExecuteNoticeText = '';
+      this.replayBatchNoticeText = '';
+      this.traceReplayErrorText = '';
+      try {
+        const result = await this.$store.dispatch('executeJudgeReplayOps', {
+          scope: row.scope,
+          jobId: row.jobId,
+          reason: 'ops_ui_manual_replay',
+        });
+        this.replayExecuteNoticeText = `已触发回放：auditId=${result?.auditId || '-'}，job=${row.scope}#${row.jobId}`;
+        this.replayActionsFilter.scope = String(row.scope || '');
+        this.replayActionsFilter.sessionId = String(row.sessionId || '');
+        this.replayActionsFilter.jobId = String(row.jobId || '');
+        this.replayActionsFilter.offset = 0;
+        await Promise.all([
+          this.refreshTraceReplayOps(),
+          this.refreshReplayActionsOps(),
+        ]);
+      } catch (error) {
+        this.traceReplayErrorText = this.resolveErrorText(error, '执行回放失败');
+      } finally {
+        this.replayExecutingJobKey = '';
+      }
+    },
+    async executeReplayBatch() {
+      if (!this.canJudgeRejudge) {
+        this.traceReplayErrorText = '当前账号没有回放执行权限';
+        return;
+      }
+      const rows = this.traceReplayBatchSelectedRows || [];
+      if (rows.length === 0) {
+        return;
+      }
+      this.replayBatchExecuting = true;
+      this.traceReplayErrorText = '';
+      this.replayExecuteNoticeText = '';
+      this.replayBatchNoticeText = '';
+      try {
+        let successCount = 0;
+        const failures = [];
+        for (const row of rows) {
+          try {
+            await this.$store.dispatch('executeJudgeReplayOps', {
+              scope: row.scope,
+              jobId: row.jobId,
+              reason: 'ops_ui_batch_replay',
+            });
+            successCount += 1;
+          } catch (error) {
+            failures.push(`${row.scope}#${row.jobId}: ${this.resolveErrorText(error, '执行失败')}`);
+          }
+        }
+        const failedCount = failures.length;
+        this.replayBatchNoticeText = `批量回放执行完成：成功 ${successCount} 条，失败 ${failedCount} 条`;
+        if (failures.length > 0) {
+          this.replayBatchNoticeText += `\n失败明细：${failures.slice(0, 3).join('；')}`;
+        }
+        this.clearTraceReplaySelection();
+        await Promise.all([
+          this.refreshTraceReplayOps(),
+          this.refreshReplayActionsOps(),
+        ]);
+      } finally {
+        this.replayBatchExecuting = false;
+      }
+    },
     async triggerJudgeRejudge(sessionIdRaw) {
       if (!this.canJudgeRejudge) {
         this.reviewErrorText = '当前账号没有触发复核权限';
@@ -1893,7 +2682,7 @@ export default {
       this.errorText = '';
       try {
         await this.syncOpsRbacSnapshot();
-        const [topics, sessions, reviews, roleAssignments] = await Promise.all([
+        const [topics, sessions, reviews, roleAssignments, traceReplay, replayActions] = await Promise.all([
           this.$store.dispatch('listDebateTopics', { activeOnly: false, limit: 200 }),
           this.$store.dispatch('listDebateSessions', { limit: 200 }),
           this.canJudgeReview
@@ -1902,16 +2691,48 @@ export default {
           this.canRoleManage
             ? this.$store.dispatch('listOpsRoleAssignments')
             : Promise.resolve({ items: [] }),
+          this.canJudgeReview
+            ? this.$store.dispatch('listJudgeTraceReplayOps', this.buildTraceReplayPayload())
+            : Promise.resolve({
+              scannedCount: 0,
+              returnedCount: 0,
+              phaseCount: 0,
+              finalCount: 0,
+              failedCount: 0,
+              replayEligibleCount: 0,
+              items: [],
+            }),
+          this.canJudgeReview
+            ? this.$store.dispatch('listJudgeReplayActionsOps', this.buildReplayActionsPayload())
+            : Promise.resolve({ scannedCount: 0, returnedCount: 0, hasMore: false, items: [] }),
         ]);
         this.topics = topics || [];
         this.sessions = sessions || [];
         this.reviewRows = Array.isArray(reviews?.items) ? reviews.items : [];
+        this.traceReplayRows = Array.isArray(traceReplay?.items) ? traceReplay.items : [];
+        this.replayActionRows = Array.isArray(replayActions?.items) ? replayActions.items : [];
         this.roleAssignments = Array.isArray(roleAssignments?.items) ? roleAssignments.items : [];
         this.reviewMeta = {
           scannedCount: Number(reviews?.scannedCount || 0),
           returnedCount: Number(reviews?.returnedCount || this.reviewRows.length),
         };
+        this.traceReplayMeta = {
+          scannedCount: Number(traceReplay?.scannedCount || 0),
+          returnedCount: Number(traceReplay?.returnedCount || this.traceReplayRows.length),
+          phaseCount: Number(traceReplay?.phaseCount || 0),
+          finalCount: Number(traceReplay?.finalCount || 0),
+          failedCount: Number(traceReplay?.failedCount || 0),
+          replayEligibleCount: Number(traceReplay?.replayEligibleCount || 0),
+        };
+        this.replayActionMeta = {
+          scannedCount: Number(replayActions?.scannedCount || 0),
+          returnedCount: Number(replayActions?.returnedCount || this.replayActionRows.length),
+          hasMore: !!replayActions?.hasMore,
+        };
+        this.reconcileTraceReplaySelection();
         this.reviewErrorText = this.canJudgeReview ? '' : '当前账号没有判决审阅权限';
+        this.traceReplayErrorText = this.canJudgeReview ? '' : '当前账号没有 trace/replay 审阅权限';
+        this.replayActionsErrorText = this.canJudgeReview ? '' : '当前账号没有 replay action 审阅权限';
         this.roleErrorText = this.canRoleManage ? '' : '仅 platform admin 可管理 Ops 角色';
         if (this.canJudgeReview) {
           this.observabilityErrorText = '';
@@ -1923,6 +2744,9 @@ export default {
           this.observabilityUpdatedAt = null;
           this.observabilityErrorText = '当前账号没有裁判观测权限';
           this.observabilityMetricsErrorText = '当前账号没有裁判观测权限';
+          this.traceReplayRows = [];
+          this.replayActionRows = [];
+          this.clearTraceReplaySelection();
         }
         if (!this.topicEditForm.topicId && this.topics.length > 0) {
           this.topicEditForm.topicId = String(this.topics[0].id);

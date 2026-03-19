@@ -585,6 +585,96 @@ export default createStore({
       });
       return response.data || { scannedCount: 0, returnedCount: 0, items: [] };
     },
+    async listJudgeTraceReplayOps({ state }, payload = {}) {
+      const sessionId = Number(payload.sessionId || 0);
+      const suffix = buildQueryString({
+        from: payload.from,
+        to: payload.to,
+        sessionId: sessionId > 0 ? sessionId : null,
+        scope: payload.scope,
+        status: payload.status,
+        limit: payload.limit,
+      });
+      const response = await network(this, 'get', `/debate/ops/judge-trace-replay${suffix}`, null, {
+        Authorization: `Bearer ${state.token}`,
+      });
+      return response.data || {
+        scannedCount: 0,
+        returnedCount: 0,
+        phaseCount: 0,
+        finalCount: 0,
+        failedCount: 0,
+        replayEligibleCount: 0,
+        items: [],
+      };
+    },
+    async listJudgeReplayActionsOps({ state }, payload = {}) {
+      const sessionId = Number(payload.sessionId || 0);
+      const jobId = Number(payload.jobId || 0);
+      const requestedBy = Number(payload.requestedBy || 0);
+      const offset = Number(payload.offset || 0);
+      const suffix = buildQueryString({
+        from: payload.from,
+        to: payload.to,
+        scope: payload.scope,
+        sessionId: sessionId > 0 ? sessionId : null,
+        jobId: jobId > 0 ? jobId : null,
+        requestedBy: requestedBy > 0 ? requestedBy : null,
+        limit: payload.limit,
+        offset: offset >= 0 ? offset : 0,
+      });
+      const response = await network(this, 'get', `/debate/ops/judge-replay/actions${suffix}`, null, {
+        Authorization: `Bearer ${state.token}`,
+      });
+      return response.data || {
+        scannedCount: 0,
+        returnedCount: 0,
+        hasMore: false,
+        items: [],
+      };
+    },
+    async getJudgeReplayPreviewOps({ state }, { scope, jobId } = {}) {
+      const normalizedScope = String(scope || '').trim();
+      const normalizedJobId = Number(jobId || 0);
+      if (!normalizedScope) {
+        throw new Error('scope is required');
+      }
+      if (!normalizedJobId) {
+        throw new Error('jobId is required');
+      }
+      const suffix = buildQueryString({
+        scope: normalizedScope,
+        jobId: normalizedJobId,
+      });
+      const response = await network(this, 'get', `/debate/ops/judge-replay/preview${suffix}`, null, {
+        Authorization: `Bearer ${state.token}`,
+      });
+      return response.data || null;
+    },
+    async executeJudgeReplayOps({ state }, { scope, jobId, reason = null } = {}) {
+      const normalizedScope = String(scope || '').trim();
+      const normalizedJobId = Number(jobId || 0);
+      if (!normalizedScope) {
+        throw new Error('scope is required');
+      }
+      if (!normalizedJobId) {
+        throw new Error('jobId is required');
+      }
+      const response = await network(
+        this,
+        'post',
+        '/debate/ops/judge-replay/execute',
+        {
+          scope: normalizedScope,
+          jobId: normalizedJobId,
+          reason: reason == null ? null : String(reason).trim() || null,
+        },
+        {
+          Authorization: `Bearer ${state.token}`,
+        },
+      );
+      return response.data || null;
+    },
     async listOpsRoleAssignments({ state }) {
       const response = await network(this, 'get', '/debate/ops/rbac/roles', null, {
         Authorization: `Bearer ${state.token}`,
