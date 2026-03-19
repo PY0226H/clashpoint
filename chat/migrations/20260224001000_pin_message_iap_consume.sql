@@ -1,6 +1,6 @@
 -- debate message + pin consume foundation
 
-CREATE TABLE IF NOT EXISTS session_messages(
+CREATE TABLE session_messages(
   id bigserial PRIMARY KEY,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
   user_id bigint NOT NULL REFERENCES users(id),
@@ -9,12 +9,12 @@ CREATE TABLE IF NOT EXISTS session_messages(
   created_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_session_messages_session_id
+CREATE INDEX idx_session_messages_session_id
   ON session_messages(session_id, id DESC);
-CREATE INDEX IF NOT EXISTS idx_session_messages_user_created
+CREATE INDEX idx_session_messages_user_created
   ON session_messages(user_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS session_pinned_messages(
+CREATE TABLE session_pinned_messages(
   id bigserial PRIMARY KEY,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
   message_id bigint NOT NULL REFERENCES session_messages(id) ON DELETE CASCADE,
@@ -29,9 +29,9 @@ CREATE TABLE IF NOT EXISTS session_pinned_messages(
   updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_session_pinned_messages_session_status_expires
+CREATE INDEX idx_session_pinned_messages_session_status_expires
   ON session_pinned_messages(session_id, status, expires_at DESC);
-CREATE INDEX IF NOT EXISTS idx_session_pinned_messages_message_status
+CREATE INDEX idx_session_pinned_messages_message_status
   ON session_pinned_messages(message_id, status, expires_at DESC);
 
 -- realtime notification for debate message created

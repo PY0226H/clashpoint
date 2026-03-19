@@ -14,7 +14,7 @@ ALTER TABLE judge_final_jobs
   ADD CONSTRAINT judge_final_jobs_status_check
   CHECK (status IN ('queued', 'dispatched', 'succeeded', 'failed'));
 
-CREATE TABLE IF NOT EXISTS judge_phase_reports(
+CREATE TABLE judge_phase_reports(
   id bigserial PRIMARY KEY,
   phase_job_id bigint NOT NULL REFERENCES judge_phase_jobs(id) ON DELETE CASCADE,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
@@ -41,13 +41,13 @@ CREATE TABLE IF NOT EXISTS judge_phase_reports(
   UNIQUE (session_id, phase_no)
 );
 
-CREATE INDEX IF NOT EXISTS idx_judge_phase_reports_session_phase
+CREATE INDEX idx_judge_phase_reports_session_phase
   ON judge_phase_reports(session_id, phase_no DESC);
 
-CREATE INDEX IF NOT EXISTS idx_judge_phase_reports_created
+CREATE INDEX idx_judge_phase_reports_created
   ON judge_phase_reports(created_at DESC);
 
-CREATE TABLE IF NOT EXISTS judge_final_reports(
+CREATE TABLE judge_final_reports(
   id bigserial PRIMARY KEY,
   final_job_id bigint NOT NULL REFERENCES judge_final_jobs(id) ON DELETE CASCADE,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
@@ -77,5 +77,5 @@ CREATE TABLE IF NOT EXISTS judge_final_reports(
     CHECK (winner_second IS NULL OR winner_second IN ('pro', 'con', 'draw'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_judge_final_reports_created
+CREATE INDEX idx_judge_final_reports_created
   ON judge_final_reports(created_at DESC);

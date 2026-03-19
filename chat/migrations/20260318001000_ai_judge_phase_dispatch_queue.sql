@@ -1,6 +1,6 @@
 -- ai judge phase dispatch queue foundation
 
-CREATE TABLE IF NOT EXISTS judge_phase_jobs(
+CREATE TABLE judge_phase_jobs(
   id bigserial PRIMARY KEY,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
   phase_no int NOT NULL CHECK (phase_no > 0),
@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS judge_phase_jobs(
   UNIQUE (idempotency_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_judge_phase_jobs_status_due
+CREATE INDEX idx_judge_phase_jobs_status_due
   ON judge_phase_jobs(status, dispatch_locked_until, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_judge_phase_jobs_session_phase
+CREATE INDEX idx_judge_phase_jobs_session_phase
   ON judge_phase_jobs(session_id, phase_no DESC);

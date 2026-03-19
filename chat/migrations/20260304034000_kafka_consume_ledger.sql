@@ -1,6 +1,6 @@
 -- kafka consumer idempotency ledger for worker processing
 
-CREATE TABLE IF NOT EXISTS kafka_consume_ledger(
+CREATE TABLE kafka_consume_ledger(
   id bigserial PRIMARY KEY,
   consumer_group text NOT NULL,
   topic text NOT NULL,
@@ -19,5 +19,5 @@ CREATE TABLE IF NOT EXISTS kafka_consume_ledger(
   UNIQUE(consumer_group, topic, partition, message_offset)
 );
 
-CREATE INDEX IF NOT EXISTS idx_kafka_consume_ledger_status_processed_at
+CREATE INDEX idx_kafka_consume_ledger_status_processed_at
   ON kafka_consume_ledger(status, processed_at DESC);

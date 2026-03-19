@@ -1,12 +1,17 @@
--- Add migration script here
+-- foundation schema for chat + auth core
+
 -- create user table
-CREATE TABLE IF NOT EXISTS users(
+CREATE TABLE users(
   id bigserial PRIMARY KEY,
   fullname varchar(64) NOT NULL,
-  email varchar(64) NOT NULL,
+  email varchar(64),
   -- hashed argon2 password, length 97
   password_hash varchar(97) NOT NULL,
-  created_at timestamptz DEFAULT CURRENT_TIMESTAMP
+  token_version bigint NOT NULL DEFAULT 0,
+  phone_e164 varchar(20),
+  phone_verified_at timestamptz,
+  phone_bind_required boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 INSERT INTO users(id, fullname, email, password_hash)
@@ -14,7 +19,12 @@ INSERT INTO users(id, fullname, email, password_hash)
 ON CONFLICT (id) DO NOTHING;
 
 -- create index for users for email
-CREATE UNIQUE INDEX IF NOT EXISTS email_index ON users(email);
+CREATE UNIQUE INDEX email_index ON users(email);
+
+-- phone is optional, but must be globally unique when provided
+CREATE UNIQUE INDEX users_phone_e164_unique_idx
+  ON users(phone_e164)
+  WHERE phone_e164 IS NOT NULL;
 
 -- create chat type: single, group, private_channel, public_channel
 CREATE TYPE chat_type AS ENUM(
@@ -25,7 +35,7 @@ CREATE TYPE chat_type AS ENUM(
 );
 
 -- create chat table
-CREATE TABLE IF NOT EXISTS chats(
+CREATE TABLE chats(
   id bigserial PRIMARY KEY,
   name varchar(64),
   type chat_type NOT NULL,
@@ -36,7 +46,7 @@ CREATE TABLE IF NOT EXISTS chats(
 );
 
 -- create message table
-CREATE TABLE IF NOT EXISTS messages(
+CREATE TABLE messages(
   id bigserial PRIMARY KEY,
   chat_id bigint NOT NULL REFERENCES chats(id),
   sender_id bigint NOT NULL REFERENCES users(id),
@@ -46,10 +56,10 @@ CREATE TABLE IF NOT EXISTS messages(
 );
 
 -- create index for messages for chat_id and created_at order by created_at desc
-CREATE INDEX IF NOT EXISTS chat_id_created_at_index ON messages(chat_id, created_at DESC);
+CREATE INDEX chat_id_created_at_index ON messages(chat_id, created_at DESC);
 
 -- create index for messages for sender_id
-CREATE INDEX IF NOT EXISTS sender_id_index ON messages(sender_id, created_at DESC);
+CREATE INDEX sender_id_index ON messages(sender_id, created_at DESC);
 
 -- create index for chat members
-CREATE INDEX IF NOT EXISTS chat_members_index ON chats USING GIN(members);
+CREATE INDEX chat_members_index ON chats USING GIN(members);

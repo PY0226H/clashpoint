@@ -1,6 +1,6 @@
 -- kafka dlq events for failed consumer governance
 
-CREATE TABLE IF NOT EXISTS kafka_dlq_events(
+CREATE TABLE kafka_dlq_events(
   id bigserial PRIMARY KEY,
   consumer_group text NOT NULL,
   topic text NOT NULL,
@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS kafka_dlq_events(
   UNIQUE(consumer_group, event_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_kafka_dlq_events_status_updated_at
+CREATE INDEX idx_kafka_dlq_events_status_updated_at
   ON kafka_dlq_events(status, updated_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_kafka_dlq_events_consumer_status_last_failed
+CREATE INDEX idx_kafka_dlq_events_consumer_status_last_failed
   ON kafka_dlq_events(consumer_group, status, last_failed_at DESC);

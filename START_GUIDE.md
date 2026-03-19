@@ -19,7 +19,7 @@
 - **PostgreSQL**: 14 或更高版本
 - **Yarn**: 包管理器
 - **Cargo**: Rust 构建工具（随 Rust 一起安装）
-- **sqlx-cli**: 数据库迁移工具（可选，用于数据库迁移）
+- **sqlx-cli**: 数据库迁移工具（推荐安装，`start.sh` 默认会执行迁移回放）
 
 ### 安装系统依赖
 
@@ -33,7 +33,7 @@ brew install rust
 # 启动 PostgreSQL
 brew services start postgresql@14
 
-# 安装 sqlx-cli (可选)
+# 安装 sqlx-cli (推荐)
 cargo install sqlx-cli --no-default-features --features postgres
 ```
 
@@ -113,7 +113,7 @@ cargo sqlx migrate run
 cd ..
 ```
 
-> **注意**: 如果数据库表已经存在，可以跳过此步骤
+> **注意**: `start.sh` 会默认执行这一步；若你手动启动服务，请先确保迁移已回放
 
 ---
 

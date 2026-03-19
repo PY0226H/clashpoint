@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dev compatibility repair:
-# When _sqlx_migrations history diverges from current files, `cargo sqlx migrate run`
-# may be blocked by "applied but missing". For local runtime bootstrap, we patch
-# missing 2026 domain tables directly from migration SQL files.
+# Deprecated emergency repair:
+# Default local bootstrap must use formal migration replay (`cargo sqlx migrate run`).
+# This script is kept only for temporary fallback in legacy/broken local DB states.
+
+if [[ "${ECHOISLE_ALLOW_LEGACY_REPAIR:-0}" != "1" ]]; then
+  echo "该脚本已降级为应急路径，不再作为默认初始化流程。" >&2
+  echo "如确需执行，请显式设置 ECHOISLE_ALLOW_LEGACY_REPAIR=1。" >&2
+  exit 2
+fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DB_NAME="${1:-chat}"
@@ -16,11 +21,11 @@ required_sql="SELECT to_regclass('public.debate_topics') IS NOT NULL,
 
 existing="$(psql -d "$DB_NAME" -Atqc "$required_sql")"
 if [[ "$existing" == "t|t|t" ]]; then
-  echo "✓ 运行时核心表已存在（debate_topics/debate_sessions/user_wallets）"
+  echo "✓ 应急检查：运行时核心表已存在（debate_topics/debate_sessions/user_wallets）"
   exit 0
 fi
 
-echo "! 检测到运行时核心表缺失，开始应用 2026 业务域 SQL（仅开发环境修复）..."
+echo "! 检测到运行时核心表缺失，开始执行应急修复（仅限本地临时兜底）..."
 
 shopt -s nullglob
 files=("$MIG_DIR"/202602*.sql)
@@ -41,4 +46,3 @@ if [[ "$after" != "t|t|t" ]]; then
 fi
 
 echo "✓ 运行时核心表修复完成"
-

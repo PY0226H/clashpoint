@@ -1,6 +1,6 @@
 -- debate domain foundation
 
-CREATE TABLE IF NOT EXISTS debate_topics(
+CREATE TABLE debate_topics(
   id bigserial PRIMARY KEY,
   title varchar(120) NOT NULL,
   description text NOT NULL,
@@ -14,12 +14,12 @@ CREATE TABLE IF NOT EXISTS debate_topics(
   updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_topics_category_active
+CREATE INDEX idx_topics_category_active
   ON debate_topics(category, is_active);
-CREATE INDEX IF NOT EXISTS idx_topics_created_at
+CREATE INDEX idx_topics_created_at
   ON debate_topics(created_at DESC);
 
-CREATE TABLE IF NOT EXISTS debate_sessions(
+CREATE TABLE debate_sessions(
   id bigserial PRIMARY KEY,
   topic_id bigint NOT NULL REFERENCES debate_topics(id) ON DELETE CASCADE,
   status varchar(20) NOT NULL CHECK (status IN ('scheduled', 'open', 'running', 'judging', 'closed', 'canceled')),
@@ -37,12 +37,12 @@ CREATE TABLE IF NOT EXISTS debate_sessions(
   CHECK (con_count <= max_participants_per_side)
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_status_time
+CREATE INDEX idx_sessions_status_time
   ON debate_sessions(status, scheduled_start_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_topic_time
+CREATE INDEX idx_sessions_topic_time
   ON debate_sessions(topic_id, scheduled_start_at DESC);
 
-CREATE TABLE IF NOT EXISTS session_participants(
+CREATE TABLE session_participants(
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
   user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   side varchar(8) NOT NULL CHECK (side IN ('pro', 'con')),
@@ -50,9 +50,9 @@ CREATE TABLE IF NOT EXISTS session_participants(
   PRIMARY KEY (session_id, user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_participants_session_side
+CREATE INDEX idx_participants_session_side
   ON session_participants(session_id, side);
-CREATE INDEX IF NOT EXISTS idx_participants_user_joined_at
+CREATE INDEX idx_participants_user_joined_at
   ON session_participants(user_id, joined_at DESC);
 
 -- realtime notification for debate participant join

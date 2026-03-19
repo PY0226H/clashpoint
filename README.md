@@ -48,7 +48,7 @@ DATABASE_URL=postgres://<username>:<password>@localhost:5432/chat
 脚本会自动：
 1. 检查并启动 PostgreSQL（macOS）
 2. 检查 `chat` 数据库
-3. 执行运行时核心表修复脚本
+3. 执行标准迁移回放（`cargo sqlx migrate run`）
 4. 启动 `chat_server`、`notify_server`、`chatapp`
 
 启动后访问：
@@ -91,5 +91,4 @@ cd ai_judge_service
 | notify_server | 6687 | SSE / WebSocket 推送 |
 | chatapp (vite) | 1420 | Web 前端 |
 | ai_judge_service | 8787 | AI 裁判内部服务（可选） |
-
 

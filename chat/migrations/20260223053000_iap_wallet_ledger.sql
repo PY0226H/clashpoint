@@ -1,6 +1,6 @@
 -- iap + wallet ledger foundation
 
-CREATE TABLE IF NOT EXISTS iap_products(
+CREATE TABLE iap_products(
   product_id varchar(64) PRIMARY KEY,
   coins int NOT NULL CHECK (coins > 0),
   is_active boolean NOT NULL DEFAULT TRUE,
@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS iap_products(
   updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_iap_products_active
+CREATE INDEX idx_iap_products_active
   ON iap_products(is_active);
 
 INSERT INTO iap_products(product_id, coins, is_active)
@@ -18,7 +18,7 @@ INSERT INTO iap_products(product_id, coins, is_active)
     ('com.echoisle.coins.680', 680, true)
 ON CONFLICT (product_id) DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS iap_orders(
+CREATE TABLE iap_orders(
   id bigserial PRIMARY KEY,
   user_id bigint NOT NULL REFERENCES users(id),
   platform varchar(16) NOT NULL CHECK (platform IN ('apple_iap')),
@@ -37,22 +37,22 @@ CREATE TABLE IF NOT EXISTS iap_orders(
   UNIQUE(platform, transaction_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_iap_orders_user_created
+CREATE INDEX idx_iap_orders_user_created
   ON iap_orders(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_iap_orders_status_created
+CREATE INDEX idx_iap_orders_status_created
   ON iap_orders(status, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS user_wallets(
+CREATE TABLE user_wallets(
   user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   balance bigint NOT NULL DEFAULT 0 CHECK (balance >= 0),
   updated_at timestamptz DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_wallets_balance
+CREATE INDEX idx_user_wallets_balance
   ON user_wallets(balance DESC);
 
-CREATE TABLE IF NOT EXISTS wallet_ledger(
+CREATE TABLE wallet_ledger(
   id bigserial PRIMARY KEY,
   user_id bigint NOT NULL REFERENCES users(id),
   order_id bigint REFERENCES iap_orders(id),
@@ -64,5 +64,5 @@ CREATE TABLE IF NOT EXISTS wallet_ledger(
   created_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_wallet_ledger_user_created
+CREATE INDEX idx_wallet_ledger_user_created
   ON wallet_ledger(user_id, created_at DESC);

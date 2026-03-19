@@ -1,6 +1,6 @@
 -- ai judge final dispatch queue foundation
 
-CREATE TABLE IF NOT EXISTS judge_final_jobs(
+CREATE TABLE judge_final_jobs(
   id bigserial PRIMARY KEY,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
   phase_start_no int NOT NULL CHECK (phase_start_no > 0),
@@ -21,5 +21,5 @@ CREATE TABLE IF NOT EXISTS judge_final_jobs(
   UNIQUE (idempotency_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_judge_final_jobs_status_due
+CREATE INDEX idx_judge_final_jobs_status_due
   ON judge_final_jobs(status, dispatch_locked_until, created_at);

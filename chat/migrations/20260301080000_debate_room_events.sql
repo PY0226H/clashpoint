@@ -1,6 +1,6 @@
 -- durable websocket replay stream for debate room events
 
-CREATE TABLE IF NOT EXISTS debate_room_events(
+CREATE TABLE debate_room_events(
   id bigserial PRIMARY KEY,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
   event_seq bigint NOT NULL CHECK (event_seq > 0),
@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS debate_room_events(
   UNIQUE(session_id, event_name, dedupe_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_debate_room_events_session_seq
+CREATE INDEX idx_debate_room_events_session_seq
   ON debate_room_events(session_id, event_seq DESC);
 
-CREATE INDEX IF NOT EXISTS idx_debate_room_events_session_event_at
+CREATE INDEX idx_debate_room_events_session_event_at
   ON debate_room_events(session_id, event_at DESC);

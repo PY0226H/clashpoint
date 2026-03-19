@@ -1,6 +1,6 @@
 -- ai judge ops replay execution audit
 
-CREATE TABLE IF NOT EXISTS judge_replay_actions(
+CREATE TABLE judge_replay_actions(
   id bigserial PRIMARY KEY,
   scope varchar(16) NOT NULL CHECK (scope IN ('phase', 'final')),
   job_id bigint NOT NULL,
@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS judge_replay_actions(
   created_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_judge_replay_actions_scope_job_created
+CREATE INDEX idx_judge_replay_actions_scope_job_created
   ON judge_replay_actions(scope, job_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_judge_replay_actions_session_created
+CREATE INDEX idx_judge_replay_actions_session_created
   ON judge_replay_actions(session_id, created_at DESC);

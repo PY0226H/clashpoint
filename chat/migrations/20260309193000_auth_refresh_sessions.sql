@@ -1,7 +1,7 @@
-ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS token_version bigint NOT NULL DEFAULT 0;
+-- token_version moved into baseline users table (20240426045903_initial.sql).
+-- this migration now focuses on refresh-session domain tables only.
 
-CREATE TABLE IF NOT EXISTS auth_refresh_sessions(
+CREATE TABLE auth_refresh_sessions(
   id bigserial PRIMARY KEY,
   user_id bigint NOT NULL REFERENCES users(id),
   sid varchar(64) NOT NULL UNIQUE,
@@ -17,11 +17,11 @@ CREATE TABLE IF NOT EXISTS auth_refresh_sessions(
   updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS auth_refresh_sessions_user_idx
+CREATE INDEX auth_refresh_sessions_user_idx
   ON auth_refresh_sessions(user_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS auth_refresh_sessions_family_idx
+CREATE INDEX auth_refresh_sessions_family_idx
   ON auth_refresh_sessions(family_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS auth_refresh_sessions_sid_user_idx
+CREATE INDEX auth_refresh_sessions_sid_user_idx
   ON auth_refresh_sessions(sid, user_id);

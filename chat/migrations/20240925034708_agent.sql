@@ -10,7 +10,7 @@ ALTER TABLE messages ADD COLUMN modified_content TEXT;
 CREATE TYPE agent_type AS ENUM ('proxy', 'reply', 'tap');
 
 -- add chat_agent table
-CREATE TABLE IF NOT EXISTS chat_agents(
+CREATE TABLE chat_agents(
   id BIGSERIAL PRIMARY KEY,
   chat_id BIGINT NOT NULL REFERENCES chats(id),
   name TEXT NOT NULL UNIQUE,

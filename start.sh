@@ -5,6 +5,19 @@
 
 set -e
 
+run_legacy_schema_repair_if_enabled() {
+    if [[ "${ECHOISLE_ALLOW_LEGACY_REPAIR:-0}" == "1" ]]; then
+        echo -e "${YELLOW}!${NC} 已启用 ECHOISLE_ALLOW_LEGACY_REPAIR=1，回退到应急 schema 修复脚本..."
+        if bash chat/scripts/repair_runtime_schema.sh chat; then
+            echo -e "${GREEN}✓${NC} 应急 schema 修复完成"
+            return 0
+        fi
+        echo -e "${RED}✗${NC} 应急 schema 修复失败"
+        return 1
+    fi
+    return 2
+}
+
 echo "=========================================="
 echo "  EchoIsle 应用启动脚本"
 echo "=========================================="
@@ -53,12 +66,32 @@ else
 fi
 
 echo ""
-echo "2.1 检查运行时业务核心表..."
-if bash chat/scripts/repair_runtime_schema.sh chat; then
-    echo -e "${GREEN}✓${NC} 运行时业务核心表检查完成"
+echo "2.1 执行标准迁移回放..."
+if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
+if cargo sqlx --help >/dev/null 2>&1; then
+    if (cd chat && cargo sqlx migrate run); then
+        echo -e "${GREEN}✓${NC} 标准迁移回放完成"
+    else
+        echo -e "${RED}✗${NC} 标准迁移回放失败"
+        echo "   可检查 DATABASE_URL 或迁移 SQL。"
+        if ! run_legacy_schema_repair_if_enabled; then
+            echo "   如需临时使用应急修复，请设置 ECHOISLE_ALLOW_LEGACY_REPAIR=1 后重试。"
+            exit 1
+        fi
+    fi
 else
-    echo -e "${RED}✗${NC} 运行时业务核心表修复失败"
-    exit 1
+    echo -e "${RED}✗${NC} 未检测到 sqlx-cli（cargo sqlx）"
+    echo "   安装命令: cargo install sqlx-cli --no-default-features --features postgres"
+    if ! run_legacy_schema_repair_if_enabled; then
+        echo "   如需临时使用应急修复，请设置 ECHOISLE_ALLOW_LEGACY_REPAIR=1 后重试。"
+        exit 1
+    fi
 fi
 
 # 检查端口占用

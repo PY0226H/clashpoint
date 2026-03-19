@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS auth_sms_audit_logs(
+CREATE TABLE auth_sms_audit_logs(
   id bigserial PRIMARY KEY,
   phone_e164 varchar(20) NOT NULL,
   scene varchar(32) NOT NULL,
@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS auth_sms_audit_logs(
   created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS auth_sms_audit_logs_phone_scene_idx
+CREATE INDEX auth_sms_audit_logs_phone_scene_idx
   ON auth_sms_audit_logs(phone_e164, scene, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS auth_sms_audit_logs_result_idx
+CREATE INDEX auth_sms_audit_logs_result_idx
   ON auth_sms_audit_logs(result, created_at DESC);

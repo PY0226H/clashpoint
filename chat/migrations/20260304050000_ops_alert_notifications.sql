@@ -1,6 +1,6 @@
 -- ops observability alert notifications and runtime states
 
-CREATE TABLE IF NOT EXISTS ops_alert_notifications(
+CREATE TABLE ops_alert_notifications(
   id bigserial PRIMARY KEY,
   alert_key text NOT NULL,
   rule_type text NOT NULL,
@@ -17,13 +17,13 @@ CREATE TABLE IF NOT EXISTS ops_alert_notifications(
   updated_at timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_ops_alert_notifications_created_at
+CREATE INDEX idx_ops_alert_notifications_created_at
   ON ops_alert_notifications(created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_ops_alert_notifications_status
+CREATE INDEX idx_ops_alert_notifications_status
   ON ops_alert_notifications(alert_status, delivery_status, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS ops_alert_states(
+CREATE TABLE ops_alert_states(
   alert_key text NOT NULL,
   is_active boolean NOT NULL DEFAULT false,
   last_emitted_status varchar(16) NOT NULL CHECK (last_emitted_status IN ('raised', 'cleared', 'suppressed')) DEFAULT 'cleared',
@@ -33,5 +33,5 @@ CREATE TABLE IF NOT EXISTS ops_alert_states(
   PRIMARY KEY (alert_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ops_alert_states_active
+CREATE INDEX idx_ops_alert_states_active
   ON ops_alert_states(is_active, updated_at DESC);
