@@ -322,7 +322,7 @@
               Replay Actions（scanned: {{ replayActionMeta.scannedCount }} · returned: {{ replayActionMeta.returnedCount }} · hasMore: {{ replayActionMeta.hasMore ? 'yes' : 'no' }})
             </div>
             <div class="text-[11px] text-slate-600">
-              当前分页: offset={{ replayActionsFilter.offset }} · limit={{ replayActionsFilter.limit }} · 本页筛选后 {{ replayActionFilteredRows.length }} 条
+              当前分页: offset={{ replayActionsFilter.offset }} · limit={{ replayActionsFilter.limit }} · 当前页返回 {{ replayActionFilteredRows.length }} 条
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-9 gap-2">
               <label class="text-xs text-gray-600">
@@ -363,7 +363,7 @@
               </label>
               <div class="flex items-end">
                 <button
-                  @click="refreshReplayActionsOps"
+                  @click="queryReplayActionsOps"
                   :disabled="replayActionsLoading || !canJudgeReview"
                   class="px-3 py-2 rounded bg-slate-700 text-white text-xs disabled:opacity-50"
                 >
@@ -373,17 +373,30 @@
             </div>
 
             <div class="rounded border border-slate-100 bg-slate-50 px-2 py-2 space-y-2">
-              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
+              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
                 <label class="text-xs text-gray-600">
-                  状态迁移
-                  <select v-model="replayActionsViewFilter.statusTransition" class="w-full border rounded px-2 py-1 mt-1">
+                  PreviousStatus
+                  <select v-model="replayActionsViewFilter.previousStatus" class="w-full border rounded px-2 py-1 mt-1">
                     <option value="">all</option>
                     <option
-                      v-for="transition in replayActionTransitionOptions"
-                      :key="`transition-${transition}`"
-                      :value="transition"
+                      v-for="status in replayActionStatusOptions"
+                      :key="`previous-status-${status}`"
+                      :value="status"
                     >
-                      {{ transition }}
+                      {{ status }}
+                    </option>
+                  </select>
+                </label>
+                <label class="text-xs text-gray-600">
+                  NewStatus
+                  <select v-model="replayActionsViewFilter.newStatus" class="w-full border rounded px-2 py-1 mt-1">
+                    <option value="">all</option>
+                    <option
+                      v-for="status in replayActionStatusOptions"
+                      :key="`new-status-${status}`"
+                      :value="status"
+                    >
+                      {{ status }}
                     </option>
                   </select>
                 </label>
@@ -1559,7 +1572,8 @@ export default {
         offset: 0,
       },
       replayActionsViewFilter: {
-        statusTransition: '',
+        previousStatus: '',
+        newStatus: '',
         reasonKeyword: '',
         traceKeyword: '',
       },
@@ -1658,39 +1672,30 @@ export default {
       }
       return this.traceReplayBatchSelectedCount === candidates.length;
     },
-    replayActionTransitionOptions() {
-      const transitions = new Set();
+    replayActionStatusOptions() {
+      const statuses = new Set([
+        'queued',
+        'running',
+        'dispatched',
+        'succeeded',
+        'failed',
+        'compensating',
+        'completed',
+      ]);
       for (const item of this.replayActionRows) {
-        const previousStatus = String(item?.previousStatus || '-').trim() || '-';
-        const newStatus = String(item?.newStatus || '-').trim() || '-';
-        transitions.add(`${previousStatus} -> ${newStatus}`);
+        const previousStatus = String(item?.previousStatus || '').trim();
+        const newStatus = String(item?.newStatus || '').trim();
+        if (previousStatus) {
+          statuses.add(previousStatus);
+        }
+        if (newStatus) {
+          statuses.add(newStatus);
+        }
       }
-      return Array.from(transitions).sort((a, b) => a.localeCompare(b));
+      return Array.from(statuses).sort((a, b) => a.localeCompare(b));
     },
     replayActionFilteredRows() {
-      const statusTransition = String(this.replayActionsViewFilter?.statusTransition || '').trim();
-      const reasonKeyword = String(this.replayActionsViewFilter?.reasonKeyword || '').trim().toLowerCase();
-      const traceKeyword = String(this.replayActionsViewFilter?.traceKeyword || '').trim().toLowerCase();
-      return this.replayActionRows.filter((item) => {
-        const itemTransition = `${String(item?.previousStatus || '-').trim() || '-'} -> ${String(item?.newStatus || '-').trim() || '-'}`;
-        if (statusTransition && statusTransition !== itemTransition) {
-          return false;
-        }
-        if (reasonKeyword) {
-          const reason = String(item?.reason || '').toLowerCase();
-          if (!reason.includes(reasonKeyword)) {
-            return false;
-          }
-        }
-        if (traceKeyword) {
-          const previousTraceId = String(item?.previousTraceId || '').toLowerCase();
-          const newTraceId = String(item?.newTraceId || '').toLowerCase();
-          if (!previousTraceId.includes(traceKeyword) && !newTraceId.includes(traceKeyword)) {
-            return false;
-          }
-        }
-        return true;
-      });
+      return this.replayActionRows;
     },
     observabilityAnomaliesRaw() {
       return buildJudgeObservabilityAnomalies({
@@ -2408,6 +2413,10 @@ export default {
     buildReplayActionsPayload() {
       const limit = Math.min(500, Math.max(1, Number(this.replayActionsFilter.limit || 50)));
       const offset = Math.max(0, Number(this.replayActionsFilter.offset || 0));
+      const previousStatus = String(this.replayActionsViewFilter.previousStatus || '').trim().toLowerCase();
+      const newStatus = String(this.replayActionsViewFilter.newStatus || '').trim().toLowerCase();
+      const reasonKeyword = String(this.replayActionsViewFilter.reasonKeyword || '').trim();
+      const traceKeyword = String(this.replayActionsViewFilter.traceKeyword || '').trim();
       this.replayActionsFilter.limit = limit;
       this.replayActionsFilter.offset = offset;
       return {
@@ -2417,6 +2426,10 @@ export default {
         sessionId: this.toPositiveNumber(this.replayActionsFilter.sessionId),
         jobId: this.toPositiveNumber(this.replayActionsFilter.jobId),
         requestedBy: this.toPositiveNumber(this.replayActionsFilter.requestedBy),
+        previousStatus: previousStatus || null,
+        newStatus: newStatus || null,
+        reasonKeyword: reasonKeyword || null,
+        traceKeyword: traceKeyword || null,
         limit,
         offset,
       };
@@ -2426,10 +2439,15 @@ export default {
     },
     resetReplayActionsViewFilter() {
       this.replayActionsViewFilter = {
-        statusTransition: '',
+        previousStatus: '',
+        newStatus: '',
         reasonKeyword: '',
         traceKeyword: '',
       };
+    },
+    async queryReplayActionsOps() {
+      this.replayActionsFilter.offset = 0;
+      await this.refreshReplayActionsOps();
     },
     async refreshReplayActionsOps() {
       if (!this.canJudgeReview) {

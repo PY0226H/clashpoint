@@ -18,6 +18,8 @@ const DEFAULT_OPS_REPLAY_ACTIONS_LIMIT: u32 = 100;
 const MAX_OPS_REPLAY_ACTIONS_LIMIT: u32 = 500;
 const MAX_OPS_REPLAY_ACTIONS_OFFSET: u32 = 10_000;
 const MAX_REPLAY_REASON_LEN: usize = 500;
+const MAX_OPS_REPLAY_ACTIONS_KEYWORD_LEN: usize = 100;
+const MAX_OPS_REPLAY_ACTIONS_STATUS_LEN: usize = 32;
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
@@ -81,6 +83,58 @@ fn normalize_optional_trace_status_filter(
                     "status must be one of: queued, dispatched, succeeded, failed".to_string(),
                 ))
             }
+        }
+        None => Ok(None),
+    }
+}
+
+fn normalize_optional_replay_actions_status_filter(
+    field_name: &str,
+    status: Option<String>,
+) -> Result<Option<String>, AppError> {
+    match status {
+        Some(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return Ok(None);
+            }
+            if normalized.chars().count() > MAX_OPS_REPLAY_ACTIONS_STATUS_LEN {
+                return Err(AppError::DebateError(format!(
+                    "{field_name} is too long, max {} chars",
+                    MAX_OPS_REPLAY_ACTIONS_STATUS_LEN
+                )));
+            }
+            if !normalized
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+            {
+                return Err(AppError::DebateError(format!(
+                    "{field_name} contains unsupported characters"
+                )));
+            }
+            Ok(Some(normalized))
+        }
+        None => Ok(None),
+    }
+}
+
+fn normalize_optional_replay_actions_keyword(
+    field_name: &str,
+    keyword: Option<String>,
+) -> Result<Option<String>, AppError> {
+    match keyword {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            if trimmed.chars().count() > MAX_OPS_REPLAY_ACTIONS_KEYWORD_LEN {
+                return Err(AppError::DebateError(format!(
+                    "{field_name} is too long, max {} chars",
+                    MAX_OPS_REPLAY_ACTIONS_KEYWORD_LEN
+                )));
+            }
+            Ok(Some(trimmed.to_string()))
         }
         None => Ok(None),
     }
@@ -1328,6 +1382,22 @@ impl AppState {
         let session_id_filter = query.session_id.map(|v| v as i64);
         let job_id_filter = query.job_id.map(|v| v as i64);
         let requested_by_filter = query.requested_by.map(|v| v as i64);
+        let previous_status_filter = normalize_optional_replay_actions_status_filter(
+            "previousStatus",
+            query.previous_status,
+        )?;
+        let new_status_filter =
+            normalize_optional_replay_actions_status_filter("newStatus", query.new_status)?;
+        let reason_keyword_filter =
+            normalize_optional_replay_actions_keyword("reasonKeyword", query.reason_keyword)?;
+        let trace_keyword_filter =
+            normalize_optional_replay_actions_keyword("traceKeyword", query.trace_keyword)?;
+        let reason_keyword_pattern = reason_keyword_filter
+            .as_ref()
+            .map(|keyword| format!("%{keyword}%"));
+        let trace_keyword_pattern = trace_keyword_filter
+            .as_ref()
+            .map(|keyword| format!("%{keyword}%"));
         let row_limit = normalize_ops_replay_actions_limit(query.limit);
         let row_offset = normalize_ops_replay_actions_offset(query.offset);
 
@@ -1341,6 +1411,14 @@ impl AppState {
               AND ($4::bigint IS NULL OR session_id = $4)
               AND ($5::bigint IS NULL OR job_id = $5)
               AND ($6::bigint IS NULL OR requested_by = $6)
+              AND ($7::varchar IS NULL OR previous_status = $7)
+              AND ($8::varchar IS NULL OR new_status = $8)
+              AND ($9::varchar IS NULL OR reason ILIKE $9)
+              AND (
+                    $10::varchar IS NULL
+                    OR previous_trace_id ILIKE $10
+                    OR new_trace_id ILIKE $10
+                  )
             "#,
         )
         .bind(query.from)
@@ -1349,6 +1427,10 @@ impl AppState {
         .bind(session_id_filter)
         .bind(job_id_filter)
         .bind(requested_by_filter)
+        .bind(previous_status_filter.as_deref())
+        .bind(new_status_filter.as_deref())
+        .bind(reason_keyword_pattern.as_deref())
+        .bind(trace_keyword_pattern.as_deref())
         .fetch_one(&self.pool)
         .await?;
 
@@ -1375,8 +1457,16 @@ impl AppState {
               AND ($4::bigint IS NULL OR session_id = $4)
               AND ($5::bigint IS NULL OR job_id = $5)
               AND ($6::bigint IS NULL OR requested_by = $6)
+              AND ($7::varchar IS NULL OR previous_status = $7)
+              AND ($8::varchar IS NULL OR new_status = $8)
+              AND ($9::varchar IS NULL OR reason ILIKE $9)
+              AND (
+                    $10::varchar IS NULL
+                    OR previous_trace_id ILIKE $10
+                    OR new_trace_id ILIKE $10
+                  )
             ORDER BY created_at DESC, id DESC
-            LIMIT $7 OFFSET $8
+            LIMIT $11 OFFSET $12
             "#,
         )
         .bind(query.from)
@@ -1385,6 +1475,10 @@ impl AppState {
         .bind(session_id_filter)
         .bind(job_id_filter)
         .bind(requested_by_filter)
+        .bind(previous_status_filter.as_deref())
+        .bind(new_status_filter.as_deref())
+        .bind(reason_keyword_pattern.as_deref())
+        .bind(trace_keyword_pattern.as_deref())
         .bind(row_limit)
         .bind(row_offset)
         .fetch_all(&self.pool)

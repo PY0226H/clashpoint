@@ -162,6 +162,10 @@ function createOpsApiMock() {
         if (pathname === '/api/debate/ops/judge-replay/actions') {
           const limit = Math.max(1, Number(url.searchParams.get('limit') || 50));
           const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+          const previousStatus = String(url.searchParams.get('previousStatus') || '').trim().toLowerCase();
+          const newStatus = String(url.searchParams.get('newStatus') || '').trim().toLowerCase();
+          const reasonKeyword = String(url.searchParams.get('reasonKeyword') || '').trim().toLowerCase();
+          const traceKeyword = String(url.searchParams.get('traceKeyword') || '').trim().toLowerCase();
           const runtimeReplayActions = executeCount > 0
             ? [{
               auditId: 18888,
@@ -180,13 +184,33 @@ function createOpsApiMock() {
             }]
             : [];
           const allReplayActions = [...runtimeReplayActions, ...seedReplayActions];
-          const items = allReplayActions.slice(offset, offset + limit);
-          const hasMore = offset + items.length < allReplayActions.length;
+          const filteredReplayActions = allReplayActions.filter((item) => {
+            const itemPreviousStatus = String(item.previousStatus || '').toLowerCase();
+            const itemNewStatus = String(item.newStatus || '').toLowerCase();
+            const itemReason = String(item.reason || '').toLowerCase();
+            const itemPreviousTrace = String(item.previousTraceId || '').toLowerCase();
+            const itemNewTrace = String(item.newTraceId || '').toLowerCase();
+            if (previousStatus && itemPreviousStatus !== previousStatus) {
+              return false;
+            }
+            if (newStatus && itemNewStatus !== newStatus) {
+              return false;
+            }
+            if (reasonKeyword && !itemReason.includes(reasonKeyword)) {
+              return false;
+            }
+            if (traceKeyword && !itemPreviousTrace.includes(traceKeyword) && !itemNewTrace.includes(traceKeyword)) {
+              return false;
+            }
+            return true;
+          });
+          const items = filteredReplayActions.slice(offset, offset + limit);
+          const hasMore = offset + items.length < filteredReplayActions.length;
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify({
-              scannedCount: allReplayActions.length,
+              scannedCount: filteredReplayActions.length,
               returnedCount: items.length,
               hasMore,
               items,
@@ -360,4 +384,18 @@ test('ops admin replay actions should support quick pagination controls', async 
 
   await page.getByRole('button', { name: '上一页' }).click();
   await expect(page.getByText('当前分页: offset=0 · limit=50')).toBeVisible();
+});
+
+test('ops admin replay actions should query server-side filters for cross-page search', async ({ page }) => {
+  await bootstrapAuthState(page);
+  const mock = createOpsApiMock();
+  await mock.route(page);
+
+  await page.goto('http://127.0.0.1:1420/debate/ops');
+
+  await page.getByLabel('Reason 关键词').fill('ops_seed_page_99');
+  await page.getByRole('button', { name: '查询' }).nth(1).click();
+
+  await expect(page.getByText('ops_seed_page_99')).toBeVisible();
+  await expect(page.getByText('ops_seed_page_0')).not.toBeVisible();
 });

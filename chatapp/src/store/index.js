@@ -620,6 +620,10 @@ export default createStore({
         sessionId: sessionId > 0 ? sessionId : null,
         jobId: jobId > 0 ? jobId : null,
         requestedBy: requestedBy > 0 ? requestedBy : null,
+        previousStatus: payload.previousStatus,
+        newStatus: payload.newStatus,
+        reasonKeyword: payload.reasonKeyword,
+        traceKeyword: payload.traceKeyword,
         limit: payload.limit,
         offset: offset >= 0 ? offset : 0,
       });

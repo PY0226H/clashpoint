@@ -349,6 +349,10 @@ pub struct ListJudgeReplayActionsOpsQuery {
     pub session_id: Option<u64>,
     pub job_id: Option<u64>,
     pub requested_by: Option<u64>,
+    pub previous_status: Option<String>,
+    pub new_status: Option<String>,
+    pub reason_keyword: Option<String>,
+    pub trace_keyword: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }

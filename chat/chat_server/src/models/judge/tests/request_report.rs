@@ -1716,6 +1716,10 @@ async fn list_judge_replay_actions_by_owner_should_return_filtered_items_with_ha
                 session_id: Some(session_a as u64),
                 job_id: Some(101),
                 requested_by: Some(1),
+                previous_status: Some("failed".to_string()),
+                new_status: Some("queued".to_string()),
+                reason_keyword: Some("phase replay".to_string()),
+                trace_keyword: Some("trace-old-phase".to_string()),
                 limit: Some(1),
                 offset: Some(0),
             },
@@ -1739,6 +1743,10 @@ async fn list_judge_replay_actions_by_owner_should_return_filtered_items_with_ha
                 session_id: Some(session_a as u64),
                 job_id: Some(101),
                 requested_by: Some(1),
+                previous_status: Some("failed".to_string()),
+                new_status: Some("queued".to_string()),
+                reason_keyword: Some("phase replay".to_string()),
+                trace_keyword: Some("trace-old-phase".to_string()),
                 limit: Some(1),
                 offset: Some(1),
             },
@@ -1766,6 +1774,10 @@ async fn list_judge_replay_actions_by_owner_should_validate_time_window() -> Res
                 session_id: None,
                 job_id: None,
                 requested_by: None,
+                previous_status: None,
+                new_status: None,
+                reason_keyword: None,
+                trace_keyword: None,
                 limit: Some(20),
                 offset: Some(0),
             },
@@ -1773,6 +1785,112 @@ async fn list_judge_replay_actions_by_owner_should_validate_time_window() -> Res
         .await
         .expect_err("from > to should be rejected");
     assert!(matches!(err, AppError::DebateError(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_match_trace_keyword_on_new_trace_id(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO judge_replay_actions(
+            scope, job_id, session_id, requested_by, reason,
+            previous_status, new_status, previous_trace_id, new_trace_id,
+            previous_idempotency_key, new_idempotency_key, created_at
+        )
+        VALUES
+        (
+            'phase', 301, $1, 1, 'phase replay target',
+            'failed', 'queued', 'trace-old-non-match', 'trace-new-phase-target',
+            'phase-old-key-target', 'phase-new-key-target', NOW() - INTERVAL '1 minutes'
+        )
+        "#,
+    )
+    .bind(session_id)
+    .execute(&state.pool)
+    .await?;
+
+    let ret = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: None,
+                to: None,
+                scope: Some("phase".to_string()),
+                session_id: Some(session_id as u64),
+                job_id: Some(301),
+                requested_by: Some(1),
+                previous_status: Some("failed".to_string()),
+                new_status: Some("queued".to_string()),
+                reason_keyword: Some("target".to_string()),
+                trace_keyword: Some("phase-target".to_string()),
+                limit: Some(20),
+                offset: Some(0),
+            },
+        )
+        .await?;
+
+    assert_eq!(ret.scanned_count, 1);
+    assert_eq!(ret.returned_count, 1);
+    assert!(!ret.has_more);
+    assert_eq!(ret.items[0].new_trace_id, "trace-new-phase-target");
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_reject_invalid_filter_values() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let status_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: None,
+                to: None,
+                scope: None,
+                session_id: None,
+                job_id: None,
+                requested_by: None,
+                previous_status: Some("FAILED!".to_string()),
+                new_status: None,
+                reason_keyword: None,
+                trace_keyword: None,
+                limit: Some(20),
+                offset: Some(0),
+            },
+        )
+        .await
+        .expect_err("invalid previous status should be rejected");
+    assert!(matches!(status_err, AppError::DebateError(_)));
+
+    let keyword_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: None,
+                to: None,
+                scope: None,
+                session_id: None,
+                job_id: None,
+                requested_by: None,
+                previous_status: None,
+                new_status: None,
+                reason_keyword: Some("a".repeat(101)),
+                trace_keyword: None,
+                limit: Some(20),
+                offset: Some(0),
+            },
+        )
+        .await
+        .expect_err("too long reason keyword should be rejected");
+    assert!(matches!(keyword_err, AppError::DebateError(_)));
     Ok(())
 }
 
