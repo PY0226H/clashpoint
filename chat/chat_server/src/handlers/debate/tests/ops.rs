@@ -1,15 +1,16 @@
 use super::super::{
     apply_ops_observability_anomaly_action_handler, discard_kafka_dlq_event_handler,
-    get_ops_observability_config_handler, get_ops_observability_metrics_dictionary_handler,
-    get_ops_observability_slo_snapshot_handler, get_ops_rbac_me_handler,
-    get_ops_service_split_readiness_handler, list_judge_final_dispatch_failure_stats_ops_handler,
-    list_judge_reviews_ops_handler, list_judge_trace_replay_ops_handler,
-    list_kafka_dlq_events_handler, list_ops_alert_notifications_handler,
-    list_ops_role_assignments_handler, list_ops_service_split_review_audits_handler,
-    replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
-    revoke_ops_role_assignment_handler, run_ops_observability_evaluation_once_handler,
-    upsert_ops_observability_anomaly_state_handler, upsert_ops_observability_thresholds_handler,
-    upsert_ops_role_assignment_handler, upsert_ops_service_split_review_handler,
+    get_judge_replay_preview_ops_handler, get_ops_observability_config_handler,
+    get_ops_observability_metrics_dictionary_handler, get_ops_observability_slo_snapshot_handler,
+    get_ops_rbac_me_handler, get_ops_service_split_readiness_handler,
+    list_judge_final_dispatch_failure_stats_ops_handler, list_judge_reviews_ops_handler,
+    list_judge_trace_replay_ops_handler, list_kafka_dlq_events_handler,
+    list_ops_alert_notifications_handler, list_ops_role_assignments_handler,
+    list_ops_service_split_review_audits_handler, replay_kafka_dlq_event_handler,
+    request_judge_rejudge_ops_handler, revoke_ops_role_assignment_handler,
+    run_ops_observability_evaluation_once_handler, upsert_ops_observability_anomaly_state_handler,
+    upsert_ops_observability_thresholds_handler, upsert_ops_role_assignment_handler,
+    upsert_ops_service_split_review_handler,
 };
 use super::test_support::{
     assert_debate_conflict_prefix, assert_is_debate_conflict, insert_kafka_dlq_event,
@@ -18,8 +19,8 @@ use super::test_support::{
 };
 use crate::{
     AppState, ApplyOpsObservabilityAnomalyActionInput, GetJudgeFinalDispatchFailureStatsQuery,
-    ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery,
-    ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
+    GetJudgeReplayPreviewOpsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
+    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
     OpsObservabilityThresholds, RunOpsObservabilityEvaluationQuery,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
@@ -323,6 +324,101 @@ async fn list_judge_trace_replay_ops_handler_should_return_phase_and_final_items
         final_item["replayRecommendation"].as_str(),
         Some("replay_final_job")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_ops_handler_should_require_platform_admin() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let non_owner = state.find_user_by_id(2).await?.expect("user should exist");
+
+    let result = get_judge_replay_preview_ops_handler(
+        Extension(non_owner),
+        State(state),
+        Query(GetJudgeReplayPreviewOpsQuery {
+            scope: "final".to_string(),
+            job_id: 1,
+        }),
+    )
+    .await;
+    assert_is_debate_conflict(result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_ops_handler_should_return_phase_snapshot() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+
+    let message_a: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO session_messages(session_id, user_id, side, content)
+        VALUES ($1, 1, 'pro', 'replay preview message a')
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let message_b: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO session_messages(session_id, user_id, side, content)
+        VALUES ($1, 2, 'con', 'replay preview message b')
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let phase_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_phase_jobs(
+            session_id, phase_no, message_start_id, message_end_id, message_count,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, $2, $3, 2,
+            'failed', $4, $5, 'v3', 'v3-default',
+            'default', 'default', 2, NOW(), $6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(message_a.0)
+    .bind(message_b.0)
+    .bind(format!("trace-phase-preview-{session_id}"))
+    .bind(format!("judge_phase_preview:{session_id}:1:v3:v3-default"))
+    .bind("[http_5xx] phase dispatch request failed")
+    .fetch_one(&state.pool)
+    .await?;
+
+    let response = get_judge_replay_preview_ops_handler(
+        Extension(owner),
+        State(state),
+        Query(GetJudgeReplayPreviewOpsQuery {
+            scope: "phase".to_string(),
+            job_id: phase_job_id.0 as u64,
+        }),
+    )
+    .await?
+    .into_response();
+    let ret = json_body_with_status(response, StatusCode::OK).await?;
+    assert_eq!(ret["sideEffectFree"], true);
+    assert_eq!(ret["meta"]["scope"], "phase");
+    assert_eq!(ret["meta"]["replayEligible"], true);
+    assert_eq!(
+        ret["requestSnapshot"]["job_id"].as_u64(),
+        Some(phase_job_id.0 as u64)
+    );
+    assert_eq!(
+        ret["requestSnapshot"]["messages"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(ret["snapshotHash"].as_str().map(str::len), Some(40));
     Ok(())
 }
 

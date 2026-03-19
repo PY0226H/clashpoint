@@ -22,12 +22,13 @@ pub use debate::{
 };
 pub use judge::{
     DrawVoteDetail, GetDrawVoteOutput, GetJudgeFinalDispatchFailureStatsOutput,
-    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReportOutput, GetJudgeReportQuery,
+    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsOutput,
+    GetJudgeReplayPreviewOpsQuery, GetJudgeReportOutput, GetJudgeReportQuery,
     JudgeFinalDispatchFailureTypeCount, JudgeGroundedSummaryPayload, JudgeJobSnapshot,
     JudgePhaseAgent1ScorePayload, JudgePhaseAgent2ScorePayload,
-    JudgePhaseAgent3WeightedScorePayload, JudgeRagMeta, JudgeRagSourceItem, JudgeReportDetail,
-    JudgeRetrievalBundleItemPayload, JudgeRetrievalBundlePayload, JudgeReviewOpsItem,
-    JudgeStageSummariesMeta, JudgeStageSummaryDetail, JudgeStageSummaryInput,
+    JudgePhaseAgent3WeightedScorePayload, JudgeRagMeta, JudgeRagSourceItem, JudgeReplayPreviewMeta,
+    JudgeReportDetail, JudgeRetrievalBundleItemPayload, JudgeRetrievalBundlePayload,
+    JudgeReviewOpsItem, JudgeStageSummariesMeta, JudgeStageSummaryDetail, JudgeStageSummaryInput,
     JudgeTraceReplayOpsItem, ListJudgeReviewOpsOutput, ListJudgeReviewOpsQuery,
     ListJudgeTraceReplayOpsOutput, ListJudgeTraceReplayOpsQuery, MarkJudgeJobFailedInput,
     MarkJudgeJobFailedOutput, RequestJudgeJobInput, RequestJudgeJobOutput, SubmitDrawVoteInput,

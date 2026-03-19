@@ -267,6 +267,50 @@ pub struct ListJudgeTraceReplayOpsOutput {
     pub items: Vec<JudgeTraceReplayOpsItem>,
 }
 
+#[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgeReplayPreviewOpsQuery {
+    pub scope: String,
+    pub job_id: u64,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeReplayPreviewMeta {
+    pub scope: String,
+    pub job_id: u64,
+    pub session_id: u64,
+    pub status: String,
+    pub trace_id: String,
+    pub idempotency_key: String,
+    pub rubric_version: String,
+    pub judge_policy_version: String,
+    pub topic_domain: String,
+    pub retrieval_profile: Option<String>,
+    pub phase_no: Option<i32>,
+    pub phase_start_no: Option<i32>,
+    pub phase_end_no: Option<i32>,
+    pub message_start_id: Option<u64>,
+    pub message_end_id: Option<u64>,
+    pub message_count: Option<i32>,
+    pub created_at: DateTime<Utc>,
+    pub dispatch_attempts: i32,
+    pub last_dispatch_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub replay_eligible: bool,
+    pub replay_block_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgeReplayPreviewOpsOutput {
+    pub side_effect_free: bool,
+    pub snapshot_hash: String,
+    pub meta: JudgeReplayPreviewMeta,
+    #[serde(default)]
+    pub request_snapshot: Value,
+}
+
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JudgeReviewOpsItem {

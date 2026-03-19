@@ -1,5 +1,7 @@
 use super::*;
 use crate::models::OpsPermission;
+use serde_json::Value;
+use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 
 const CONTRACT_FAILURE_FINAL_BLOCKED: &str = "final_contract_blocked";
@@ -68,6 +70,29 @@ fn normalize_optional_trace_status_filter(
         }
         None => Ok(None),
     }
+}
+
+fn normalize_replay_scope(scope: &str) -> Result<String, AppError> {
+    let normalized = scope.trim().to_ascii_lowercase();
+    if normalized == "phase" || normalized == "final" {
+        Ok(normalized)
+    } else {
+        Err(AppError::DebateError(
+            "scope must be one of: phase, final".to_string(),
+        ))
+    }
+}
+
+fn is_replay_eligible_status(status: &str) -> bool {
+    matches!(status, "failed" | "succeeded")
+}
+
+fn compute_snapshot_hash(snapshot: &Value) -> Result<String, AppError> {
+    let encoded = serde_json::to_vec(snapshot)
+        .map_err(|e| AppError::DebateError(format!("serialize replay snapshot failed: {e}")))?;
+    let mut hasher = Sha1::new();
+    hasher.update(encoded);
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn normalize_optional_winner_filter(winner: Option<String>) -> Result<Option<String>, AppError> {
@@ -654,6 +679,228 @@ impl AppState {
             failed_count,
             replay_eligible_count,
             items,
+        })
+    }
+
+    pub async fn get_judge_replay_preview_by_owner(
+        &self,
+        user: &User,
+        query: GetJudgeReplayPreviewOpsQuery,
+    ) -> Result<GetJudgeReplayPreviewOpsOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+        let scope = normalize_replay_scope(query.scope.as_str())?;
+        if scope == "phase" {
+            let job: JudgePhaseReplayJobRow = sqlx::query_as(
+                r#"
+                SELECT
+                    id,
+                    session_id,
+                    phase_no,
+                    message_start_id,
+                    message_end_id,
+                    message_count,
+                    status,
+                    trace_id,
+                    idempotency_key,
+                    rubric_version,
+                    judge_policy_version,
+                    topic_domain,
+                    retrieval_profile,
+                    dispatch_attempts,
+                    last_dispatch_at,
+                    error_message,
+                    created_at
+                FROM judge_phase_jobs
+                WHERE id = $1
+                LIMIT 1
+                "#,
+            )
+            .bind(query.job_id as i64)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("judge phase job id {}", query.job_id)))?;
+
+            let messages: Vec<(i64, i64, String, String, DateTime<Utc>)> = sqlx::query_as(
+                r#"
+                SELECT id, user_id, side, content, created_at
+                FROM session_messages
+                WHERE session_id = $1
+                  AND id >= $2
+                  AND id <= $3
+                ORDER BY id ASC
+                "#,
+            )
+            .bind(job.session_id)
+            .bind(job.message_start_id)
+            .bind(job.message_end_id)
+            .fetch_all(&self.pool)
+            .await?;
+            if messages.len() != job.message_count as usize {
+                return Err(AppError::DebateError(format!(
+                    "phase replay preview message_count mismatch, expected={}, got={}",
+                    job.message_count,
+                    messages.len()
+                )));
+            }
+
+            let mut speaker_aliases: HashMap<i64, String> = HashMap::new();
+            let mut speaker_seq: u32 = 1;
+            let mut message_items = Vec::with_capacity(messages.len());
+            for (message_id, user_id, side, content, created_at) in messages {
+                let speaker_tag = speaker_aliases
+                    .entry(user_id)
+                    .or_insert_with(|| {
+                        let alias = format!("speaker-{speaker_seq}");
+                        speaker_seq = speaker_seq.saturating_add(1);
+                        alias
+                    })
+                    .clone();
+                message_items.push(serde_json::json!({
+                    "message_id": message_id as u64,
+                    "speaker_tag": speaker_tag,
+                    "side": side,
+                    "content": content,
+                    "created_at": created_at,
+                }));
+            }
+
+            let request_snapshot = serde_json::json!({
+                "job_id": job.id as u64,
+                "scope_id": 1_u64,
+                "session_id": job.session_id as u64,
+                "phase_no": job.phase_no,
+                "message_start_id": job.message_start_id as u64,
+                "message_end_id": job.message_end_id as u64,
+                "message_count": job.message_count,
+                "messages": message_items,
+                "rubric_version": job.rubric_version,
+                "judge_policy_version": job.judge_policy_version,
+                "topic_domain": job.topic_domain,
+                "retrieval_profile": job.retrieval_profile,
+                "trace_id": job.trace_id,
+                "idempotency_key": job.idempotency_key,
+            });
+            let status = job.status.to_ascii_lowercase();
+            let replay_eligible = is_replay_eligible_status(status.as_str());
+            let snapshot_hash = compute_snapshot_hash(&request_snapshot)?;
+
+            return Ok(GetJudgeReplayPreviewOpsOutput {
+                side_effect_free: true,
+                snapshot_hash,
+                meta: JudgeReplayPreviewMeta {
+                    scope: "phase".to_string(),
+                    job_id: job.id as u64,
+                    session_id: job.session_id as u64,
+                    status,
+                    trace_id: job.trace_id,
+                    idempotency_key: job.idempotency_key,
+                    rubric_version: job.rubric_version,
+                    judge_policy_version: job.judge_policy_version,
+                    topic_domain: job.topic_domain,
+                    retrieval_profile: Some(job.retrieval_profile),
+                    phase_no: Some(job.phase_no),
+                    phase_start_no: None,
+                    phase_end_no: None,
+                    message_start_id: Some(job.message_start_id as u64),
+                    message_end_id: Some(job.message_end_id as u64),
+                    message_count: Some(job.message_count),
+                    created_at: job.created_at,
+                    dispatch_attempts: job.dispatch_attempts,
+                    last_dispatch_at: job.last_dispatch_at,
+                    error_message: job.error_message,
+                    replay_eligible,
+                    replay_block_reason: if replay_eligible {
+                        None
+                    } else {
+                        Some("job_status_not_terminal".to_string())
+                    },
+                },
+                request_snapshot,
+            });
+        }
+
+        let job: JudgeFinalReplayJobRow = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                session_id,
+                phase_start_no,
+                phase_end_no,
+                status,
+                trace_id,
+                idempotency_key,
+                rubric_version,
+                judge_policy_version,
+                topic_domain,
+                dispatch_attempts,
+                last_dispatch_at,
+                error_message,
+                created_at
+            FROM judge_final_jobs
+            WHERE id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(query.job_id as i64)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("judge final job id {}", query.job_id)))?;
+        if job.phase_end_no < job.phase_start_no {
+            return Err(AppError::DebateError(format!(
+                "final replay preview phase range invalid, start={}, end={}",
+                job.phase_start_no, job.phase_end_no
+            )));
+        }
+
+        let request_snapshot = serde_json::json!({
+            "job_id": job.id as u64,
+            "scope_id": 1_u64,
+            "session_id": job.session_id as u64,
+            "phase_start_no": job.phase_start_no,
+            "phase_end_no": job.phase_end_no,
+            "rubric_version": job.rubric_version,
+            "judge_policy_version": job.judge_policy_version,
+            "topic_domain": job.topic_domain,
+            "trace_id": job.trace_id,
+            "idempotency_key": job.idempotency_key,
+        });
+        let status = job.status.to_ascii_lowercase();
+        let replay_eligible = is_replay_eligible_status(status.as_str());
+        let snapshot_hash = compute_snapshot_hash(&request_snapshot)?;
+
+        Ok(GetJudgeReplayPreviewOpsOutput {
+            side_effect_free: true,
+            snapshot_hash,
+            meta: JudgeReplayPreviewMeta {
+                scope: "final".to_string(),
+                job_id: job.id as u64,
+                session_id: job.session_id as u64,
+                status,
+                trace_id: job.trace_id,
+                idempotency_key: job.idempotency_key,
+                rubric_version: job.rubric_version,
+                judge_policy_version: job.judge_policy_version,
+                topic_domain: job.topic_domain,
+                retrieval_profile: None,
+                phase_no: None,
+                phase_start_no: Some(job.phase_start_no),
+                phase_end_no: Some(job.phase_end_no),
+                message_start_id: None,
+                message_end_id: None,
+                message_count: None,
+                created_at: job.created_at,
+                dispatch_attempts: job.dispatch_attempts,
+                last_dispatch_at: job.last_dispatch_at,
+                error_message: job.error_message,
+                replay_eligible,
+                replay_block_reason: if replay_eligible {
+                    None
+                } else {
+                    Some("job_status_not_terminal".to_string())
+                },
+            },
+            request_snapshot,
         })
     }
 

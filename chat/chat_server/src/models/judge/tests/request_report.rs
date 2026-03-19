@@ -1391,6 +1391,105 @@ async fn list_judge_trace_replay_by_owner_should_apply_scope_status_and_session_
 }
 
 #[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_return_phase_snapshot() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+
+    let message_start =
+        seed_session_message(&state, session_id, 1, "pro", "preview phase start").await?;
+    let message_end =
+        seed_session_message(&state, session_id, 2, "con", "preview phase end").await?;
+    let phase_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_phase_jobs(
+            session_id, phase_no, message_start_id, message_end_id, message_count,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, $2, $3, 2,
+            'failed', $4, $5, 'v3', 'v3-default',
+            'default', 'default', 2, NOW(), $6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(message_start)
+    .bind(message_end)
+    .bind(format!("trace-phase-preview-{session_id}"))
+    .bind(format!("judge_phase_preview:{session_id}:1:v3:v3-default"))
+    .bind("[http_5xx] phase dispatch request failed")
+    .fetch_one(&state.pool)
+    .await?;
+
+    let ret = state
+        .get_judge_replay_preview_by_owner(
+            &owner,
+            GetJudgeReplayPreviewOpsQuery {
+                scope: "phase".to_string(),
+                job_id: phase_job_id.0 as u64,
+            },
+        )
+        .await?;
+
+    assert!(ret.side_effect_free);
+    assert_eq!(ret.meta.scope, "phase");
+    assert_eq!(ret.meta.job_id, phase_job_id.0 as u64);
+    assert_eq!(ret.meta.phase_no, Some(1));
+    assert!(ret.meta.replay_eligible);
+    assert!(ret.meta.replay_block_reason.is_none());
+    assert_eq!(ret.request_snapshot["job_id"], phase_job_id.0 as u64);
+    assert_eq!(
+        ret.request_snapshot["messages"]
+            .as_array()
+            .expect("messages should be array")
+            .len(),
+        2
+    );
+    assert_eq!(ret.snapshot_hash.len(), 40);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_return_final_snapshot_and_terminal_hint(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    let ret = state
+        .get_judge_replay_preview_by_owner(
+            &owner,
+            GetJudgeReplayPreviewOpsQuery {
+                scope: "final".to_string(),
+                job_id: final_job_id as u64,
+            },
+        )
+        .await?;
+
+    assert!(ret.side_effect_free);
+    assert_eq!(ret.meta.scope, "final");
+    assert_eq!(ret.meta.job_id, final_job_id as u64);
+    assert_eq!(ret.meta.phase_start_no, Some(1));
+    assert_eq!(ret.meta.phase_end_no, Some(2));
+    assert!(!ret.meta.replay_eligible);
+    assert_eq!(
+        ret.meta.replay_block_reason.as_deref(),
+        Some("job_status_not_terminal")
+    );
+    assert_eq!(ret.request_snapshot["job_id"], final_job_id as u64);
+    assert_eq!(ret.request_snapshot["phase_start_no"], 1);
+    assert_eq!(ret.request_snapshot["phase_end_no"], 2);
+    assert_eq!(ret.snapshot_hash.len(), 40);
+    Ok(())
+}
+
+#[tokio::test]
 async fn request_judge_rejudge_by_owner_should_enforce_owner_and_report_requirements() -> Result<()>
 {
     let (_tdb, state) = AppState::new_for_test().await?;
