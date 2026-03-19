@@ -1,4 +1,5 @@
 use super::*;
+use crate::{DomainEvent, EventPublisher};
 
 #[allow(dead_code)]
 impl AppState {
@@ -466,29 +467,22 @@ impl AppState {
         .execute(&mut *tx)
         .await?;
 
+        self.event_bus
+            .enqueue_in_tx(
+                &mut tx,
+                DomainEvent::DebateMessagePinned(DebateMessagePinnedEvent {
+                    session_id: pin.session_id as u64,
+                    message_id: pin.message_id as u64,
+                    user_id: user.id as u64,
+                    ledger_id: ledger_id.0 as u64,
+                    cost_coins: pin.cost_coins,
+                    pin_seconds: pin.pin_seconds,
+                    pinned_at: now,
+                    expires_at: pin.expires_at,
+                }),
+            )
+            .await?;
         tx.commit().await?;
-
-        if let Err(err) = self
-            .event_bus
-            .publish_debate_message_pinned(DebateMessagePinnedEvent {
-                session_id: pin.session_id as u64,
-                message_id: pin.message_id as u64,
-                user_id: user.id as u64,
-                ledger_id: ledger_id.0 as u64,
-                cost_coins: pin.cost_coins,
-                pin_seconds: pin.pin_seconds,
-                pinned_at: now,
-                expires_at: pin.expires_at,
-            })
-            .await
-        {
-            warn!(
-                message_id,
-                user_id = user.id,
-                "publish kafka debate message pinned failed: {}",
-                err
-            );
-        }
 
         Ok(PinDebateMessageOutput {
             pin_id: pin.id as u64,

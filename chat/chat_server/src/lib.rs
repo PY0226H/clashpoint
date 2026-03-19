@@ -32,7 +32,8 @@ use application::runtime_workers::spawn_background_workers;
 pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
     AiJudgeJobCreatedEvent, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
-    DebateSessionStatusChangedEvent, EventBus,
+    DebateSessionStatusChangedEvent, DomainEvent, EventBus, EventOutboxRelayConfig,
+    EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher,
 };
 use models::JudgeDispatchTrigger;
 pub use models::*;
@@ -62,6 +63,7 @@ pub struct AppStateInner {
     pub(crate) redis: redis_store::RedisStore,
     pub(crate) event_bus: EventBus,
     pub(crate) dispatch_metrics: AiJudgeDispatchMetrics,
+    pub(crate) event_outbox_metrics: EventOutboxRelayMetrics,
     pub(crate) dispatch_trigger_tx: Option<UnboundedSender<JudgeDispatchTrigger>>,
 }
 
@@ -418,6 +420,7 @@ impl AppState {
                 redis,
                 event_bus,
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
+                event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 dispatch_trigger_tx,
             }),
         };
@@ -451,6 +454,7 @@ impl AppState {
                 redis,
                 event_bus,
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
+                event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 dispatch_trigger_tx: None,
             }),
         })
@@ -471,6 +475,20 @@ impl AppState {
                 );
             }
         }
+    }
+
+    pub(crate) async fn relay_event_outbox_once(&self) -> Result<EventOutboxRelayReport, AppError> {
+        let relay_config = EventOutboxRelayConfig::from_worker_runtime(&self.config.worker_runtime);
+        let report = self
+            .event_bus
+            .relay_outbox_once(&self.pool, &relay_config)
+            .await?;
+        self.event_outbox_metrics.observe_tick_success(&report);
+        Ok(report)
+    }
+
+    pub(crate) fn observe_event_outbox_worker_error(&self) {
+        self.event_outbox_metrics.observe_tick_error();
     }
 }
 
@@ -628,6 +646,7 @@ mod test_util {
                     },
                     event_bus: EventBus::Disabled,
                     dispatch_metrics: AiJudgeDispatchMetrics::default(),
+                    event_outbox_metrics: EventOutboxRelayMetrics::default(),
                     dispatch_trigger_tx: None,
                 }),
             };

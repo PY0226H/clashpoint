@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -10,16 +16,338 @@ use rdkafka::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::config::KafkaConfig;
+use crate::config::{KafkaConfig, WorkerRuntimeConfig};
 
 pub const TOPIC_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined.v1";
 pub const TOPIC_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed.v1";
 pub const TOPIC_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned.v1";
 pub const TOPIC_AI_JUDGE_JOB_CREATED: &str = "ai.judge.job.created.v1";
+
+const OUTBOX_STATUS_PENDING: &str = "pending";
+const OUTBOX_STATUS_SENDING: &str = "sending";
+const OUTBOX_STATUS_SENT: &str = "sent";
+const OUTBOX_STATUS_FAILED: &str = "failed";
+const OUTBOX_ERROR_MAX_LEN: usize = 1000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DomainEvent {
+    DebateParticipantJoined(DebateParticipantJoinedEvent),
+    DebateSessionStatusChanged(DebateSessionStatusChangedEvent),
+    DebateMessagePinned(DebateMessagePinnedEvent),
+    AiJudgeJobCreated(AiJudgeJobCreatedEvent),
+}
+
+impl DomainEvent {
+    fn into_message(self) -> anyhow::Result<OutboxMessage> {
+        match self {
+            Self::DebateParticipantJoined(event) => build_outbox_message(
+                TOPIC_DEBATE_PARTICIPANT_JOINED,
+                "debate.participant.joined",
+                format!("session:{}", event.session_id),
+                Utc::now(),
+                serde_json::to_value(event)?,
+            ),
+            Self::DebateSessionStatusChanged(event) => build_outbox_message(
+                TOPIC_DEBATE_SESSION_STATUS_CHANGED,
+                "debate.session.status.changed",
+                format!("session:{}", event.session_id),
+                event.changed_at,
+                serde_json::to_value(event)?,
+            ),
+            Self::DebateMessagePinned(event) => build_outbox_message(
+                TOPIC_DEBATE_MESSAGE_PINNED,
+                "debate.message.pinned",
+                format!("session:{}", event.session_id),
+                event.pinned_at,
+                serde_json::to_value(event)?,
+            ),
+            Self::AiJudgeJobCreated(event) => build_outbox_message(
+                TOPIC_AI_JUDGE_JOB_CREATED,
+                "ai.judge.job.created",
+                format!("session:{}", event.session_id),
+                event.requested_at,
+                serde_json::to_value(event)?,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboxMessage {
+    pub event_id: String,
+    pub event_type: String,
+    pub source: String,
+    pub aggregate_id: String,
+    pub topic: String,
+    pub key: String,
+    pub payload: Value,
+    pub occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EventOutboxRelayConfig {
+    pub batch_size: i64,
+    pub lock_secs: i64,
+    pub max_attempts: i32,
+    pub base_backoff_ms: u64,
+    pub max_backoff_ms: u64,
+}
+
+impl EventOutboxRelayConfig {
+    pub fn from_worker_runtime(cfg: &WorkerRuntimeConfig) -> Self {
+        Self {
+            batch_size: cfg.event_outbox_batch_size.max(1),
+            lock_secs: cfg.event_outbox_lock_secs.max(1),
+            max_attempts: cfg.event_outbox_max_attempts.max(1),
+            base_backoff_ms: cfg.event_outbox_base_backoff_ms.max(1),
+            max_backoff_ms: cfg
+                .event_outbox_max_backoff_ms
+                .max(cfg.event_outbox_base_backoff_ms.max(1)),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventOutboxRelayReport {
+    pub claimed: usize,
+    pub sent: usize,
+    pub retried: usize,
+    pub failed: usize,
+    pub dead_letter: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct EventOutboxRelayMetrics {
+    tick_success_total: AtomicU64,
+    tick_error_total: AtomicU64,
+    claimed_total: AtomicU64,
+    sent_total: AtomicU64,
+    retried_total: AtomicU64,
+    failed_total: AtomicU64,
+    dead_letter_total: AtomicU64,
+}
+
+impl EventOutboxRelayMetrics {
+    pub(crate) fn observe_tick_success(&self, report: &EventOutboxRelayReport) {
+        self.tick_success_total.fetch_add(1, Ordering::Relaxed);
+        self.claimed_total
+            .fetch_add(report.claimed as u64, Ordering::Relaxed);
+        self.sent_total
+            .fetch_add(report.sent as u64, Ordering::Relaxed);
+        self.retried_total
+            .fetch_add(report.retried as u64, Ordering::Relaxed);
+        self.failed_total
+            .fetch_add(report.failed as u64, Ordering::Relaxed);
+        self.dead_letter_total
+            .fetch_add(report.dead_letter as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn observe_tick_error(&self) {
+        self.tick_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub trait EventPublisher {
+    async fn enqueue_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: DomainEvent,
+    ) -> anyhow::Result<OutboxMessage>;
+
+    #[allow(dead_code)]
+    async fn publish_direct(&self, event: DomainEvent) -> anyhow::Result<()>;
+}
+
+fn build_outbox_message(
+    topic: &str,
+    event_type: &str,
+    aggregate_id: String,
+    occurred_at: DateTime<Utc>,
+    event_payload: Value,
+) -> anyhow::Result<OutboxMessage> {
+    let envelope = EventEnvelope::new(
+        event_type,
+        "chat-server",
+        aggregate_id.clone(),
+        event_payload,
+    );
+    let key = envelope.aggregate_id.clone();
+    let payload = serde_json::to_value(&envelope)?;
+    Ok(OutboxMessage {
+        event_id: envelope.event_id,
+        event_type: envelope.event_type,
+        source: envelope.source,
+        aggregate_id,
+        topic: topic.to_string(),
+        key,
+        payload,
+        occurred_at,
+    })
+}
+
+#[derive(Debug, FromRow)]
+struct ClaimedOutboxRow {
+    id: i64,
+    event_id: String,
+    topic: String,
+    partition_key: String,
+    payload: Value,
+    attempts: i32,
+}
+
+async fn mark_outbox_rows_reaching_max_attempts(
+    pool: &PgPool,
+    max_attempts: i32,
+) -> anyhow::Result<usize> {
+    let affected = sqlx::query(
+        r#"
+        UPDATE event_outbox
+        SET status = $1,
+            locked_until = NULL,
+            updated_at = NOW(),
+            last_error = COALESCE(NULLIF(last_error, ''), 'max attempts exceeded before relay')
+        WHERE attempts >= $2
+          AND (
+                status = $3
+                OR (
+                    status = $4
+                    AND locked_until IS NOT NULL
+                    AND locked_until <= NOW()
+                )
+              )
+        "#,
+    )
+    .bind(OUTBOX_STATUS_FAILED)
+    .bind(max_attempts)
+    .bind(OUTBOX_STATUS_PENDING)
+    .bind(OUTBOX_STATUS_SENDING)
+    .execute(pool)
+    .await?
+    .rows_affected() as usize;
+    Ok(affected)
+}
+
+async fn claim_due_outbox_rows(
+    pool: &PgPool,
+    config: &EventOutboxRelayConfig,
+) -> anyhow::Result<Vec<ClaimedOutboxRow>> {
+    let rows = sqlx::query_as::<_, ClaimedOutboxRow>(
+        r#"
+        WITH due AS (
+            SELECT id
+            FROM event_outbox
+            WHERE (
+                    (status = $1 AND available_at <= NOW())
+                    OR (status = $2 AND locked_until IS NOT NULL AND locked_until <= NOW())
+                  )
+              AND attempts < $3
+            ORDER BY available_at ASC, id ASC
+            LIMIT $4
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE event_outbox o
+        SET status = $2,
+            attempts = o.attempts + 1,
+            locked_until = NOW() + ($5::bigint * INTERVAL '1 second'),
+            updated_at = NOW()
+        FROM due
+        WHERE o.id = due.id
+        RETURNING o.id, o.event_id, o.topic, o.partition_key, o.payload, o.attempts
+        "#,
+    )
+    .bind(OUTBOX_STATUS_PENDING)
+    .bind(OUTBOX_STATUS_SENDING)
+    .bind(config.max_attempts)
+    .bind(config.batch_size)
+    .bind(config.lock_secs)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn mark_outbox_row_sent(pool: &PgPool, id: i64) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE event_outbox
+        SET status = $2,
+            locked_until = NULL,
+            sent_at = NOW(),
+            last_error = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(OUTBOX_STATUS_SENT)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_outbox_row_failed(pool: &PgPool, id: i64, last_error: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE event_outbox
+        SET status = $2,
+            locked_until = NULL,
+            last_error = $3,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(OUTBOX_STATUS_FAILED)
+    .bind(last_error)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn reschedule_outbox_row(
+    pool: &PgPool,
+    id: i64,
+    backoff_ms: u64,
+    last_error: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE event_outbox
+        SET status = $2,
+            available_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+            locked_until = NULL,
+            last_error = $4,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(OUTBOX_STATUS_PENDING)
+    .bind(backoff_ms as i64)
+    .bind(last_error)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn sanitize_outbox_error(err: &anyhow::Error) -> String {
+    let mut text = err.to_string().trim().to_string();
+    if text.len() > OUTBOX_ERROR_MAX_LEN {
+        text.truncate(OUTBOX_ERROR_MAX_LEN);
+    }
+    text
+}
+
+fn relay_backoff_ms(attempts: i32, config: &EventOutboxRelayConfig) -> u64 {
+    let attempt = attempts.max(1) as u32;
+    let pow = attempt.saturating_sub(1).min(16);
+    let scaled = config.base_backoff_ms.saturating_mul(1_u64 << pow);
+    scaled.min(config.max_backoff_ms).max(1)
+}
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ConsumeLedgerStatus {
     Succeeded,
@@ -168,81 +496,17 @@ impl EventBus {
         Ok(bus)
     }
 
-    pub async fn publish_debate_participant_joined(
-        &self,
-        event: DebateParticipantJoinedEvent,
-    ) -> anyhow::Result<()> {
-        let aggregate_id = format!("session:{}", event.session_id);
-        let payload = serde_json::to_value(event)?;
-        let envelope = EventEnvelope::new(
-            "debate.participant.joined",
-            "chat-server",
-            aggregate_id,
-            payload,
-        );
-        let key = envelope.aggregate_id.clone();
-        self.publish(TOPIC_DEBATE_PARTICIPANT_JOINED, &key, &envelope)
-            .await
-    }
-
-    pub async fn publish_debate_session_status_changed(
-        &self,
-        event: DebateSessionStatusChangedEvent,
-    ) -> anyhow::Result<()> {
-        let aggregate_id = format!("session:{}", event.session_id);
-        let payload = serde_json::to_value(event)?;
-        let envelope = EventEnvelope::new(
-            "debate.session.status.changed",
-            "chat-server",
-            aggregate_id,
-            payload,
-        );
-        let key = envelope.aggregate_id.clone();
-        self.publish(TOPIC_DEBATE_SESSION_STATUS_CHANGED, &key, &envelope)
-            .await
-    }
-
-    pub async fn publish_debate_message_pinned(
-        &self,
-        event: DebateMessagePinnedEvent,
-    ) -> anyhow::Result<()> {
-        let aggregate_id = format!("session:{}", event.session_id);
-        let payload = serde_json::to_value(event)?;
-        let envelope = EventEnvelope::new(
-            "debate.message.pinned",
-            "chat-server",
-            aggregate_id,
-            payload,
-        );
-        let key = envelope.aggregate_id.clone();
-        self.publish(TOPIC_DEBATE_MESSAGE_PINNED, &key, &envelope)
-            .await
-    }
-
-    pub async fn publish_ai_judge_job_created(
-        &self,
-        event: AiJudgeJobCreatedEvent,
-    ) -> anyhow::Result<()> {
-        let aggregate_id = format!("session:{}", event.session_id);
-        let payload = serde_json::to_value(event)?;
-        let envelope =
-            EventEnvelope::new("ai.judge.job.created", "chat-server", aggregate_id, payload);
-        let key = envelope.aggregate_id.clone();
-        self.publish(TOPIC_AI_JUDGE_JOB_CREATED, &key, &envelope)
-            .await
-    }
-
-    pub async fn publish(
+    async fn publish_payload(
         &self,
         base_topic: &str,
         key: &str,
-        event: &EventEnvelope,
+        payload: &Value,
     ) -> anyhow::Result<()> {
         match self {
             EventBus::Disabled => Ok(()),
             EventBus::Kafka(bus) => {
                 let topic = bus.config.topic_name(base_topic);
-                let payload = serde_json::to_string(event)?;
+                let payload = serde_json::to_string(payload)?;
                 bus.producer
                     .send(
                         FutureRecord::to(&topic).key(key).payload(&payload),
@@ -258,6 +522,64 @@ impl EventBus {
                     })
             }
         }
+    }
+
+    pub async fn relay_outbox_once(
+        &self,
+        pool: &PgPool,
+        config: &EventOutboxRelayConfig,
+    ) -> anyhow::Result<EventOutboxRelayReport> {
+        if matches!(self, EventBus::Disabled) {
+            return Ok(EventOutboxRelayReport::default());
+        }
+
+        let mut report = EventOutboxRelayReport {
+            dead_letter: mark_outbox_rows_reaching_max_attempts(pool, config.max_attempts).await?,
+            ..Default::default()
+        };
+        let claimed = claim_due_outbox_rows(pool, config).await?;
+        report.claimed = claimed.len();
+
+        for row in claimed {
+            match self
+                .publish_payload(&row.topic, &row.partition_key, &row.payload)
+                .await
+            {
+                Ok(()) => {
+                    mark_outbox_row_sent(pool, row.id).await?;
+                    report.sent += 1;
+                }
+                Err(err) => {
+                    report.failed += 1;
+                    let error_message = sanitize_outbox_error(&err);
+                    if row.attempts >= config.max_attempts {
+                        mark_outbox_row_failed(pool, row.id, &error_message).await?;
+                        report.dead_letter += 1;
+                        warn!(
+                            event_id = row.event_id,
+                            topic = row.topic,
+                            attempts = row.attempts,
+                            "event outbox delivery exhausted retries: {}",
+                            error_message
+                        );
+                    } else {
+                        let backoff_ms = relay_backoff_ms(row.attempts, config);
+                        reschedule_outbox_row(pool, row.id, backoff_ms, &error_message).await?;
+                        report.retried += 1;
+                        warn!(
+                            event_id = row.event_id,
+                            topic = row.topic,
+                            attempts = row.attempts,
+                            backoff_ms,
+                            "event outbox delivery failed and scheduled retry: {}",
+                            error_message
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(report)
     }
 
     pub fn maybe_spawn_consumer_worker(&self, pool: PgPool) -> anyhow::Result<()> {
@@ -374,6 +696,54 @@ impl EventBus {
         });
 
         Ok(())
+    }
+}
+
+impl EventPublisher for EventBus {
+    async fn enqueue_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: DomainEvent,
+    ) -> anyhow::Result<OutboxMessage> {
+        let message = event.into_message()?;
+        if matches!(self, EventBus::Disabled) {
+            return Ok(message);
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO event_outbox(
+                event_id, event_type, source, aggregate_id,
+                topic, partition_key, payload, occurred_at,
+                status, attempts, available_at, locked_until,
+                last_error, sent_at, created_at, updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7, $8,
+                $9, 0, NOW(), NULL,
+                NULL, NULL, NOW(), NOW()
+            )
+            "#,
+        )
+        .bind(&message.event_id)
+        .bind(&message.event_type)
+        .bind(&message.source)
+        .bind(&message.aggregate_id)
+        .bind(&message.topic)
+        .bind(&message.key)
+        .bind(&message.payload)
+        .bind(message.occurred_at)
+        .bind(OUTBOX_STATUS_PENDING)
+        .execute(&mut **tx)
+        .await?;
+        Ok(message)
+    }
+
+    async fn publish_direct(&self, event: DomainEvent) -> anyhow::Result<()> {
+        let message = event.into_message()?;
+        self.publish_payload(&message.topic, &message.key, &message.payload)
+            .await
     }
 }
 
@@ -938,5 +1308,37 @@ mod tests {
             Some(ConsumeLedgerStatus::Failed)
         );
         assert_eq!(ConsumeLedgerStatus::from_db("unknown"), None);
+    }
+
+    #[test]
+    fn domain_event_into_message_should_fill_topic_key_and_payload() {
+        let event = DomainEvent::AiJudgeJobCreated(AiJudgeJobCreatedEvent {
+            session_id: 11,
+            job_id: 22,
+            requested_by: 33,
+            style_mode: "rational".to_string(),
+            rejudge_triggered: false,
+            requested_at: Utc::now(),
+        });
+        let outbox = event.into_message().expect("build outbox message");
+        assert_eq!(outbox.topic, TOPIC_AI_JUDGE_JOB_CREATED);
+        assert_eq!(outbox.key, "session:11");
+        assert_eq!(outbox.event_type, "ai.judge.job.created");
+        assert_eq!(outbox.payload["payload"]["jobId"], 22);
+    }
+
+    #[test]
+    fn relay_backoff_ms_should_cap_by_config() {
+        let cfg = EventOutboxRelayConfig {
+            batch_size: 200,
+            lock_secs: 30,
+            max_attempts: 12,
+            base_backoff_ms: 500,
+            max_backoff_ms: 60_000,
+        };
+        assert_eq!(relay_backoff_ms(1, &cfg), 500);
+        assert_eq!(relay_backoff_ms(2, &cfg), 1_000);
+        assert_eq!(relay_backoff_ms(3, &cfg), 2_000);
+        assert_eq!(relay_backoff_ms(20, &cfg), 60_000);
     }
 }

@@ -150,12 +150,26 @@ pub struct WorkerRuntimeConfig {
     pub ops_observability_worker_enabled: bool,
     #[serde(default = "default_worker_runtime_ai_judge_alert_outbox_bridge_worker_enabled")]
     pub ai_judge_alert_outbox_bridge_worker_enabled: bool,
+    #[serde(default = "default_worker_runtime_event_outbox_relay_worker_enabled")]
+    pub event_outbox_relay_worker_enabled: bool,
     #[serde(default = "default_worker_runtime_debate_lifecycle_interval_secs")]
     pub debate_lifecycle_interval_secs: u64,
     #[serde(default = "default_worker_runtime_debate_lifecycle_batch_size")]
     pub debate_lifecycle_batch_size: i64,
     #[serde(default = "default_worker_runtime_ops_observability_interval_secs")]
     pub ops_observability_interval_secs: u64,
+    #[serde(default = "default_worker_runtime_event_outbox_poll_interval_secs")]
+    pub event_outbox_poll_interval_secs: u64,
+    #[serde(default = "default_worker_runtime_event_outbox_batch_size")]
+    pub event_outbox_batch_size: i64,
+    #[serde(default = "default_worker_runtime_event_outbox_lock_secs")]
+    pub event_outbox_lock_secs: i64,
+    #[serde(default = "default_worker_runtime_event_outbox_max_attempts")]
+    pub event_outbox_max_attempts: i32,
+    #[serde(default = "default_worker_runtime_event_outbox_base_backoff_ms")]
+    pub event_outbox_base_backoff_ms: u64,
+    #[serde(default = "default_worker_runtime_event_outbox_max_backoff_ms")]
+    pub event_outbox_max_backoff_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,10 +224,19 @@ impl Default for WorkerRuntimeConfig {
                 default_worker_runtime_ops_observability_worker_enabled(),
             ai_judge_alert_outbox_bridge_worker_enabled:
                 default_worker_runtime_ai_judge_alert_outbox_bridge_worker_enabled(),
+            event_outbox_relay_worker_enabled:
+                default_worker_runtime_event_outbox_relay_worker_enabled(),
             debate_lifecycle_interval_secs: default_worker_runtime_debate_lifecycle_interval_secs(),
             debate_lifecycle_batch_size: default_worker_runtime_debate_lifecycle_batch_size(),
             ops_observability_interval_secs: default_worker_runtime_ops_observability_interval_secs(
             ),
+            event_outbox_poll_interval_secs: default_worker_runtime_event_outbox_poll_interval_secs(
+            ),
+            event_outbox_batch_size: default_worker_runtime_event_outbox_batch_size(),
+            event_outbox_lock_secs: default_worker_runtime_event_outbox_lock_secs(),
+            event_outbox_max_attempts: default_worker_runtime_event_outbox_max_attempts(),
+            event_outbox_base_backoff_ms: default_worker_runtime_event_outbox_base_backoff_ms(),
+            event_outbox_max_backoff_ms: default_worker_runtime_event_outbox_max_backoff_ms(),
         }
     }
 }
@@ -433,6 +456,10 @@ fn default_worker_runtime_ai_judge_alert_outbox_bridge_worker_enabled() -> bool 
     true
 }
 
+fn default_worker_runtime_event_outbox_relay_worker_enabled() -> bool {
+    true
+}
+
 fn default_worker_runtime_debate_lifecycle_interval_secs() -> u64 {
     2
 }
@@ -443,6 +470,30 @@ fn default_worker_runtime_debate_lifecycle_batch_size() -> i64 {
 
 fn default_worker_runtime_ops_observability_interval_secs() -> u64 {
     30
+}
+
+fn default_worker_runtime_event_outbox_poll_interval_secs() -> u64 {
+    1
+}
+
+fn default_worker_runtime_event_outbox_batch_size() -> i64 {
+    200
+}
+
+fn default_worker_runtime_event_outbox_lock_secs() -> i64 {
+    30
+}
+
+fn default_worker_runtime_event_outbox_max_attempts() -> i32 {
+    12
+}
+
+fn default_worker_runtime_event_outbox_base_backoff_ms() -> u64 {
+    500
+}
+
+fn default_worker_runtime_event_outbox_max_backoff_ms() -> u64 {
+    60_000
 }
 
 fn default_payment_verify_mode() -> String {
@@ -662,8 +713,15 @@ mod tests {
         assert!(cfg.ai_judge_dispatch_worker_enabled);
         assert!(cfg.ops_observability_worker_enabled);
         assert!(cfg.ai_judge_alert_outbox_bridge_worker_enabled);
+        assert!(cfg.event_outbox_relay_worker_enabled);
         assert_eq!(cfg.debate_lifecycle_interval_secs, 2);
         assert_eq!(cfg.debate_lifecycle_batch_size, 200);
         assert_eq!(cfg.ops_observability_interval_secs, 30);
+        assert_eq!(cfg.event_outbox_poll_interval_secs, 1);
+        assert_eq!(cfg.event_outbox_batch_size, 200);
+        assert_eq!(cfg.event_outbox_lock_secs, 30);
+        assert_eq!(cfg.event_outbox_max_attempts, 12);
+        assert_eq!(cfg.event_outbox_base_backoff_ms, 500);
+        assert_eq!(cfg.event_outbox_max_backoff_ms, 60_000);
     }
 }

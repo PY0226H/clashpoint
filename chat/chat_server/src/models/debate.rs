@@ -1,6 +1,6 @@
 use crate::{
     AppError, AppState, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
-    DebateSessionStatusChangedEvent,
+    DebateSessionStatusChangedEvent, DomainEvent, EventPublisher,
 };
 use chat_core::User;
 use chrono::{DateTime, Utc};
@@ -470,26 +470,19 @@ impl AppState {
             .await?
         };
 
+        self.event_bus
+            .enqueue_in_tx(
+                &mut tx,
+                DomainEvent::DebateParticipantJoined(DebateParticipantJoinedEvent {
+                    session_id,
+                    user_id: user.id as u64,
+                    side: input.side.clone(),
+                    pro_count,
+                    con_count,
+                }),
+            )
+            .await?;
         tx.commit().await?;
-
-        if let Err(err) = self
-            .event_bus
-            .publish_debate_participant_joined(DebateParticipantJoinedEvent {
-                session_id,
-                user_id: user.id as u64,
-                side: input.side.clone(),
-                pro_count,
-                con_count,
-            })
-            .await
-        {
-            warn!(
-                session_id,
-                user_id = user.id,
-                "publish kafka debate participant joined failed: {}",
-                err
-            );
-        }
 
         Ok(JoinDebateSessionOutput {
             session_id,
@@ -508,6 +501,7 @@ impl AppState {
         let close_before = now - chrono::Duration::seconds(JUDGING_CLOSE_GRACE_SECONDS);
         let batch_size = batch_size.max(1);
 
+        let mut opened_tx = self.pool.begin().await?;
         let opened_ids: Vec<(i64,)> = sqlx::query_as(
             r#"
             WITH due AS (
@@ -530,11 +524,19 @@ impl AppState {
         )
         .bind(now)
         .bind(batch_size)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *opened_tx)
         .await?;
-        self.publish_status_changed_batch("scheduled", "open", &opened_ids, now)
-            .await;
+        self.enqueue_status_changed_batch_in_tx(
+            &mut opened_tx,
+            "scheduled",
+            "open",
+            &opened_ids,
+            now,
+        )
+        .await?;
+        opened_tx.commit().await?;
 
+        let mut running_tx = self.pool.begin().await?;
         let running_ids: Vec<(i64,)> = sqlx::query_as(
             r#"
             WITH due AS (
@@ -559,11 +561,19 @@ impl AppState {
         )
         .bind(now)
         .bind(batch_size)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *running_tx)
         .await?;
-        self.publish_status_changed_batch("open", "running", &running_ids, now)
-            .await;
+        self.enqueue_status_changed_batch_in_tx(
+            &mut running_tx,
+            "open",
+            "running",
+            &running_ids,
+            now,
+        )
+        .await?;
+        running_tx.commit().await?;
 
+        let mut judging_tx = self.pool.begin().await?;
         let judging_ids: Vec<(i64,)> = sqlx::query_as(
             r#"
             WITH due AS (
@@ -585,11 +595,19 @@ impl AppState {
         )
         .bind(now)
         .bind(batch_size)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *judging_tx)
         .await?;
-        self.publish_status_changed_batch("running", "judging", &judging_ids, now)
-            .await;
+        self.enqueue_status_changed_batch_in_tx(
+            &mut judging_tx,
+            "running",
+            "judging",
+            &judging_ids,
+            now,
+        )
+        .await?;
+        judging_tx.commit().await?;
 
+        let mut closed_tx = self.pool.begin().await?;
         let closed_ids: Vec<(i64,)> = sqlx::query_as(
             r#"
             WITH due AS (
@@ -611,10 +629,17 @@ impl AppState {
         )
         .bind(close_before)
         .bind(batch_size)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *closed_tx)
         .await?;
-        self.publish_status_changed_batch("judging", "closed", &closed_ids, now)
-            .await;
+        self.enqueue_status_changed_batch_in_tx(
+            &mut closed_tx,
+            "judging",
+            "closed",
+            &closed_ids,
+            now,
+        )
+        .await?;
+        closed_tx.commit().await?;
         if let Err(err) = self
             .auto_trigger_judge_jobs_for_recoverable_sessions(batch_size)
             .await
@@ -630,33 +655,28 @@ impl AppState {
         })
     }
 
-    async fn publish_status_changed_batch(
+    async fn enqueue_status_changed_batch_in_tx(
         &self,
+        tx: &mut Transaction<'_, Postgres>,
         from_status: &str,
         to_status: &str,
         session_ids: &[(i64,)],
         changed_at: DateTime<Utc>,
-    ) {
+    ) -> Result<(), AppError> {
         for (session_id,) in session_ids.iter() {
-            if let Err(err) = self
-                .event_bus
-                .publish_debate_session_status_changed(DebateSessionStatusChangedEvent {
-                    session_id: *session_id as u64,
-                    from_status: from_status.to_string(),
-                    to_status: to_status.to_string(),
-                    changed_at,
-                })
-                .await
-            {
-                warn!(
-                    session_id,
-                    from_status,
-                    to_status,
-                    "publish kafka debate session status changed failed: {}",
-                    err
-                );
-            }
+            self.event_bus
+                .enqueue_in_tx(
+                    tx,
+                    DomainEvent::DebateSessionStatusChanged(DebateSessionStatusChangedEvent {
+                        session_id: *session_id as u64,
+                        from_status: from_status.to_string(),
+                        to_status: to_status.to_string(),
+                        changed_at,
+                    }),
+                )
+                .await?;
         }
+        Ok(())
     }
 
     async fn auto_trigger_judge_jobs_for_sessions(&self, session_ids: &[(i64,)]) {

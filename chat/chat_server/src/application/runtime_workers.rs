@@ -32,7 +32,11 @@ pub(crate) fn spawn_background_workers(
     }
 
     if runtime.ai_judge_alert_outbox_bridge_worker_enabled {
-        spawn_ai_judge_alert_outbox_bridge_worker(state);
+        spawn_ai_judge_alert_outbox_bridge_worker(state.clone());
+    }
+
+    if runtime.event_outbox_relay_worker_enabled {
+        spawn_event_outbox_relay_worker(state);
     }
 }
 
@@ -247,6 +251,35 @@ fn spawn_ai_judge_alert_outbox_bridge_worker(state: AppState) {
                 state.config.ai_judge.alert_outbox_poll_interval_secs.max(1),
             ))
             .await;
+        }
+    });
+}
+
+fn spawn_event_outbox_relay_worker(state: AppState) {
+    tokio::spawn(async move {
+        let interval_secs = state
+            .config
+            .worker_runtime
+            .event_outbox_poll_interval_secs
+            .max(1);
+        loop {
+            match state.relay_event_outbox_once().await {
+                Ok(report) => {
+                    debug!(
+                        claimed = report.claimed,
+                        sent = report.sent,
+                        retried = report.retried,
+                        failed = report.failed,
+                        dead_letter = report.dead_letter,
+                        "event outbox relay worker tick success"
+                    );
+                }
+                Err(err) => {
+                    state.observe_event_outbox_worker_error();
+                    warn!("event outbox relay worker tick failed: {}", err);
+                }
+            }
+            sleep(Duration::from_secs(interval_secs)).await;
         }
     });
 }

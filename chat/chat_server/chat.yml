@@ -62,9 +62,16 @@ worker_runtime:
   ai_judge_dispatch_worker_enabled: true
   ops_observability_worker_enabled: true
   ai_judge_alert_outbox_bridge_worker_enabled: true
+  event_outbox_relay_worker_enabled: true
   debate_lifecycle_interval_secs: 2
   debate_lifecycle_batch_size: 200
   ops_observability_interval_secs: 30
+  event_outbox_poll_interval_secs: 1
+  event_outbox_batch_size: 200
+  event_outbox_lock_secs: 30
+  event_outbox_max_attempts: 12
+  event_outbox_base_backoff_ms: 500
+  event_outbox_max_backoff_ms: 60000
 payment:
   verify_mode: mock
   apple_verify_url_prod: https://buy.itunes.apple.com/verifyReceipt

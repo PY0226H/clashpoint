@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::OpsPermission;
+use crate::{DomainEvent, EventPublisher};
 
 impl AppState {
     pub(crate) async fn request_judge_job_automatically(
@@ -206,27 +207,21 @@ impl AppState {
         .fetch_one(&mut *tx)
         .await?;
 
-        tx.commit().await?;
+        self.event_bus
+            .enqueue_in_tx(
+                &mut tx,
+                DomainEvent::AiJudgeJobCreated(AiJudgeJobCreatedEvent {
+                    session_id,
+                    job_id: job.id as u64,
+                    requested_by: user.id as u64,
+                    style_mode: style_mode.clone(),
+                    rejudge_triggered,
+                    requested_at: job.requested_at,
+                }),
+            )
+            .await?;
 
-        if let Err(err) = self
-            .event_bus
-            .publish_ai_judge_job_created(AiJudgeJobCreatedEvent {
-                session_id,
-                job_id: job.id as u64,
-                requested_by: user.id as u64,
-                style_mode: style_mode.clone(),
-                rejudge_triggered,
-                requested_at: job.requested_at,
-            })
-            .await
-        {
-            warn!(
-                session_id,
-                user_id = user.id,
-                "publish kafka ai judge job created failed: {}",
-                err
-            );
-        }
+        tx.commit().await?;
         self.trigger_judge_dispatch(JudgeDispatchTrigger {
             job_id: job.id,
             source: "event:judge_job_created",
