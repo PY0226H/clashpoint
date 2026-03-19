@@ -1294,6 +1294,61 @@ async fn list_judge_trace_replay_by_owner_should_aggregate_phase_and_final() -> 
     .bind(session_id)
     .fetch_one(&state.pool)
     .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO judge_replay_actions(
+            scope, job_id, session_id, requested_by, reason,
+            previous_status, new_status, previous_trace_id, new_trace_id,
+            previous_idempotency_key, new_idempotency_key, created_at
+        )
+        VALUES (
+            'phase', $1, $2, 1, 'phase replay',
+            'failed', 'queued', 'trace-old-phase', 'trace-new-phase',
+            'phase-old-key', 'phase-new-key', NOW() - INTERVAL '2 minutes'
+        )
+        "#,
+    )
+    .bind(phase_job_id.0)
+    .bind(session_id)
+    .execute(&state.pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO judge_replay_actions(
+            scope, job_id, session_id, requested_by, reason,
+            previous_status, new_status, previous_trace_id, new_trace_id,
+            previous_idempotency_key, new_idempotency_key, created_at
+        )
+        VALUES (
+            'final', $1, $2, 1, 'final replay first',
+            'failed', 'queued', 'trace-old-final-1', 'trace-new-final-1',
+            'final-old-key-1', 'final-new-key-1', NOW() - INTERVAL '3 minutes'
+        )
+        "#,
+    )
+    .bind(final_job_id)
+    .bind(session_id)
+    .execute(&state.pool)
+    .await?;
+    let final_latest_replay_action_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_replay_actions(
+            scope, job_id, session_id, requested_by, reason,
+            previous_status, new_status, previous_trace_id, new_trace_id,
+            previous_idempotency_key, new_idempotency_key, created_at
+        )
+        VALUES (
+            'final', $1, $2, 1, 'final replay second',
+            'failed', 'queued', 'trace-old-final-2', 'trace-new-final-2',
+            'final-old-key-2', 'final-new-key-2', NOW() - INTERVAL '1 minutes'
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(final_job_id)
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
 
     let ret = state
         .list_judge_trace_replay_by_owner(
@@ -1322,6 +1377,11 @@ async fn list_judge_trace_replay_by_owner_should_aggregate_phase_and_final() -> 
         .expect("phase item should exist");
     assert_eq!(phase_item.phase_job_id, Some(phase_job_id.0 as u64));
     assert_eq!(phase_item.phase_report_id, Some(phase_report_id.0 as u64));
+    assert_eq!(phase_item.job_id, phase_job_id.0 as u64);
+    assert_eq!(phase_item.report_id, Some(phase_report_id.0 as u64));
+    assert_eq!(phase_item.replay_action_count, 1);
+    assert!(phase_item.latest_replay_action_id.is_some());
+    assert!(phase_item.latest_replay_at.is_some());
     assert_eq!(phase_item.error_code.as_deref(), Some("http_5xx"));
     assert!(phase_item.contract_failure_type.is_none());
     assert_eq!(
@@ -1336,6 +1396,14 @@ async fn list_judge_trace_replay_by_owner_should_aggregate_phase_and_final() -> 
         .expect("final item should exist");
     assert_eq!(final_item.final_job_id, Some(final_job_id as u64));
     assert_eq!(final_item.final_report_id, Some(final_report_id.0 as u64));
+    assert_eq!(final_item.job_id, final_job_id as u64);
+    assert_eq!(final_item.report_id, Some(final_report_id.0 as u64));
+    assert_eq!(final_item.replay_action_count, 2);
+    assert_eq!(
+        final_item.latest_replay_action_id,
+        Some(final_latest_replay_action_id.0 as u64)
+    );
+    assert!(final_item.latest_replay_at.is_some());
     assert_eq!(
         final_item.contract_failure_type.as_deref(),
         Some("final_contract_blocked")
@@ -1596,6 +1664,115 @@ async fn execute_judge_replay_by_owner_should_reject_non_failed_final_job() -> R
         .await
         .expect_err("dispatched job should be rejected");
     assert!(matches!(err, AppError::DebateConflict(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_return_filtered_items_with_has_more(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_a = seed_topic_and_session(&state, "closed").await?;
+    let session_b = seed_topic_and_session(&state, "closed").await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO judge_replay_actions(
+            scope, job_id, session_id, requested_by, reason,
+            previous_status, new_status, previous_trace_id, new_trace_id,
+            previous_idempotency_key, new_idempotency_key, created_at
+        )
+        VALUES
+        (
+            'phase', 101, $1, 1, 'phase replay a',
+            'failed', 'queued', 'trace-old-phase-a', 'trace-new-phase-a',
+            'phase-old-key-a', 'phase-new-key-a', NOW() - INTERVAL '3 minutes'
+        ),
+        (
+            'phase', 101, $1, 1, 'phase replay b',
+            'failed', 'queued', 'trace-old-phase-b', 'trace-new-phase-b',
+            'phase-old-key-b', 'phase-new-key-b', NOW() - INTERVAL '2 minutes'
+        ),
+        (
+            'final', 201, $2, 1, 'final replay c',
+            'failed', 'queued', 'trace-old-final-c', 'trace-new-final-c',
+            'final-old-key-c', 'final-new-key-c', NOW() - INTERVAL '1 minutes'
+        )
+        "#,
+    )
+    .bind(session_a)
+    .bind(session_b)
+    .execute(&state.pool)
+    .await?;
+
+    let page1 = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: None,
+                to: None,
+                scope: Some("phase".to_string()),
+                session_id: Some(session_a as u64),
+                job_id: Some(101),
+                requested_by: Some(1),
+                limit: Some(1),
+                offset: Some(0),
+            },
+        )
+        .await?;
+    assert_eq!(page1.scanned_count, 2);
+    assert_eq!(page1.returned_count, 1);
+    assert!(page1.has_more);
+    assert_eq!(page1.items[0].scope, "phase");
+    assert_eq!(page1.items[0].job_id, 101);
+    assert_eq!(page1.items[0].session_id, session_a as u64);
+    assert_eq!(page1.items[0].requested_by, 1);
+
+    let page2 = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: None,
+                to: None,
+                scope: Some("phase".to_string()),
+                session_id: Some(session_a as u64),
+                job_id: Some(101),
+                requested_by: Some(1),
+                limit: Some(1),
+                offset: Some(1),
+            },
+        )
+        .await?;
+    assert_eq!(page2.scanned_count, 2);
+    assert_eq!(page2.returned_count, 1);
+    assert!(!page2.has_more);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_validate_time_window() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: Some(Utc::now()),
+                to: Some(Utc::now() - chrono::Duration::minutes(1)),
+                scope: None,
+                session_id: None,
+                job_id: None,
+                requested_by: None,
+                limit: Some(20),
+                offset: Some(0),
+            },
+        )
+        .await
+        .expect_err("from > to should be rejected");
+    assert!(matches!(err, AppError::DebateError(_)));
     Ok(())
 }
 

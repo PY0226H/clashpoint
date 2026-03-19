@@ -248,6 +248,11 @@ pub struct JudgeTraceReplayOpsItem {
     pub phase_end_no: Option<i32>,
     pub phase_report_id: Option<u64>,
     pub final_report_id: Option<u64>,
+    pub job_id: u64,
+    pub report_id: Option<u64>,
+    pub replay_action_count: u32,
+    pub latest_replay_action_id: Option<u64>,
+    pub latest_replay_at: Option<DateTime<Utc>>,
     pub replay_eligible: bool,
     pub replay_recommendation: Option<String>,
 }
@@ -333,6 +338,49 @@ pub struct ExecuteJudgeReplayOpsOutput {
     pub previous_idempotency_key: String,
     pub new_idempotency_key: String,
     pub replay_triggered_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListJudgeReplayActionsOpsQuery {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub scope: Option<String>,
+    pub session_id: Option<u64>,
+    pub job_id: Option<u64>,
+    pub requested_by: Option<u64>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeReplayActionOpsItem {
+    pub audit_id: u64,
+    pub scope: String,
+    pub job_id: u64,
+    pub session_id: u64,
+    pub requested_by: u64,
+    pub reason: Option<String>,
+    pub previous_status: String,
+    pub new_status: String,
+    pub previous_trace_id: String,
+    pub new_trace_id: String,
+    pub previous_idempotency_key: String,
+    pub new_idempotency_key: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListJudgeReplayActionsOpsOutput {
+    pub window_from: Option<DateTime<Utc>>,
+    pub window_to: Option<DateTime<Utc>>,
+    pub scanned_count: u32,
+    pub returned_count: u32,
+    pub has_more: bool,
+    #[serde(default)]
+    pub items: Vec<JudgeReplayActionOpsItem>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]

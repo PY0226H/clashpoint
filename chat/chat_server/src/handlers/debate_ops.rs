@@ -3,12 +3,12 @@ use crate::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
     },
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
-    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery, ListJudgeReviewOpsQuery,
-    ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
-    ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsObservabilityThresholds, OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput,
-    RunOpsObservabilityEvaluationQuery, UpdateOpsObservabilityAnomalyStateInput,
-    UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
+    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
+    ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
+    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
+    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsObservabilityThresholds,
+    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
+    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -688,6 +688,32 @@ pub(crate) async fn execute_judge_replay_ops_handler(
     Json(input): Json<ExecuteJudgeReplayOpsInput>,
 ) -> Result<impl IntoResponse, AppError> {
     let ret = state.execute_judge_replay_by_owner(&user, input).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// List replay execute audit actions for ops diagnostics.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/judge-replay/actions",
+    params(
+        ListJudgeReplayActionsOpsQuery
+    ),
+    responses(
+        (status = 200, description = "Replay execute audit actions", body = crate::ListJudgeReplayActionsOpsOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn list_judge_replay_actions_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Query(input): Query<ListJudgeReplayActionsOpsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state
+        .list_judge_replay_actions_by_owner(&user, input)
+        .await?;
     Ok((StatusCode::OK, Json(ret)))
 }
 

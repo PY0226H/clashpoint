@@ -14,6 +14,9 @@ const DEFAULT_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 500;
 const MAX_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 5000;
 const DEFAULT_OPS_TRACE_REPLAY_LIMIT: u32 = 100;
 const MAX_OPS_TRACE_REPLAY_LIMIT: u32 = 500;
+const DEFAULT_OPS_REPLAY_ACTIONS_LIMIT: u32 = 100;
+const MAX_OPS_REPLAY_ACTIONS_LIMIT: u32 = 500;
+const MAX_OPS_REPLAY_ACTIONS_OFFSET: u32 = 10_000;
 const MAX_REPLAY_REASON_LEN: usize = 500;
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
@@ -29,6 +32,15 @@ fn normalize_ops_failure_stats_scan_limit(limit: Option<u32>) -> i64 {
 fn normalize_ops_trace_replay_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_TRACE_REPLAY_LIMIT);
     requested.clamp(1, MAX_OPS_TRACE_REPLAY_LIMIT) as i64
+}
+
+fn normalize_ops_replay_actions_limit(limit: Option<u32>) -> i64 {
+    let requested = limit.unwrap_or(DEFAULT_OPS_REPLAY_ACTIONS_LIMIT);
+    requested.clamp(1, MAX_OPS_REPLAY_ACTIONS_LIMIT) as i64
+}
+
+fn normalize_ops_replay_actions_offset(offset: Option<u32>) -> i64 {
+    offset.unwrap_or(0).clamp(0, MAX_OPS_REPLAY_ACTIONS_OFFSET) as i64
 }
 
 fn normalize_optional_trace_scope_filter(
@@ -336,6 +348,20 @@ fn build_final_dispatch_failure_stats(
 }
 
 fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceReplayOpsItem {
+    let job_id = row
+        .phase_job_id
+        .or(row.final_job_id)
+        .and_then(|v| u64::try_from(v).ok())
+        .unwrap_or(0);
+    let report_id = row
+        .phase_report_id
+        .or(row.final_report_id)
+        .and_then(|v| u64::try_from(v).ok());
+    let replay_action_count = if row.replay_action_count <= 0 {
+        0
+    } else {
+        u32::try_from(row.replay_action_count).unwrap_or(u32::MAX)
+    };
     let status = row.status;
     let error_message = row.error_message;
     let error_code = error_message
@@ -380,8 +406,31 @@ fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceRep
         phase_end_no: row.phase_end_no,
         phase_report_id: row.phase_report_id.map(|v| v as u64),
         final_report_id: row.final_report_id.map(|v| v as u64),
+        job_id,
+        report_id,
+        replay_action_count,
+        latest_replay_action_id: row.latest_replay_action_id.map(|v| v as u64),
+        latest_replay_at: row.latest_replay_at,
         replay_eligible,
         replay_recommendation,
+    }
+}
+
+fn map_judge_replay_action_ops_item(row: JudgeReplayActionOpsRow) -> JudgeReplayActionOpsItem {
+    JudgeReplayActionOpsItem {
+        audit_id: row.audit_id as u64,
+        scope: row.scope,
+        job_id: row.job_id as u64,
+        session_id: row.session_id as u64,
+        requested_by: row.requested_by as u64,
+        reason: row.reason,
+        previous_status: row.previous_status,
+        new_status: row.new_status,
+        previous_trace_id: row.previous_trace_id,
+        new_trace_id: row.new_trace_id,
+        previous_idempotency_key: row.previous_idempotency_key,
+        new_idempotency_key: row.new_idempotency_key,
+        created_at: row.created_at,
     }
 }
 
@@ -607,7 +656,10 @@ impl AppState {
                 item.phase_start_no,
                 item.phase_end_no,
                 item.phase_report_id,
-                item.final_report_id
+                item.final_report_id,
+                item.replay_action_count,
+                item.latest_replay_action_id,
+                item.latest_replay_at
             FROM (
                 SELECT
                     'phase'::varchar AS scope,
@@ -625,7 +677,26 @@ impl AppState {
                     NULL::int AS phase_start_no,
                     NULL::int AS phase_end_no,
                     r.id AS phase_report_id,
-                    NULL::bigint AS final_report_id
+                    NULL::bigint AS final_report_id,
+                    (
+                        SELECT COUNT(*)::bigint
+                        FROM judge_replay_actions a
+                        WHERE a.scope = 'phase' AND a.job_id = p.id
+                    ) AS replay_action_count,
+                    (
+                        SELECT a.id
+                        FROM judge_replay_actions a
+                        WHERE a.scope = 'phase' AND a.job_id = p.id
+                        ORDER BY a.created_at DESC, a.id DESC
+                        LIMIT 1
+                    ) AS latest_replay_action_id,
+                    (
+                        SELECT a.created_at
+                        FROM judge_replay_actions a
+                        WHERE a.scope = 'phase' AND a.job_id = p.id
+                        ORDER BY a.created_at DESC, a.id DESC
+                        LIMIT 1
+                    ) AS latest_replay_at
                 FROM judge_phase_jobs p
                 LEFT JOIN judge_phase_reports r ON r.phase_job_id = p.id
                 WHERE ($1::timestamptz IS NULL OR p.created_at >= $1)
@@ -650,7 +721,26 @@ impl AppState {
                     f.phase_start_no,
                     f.phase_end_no,
                     NULL::bigint AS phase_report_id,
-                    r.id AS final_report_id
+                    r.id AS final_report_id,
+                    (
+                        SELECT COUNT(*)::bigint
+                        FROM judge_replay_actions a
+                        WHERE a.scope = 'final' AND a.job_id = f.id
+                    ) AS replay_action_count,
+                    (
+                        SELECT a.id
+                        FROM judge_replay_actions a
+                        WHERE a.scope = 'final' AND a.job_id = f.id
+                        ORDER BY a.created_at DESC, a.id DESC
+                        LIMIT 1
+                    ) AS latest_replay_action_id,
+                    (
+                        SELECT a.created_at
+                        FROM judge_replay_actions a
+                        WHERE a.scope = 'final' AND a.job_id = f.id
+                        ORDER BY a.created_at DESC, a.id DESC
+                        LIMIT 1
+                    ) AS latest_replay_at
                 FROM judge_final_jobs f
                 LEFT JOIN judge_final_reports r ON r.final_job_id = f.id
                 WHERE ($1::timestamptz IS NULL OR f.created_at >= $1)
@@ -1218,6 +1308,107 @@ impl AppState {
             previous_idempotency_key: job.idempotency_key,
             new_idempotency_key,
             replay_triggered_at: audit.created_at,
+        })
+    }
+
+    pub async fn list_judge_replay_actions_by_owner(
+        &self,
+        user: &User,
+        query: ListJudgeReplayActionsOpsQuery,
+    ) -> Result<ListJudgeReplayActionsOpsOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+        if let (Some(from), Some(to)) = (query.from, query.to) {
+            if from > to {
+                return Err(AppError::DebateError("from must be <= to".to_string()));
+            }
+        }
+
+        let scope_filter = normalize_optional_trace_scope_filter(query.scope)?;
+        let session_id_filter = query.session_id.map(|v| v as i64);
+        let job_id_filter = query.job_id.map(|v| v as i64);
+        let requested_by_filter = query.requested_by.map(|v| v as i64);
+        let row_limit = normalize_ops_replay_actions_limit(query.limit);
+        let row_offset = normalize_ops_replay_actions_offset(query.offset);
+
+        let total_count_i64: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM judge_replay_actions
+            WHERE ($1::timestamptz IS NULL OR created_at >= $1)
+              AND ($2::timestamptz IS NULL OR created_at <= $2)
+              AND ($3::varchar IS NULL OR scope = $3)
+              AND ($4::bigint IS NULL OR session_id = $4)
+              AND ($5::bigint IS NULL OR job_id = $5)
+              AND ($6::bigint IS NULL OR requested_by = $6)
+            "#,
+        )
+        .bind(query.from)
+        .bind(query.to)
+        .bind(scope_filter.as_deref())
+        .bind(session_id_filter)
+        .bind(job_id_filter)
+        .bind(requested_by_filter)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let rows: Vec<JudgeReplayActionOpsRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id AS audit_id,
+                scope,
+                job_id,
+                session_id,
+                requested_by,
+                reason,
+                previous_status,
+                new_status,
+                previous_trace_id,
+                new_trace_id,
+                previous_idempotency_key,
+                new_idempotency_key,
+                created_at
+            FROM judge_replay_actions
+            WHERE ($1::timestamptz IS NULL OR created_at >= $1)
+              AND ($2::timestamptz IS NULL OR created_at <= $2)
+              AND ($3::varchar IS NULL OR scope = $3)
+              AND ($4::bigint IS NULL OR session_id = $4)
+              AND ($5::bigint IS NULL OR job_id = $5)
+              AND ($6::bigint IS NULL OR requested_by = $6)
+            ORDER BY created_at DESC, id DESC
+            LIMIT $7 OFFSET $8
+            "#,
+        )
+        .bind(query.from)
+        .bind(query.to)
+        .bind(scope_filter.as_deref())
+        .bind(session_id_filter)
+        .bind(job_id_filter)
+        .bind(requested_by_filter)
+        .bind(row_limit)
+        .bind(row_offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let items: Vec<JudgeReplayActionOpsItem> = rows
+            .into_iter()
+            .map(map_judge_replay_action_ops_item)
+            .collect();
+        let returned_count = u32::try_from(items.len()).unwrap_or(u32::MAX);
+        let scanned_count = if total_count_i64 <= 0 {
+            0
+        } else {
+            u32::try_from(total_count_i64).unwrap_or(u32::MAX)
+        };
+        let has_more = row_offset.saturating_add(i64::from(returned_count)) < total_count_i64;
+
+        Ok(ListJudgeReplayActionsOpsOutput {
+            window_from: query.from,
+            window_to: query.to,
+            scanned_count,
+            returned_count,
+            has_more,
+            items,
         })
     }
 

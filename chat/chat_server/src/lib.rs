@@ -188,6 +188,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             post(execute_judge_replay_ops_handler),
         )
         .route(
+            "/ops/judge-replay/actions",
+            get(list_judge_replay_actions_ops_handler),
+        )
+        .route(
             "/ops/sessions/:id/judge/rejudge",
             post(request_judge_rejudge_ops_handler),
         )

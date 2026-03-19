@@ -126,6 +126,9 @@ pub(super) struct JudgeTraceReplayOpsRow {
     pub phase_end_no: Option<i32>,
     pub phase_report_id: Option<i64>,
     pub final_report_id: Option<i64>,
+    pub replay_action_count: i64,
+    pub latest_replay_action_id: Option<i64>,
+    pub latest_replay_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -170,6 +173,23 @@ pub(super) struct JudgeFinalReplayJobRow {
 #[derive(Debug, Clone, FromRow)]
 pub(super) struct JudgeReplayActionRow {
     pub id: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgeReplayActionOpsRow {
+    pub audit_id: i64,
+    pub scope: String,
+    pub job_id: i64,
+    pub session_id: i64,
+    pub requested_by: i64,
+    pub reason: Option<String>,
+    pub previous_status: String,
+    pub new_status: String,
+    pub previous_trace_id: String,
+    pub new_trace_id: String,
+    pub previous_idempotency_key: String,
+    pub new_idempotency_key: String,
     pub created_at: DateTime<Utc>,
 }
 
