@@ -15,6 +15,21 @@ async function bootstrapAuthState(page) {
 function createOpsApiMock() {
   let executeCount = 0;
   const executeJobIds = [];
+  const seedReplayActions = Array.from({ length: 120 }).map((_, index) => ({
+    auditId: 17000 + index,
+    scope: index % 2 === 0 ? 'final' : 'phase',
+    jobId: 1000 + index,
+    sessionId: 601,
+    requestedBy: 1001,
+    reason: `ops_seed_page_${index}`,
+    previousStatus: 'failed',
+    newStatus: 'queued',
+    previousTraceId: `trace-seed-before-${index}`,
+    newTraceId: `trace-seed-after-${index}`,
+    previousIdempotencyKey: `seed-old-key-${index}`,
+    newIdempotencyKey: `seed-new-key-${index}`,
+    createdAt: new Date(Date.parse('2026-03-18T01:20:00Z') - index * 1000).toISOString(),
+  }));
   return {
     async route(page) {
       await page.route('**/api/**', async (route) => {
@@ -145,30 +160,36 @@ function createOpsApiMock() {
           return;
         }
         if (pathname === '/api/debate/ops/judge-replay/actions') {
+          const limit = Math.max(1, Number(url.searchParams.get('limit') || 50));
+          const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+          const runtimeReplayActions = executeCount > 0
+            ? [{
+              auditId: 18888,
+              scope: 'final',
+              jobId: 901,
+              sessionId: 601,
+              requestedBy: 1001,
+              reason: 'ops_ui_manual_replay',
+              previousStatus: 'failed',
+              newStatus: 'queued',
+              previousTraceId: 'trace-final-replay-e2e',
+              newTraceId: 'trace-final-replay-e2e-rerun',
+              previousIdempotencyKey: 'old-key',
+              newIdempotencyKey: 'new-key',
+              createdAt: '2026-03-18T01:30:00Z',
+            }]
+            : [];
+          const allReplayActions = [...runtimeReplayActions, ...seedReplayActions];
+          const items = allReplayActions.slice(offset, offset + limit);
+          const hasMore = offset + items.length < allReplayActions.length;
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify({
-              scannedCount: executeCount > 0 ? 1 : 0,
-              returnedCount: executeCount > 0 ? 1 : 0,
-              hasMore: false,
-              items: executeCount > 0
-                ? [{
-                  auditId: 18888,
-                  scope: 'final',
-                  jobId: 901,
-                  sessionId: 601,
-                  requestedBy: 1001,
-                  reason: 'ops_ui_manual_replay',
-                  previousStatus: 'failed',
-                  newStatus: 'queued',
-                  previousTraceId: 'trace-final-replay-e2e',
-                  newTraceId: 'trace-final-replay-e2e-rerun',
-                  previousIdempotencyKey: 'old-key',
-                  newIdempotencyKey: 'new-key',
-                  createdAt: '2026-03-18T01:10:00Z',
-                }]
-                : [],
+              scannedCount: allReplayActions.length,
+              returnedCount: items.length,
+              hasMore,
+              items,
             }),
           });
           return;
@@ -321,4 +342,22 @@ test('ops admin should support batch replay execution for selected candidates', 
   await expect(page.getByText('批量回放执行完成：成功 2 条，失败 0 条')).toBeVisible();
   await expect.poll(() => mock.getExecuteCount()).toBe(2);
   await expect.poll(() => mock.getExecuteJobIds().sort((a, b) => a - b).join(',')).toBe('901,902');
+});
+
+test('ops admin replay actions should support quick pagination controls', async ({ page }) => {
+  await bootstrapAuthState(page);
+  const mock = createOpsApiMock();
+  await mock.route(page);
+
+  await page.goto('http://127.0.0.1:1420/debate/ops');
+
+  await expect(page.getByText('当前分页: offset=0 · limit=50')).toBeVisible();
+  await expect(page.getByText('ops_seed_page_0')).toBeVisible();
+
+  await page.getByRole('button', { name: '下一页' }).click();
+  await expect(page.getByText('当前分页: offset=50 · limit=50')).toBeVisible();
+  await expect(page.getByText('ops_seed_page_50')).toBeVisible();
+
+  await page.getByRole('button', { name: '上一页' }).click();
+  await expect(page.getByText('当前分页: offset=0 · limit=50')).toBeVisible();
 });

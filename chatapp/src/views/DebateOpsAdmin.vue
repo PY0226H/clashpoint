@@ -321,6 +321,9 @@
             <div class="text-xs font-semibold text-slate-800">
               Replay Actions（scanned: {{ replayActionMeta.scannedCount }} · returned: {{ replayActionMeta.returnedCount }} · hasMore: {{ replayActionMeta.hasMore ? 'yes' : 'no' }})
             </div>
+            <div class="text-[11px] text-slate-600">
+              当前分页: offset={{ replayActionsFilter.offset }} · limit={{ replayActionsFilter.limit }} · 本页筛选后 {{ replayActionFilteredRows.length }} 条
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-9 gap-2">
               <label class="text-xs text-gray-600">
                 开始时间
@@ -369,6 +372,63 @@
               </div>
             </div>
 
+            <div class="rounded border border-slate-100 bg-slate-50 px-2 py-2 space-y-2">
+              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
+                <label class="text-xs text-gray-600">
+                  状态迁移
+                  <select v-model="replayActionsViewFilter.statusTransition" class="w-full border rounded px-2 py-1 mt-1">
+                    <option value="">all</option>
+                    <option
+                      v-for="transition in replayActionTransitionOptions"
+                      :key="`transition-${transition}`"
+                      :value="transition"
+                    >
+                      {{ transition }}
+                    </option>
+                  </select>
+                </label>
+                <label class="text-xs text-gray-600">
+                  Reason 关键词
+                  <input v-model.trim="replayActionsViewFilter.reasonKeyword" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                </label>
+                <label class="text-xs text-gray-600">
+                  Trace 关键词
+                  <input v-model.trim="replayActionsViewFilter.traceKeyword" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                </label>
+                <div class="flex items-end">
+                  <button
+                    @click="resetReplayActionsViewFilter"
+                    class="px-2 py-2 rounded border border-gray-300 bg-white hover:bg-gray-100 text-xs"
+                  >
+                    重置筛选
+                  </button>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  @click="gotoReplayActionsFirstPage"
+                  :disabled="replayActionsLoading || Number(replayActionsFilter.offset || 0) <= 0"
+                  class="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-xs disabled:opacity-50"
+                >
+                  回到第一页
+                </button>
+                <button
+                  @click="gotoReplayActionsPrevPage"
+                  :disabled="replayActionsLoading || Number(replayActionsFilter.offset || 0) <= 0"
+                  class="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-xs disabled:opacity-50"
+                >
+                  上一页
+                </button>
+                <button
+                  @click="gotoReplayActionsNextPage"
+                  :disabled="replayActionsLoading || !replayActionMeta.hasMore"
+                  class="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-xs disabled:opacity-50"
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+
             <div class="overflow-x-auto">
               <table class="min-w-full text-xs">
                 <thead>
@@ -385,7 +445,7 @@
                 </thead>
                 <tbody>
                   <tr
-                    v-for="item in replayActionRows"
+                    v-for="item in replayActionFilteredRows"
                     :key="item.auditId"
                     class="border-b last:border-b-0"
                   >
@@ -400,7 +460,7 @@
                       {{ item.previousTraceId || '-' }} -> {{ item.newTraceId || '-' }}
                     </td>
                   </tr>
-                  <tr v-if="replayActionRows.length === 0">
+                  <tr v-if="replayActionFilteredRows.length === 0">
                     <td colspan="8" class="py-4 text-center text-gray-500">暂无 replay actions 数据</td>
                   </tr>
                 </tbody>
@@ -1498,6 +1558,11 @@ export default {
         limit: 50,
         offset: 0,
       },
+      replayActionsViewFilter: {
+        statusTransition: '',
+        reasonKeyword: '',
+        traceKeyword: '',
+      },
       replayPreviewData: null,
       replayPreviewSnapshotText: '',
       replayPreviewTargetKey: '',
@@ -1592,6 +1657,40 @@ export default {
         return false;
       }
       return this.traceReplayBatchSelectedCount === candidates.length;
+    },
+    replayActionTransitionOptions() {
+      const transitions = new Set();
+      for (const item of this.replayActionRows) {
+        const previousStatus = String(item?.previousStatus || '-').trim() || '-';
+        const newStatus = String(item?.newStatus || '-').trim() || '-';
+        transitions.add(`${previousStatus} -> ${newStatus}`);
+      }
+      return Array.from(transitions).sort((a, b) => a.localeCompare(b));
+    },
+    replayActionFilteredRows() {
+      const statusTransition = String(this.replayActionsViewFilter?.statusTransition || '').trim();
+      const reasonKeyword = String(this.replayActionsViewFilter?.reasonKeyword || '').trim().toLowerCase();
+      const traceKeyword = String(this.replayActionsViewFilter?.traceKeyword || '').trim().toLowerCase();
+      return this.replayActionRows.filter((item) => {
+        const itemTransition = `${String(item?.previousStatus || '-').trim() || '-'} -> ${String(item?.newStatus || '-').trim() || '-'}`;
+        if (statusTransition && statusTransition !== itemTransition) {
+          return false;
+        }
+        if (reasonKeyword) {
+          const reason = String(item?.reason || '').toLowerCase();
+          if (!reason.includes(reasonKeyword)) {
+            return false;
+          }
+        }
+        if (traceKeyword) {
+          const previousTraceId = String(item?.previousTraceId || '').toLowerCase();
+          const newTraceId = String(item?.newTraceId || '').toLowerCase();
+          if (!previousTraceId.includes(traceKeyword) && !newTraceId.includes(traceKeyword)) {
+            return false;
+          }
+        }
+        return true;
+      });
     },
     observabilityAnomaliesRaw() {
       return buildJudgeObservabilityAnomalies({
@@ -2307,6 +2406,10 @@ export default {
       }
     },
     buildReplayActionsPayload() {
+      const limit = Math.min(500, Math.max(1, Number(this.replayActionsFilter.limit || 50)));
+      const offset = Math.max(0, Number(this.replayActionsFilter.offset || 0));
+      this.replayActionsFilter.limit = limit;
+      this.replayActionsFilter.offset = offset;
       return {
         from: this.toIso(this.replayActionsFilter.fromLocal),
         to: this.toIso(this.replayActionsFilter.toLocal),
@@ -2314,8 +2417,18 @@ export default {
         sessionId: this.toPositiveNumber(this.replayActionsFilter.sessionId),
         jobId: this.toPositiveNumber(this.replayActionsFilter.jobId),
         requestedBy: this.toPositiveNumber(this.replayActionsFilter.requestedBy),
-        limit: Number(this.replayActionsFilter.limit || 50),
-        offset: Math.max(0, Number(this.replayActionsFilter.offset || 0)),
+        limit,
+        offset,
+      };
+    },
+    replayActionsPageLimit() {
+      return Math.min(500, Math.max(1, Number(this.replayActionsFilter.limit || 50)));
+    },
+    resetReplayActionsViewFilter() {
+      this.replayActionsViewFilter = {
+        statusTransition: '',
+        reasonKeyword: '',
+        traceKeyword: '',
       };
     },
     async refreshReplayActionsOps() {
@@ -2355,6 +2468,25 @@ export default {
       this.replayActionsFilter.jobId = String(row.jobId || '');
       this.replayActionsFilter.offset = 0;
       this.refreshReplayActionsOps();
+    },
+    async gotoReplayActionsFirstPage() {
+      this.replayActionsFilter.offset = 0;
+      await this.refreshReplayActionsOps();
+    },
+    async gotoReplayActionsPrevPage() {
+      const limit = this.replayActionsPageLimit();
+      const currentOffset = Math.max(0, Number(this.replayActionsFilter.offset || 0));
+      this.replayActionsFilter.offset = Math.max(0, currentOffset - limit);
+      await this.refreshReplayActionsOps();
+    },
+    async gotoReplayActionsNextPage() {
+      if (!this.replayActionMeta.hasMore) {
+        return;
+      }
+      const limit = this.replayActionsPageLimit();
+      const currentOffset = Math.max(0, Number(this.replayActionsFilter.offset || 0));
+      this.replayActionsFilter.offset = currentOffset + limit;
+      await this.refreshReplayActionsOps();
     },
     clearReplayPreview() {
       this.replayPreviewData = null;
