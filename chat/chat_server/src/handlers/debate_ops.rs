@@ -2,7 +2,7 @@ use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
     },
-    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput,
+    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery, ListJudgeReviewOpsQuery,
     ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
     ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
@@ -665,6 +665,29 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
     let ret = state
         .get_judge_replay_preview_by_owner(&user, input)
         .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Execute replay for a failed phase/final dispatch job.
+#[utoipa::path(
+    post,
+    path = "/api/debate/ops/judge-replay/execute",
+    request_body = ExecuteJudgeReplayOpsInput,
+    responses(
+        (status = 200, description = "Replay execute accepted", body = crate::ExecuteJudgeReplayOpsOutput),
+        (status = 404, description = "Replay target not found", body = crate::ErrorOutput),
+        (status = 409, description = "Permission or state conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn execute_judge_replay_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Json(input): Json<ExecuteJudgeReplayOpsInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.execute_judge_replay_by_owner(&user, input).await?;
     Ok((StatusCode::OK, Json(ret)))
 }
 

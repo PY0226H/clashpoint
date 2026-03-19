@@ -168,6 +168,12 @@ pub(super) struct JudgeFinalReplayJobRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgeReplayActionRow {
+    pub id: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub(super) struct JudgeStageSummaryRow {
     pub stage_no: i32,
     pub from_message_id: Option<i64>,

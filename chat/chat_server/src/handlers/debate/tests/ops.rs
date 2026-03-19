@@ -1,16 +1,16 @@
 use super::super::{
     apply_ops_observability_anomaly_action_handler, discard_kafka_dlq_event_handler,
-    get_judge_replay_preview_ops_handler, get_ops_observability_config_handler,
-    get_ops_observability_metrics_dictionary_handler, get_ops_observability_slo_snapshot_handler,
-    get_ops_rbac_me_handler, get_ops_service_split_readiness_handler,
-    list_judge_final_dispatch_failure_stats_ops_handler, list_judge_reviews_ops_handler,
-    list_judge_trace_replay_ops_handler, list_kafka_dlq_events_handler,
-    list_ops_alert_notifications_handler, list_ops_role_assignments_handler,
-    list_ops_service_split_review_audits_handler, replay_kafka_dlq_event_handler,
-    request_judge_rejudge_ops_handler, revoke_ops_role_assignment_handler,
-    run_ops_observability_evaluation_once_handler, upsert_ops_observability_anomaly_state_handler,
-    upsert_ops_observability_thresholds_handler, upsert_ops_role_assignment_handler,
-    upsert_ops_service_split_review_handler,
+    execute_judge_replay_ops_handler, get_judge_replay_preview_ops_handler,
+    get_ops_observability_config_handler, get_ops_observability_metrics_dictionary_handler,
+    get_ops_observability_slo_snapshot_handler, get_ops_rbac_me_handler,
+    get_ops_service_split_readiness_handler, list_judge_final_dispatch_failure_stats_ops_handler,
+    list_judge_reviews_ops_handler, list_judge_trace_replay_ops_handler,
+    list_kafka_dlq_events_handler, list_ops_alert_notifications_handler,
+    list_ops_role_assignments_handler, list_ops_service_split_review_audits_handler,
+    replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
+    revoke_ops_role_assignment_handler, run_ops_observability_evaluation_once_handler,
+    upsert_ops_observability_anomaly_state_handler, upsert_ops_observability_thresholds_handler,
+    upsert_ops_role_assignment_handler, upsert_ops_service_split_review_handler,
 };
 use super::test_support::{
     assert_debate_conflict_prefix, assert_is_debate_conflict, insert_kafka_dlq_event,
@@ -18,11 +18,12 @@ use super::test_support::{
     seed_topic_and_session,
 };
 use crate::{
-    AppState, ApplyOpsObservabilityAnomalyActionInput, GetJudgeFinalDispatchFailureStatsQuery,
-    GetJudgeReplayPreviewOpsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
-    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
-    OpsObservabilityThresholds, RunOpsObservabilityEvaluationQuery,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
+    AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
+    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery, ListJudgeReviewOpsQuery,
+    ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
+    ListOpsServiceSplitReviewAuditsQuery, OpsObservabilityThresholds,
+    RunOpsObservabilityEvaluationQuery, UpdateOpsObservabilityAnomalyStateInput,
+    UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
 use anyhow::Result;
 use axum::{
@@ -419,6 +420,93 @@ async fn get_judge_replay_preview_ops_handler_should_return_phase_snapshot() -> 
         2
     );
     assert_eq!(ret["snapshotHash"].as_str().map(str::len), Some(40));
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_ops_handler_should_require_rejudge_permission() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let non_owner = state.find_user_by_id(2).await?.expect("user should exist");
+
+    let result = execute_judge_replay_ops_handler(
+        Extension(non_owner),
+        State(state),
+        Json(ExecuteJudgeReplayOpsInput {
+            scope: "final".to_string(),
+            job_id: 1,
+            reason: Some("retry".to_string()),
+        }),
+    )
+    .await;
+    assert_is_debate_conflict(result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_ops_handler_should_requeue_failed_final_job() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+
+    let final_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_final_jobs(
+            session_id, phase_start_no, phase_end_no,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, 1,
+            'failed', $2, $3, 'v3', 'v3-default',
+            'default', 3, NOW(), $4
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(format!("trace-final-exec-{session_id}"))
+    .bind(format!("judge_final_exec:{session_id}:1:1:v3:v3-default"))
+    .bind("[http_5xx] final dispatch request failed")
+    .fetch_one(&state.pool)
+    .await?;
+
+    let response = execute_judge_replay_ops_handler(
+        Extension(owner),
+        State(state.clone()),
+        Json(ExecuteJudgeReplayOpsInput {
+            scope: "final".to_string(),
+            job_id: final_job_id.0 as u64,
+            reason: Some("ops manual replay".to_string()),
+        }),
+    )
+    .await?
+    .into_response();
+    let ret = json_body_with_status(response, StatusCode::OK).await?;
+    assert_eq!(ret["scope"], "final");
+    assert_eq!(ret["jobId"].as_u64(), Some(final_job_id.0 as u64));
+    assert_eq!(ret["previousStatus"], "failed");
+    assert_eq!(ret["newStatus"], "queued");
+    assert!(ret["auditId"].as_u64().unwrap_or(0) > 0);
+
+    let row: (String, i32, Option<String>, String, String) = sqlx::query_as(
+        r#"
+        SELECT status, dispatch_attempts, error_message, trace_id, idempotency_key
+        FROM judge_final_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id.0)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, "queued");
+    assert_eq!(row.1, 0);
+    assert!(row.2.is_none());
+    assert_ne!(row.3, format!("trace-final-exec-{session_id}"));
+    assert_ne!(
+        row.4,
+        format!("judge_final_exec:{session_id}:1:1:v3:v3-default")
+    );
     Ok(())
 }
 

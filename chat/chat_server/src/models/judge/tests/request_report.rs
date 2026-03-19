@@ -1490,6 +1490,116 @@ async fn get_judge_replay_preview_by_owner_should_return_final_snapshot_and_term
 }
 
 #[tokio::test]
+async fn execute_judge_replay_by_owner_should_requeue_failed_phase_and_write_audit() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+
+    let message_start = seed_session_message(&state, session_id, 1, "pro", "replay start").await?;
+    let message_end = seed_session_message(&state, session_id, 2, "con", "replay end").await?;
+    let old_trace_id = format!("trace-phase-replay-exec-{session_id}");
+    let old_idempotency_key = format!("judge_phase_replay_exec:{session_id}:1:v3:v3-default");
+    let phase_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_phase_jobs(
+            session_id, phase_no, message_start_id, message_end_id, message_count,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, $2, $3, 2,
+            'failed', $4, $5, 'v3', 'v3-default',
+            'default', 'default', 3, NOW(), $6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(message_start)
+    .bind(message_end)
+    .bind(&old_trace_id)
+    .bind(&old_idempotency_key)
+    .bind("[http_5xx] phase dispatch request failed")
+    .fetch_one(&state.pool)
+    .await?;
+
+    let ret = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            ExecuteJudgeReplayOpsInput {
+                scope: "phase".to_string(),
+                job_id: phase_job_id.0 as u64,
+                reason: Some("manual replay".to_string()),
+            },
+        )
+        .await?;
+
+    assert_eq!(ret.scope, "phase");
+    assert_eq!(ret.job_id, phase_job_id.0 as u64);
+    assert_eq!(ret.previous_status, "failed");
+    assert_eq!(ret.new_status, "queued");
+    assert_ne!(ret.new_trace_id, old_trace_id);
+    assert_ne!(ret.new_idempotency_key, old_idempotency_key);
+
+    let phase_row: (String, i32, Option<String>, String, String) = sqlx::query_as(
+        r#"
+        SELECT status, dispatch_attempts, error_message, trace_id, idempotency_key
+        FROM judge_phase_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_job_id.0)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(phase_row.0, "queued");
+    assert_eq!(phase_row.1, 0);
+    assert!(phase_row.2.is_none());
+    assert_eq!(phase_row.3, ret.new_trace_id);
+    assert_eq!(phase_row.4, ret.new_idempotency_key);
+
+    let audit_row: (String, i64, i64, String, String) = sqlx::query_as(
+        r#"
+        SELECT scope, job_id, session_id, previous_status, new_status
+        FROM judge_replay_actions
+        WHERE id = $1
+        "#,
+    )
+    .bind(ret.audit_id as i64)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(audit_row.0, "phase");
+    assert_eq!(audit_row.1, phase_job_id.0);
+    assert_eq!(audit_row.2, session_id);
+    assert_eq!(audit_row.3, "failed");
+    assert_eq!(audit_row.4, "queued");
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_non_failed_final_job() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    let err = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            ExecuteJudgeReplayOpsInput {
+                scope: "final".to_string(),
+                job_id: final_job_id as u64,
+                reason: Some("should fail".to_string()),
+            },
+        )
+        .await
+        .expect_err("dispatched job should be rejected");
+    assert!(matches!(err, AppError::DebateConflict(_)));
+    Ok(())
+}
+
+#[tokio::test]
 async fn request_judge_rejudge_by_owner_should_enforce_owner_and_report_requirements() -> Result<()>
 {
     let (_tdb, state) = AppState::new_for_test().await?;

@@ -313,6 +313,30 @@ pub struct GetJudgeReplayPreviewOpsOutput {
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecuteJudgeReplayOpsInput {
+    pub scope: String,
+    pub job_id: u64,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteJudgeReplayOpsOutput {
+    pub audit_id: u64,
+    pub scope: String,
+    pub job_id: u64,
+    pub session_id: u64,
+    pub previous_status: String,
+    pub new_status: String,
+    pub previous_trace_id: String,
+    pub new_trace_id: String,
+    pub previous_idempotency_key: String,
+    pub new_idempotency_key: String,
+    pub replay_triggered_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JudgeReviewOpsItem {
     pub report_id: u64,
     pub session_id: u64,

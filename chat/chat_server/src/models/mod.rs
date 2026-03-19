@@ -21,11 +21,11 @@ pub use debate::{
     PinDebateMessageInput, PinDebateMessageOutput,
 };
 pub use judge::{
-    DrawVoteDetail, GetDrawVoteOutput, GetJudgeFinalDispatchFailureStatsOutput,
-    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsOutput,
-    GetJudgeReplayPreviewOpsQuery, GetJudgeReportOutput, GetJudgeReportQuery,
-    JudgeFinalDispatchFailureTypeCount, JudgeGroundedSummaryPayload, JudgeJobSnapshot,
-    JudgePhaseAgent1ScorePayload, JudgePhaseAgent2ScorePayload,
+    DrawVoteDetail, ExecuteJudgeReplayOpsInput, ExecuteJudgeReplayOpsOutput, GetDrawVoteOutput,
+    GetJudgeFinalDispatchFailureStatsOutput, GetJudgeFinalDispatchFailureStatsQuery,
+    GetJudgeReplayPreviewOpsOutput, GetJudgeReplayPreviewOpsQuery, GetJudgeReportOutput,
+    GetJudgeReportQuery, JudgeFinalDispatchFailureTypeCount, JudgeGroundedSummaryPayload,
+    JudgeJobSnapshot, JudgePhaseAgent1ScorePayload, JudgePhaseAgent2ScorePayload,
     JudgePhaseAgent3WeightedScorePayload, JudgeRagMeta, JudgeRagSourceItem, JudgeReplayPreviewMeta,
     JudgeReportDetail, JudgeRetrievalBundleItemPayload, JudgeRetrievalBundlePayload,
     JudgeReviewOpsItem, JudgeStageSummariesMeta, JudgeStageSummaryDetail, JudgeStageSummaryInput,

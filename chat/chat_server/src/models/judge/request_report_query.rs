@@ -3,6 +3,7 @@ use crate::models::OpsPermission;
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 const CONTRACT_FAILURE_FINAL_BLOCKED: &str = "final_contract_blocked";
 const CONTRACT_FAILURE_PHASE_INCOMPLETE: &str = "phase_artifact_incomplete";
@@ -13,6 +14,7 @@ const DEFAULT_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 500;
 const MAX_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 5000;
 const DEFAULT_OPS_TRACE_REPLAY_LIMIT: u32 = 100;
 const MAX_OPS_TRACE_REPLAY_LIMIT: u32 = 500;
+const MAX_REPLAY_REASON_LEN: usize = 500;
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
@@ -93,6 +95,31 @@ fn compute_snapshot_hash(snapshot: &Value) -> Result<String, AppError> {
     let mut hasher = Sha1::new();
     hasher.update(encoded);
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn normalize_optional_replay_reason(reason: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(value) = reason else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > MAX_REPLAY_REASON_LEN {
+        return Err(AppError::DebateError(format!(
+            "reason is too long, max {} chars",
+            MAX_REPLAY_REASON_LEN
+        )));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn build_replay_trace_id(scope: &str, job_id: u64) -> String {
+    format!("judge-replay-{scope}-{job_id}-{}", Uuid::now_v7())
+}
+
+fn build_replay_idempotency_key(scope: &str, job_id: u64) -> String {
+    format!("judge-replay:{scope}:{job_id}:{}", Uuid::now_v7())
 }
 
 fn normalize_optional_winner_filter(winner: Option<String>) -> Result<Option<String>, AppError> {
@@ -901,6 +928,296 @@ impl AppState {
                 },
             },
             request_snapshot,
+        })
+    }
+
+    pub async fn execute_judge_replay_by_owner(
+        &self,
+        user: &User,
+        input: ExecuteJudgeReplayOpsInput,
+    ) -> Result<ExecuteJudgeReplayOpsOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeRejudge)
+            .await?;
+        let scope = normalize_replay_scope(input.scope.as_str())?;
+        let reason = normalize_optional_replay_reason(input.reason)?;
+        let job_id = input.job_id;
+        let new_status = "queued".to_string();
+
+        if scope == "phase" {
+            let mut tx = self.pool.begin().await?;
+            let job: JudgePhaseReplayJobRow = sqlx::query_as(
+                r#"
+                SELECT
+                    id,
+                    session_id,
+                    phase_no,
+                    message_start_id,
+                    message_end_id,
+                    message_count,
+                    status,
+                    trace_id,
+                    idempotency_key,
+                    rubric_version,
+                    judge_policy_version,
+                    topic_domain,
+                    retrieval_profile,
+                    dispatch_attempts,
+                    last_dispatch_at,
+                    error_message,
+                    created_at
+                FROM judge_phase_jobs
+                WHERE id = $1
+                FOR UPDATE
+                "#,
+            )
+            .bind(job_id as i64)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("judge phase job id {}", job_id)))?;
+
+            let previous_status = job.status.to_ascii_lowercase();
+            if previous_status != "failed" {
+                return Err(AppError::DebateConflict(format!(
+                    "replay execute requires failed phase job, current status={}",
+                    previous_status
+                )));
+            }
+            let existing_report_id: Option<i64> = sqlx::query_scalar(
+                r#"
+                SELECT id
+                FROM judge_phase_reports
+                WHERE phase_job_id = $1
+                LIMIT 1
+                "#,
+            )
+            .bind(job.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if existing_report_id.is_some() {
+                return Err(AppError::DebateConflict(format!(
+                    "phase job {} already has report, replay execute is not allowed",
+                    job.id
+                )));
+            }
+
+            let new_trace_id = build_replay_trace_id("phase", job_id);
+            let new_idempotency_key = build_replay_idempotency_key("phase", job_id);
+            sqlx::query(
+                r#"
+                UPDATE judge_phase_jobs
+                SET
+                    status = 'queued',
+                    trace_id = $2,
+                    idempotency_key = $3,
+                    dispatch_attempts = 0,
+                    last_dispatch_at = NULL,
+                    dispatch_locked_until = NULL,
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(job.id)
+            .bind(&new_trace_id)
+            .bind(&new_idempotency_key)
+            .execute(&mut *tx)
+            .await?;
+
+            let audit: JudgeReplayActionRow = sqlx::query_as(
+                r#"
+                INSERT INTO judge_replay_actions(
+                    scope,
+                    job_id,
+                    session_id,
+                    requested_by,
+                    reason,
+                    previous_status,
+                    new_status,
+                    previous_trace_id,
+                    new_trace_id,
+                    previous_idempotency_key,
+                    new_idempotency_key,
+                    created_at
+                )
+                VALUES (
+                    'phase',
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    'queued',
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    NOW()
+                )
+                RETURNING id, created_at
+                "#,
+            )
+            .bind(job.id)
+            .bind(job.session_id)
+            .bind(user.id)
+            .bind(reason)
+            .bind(&previous_status)
+            .bind(&job.trace_id)
+            .bind(&new_trace_id)
+            .bind(&job.idempotency_key)
+            .bind(&new_idempotency_key)
+            .fetch_one(&mut *tx)
+            .await?;
+            tx.commit().await?;
+
+            return Ok(ExecuteJudgeReplayOpsOutput {
+                audit_id: audit.id as u64,
+                scope: "phase".to_string(),
+                job_id: job.id as u64,
+                session_id: job.session_id as u64,
+                previous_status,
+                new_status,
+                previous_trace_id: job.trace_id,
+                new_trace_id,
+                previous_idempotency_key: job.idempotency_key,
+                new_idempotency_key,
+                replay_triggered_at: audit.created_at,
+            });
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let job: JudgeFinalReplayJobRow = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                session_id,
+                phase_start_no,
+                phase_end_no,
+                status,
+                trace_id,
+                idempotency_key,
+                rubric_version,
+                judge_policy_version,
+                topic_domain,
+                dispatch_attempts,
+                last_dispatch_at,
+                error_message,
+                created_at
+            FROM judge_final_jobs
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(job_id as i64)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("judge final job id {}", job_id)))?;
+
+        let previous_status = job.status.to_ascii_lowercase();
+        if previous_status != "failed" {
+            return Err(AppError::DebateConflict(format!(
+                "replay execute requires failed final job, current status={}",
+                previous_status
+            )));
+        }
+        let existing_report_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM judge_final_reports
+            WHERE final_job_id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(job.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if existing_report_id.is_some() {
+            return Err(AppError::DebateConflict(format!(
+                "final job {} already has report, replay execute is not allowed",
+                job.id
+            )));
+        }
+
+        let new_trace_id = build_replay_trace_id("final", job_id);
+        let new_idempotency_key = build_replay_idempotency_key("final", job_id);
+        sqlx::query(
+            r#"
+            UPDATE judge_final_jobs
+            SET
+                status = 'queued',
+                trace_id = $2,
+                idempotency_key = $3,
+                dispatch_attempts = 0,
+                last_dispatch_at = NULL,
+                dispatch_locked_until = NULL,
+                error_message = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(job.id)
+        .bind(&new_trace_id)
+        .bind(&new_idempotency_key)
+        .execute(&mut *tx)
+        .await?;
+
+        let audit: JudgeReplayActionRow = sqlx::query_as(
+            r#"
+            INSERT INTO judge_replay_actions(
+                scope,
+                job_id,
+                session_id,
+                requested_by,
+                reason,
+                previous_status,
+                new_status,
+                previous_trace_id,
+                new_trace_id,
+                previous_idempotency_key,
+                new_idempotency_key,
+                created_at
+            )
+            VALUES (
+                'final',
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                'queued',
+                $6,
+                $7,
+                $8,
+                $9,
+                NOW()
+            )
+            RETURNING id, created_at
+            "#,
+        )
+        .bind(job.id)
+        .bind(job.session_id)
+        .bind(user.id)
+        .bind(reason)
+        .bind(&previous_status)
+        .bind(&job.trace_id)
+        .bind(&new_trace_id)
+        .bind(&job.idempotency_key)
+        .bind(&new_idempotency_key)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(ExecuteJudgeReplayOpsOutput {
+            audit_id: audit.id as u64,
+            scope: "final".to_string(),
+            job_id: job.id as u64,
+            session_id: job.session_id as u64,
+            previous_status,
+            new_status,
+            previous_trace_id: job.trace_id,
+            new_trace_id,
+            previous_idempotency_key: job.idempotency_key,
+            new_idempotency_key,
+            replay_triggered_at: audit.created_at,
         })
     }
 
