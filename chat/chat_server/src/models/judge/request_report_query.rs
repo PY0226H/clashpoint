@@ -7,10 +7,67 @@ const CONTRACT_FAILURE_PHASE_INCOMPLETE: &str = "phase_artifact_incomplete";
 const CONTRACT_FAILURE_ACCEPTED_FALSE: &str = "response_accepted_false";
 const CONTRACT_FAILURE_JOB_ID_MISMATCH: &str = "response_job_id_mismatch";
 const CONTRACT_FAILURE_UNKNOWN: &str = "unknown_contract_failure";
+const DEFAULT_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 500;
+const MAX_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 5000;
+const DEFAULT_OPS_TRACE_REPLAY_LIMIT: u32 = 100;
+const MAX_OPS_TRACE_REPLAY_LIMIT: u32 = 500;
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
     requested.clamp(1, MAX_OPS_JUDGE_REVIEW_LIMIT) as i64
+}
+
+fn normalize_ops_failure_stats_scan_limit(limit: Option<u32>) -> i64 {
+    let requested = limit.unwrap_or(DEFAULT_OPS_FAILURE_STATS_SCAN_LIMIT);
+    requested.clamp(1, MAX_OPS_FAILURE_STATS_SCAN_LIMIT) as i64
+}
+
+fn normalize_ops_trace_replay_limit(limit: Option<u32>) -> i64 {
+    let requested = limit.unwrap_or(DEFAULT_OPS_TRACE_REPLAY_LIMIT);
+    requested.clamp(1, MAX_OPS_TRACE_REPLAY_LIMIT) as i64
+}
+
+fn normalize_optional_trace_scope_filter(
+    scope: Option<String>,
+) -> Result<Option<String>, AppError> {
+    match scope {
+        Some(value) => {
+            let trimmed = value.trim().to_ascii_lowercase();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else if trimmed == "phase" || trimmed == "final" {
+                Ok(Some(trimmed))
+            } else {
+                Err(AppError::DebateError(
+                    "scope must be one of: phase, final".to_string(),
+                ))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn normalize_optional_trace_status_filter(
+    status: Option<String>,
+) -> Result<Option<String>, AppError> {
+    match status {
+        Some(value) => {
+            let trimmed = value.trim().to_ascii_lowercase();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else if matches!(
+                trimmed.as_str(),
+                "queued" | "dispatched" | "succeeded" | "failed"
+            ) {
+                Ok(Some(trimmed))
+            } else {
+                Err(AppError::DebateError(
+                    "status must be one of: queued, dispatched, succeeded, failed".to_string(),
+                ))
+            }
+        }
+        None => Ok(None),
+    }
 }
 
 fn normalize_optional_winner_filter(winner: Option<String>) -> Result<Option<String>, AppError> {
@@ -226,6 +283,56 @@ fn build_final_dispatch_failure_stats(
     })
 }
 
+fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceReplayOpsItem {
+    let status = row.status;
+    let error_message = row.error_message;
+    let error_code = error_message
+        .as_deref()
+        .and_then(extract_dispatch_error_code);
+    let contract_failure_type = if row.scope == "final" {
+        resolve_contract_failure_type(
+            status.as_str(),
+            error_code.as_deref(),
+            error_message.as_deref(),
+        )
+    } else {
+        None
+    };
+    let replay_eligible = matches!(status.as_str(), "failed" | "succeeded");
+    let replay_recommendation = if replay_eligible {
+        if row.scope == "phase" {
+            Some("replay_phase_job".to_string())
+        } else {
+            Some("replay_final_job".to_string())
+        }
+    } else {
+        None
+    };
+
+    JudgeTraceReplayOpsItem {
+        scope: row.scope,
+        session_id: row.session_id as u64,
+        trace_id: row.trace_id,
+        idempotency_key: row.idempotency_key,
+        status,
+        created_at: row.created_at,
+        dispatch_attempts: row.dispatch_attempts,
+        last_dispatch_at: row.last_dispatch_at,
+        error_message,
+        error_code,
+        contract_failure_type,
+        phase_job_id: row.phase_job_id.map(|v| v as u64),
+        final_job_id: row.final_job_id.map(|v| v as u64),
+        phase_no: row.phase_no,
+        phase_start_no: row.phase_start_no,
+        phase_end_no: row.phase_end_no,
+        phase_report_id: row.phase_report_id.map(|v| v as u64),
+        final_report_id: row.final_report_id.map(|v| v as u64),
+        replay_eligible,
+        replay_recommendation,
+    }
+}
+
 impl AppState {
     pub async fn list_judge_reviews_by_owner(
         &self,
@@ -339,6 +446,213 @@ impl AppState {
         Ok(ListJudgeReviewOpsOutput {
             scanned_count,
             returned_count: u32::try_from(items.len()).unwrap_or(u32::MAX),
+            items,
+        })
+    }
+
+    pub async fn get_judge_final_dispatch_failure_stats_by_owner(
+        &self,
+        user: &User,
+        query: GetJudgeFinalDispatchFailureStatsQuery,
+    ) -> Result<GetJudgeFinalDispatchFailureStatsOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+        if let (Some(from), Some(to)) = (query.from, query.to) {
+            if from > to {
+                return Err(AppError::DebateError("from must be <= to".to_string()));
+            }
+        }
+
+        let scan_limit = normalize_ops_failure_stats_scan_limit(query.limit);
+        let total_failed_jobs_i64: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM judge_final_jobs
+            WHERE status = 'failed'
+              AND ($1::timestamptz IS NULL OR created_at >= $1)
+              AND ($2::timestamptz IS NULL OR created_at <= $2)
+            "#,
+        )
+        .bind(query.from)
+        .bind(query.to)
+        .fetch_one(&self.pool)
+        .await?;
+        let sampled_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            r#"
+            SELECT status, error_message
+            FROM judge_final_jobs
+            WHERE status = 'failed'
+              AND ($1::timestamptz IS NULL OR created_at >= $1)
+              AND ($2::timestamptz IS NULL OR created_at <= $2)
+            ORDER BY created_at DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(query.from)
+        .bind(query.to)
+        .bind(scan_limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let sampled_stats = build_final_dispatch_failure_stats(sampled_rows).unwrap_or(
+            JudgeFinalDispatchFailureStats {
+                total_failed_jobs: 0,
+                unknown_failed_jobs: 0,
+                by_type: Vec::new(),
+            },
+        );
+        let total_failed_jobs = if total_failed_jobs_i64 <= 0 {
+            0
+        } else {
+            u32::try_from(total_failed_jobs_i64).unwrap_or(u32::MAX)
+        };
+        let scanned_failed_jobs = sampled_stats.total_failed_jobs;
+
+        Ok(GetJudgeFinalDispatchFailureStatsOutput {
+            window_from: query.from,
+            window_to: query.to,
+            total_failed_jobs,
+            scanned_failed_jobs,
+            truncated: total_failed_jobs > scanned_failed_jobs,
+            unknown_failed_jobs: sampled_stats.unknown_failed_jobs,
+            by_type: sampled_stats.by_type,
+        })
+    }
+
+    pub async fn list_judge_trace_replay_by_owner(
+        &self,
+        user: &User,
+        query: ListJudgeTraceReplayOpsQuery,
+    ) -> Result<ListJudgeTraceReplayOpsOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+        if let (Some(from), Some(to)) = (query.from, query.to) {
+            if from > to {
+                return Err(AppError::DebateError("from must be <= to".to_string()));
+            }
+        }
+
+        let scope_filter = normalize_optional_trace_scope_filter(query.scope)?;
+        let status_filter = normalize_optional_trace_status_filter(query.status)?;
+        let row_limit = normalize_ops_trace_replay_limit(query.limit);
+        let session_id_filter = query.session_id.map(|v| v as i64);
+
+        let rows: Vec<JudgeTraceReplayOpsRow> = sqlx::query_as(
+            r#"
+            SELECT
+                item.scope,
+                item.session_id,
+                item.trace_id,
+                item.idempotency_key,
+                item.status,
+                item.created_at,
+                item.dispatch_attempts,
+                item.last_dispatch_at,
+                item.error_message,
+                item.phase_job_id,
+                item.final_job_id,
+                item.phase_no,
+                item.phase_start_no,
+                item.phase_end_no,
+                item.phase_report_id,
+                item.final_report_id
+            FROM (
+                SELECT
+                    'phase'::varchar AS scope,
+                    p.session_id,
+                    p.trace_id,
+                    p.idempotency_key,
+                    p.status,
+                    p.created_at,
+                    p.dispatch_attempts,
+                    p.last_dispatch_at,
+                    p.error_message,
+                    p.id AS phase_job_id,
+                    NULL::bigint AS final_job_id,
+                    p.phase_no,
+                    NULL::int AS phase_start_no,
+                    NULL::int AS phase_end_no,
+                    r.id AS phase_report_id,
+                    NULL::bigint AS final_report_id
+                FROM judge_phase_jobs p
+                LEFT JOIN judge_phase_reports r ON r.phase_job_id = p.id
+                WHERE ($1::timestamptz IS NULL OR p.created_at >= $1)
+                  AND ($2::timestamptz IS NULL OR p.created_at <= $2)
+                  AND ($3::bigint IS NULL OR p.session_id = $3)
+
+                UNION ALL
+
+                SELECT
+                    'final'::varchar AS scope,
+                    f.session_id,
+                    f.trace_id,
+                    f.idempotency_key,
+                    f.status,
+                    f.created_at,
+                    f.dispatch_attempts,
+                    f.last_dispatch_at,
+                    f.error_message,
+                    NULL::bigint AS phase_job_id,
+                    f.id AS final_job_id,
+                    NULL::int AS phase_no,
+                    f.phase_start_no,
+                    f.phase_end_no,
+                    NULL::bigint AS phase_report_id,
+                    r.id AS final_report_id
+                FROM judge_final_jobs f
+                LEFT JOIN judge_final_reports r ON r.final_job_id = f.id
+                WHERE ($1::timestamptz IS NULL OR f.created_at >= $1)
+                  AND ($2::timestamptz IS NULL OR f.created_at <= $2)
+                  AND ($3::bigint IS NULL OR f.session_id = $3)
+            ) AS item
+            WHERE ($4::varchar IS NULL OR item.scope = $4)
+              AND ($5::varchar IS NULL OR item.status = $5)
+            ORDER BY item.created_at DESC
+            LIMIT $6
+            "#,
+        )
+        .bind(query.from)
+        .bind(query.to)
+        .bind(session_id_filter)
+        .bind(scope_filter)
+        .bind(status_filter)
+        .bind(row_limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let scanned_count = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+        let items: Vec<JudgeTraceReplayOpsItem> = rows
+            .into_iter()
+            .map(map_judge_trace_replay_ops_item)
+            .collect();
+
+        let mut phase_count = 0_u32;
+        let mut final_count = 0_u32;
+        let mut failed_count = 0_u32;
+        let mut replay_eligible_count = 0_u32;
+        for item in &items {
+            if item.scope == "phase" {
+                phase_count = phase_count.saturating_add(1);
+            } else if item.scope == "final" {
+                final_count = final_count.saturating_add(1);
+            }
+            if item.status == "failed" {
+                failed_count = failed_count.saturating_add(1);
+            }
+            if item.replay_eligible {
+                replay_eligible_count = replay_eligible_count.saturating_add(1);
+            }
+        }
+
+        Ok(ListJudgeTraceReplayOpsOutput {
+            window_from: query.from,
+            window_to: query.to,
+            scanned_count,
+            returned_count: u32::try_from(items.len()).unwrap_or(u32::MAX),
+            phase_count,
+            final_count,
+            failed_count,
+            replay_eligible_count,
             items,
         })
     }

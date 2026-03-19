@@ -172,6 +172,14 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         )
         .route("/ops/judge-reviews", get(list_judge_reviews_ops_handler))
         .route(
+            "/ops/judge-final-dispatch/failure-stats",
+            get(list_judge_final_dispatch_failure_stats_ops_handler),
+        )
+        .route(
+            "/ops/judge-trace-replay",
+            get(list_judge_trace_replay_ops_handler),
+        )
+        .route(
             "/ops/sessions/:id/judge/rejudge",
             post(request_judge_rejudge_ops_handler),
         )

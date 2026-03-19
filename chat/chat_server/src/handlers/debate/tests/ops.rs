@@ -2,7 +2,8 @@ use super::super::{
     apply_ops_observability_anomaly_action_handler, discard_kafka_dlq_event_handler,
     get_ops_observability_config_handler, get_ops_observability_metrics_dictionary_handler,
     get_ops_observability_slo_snapshot_handler, get_ops_rbac_me_handler,
-    get_ops_service_split_readiness_handler, list_judge_reviews_ops_handler,
+    get_ops_service_split_readiness_handler, list_judge_final_dispatch_failure_stats_ops_handler,
+    list_judge_reviews_ops_handler, list_judge_trace_replay_ops_handler,
     list_kafka_dlq_events_handler, list_ops_alert_notifications_handler,
     list_ops_role_assignments_handler, list_ops_service_split_review_audits_handler,
     replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
@@ -16,8 +17,9 @@ use super::test_support::{
     seed_topic_and_session,
 };
 use crate::{
-    AppState, ApplyOpsObservabilityAnomalyActionInput, ListJudgeReviewOpsQuery,
-    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
+    AppState, ApplyOpsObservabilityAnomalyActionInput, GetJudgeFinalDispatchFailureStatsQuery,
+    ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery,
+    ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
     OpsObservabilityThresholds, RunOpsObservabilityEvaluationQuery,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
@@ -51,6 +53,276 @@ async fn list_judge_reviews_ops_handler_should_require_platform_admin() -> Resul
     )
     .await;
     assert_is_debate_conflict(result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_final_dispatch_failure_stats_ops_handler_should_require_platform_admin(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let non_owner = state.find_user_by_id(2).await?.expect("user should exist");
+
+    let result = list_judge_final_dispatch_failure_stats_ops_handler(
+        Extension(non_owner),
+        State(state),
+        Query(GetJudgeFinalDispatchFailureStatsQuery {
+            from: None,
+            to: None,
+            limit: Some(100),
+        }),
+    )
+    .await;
+    assert_is_debate_conflict(result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_final_dispatch_failure_stats_ops_handler_should_return_aggregated_stats(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    sqlx::query(
+        r#"
+        INSERT INTO judge_final_jobs(
+            session_id, phase_start_no, phase_end_no,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, 2,
+            'failed', $2, $3, 'v3', 'v3-default',
+            'default', 1, NOW(), $4
+        )
+        "#,
+    )
+    .bind(session_id)
+    .bind(format!("trace-final-failed-ops-{session_id}"))
+    .bind(format!(
+        "judge_final_failed_ops:{session_id}:1:2:v3:v3-default"
+    ))
+    .bind(
+        "[response_accepted_false] final dispatch response rejected: accepted=false, status=queued",
+    )
+    .execute(&state.pool)
+    .await?;
+
+    let response = list_judge_final_dispatch_failure_stats_ops_handler(
+        Extension(owner),
+        State(state),
+        Query(GetJudgeFinalDispatchFailureStatsQuery {
+            from: None,
+            to: None,
+            limit: Some(100),
+        }),
+    )
+    .await?
+    .into_response();
+    let ret = json_body_with_status(response, StatusCode::OK).await?;
+    assert_eq!(ret["totalFailedJobs"], 1);
+    assert_eq!(ret["scannedFailedJobs"], 1);
+    assert_eq!(ret["unknownFailedJobs"], 0);
+    assert_eq!(ret["byType"][0]["failureType"], "response_accepted_false");
+    assert_eq!(ret["byType"][0]["count"], 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_ops_handler_should_require_platform_admin() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let non_owner = state.find_user_by_id(2).await?.expect("user should exist");
+
+    let result = list_judge_trace_replay_ops_handler(
+        Extension(non_owner),
+        State(state),
+        Query(ListJudgeTraceReplayOpsQuery {
+            from: None,
+            to: None,
+            session_id: None,
+            scope: None,
+            status: None,
+            limit: Some(20),
+        }),
+    )
+    .await;
+    assert_is_debate_conflict(result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_ops_handler_should_return_phase_and_final_items() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+
+    let message_a: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO session_messages(session_id, user_id, side, content)
+        VALUES ($1, 1, 'pro', 'trace replay message a')
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let message_b: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO session_messages(session_id, user_id, side, content)
+        VALUES ($1, 1, 'con', 'trace replay message b')
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let phase_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_phase_jobs(
+            session_id, phase_no, message_start_id, message_end_id, message_count,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, $2, $3, 100,
+            'failed', $4, $5, 'v3', 'v3-default',
+            'default', 'default', 2, NOW(), $6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(message_a.0)
+    .bind(message_b.0)
+    .bind(format!("trace-phase-ops-{session_id}"))
+    .bind(format!("judge_phase_ops:{session_id}:1:v3:v3-default"))
+    .bind("[http_5xx] phase dispatch request failed")
+    .fetch_one(&state.pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO judge_phase_reports(
+            phase_job_id, session_id, phase_no, message_start_id, message_end_id, message_count,
+            pro_summary_grounded, con_summary_grounded,
+            pro_retrieval_bundle, con_retrieval_bundle,
+            agent1_score, agent2_score, agent3_weighted_score,
+            prompt_hashes, token_usage, latency_ms, error_codes, degradation_level, judge_trace
+        )
+        VALUES (
+            $1, $2, 1, $3, $4, 100,
+            '{}'::jsonb, '{}'::jsonb,
+            '{}'::jsonb, '{}'::jsonb,
+            '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+            '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, 0, '{}'::jsonb
+        )
+        "#,
+    )
+    .bind(phase_job_id.0)
+    .bind(session_id)
+    .bind(message_a.0)
+    .bind(message_b.0)
+    .execute(&state.pool)
+    .await?;
+
+    let final_job_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_final_jobs(
+            session_id, phase_start_no, phase_end_no,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, 1,
+            'failed', $2, $3, 'v3', 'v3-default',
+            'default', 1, NOW(), $4
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(format!("trace-final-ops-{session_id}"))
+    .bind(format!("judge_final_ops:{session_id}:1:1:v3:v3-default"))
+    .bind("[final_contract_blocked] missing final report fields")
+    .fetch_one(&state.pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO judge_final_reports(
+            final_job_id, session_id, winner, pro_score, con_score,
+            dimension_scores, final_rationale, verdict_evidence_refs,
+            phase_rollup_summary, retrieval_snapshot_rollup,
+            winner_first, winner_second, rejudge_triggered, needs_draw_vote,
+            judge_trace, audit_alerts, error_codes, degradation_level
+        )
+        VALUES (
+            $1, $2, 'draw', 75, 75,
+            '{}'::jsonb, 'ops trace replay', '[]'::jsonb,
+            '[]'::jsonb, '[]'::jsonb,
+            'draw', 'draw', false, true,
+            '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, 0
+        )
+        "#,
+    )
+    .bind(final_job_id.0)
+    .bind(session_id)
+    .execute(&state.pool)
+    .await?;
+
+    let response = list_judge_trace_replay_ops_handler(
+        Extension(owner),
+        State(state),
+        Query(ListJudgeTraceReplayOpsQuery {
+            from: None,
+            to: None,
+            session_id: None,
+            scope: None,
+            status: None,
+            limit: Some(50),
+        }),
+    )
+    .await?
+    .into_response();
+    let ret = json_body_with_status(response, StatusCode::OK).await?;
+    assert_eq!(ret["returnedCount"], 2);
+    assert_eq!(ret["phaseCount"], 1);
+    assert_eq!(ret["finalCount"], 1);
+    assert_eq!(ret["failedCount"], 2);
+    assert_eq!(ret["replayEligibleCount"], 2);
+
+    let items = ret["items"].as_array().expect("items should be array");
+    let phase_item = items
+        .iter()
+        .find(|item| item["scope"] == "phase")
+        .expect("phase item should exist");
+    assert_eq!(
+        phase_item["phaseJobId"].as_u64(),
+        Some(phase_job_id.0 as u64)
+    );
+    assert_eq!(
+        phase_item["replayRecommendation"].as_str(),
+        Some("replay_phase_job")
+    );
+    assert_eq!(phase_item["errorCode"].as_str(), Some("http_5xx"));
+
+    let final_item = items
+        .iter()
+        .find(|item| item["scope"] == "final")
+        .expect("final item should exist");
+    assert_eq!(
+        final_item["finalJobId"].as_u64(),
+        Some(final_job_id.0 as u64)
+    );
+    assert_eq!(
+        final_item["contractFailureType"].as_str(),
+        Some("final_contract_blocked")
+    );
+    assert_eq!(
+        final_item["replayRecommendation"].as_str(),
+        Some("replay_final_job")
+    );
     Ok(())
 }
 

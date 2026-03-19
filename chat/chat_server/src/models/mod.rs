@@ -21,16 +21,19 @@ pub use debate::{
     PinDebateMessageInput, PinDebateMessageOutput,
 };
 pub use judge::{
-    DrawVoteDetail, GetDrawVoteOutput, GetJudgeReportOutput, GetJudgeReportQuery,
-    JudgeGroundedSummaryPayload, JudgeJobSnapshot, JudgePhaseAgent1ScorePayload,
-    JudgePhaseAgent2ScorePayload, JudgePhaseAgent3WeightedScorePayload, JudgeRagMeta,
-    JudgeRagSourceItem, JudgeReportDetail, JudgeRetrievalBundleItemPayload,
-    JudgeRetrievalBundlePayload, JudgeReviewOpsItem, JudgeStageSummariesMeta,
-    JudgeStageSummaryDetail, JudgeStageSummaryInput, ListJudgeReviewOpsOutput,
-    ListJudgeReviewOpsQuery, MarkJudgeJobFailedInput, MarkJudgeJobFailedOutput,
-    RequestJudgeJobInput, RequestJudgeJobOutput, SubmitDrawVoteInput, SubmitDrawVoteOutput,
-    SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput, SubmitJudgePhaseReportInput,
-    SubmitJudgePhaseReportOutput, SubmitJudgeReportInput, SubmitJudgeReportOutput,
+    DrawVoteDetail, GetDrawVoteOutput, GetJudgeFinalDispatchFailureStatsOutput,
+    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReportOutput, GetJudgeReportQuery,
+    JudgeFinalDispatchFailureTypeCount, JudgeGroundedSummaryPayload, JudgeJobSnapshot,
+    JudgePhaseAgent1ScorePayload, JudgePhaseAgent2ScorePayload,
+    JudgePhaseAgent3WeightedScorePayload, JudgeRagMeta, JudgeRagSourceItem, JudgeReportDetail,
+    JudgeRetrievalBundleItemPayload, JudgeRetrievalBundlePayload, JudgeReviewOpsItem,
+    JudgeStageSummariesMeta, JudgeStageSummaryDetail, JudgeStageSummaryInput,
+    JudgeTraceReplayOpsItem, ListJudgeReviewOpsOutput, ListJudgeReviewOpsQuery,
+    ListJudgeTraceReplayOpsOutput, ListJudgeTraceReplayOpsQuery, MarkJudgeJobFailedInput,
+    MarkJudgeJobFailedOutput, RequestJudgeJobInput, RequestJudgeJobOutput, SubmitDrawVoteInput,
+    SubmitDrawVoteOutput, SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput,
+    SubmitJudgePhaseReportInput, SubmitJudgePhaseReportOutput, SubmitJudgeReportInput,
+    SubmitJudgeReportOutput,
 };
 pub(crate) use judge_dispatch::AiJudgeDispatchMetrics;
 pub use judge_dispatch::GetJudgeDispatchMetricsOutput;

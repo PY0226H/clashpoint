@@ -109,6 +109,26 @@ pub(super) struct JudgeFinalJobSnapshotRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgeTraceReplayOpsRow {
+    pub scope: String,
+    pub session_id: i64,
+    pub trace_id: String,
+    pub idempotency_key: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub dispatch_attempts: i32,
+    pub last_dispatch_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub phase_job_id: Option<i64>,
+    pub final_job_id: Option<i64>,
+    pub phase_no: Option<i32>,
+    pub phase_start_no: Option<i32>,
+    pub phase_end_no: Option<i32>,
+    pub phase_report_id: Option<i64>,
+    pub final_report_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub(super) struct JudgeStageSummaryRow {
     pub stage_no: i32,
     pub from_message_id: Option<i64>,

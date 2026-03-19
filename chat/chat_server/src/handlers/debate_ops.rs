@@ -2,7 +2,8 @@ use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
     },
-    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ListJudgeReviewOpsQuery,
+    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput,
+    GetJudgeFinalDispatchFailureStatsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
     ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
     OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsObservabilityThresholds,
     OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
@@ -586,6 +587,56 @@ pub(crate) async fn list_judge_reviews_ops_handler(
     Query(input): Query<ListJudgeReviewOpsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let ret = state.list_judge_reviews_by_owner(&user, input).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Aggregate final dispatch failure types by ops time window.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/judge-final-dispatch/failure-stats",
+    params(
+        GetJudgeFinalDispatchFailureStatsQuery
+    ),
+    responses(
+        (status = 200, description = "Ops final dispatch failure type stats", body = crate::GetJudgeFinalDispatchFailureStatsOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn list_judge_final_dispatch_failure_stats_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Query(input): Query<GetJudgeFinalDispatchFailureStatsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state
+        .get_judge_final_dispatch_failure_stats_by_owner(&user, input)
+        .await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Aggregate judge trace/replay records for ops diagnostics.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/judge-trace-replay",
+    params(
+        ListJudgeTraceReplayOpsQuery
+    ),
+    responses(
+        (status = 200, description = "Ops judge trace/replay aggregation", body = crate::ListJudgeTraceReplayOpsOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn list_judge_trace_replay_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Query(input): Query<ListJudgeTraceReplayOpsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.list_judge_trace_replay_by_owner(&user, input).await?;
     Ok((StatusCode::OK, Json(ret)))
 }
 
