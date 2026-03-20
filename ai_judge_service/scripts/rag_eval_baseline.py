@@ -6,14 +6,15 @@ import json
 from pathlib import Path
 import sys
 from typing import Any
+from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.models import JudgeDispatchRequest
 from app.rag_eval import RagEvalCase, compare_rag_profiles
 from app.rag_retriever import RAG_BACKEND_FILE, parse_source_whitelist
+from app.runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
 
 
 def _parse_args() -> argparse.Namespace:
@@ -58,7 +59,7 @@ def _load_cases(path: str) -> list[RagEvalCase]:
             continue
         if not isinstance(expected, list):
             continue
-        request = JudgeDispatchRequest.model_validate(request_payload)
+        request = _build_rag_request(request_payload)
         case_id = str(row.get("caseId") or row.get("case_id") or f"case-{idx + 1}")
         expected_ids = tuple(
             str(chunk_id).strip()
@@ -73,6 +74,53 @@ def _load_cases(path: str) -> list[RagEvalCase]:
             )
         )
     return cases
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _build_rag_request(payload: dict[str, Any]) -> RuntimeRagRequest:
+    topic_payload = payload.get("topic") if isinstance(payload.get("topic"), dict) else {}
+    topic = RagTopicContext(
+        title=str(topic_payload.get("title") or "unknown-topic"),
+        category=str(topic_payload.get("category") or "default"),
+        description=str(topic_payload.get("description") or ""),
+        stance_pro=str(topic_payload.get("stance_pro") or topic_payload.get("stancePro") or "pro"),
+        stance_con=str(topic_payload.get("stance_con") or topic_payload.get("stanceCon") or "con"),
+        context_seed=topic_payload.get("context_seed") or topic_payload.get("contextSeed"),
+    )
+
+    messages_payload = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    messages: list[RagMessageContext] = []
+    for row in messages_payload:
+        if not isinstance(row, dict):
+            continue
+        message_id = int(row.get("message_id") or row.get("messageId") or 0)
+        if message_id <= 0:
+            continue
+        messages.append(
+            RagMessageContext(
+                message_id=message_id,
+                side=str(row.get("side") or "pro"),
+                content=str(row.get("content") or ""),
+                created_at=_parse_datetime(row.get("created_at") or row.get("createdAt")),
+                speaker_tag=row.get("speaker_tag") or row.get("speakerTag"),
+                user_id=row.get("user_id") or row.get("userId"),
+            )
+        )
+    retrieval_profile = str(payload.get("retrieval_profile") or payload.get("retrievalProfile") or "hybrid_v1")
+    return RuntimeRagRequest(
+        topic=topic,
+        messages=messages,
+        retrieval_profile=retrieval_profile,
+    )
 
 
 def main() -> int:

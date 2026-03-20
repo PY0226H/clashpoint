@@ -360,7 +360,7 @@ impl AppState {
             )));
         }
 
-        sqlx::query(
+        let final_report_id: i64 = sqlx::query_scalar(
             r#"
             INSERT INTO judge_final_reports(
                 final_job_id,
@@ -391,6 +391,7 @@ impl AppState {
                 $15, $16, $17, $18,
                 NOW(), NOW()
             )
+            RETURNING id
             "#,
         )
         .bind(job.id)
@@ -411,8 +412,12 @@ impl AppState {
         .bind(json!(audit_alerts))
         .bind(json!(error_codes))
         .bind(degradation_level)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
+
+        if needs_draw_vote {
+            AppState::create_draw_vote_for_report(&mut tx, job.session_id, final_report_id).await?;
+        }
 
         sqlx::query(
             r#"

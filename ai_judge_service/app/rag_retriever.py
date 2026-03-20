@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 if TYPE_CHECKING:
-    from .models import JudgeDispatchRequest
+    from .runtime_types import RuntimeRagRequest
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 RAG_BACKEND_FILE = "file"
@@ -165,7 +165,7 @@ def _load_knowledge_file(path: str) -> list[KnowledgeChunk]:
     return rows
 
 
-def _build_query_text(request: "JudgeDispatchRequest", query_message_limit: int) -> str:
+def _build_query_text(request: "RuntimeRagRequest", query_message_limit: int) -> str:
     topic = request.topic
     topic_text = " ".join(
         [
@@ -183,7 +183,7 @@ def _build_query_text(request: "JudgeDispatchRequest", query_message_limit: int)
     return f"{topic_text}\n{message_text}"
 
 
-def _build_query_tokens(request: "JudgeDispatchRequest", query_message_limit: int) -> set[str]:
+def _build_query_tokens(request: "RuntimeRagRequest", query_message_limit: int) -> set[str]:
     return _tokenize(_build_query_text(request, query_message_limit))
 
 
@@ -440,7 +440,7 @@ def _context_from_milvus_row(
 
 
 def _retrieve_contexts_from_file(
-    request: "JudgeDispatchRequest",
+    request: "RuntimeRagRequest",
     *,
     knowledge_file: str,
     max_snippets: int,
@@ -497,7 +497,7 @@ def _retrieve_contexts_from_file(
 
 
 def _retrieve_contexts_from_milvus(
-    request: "JudgeDispatchRequest",
+    request: "RuntimeRagRequest",
     *,
     max_snippets: int,
     max_chars_per_snippet: int,
@@ -558,7 +558,7 @@ def _retrieve_contexts_from_milvus(
 
 
 def retrieve_contexts(
-    request: "JudgeDispatchRequest",
+    request: "RuntimeRagRequest",
     *,
     enabled: bool,
     knowledge_file: str,

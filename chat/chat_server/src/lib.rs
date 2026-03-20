@@ -31,9 +31,9 @@ use tracing::{info, warn};
 use application::runtime_workers::spawn_background_workers;
 pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
-    AiJudgeJobCreatedEvent, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
-    DebateSessionStatusChangedEvent, DomainEvent, EventBus, EventOutboxRelayConfig,
-    EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher,
+    DebateMessagePinnedEvent, DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent,
+    DomainEvent, EventBus, EventOutboxRelayConfig, EventOutboxRelayMetrics, EventOutboxRelayReport,
+    EventPublisher,
 };
 use models::JudgeDispatchTrigger;
 pub use models::*;
@@ -237,7 +237,6 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/wallet", get(get_wallet_balance_handler))
         .route("/wallet/ledger", get(list_wallet_ledger_handler));
     let internal_ai = Router::new()
-        .route("/judge/jobs/:id/report", post(submit_judge_report_handler))
         .route(
             "/judge/v3/phase/jobs/:id/report",
             post(submit_judge_phase_report_handler),
@@ -245,10 +244,6 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route(
             "/judge/v3/final/jobs/:id/report",
             post(submit_judge_final_report_handler),
-        )
-        .route(
-            "/judge/jobs/:id/failed",
-            post(mark_judge_job_failed_handler),
         )
         .route("/infra/redis/health", get(get_redis_health_handler))
         .route(

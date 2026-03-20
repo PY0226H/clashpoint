@@ -180,8 +180,6 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(callback_cfg.ai_internal_key, settings.ai_internal_key)
         self.assertEqual(callback_cfg.chat_server_base_url, settings.chat_server_base_url)
-        self.assertEqual(callback_cfg.report_path_template, settings.report_path_template)
-        self.assertEqual(callback_cfg.failed_path_template, settings.failed_path_template)
         self.assertEqual(callback_cfg.callback_timeout_secs, settings.callback_timeout_secs)
         self.assertEqual(runtime_cfg.process_delay_ms, settings.process_delay_ms)
         self.assertEqual(runtime_cfg.judge_style_mode, settings.judge_style_mode)

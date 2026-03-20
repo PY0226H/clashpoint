@@ -27,7 +27,7 @@ BEGIN
       json_build_object(
         'vote_id', NEW.id,
         'session_id', NEW.session_id,
-        'report_id', NEW.report_id,
+        'final_report_id', NEW.final_report_id,
         'status', NEW.status,
         'resolution', NEW.resolution,
         'decision_source', CASE

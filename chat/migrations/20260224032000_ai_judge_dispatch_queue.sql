@@ -1,13 +1,2 @@
--- ai judge dispatch queue metadata
-
-ALTER TABLE judge_jobs
-  ADD COLUMN dispatch_attempts int NOT NULL DEFAULT 0 CHECK (dispatch_attempts >= 0);
-
-ALTER TABLE judge_jobs
-  ADD COLUMN last_dispatch_at timestamptz;
-
-ALTER TABLE judge_jobs
-  ADD COLUMN dispatch_locked_until timestamptz;
-
-CREATE INDEX idx_judge_jobs_dispatch_due
-  ON judge_jobs(status, dispatch_locked_until, requested_at);
+-- v3 baseline already includes dispatch metadata in 20260224022000_ai_judge_domain.sql.
+-- keep this migration as no-op for history compatibility in local reset workflow.

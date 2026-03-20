@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .models import JudgeDispatchRequest, SubmitJudgeReportInput
 from .rag_profiles import DEFAULT_RETRIEVAL_PROFILE, resolve_retrieval_profile
 from .rag_retriever import (
     RAG_BACKEND_FILE,
@@ -13,6 +12,7 @@ from .rag_retriever import (
     retrieve_contexts,
     summarize_retrieved_contexts,
 )
+from .runtime_types import RuntimeRagRequest
 from .settings import Settings
 
 RetrieveContextsFn = Callable[..., list[RetrievedContext]]
@@ -69,7 +69,7 @@ def resolve_effective_rag_backend(
 
 def retrieve_runtime_contexts_with_meta(
     *,
-    request: JudgeDispatchRequest,
+    request: RuntimeRagRequest,
     settings: Settings,
     retrieve_contexts_fn: RetrieveContextsFn = retrieve_contexts,
 ) -> RuntimeRagResult:
@@ -154,7 +154,7 @@ def retrieve_runtime_contexts_with_meta(
 
 def retrieve_runtime_contexts(
     *,
-    request: JudgeDispatchRequest,
+    request: RuntimeRagRequest,
     settings: Settings,
     retrieve_contexts_fn: RetrieveContextsFn = retrieve_contexts,
 ) -> list[RetrievedContext]:
@@ -166,7 +166,7 @@ def retrieve_runtime_contexts(
 
 
 def apply_rag_payload_fields(
-    report: SubmitJudgeReportInput,
+    report: Any,
     settings: Settings,
     retrieved_contexts: list[RetrievedContext],
     *,

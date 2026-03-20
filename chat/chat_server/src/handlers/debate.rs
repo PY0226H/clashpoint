@@ -56,6 +56,3 @@ pub(crate) async fn list_debate_topics_handler(
     let topics = state.list_debate_topics(input).await?;
     Ok((StatusCode::OK, Json(topics)))
 }
-
-#[cfg(test)]
-mod tests;

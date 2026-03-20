@@ -1,9 +1,9 @@
--- judge draw vote domain for AI draw-resolution workflow
+-- judge draw vote domain for AI draw-resolution workflow (v3 final report based)
 
 CREATE TABLE judge_draw_votes(
   id bigserial PRIMARY KEY,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
-  report_id bigint NOT NULL UNIQUE REFERENCES judge_reports(id) ON DELETE CASCADE,
+  final_report_id bigint NOT NULL UNIQUE REFERENCES judge_final_reports(id) ON DELETE CASCADE,
   threshold_percent int NOT NULL DEFAULT 70 CHECK (threshold_percent > 0 AND threshold_percent <= 100),
   eligible_voters int NOT NULL CHECK (eligible_voters >= 0),
   required_voters int NOT NULL CHECK (required_voters >= 0),
@@ -11,8 +11,8 @@ CREATE TABLE judge_draw_votes(
   status varchar(16) NOT NULL CHECK (status IN ('open', 'decided', 'expired')),
   resolution varchar(20) NOT NULL CHECK (resolution IN ('pending', 'accept_draw', 'open_rematch')),
   decided_at timestamptz,
-  created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
-  updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_judge_draw_votes_session
@@ -24,7 +24,7 @@ CREATE TABLE judge_draw_vote_ballots(
   id bigserial PRIMARY KEY,
   vote_id bigint NOT NULL REFERENCES judge_draw_votes(id) ON DELETE CASCADE,
   session_id bigint NOT NULL REFERENCES debate_sessions(id) ON DELETE CASCADE,
-  report_id bigint NOT NULL REFERENCES judge_reports(id) ON DELETE CASCADE,
+  final_report_id bigint NOT NULL REFERENCES judge_final_reports(id) ON DELETE CASCADE,
   user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   agree_draw boolean NOT NULL,
   voted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,

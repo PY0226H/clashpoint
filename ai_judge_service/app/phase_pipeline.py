@@ -5,16 +5,10 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
 from .models import (
-    DispatchJob,
-    DispatchMessage,
-    DispatchSession,
-    DispatchTopic,
-    JudgeDispatchRequest,
     PhaseDispatchMessage,
     PhaseDispatchRequest,
 )
@@ -22,6 +16,7 @@ from .openai_judge_client import call_openai_json
 from .runtime_errors import classify_openai_failure
 from .runtime_policy import should_use_openai
 from .runtime_rag import RuntimeRagResult, retrieve_runtime_contexts_with_meta
+from .runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
 from .rag_retriever import RetrievedContext
 from .settings import Settings
 
@@ -424,12 +419,11 @@ def _build_side_rag_request(
     side: str,
     side_messages: list[PhaseDispatchMessage],
     query_text: str | None = None,
-) -> JudgeDispatchRequest:
-    now = datetime.now(timezone.utc)
+) -> RuntimeRagRequest:
     query = str(query_text or "").strip()
     topic_description = f"phase_{request.phase_no}" if not query else f"phase_{request.phase_no}:{query[:200]}"
-    dispatch_messages = [
-        DispatchMessage(
+    rag_messages = [
+        RagMessageContext(
             message_id=msg.message_id,
             speaker_tag=msg.speaker_tag,
             user_id=None,
@@ -439,23 +433,8 @@ def _build_side_rag_request(
         )
         for msg in side_messages
     ]
-    return JudgeDispatchRequest(
-        job=DispatchJob(
-            job_id=request.job_id,
-            scope_id=request.scope_id,
-            session_id=request.session_id,
-            requested_by=0,
-            style_mode="rational",
-            rejudge_triggered=False,
-            requested_at=now,
-        ),
-        session=DispatchSession(
-            status="judging",
-            scheduled_start_at=now,
-            actual_start_at=now,
-            end_at=now,
-        ),
-        topic=DispatchTopic(
+    return RuntimeRagRequest(
+        topic=RagTopicContext(
             title=f"{request.topic_domain}:{side}",
             description=topic_description,
             category=request.topic_domain,
@@ -463,13 +442,7 @@ def _build_side_rag_request(
             stance_con="con",
             context_seed=query or None,
         ),
-        messages=dispatch_messages,
-        message_window_size=request.message_count,
-        rubric_version=request.rubric_version,
-        trace_id=f"{request.trace_id}:{side}",
-        idempotency_key=f"{request.idempotency_key}:{side}",
-        judge_policy_version=request.judge_policy_version,
-        topic_domain=request.topic_domain,
+        messages=rag_messages,
         retrieval_profile=request.retrieval_profile,
     )
 

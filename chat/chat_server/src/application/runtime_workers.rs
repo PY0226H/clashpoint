@@ -69,36 +69,6 @@ async fn run_ai_judge_dispatch_tick(
     trigger_job_id: Option<i64>,
 ) {
     if state.config.ai_judge.dispatch_enabled {
-        match state.dispatch_pending_judge_jobs_once().await {
-            Ok(report) => {
-                debug!(
-                    trigger_source,
-                    trigger_job_id,
-                    claimed = report.claimed,
-                    dispatched = report.dispatched,
-                    failed = report.failed,
-                    marked_failed = report.marked_failed,
-                    timed_out_failed = report.timed_out_failed,
-                    terminal_failed = report.terminal_failed,
-                    retryable_failed = report.retryable_failed,
-                    failed_contract = report.failed_contract,
-                    failed_http_4xx = report.failed_http_4xx,
-                    failed_http_429 = report.failed_http_429,
-                    failed_http_5xx = report.failed_http_5xx,
-                    failed_network = report.failed_network,
-                    failed_internal = report.failed_internal,
-                    "ai judge dispatch worker tick success"
-                );
-            }
-            Err(err) => {
-                state.observe_dispatch_worker_error();
-                warn!(
-                    trigger_source,
-                    trigger_job_id, "ai judge dispatch worker tick failed: {}", err
-                );
-            }
-        }
-
         match state.dispatch_pending_judge_phase_jobs_once().await {
             Ok(report) => {
                 debug!(
@@ -120,6 +90,7 @@ async fn run_ai_judge_dispatch_tick(
                 );
             }
             Err(err) => {
+                state.observe_dispatch_worker_error();
                 warn!(
                     trigger_source,
                     trigger_job_id, "ai judge phase dispatch worker tick failed: {}", err
@@ -163,6 +134,7 @@ async fn run_ai_judge_dispatch_tick(
                 );
             }
             Err(err) => {
+                state.observe_dispatch_worker_error();
                 warn!(
                     trigger_source,
                     trigger_job_id, "ai judge final dispatch worker tick failed: {}", err

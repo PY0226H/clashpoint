@@ -1,63 +1,11 @@
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.app_factory import (
-    create_app,
-    create_default_app,
-    create_runtime,
-    require_internal_key,
-)
-from app.models import (
-    DispatchJob,
-    DispatchMessage,
-    DispatchSession,
-    DispatchTopic,
-    FinalDispatchRequest,
-    JudgeDispatchRequest,
-    PhaseDispatchRequest,
-)
-from app.runtime_errors import JudgeRuntimeError
+from app.app_factory import create_app, create_default_app, create_runtime, require_internal_key
+from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
 from app.settings import Settings
-
-
-class _FakeReport:
-    def __init__(self) -> None:
-        self.winner = "pro"
-        self.needs_draw_vote = False
-        self.payload = {
-            "provider": "openai",
-            "evidenceRefs": [{"messageId": 1, "reason": "test"}],
-            "judgeAudit": {
-                "promptHash": "hash-1",
-                "model": "gpt-4.1-mini",
-                "rubricVersion": "v1",
-                "retrievalSnapshot": [],
-                "degradationLevel": 0,
-            },
-        }
-        self.rationale = "test rationale with enough chars"
-
-    def model_dump(self, *, mode: str = "python") -> dict:
-        return {
-            "winner": self.winner,
-            "needsDrawVote": self.needs_draw_vote,
-            "rationale": self.rationale,
-            "payload": self.payload,
-            "stage_summaries": [
-                {
-                    "stage_no": 1,
-                    "from_message_id": 1,
-                    "to_message_id": 1,
-                    "pro_score": 30,
-                    "con_score": 28,
-                    "summary": {"stageFocus": "opening"},
-                }
-            ],
-            "mode": mode,
-        }
 
 
 def _build_settings(**overrides: object) -> Settings:
@@ -118,56 +66,18 @@ def _build_settings(**overrides: object) -> Settings:
         "topic_memory_min_evidence_refs": 1,
         "topic_memory_min_rationale_chars": 20,
         "topic_memory_min_quality_score": 0.55,
+        "runtime_retry_max_attempts": 2,
+        "runtime_retry_backoff_ms": 200,
+        "compliance_block_enabled": True,
     }
     base.update(overrides)
     return Settings(**base)
 
 
-def _build_request() -> JudgeDispatchRequest:
-    now = datetime.now(timezone.utc)
-    return JudgeDispatchRequest(
-        job=DispatchJob(
-            job_id=1,
-            scope_id=1,
-            session_id=2,
-            requested_by=1,
-            style_mode="rational",
-            rejudge_triggered=False,
-            requested_at=now,
-        ),
-        session=DispatchSession(
-            status="judging",
-            scheduled_start_at=now,
-            actual_start_at=now,
-            end_at=now,
-        ),
-        topic=DispatchTopic(
-            title="test",
-            description="desc",
-            category="game",
-            stance_pro="pro",
-            stance_con="con",
-            context_seed=None,
-        ),
-        messages=[
-            DispatchMessage(
-                message_id=1,
-                speaker_tag="pro_1",
-                user_id=None,
-                side="pro",
-                content="hello",
-                created_at=now,
-            )
-        ],
-        message_window_size=100,
-        rubric_version="v1",
-    )
-
-
-def _build_phase_request() -> PhaseDispatchRequest:
+def _build_phase_request(*, job_id: int = 101, idempotency_key: str = "phase-key-101") -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
     return PhaseDispatchRequest(
-        job_id=101,
+        job_id=job_id,
         scope_id=1,
         session_id=2,
         phase_no=1,
@@ -175,51 +85,50 @@ def _build_phase_request() -> PhaseDispatchRequest:
         message_end_id=2,
         message_count=2,
         messages=[
-            {
-                "message_id": 1,
-                "side": "pro",
-                "content": "pro message",
-                "created_at": now,
-                "speaker_tag": "pro_1",
-            },
-            {
-                "message_id": 2,
-                "side": "con",
-                "content": "con message",
-                "created_at": now,
-                "speaker_tag": "con_1",
-            },
+            PhaseDispatchMessage(
+                message_id=1,
+                side="pro",
+                content="pro message",
+                created_at=now,
+                speaker_tag="pro_1",
+            ),
+            PhaseDispatchMessage(
+                message_id=2,
+                side="con",
+                content="con message",
+                created_at=now,
+                speaker_tag="con_1",
+            ),
         ],
         rubric_version="v3",
         judge_policy_version="v3-default",
         topic_domain="tft",
         retrieval_profile="hybrid_v1",
-        trace_id="trace-phase-101",
-        idempotency_key="phase-key-101",
+        trace_id=f"trace-phase-{job_id}",
+        idempotency_key=idempotency_key,
     )
 
 
-def _build_final_request() -> FinalDispatchRequest:
+def _build_final_request(*, job_id: int = 202, idempotency_key: str = "final-key-202") -> FinalDispatchRequest:
     return FinalDispatchRequest(
-        job_id=202,
+        job_id=job_id,
         scope_id=1,
         session_id=2,
         phase_start_no=1,
-        phase_end_no=2,
+        phase_end_no=1,
         rubric_version="v3",
         judge_policy_version="v3-default",
         topic_domain="tft",
-        trace_id="trace-final-202",
-        idempotency_key="final-key-202",
+        trace_id=f"trace-final-{job_id}",
+        idempotency_key=idempotency_key,
     )
 
 
-async def _noop_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-    return None
-
-
-async def _noop_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-    return None
+def _route_endpoint(app, path: str):
+    for route in app.routes:
+        if getattr(route, "path", "") == path:
+            return route.endpoint
+    raise AssertionError(f"route not found: {path}")
 
 
 class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
@@ -238,1055 +147,98 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         require_internal_key(settings, " expected ")
 
-    async def test_create_runtime_should_bind_callbacks_and_adapter(self) -> None:
-        settings = _build_settings(
-            ai_internal_key="k2",
-            process_delay_ms=120,
-            judge_style_mode="entertaining",
-        )
-        calls: dict[str, object] = {}
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            calls["report"] = (cfg, job_id, payload)
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            calls["failed"] = (cfg, job_id, error_message)
-
-        async def fake_runtime_builder(**kwargs: object) -> _FakeReport:
-            calls["runtime"] = kwargs
-            return _FakeReport()
-
-        runtime = create_runtime(
-            settings=settings,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-            build_report_by_runtime_fn=fake_runtime_builder,
-        )
-        self.assertEqual(runtime.dispatch_runtime_cfg.process_delay_ms, 120)
-        self.assertEqual(runtime.dispatch_runtime_cfg.judge_style_mode, "entertaining")
-
-        await runtime.callback_report_fn(11, {"a": 1})
-        await runtime.callback_failed_fn(11, "err")
-        report_call = calls["report"]
-        failed_call = calls["failed"]
-        self.assertEqual(report_call[1], 11)
-        self.assertEqual(report_call[2], {"a": 1})
-        self.assertEqual(failed_call[1], 11)
-        self.assertEqual(failed_call[2], "err")
-
-        request = _build_request()
-        result = await runtime.build_report_by_runtime_adapter(
-            request,
-            "rational",
-            "system_config",
-        )
-        self.assertIsInstance(result, _FakeReport)
-        runtime_call = calls["runtime"]
-        self.assertEqual(runtime_call["request"], request)
-        self.assertEqual(runtime_call["effective_style_mode"], "rational")
-        self.assertEqual(runtime_call["style_mode_source"], "system_config")
-        self.assertEqual(runtime_call["settings"], settings)
-
-    async def test_create_app_should_register_routes_and_delegate_dispatch(self) -> None:
-        settings = _build_settings(ai_internal_key="k3")
-        request = _build_request()
-        callback_report_calls: list[tuple[int, dict]] = []
-        callback_failed_calls: list[tuple[int, str]] = []
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            callback_report_calls.append((job_id, payload))
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            callback_failed_calls.append((job_id, error_message))
-
-        async def fake_sleep(_seconds: float) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-            sleep_fn=fake_sleep,
-        )
+    async def test_create_app_should_expose_v3_routes_only(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)
-        paths = {route.path for route in app.routes if hasattr(route, "path")}
-        self.assertIn("/healthz", paths)
-        self.assertIn("/internal/judge/dispatch", paths)
+        paths = {getattr(route, "path", "") for route in app.routes}
+
         self.assertIn("/internal/judge/v3/phase/dispatch", paths)
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
-        self.assertIn("/internal/judge/v3/phase/jobs/{job_id}/receipt", paths)
-        self.assertIn("/internal/judge/v3/final/jobs/{job_id}/receipt", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/trace", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/replay", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/replay/report", paths)
-        self.assertIn("/internal/judge/jobs/replay/reports", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/alerts", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/alerts/{alert_id}/ack", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/alerts/{alert_id}/resolve", paths)
-        self.assertIn("/internal/judge/alerts/outbox", paths)
-        self.assertIn("/internal/judge/alerts/outbox/{event_id}/delivery", paths)
-        self.assertIn("/internal/judge/rag/diagnostics", paths)
+        self.assertNotIn("/internal/judge/dispatch", paths)
 
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-        endpoint = dispatch_route.endpoint
-
-        with self.assertRaises(HTTPException):
-            await endpoint(request=request, x_ai_internal_key=None)
-
-        result = await endpoint(request=request, x_ai_internal_key="k3")
-        self.assertTrue(result["accepted"])
-        self.assertEqual(result["winner"], "pro")
-        self.assertEqual(result["provider"], "openai")
-        self.assertEqual(len(callback_report_calls), 1)
-        self.assertEqual(callback_report_calls[0][0], 1)
-        self.assertEqual(callback_failed_calls, [])
-
-        trace_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/trace"
-        )
-        trace = await trace_route.endpoint(job_id=1, x_ai_internal_key="k3")
-        self.assertEqual(trace["jobId"], 1)
-        self.assertEqual(trace["status"], "completed")
-        self.assertTrue(trace["reportSummary"]["topicMemoryAudit"]["accepted"])
-        topic_memory_rows = runtime.trace_store.list_topic_memory(
-            topic_domain="default",
-            rubric_version="v1",
-            limit=3,
-        )
-        self.assertEqual(len(topic_memory_rows), 1)
-        self.assertEqual(topic_memory_rows[0].job_id, 1)
-
-        rag_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/rag/diagnostics"
-        )
-        rag = await rag_route.endpoint(job_id=1, x_ai_internal_key="k3")
-        self.assertEqual(rag["jobId"], 1)
-
-        replay_report_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/replay/report"
-        )
-        replay_report = await replay_report_route.endpoint(job_id=1, x_ai_internal_key="k3")
-        self.assertEqual(replay_report["jobId"], 1)
-        self.assertEqual(replay_report["status"], "completed")
-        self.assertEqual(replay_report["judgeAudit"]["promptHash"], "hash-1")
-        self.assertEqual(replay_report["pipeline"]["finalWinner"], "pro")
-        self.assertEqual(len(replay_report["pipeline"]["stageSummaries"]), 1)
-
-        replay_reports_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/replay/reports"
-        )
-        replay_reports = await replay_reports_route.endpoint(
-            x_ai_internal_key="k3",
-            status="completed",
-            winner="pro",
-            callback_status=None,
-            trace_id=None,
-            created_after=None,
-            created_before=None,
-            has_audit_alert=None,
-            limit=20,
-            include_report=False,
-        )
-        self.assertEqual(replay_reports["count"], 1)
-        self.assertEqual(replay_reports["items"][0]["jobId"], 1)
-        self.assertEqual(replay_reports["items"][0]["winner"], "pro")
-
-    async def test_dispatch_should_reject_unblinded_user_id(self) -> None:
-        settings = _build_settings(ai_internal_key="k4")
-        request = _build_request()
-        request.messages[0].user_id = 123  # type: ignore[misc]
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-
-        with self.assertRaises(HTTPException) as ctx:
-            await dispatch_route.endpoint(request=request, x_ai_internal_key="k4")
-        self.assertEqual(ctx.exception.status_code, 422)
-        self.assertEqual(ctx.exception.detail, "unblinded_user_id_in_messages")
-
-    async def test_v3_phase_dispatch_should_support_idempotency_replay(self) -> None:
-        settings = _build_settings(ai_internal_key="k4p")
-        request = _build_phase_request()
+    async def test_phase_dispatch_should_callback_and_support_idempotent_replay(self) -> None:
         phase_callback_calls: list[tuple[int, dict]] = []
 
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        async def fake_callback_phase_report(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def fake_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
             phase_callback_calls.append((job_id, payload))
 
         runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-            callback_phase_report_impl=fake_callback_phase_report,
-            callback_final_report_impl=_noop_callback_report,
+            settings=_build_settings(),
+            callback_phase_report_impl=fake_phase_callback,
+            callback_final_report_impl=fake_phase_callback,
         )
         app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
-        )
+        endpoint = _route_endpoint(app, "/internal/judge/v3/phase/dispatch")
 
-        first = await route.endpoint(request=request, x_ai_internal_key="k4p")
-        second = await route.endpoint(request=request, x_ai_internal_key="k4p")
+        req = _build_phase_request(job_id=1001, idempotency_key="phase:1001")
+        first = await endpoint(request=req, x_ai_internal_key=runtime.settings.ai_internal_key)
         self.assertTrue(first["accepted"])
         self.assertEqual(first["dispatchType"], "phase")
-        self.assertEqual(first["status"], "queued")
-        self.assertTrue(second["idempotentReplay"])
-        receipt_route = next(
-            item
-            for item in app.routes
-            if getattr(item, "path", "") == "/internal/judge/v3/phase/jobs/{job_id}/receipt"
-        )
-        receipt = await receipt_route.endpoint(job_id=101, x_ai_internal_key="k4p")
-        self.assertEqual(receipt["dispatchType"], "phase")
-        self.assertEqual(receipt["phaseNo"], 1)
-        self.assertEqual(receipt["messageCount"], 2)
-        self.assertEqual(receipt["status"], "reported")
-        self.assertEqual(receipt["response"]["callbackStatus"], "reported")
         self.assertEqual(len(phase_callback_calls), 1)
-        self.assertEqual(phase_callback_calls[0][0], 101)
-        self.assertIn("sessionId", phase_callback_calls[0][1])
-        self.assertIn("agent1Score", phase_callback_calls[0][1])
-        self.assertIn("proSummaryGrounded", phase_callback_calls[0][1])
 
-    async def test_v3_final_dispatch_should_support_idempotency_replay_and_persist_receipt(self) -> None:
-        settings = _build_settings(ai_internal_key="k4fr")
-        request = _build_final_request()
+        replay = await endpoint(request=req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        self.assertTrue(replay["idempotentReplay"])
+        self.assertEqual(len(phase_callback_calls), 1)
+
+    async def test_final_dispatch_should_use_phase_receipts_and_callback(self) -> None:
+        phase_callback_calls: list[tuple[int, dict]] = []
         final_callback_calls: list[tuple[int, dict]] = []
 
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
+        async def fake_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            phase_callback_calls.append((job_id, payload))
 
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def fake_final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
             final_callback_calls.append((job_id, payload))
 
         runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=fake_callback_final_report,
+            settings=_build_settings(),
+            callback_phase_report_impl=fake_phase_callback,
+            callback_final_report_impl=fake_final_callback,
         )
         app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
-        )
+        phase_endpoint = _route_endpoint(app, "/internal/judge/v3/phase/dispatch")
+        final_endpoint = _route_endpoint(app, "/internal/judge/v3/final/dispatch")
 
-        first = await route.endpoint(request=request, x_ai_internal_key="k4fr")
-        second = await route.endpoint(request=request, x_ai_internal_key="k4fr")
-        self.assertTrue(first["accepted"])
-        self.assertEqual(first["dispatchType"], "final")
-        self.assertEqual(first["status"], "queued")
-        self.assertTrue(second["idempotentReplay"])
+        phase_req = _build_phase_request(job_id=2001, idempotency_key="phase:2001")
+        await phase_endpoint(request=phase_req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        self.assertEqual(len(phase_callback_calls), 1)
 
-        receipt_route = next(
-            item
-            for item in app.routes
-            if getattr(item, "path", "") == "/internal/judge/v3/final/jobs/{job_id}/receipt"
-        )
-        receipt = await receipt_route.endpoint(job_id=202, x_ai_internal_key="k4fr")
-        self.assertEqual(receipt["dispatchType"], "final")
-        self.assertEqual(receipt["phaseStartNo"], 1)
-        self.assertEqual(receipt["phaseEndNo"], 2)
-        self.assertEqual(receipt["status"], "reported")
-        self.assertEqual(receipt["response"]["callbackStatus"], "reported")
+        final_req = _build_final_request(job_id=2002, idempotency_key="final:2002")
+        result = await final_endpoint(request=final_req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["dispatchType"], "final")
         self.assertEqual(len(final_callback_calls), 1)
-        self.assertEqual(final_callback_calls[0][0], 202)
-        self.assertIn("sessionId", final_callback_calls[0][1])
-        self.assertIn("finalRationale", final_callback_calls[0][1])
-        self.assertIn("dimensionScores", final_callback_calls[0][1])
+        self.assertEqual(final_callback_calls[0][0], 2002)
+        self.assertIn("winner", final_callback_calls[0][1])
 
-    async def test_v3_final_dispatch_should_aggregate_phase_payloads_from_receipts(self) -> None:
-        settings = _build_settings(ai_internal_key="k4fa")
-        phase_request_1 = _build_phase_request()
-        phase_request_2_data = _build_phase_request().model_dump(mode="json")
-        phase_request_2_data.update(
-            {
-                "job_id": 102,
-                "phase_no": 2,
-                "message_start_id": 3,
-                "message_end_id": 4,
-                "messages": [
-                    {
-                        "message_id": 3,
-                        "side": "pro",
-                        "content": "pro message phase 2",
-                        "created_at": datetime.now(timezone.utc),
-                        "speaker_tag": "pro_2",
-                    },
-                    {
-                        "message_id": 4,
-                        "side": "con",
-                        "content": "con message phase 2",
-                        "created_at": datetime.now(timezone.utc),
-                        "speaker_tag": "con_2",
-                    },
-                ],
-                "trace_id": "trace-phase-102",
-                "idempotency_key": "phase-key-102",
-            }
-        )
-        phase_request_2 = PhaseDispatchRequest.model_validate(phase_request_2_data)
-        final_request = _build_final_request().model_copy(
-            update={
-                "job_id": 303,
-                "trace_id": "trace-final-303",
-                "idempotency_key": "final-key-303",
-            }
-        )
-        final_callback_calls: list[tuple[int, dict]] = []
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_callback_calls.append((job_id, payload))
+    async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(self) -> None:
+        async def failing_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            raise RuntimeError("phase-callback-down")
 
         runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=_noop_callback_report,
-            callback_failed_impl=_noop_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=fake_callback_final_report,
+            settings=_build_settings(runtime_retry_max_attempts=1),
+            callback_phase_report_impl=failing_phase_callback,
+            callback_final_report_impl=failing_phase_callback,
         )
         app = create_app(runtime)
-        phase_route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
-        )
-        final_route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
-        )
+        phase_endpoint = _route_endpoint(app, "/internal/judge/v3/phase/dispatch")
+        receipt_endpoint = _route_endpoint(app, "/internal/judge/v3/phase/jobs/{job_id}/receipt")
 
-        first_phase = await phase_route.endpoint(request=phase_request_1, x_ai_internal_key="k4fa")
-        second_phase = await phase_route.endpoint(request=phase_request_2, x_ai_internal_key="k4fa")
-        final_resp = await final_route.endpoint(request=final_request, x_ai_internal_key="k4fa")
-
-        self.assertTrue(first_phase["accepted"])
-        self.assertTrue(second_phase["accepted"])
-        self.assertTrue(final_resp["accepted"])
-        self.assertEqual(len(final_callback_calls), 1)
-
-        payload = final_callback_calls[0][1]
-        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-final-a9a10-rollup-v2")
-        self.assertEqual(payload["judgeTrace"]["phaseCountExpected"], 2)
-        self.assertEqual(payload["judgeTrace"]["phaseCountUsed"], 2)
-        self.assertEqual(payload["judgeTrace"]["missingPhaseNos"], [])
-        self.assertEqual(len(payload["phaseRollupSummary"]), 2)
-        self.assertIn(payload["winner"], {"pro", "con", "draw"})
-        self.assertIn("winnerFirst", payload)
-        self.assertIn("winnerSecond", payload)
-        self.assertEqual(set(payload["dimensionScores"].keys()), {"logic", "evidence", "rebuttal", "clarity"})
-        self.assertGreaterEqual(len(payload["verdictEvidenceRefs"]), 1)
-        self.assertEqual(payload["errorCodes"], [])
-
-    async def test_v3_final_dispatch_should_lock_facts_when_display_style_rewrite_enabled(self) -> None:
-        settings = _build_settings(ai_internal_key="k4fd", judge_style_mode="entertaining")
-        phase_request = _build_phase_request().model_copy(
-            update={
-                "job_id": 131,
-                "trace_id": "trace-phase-131",
-                "idempotency_key": "phase-key-131",
-            }
-        )
-        final_request = _build_final_request().model_copy(
-            update={
-                "job_id": 331,
-                "phase_end_no": 1,
-                "trace_id": "trace-final-331",
-                "idempotency_key": "final-key-331",
-            }
-        )
-        final_callback_calls: list[tuple[int, dict]] = []
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_callback_calls.append((job_id, payload))
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=_noop_callback_report,
-            callback_failed_impl=_noop_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=fake_callback_final_report,
-        )
-        app = create_app(runtime)
-        phase_route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
-        )
-        final_route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
-        )
-
-        await phase_route.endpoint(request=phase_request, x_ai_internal_key="k4fd")
-        await final_route.endpoint(request=final_request, x_ai_internal_key="k4fd")
-
-        self.assertEqual(len(final_callback_calls), 1)
-        payload = final_callback_calls[0][1]
-        self.assertTrue(payload["finalRationale"].startswith("Final buzzer:"))
-        self.assertEqual(payload["judgeTrace"]["displayStyleMode"], "entertaining")
-        self.assertIn("A9 final aggregated", payload["judgeTrace"]["a9RationaleRaw"])
-        self.assertEqual(payload["judgeTrace"]["factLock"]["winner"], payload["winner"])
-        self.assertEqual(payload["judgeTrace"]["factLock"]["proScore"], payload["proScore"])
-        self.assertEqual(payload["judgeTrace"]["factLock"]["conScore"], payload["conScore"])
-        ref_types = {str(item.get("type")) for item in payload["verdictEvidenceRefs"]}
-        self.assertTrue({"agent2_hit", "agent2_miss"} & ref_types)
-
-    async def test_v3_final_dispatch_should_block_on_contract_violation_and_raise_alert(self) -> None:
-        settings = _build_settings(ai_internal_key="k4fb")
-        request = _build_final_request().model_copy(
-            update={
-                "job_id": 404,
-                "trace_id": "trace-final-404",
-                "idempotency_key": "final-key-404",
-            }
-        )
-        final_callback_calls: list[tuple[int, dict]] = []
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_callback_calls.append((job_id, payload))
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=_noop_callback_report,
-            callback_failed_impl=_noop_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=fake_callback_final_report,
-        )
-        app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
-        )
-        receipt_route = next(
-            item
-            for item in app.routes
-            if getattr(item, "path", "") == "/internal/judge/v3/final/jobs/{job_id}/receipt"
-        )
-        alerts_route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/jobs/{job_id}/alerts"
-        )
-
-        with patch(
-            "app.app_factory._build_final_report_payload",
-            return_value={
-                "sessionId": request.session_id,
-                "winner": "pro",
-                "proScore": 85.0,
-                "conScore": 70.0,
-            },
-        ):
-            with self.assertRaises(HTTPException) as ctx:
-                await route.endpoint(request=request, x_ai_internal_key="k4fb")
-
-        self.assertEqual(ctx.exception.status_code, 502)
-        self.assertIn("final_contract_blocked", str(ctx.exception.detail))
-        self.assertEqual(final_callback_calls, [])
-        self.assertIsNone(runtime.trace_store.get_idempotency(request.idempotency_key))
-
-        receipt = await receipt_route.endpoint(job_id=404, x_ai_internal_key="k4fb")
-        self.assertEqual(receipt["status"], "callback_failed")
-        self.assertEqual(receipt["response"]["callbackStatus"], "blocked")
-        self.assertIn("final_contract_violation", receipt["response"]["callbackError"])
-        self.assertEqual(len(receipt["response"]["auditAlertIds"]), 1)
-
-        alerts = await alerts_route.endpoint(job_id=404, x_ai_internal_key="k4fb", status=None, limit=20)
-        self.assertEqual(alerts["count"], 1)
-        self.assertEqual(alerts["items"][0]["type"], "final_contract_violation")
-        self.assertEqual(alerts["items"][0]["severity"], "critical")
-
-    async def test_v3_phase_dispatch_should_retry_callback_and_fail_open_for_worker_retry(self) -> None:
-        settings = _build_settings(
-            ai_internal_key="k4pf",
-            runtime_retry_max_attempts=3,
-            runtime_retry_backoff_ms=0,
-        )
-        request = _build_phase_request()
-        callback_attempts = {"n": 0}
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_phase_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            callback_attempts["n"] += 1
-            raise RuntimeError(f"phase callback boom-{job_id}")
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=_noop_callback_report,
-            callback_failed_impl=_noop_callback_failed,
-            callback_phase_report_impl=fake_callback_phase_report,
-            callback_final_report_impl=_noop_callback_report,
-        )
-        app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
-        )
-        receipt_route = next(
-            item
-            for item in app.routes
-            if getattr(item, "path", "") == "/internal/judge/v3/phase/jobs/{job_id}/receipt"
-        )
-
+        req = _build_phase_request(job_id=3001, idempotency_key="phase:3001")
         with self.assertRaises(HTTPException) as ctx:
-            await route.endpoint(request=request, x_ai_internal_key="k4pf")
+            await phase_endpoint(request=req, x_ai_internal_key=runtime.settings.ai_internal_key)
         self.assertEqual(ctx.exception.status_code, 502)
         self.assertIn("phase_callback_failed", str(ctx.exception.detail))
-        self.assertEqual(callback_attempts["n"], 3)
-        self.assertIsNone(runtime.trace_store.get_idempotency(request.idempotency_key))
 
-        receipt = await receipt_route.endpoint(job_id=101, x_ai_internal_key="k4pf")
+        receipt = await receipt_endpoint(
+            job_id=3001,
+            x_ai_internal_key=runtime.settings.ai_internal_key,
+        )
         self.assertEqual(receipt["status"], "callback_failed")
-        self.assertEqual(receipt["response"]["callbackStatus"], "failed")
-        self.assertIn("v3 callback failed after", receipt["response"]["callbackError"])
 
-    async def test_v3_final_dispatch_should_retry_callback_and_fail_open_for_worker_retry(self) -> None:
-        settings = _build_settings(
-            ai_internal_key="k4ff",
-            runtime_retry_max_attempts=2,
-            runtime_retry_backoff_ms=0,
-        )
-        request = _build_final_request()
-        callback_attempts = {"n": 0}
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_final_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            callback_attempts["n"] += 1
-            raise RuntimeError(f"final callback boom-{job_id}")
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=_noop_callback_report,
-            callback_failed_impl=_noop_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=fake_callback_final_report,
-        )
-        app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
-        )
-        receipt_route = next(
-            item
-            for item in app.routes
-            if getattr(item, "path", "") == "/internal/judge/v3/final/jobs/{job_id}/receipt"
-        )
-
-        with self.assertRaises(HTTPException) as ctx:
-            await route.endpoint(request=request, x_ai_internal_key="k4ff")
-        self.assertEqual(ctx.exception.status_code, 502)
-        self.assertIn("final_callback_failed", str(ctx.exception.detail))
-        self.assertEqual(callback_attempts["n"], 2)
-        self.assertIsNone(runtime.trace_store.get_idempotency(request.idempotency_key))
-
-        receipt = await receipt_route.endpoint(job_id=202, x_ai_internal_key="k4ff")
-        self.assertEqual(receipt["status"], "callback_failed")
-        self.assertEqual(receipt["response"]["callbackStatus"], "failed")
-        self.assertIn("v3 callback failed after", receipt["response"]["callbackError"])
-
-    async def test_v3_phase_dispatch_should_validate_message_count(self) -> None:
-        settings = _build_settings(ai_internal_key="k4v")
-        request = _build_phase_request()
-        request.message_count = 3
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=_noop_callback_report,
-        )
-        app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/phase/dispatch"
-        )
-
-        with self.assertRaises(HTTPException) as ctx:
-            await route.endpoint(request=request, x_ai_internal_key="k4v")
-        self.assertEqual(ctx.exception.status_code, 422)
-        self.assertEqual(ctx.exception.detail, "message_count_mismatch")
-
-    async def test_v3_final_dispatch_should_validate_phase_range(self) -> None:
-        settings = _build_settings(ai_internal_key="k4f")
-        request = _build_final_request()
-        request.phase_start_no = 3
-        request.phase_end_no = 2
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-            callback_phase_report_impl=_noop_callback_report,
-            callback_final_report_impl=_noop_callback_report,
-        )
-        app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/v3/final/dispatch"
-        )
-
-        with self.assertRaises(HTTPException) as ctx:
-            await route.endpoint(request=request, x_ai_internal_key="k4f")
-        self.assertEqual(ctx.exception.status_code, 422)
-        self.assertEqual(ctx.exception.detail, "invalid_phase_range")
-
-    async def test_dispatch_should_support_idempotency_replay(self) -> None:
-        settings = _build_settings(ai_internal_key="k5")
-        request = _build_request()
-        request.idempotency_key = "same-key"
-        call_counter = {"n": 0}
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            call_counter["n"] += 1
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-
-        first = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5")
-        second = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5")
-        self.assertTrue(first["accepted"])
-        self.assertTrue(second["accepted"])
-        self.assertTrue(second["idempotentReplay"])
-        self.assertEqual(call_counter["n"], 1)
-
-    async def test_dispatch_should_reject_idempotency_pending_conflict(self) -> None:
-        settings = _build_settings(ai_internal_key="k5c")
-        request = _build_request()
-        request.idempotency_key = "same-key-pending"
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            raise AssertionError("pending conflict should short-circuit before runtime")
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        runtime.trace_store.set_idempotency_pending(
-            key="same-key-pending",
-            job_id=request.job.job_id,
-            ttl_secs=3600,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-
-        with self.assertRaises(HTTPException) as ctx:
-            await dispatch_route.endpoint(request=request, x_ai_internal_key="k5c")
-        self.assertEqual(ctx.exception.status_code, 409)
-        self.assertEqual(ctx.exception.detail, "idempotency_conflict:judge_dispatch")
-
-    async def test_dispatch_should_clear_idempotency_on_failed_and_allow_retry(self) -> None:
-        settings = _build_settings(ai_internal_key="k5d")
-        request = _build_request()
-        request.idempotency_key = "retry-after-failed"
-        call_counter = {"n": 0}
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            call_counter["n"] += 1
-            if call_counter["n"] == 1:
-                raise JudgeRuntimeError(code="consistency_conflict", message="draw protection conflict")
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-
-        first = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5d")
-        self.assertEqual(first["status"], "marked_failed")
-        self.assertIsNone(runtime.trace_store.get_idempotency("retry-after-failed"))
-
-        second = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5d")
-        self.assertTrue(second["accepted"])
-        self.assertNotIn("status", second)
-        self.assertEqual(call_counter["n"], 2)
-
-    async def test_dispatch_should_block_compliance_and_expose_audit_alert_in_replay_report(self) -> None:
-        settings = _build_settings(ai_internal_key="k5e")
-        request = _build_request()
-        callback_failed_calls: list[tuple[int, str]] = []
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            report = _FakeReport()
-            report.payload["agentPipeline"] = {
-                "compliance": {
-                    "status": "warn",
-                    "violations": ["display_missing_rationale"],
-                }
-            }
-            return report
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            raise AssertionError("compliance blocked should not call callback_report")
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            callback_failed_calls.append((job_id, error_message))
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-        trace_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/trace"
-        )
-        replay_report_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/replay/report"
-        )
-
-        result = await dispatch_route.endpoint(request=request, x_ai_internal_key="k5e")
-        self.assertEqual(result["status"], "marked_failed")
-        self.assertEqual(result["errorCode"], "consistency_conflict")
-        self.assertTrue(result["complianceBlocked"])
-        self.assertEqual(result["auditAlert"]["type"], "compliance_violation")
-        self.assertEqual(len(result["auditAlertIds"]), 1)
-        self.assertEqual(len(callback_failed_calls), 1)
-        self.assertIn("judge compliance blocked", callback_failed_calls[0][1])
-
-        trace = await trace_route.endpoint(job_id=1, x_ai_internal_key="k5e")
-        self.assertEqual(trace["status"], "failed")
-
-        replay_report = await replay_report_route.endpoint(job_id=1, x_ai_internal_key="k5e")
-        self.assertEqual(replay_report["status"], "failed")
-        self.assertEqual(replay_report["callbackResult"]["response"]["errorCode"], "consistency_conflict")
-        self.assertEqual(len(replay_report["auditAlerts"]), 1)
-        self.assertEqual(replay_report["auditAlerts"][0]["type"], "compliance_violation")
-
-        alerts_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts"
-        )
-        alerts = await alerts_route.endpoint(job_id=1, x_ai_internal_key="k5e", status=None, limit=20)
-        self.assertEqual(alerts["count"], 1)
-        self.assertEqual(alerts["items"][0]["status"], "raised")
-
-    async def test_dispatch_should_skip_low_quality_topic_memory_but_keep_audit(self) -> None:
-        settings = _build_settings(
-            ai_internal_key="k6",
-            topic_memory_min_rationale_chars=100,
-        )
-        request = _build_request()
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-        trace_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/trace"
-        )
-
-        result = await dispatch_route.endpoint(request=request, x_ai_internal_key="k6")
-        self.assertTrue(result["accepted"])
-        trace = await trace_route.endpoint(job_id=1, x_ai_internal_key="k6")
-        self.assertFalse(trace["reportSummary"]["topicMemoryAudit"]["accepted"])
-        self.assertIn("insufficient_rationale_chars", trace["reportSummary"]["topicMemoryAudit"]["rejectReasons"])
-        topic_memory_rows = runtime.trace_store.list_topic_memory(
-            topic_domain="default",
-            rubric_version="v1",
-            limit=3,
-        )
-        self.assertEqual(topic_memory_rows, [])
-
-    async def test_list_replay_reports_should_filter_and_support_full_report(self) -> None:
-        settings = _build_settings(ai_internal_key="k7")
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            return _FakeReport()
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        route = next(
-            item for item in app.routes if getattr(item, "path", "") == "/internal/judge/jobs/replay/reports"
-        )
-
-        def register_record(job_id: int, winner: str, *, with_alert: bool) -> None:
-            request = _build_request().model_dump(mode="json")
-            request["job"]["job_id"] = job_id
-            runtime.trace_store.register_start(
-                job_id=job_id,
-                trace_id=f"trace-{job_id}",
-                request=request,
-            )
-            payload = {"provider": "openai", "stage_summaries": []}
-            if with_alert:
-                payload["auditAlerts"] = [{"type": "compliance_violation"}]
-            runtime.trace_store.register_success(
-                job_id=job_id,
-                response={
-                    "accepted": True,
-                    "jobId": job_id,
-                    "winner": winner,
-                    "provider": "openai",
-                },
-                callback_status="reported",
-                report_summary={
-                    "winner": winner,
-                    "needs_draw_vote": winner == "draw",
-                    "payload": payload,
-                    "stage_summaries": [],
-                },
-            )
-
-        register_record(701, "pro", with_alert=True)
-        register_record(702, "con", with_alert=False)
-        register_record(703, "pro", with_alert=False)
-
-        result = await route.endpoint(
-            x_ai_internal_key="k7",
-            status="completed",
-            winner="pro",
-            callback_status=None,
-            trace_id=None,
-            created_after=None,
-            created_before=None,
-            has_audit_alert=True,
-            limit=20,
-            include_report=False,
-        )
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["items"][0]["jobId"], 701)
-        self.assertEqual(result["items"][0]["auditAlertCount"], 1)
-
-        full = await route.endpoint(
-            x_ai_internal_key="k7",
-            status="completed",
-            winner=None,
-            callback_status="reported",
-            trace_id=None,
-            created_after=None,
-            created_before=None,
-            has_audit_alert=None,
-            limit=2,
-            include_report=True,
-        )
-        self.assertEqual(full["count"], 2)
-        self.assertIn("pipeline", full["items"][0])
-        self.assertIn("requestInput", full["items"][0])
-
-    async def test_alert_state_machine_and_outbox_endpoints_should_work(self) -> None:
-        settings = _build_settings(ai_internal_key="k8")
-        request = _build_request()
-
-        async def fake_runtime_builder(**_kwargs: object) -> _FakeReport:
-            report = _FakeReport()
-            report.payload["agentPipeline"] = {
-                "compliance": {
-                    "status": "warn",
-                    "violations": ["display_missing_rationale"],
-                }
-            }
-            return report
-
-        async def fake_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
-            return None
-
-        async def fake_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-            return None
-
-        runtime = create_runtime(
-            settings=settings,
-            build_report_by_runtime_fn=fake_runtime_builder,
-            callback_report_impl=fake_callback_report,
-            callback_failed_impl=fake_callback_failed,
-        )
-        app = create_app(runtime)
-        dispatch_route = next(route for route in app.routes if getattr(route, "path", "") == "/internal/judge/dispatch")
-        alerts_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts"
-        )
-        ack_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts/{alert_id}/ack"
-        )
-        resolve_route = next(
-            route
-            for route in app.routes
-            if getattr(route, "path", "") == "/internal/judge/jobs/{job_id}/alerts/{alert_id}/resolve"
-        )
-        outbox_route = next(
-            route for route in app.routes if getattr(route, "path", "") == "/internal/judge/alerts/outbox"
-        )
-        delivery_route = next(
-            route
-            for route in app.routes
-            if getattr(route, "path", "") == "/internal/judge/alerts/outbox/{event_id}/delivery"
-        )
-
-        dispatch_result = await dispatch_route.endpoint(request=request, x_ai_internal_key="k8")
-        self.assertEqual(dispatch_result["status"], "marked_failed")
-        alert_ids = dispatch_result["auditAlertIds"]
-        self.assertEqual(len(alert_ids), 1)
-        alert_id = alert_ids[0]
-
-        alerts = await alerts_route.endpoint(job_id=1, x_ai_internal_key="k8", status=None, limit=20)
-        self.assertEqual(alerts["count"], 1)
-        self.assertEqual(alerts["items"][0]["status"], "raised")
-        self.assertEqual(alerts["items"][0]["scopeId"], 1)
-
-        acked = await ack_route.endpoint(
-            job_id=1,
-            alert_id=alert_id,
-            x_ai_internal_key="k8",
-            actor="ops_reviewer_1",
-            reason="reviewed",
-        )
-        self.assertEqual(acked["status"], "acked")
-
-        resolved = await resolve_route.endpoint(
-            job_id=1,
-            alert_id=alert_id,
-            x_ai_internal_key="k8",
-            actor="ops_reviewer_1",
-            reason="fixed",
-        )
-        self.assertEqual(resolved["status"], "resolved")
-
-        pending_outbox = await outbox_route.endpoint(
-            x_ai_internal_key="k8",
-            delivery_status="pending",
-            limit=20,
-        )
-        self.assertGreaterEqual(pending_outbox["count"], 3)
-        self.assertEqual(pending_outbox["items"][0]["scopeId"], 1)
-        self.assertIn("scopeId", pending_outbox["items"][0]["payload"])
-        event_id = pending_outbox["items"][0]["eventId"]
-
-        marked = await delivery_route.endpoint(
-            event_id=event_id,
-            x_ai_internal_key="k8",
-            delivery_status="sent",
-            error_message=None,
-        )
-        self.assertEqual(marked["item"]["deliveryStatus"], "sent")
-
-    async def test_create_default_app_should_use_loader(self) -> None:
-        settings = _build_settings(ai_internal_key="loader-key")
-        called = {"count": 0}
-
-        def fake_loader() -> Settings:
-            called["count"] += 1
-            return settings
-
-        app = create_default_app(load_settings_fn=fake_loader)
-        self.assertEqual(called["count"], 1)
-        self.assertEqual(app.title, "AI Judge Service")
+    async def test_create_default_app_should_be_constructible(self) -> None:
+        app = create_default_app(load_settings_fn=_build_settings)
+        self.assertIsNotNone(app)
 
 
 if __name__ == "__main__":

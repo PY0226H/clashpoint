@@ -25,7 +25,6 @@ use crate::config::{KafkaConfig, WorkerRuntimeConfig};
 pub const TOPIC_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined.v1";
 pub const TOPIC_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed.v1";
 pub const TOPIC_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned.v1";
-pub const TOPIC_AI_JUDGE_JOB_CREATED: &str = "ai.judge.job.created.v1";
 
 const OUTBOX_STATUS_PENDING: &str = "pending";
 const OUTBOX_STATUS_SENDING: &str = "sending";
@@ -34,11 +33,11 @@ const OUTBOX_STATUS_FAILED: &str = "failed";
 const OUTBOX_ERROR_MAX_LEN: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum DomainEvent {
     DebateParticipantJoined(DebateParticipantJoinedEvent),
     DebateSessionStatusChanged(DebateSessionStatusChangedEvent),
     DebateMessagePinned(DebateMessagePinnedEvent),
-    AiJudgeJobCreated(AiJudgeJobCreatedEvent),
 }
 
 impl DomainEvent {
@@ -63,13 +62,6 @@ impl DomainEvent {
                 "debate.message.pinned",
                 format!("session:{}", event.session_id),
                 event.pinned_at,
-                serde_json::to_value(event)?,
-            ),
-            Self::AiJudgeJobCreated(event) => build_outbox_message(
-                TOPIC_AI_JUDGE_JOB_CREATED,
-                "ai.judge.job.created",
-                format!("session:{}", event.session_id),
-                event.requested_at,
                 serde_json::to_value(event)?,
             ),
         }
@@ -449,17 +441,6 @@ pub struct DebateMessagePinnedEvent {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiJudgeJobCreatedEvent {
-    pub session_id: u64,
-    pub job_id: u64,
-    pub requested_by: u64,
-    pub style_mode: String,
-    pub rejudge_triggered: bool,
-    pub requested_at: DateTime<Utc>,
-}
-
 #[derive(Clone)]
 pub(crate) struct KafkaEventBus {
     producer: FutureProducer,
@@ -595,7 +576,6 @@ impl EventBus {
                 bus.config.topic_name(TOPIC_DEBATE_PARTICIPANT_JOINED),
                 bus.config.topic_name(TOPIC_DEBATE_SESSION_STATUS_CHANGED),
                 bus.config.topic_name(TOPIC_DEBATE_MESSAGE_PINNED),
-                bus.config.topic_name(TOPIC_AI_JUDGE_JOB_CREATED),
             ]
         } else {
             bus.config
@@ -769,7 +749,6 @@ impl std::fmt::Display for ConsumeProcessOutcome {
 #[derive(Debug)]
 enum BusinessProcessOutcome {
     Succeeded,
-    FailedPermanently(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -822,7 +801,6 @@ pub(crate) struct WorkerEnvelopeMeta {
 pub(crate) enum WorkerProcessOutcome {
     Succeeded,
     Duplicated,
-    FailedPermanently(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -893,25 +871,6 @@ async fn consume_worker_message(
             mark_kafka_dlq_replayed(pool, &meta.consumer_group, &envelope.event_id).await?;
             Ok(ConsumeWorkerResult {
                 outcome: ConsumeProcessOutcome::Duplicated,
-                should_commit: true,
-                retry_backoff_ms: 0,
-            })
-        }
-        Ok(WorkerProcessOutcome::FailedPermanently(error_message)) => {
-            let row = FailedConsumeRow {
-                consumer_group: meta.consumer_group.clone(),
-                topic: meta.topic.clone(),
-                partition: meta.partition,
-                offset: meta.offset,
-                event_id: envelope.event_id.clone(),
-                event_type: envelope.event_type.clone(),
-                aggregate_id: envelope.aggregate_id.clone(),
-                payload: serde_json::to_value(&envelope).unwrap_or(Value::Null),
-                error_message,
-            };
-            let _ = upsert_kafka_dlq_failure(pool, &row).await?;
-            Ok(ConsumeWorkerResult {
-                outcome: ConsumeProcessOutcome::Failed,
                 should_commit: true,
                 retry_backoff_ms: 0,
             })
@@ -997,88 +956,42 @@ pub(crate) async fn process_worker_envelope(
         .await?
     };
 
-    match apply_worker_business_logic(&mut tx, envelope).await? {
-        BusinessProcessOutcome::Succeeded => {
-            sqlx::query(
-                r#"
-                UPDATE kafka_consume_ledger
-                SET status = $2,
-                    error_message = NULL,
-                    topic = $3,
-                    partition = $4,
-                    message_offset = $5,
-                    event_type = $6,
-                    aggregate_id = $7,
-                    payload = $8,
-                    processed_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(ledger_id)
-            .bind(ConsumeLedgerStatus::Succeeded.as_str())
-            .bind(&meta.topic)
-            .bind(meta.partition)
-            .bind(meta.offset)
-            .bind(&envelope.event_type)
-            .bind(&envelope.aggregate_id)
-            .bind(&envelope.payload)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            Ok(WorkerProcessOutcome::Succeeded)
-        }
-        BusinessProcessOutcome::FailedPermanently(error_message) => {
-            sqlx::query(
-                r#"
-                UPDATE kafka_consume_ledger
-                SET status = $2,
-                    error_message = $3,
-                    processed_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(ledger_id)
-            .bind(ConsumeLedgerStatus::Failed.as_str())
-            .bind(&error_message)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            Ok(WorkerProcessOutcome::FailedPermanently(error_message))
-        }
-    }
+    let _ = apply_worker_business_logic(&mut tx, envelope).await?;
+    sqlx::query(
+        r#"
+        UPDATE kafka_consume_ledger
+        SET status = $2,
+            error_message = NULL,
+            topic = $3,
+            partition = $4,
+            message_offset = $5,
+            event_type = $6,
+            aggregate_id = $7,
+            payload = $8,
+            processed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(ledger_id)
+    .bind(ConsumeLedgerStatus::Succeeded.as_str())
+    .bind(&meta.topic)
+    .bind(meta.partition)
+    .bind(meta.offset)
+    .bind(&envelope.event_type)
+    .bind(&envelope.aggregate_id)
+    .bind(&envelope.payload)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(WorkerProcessOutcome::Succeeded)
 }
 
 async fn apply_worker_business_logic(
     tx: &mut Transaction<'_, Postgres>,
     envelope: &EventEnvelope,
 ) -> anyhow::Result<BusinessProcessOutcome> {
-    if envelope.event_type == "ai.judge.job.created" {
-        let payload: AiJudgeJobCreatedEvent = match serde_json::from_value(envelope.payload.clone())
-        {
-            Ok(v) => v,
-            Err(err) => {
-                return Ok(BusinessProcessOutcome::FailedPermanently(format!(
-                    "decode ai.judge.job.created payload failed: {err}"
-                )))
-            }
-        };
-        sqlx::query(
-            r#"
-            UPDATE judge_jobs
-            SET dispatch_locked_until = NOW() - INTERVAL '1 second',
-                updated_at = NOW()
-            WHERE id = $1
-              AND session_id = $2
-              AND status = 'running'
-            "#,
-        )
-        .bind(payload.job_id as i64)
-        .bind(payload.session_id as i64)
-        .execute(&mut **tx)
-        .await?;
-    }
+    let _ = (tx, envelope);
     Ok(BusinessProcessOutcome::Succeeded)
 }
 
@@ -1241,10 +1154,6 @@ mod tests {
             cfg.topic_name(TOPIC_DEBATE_MESSAGE_PINNED),
             "echoisle.debate.message.pinned.v1"
         );
-        assert_eq!(
-            cfg.topic_name(TOPIC_AI_JUDGE_JOB_CREATED),
-            "echoisle.ai.judge.job.created.v1"
-        );
     }
 
     #[test]
@@ -1264,8 +1173,8 @@ mod tests {
 
     #[test]
     fn fallback_event_id_should_include_topic_partition_offset() {
-        let id = fallback_event_id("echoisle.ai.judge.job.created.v1", 2, 18);
-        assert_eq!(id, "echoisle.ai.judge.job.created.v1:2:18");
+        let id = fallback_event_id("echoisle.debate.message.pinned.v1", 2, 18);
+        assert_eq!(id, "echoisle.debate.message.pinned.v1:2:18");
     }
 
     #[test]
@@ -1312,19 +1221,21 @@ mod tests {
 
     #[test]
     fn domain_event_into_message_should_fill_topic_key_and_payload() {
-        let event = DomainEvent::AiJudgeJobCreated(AiJudgeJobCreatedEvent {
+        let event = DomainEvent::DebateMessagePinned(DebateMessagePinnedEvent {
             session_id: 11,
-            job_id: 22,
-            requested_by: 33,
-            style_mode: "rational".to_string(),
-            rejudge_triggered: false,
-            requested_at: Utc::now(),
+            message_id: 22,
+            user_id: 33,
+            ledger_id: 44,
+            cost_coins: 10,
+            pin_seconds: 60,
+            pinned_at: Utc::now(),
+            expires_at: Utc::now(),
         });
         let outbox = event.into_message().expect("build outbox message");
-        assert_eq!(outbox.topic, TOPIC_AI_JUDGE_JOB_CREATED);
+        assert_eq!(outbox.topic, TOPIC_DEBATE_MESSAGE_PINNED);
         assert_eq!(outbox.key, "session:11");
-        assert_eq!(outbox.event_type, "ai.judge.job.created");
-        assert_eq!(outbox.payload["payload"]["jobId"], 22);
+        assert_eq!(outbox.event_type, "debate.message.pinned");
+        assert_eq!(outbox.payload["payload"]["messageId"], 22);
     }
 
     #[test]

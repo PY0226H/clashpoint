@@ -4,8 +4,8 @@ import os
 from dataclasses import dataclass
 
 from .callback_client import CallbackClientConfig
-from .dispatch_controller import DispatchRuntimeConfig
 from .rag_retriever import parse_rag_backend, parse_source_whitelist
+from .runtime_types import DispatchRuntimeConfig
 from .runtime_policy import (
     PROVIDER_MOCK,
     PROVIDER_OPENAI,
@@ -280,8 +280,6 @@ def build_callback_client_config(settings: Settings) -> CallbackClientConfig:
     return CallbackClientConfig(
         ai_internal_key=settings.ai_internal_key,
         chat_server_base_url=settings.chat_server_base_url,
-        report_path_template=settings.report_path_template,
-        failed_path_template=settings.failed_path_template,
         callback_timeout_secs=settings.callback_timeout_secs,
     )
 

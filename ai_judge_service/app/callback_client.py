@@ -4,15 +4,11 @@ from dataclasses import dataclass
 
 import httpx
 
-from .models import MarkJudgeJobFailedInput
-
 
 @dataclass(frozen=True)
 class CallbackClientConfig:
     ai_internal_key: str
     chat_server_base_url: str
-    report_path_template: str
-    failed_path_template: str
     callback_timeout_secs: float
     phase_report_path_template: str = "/api/internal/ai/judge/v3/phase/jobs/{job_id}/report"
     final_report_path_template: str = "/api/internal/ai/judge/v3/final/jobs/{job_id}/report"
@@ -20,24 +16,6 @@ class CallbackClientConfig:
 
 def join_url(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
-
-
-async def callback_report(
-    *,
-    cfg: CallbackClientConfig,
-    job_id: int,
-    payload: dict,
-) -> None:
-    path = cfg.report_path_template.format(job_id=job_id)
-    url = join_url(cfg.chat_server_base_url, path)
-    async with httpx.AsyncClient(timeout=cfg.callback_timeout_secs) as client:
-        resp = await client.post(
-            url,
-            headers={"x-ai-internal-key": cfg.ai_internal_key},
-            json=payload,
-        )
-    if resp.status_code // 100 != 2:
-        raise RuntimeError(f"report callback failed: status={resp.status_code}, body={resp.text}")
 
 
 async def callback_phase_report(
@@ -78,22 +56,3 @@ async def callback_final_report(
         raise RuntimeError(
             f"final report callback failed: status={resp.status_code}, body={resp.text}"
         )
-
-
-async def callback_failed(
-    *,
-    cfg: CallbackClientConfig,
-    job_id: int,
-    error_message: str,
-) -> None:
-    path = cfg.failed_path_template.format(job_id=job_id)
-    url = join_url(cfg.chat_server_base_url, path)
-    body = MarkJudgeJobFailedInput(error_message=error_message).model_dump()
-    async with httpx.AsyncClient(timeout=cfg.callback_timeout_secs) as client:
-        resp = await client.post(
-            url,
-            headers={"x-ai-internal-key": cfg.ai_internal_key},
-            json=body,
-        )
-    if resp.status_code // 100 != 2:
-        raise RuntimeError(f"failed callback failed: status={resp.status_code}, body={resp.text}")

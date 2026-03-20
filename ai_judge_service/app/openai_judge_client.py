@@ -4,7 +4,18 @@ from typing import Any, Protocol
 
 import httpx
 
-from .openai_judge_helpers import _extract_json_object
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        raise ValueError("empty model response")
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end < 0 or end <= start:
+        raise ValueError("json object not found in model response")
+    import json
+
+    return json.loads(raw[start : end + 1])
 
 
 class OpenAiConfigProtocol(Protocol):

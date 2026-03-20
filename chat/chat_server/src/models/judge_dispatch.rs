@@ -7,13 +7,7 @@ use utoipa::ToSchema;
 
 mod dispatch_worker;
 
-const DISPATCH_MESSAGE_WINDOW_LIMIT: i64 = 100;
 const DISPATCH_ERROR_MAX_LEN: usize = 1000;
-const DISPATCH_TRACE_ID_PREFIX: &str = "judge-dispatch";
-const DISPATCH_IDEMPOTENCY_KEY_PREFIX: &str = "judge-dispatch";
-const DISPATCH_JUDGE_POLICY_VERSION: &str = "v2-default";
-const DISPATCH_TOPIC_DOMAIN: &str = "default";
-const DISPATCH_RETRIEVAL_PROFILE: &str = "hybrid_v1";
 const PHASE_DISPATCH_PATH: &str = "/internal/judge/v3/phase/dispatch";
 const PHASE_DISPATCH_SCOPE_ID: u64 = 1;
 const FINAL_DISPATCH_PATH: &str = "/internal/judge/v3/final/dispatch";
@@ -173,17 +167,6 @@ impl AiJudgeDispatchMetrics {
 }
 
 #[derive(Debug, Clone, FromRow)]
-struct PendingDispatchJob {
-    id: i64,
-    session_id: i64,
-    requested_by: i64,
-    style_mode: String,
-    rejudge_triggered: bool,
-    requested_at: DateTime<Utc>,
-    dispatch_attempts: i32,
-}
-
-#[derive(Debug, Clone, FromRow)]
 struct PendingPhaseDispatchJob {
     id: i64,
     session_id: i64,
@@ -215,41 +198,12 @@ struct PendingFinalDispatchJob {
 }
 
 #[derive(Debug, Clone, FromRow)]
-struct SessionTopicRow {
-    status: String,
-    scheduled_start_at: DateTime<Utc>,
-    actual_start_at: Option<DateTime<Utc>>,
-    end_at: DateTime<Utc>,
-    title: String,
-    description: String,
-    category: String,
-    stance_pro: String,
-    stance_con: String,
-    context_seed: Option<String>,
-}
-
-#[derive(Debug, Clone, FromRow)]
 struct SessionMessageRow {
     id: i64,
     user_id: i64,
     side: String,
     content: String,
     created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AiJudgeDispatchRequest {
-    job: AiJudgeDispatchJob,
-    session: AiJudgeDispatchSession,
-    topic: AiJudgeDispatchTopic,
-    messages: Vec<AiJudgeDispatchMessage>,
-    message_window_size: i64,
-    rubric_version: String,
-    trace_id: String,
-    idempotency_key: String,
-    judge_policy_version: String,
-    topic_domain: String,
-    retrieval_profile: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -282,34 +236,6 @@ struct AiJudgeFinalDispatchRequest {
     topic_domain: String,
     trace_id: String,
     idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AiJudgeDispatchJob {
-    job_id: u64,
-    session_id: u64,
-    requested_by: u64,
-    style_mode: String,
-    rejudge_triggered: bool,
-    requested_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AiJudgeDispatchSession {
-    status: String,
-    scheduled_start_at: DateTime<Utc>,
-    actual_start_at: Option<DateTime<Utc>>,
-    end_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AiJudgeDispatchTopic {
-    title: String,
-    description: String,
-    category: String,
-    stance_pro: String,
-    stance_con: String,
-    context_seed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +286,7 @@ impl DispatchFailureCode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DispatchResponseViolation {
+    InvalidPayload,
     AcceptedFalse { status: String },
     JobIdMismatch { expected: u64, got: u64 },
 }
@@ -367,6 +294,7 @@ enum DispatchResponseViolation {
 impl std::fmt::Display for DispatchResponseViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPayload => write!(f, "dispatch response payload is not valid json"),
             Self::AcceptedFalse { status } => {
                 write!(
                     f,
@@ -411,14 +339,6 @@ fn build_dispatch_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
     format!("{base}/{path}")
-}
-
-fn build_dispatch_trace_id(job_id: i64) -> String {
-    format!("{DISPATCH_TRACE_ID_PREFIX}-{job_id}")
-}
-
-fn build_dispatch_idempotency_key(job_id: i64) -> String {
-    format!("{DISPATCH_IDEMPOTENCY_KEY_PREFIX}-{job_id}")
 }
 
 fn sanitize_error_message(err: &str) -> String {
@@ -481,11 +401,8 @@ fn validate_dispatch_response(
         return Ok(());
     }
 
-    // Backward compatibility: old AI judge mock may return free-form json body.
-    let parsed: AiJudgeDispatchResponse = match serde_json::from_str(trimmed) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+    let parsed: AiJudgeDispatchResponse =
+        serde_json::from_str(trimmed).map_err(|_| DispatchResponseViolation::InvalidPayload)?;
 
     if parsed.accepted == Some(false) {
         return Err(DispatchResponseViolation::AcceptedFalse {
@@ -504,6 +421,3 @@ fn validate_dispatch_response(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

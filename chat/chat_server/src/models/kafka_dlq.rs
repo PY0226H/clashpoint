@@ -270,26 +270,6 @@ impl AppState {
                 .await?;
                 Ok(map_dlq_action_row(row))
             }
-            Ok(WorkerProcessOutcome::FailedPermanently(error_message)) => {
-                let row: KafkaDlqActionRow = sqlx::query_as(
-                    r#"
-                    UPDATE kafka_dlq_events
-                    SET status = $2,
-                        failure_count = failure_count + 1,
-                        error_message = $3,
-                        last_failed_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = $1
-                    RETURNING id, status, failure_count, error_message, replayed_at, discarded_at, updated_at
-                    "#,
-                )
-                .bind(id as i64)
-                .bind(DLQ_STATUS_PENDING)
-                .bind(error_message)
-                .fetch_one(&self.pool)
-                .await?;
-                Ok(map_dlq_action_row(row))
-            }
             Err(err) => {
                 let row: KafkaDlqActionRow = sqlx::query_as(
                     r#"

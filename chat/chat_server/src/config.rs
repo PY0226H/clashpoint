@@ -373,7 +373,7 @@ fn default_ai_judge_service_base_url() -> String {
 }
 
 fn default_ai_judge_dispatch_path() -> String {
-    "/internal/judge/dispatch".to_string()
+    "/internal/judge/v3/phase/dispatch".to_string()
 }
 
 fn default_ai_judge_dispatch_interval_secs() -> u64 {

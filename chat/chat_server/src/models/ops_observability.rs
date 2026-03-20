@@ -1382,14 +1382,19 @@ impl AppState {
         let dispatch_metrics = self.get_judge_dispatch_metrics();
         let pending_running_jobs: i64 = sqlx::query_scalar(
             r#"
-            SELECT COUNT(1)::bigint
-            FROM judge_jobs j
-            WHERE j.status = 'running'
-              AND NOT EXISTS (
-                SELECT 1
-                FROM judge_reports r
-                WHERE r.job_id = j.id
-              )
+            SELECT (
+                COALESCE((
+                    SELECT COUNT(1)::bigint
+                    FROM judge_phase_jobs p
+                    WHERE p.status IN ('queued', 'dispatched')
+                ), 0)
+                +
+                COALESCE((
+                    SELECT COUNT(1)::bigint
+                    FROM judge_final_jobs f
+                    WHERE f.status IN ('queued', 'dispatched')
+                ), 0)
+            )::bigint
             "#,
         )
         .fetch_one(&self.pool)
@@ -1839,21 +1844,22 @@ impl AppState {
             SELECT
                 COUNT(1) FILTER (
                     WHERE status = 'succeeded'
-                      AND finished_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
+                      AND updated_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
                 )::bigint AS success_count,
                 COUNT(1) FILTER (
                     WHERE status = 'failed'
-                      AND finished_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
+                      AND updated_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
                 )::bigint AS failed_count,
                 COALESCE(AVG(dispatch_attempts::double precision) FILTER (
-                    WHERE requested_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
+                    WHERE created_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
                 ), 0)::double precision AS avg_dispatch_attempts,
                 COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (
-                    ORDER BY EXTRACT(EPOCH FROM (COALESCE(finished_at, NOW()) - requested_at)) * 1000
+                    ORDER BY EXTRACT(EPOCH FROM (COALESCE(updated_at, NOW()) - created_at)) * 1000
                 ) FILTER (
-                    WHERE requested_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
+                    WHERE created_at >= NOW() - ($1::bigint * INTERVAL '1 minute')
+                      AND status IN ('succeeded', 'failed')
                 ), 0)::double precision AS p95_latency_ms
-            FROM judge_jobs
+            FROM judge_final_jobs
             "#,
         )
         .bind(OPS_ALERT_EVAL_WINDOW_MINUTES)
@@ -2737,21 +2743,24 @@ mod tests {
 
         sqlx::query(
             r#"
-            INSERT INTO judge_jobs(
-                session_id, requested_by, status, style_mode,
-                requested_at, started_at, finished_at, dispatch_attempts, created_at, updated_at
+            INSERT INTO judge_final_jobs(
+                session_id, phase_start_no, phase_end_no,
+                status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                topic_domain, dispatch_attempts, created_at, updated_at
             )
             VALUES (
-                $1, $2, 'failed', 'rational',
+                $1, 1, 1,
+                'failed',
+                format('ops-final-%s', $1::text),
+                format('ops_final:%s', $1::text),
+                'v3', 'v3-default', 'default',
+                3,
                 NOW() - INTERVAL '2 minutes',
-                NOW() - INTERVAL '2 minutes',
-                NOW() - INTERVAL '1 minutes',
-                3, NOW(), NOW()
+                NOW() - INTERVAL '1 minutes'
             )
             "#,
         )
         .bind(session_id.0)
-        .bind(owner.id)
         .execute(&state.pool)
         .await?;
 

@@ -1,5 +1,24 @@
 use super::*;
 
+async fn seed_session_messages(state: &AppState, session_id: i64, count: i64) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO session_messages(session_id, user_id, side, content)
+        SELECT
+            $1,
+            1,
+            CASE WHEN gs % 2 = 0 THEN 'pro' ELSE 'con' END,
+            format('auto-msg-%s', gs)
+        FROM generate_series(1, $2) AS gs
+        "#,
+    )
+    .bind(session_id)
+    .bind(count)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn advance_debate_sessions_should_open_due_scheduled_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -58,6 +77,7 @@ async fn advance_debate_sessions_should_move_running_to_judging_then_closed() ->
 async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judging() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
+    seed_session_messages(&state, session_id, 100).await?;
     sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
         .bind(session_id)
         .execute(&state.pool)
@@ -70,9 +90,9 @@ async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judgin
     let row: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(1)::bigint
-        FROM judge_jobs
+        FROM judge_phase_jobs
         WHERE session_id = $1
-          AND status = 'running'
+          AND status IN ('queued', 'dispatched', 'succeeded')
         "#,
     )
     .bind(session_id)
@@ -80,31 +100,6 @@ async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judgin
     .await?;
     assert_eq!(row.0, 1);
 
-    let requester: (i64,) = sqlx::query_as(
-        r#"
-        SELECT requested_by
-        FROM judge_jobs
-        WHERE session_id = $1
-        ORDER BY requested_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(session_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let requester_exists: (bool,) = sqlx::query_as(
-        r#"
-        SELECT EXISTS(
-            SELECT 1
-            FROM users
-            WHERE id = $1
-        )
-        "#,
-    )
-    .bind(requester.0)
-    .fetch_one(&state.pool)
-    .await?;
-    assert!(requester_exists.0);
     Ok(())
 }
 
@@ -112,6 +107,7 @@ async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judgin
 async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
+    seed_session_messages(&state, session_id, 100).await?;
     sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
         .bind(session_id)
         .execute(&state.pool)
@@ -119,11 +115,22 @@ async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -
 
     sqlx::query(
         r#"
-        INSERT INTO judge_jobs(
-            session_id, requested_by, status, style_mode,
-            requested_at, started_at, created_at, updated_at
+        INSERT INTO judge_phase_jobs(
+            session_id, phase_no, message_start_id, message_end_id, message_count,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, retrieval_profile, dispatch_attempts, created_at, updated_at
         )
-        VALUES ($1, 1, 'running', 'rational', NOW(), NULL, NOW(), NOW())
+        VALUES (
+            $1, 1,
+            (SELECT MIN(id) FROM session_messages WHERE session_id = $1),
+            (SELECT MAX(id) FROM session_messages WHERE session_id = $1),
+            100,
+            'queued',
+            format('test-phase-%s-1', $1::text),
+            format('judge_phase:%s:1:v3:v3-default', $1::text),
+            'v3', 'v3-default',
+            'default', 'hybrid_v1', 0, NOW(), NOW()
+        )
         "#,
     )
     .bind(session_id)
@@ -136,9 +143,9 @@ async fn advance_debate_sessions_should_not_create_duplicate_auto_judge_jobs() -
     let count: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(1)::bigint
-        FROM judge_jobs
+        FROM judge_phase_jobs
         WHERE session_id = $1
-          AND status = 'running'
+          AND phase_no = 1
         "#,
     )
     .bind(session_id)
@@ -153,6 +160,7 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_existing_judging
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "judging", 10).await?;
+    seed_session_messages(&state, session_id, 100).await?;
 
     let first = state.advance_debate_sessions(100).await?;
     assert_eq!(first.judging, 0);
@@ -164,9 +172,9 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_existing_judging
     let count: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(1)::bigint
-        FROM judge_jobs
+        FROM judge_phase_jobs
         WHERE session_id = $1
-          AND status = 'running'
+          AND status IN ('queued', 'dispatched', 'succeeded')
         "#,
     )
     .bind(session_id)
@@ -181,6 +189,7 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_closed_session_w
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "closed", 10).await?;
+    seed_session_messages(&state, session_id, 1).await?;
 
     let report = state.advance_debate_sessions(100).await?;
     assert_eq!(report.judging, 0);
@@ -190,9 +199,9 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_closed_session_w
     let count: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(1)::bigint
-        FROM judge_jobs
+        FROM judge_phase_jobs
         WHERE session_id = $1
-          AND status = 'running'
+          AND status IN ('queued', 'dispatched', 'succeeded')
         "#,
     )
     .bind(session_id)

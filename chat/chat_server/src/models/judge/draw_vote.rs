@@ -64,7 +64,7 @@ impl AppState {
                 updated_at = NOW()
             WHERE id = $1
             RETURNING
-                id, session_id, report_id, threshold_percent, eligible_voters, required_voters,
+                id, session_id, final_report_id, threshold_percent, eligible_voters, required_voters,
                 voting_ends_at, status, resolution, decided_at, rematch_session_id
             "#,
         )
@@ -187,7 +187,7 @@ impl AppState {
                 updated_at = NOW()
             WHERE id = $1
             RETURNING
-                id, session_id, report_id, threshold_percent, eligible_voters, required_voters,
+                id, session_id, final_report_id, threshold_percent, eligible_voters, required_voters,
                 voting_ends_at, status, resolution, decided_at, rematch_session_id
             "#,
         )
@@ -201,7 +201,7 @@ impl AppState {
     pub(super) async fn create_draw_vote_for_report(
         tx: &mut Transaction<'_, Postgres>,
         session_id: i64,
-        report_id: i64,
+        final_report_id: i64,
     ) -> Result<(), AppError> {
         let eligible_voters: i32 = sqlx::query_scalar(
             r#"
@@ -217,7 +217,7 @@ impl AppState {
         sqlx::query(
             r#"
             INSERT INTO judge_draw_votes(
-                session_id, report_id, threshold_percent, eligible_voters, required_voters,
+                session_id, final_report_id, threshold_percent, eligible_voters, required_voters,
                 voting_ends_at, status, resolution, created_at, updated_at
             )
             VALUES (
@@ -225,11 +225,11 @@ impl AppState {
                 NOW() + ($6::bigint * INTERVAL '1 second'),
                 'open', 'pending', NOW(), NOW()
             )
-            ON CONFLICT (report_id) DO NOTHING
+            ON CONFLICT (final_report_id) DO NOTHING
             "#,
         )
         .bind(session_id)
-        .bind(report_id)
+        .bind(final_report_id)
         .bind(DRAW_VOTE_THRESHOLD_PERCENT)
         .bind(eligible_voters)
         .bind(required_voters)
@@ -285,7 +285,7 @@ impl AppState {
         let vote: Option<DrawVoteRow> = sqlx::query_as(
             r#"
             SELECT
-                id, session_id, report_id, threshold_percent, eligible_voters, required_voters,
+                id, session_id, final_report_id, threshold_percent, eligible_voters, required_voters,
                 voting_ends_at, status, resolution, decided_at, rematch_session_id
             FROM judge_draw_votes
             WHERE session_id = $1
@@ -384,7 +384,7 @@ impl AppState {
         let vote: Option<DrawVoteRow> = sqlx::query_as(
             r#"
             SELECT
-                id, session_id, report_id, threshold_percent, eligible_voters, required_voters,
+                id, session_id, final_report_id, threshold_percent, eligible_voters, required_voters,
                 voting_ends_at, status, resolution, decided_at, rematch_session_id
             FROM judge_draw_votes
             WHERE session_id = $1
@@ -429,7 +429,7 @@ impl AppState {
         sqlx::query(
             r#"
             INSERT INTO judge_draw_vote_ballots(
-                vote_id, session_id, report_id, user_id, agree_draw, voted_at
+                vote_id, session_id, final_report_id, user_id, agree_draw, voted_at
             )
             VALUES ($1, $2, $3, $4, $5, NOW())
             ON CONFLICT (vote_id, user_id)
@@ -440,7 +440,7 @@ impl AppState {
         )
         .bind(vote.id)
         .bind(vote.session_id)
-        .bind(vote.report_id)
+        .bind(vote.final_report_id)
         .bind(user.id)
         .bind(input.agree_draw)
         .execute(&mut *tx)

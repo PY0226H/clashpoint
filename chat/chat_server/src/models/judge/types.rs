@@ -6,9 +6,6 @@ use utoipa::{IntoParams, ToSchema};
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestJudgeJobInput {
-    /// Deprecated for decision making. Server keeps this for compatibility but now enforces
-    /// `ai_judge.style_mode` from system config.
-    pub style_mode: Option<String>,
     #[serde(default)]
     pub allow_rejudge: bool,
 }
@@ -16,24 +13,37 @@ pub struct RequestJudgeJobInput {
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestJudgeJobOutput {
+    pub accepted: bool,
     pub session_id: u64,
-    pub job_id: u64,
     pub status: String,
-    pub style_mode: String,
-    pub style_mode_source: String,
-    pub rejudge_triggered: bool,
-    pub requested_at: DateTime<Utc>,
-    pub newly_created: bool,
+    pub reason: Option<String>,
+    pub queued_phase_jobs: u32,
+    pub queued_final_job: bool,
+    pub trigger_mode: String,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct JudgeJobSnapshot {
-    pub job_id: u64,
+pub struct JudgePhaseJobSnapshot {
+    pub phase_job_id: u64,
+    pub phase_no: i32,
     pub status: String,
-    pub style_mode: String,
-    pub rejudge_triggered: bool,
-    pub requested_at: DateTime<Utc>,
+    pub message_count: i32,
+    pub dispatch_attempts: i32,
+    pub last_dispatch_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeFinalJobSnapshot {
+    pub final_job_id: u64,
+    pub status: String,
+    pub phase_start_no: i32,
+    pub phase_end_no: i32,
+    pub dispatch_attempts: i32,
+    pub last_dispatch_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -168,11 +178,11 @@ pub struct JudgeVerdictEvidenceItem {
 pub struct GetJudgeReportOutput {
     pub session_id: u64,
     pub status: String,
-    pub latest_job: Option<JudgeJobSnapshot>,
+    pub latest_phase_job: Option<JudgePhaseJobSnapshot>,
+    pub latest_final_job: Option<JudgeFinalJobSnapshot>,
     pub final_dispatch_diagnostics: Option<JudgeFinalDispatchDiagnostics>,
     pub final_dispatch_failure_stats: Option<JudgeFinalDispatchFailureStats>,
-    pub report: Option<JudgeReportDetail>,
-    pub final_report_v3: Option<JudgeFinalReportDetail>,
+    pub final_report: Option<JudgeFinalReportDetail>,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
@@ -422,7 +432,7 @@ pub struct ListJudgeReviewOpsOutput {
 #[serde(rename_all = "camelCase")]
 pub struct DrawVoteDetail {
     pub vote_id: u64,
-    pub report_id: u64,
+    pub final_report_id: u64,
     pub status: String,
     pub resolution: String,
     pub decision_source: String,
@@ -495,61 +505,6 @@ pub struct JudgeStageSummariesMeta {
     pub max_stage_count: Option<u32>,
 }
 
-#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-pub struct SubmitJudgeReportInput {
-    pub winner: String,
-    pub pro_score: i32,
-    pub con_score: i32,
-    pub logic_pro: i32,
-    pub logic_con: i32,
-    pub evidence_pro: i32,
-    pub evidence_con: i32,
-    pub rebuttal_pro: i32,
-    pub rebuttal_con: i32,
-    pub clarity_pro: i32,
-    pub clarity_con: i32,
-    pub pro_summary: String,
-    pub con_summary: String,
-    pub rationale: String,
-    pub style_mode: Option<String>,
-    #[serde(default)]
-    pub needs_draw_vote: bool,
-    #[serde(default)]
-    pub rejudge_triggered: bool,
-    #[serde(default)]
-    pub payload: Value,
-    pub winner_first: Option<String>,
-    pub winner_second: Option<String>,
-    #[serde(default)]
-    pub stage_summaries: Vec<JudgeStageSummaryInput>,
-}
-
-#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubmitJudgeReportOutput {
-    pub job_id: u64,
-    pub session_id: u64,
-    pub report_id: u64,
-    pub status: String,
-    pub newly_created: bool,
-}
-
-#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-pub struct MarkJudgeJobFailedInput {
-    pub error_message: String,
-}
-
-#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MarkJudgeJobFailedOutput {
-    pub job_id: u64,
-    pub session_id: u64,
-    pub status: String,
-    pub error_message: String,
-    pub newly_marked: bool,
-}
-
-#[allow(dead_code)]
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JudgePhaseDispatchMessage {

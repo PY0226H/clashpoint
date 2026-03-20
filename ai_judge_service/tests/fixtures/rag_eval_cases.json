@@ -44,7 +44,7 @@
       "rubric_version": "v1",
       "trace_id": "trace-sample-1",
       "idempotency_key": "idem-sample-1",
-      "judge_policy_version": "v2-default",
+      "judge_policy_version": "v3-default",
       "topic_domain": "game_tft",
       "retrieval_profile": "hybrid_v1"
     }

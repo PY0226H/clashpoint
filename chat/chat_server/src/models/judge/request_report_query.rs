@@ -515,24 +515,24 @@ impl AppState {
             SELECT
                 r.id AS report_id,
                 r.session_id,
-                r.job_id,
+                r.final_job_id AS job_id,
                 r.winner,
-                j.winner_first,
-                j.winner_second,
-                r.pro_score,
-                r.con_score,
-                r.style_mode,
-                r.rubric_version,
+                r.winner_first,
+                r.winner_second,
+                ROUND(r.pro_score)::int AS pro_score,
+                ROUND(r.con_score)::int AS con_score,
+                'v3'::varchar AS style_mode,
+                f.rubric_version,
                 r.needs_draw_vote,
                 r.rejudge_triggered,
                 CASE
-                    WHEN jsonb_typeof(r.payload->'verdictEvidenceRefs') = 'array'
-                    THEN jsonb_array_length(r.payload->'verdictEvidenceRefs')
+                    WHEN jsonb_typeof(r.verdict_evidence_refs) = 'array'
+                    THEN jsonb_array_length(r.verdict_evidence_refs)
                     ELSE 0
                 END AS verdict_evidence_count,
                 r.created_at
-            FROM judge_reports r
-            JOIN judge_jobs j ON j.id = r.job_id
+            FROM judge_final_reports r
+            JOIN judge_final_jobs f ON f.id = r.final_job_id
             WHERE ($1::timestamptz IS NULL OR r.created_at >= $1)
               AND ($2::timestamptz IS NULL OR r.created_at <= $2)
               AND ($3::varchar IS NULL OR r.winner = $3)
@@ -541,8 +541,8 @@ impl AppState {
                 $5::boolean IS NULL
                 OR (
                     CASE
-                        WHEN jsonb_typeof(r.payload->'verdictEvidenceRefs') = 'array'
-                        THEN jsonb_array_length(r.payload->'verdictEvidenceRefs') > 0
+                        WHEN jsonb_typeof(r.verdict_evidence_refs) = 'array'
+                        THEN jsonb_array_length(r.verdict_evidence_refs) > 0
                         ELSE FALSE
                     END
                 ) = $5
@@ -1510,7 +1510,7 @@ impl AppState {
         &self,
         session_id: u64,
         _user: &User,
-        query: GetJudgeReportQuery,
+        _query: GetJudgeReportQuery,
     ) -> Result<GetJudgeReportOutput, AppError> {
         let session_exists = sqlx::query_scalar::<_, i32>(
             r#"
@@ -1529,12 +1529,19 @@ impl AppState {
             )));
         }
 
-        let latest_job: Option<JudgeJobRow> = sqlx::query_as(
+        let latest_phase_job: Option<JudgePhaseJobSnapshotRow> = sqlx::query_as(
             r#"
-            SELECT id, status, style_mode, rejudge_triggered, requested_at
-            FROM judge_jobs
+            SELECT
+                id,
+                phase_no,
+                status,
+                message_count,
+                dispatch_attempts,
+                last_dispatch_at,
+                error_message
+            FROM judge_phase_jobs
             WHERE session_id = $1
-            ORDER BY requested_at DESC
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
@@ -1573,23 +1580,7 @@ impl AppState {
         .fetch_all(&self.pool)
         .await?;
 
-        let report: Option<JudgeReportRow> = sqlx::query_as(
-            r#"
-            SELECT
-                id, job_id, winner, pro_score, con_score,
-                logic_pro, logic_con, evidence_pro, evidence_con, rebuttal_pro, rebuttal_con,
-                clarity_pro, clarity_con, pro_summary, con_summary, rationale, style_mode, rubric_version,
-                needs_draw_vote, rejudge_triggered, payload, created_at
-            FROM judge_reports
-            WHERE session_id = $1
-            ORDER BY created_at DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(session_id as i64)
-        .fetch_optional(&self.pool)
-        .await?;
-        let final_report_v3: Option<JudgeFinalReportRow> = sqlx::query_as(
+        let final_report: Option<JudgeFinalReportRow> = sqlx::query_as(
             r#"
             SELECT
                 id,
@@ -1621,131 +1612,14 @@ impl AppState {
         .fetch_optional(&self.pool)
         .await?;
 
-        let report = if let Some(report) = report {
-            let verdict_refs = extract_verdict_evidence_refs(&report.payload);
-            let verdict_evidence = if verdict_refs.is_empty() {
-                Vec::new()
-            } else {
-                let message_ids: Vec<i64> = verdict_refs
-                    .iter()
-                    .map(|item| item.message_id as i64)
-                    .collect();
-                let message_rows: Vec<SessionMessageEvidenceRow> = sqlx::query_as(
-                    r#"
-                    SELECT id, side, content, created_at
-                    FROM session_messages
-                    WHERE session_id = $1 AND id = ANY($2)
-                    "#,
-                )
-                .bind(session_id as i64)
-                .bind(&message_ids)
-                .fetch_all(&self.pool)
-                .await?;
-                let by_id: HashMap<u64, SessionMessageEvidenceRow> = message_rows
-                    .into_iter()
-                    .map(|row| (row.id as u64, row))
-                    .collect();
-                verdict_refs
-                    .into_iter()
-                    .filter_map(|item| {
-                        let row = by_id.get(&item.message_id)?;
-                        let side = if row.side.trim().is_empty() {
-                            item.side.clone()
-                        } else {
-                            row.side.clone()
-                        };
-                        Some(JudgeVerdictEvidenceItem {
-                            message_id: row.id as u64,
-                            side,
-                            role: item.role,
-                            reason: item.reason,
-                            content: row.content.clone(),
-                            created_at: row.created_at,
-                        })
-                    })
-                    .collect()
-            };
-            let stage_limit = normalize_stage_summary_limit(query.max_stage_count);
-            let stage_offset = normalize_stage_summary_offset(query.stage_offset);
-            let total_stage_count: i64 = sqlx::query_scalar(
-                r#"
-                SELECT COUNT(*)::bigint
-                FROM judge_stage_summaries
-                WHERE job_id = $1
-                "#,
-            )
-            .bind(report.job_id)
-            .fetch_one(&self.pool)
-            .await?;
-            let stage_summaries: Vec<JudgeStageSummaryRow> = if let Some(limit) = stage_limit {
-                sqlx::query_as(
-                    r#"
-                    SELECT
-                        stage_no, from_message_id, to_message_id,
-                        pro_score, con_score, summary, created_at
-                    FROM judge_stage_summaries
-                    WHERE job_id = $1
-                    ORDER BY stage_no ASC, created_at ASC
-                    LIMIT $2 OFFSET $3
-                    "#,
-                )
-                .bind(report.job_id)
-                .bind(limit)
-                .bind(stage_offset)
-                .fetch_all(&self.pool)
-                .await?
-            } else {
-                sqlx::query_as(
-                    r#"
-                    SELECT
-                        stage_no, from_message_id, to_message_id,
-                        pro_score, con_score, summary, created_at
-                    FROM judge_stage_summaries
-                    WHERE job_id = $1
-                    ORDER BY stage_no ASC, created_at ASC
-                    OFFSET $2
-                    "#,
-                )
-                .bind(report.job_id)
-                .bind(stage_offset)
-                .fetch_all(&self.pool)
-                .await?
-            };
-            let returned_count = u32::try_from(stage_summaries.len()).unwrap_or(u32::MAX);
-            let total_count = if total_stage_count <= 0 {
-                0
-            } else {
-                u32::try_from(total_stage_count).unwrap_or(u32::MAX)
-            };
-            let stage_offset_u32 = u32::try_from(stage_offset).unwrap_or(u32::MAX);
-            let effective_offset = stage_offset_u32.min(total_count);
-            let consumed = effective_offset.saturating_add(returned_count);
-            let has_more = consumed < total_count;
-            let stage_summaries_meta = Some(JudgeStageSummariesMeta {
-                total_count,
-                returned_count,
-                stage_offset: effective_offset,
-                truncated: has_more,
-                has_more,
-                next_offset: if has_more { Some(consumed) } else { None },
-                max_stage_count: stage_limit.map(|value| value as u32),
-            });
-            Some(map_report_detail(
-                report,
-                verdict_evidence,
-                stage_summaries.into_iter().map(map_stage_summary).collect(),
-                stage_summaries_meta,
-            ))
-        } else {
-            None
-        };
-
-        let final_report_v3 = final_report_v3.map(map_final_report_detail);
-        let final_dispatch_diagnostics = latest_final_job.map(map_final_dispatch_diagnostics);
+        let final_report = final_report.map(map_final_report_detail);
+        let final_dispatch_diagnostics = latest_final_job
+            .as_ref()
+            .map(|job| map_final_dispatch_diagnostics(job.clone()));
         let final_dispatch_failure_stats =
             build_final_dispatch_failure_stats(failed_final_dispatch_rows);
 
-        let status = if report.is_some() || final_report_v3.is_some() {
+        let status = if final_report.is_some() {
             "ready".to_string()
         } else if final_dispatch_diagnostics
             .as_ref()
@@ -1753,13 +1627,7 @@ impl AppState {
             .unwrap_or(false)
         {
             "failed".to_string()
-        } else if let Some(job) = latest_job.as_ref() {
-            if job.status == "failed" {
-                "failed".to_string()
-            } else {
-                "pending".to_string()
-            }
-        } else if final_dispatch_diagnostics.is_some() {
+        } else if latest_phase_job.is_some() || final_dispatch_diagnostics.is_some() {
             "pending".to_string()
         } else {
             "absent".to_string()
@@ -1768,17 +1636,27 @@ impl AppState {
         Ok(GetJudgeReportOutput {
             session_id,
             status,
-            latest_job: latest_job.map(|job| JudgeJobSnapshot {
-                job_id: job.id as u64,
+            latest_phase_job: latest_phase_job.map(|job| JudgePhaseJobSnapshot {
+                phase_job_id: job.id as u64,
+                phase_no: job.phase_no,
                 status: job.status,
-                style_mode: job.style_mode,
-                rejudge_triggered: job.rejudge_triggered,
-                requested_at: job.requested_at,
+                message_count: job.message_count,
+                dispatch_attempts: job.dispatch_attempts,
+                last_dispatch_at: job.last_dispatch_at,
+                error_message: job.error_message,
+            }),
+            latest_final_job: latest_final_job.map(|job| JudgeFinalJobSnapshot {
+                final_job_id: job.id as u64,
+                status: job.status,
+                phase_start_no: job.phase_start_no,
+                phase_end_no: job.phase_end_no,
+                dispatch_attempts: job.dispatch_attempts,
+                last_dispatch_at: job.last_dispatch_at,
+                error_message: job.error_message,
             }),
             final_dispatch_diagnostics,
             final_dispatch_failure_stats,
-            report,
-            final_report_v3,
+            final_report,
         })
     }
 }

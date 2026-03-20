@@ -10,11 +10,8 @@ from time import perf_counter
 
 from .app_factory import create_app, create_runtime
 from .models import (
-    DispatchJob,
-    DispatchMessage,
-    DispatchSession,
-    DispatchTopic,
-    JudgeDispatchRequest,
+    PhaseDispatchMessage,
+    PhaseDispatchRequest,
 )
 from .settings import Settings
 
@@ -160,52 +157,39 @@ def _build_gate_settings(**overrides: object) -> Settings:
     return Settings(**base)
 
 
-def _build_request(job_id: int) -> JudgeDispatchRequest:
+def _build_request(job_id: int) -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
-    return JudgeDispatchRequest(
-        job=DispatchJob(
-            job_id=job_id,
-            scope_id=1,
-            session_id=2,
-            requested_by=1,
-            style_mode="rational",
-            rejudge_triggered=False,
-            requested_at=now,
-        ),
-        session=DispatchSession(
-            status="judging",
-            scheduled_start_at=now,
-            actual_start_at=now,
-            end_at=now,
-        ),
-        topic=DispatchTopic(
-            title="m7 gate",
-            description="gate test topic",
-            category="game",
-            stance_pro="pro",
-            stance_con="con",
-            context_seed=None,
-        ),
+    return PhaseDispatchRequest(
+        job_id=job_id,
+        scope_id=1,
+        session_id=2,
+        phase_no=1,
+        message_start_id=1,
+        message_end_id=1,
+        message_count=1,
         messages=[
-            DispatchMessage(
+            PhaseDispatchMessage(
                 message_id=1,
                 speaker_tag="pro_1",
-                user_id=None,
                 side="pro",
                 content=f"message-{job_id}",
                 created_at=now,
             )
         ],
-        message_window_size=100,
-        rubric_version="v1",
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="default",
+        retrieval_profile="hybrid_v1",
+        trace_id=f"m7-phase-{job_id}",
+        idempotency_key=f"m7:phase:{job_id}",
     )
 
 
 def _find_dispatch_endpoint(app: object):
     for route in getattr(app, "routes", []):
-        if getattr(route, "path", "") == "/internal/judge/dispatch":
+        if getattr(route, "path", "") == "/internal/judge/v3/phase/dispatch":
             return route.endpoint
-    raise RuntimeError("dispatch endpoint not found")
+    raise RuntimeError("phase dispatch endpoint not found")
 
 
 async def run_inprocess_dispatch_load(
@@ -222,13 +206,10 @@ async def run_inprocess_dispatch_load(
     async def _noop_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
         return None
 
-    async def _noop_callback_failed(*, cfg: object, job_id: int, error_message: str) -> None:
-        return None
-
     runtime = create_runtime(
         settings=settings or _build_gate_settings(),
-        callback_report_impl=_noop_callback_report,
-        callback_failed_impl=_noop_callback_failed,
+        callback_phase_report_impl=_noop_callback_report,
+        callback_final_report_impl=_noop_callback_report,
     )
     app = create_app(runtime)
     endpoint = _find_dispatch_endpoint(app)

@@ -3,40 +3,26 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from uuid import uuid4
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query
 
 from .callback_client import (
-    callback_failed,
     callback_final_report,
     callback_phase_report,
-    callback_report,
 )
-from .compliance_guard import validate_blinded_dispatch_request
-from .dispatch_controller import (
-    BuildReportByRuntimeFn,
-    CallbackFailedFn,
-    CallbackReportFn,
-    DispatchRuntimeConfig,
-    SleepFn,
-    process_dispatch_request,
-)
-from .models import FinalDispatchRequest, JudgeDispatchRequest, PhaseDispatchRequest
+from .models import FinalDispatchRequest, PhaseDispatchRequest
 from .phase_pipeline import build_phase_report_payload as build_phase_report_payload_v3
-from .scoring import resolve_effective_style_mode
-from .runtime_orchestrator import build_report_by_runtime
+from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
     Settings,
     build_callback_client_config,
     build_dispatch_runtime_config,
     load_settings,
 )
+from .style_mode import resolve_effective_style_mode
 from .trace_store import TraceQuery, TraceStoreProtocol, build_trace_store_from_settings
-from .wiring import build_dispatch_callbacks, build_v3_dispatch_callbacks
-
-BuildReportByRuntimeImpl = Callable[..., Awaitable[Any]]
+from .wiring import build_v3_dispatch_callbacks
 LoadSettingsFn = Callable[[], Settings]
 
 
@@ -44,11 +30,8 @@ LoadSettingsFn = Callable[[], Settings]
 class AppRuntime:
     settings: Settings
     dispatch_runtime_cfg: DispatchRuntimeConfig
-    build_report_by_runtime_adapter: BuildReportByRuntimeFn
-    callback_report_fn: CallbackReportFn
-    callback_failed_fn: CallbackFailedFn
-    callback_phase_report_fn: CallbackReportFn
-    callback_final_report_fn: CallbackReportFn
+    callback_phase_report_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
+    callback_final_report_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
     sleep_fn: SleepFn
     trace_store: TraceStoreProtocol
 
@@ -60,45 +43,15 @@ def require_internal_key(settings: Settings, header_value: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid x-ai-internal-key")
 
 
-def build_report_by_runtime_adapter(
-    *,
-    settings: Settings,
-    trace_store: TraceStoreProtocol,
-    build_report_by_runtime_fn: BuildReportByRuntimeImpl = build_report_by_runtime,
-) -> BuildReportByRuntimeFn:
-    async def _adapter(
-        request: JudgeDispatchRequest,
-        effective_style_mode: str,
-        style_mode_source: str,
-    ):
-        return await build_report_by_runtime_fn(
-            request=request,
-            effective_style_mode=effective_style_mode,
-            style_mode_source=style_mode_source,
-            settings=settings,
-            trace_store=trace_store,
-        )
-
-    return _adapter
-
-
 def create_runtime(
     *,
     settings: Settings,
-    build_report_by_runtime_fn: BuildReportByRuntimeImpl = build_report_by_runtime,
-    callback_report_impl=callback_report,
-    callback_failed_impl=callback_failed,
     callback_phase_report_impl=callback_phase_report,
     callback_final_report_impl=callback_final_report,
     sleep_fn: SleepFn = asyncio.sleep,
 ) -> AppRuntime:
     trace_store = build_trace_store_from_settings(settings=settings)
     callback_cfg = build_callback_client_config(settings)
-    callback_report_fn, callback_failed_fn = build_dispatch_callbacks(
-        cfg=callback_cfg,
-        callback_report_impl=callback_report_impl,
-        callback_failed_impl=callback_failed_impl,
-    )
     callback_phase_report_fn, callback_final_report_fn = build_v3_dispatch_callbacks(
         cfg=callback_cfg,
         callback_phase_report_impl=callback_phase_report_impl,
@@ -107,141 +60,11 @@ def create_runtime(
     return AppRuntime(
         settings=settings,
         dispatch_runtime_cfg=build_dispatch_runtime_config(settings),
-        build_report_by_runtime_adapter=build_report_by_runtime_adapter(
-            settings=settings,
-            trace_store=trace_store,
-            build_report_by_runtime_fn=build_report_by_runtime_fn,
-        ),
-        callback_report_fn=callback_report_fn,
-        callback_failed_fn=callback_failed_fn,
         callback_phase_report_fn=callback_phase_report_fn,
         callback_final_report_fn=callback_final_report_fn,
         sleep_fn=sleep_fn,
         trace_store=trace_store,
     )
-
-
-def _extract_report_evidence_refs(report_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(report_payload, dict):
-        return []
-
-    payload = report_payload.get("payload")
-    if isinstance(payload, dict):
-        evidence = payload.get("evidenceRefs") or payload.get("verdictEvidenceRefs")
-        if isinstance(evidence, list):
-            return [row for row in evidence if isinstance(row, dict)]
-
-    evidence = report_payload.get("evidenceRefs")
-    if isinstance(evidence, list):
-        return [row for row in evidence if isinstance(row, dict)]
-    return []
-
-
-def _extract_runtime_audit_alerts(
-    *,
-    response: dict[str, Any] | None,
-    report_payload: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    response_obj = response if isinstance(response, dict) else {}
-    report_obj = report_payload if isinstance(report_payload, dict) else {}
-
-    response_alert = response_obj.get("auditAlert")
-    if isinstance(response_alert, dict):
-        out.append(response_alert)
-
-    payload = report_obj.get("payload")
-    if isinstance(payload, dict):
-        payload_alerts = payload.get("auditAlerts")
-        if isinstance(payload_alerts, list):
-            out.extend([row for row in payload_alerts if isinstance(row, dict)])
-    return out
-
-
-def _normalize_runtime_audit_alert(row: dict[str, Any]) -> dict[str, Any]:
-    alert_type = str(row.get("type") or "judge_runtime_alert").strip().lower()
-    severity = str(row.get("severity") or "warning").strip().lower()
-    status = str(row.get("status") or "").strip().lower()
-    violations = row.get("violations")
-    violations_list = (
-        [str(item).strip() for item in violations if str(item).strip()]
-        if isinstance(violations, list)
-        else []
-    )
-    title = str(row.get("title") or "").strip()
-    if not title:
-        if alert_type == "compliance_violation":
-            title = "AI Judge Compliance Violation"
-        else:
-            title = "AI Judge Runtime Alert"
-    message = str(row.get("message") or "").strip()
-    if not message:
-        if violations_list:
-            message = f"violations={','.join(violations_list)}"
-        elif status:
-            message = f"status={status}"
-        else:
-            message = "ai_judge alert raised"
-    return {
-        "alertType": alert_type,
-        "severity": severity or "warning",
-        "title": title,
-        "message": message,
-        "details": {
-            "raw": row,
-            "status": status or None,
-            "violations": violations_list,
-        },
-    }
-
-
-def _calc_topic_memory_quality_audit(
-    *,
-    settings: Settings,
-    request: JudgeDispatchRequest,
-    response: dict[str, Any],
-    report_payload: dict[str, Any] | None,
-) -> dict[str, Any]:
-    evidence_refs = _extract_report_evidence_refs(report_payload)
-    evidence_count = len(evidence_refs)
-    rationale = str((report_payload or {}).get("rationale") or "").strip()
-    rationale_chars = len(rationale)
-    winner = str(response.get("winner") or "").strip().lower()
-
-    winner_score = 0.2 if winner in {"pro", "con", "draw"} else 0.0
-    evidence_score = min(0.4, evidence_count * 0.1)
-    if settings.topic_memory_min_rationale_chars <= 0:
-        rationale_score = 0.4
-    else:
-        rationale_score = min(
-            0.4,
-            (rationale_chars / float(settings.topic_memory_min_rationale_chars)) * 0.4,
-        )
-    quality_score = round(min(1.0, winner_score + evidence_score + rationale_score), 4)
-
-    reject_reasons: list[str] = []
-    if evidence_count < settings.topic_memory_min_evidence_refs:
-        reject_reasons.append("insufficient_evidence_refs")
-    if rationale_chars < settings.topic_memory_min_rationale_chars:
-        reject_reasons.append("insufficient_rationale_chars")
-    if quality_score < settings.topic_memory_min_quality_score:
-        reject_reasons.append("quality_score_below_threshold")
-
-    return {
-        "topicDomain": getattr(request, "topic_domain", "default"),
-        "rubricVersion": request.rubric_version,
-        "winner": winner or None,
-        "evidenceCount": evidence_count,
-        "rationaleChars": rationale_chars,
-        "qualityScore": quality_score,
-        "accepted": len(reject_reasons) == 0,
-        "rejectReasons": reject_reasons,
-        "thresholds": {
-            "minEvidenceRefs": settings.topic_memory_min_evidence_refs,
-            "minRationaleChars": settings.topic_memory_min_rationale_chars,
-            "minQualityScore": settings.topic_memory_min_quality_score,
-        },
-    }
 
 
 def _serialize_alert_item(alert: Any) -> dict[str, Any]:
@@ -505,27 +328,11 @@ def _extract_agent1_dimensions(payload: dict[str, Any], *, side: str) -> dict[st
             "rebuttal": _clamp_score(_safe_float(side_dimensions.get("rebuttal"), default=50.0)),
             "clarity": _clamp_score(_safe_float(side_dimensions.get("expression"), default=50.0)),
         }
-
-    # Backward compatibility for old phase payload shape.
-    fallback_logic = 50.0
-    fallback_evidence = 50.0
-    fallback_rebuttal = 50.0
-    fallback_clarity = 50.0
-    if side == "pro":
-        fallback_logic = _clamp_score(40.0 + _safe_float(dimensions.get("proCoverage"), default=0.5) * 40.0)
-        fallback_rebuttal = _clamp_score(
-            40.0 + _safe_float(dimensions.get("proRebuttalRate"), default=0.5) * 40.0
-        )
-    else:
-        fallback_logic = _clamp_score(40.0 + _safe_float(dimensions.get("conCoverage"), default=0.5) * 40.0)
-        fallback_rebuttal = _clamp_score(
-            40.0 + _safe_float(dimensions.get("conRebuttalRate"), default=0.5) * 40.0
-        )
     return {
-        "logic": fallback_logic,
-        "evidence": fallback_evidence,
-        "rebuttal": fallback_rebuttal,
-        "clarity": fallback_clarity,
+        "logic": 50.0,
+        "evidence": 50.0,
+        "rebuttal": 50.0,
+        "clarity": 50.0,
     }
 
 
@@ -1005,159 +812,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     async def healthz() -> dict[str, bool]:
         return {"ok": True}
 
-    @app.post("/internal/judge/dispatch")
-    async def dispatch_judge_job(
-        request: JudgeDispatchRequest,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        validate_blinded_dispatch_request(request)
-
-        if not request.trace_id:
-            request = request.model_copy(
-                update={"trace_id": f"trace-{request.job.job_id}-{uuid4().hex[:12]}"}
-            )
-
-        runtime.trace_store.register_start(
-            job_id=request.job.job_id,
-            trace_id=request.trace_id,
-            request=request.model_dump(mode="json"),
-        )
-        if request.idempotency_key:
-            existed = runtime.trace_store.get_idempotency(request.idempotency_key)
-            if existed and existed.job_id != request.job.job_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail="idempotency_conflict:judge_dispatch",
-                )
-            if existed and existed.response:
-                replayed = dict(existed.response)
-                replayed["idempotentReplay"] = True
-                return replayed
-            if existed:
-                raise HTTPException(
-                    status_code=409,
-                    detail="idempotency_conflict:judge_dispatch",
-                )
-            runtime.trace_store.set_idempotency_pending(
-                key=request.idempotency_key,
-                job_id=request.job.job_id,
-                ttl_secs=runtime.settings.idempotency_ttl_secs,
-            )
-
-        callback_status = "not_called"
-        callback_error = ""
-        report_payload: dict[str, Any] | None = None
-
-        async def callback_report_with_trace(job_id: int, payload: dict[str, Any]) -> None:
-            nonlocal callback_status, callback_error, report_payload
-            report_payload = payload
-            try:
-                await runtime.callback_report_fn(job_id, payload)
-                callback_status = "reported"
-            except Exception as err:
-                callback_status = "report_failed"
-                callback_error = str(err)
-                raise
-
-        async def callback_failed_with_trace(job_id: int, error_message: str) -> None:
-            nonlocal callback_status, callback_error
-            callback_status = "marked_failed"
-            callback_error = error_message
-            await runtime.callback_failed_fn(job_id, error_message)
-
-        try:
-            response = await process_dispatch_request(
-                request=request,
-                runtime_cfg=runtime.dispatch_runtime_cfg,
-                build_report_by_runtime=runtime.build_report_by_runtime_adapter,
-                callback_report=callback_report_with_trace,
-                callback_failed=callback_failed_with_trace,
-                sleep_fn=runtime.sleep_fn,
-            )
-        except Exception as err:
-            if request.idempotency_key:
-                runtime.trace_store.clear_idempotency(request.idempotency_key)
-            runtime.trace_store.register_failure(
-                job_id=request.job.job_id,
-                response={
-                    "accepted": False,
-                    "jobId": request.job.job_id,
-                    "status": "error",
-                },
-                callback_status=callback_status,
-                callback_error=callback_error or str(err),
-            )
-            raise
-
-        if response.get("status") == "marked_failed":
-            if request.idempotency_key:
-                runtime.trace_store.clear_idempotency(request.idempotency_key)
-            runtime.trace_store.register_failure(
-                job_id=request.job.job_id,
-                response=response,
-                callback_status=callback_status,
-                callback_error=callback_error or "marked_failed",
-            )
-        else:
-            if request.idempotency_key:
-                runtime.trace_store.set_idempotency_success(
-                    key=request.idempotency_key,
-                    job_id=request.job.job_id,
-                    response=response,
-                    ttl_secs=runtime.settings.idempotency_ttl_secs,
-                )
-            topic_memory_audit: dict[str, Any] | None = None
-            report_summary = dict(report_payload or {})
-            if runtime.settings.topic_memory_enabled:
-                topic_memory_audit = _calc_topic_memory_quality_audit(
-                    settings=runtime.settings,
-                    request=request,
-                    response=response,
-                    report_payload=report_payload,
-                )
-                report_summary["topicMemoryAudit"] = topic_memory_audit
-            runtime.trace_store.register_success(
-                job_id=request.job.job_id,
-                response=response,
-                callback_status=callback_status,
-                report_summary=report_summary,
-            )
-            if runtime.settings.topic_memory_enabled and topic_memory_audit and topic_memory_audit["accepted"]:
-                runtime.trace_store.save_topic_memory(
-                    job_id=request.job.job_id,
-                    trace_id=request.trace_id or "",
-                    topic_domain=getattr(request, "topic_domain", "default"),
-                    rubric_version=request.rubric_version,
-                    winner=response.get("winner"),
-                    rationale=str((report_payload or {}).get("rationale") or ""),
-                    evidence_refs=_extract_report_evidence_refs(report_payload),
-                    provider=response.get("provider"),
-                    audit=topic_memory_audit,
-                )
-        runtime_alerts = _extract_runtime_audit_alerts(
-            response=response,
-            report_payload=report_payload,
-        )
-        persisted_alert_ids: list[str] = []
-        for row in runtime_alerts:
-            normalized = _normalize_runtime_audit_alert(row)
-            alert = runtime.trace_store.upsert_audit_alert(
-                job_id=request.job.job_id,
-                scope_id=request.job.scope_id,
-                trace_id=request.trace_id or "",
-                alert_type=normalized["alertType"],
-                severity=normalized["severity"],
-                title=normalized["title"],
-                message=normalized["message"],
-                details=normalized["details"],
-            )
-            persisted_alert_ids.append(alert.alert_id)
-        if persisted_alert_ids:
-            response = dict(response)
-            response["auditAlertIds"] = persisted_alert_ids
-        return response
-
     @app.post("/internal/judge/v3/phase/dispatch")
     async def dispatch_judge_phase(
         request: PhaseDispatchRequest,
@@ -1529,43 +1183,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 }
                 for item in record.replays
             ],
-        }
-
-    @app.post("/internal/judge/jobs/{job_id}/replay")
-    async def replay_judge_job(
-        job_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        record = runtime.trace_store.get_trace(job_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="judge_trace_not_found")
-        request = JudgeDispatchRequest.model_validate(record.request)
-        effective_style_mode, style_mode_source = resolve_effective_style_mode(
-            request.job.style_mode,
-            runtime.dispatch_runtime_cfg.judge_style_mode,
-        )
-        try:
-            report = await runtime.build_report_by_runtime_adapter(
-                request,
-                effective_style_mode,
-                style_mode_source,
-            )
-        except Exception as err:
-            raise HTTPException(status_code=502, detail=f"replay_failed: {err}") from err
-        runtime.trace_store.mark_replay(
-            job_id=job_id,
-            winner=report.winner,
-            needs_draw_vote=report.needs_draw_vote,
-            provider=report.payload.get("provider"),
-        )
-        return {
-            "ok": True,
-            "jobId": job_id,
-            "winner": report.winner,
-            "needsDrawVote": report.needs_draw_vote,
-            "provider": report.payload.get("provider"),
-            "judgeTrace": report.payload.get("judgeTrace"),
         }
 
     @app.get("/internal/judge/jobs/{job_id}/replay/report")

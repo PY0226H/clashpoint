@@ -686,10 +686,10 @@ impl AppState {
                 .await
             {
                 Ok(Some(output)) => {
-                    if output.newly_created {
+                    if output.queued_phase_jobs > 0 || output.queued_final_job {
                         continue;
                     }
-                    // Existing running job was reused; treat as success and no-op.
+                    // Existing v3 jobs/report already cover this session; treat as success and no-op.
                 }
                 Ok(None) => {
                     warn!(
@@ -722,14 +722,35 @@ impl AppState {
               )
               AND NOT EXISTS(
                 SELECT 1
-                FROM judge_reports r
+                FROM judge_final_reports r
                 WHERE r.session_id = s.id
               )
-              AND NOT EXISTS(
-                SELECT 1
-                FROM judge_jobs j
-                WHERE j.session_id = s.id
-                  AND j.status = 'running'
+              AND (
+                NOT EXISTS(
+                    SELECT 1
+                    FROM judge_phase_jobs p
+                    WHERE p.session_id = s.id
+                )
+                OR EXISTS(
+                    SELECT 1
+                    FROM judge_phase_jobs p
+                    WHERE p.session_id = s.id
+                      AND p.status = 'failed'
+                )
+                OR (
+                    s.status = 'closed'
+                    AND NOT EXISTS(
+                        SELECT 1
+                        FROM judge_final_jobs f
+                        WHERE f.session_id = s.id
+                    )
+                )
+                OR EXISTS(
+                    SELECT 1
+                    FROM judge_final_jobs f
+                    WHERE f.session_id = s.id
+                      AND f.status = 'failed'
+                )
               )
             ORDER BY s.updated_at ASC
             LIMIT $1

@@ -38,30 +38,3 @@ pub(crate) async fn seed_judge_topic_and_session(
 
     Ok(session_id.0)
 }
-
-pub(crate) async fn seed_running_judge_job(
-    state: &AppState,
-    session_id: i64,
-    requested_by: i64,
-    attempts: i32,
-    lock_secs_offset: Option<i64>,
-) -> Result<i64> {
-    let dispatch_locked_until = lock_secs_offset.map(|secs| Utc::now() + Duration::seconds(secs));
-    let job_id: (i64,) = sqlx::query_as(
-        r#"
-        INSERT INTO judge_jobs(
-            session_id, requested_by, status, style_mode, requested_at, started_at,
-            dispatch_attempts, dispatch_locked_until, created_at, updated_at
-        )
-        VALUES ($1, $2, 'running', 'rational', NOW(), NOW(), $3, $4, NOW(), NOW())
-        RETURNING id
-        "#,
-    )
-    .bind(session_id)
-    .bind(requested_by)
-    .bind(attempts)
-    .bind(dispatch_locked_until)
-    .fetch_one(&state.pool)
-    .await?;
-    Ok(job_id.0)
-}

@@ -1,5 +1,4 @@
 import unittest
-from types import SimpleNamespace
 
 from app.rag_retriever import RAG_BACKEND_MILVUS, RetrievedContext
 from app.runtime_rag import (
@@ -9,12 +8,34 @@ from app.runtime_rag import (
     retrieve_runtime_contexts,
     resolve_effective_rag_backend,
 )
+from app.runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
 from app.settings import Settings
 
 
 class _FakeReport:
     def __init__(self) -> None:
         self.payload: dict = {}
+
+
+def _build_rag_request(*, retrieval_profile: str = "hybrid_v1") -> RuntimeRagRequest:
+    return RuntimeRagRequest(
+        topic=RagTopicContext(
+            title="topic",
+            category="default",
+            description="desc",
+            stance_pro="pro",
+            stance_con="con",
+            context_seed=None,
+        ),
+        messages=[
+            RagMessageContext(
+                message_id=1,
+                side="pro",
+                content="message",
+            )
+        ],
+        retrieval_profile=retrieval_profile,
+    )
 
 
 def _build_settings(**overrides: object) -> Settings:
@@ -108,7 +129,7 @@ class RuntimeRagTests(unittest.TestCase):
             rag_milvus_collection="judge_kb",
             openai_api_key="sk-test",
         )
-        request = SimpleNamespace(job=SimpleNamespace(job_id=1))
+        request = _build_rag_request()
         captured: dict[str, object] = {}
         expected = [
             RetrievedContext(
@@ -157,7 +178,7 @@ class RuntimeRagTests(unittest.TestCase):
             rag_knowledge_file="/tmp/knowledge.json",
             openai_api_key="",
         )
-        request = SimpleNamespace(job=SimpleNamespace(job_id=1))
+        request = _build_rag_request()
         captured: dict[str, object] = {}
 
         def fake_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
@@ -187,7 +208,7 @@ class RuntimeRagTests(unittest.TestCase):
 
     def test_retrieve_runtime_contexts_with_meta_should_retry_without_hybrid_kwargs_for_legacy_fn(self) -> None:
         settings = _build_settings(rag_enabled=True)
-        request = SimpleNamespace(job=SimpleNamespace(job_id=1))
+        request = _build_rag_request()
         calls = {"count": 0}
 
         def legacy_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
@@ -208,10 +229,7 @@ class RuntimeRagTests(unittest.TestCase):
 
     def test_retrieve_runtime_contexts_with_meta_should_fallback_unknown_profile_to_default(self) -> None:
         settings = _build_settings(rag_enabled=True)
-        request = SimpleNamespace(
-            job=SimpleNamespace(job_id=1),
-            retrieval_profile="unknown-profile",
-        )
+        request = _build_rag_request(retrieval_profile="unknown-profile")
         captured: dict[str, object] = {}
 
         def fake_retrieve_contexts(req: object, **kwargs: object) -> list[RetrievedContext]:
