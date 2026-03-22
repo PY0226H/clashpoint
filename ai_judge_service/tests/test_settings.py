@@ -27,11 +27,16 @@ class SettingsTests(unittest.TestCase):
             ("https://teamfighttactics.leagueoflegends.com/en-us/news",),
         )
         self.assertEqual(settings.stage_agent_max_chunks, 12)
-        self.assertTrue(settings.graph_v2_enabled)
         self.assertTrue(settings.reflection_enabled)
         self.assertTrue(settings.topic_memory_enabled)
         self.assertTrue(settings.rag_hybrid_enabled)
         self.assertTrue(settings.rag_rerank_enabled)
+        self.assertEqual(settings.rag_rerank_engine, "bge")
+        self.assertEqual(settings.rag_rerank_model, "BAAI/bge-reranker-v2-m3")
+        self.assertEqual(settings.rag_rerank_batch_size, 16)
+        self.assertEqual(settings.rag_rerank_candidate_cap, 50)
+        self.assertEqual(settings.rag_rerank_timeout_ms, 12000)
+        self.assertEqual(settings.rag_rerank_device, "cpu")
         self.assertEqual(settings.reflection_policy, "winner_mismatch_only")
         self.assertEqual(settings.reflection_low_margin_threshold, 3)
         self.assertEqual(settings.fault_injection_nodes, ())
@@ -91,11 +96,16 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_RAG_MILVUS_METRIC_TYPE": "IP",
                 "AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT": "33",
                 "AI_JUDGE_STAGE_AGENT_MAX_CHUNKS": "20",
-                "AI_JUDGE_GRAPH_V2_ENABLED": "false",
                 "AI_JUDGE_REFLECTION_ENABLED": "false",
                 "AI_JUDGE_TOPIC_MEMORY_ENABLED": "false",
                 "AI_JUDGE_RAG_HYBRID_ENABLED": "false",
                 "AI_JUDGE_RAG_RERANK_ENABLED": "false",
+                "AI_JUDGE_RAG_RERANK_ENGINE": "heuristic",
+                "AI_JUDGE_RAG_RERANK_MODEL": "BAAI/bge-reranker-v2-m3",
+                "AI_JUDGE_RAG_RERANK_BATCH_SIZE": "8",
+                "AI_JUDGE_RAG_RERANK_CANDIDATE_CAP": "40",
+                "AI_JUDGE_RAG_RERANK_TIMEOUT_MS": "5000",
+                "AI_JUDGE_RAG_RERANK_DEVICE": "cuda",
                 "AI_JUDGE_REFLECTION_POLICY": "winner_mismatch_or_low_margin",
                 "AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD": "6",
                 "AI_JUDGE_FAULT_INJECTION_NODES": "final_pass_1, display",
@@ -147,11 +157,16 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.rag_milvus_collection, "col1")
         self.assertEqual(settings.rag_milvus_search_limit, 33)
         self.assertEqual(settings.stage_agent_max_chunks, 20)
-        self.assertFalse(settings.graph_v2_enabled)
         self.assertFalse(settings.reflection_enabled)
         self.assertFalse(settings.topic_memory_enabled)
         self.assertFalse(settings.rag_hybrid_enabled)
         self.assertFalse(settings.rag_rerank_enabled)
+        self.assertEqual(settings.rag_rerank_engine, "heuristic")
+        self.assertEqual(settings.rag_rerank_model, "BAAI/bge-reranker-v2-m3")
+        self.assertEqual(settings.rag_rerank_batch_size, 8)
+        self.assertEqual(settings.rag_rerank_candidate_cap, 40)
+        self.assertEqual(settings.rag_rerank_timeout_ms, 5000)
+        self.assertEqual(settings.rag_rerank_device, "cuda")
         self.assertEqual(settings.reflection_policy, "winner_mismatch_or_low_margin")
         self.assertEqual(settings.reflection_low_margin_threshold, 6)
         self.assertEqual(settings.fault_injection_nodes, ("final_pass_1", "display"))

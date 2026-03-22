@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="$ROOT_DIR/ai_judge_service"
+VENV_DIR="$PROJECT_DIR/.venv"
+ASSERT_SCRIPT="$ROOT_DIR/skills/python-venv-guard/scripts/assert_venv.sh"
+
+bash "$ASSERT_SCRIPT" --project "$PROJECT_DIR" --venv "$VENV_DIR" >/dev/null
+exec "$VENV_DIR/bin/python" "$@"

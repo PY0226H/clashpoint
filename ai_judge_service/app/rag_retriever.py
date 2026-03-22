@@ -8,6 +8,13 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from .reranker_engine import (
+    DEFAULT_BGE_MODEL,
+    RerankCandidate,
+    RerankRequest,
+    rerank_with_fallback,
+)
+
 if TYPE_CHECKING:
     from .runtime_types import RuntimeRagRequest
 
@@ -276,6 +283,40 @@ def _simple_rerank(
         )
     reranked.sort(key=lambda row: (-row.score, row.chunk_id))
     return reranked[: max(0, limit)]
+
+
+def _contexts_to_candidates(
+    contexts: list[RetrievedContext],
+) -> list[RerankCandidate]:
+    out: list[RerankCandidate] = []
+    for item in contexts:
+        out.append(
+            RerankCandidate(
+                chunk_id=item.chunk_id,
+                title=item.title,
+                content=item.content,
+                score=float(item.score),
+                source_url=item.source_url,
+            )
+        )
+    return out
+
+
+def _candidates_to_contexts(
+    candidates: list[RerankCandidate],
+) -> list[RetrievedContext]:
+    out: list[RetrievedContext] = []
+    for item in candidates:
+        out.append(
+            RetrievedContext(
+                chunk_id=item.chunk_id,
+                title=item.title,
+                source_url=item.source_url,
+                content=item.content,
+                score=float(item.score),
+            )
+        )
+    return out
 
 
 def parse_source_whitelist(raw: str | None) -> tuple[str, ...]:
@@ -557,6 +598,46 @@ def _retrieve_contexts_from_milvus(
     return out
 
 
+def _apply_rerank(
+    *,
+    query_text: str,
+    contexts: list[RetrievedContext],
+    limit: int,
+    rerank_engine: str,
+    rerank_model: str,
+    rerank_batch_size: int,
+    rerank_candidate_cap: int,
+    rerank_timeout_ms: int,
+    rerank_device: str,
+    query_weight: float,
+    base_weight: float,
+) -> tuple[list[RetrievedContext], dict[str, Any], str | None]:
+    request = RerankRequest(
+        query_text=query_text,
+        candidates=_contexts_to_candidates(contexts),
+        top_n=max(0, int(limit)),
+        configured_engine=rerank_engine,
+        model_name=rerank_model.strip() or DEFAULT_BGE_MODEL,
+        batch_size=rerank_batch_size,
+        candidate_cap=rerank_candidate_cap,
+        timeout_ms=rerank_timeout_ms,
+        device=rerank_device,
+        query_weight=query_weight,
+        base_weight=base_weight,
+    )
+    result = rerank_with_fallback(request)
+    diagnostics = {
+        "rerankEngineConfigured": result.configured_engine,
+        "rerankEngineEffective": result.effective_engine,
+        "rerankModel": result.model_name,
+        "rerankLatencyMs": round(float(result.latency_ms), 2),
+        "rerankFallbackReason": result.fallback_reason,
+        "candidateBeforeRerank": int(result.candidate_before),
+        "candidateAfterRerank": int(result.candidate_after),
+    }
+    return _candidates_to_contexts(result.candidates), diagnostics, result.error_code
+
+
 def retrieve_contexts(
     request: "RuntimeRagRequest",
     *,
@@ -579,6 +660,12 @@ def retrieve_contexts(
     hybrid_lexical_limit_multiplier: int = 2,
     rerank_query_weight: float = 0.7,
     rerank_base_weight: float = 0.3,
+    rerank_engine: str = "bge",
+    rerank_model: str = DEFAULT_BGE_MODEL,
+    rerank_batch_size: int = 16,
+    rerank_candidate_cap: int = 50,
+    rerank_timeout_ms: int = 12000,
+    rerank_device: str = "cpu",
     diagnostics: dict[str, Any] | None = None,
 ) -> list[RetrievedContext]:
     diagnostics_payload: dict[str, Any] = diagnostics if isinstance(diagnostics, dict) else {}
@@ -617,6 +704,13 @@ def retrieve_contexts(
                 "hybridApplied": False,
                 "rerankApplied": False,
                 "tuning": diagnostics_tuning,
+                "rerankEngineConfigured": rerank_engine,
+                "rerankEngineEffective": "disabled",
+                "rerankModel": rerank_model,
+                "rerankLatencyMs": 0.0,
+                "rerankFallbackReason": None,
+                "candidateBeforeRerank": 0,
+                "candidateAfterRerank": 0,
             }
         )
         return []
@@ -634,12 +728,19 @@ def retrieve_contexts(
                 "hybridApplied": False,
                 "rerankApplied": False,
                 "tuning": diagnostics_tuning,
+                "rerankEngineConfigured": rerank_engine,
+                "rerankEngineEffective": "disabled",
+                "rerankModel": rerank_model,
+                "rerankLatencyMs": 0.0,
+                "rerankFallbackReason": None,
+                "candidateBeforeRerank": 0,
+                "candidateAfterRerank": 0,
             }
         )
         return []
 
     selected_backend = parse_rag_backend(backend)
-    query_tokens = _build_query_tokens(request, query_message_limit)
+    query_text = _build_query_text(request, query_message_limit)
     if selected_backend == RAG_BACKEND_MILVUS and milvus_config is not None:
         vector_limit = max(limit, milvus_config.search_limit * vector_limit_multiplier)
         vector_contexts = _retrieve_contexts_from_milvus(
@@ -670,17 +771,33 @@ def retrieve_contexts(
             else vector_contexts
         )
         rerank_candidates = fused_contexts
-        final_contexts = (
-            _simple_rerank(
-                fused_contexts,
-                query_tokens=query_tokens,
+        rerank_meta: dict[str, Any] = {
+            "rerankEngineConfigured": rerank_engine,
+            "rerankEngineEffective": "disabled",
+            "rerankModel": rerank_model,
+            "rerankLatencyMs": 0.0,
+            "rerankFallbackReason": None,
+            "candidateBeforeRerank": len(fused_contexts),
+            "candidateAfterRerank": min(limit, len(fused_contexts)),
+        }
+        rerank_error_code: str | None = None
+        final_contexts = fused_contexts[:limit]
+        if rerank_enabled:
+            final_contexts, rerank_meta, rerank_error_code = _apply_rerank(
+                query_text=query_text,
+                contexts=fused_contexts,
                 limit=limit,
+                rerank_engine=rerank_engine,
+                rerank_model=rerank_model,
+                rerank_batch_size=rerank_batch_size,
+                rerank_candidate_cap=rerank_candidate_cap,
+                rerank_timeout_ms=rerank_timeout_ms,
+                rerank_device=rerank_device,
                 query_weight=rerank_query_w,
                 base_weight=rerank_base_w,
             )
-            if rerank_enabled
-            else fused_contexts[:limit]
-        )
+        if rerank_error_code:
+            diagnostics_payload.setdefault("errorCode", rerank_error_code)
         diagnostics_payload.update(
             {
                 "strategy": "milvus_hybrid" if hybrid_enabled else "milvus_vector_only",
@@ -692,6 +809,7 @@ def retrieve_contexts(
                 "hybridApplied": hybrid_enabled and bool(lexical_contexts),
                 "rerankApplied": rerank_enabled,
                 "tuning": diagnostics_tuning,
+                **rerank_meta,
             }
         )
         return final_contexts
@@ -705,17 +823,33 @@ def retrieve_contexts(
         query_message_limit=query_message_limit,
         allowed_source_prefixes=allowed_source_prefixes,
     )
-    final_contexts = (
-        _simple_rerank(
-            lexical_contexts,
-            query_tokens=query_tokens,
+    rerank_meta = {
+        "rerankEngineConfigured": rerank_engine,
+        "rerankEngineEffective": "disabled",
+        "rerankModel": rerank_model,
+        "rerankLatencyMs": 0.0,
+        "rerankFallbackReason": None,
+        "candidateBeforeRerank": len(lexical_contexts),
+        "candidateAfterRerank": min(limit, len(lexical_contexts)),
+    }
+    rerank_error_code: str | None = None
+    final_contexts = lexical_contexts[:limit]
+    if rerank_enabled:
+        final_contexts, rerank_meta, rerank_error_code = _apply_rerank(
+            query_text=query_text,
+            contexts=lexical_contexts,
             limit=limit,
+            rerank_engine=rerank_engine,
+            rerank_model=rerank_model,
+            rerank_batch_size=rerank_batch_size,
+            rerank_candidate_cap=rerank_candidate_cap,
+            rerank_timeout_ms=rerank_timeout_ms,
+            rerank_device=rerank_device,
             query_weight=rerank_query_w,
             base_weight=rerank_base_w,
         )
-        if rerank_enabled
-        else lexical_contexts[:limit]
-    )
+    if rerank_error_code:
+        diagnostics_payload.setdefault("errorCode", rerank_error_code)
     diagnostics_payload.update(
         {
             "strategy": "file_lexical",
@@ -727,6 +861,7 @@ def retrieve_contexts(
             "hybridApplied": False,
             "rerankApplied": rerank_enabled,
             "tuning": diagnostics_tuning,
+            **rerank_meta,
         }
     )
     return final_contexts

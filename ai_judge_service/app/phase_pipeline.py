@@ -18,6 +18,7 @@ from .runtime_policy import should_use_openai
 from .runtime_rag import RuntimeRagResult, retrieve_runtime_contexts_with_meta
 from .runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
 from .rag_retriever import RetrievedContext
+from .reranker_engine import RerankCandidate, RerankRequest, rerank_with_fallback
 from .settings import Settings
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
@@ -496,35 +497,101 @@ def _rerank_contexts_for_queries(
     *,
     queries: list[str],
     limit: int,
-) -> list[RetrievedContext]:
-    if not contexts:
-        return []
+    settings: Settings,
+    rerank_enabled_effective: bool,
+) -> tuple[list[RetrievedContext], dict[str, Any], str | None]:
     clipped_limit = max(0, int(limit))
-    if clipped_limit == 0:
-        return []
-    query_tokens = _tokenize(" ".join(queries))
-    if not query_tokens:
-        return contexts[:clipped_limit]
+    if not contexts or clipped_limit == 0:
+        return (
+            [],
+            {
+                "rerankEngineConfigured": settings.rag_rerank_engine,
+                "rerankEngineEffective": "disabled",
+                "rerankModel": settings.rag_rerank_model,
+                "rerankLatencyMs": 0.0,
+                "rerankFallbackReason": None,
+                "candidateBeforeRerank": len(contexts),
+                "candidateAfterRerank": 0,
+            },
+            None,
+        )
 
-    # 轻量 rerank：RRF 得分与 query-token overlap 加权。
-    max_base = max(1e-6, max((row.score for row in contexts), default=1.0))
-    reranked: list[RetrievedContext] = []
+    query_text = " ".join(queries).strip()
+    if not query_text:
+        return (
+            contexts[:clipped_limit],
+            {
+                "rerankEngineConfigured": settings.rag_rerank_engine,
+                "rerankEngineEffective": "disabled",
+                "rerankModel": settings.rag_rerank_model,
+                "rerankLatencyMs": 0.0,
+                "rerankFallbackReason": None,
+                "candidateBeforeRerank": len(contexts),
+                "candidateAfterRerank": min(clipped_limit, len(contexts)),
+            },
+            None,
+        )
+
+    if not rerank_enabled_effective:
+        return (
+            contexts[:clipped_limit],
+            {
+                "rerankEngineConfigured": settings.rag_rerank_engine,
+                "rerankEngineEffective": "disabled",
+                "rerankModel": settings.rag_rerank_model,
+                "rerankLatencyMs": 0.0,
+                "rerankFallbackReason": None,
+                "candidateBeforeRerank": len(contexts),
+                "candidateAfterRerank": min(clipped_limit, len(contexts)),
+            },
+            None,
+        )
+
+    candidates: list[RerankCandidate] = []
     for row in contexts:
-        row_tokens = _tokenize(f"{row.title} {row.content}")
-        overlap = len(set(query_tokens).intersection(set(row_tokens))) / float(max(1, len(query_tokens)))
-        base = row.score / max_base
-        score = overlap * 0.65 + base * 0.35
+        candidates.append(
+            RerankCandidate(
+                chunk_id=row.chunk_id,
+                title=row.title,
+                content=row.content,
+                score=float(row.score),
+                source_url=row.source_url,
+            )
+        )
+    result = rerank_with_fallback(
+        RerankRequest(
+            query_text=query_text,
+            candidates=candidates,
+            top_n=clipped_limit,
+            configured_engine=settings.rag_rerank_engine,
+            model_name=settings.rag_rerank_model,
+            batch_size=settings.rag_rerank_batch_size,
+            candidate_cap=settings.rag_rerank_candidate_cap,
+            timeout_ms=settings.rag_rerank_timeout_ms,
+            device=settings.rag_rerank_device,
+        )
+    )
+    reranked: list[RetrievedContext] = []
+    for row in result.candidates:
         reranked.append(
             RetrievedContext(
                 chunk_id=row.chunk_id,
                 title=row.title,
                 source_url=row.source_url,
                 content=row.content,
-                score=score,
+                score=float(row.score),
             )
         )
-    reranked.sort(key=lambda row: (-row.score, row.chunk_id))
-    return reranked[:clipped_limit]
+    diagnostics = {
+        "rerankEngineConfigured": result.configured_engine,
+        "rerankEngineEffective": result.effective_engine,
+        "rerankModel": result.model_name,
+        "rerankLatencyMs": round(float(result.latency_ms), 2),
+        "rerankFallbackReason": result.fallback_reason,
+        "candidateBeforeRerank": int(result.candidate_before),
+        "candidateAfterRerank": int(result.candidate_after),
+    }
+    return reranked, diagnostics, result.error_code
 
 
 def _build_retrieval_items(
@@ -640,6 +707,7 @@ def _retrieve_side_with_query_plan(
         )
 
     rrf_k = 60
+    rerank_enabled_effective = settings.rag_rerank_enabled
     if per_query_diagnostics:
         first_diag = per_query_diagnostics[0].get("diagnostics")
         if isinstance(first_diag, dict):
@@ -649,12 +717,17 @@ def _retrieve_side_with_query_plan(
                     rrf_k = max(1, int(tuning.get("rrfK", 60)))
                 except (TypeError, ValueError):
                     rrf_k = 60
+            rerank_enabled_effective = bool(
+                first_diag.get("rerankEnabledEffective", settings.rag_rerank_enabled)
+            )
 
     fused_contexts = _rrf_fuse_context_lists(ranked_lists, rrf_k=rrf_k)
-    final_contexts = _rerank_contexts_for_queries(
+    final_contexts, rerank_diagnostics, rerank_error_code = _rerank_contexts_for_queries(
         fused_contexts,
         queries=queries,
         limit=settings.rag_max_snippets,
+        settings=settings,
+        rerank_enabled_effective=rerank_enabled_effective,
     )
     items = _build_retrieval_items(
         final_contexts,
@@ -673,6 +746,8 @@ def _retrieve_side_with_query_plan(
             error_codes.append(str(error_code).strip().lower())
         if result.backend_fallback_reason:
             error_codes.append("rag_backend_fallback")
+    if rerank_error_code:
+        error_codes.append(rerank_error_code)
     if not items:
         error_codes.append(f"rag_no_hit_{side}")
 
@@ -694,6 +769,7 @@ def _retrieve_side_with_query_plan(
             "fusedCount": len(fused_contexts),
             "finalCount": len(final_contexts),
         },
+        "rerank": rerank_diagnostics,
     }
     return SideRetrievalResult(
         bundle={"queries": queries, "items": items},

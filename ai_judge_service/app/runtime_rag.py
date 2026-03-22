@@ -105,6 +105,12 @@ def retrieve_runtime_contexts_with_meta(
         "hybrid_lexical_limit_multiplier": profile.hybrid_lexical_limit_multiplier,
         "rerank_query_weight": profile.rerank_query_weight,
         "rerank_base_weight": profile.rerank_base_weight,
+        "rerank_engine": settings.rag_rerank_engine,
+        "rerank_model": settings.rag_rerank_model,
+        "rerank_batch_size": settings.rag_rerank_batch_size,
+        "rerank_candidate_cap": settings.rag_rerank_candidate_cap,
+        "rerank_timeout_ms": settings.rag_rerank_timeout_ms,
+        "rerank_device": settings.rag_rerank_device,
     }
     retrieval_diagnostics: dict[str, Any] = {}
     retrieve_kwargs["diagnostics"] = retrieval_diagnostics
@@ -121,6 +127,12 @@ def retrieve_runtime_contexts_with_meta(
         retrieve_kwargs.pop("hybrid_lexical_limit_multiplier", None)
         retrieve_kwargs.pop("rerank_query_weight", None)
         retrieve_kwargs.pop("rerank_base_weight", None)
+        retrieve_kwargs.pop("rerank_engine", None)
+        retrieve_kwargs.pop("rerank_model", None)
+        retrieve_kwargs.pop("rerank_batch_size", None)
+        retrieve_kwargs.pop("rerank_candidate_cap", None)
+        retrieve_kwargs.pop("rerank_timeout_ms", None)
+        retrieve_kwargs.pop("rerank_device", None)
         retrieve_kwargs.pop("diagnostics", None)
         retrieved_contexts = retrieve_contexts_fn(
             request,
@@ -133,6 +145,8 @@ def retrieve_runtime_contexts_with_meta(
     retrieval_diagnostics.setdefault("rerankEnabledBySettings", settings.rag_rerank_enabled)
     retrieval_diagnostics.setdefault("hybridEnabledEffective", effective_hybrid_enabled)
     retrieval_diagnostics.setdefault("rerankEnabledEffective", effective_rerank_enabled)
+    retrieval_diagnostics.setdefault("rerankEngineConfigured", settings.rag_rerank_engine)
+    retrieval_diagnostics.setdefault("rerankModelConfigured", settings.rag_rerank_model)
     retrieval_diagnostics.setdefault(
         "profileTuning",
         {

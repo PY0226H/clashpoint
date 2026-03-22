@@ -264,6 +264,7 @@ class RagRetrieverTests(unittest.TestCase):
                 max_chars_per_snippet=120,
                 query_message_limit=50,
                 rerank_enabled=True,
+                rerank_engine="heuristic",
                 diagnostics=diagnostics,
             )
         self.assertLessEqual(len(contexts), 2)
@@ -273,6 +274,11 @@ class RagRetrieverTests(unittest.TestCase):
         self.assertEqual(diagnostics["tuning"]["lexicalLimitMultiplier"], 2)
         self.assertEqual(diagnostics["tuning"]["rerankQueryWeight"], 0.7)
         self.assertEqual(diagnostics["tuning"]["rerankBaseWeight"], 0.3)
+        self.assertEqual(diagnostics["rerankEngineConfigured"], "heuristic")
+        self.assertEqual(diagnostics["rerankEngineEffective"], "heuristic")
+        self.assertIn("rerankLatencyMs", diagnostics)
+        self.assertIn("candidateBeforeRerank", diagnostics)
+        self.assertIn("candidateAfterRerank", diagnostics)
 
     @patch("app.rag_retriever._embed_query_with_openai")
     @patch("app.rag_retriever._fetch_milvus_candidates")
@@ -325,6 +331,7 @@ class RagRetrieverTests(unittest.TestCase):
                 openai_timeout_secs=8,
                 hybrid_enabled=True,
                 rerank_enabled=True,
+                rerank_engine="heuristic",
                 diagnostics=diagnostics,
             )
         chunk_ids = [item.chunk_id for item in contexts]
@@ -336,6 +343,8 @@ class RagRetrieverTests(unittest.TestCase):
         self.assertTrue(diagnostics["rerankApplied"])
         self.assertEqual(diagnostics["tuning"]["rrfK"], 60)
         self.assertEqual(diagnostics["tuning"]["vectorLimitMultiplier"], 1)
+        self.assertEqual(diagnostics["rerankEngineConfigured"], "heuristic")
+        self.assertEqual(diagnostics["rerankEngineEffective"], "heuristic")
 
     def test_retrieve_contexts_should_clamp_invalid_tuning_values(self) -> None:
         request = _build_request()
@@ -353,6 +362,7 @@ class RagRetrieverTests(unittest.TestCase):
             hybrid_lexical_limit_multiplier=99,
             rerank_query_weight=2.5,
             rerank_base_weight=-1.0,
+            rerank_engine="heuristic",
             diagnostics=diagnostics,
         )
         self.assertGreaterEqual(len(contexts), 1)
@@ -361,6 +371,8 @@ class RagRetrieverTests(unittest.TestCase):
         self.assertEqual(diagnostics["tuning"]["lexicalLimitMultiplier"], 8)
         self.assertEqual(diagnostics["tuning"]["rerankQueryWeight"], 1.0)
         self.assertEqual(diagnostics["tuning"]["rerankBaseWeight"], 0.0)
+        self.assertEqual(diagnostics["rerankEngineConfigured"], "heuristic")
+        self.assertEqual(diagnostics["rerankEngineEffective"], "heuristic")
 
 
 if __name__ == "__main__":

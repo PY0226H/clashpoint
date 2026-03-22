@@ -76,11 +76,11 @@ def _build_settings(**overrides: object) -> Settings:
         "rag_milvus_metric_type": "COSINE",
         "rag_milvus_search_limit": 20,
         "stage_agent_max_chunks": 12,
-        "graph_v2_enabled": True,
         "reflection_enabled": True,
         "topic_memory_enabled": True,
         "rag_hybrid_enabled": True,
         "rag_rerank_enabled": True,
+        "rag_rerank_engine": "heuristic",
         "reflection_policy": "winner_mismatch_only",
         "reflection_low_margin_threshold": 3,
         "fault_injection_nodes": (),
@@ -165,6 +165,12 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertEqual(kwargs["hybrid_lexical_limit_multiplier"], 2)
         self.assertEqual(kwargs["rerank_query_weight"], 0.7)
         self.assertEqual(kwargs["rerank_base_weight"], 0.3)
+        self.assertEqual(kwargs["rerank_engine"], "heuristic")
+        self.assertEqual(kwargs["rerank_model"], "BAAI/bge-reranker-v2-m3")
+        self.assertEqual(kwargs["rerank_batch_size"], 16)
+        self.assertEqual(kwargs["rerank_candidate_cap"], 50)
+        self.assertEqual(kwargs["rerank_timeout_ms"], 12000)
+        self.assertEqual(kwargs["rerank_device"], "cpu")
         self.assertIsInstance(kwargs["diagnostics"], dict)
         self.assertEqual(kwargs["milvus_config"].collection, "judge_kb")
 

@@ -5,6 +5,13 @@ from dataclasses import dataclass
 
 from .callback_client import CallbackClientConfig
 from .rag_retriever import parse_rag_backend, parse_source_whitelist
+from .reranker_engine import (
+    DEFAULT_BGE_MODEL,
+    VALID_RERANK_DEVICES,
+    VALID_RERANK_ENGINES,
+    normalize_rerank_device,
+    normalize_rerank_engine,
+)
 from .runtime_types import DispatchRuntimeConfig
 from .runtime_policy import (
     PROVIDER_MOCK,
@@ -88,7 +95,6 @@ class Settings:
     rag_milvus_metric_type: str
     rag_milvus_search_limit: int
     stage_agent_max_chunks: int
-    graph_v2_enabled: bool
     reflection_enabled: bool
     topic_memory_enabled: bool
     rag_hybrid_enabled: bool
@@ -111,6 +117,12 @@ class Settings:
     runtime_retry_max_attempts: int = 2
     runtime_retry_backoff_ms: int = 200
     compliance_block_enabled: bool = True
+    rag_rerank_engine: str = "bge"
+    rag_rerank_model: str = DEFAULT_BGE_MODEL
+    rag_rerank_batch_size: int = 16
+    rag_rerank_candidate_cap: int = 50
+    rag_rerank_timeout_ms: int = 12000
+    rag_rerank_device: str = "cpu"
 
 
 def load_settings() -> Settings:
@@ -172,7 +184,6 @@ def load_settings() -> Settings:
         rag_milvus_metric_type=os.getenv("AI_JUDGE_RAG_MILVUS_METRIC_TYPE", "COSINE"),
         rag_milvus_search_limit=int(os.getenv("AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT", "20")),
         stage_agent_max_chunks=int(os.getenv("AI_JUDGE_STAGE_AGENT_MAX_CHUNKS", "12")),
-        graph_v2_enabled=parse_env_bool(os.getenv("AI_JUDGE_GRAPH_V2_ENABLED"), default=True),
         reflection_enabled=parse_env_bool(os.getenv("AI_JUDGE_REFLECTION_ENABLED"), default=True),
         topic_memory_enabled=parse_env_bool(os.getenv("AI_JUDGE_TOPIC_MEMORY_ENABLED"), default=True),
         rag_hybrid_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_HYBRID_ENABLED"), default=True),
@@ -212,6 +223,20 @@ def load_settings() -> Settings:
         compliance_block_enabled=parse_env_bool(
             os.getenv("AI_JUDGE_COMPLIANCE_BLOCK_ENABLED"),
             default=True,
+        ),
+        rag_rerank_engine=normalize_rerank_engine(
+            os.getenv("AI_JUDGE_RAG_RERANK_ENGINE", "bge")
+        ),
+        rag_rerank_model=os.getenv(
+            "AI_JUDGE_RAG_RERANK_MODEL",
+            DEFAULT_BGE_MODEL,
+        ).strip()
+        or DEFAULT_BGE_MODEL,
+        rag_rerank_batch_size=int(os.getenv("AI_JUDGE_RAG_RERANK_BATCH_SIZE", "16")),
+        rag_rerank_candidate_cap=int(os.getenv("AI_JUDGE_RAG_RERANK_CANDIDATE_CAP", "50")),
+        rag_rerank_timeout_ms=int(os.getenv("AI_JUDGE_RAG_RERANK_TIMEOUT_MS", "12000")),
+        rag_rerank_device=normalize_rerank_device(
+            os.getenv("AI_JUDGE_RAG_RERANK_DEVICE", "cpu")
         ),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
@@ -255,6 +280,24 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS must be between 1 and 10")
     if settings.runtime_retry_backoff_ms < 0 or settings.runtime_retry_backoff_ms > 10000:
         raise ValueError("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS must be between 0 and 10000")
+    if settings.rag_rerank_engine not in VALID_RERANK_ENGINES:
+        raise ValueError(
+            "AI_JUDGE_RAG_RERANK_ENGINE must be one of "
+            + ",".join(sorted(VALID_RERANK_ENGINES))
+        )
+    if not settings.rag_rerank_model.strip():
+        raise ValueError("AI_JUDGE_RAG_RERANK_MODEL cannot be empty")
+    if settings.rag_rerank_batch_size < 1 or settings.rag_rerank_batch_size > 128:
+        raise ValueError("AI_JUDGE_RAG_RERANK_BATCH_SIZE must be between 1 and 128")
+    if settings.rag_rerank_candidate_cap < 1 or settings.rag_rerank_candidate_cap > 200:
+        raise ValueError("AI_JUDGE_RAG_RERANK_CANDIDATE_CAP must be between 1 and 200")
+    if settings.rag_rerank_timeout_ms < 100 or settings.rag_rerank_timeout_ms > 60000:
+        raise ValueError("AI_JUDGE_RAG_RERANK_TIMEOUT_MS must be between 100 and 60000")
+    if settings.rag_rerank_device not in VALID_RERANK_DEVICES:
+        raise ValueError(
+            "AI_JUDGE_RAG_RERANK_DEVICE must be one of "
+            + ",".join(sorted(VALID_RERANK_DEVICES))
+        )
     if settings.redis_enabled:
         if not settings.redis_url:
             raise ValueError("AI_JUDGE_REDIS_URL cannot be empty when AI_JUDGE_REDIS_ENABLED=true")

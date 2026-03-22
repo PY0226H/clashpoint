@@ -15,23 +15,19 @@
 ## 快速启动
 
 ```bash
-cd ai_judge_service
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8787
-```
-
-如果启用 `AI_JUDGE_RAG_BACKEND=milvus`，需额外安装：
-
-```bash
-.venv/bin/python -m pip install pymilvus
+cd /Users/panyihang/Documents/EchoIsle
+./scripts/pip install -r ai_judge_service/requirements.txt
+cd ai_judge_service
+../scripts/py -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 ```
 
 手工知识导入 Milvus（MVP 推荐）：
 
 ```bash
-cd ai_judge_service
-.venv/bin/python scripts/import_knowledge_to_milvus.py \
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
+../scripts/py scripts/import_knowledge_to_milvus.py \
   --input-file ./knowledge.json \
   --milvus-uri http://127.0.0.1:19530 \
   --milvus-collection debate_knowledge \
@@ -41,7 +37,7 @@ cd ai_judge_service
 如果需要脚本自动尝试创建 collection（仅适用于你的 Milvus 配置允许该简化创建方式）：
 
 ```bash
-.venv/bin/python scripts/import_knowledge_to_milvus.py \
+../scripts/py scripts/import_knowledge_to_milvus.py \
   --input-file ./knowledge.json \
   --milvus-uri http://127.0.0.1:19530 \
   --milvus-collection debate_knowledge \
@@ -85,7 +81,6 @@ cd ai_judge_service
 - `AI_JUDGE_RAG_MILVUS_METRIC_TYPE`: 向量距离类型，默认 `COSINE`
 - `AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT`: Milvus 向量召回候选数，默认 `20`
 - `AI_JUDGE_STAGE_AGENT_MAX_CHUNKS`: 阶段 Agent 最大处理窗口数（超出取最近窗口），默认 `12`
-- `AI_JUDGE_GRAPH_V2_ENABLED`: DAG+Reflection v2 开关，默认 `true`
 - `AI_JUDGE_REFLECTION_ENABLED`: 终局反思回路开关，默认 `true`
 - `AI_JUDGE_REFLECTION_POLICY`: 反思策略，`winner_mismatch_only|winner_mismatch_or_low_margin`，默认 `winner_mismatch_only`
 - `AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD`: 低分差保护阈值（平均分差），默认 `3`
@@ -96,6 +91,12 @@ cd ai_judge_service
 - `AI_JUDGE_TOPIC_MEMORY_ENABLED`: 辩题级长期记忆开关，默认 `true`
 - `AI_JUDGE_RAG_HYBRID_ENABLED`: 混合检索策略开关，默认 `true`
 - `AI_JUDGE_RAG_RERANK_ENABLED`: 检索重排开关，默认 `true`
+- `AI_JUDGE_RAG_RERANK_ENGINE`: 重排引擎，`bge|heuristic`，默认 `bge`
+- `AI_JUDGE_RAG_RERANK_MODEL`: 重排模型，默认 `BAAI/bge-reranker-v2-m3`
+- `AI_JUDGE_RAG_RERANK_BATCH_SIZE`: 重排批大小，默认 `16`
+- `AI_JUDGE_RAG_RERANK_CANDIDATE_CAP`: 每次重排候选上限，默认 `50`
+- `AI_JUDGE_RAG_RERANK_TIMEOUT_MS`: 重排超时毫秒，默认 `12000`
+- `AI_JUDGE_RAG_RERANK_DEVICE`: 重排设备，`cpu|cuda`，默认 `cpu`
 - `AI_JUDGE_DEGRADE_MAX_LEVEL`: 最大降级等级 `0..3`，默认 `3`
 - `AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS`: runtime 可重试错误最大尝试次数（含首次），默认 `2`
 - `AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS`: runtime 重试退避基线毫秒，默认 `200`
@@ -185,22 +186,22 @@ M6 phase4 告警状态机：
 依赖安装完成后执行：
 
 ```bash
-cd ai_judge_service
-.venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
+../scripts/py -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 M7 预验收（phase1）端到端场景回归：
 
 ```bash
-cd ai_judge_service
-.venv/bin/python -m unittest tests/test_m7_acceptance.py -v
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
+../scripts/py -m unittest tests/test_m7_acceptance.py -v
 ```
 
 M7 预验收门禁（phase2，回归 + 负载阈值 + 报告）：
 
 ```bash
-cd ai_judge_service
-.venv/bin/python scripts/m7_acceptance_gate.py \
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
+../scripts/py scripts/m7_acceptance_gate.py \
   --report-out ../docs/dev_plan/AI裁判M7验收报告-$(date +%F).md
 ```
 

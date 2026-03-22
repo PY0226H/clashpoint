@@ -62,9 +62,9 @@ DATABASE_URL=postgres://<username>:<password>@localhost:5432/chat
 ## 可选：启动 AI 裁判服务
 
 ```bash
+./scripts/pip install -r ai_judge_service/requirements.txt
 cd ai_judge_service
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8787
+../scripts/py -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 ```
 
 注意：项目内 Python 任务统一使用虚拟环境解释器，避免全局 Python 污染。
@@ -79,7 +79,7 @@ bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode full
 AI 服务单测：
 ```bash
 cd ai_judge_service
-.venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
+../scripts/py -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 
@@ -91,4 +91,3 @@ cd ai_judge_service
 | notify_server | 6687 | SSE / WebSocket 推送 |
 | chatapp (vite) | 1420 | Web 前端 |
 | ai_judge_service | 8787 | AI 裁判内部服务（可选） |
-
