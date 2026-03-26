@@ -4,6 +4,12 @@ import os
 from dataclasses import dataclass
 
 from .callback_client import CallbackClientConfig
+from .lexical_retriever import (
+    DEFAULT_BM25_CACHE_DIR,
+    DEFAULT_LEXICAL_ENGINE,
+    VALID_LEXICAL_ENGINES,
+    normalize_lexical_engine,
+)
 from .rag_retriever import parse_rag_backend, parse_source_whitelist
 from .reranker_engine import (
     DEFAULT_BGE_MODEL,
@@ -117,6 +123,10 @@ class Settings:
     runtime_retry_max_attempts: int = 2
     runtime_retry_backoff_ms: int = 200
     compliance_block_enabled: bool = True
+    rag_lexical_engine: str = DEFAULT_LEXICAL_ENGINE
+    rag_bm25_cache_dir: str = DEFAULT_BM25_CACHE_DIR
+    rag_bm25_use_disk_cache: bool = True
+    rag_bm25_fallback_to_simple: bool = True
     rag_rerank_engine: str = "bge"
     rag_rerank_model: str = DEFAULT_BGE_MODEL
     rag_rerank_batch_size: int = 16
@@ -224,6 +234,22 @@ def load_settings() -> Settings:
             os.getenv("AI_JUDGE_COMPLIANCE_BLOCK_ENABLED"),
             default=True,
         ),
+        rag_lexical_engine=normalize_lexical_engine(
+            os.getenv("AI_JUDGE_RAG_LEXICAL_ENGINE", DEFAULT_LEXICAL_ENGINE)
+        ),
+        rag_bm25_cache_dir=os.getenv(
+            "AI_JUDGE_RAG_BM25_CACHE_DIR",
+            DEFAULT_BM25_CACHE_DIR,
+        ).strip()
+        or DEFAULT_BM25_CACHE_DIR,
+        rag_bm25_use_disk_cache=parse_env_bool(
+            os.getenv("AI_JUDGE_RAG_BM25_USE_DISK_CACHE"),
+            default=True,
+        ),
+        rag_bm25_fallback_to_simple=parse_env_bool(
+            os.getenv("AI_JUDGE_RAG_BM25_FALLBACK_TO_SIMPLE"),
+            default=True,
+        ),
         rag_rerank_engine=normalize_rerank_engine(
             os.getenv("AI_JUDGE_RAG_RERANK_ENGINE", "bge")
         ),
@@ -280,6 +306,13 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS must be between 1 and 10")
     if settings.runtime_retry_backoff_ms < 0 or settings.runtime_retry_backoff_ms > 10000:
         raise ValueError("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS must be between 0 and 10000")
+    if settings.rag_lexical_engine not in VALID_LEXICAL_ENGINES:
+        raise ValueError(
+            "AI_JUDGE_RAG_LEXICAL_ENGINE must be one of "
+            + ",".join(sorted(VALID_LEXICAL_ENGINES))
+        )
+    if not settings.rag_bm25_cache_dir.strip():
+        raise ValueError("AI_JUDGE_RAG_BM25_CACHE_DIR cannot be empty")
     if settings.rag_rerank_engine not in VALID_RERANK_ENGINES:
         raise ValueError(
             "AI_JUDGE_RAG_RERANK_ENGINE must be one of "

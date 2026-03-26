@@ -97,14 +97,16 @@ class RagRetrieverTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
             json.dump(chunks, f, ensure_ascii=False)
             f.flush()
-            contexts = retrieve_contexts(
-                request,
-                enabled=True,
-                knowledge_file=f.name,
-                max_snippets=3,
-                max_chars_per_snippet=120,
-                query_message_limit=50,
-            )
+            with tempfile.TemporaryDirectory() as cache_dir:
+                contexts = retrieve_contexts(
+                    request,
+                    enabled=True,
+                    knowledge_file=f.name,
+                    max_snippets=3,
+                    max_chars_per_snippet=120,
+                    query_message_limit=50,
+                    bm25_cache_dir=cache_dir,
+                )
 
         self.assertGreaterEqual(len(contexts), 2)
         self.assertEqual(contexts[0].chunk_id, "topic-context-seed")
@@ -132,17 +134,19 @@ class RagRetrieverTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
             json.dump(chunks, f, ensure_ascii=False)
             f.flush()
-            contexts = retrieve_contexts(
-                request,
-                enabled=True,
-                knowledge_file=f.name,
-                max_snippets=5,
-                max_chars_per_snippet=120,
-                query_message_limit=50,
-                allowed_source_prefixes=parse_source_whitelist(
-                    "https://teamfighttactics.leagueoflegends.com/en-us/news/"
-                ),
-            )
+            with tempfile.TemporaryDirectory() as cache_dir:
+                contexts = retrieve_contexts(
+                    request,
+                    enabled=True,
+                    knowledge_file=f.name,
+                    max_snippets=5,
+                    max_chars_per_snippet=120,
+                    query_message_limit=50,
+                    allowed_source_prefixes=parse_source_whitelist(
+                        "https://teamfighttactics.leagueoflegends.com/en-us/news/"
+                    ),
+                    bm25_cache_dir=cache_dir,
+                )
 
         chunk_ids = [item.chunk_id for item in contexts]
         self.assertIn("topic-context-seed", chunk_ids)
@@ -256,20 +260,27 @@ class RagRetrieverTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
             json.dump(chunks, f, ensure_ascii=False)
             f.flush()
-            contexts = retrieve_contexts(
-                request,
-                enabled=True,
-                knowledge_file=f.name,
-                max_snippets=2,
-                max_chars_per_snippet=120,
-                query_message_limit=50,
-                rerank_enabled=True,
-                rerank_engine="heuristic",
-                diagnostics=diagnostics,
-            )
+            with tempfile.TemporaryDirectory() as cache_dir:
+                contexts = retrieve_contexts(
+                    request,
+                    enabled=True,
+                    knowledge_file=f.name,
+                    max_snippets=2,
+                    max_chars_per_snippet=120,
+                    query_message_limit=50,
+                    rerank_enabled=True,
+                    rerank_engine="heuristic",
+                    bm25_cache_dir=cache_dir,
+                    diagnostics=diagnostics,
+                )
         self.assertLessEqual(len(contexts), 2)
         self.assertEqual(diagnostics["strategy"], "file_lexical")
         self.assertTrue(diagnostics["rerankApplied"])
+        self.assertEqual(diagnostics["lexicalEngineConfigured"], "bm25")
+        self.assertEqual(diagnostics["lexicalEngineEffective"], "bm25")
+        self.assertIn("lexicalIndexCacheHit", diagnostics)
+        self.assertIn("lexicalIndexBuildMs", diagnostics)
+        self.assertIn("lexicalDocCount", diagnostics)
         self.assertEqual(diagnostics["finalCount"], len(contexts))
         self.assertEqual(diagnostics["tuning"]["lexicalLimitMultiplier"], 2)
         self.assertEqual(diagnostics["tuning"]["rerankQueryWeight"], 0.7)
@@ -313,27 +324,29 @@ class RagRetrieverTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
             json.dump(chunks, f, ensure_ascii=False)
             f.flush()
-            contexts = retrieve_contexts(
-                request,
-                enabled=True,
-                knowledge_file=f.name,
-                max_snippets=4,
-                max_chars_per_snippet=120,
-                query_message_limit=50,
-                backend=RAG_BACKEND_MILVUS,
-                milvus_config=RagMilvusConfig(
-                    uri="http://milvus:19530",
-                    collection="debate_knowledge",
-                ),
-                openai_api_key="sk-test",
-                openai_base_url="https://api.openai.com/v1",
-                openai_embedding_model="text-embedding-3-small",
-                openai_timeout_secs=8,
-                hybrid_enabled=True,
-                rerank_enabled=True,
-                rerank_engine="heuristic",
-                diagnostics=diagnostics,
-            )
+            with tempfile.TemporaryDirectory() as cache_dir:
+                contexts = retrieve_contexts(
+                    request,
+                    enabled=True,
+                    knowledge_file=f.name,
+                    max_snippets=4,
+                    max_chars_per_snippet=120,
+                    query_message_limit=50,
+                    backend=RAG_BACKEND_MILVUS,
+                    milvus_config=RagMilvusConfig(
+                        uri="http://milvus:19530",
+                        collection="debate_knowledge",
+                    ),
+                    openai_api_key="sk-test",
+                    openai_base_url="https://api.openai.com/v1",
+                    openai_embedding_model="text-embedding-3-small",
+                    openai_timeout_secs=8,
+                    hybrid_enabled=True,
+                    rerank_enabled=True,
+                    rerank_engine="heuristic",
+                    bm25_cache_dir=cache_dir,
+                    diagnostics=diagnostics,
+                )
         chunk_ids = [item.chunk_id for item in contexts]
         self.assertIn("milvus-ok", chunk_ids)
         self.assertIn("file-ok", chunk_ids)
@@ -341,6 +354,8 @@ class RagRetrieverTests(unittest.TestCase):
         self.assertGreaterEqual(diagnostics["vectorCandidateCount"], 1)
         self.assertGreaterEqual(diagnostics["lexicalCandidateCount"], 1)
         self.assertTrue(diagnostics["rerankApplied"])
+        self.assertEqual(diagnostics["lexicalEngineConfigured"], "bm25")
+        self.assertEqual(diagnostics["lexicalEngineEffective"], "bm25")
         self.assertEqual(diagnostics["tuning"]["rrfK"], 60)
         self.assertEqual(diagnostics["tuning"]["vectorLimitMultiplier"], 1)
         self.assertEqual(diagnostics["rerankEngineConfigured"], "heuristic")
@@ -349,26 +364,29 @@ class RagRetrieverTests(unittest.TestCase):
     def test_retrieve_contexts_should_clamp_invalid_tuning_values(self) -> None:
         request = _build_request()
         diagnostics: dict = {}
-        contexts = retrieve_contexts(
-            request,
-            enabled=True,
-            knowledge_file="",
-            max_snippets=2,
-            max_chars_per_snippet=120,
-            query_message_limit=50,
-            rerank_enabled=True,
-            hybrid_rrf_k=-10,
-            hybrid_vector_limit_multiplier=-2,
-            hybrid_lexical_limit_multiplier=99,
-            rerank_query_weight=2.5,
-            rerank_base_weight=-1.0,
-            rerank_engine="heuristic",
-            diagnostics=diagnostics,
-        )
+        with tempfile.TemporaryDirectory() as cache_dir:
+            contexts = retrieve_contexts(
+                request,
+                enabled=True,
+                knowledge_file="",
+                max_snippets=2,
+                max_chars_per_snippet=120,
+                query_message_limit=50,
+                rerank_enabled=True,
+                hybrid_rrf_k=-10,
+                hybrid_vector_limit_multiplier=-2,
+                hybrid_lexical_limit_multiplier=99,
+                rerank_query_weight=2.5,
+                rerank_base_weight=-1.0,
+                rerank_engine="heuristic",
+                bm25_cache_dir=cache_dir,
+                diagnostics=diagnostics,
+            )
         self.assertGreaterEqual(len(contexts), 1)
         self.assertEqual(diagnostics["tuning"]["rrfK"], 1)
         self.assertEqual(diagnostics["tuning"]["vectorLimitMultiplier"], 1)
         self.assertEqual(diagnostics["tuning"]["lexicalLimitMultiplier"], 8)
+        self.assertEqual(diagnostics["lexicalEngineConfigured"], "bm25")
         self.assertEqual(diagnostics["tuning"]["rerankQueryWeight"], 1.0)
         self.assertEqual(diagnostics["tuning"]["rerankBaseWeight"], 0.0)
         self.assertEqual(diagnostics["rerankEngineConfigured"], "heuristic")

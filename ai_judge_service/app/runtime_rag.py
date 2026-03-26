@@ -103,6 +103,10 @@ def retrieve_runtime_contexts_with_meta(
         "hybrid_rrf_k": profile.hybrid_rrf_k,
         "hybrid_vector_limit_multiplier": profile.hybrid_vector_limit_multiplier,
         "hybrid_lexical_limit_multiplier": profile.hybrid_lexical_limit_multiplier,
+        "lexical_engine": settings.rag_lexical_engine,
+        "bm25_cache_dir": settings.rag_bm25_cache_dir,
+        "bm25_use_disk_cache": settings.rag_bm25_use_disk_cache,
+        "bm25_fallback_to_simple": settings.rag_bm25_fallback_to_simple,
         "rerank_query_weight": profile.rerank_query_weight,
         "rerank_base_weight": profile.rerank_base_weight,
         "rerank_engine": settings.rag_rerank_engine,
@@ -125,6 +129,10 @@ def retrieve_runtime_contexts_with_meta(
         retrieve_kwargs.pop("hybrid_rrf_k", None)
         retrieve_kwargs.pop("hybrid_vector_limit_multiplier", None)
         retrieve_kwargs.pop("hybrid_lexical_limit_multiplier", None)
+        retrieve_kwargs.pop("lexical_engine", None)
+        retrieve_kwargs.pop("bm25_cache_dir", None)
+        retrieve_kwargs.pop("bm25_use_disk_cache", None)
+        retrieve_kwargs.pop("bm25_fallback_to_simple", None)
         retrieve_kwargs.pop("rerank_query_weight", None)
         retrieve_kwargs.pop("rerank_base_weight", None)
         retrieve_kwargs.pop("rerank_engine", None)
@@ -145,6 +153,7 @@ def retrieve_runtime_contexts_with_meta(
     retrieval_diagnostics.setdefault("rerankEnabledBySettings", settings.rag_rerank_enabled)
     retrieval_diagnostics.setdefault("hybridEnabledEffective", effective_hybrid_enabled)
     retrieval_diagnostics.setdefault("rerankEnabledEffective", effective_rerank_enabled)
+    retrieval_diagnostics.setdefault("lexicalEngineConfigured", settings.rag_lexical_engine)
     retrieval_diagnostics.setdefault("rerankEngineConfigured", settings.rag_rerank_engine)
     retrieval_diagnostics.setdefault("rerankModelConfigured", settings.rag_rerank_model)
     retrieval_diagnostics.setdefault(

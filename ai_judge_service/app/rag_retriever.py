@@ -8,6 +8,14 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from .lexical_retriever import (
+    DEFAULT_BM25_CACHE_DIR,
+    DEFAULT_LEXICAL_ENGINE,
+    LEXICAL_TOKENIZER_PROFILE,
+    LexicalDocument,
+    LexicalSearchRequest,
+    search_lexical,
+)
 from .reranker_engine import (
     DEFAULT_BGE_MODEL,
     RerankCandidate,
@@ -243,48 +251,6 @@ def _rrf_fuse(
     return fused
 
 
-def _simple_rerank(
-    contexts: list[RetrievedContext],
-    *,
-    query_tokens: set[str],
-    limit: int,
-    query_weight: float = 0.7,
-    base_weight: float = 0.3,
-) -> list[RetrievedContext]:
-    if not contexts:
-        return []
-    if not query_tokens:
-        return contexts[: max(0, limit)]
-
-    q_weight = _clamp_weight(query_weight)
-    b_weight = _clamp_weight(base_weight)
-    if q_weight == 0.0 and b_weight == 0.0:
-        q_weight = 0.7
-        b_weight = 0.3
-    total_weight = q_weight + b_weight
-    if total_weight > 0:
-        q_weight = q_weight / total_weight
-        b_weight = b_weight / total_weight
-
-    reranked: list[RetrievedContext] = []
-    for item in contexts:
-        item_tokens = _tokenize(f"{item.title} {item.content}")
-        overlap = len(query_tokens.intersection(item_tokens))
-        overlap_score = overlap / max(1, len(query_tokens))
-        score = overlap_score * q_weight + min(1.0, max(0.0, item.score)) * b_weight
-        reranked.append(
-            RetrievedContext(
-                chunk_id=item.chunk_id,
-                title=item.title,
-                source_url=item.source_url,
-                content=item.content,
-                score=score,
-            )
-        )
-    reranked.sort(key=lambda row: (-row.score, row.chunk_id))
-    return reranked[: max(0, limit)]
-
-
 def _contexts_to_candidates(
     contexts: list[RetrievedContext],
 ) -> list[RerankCandidate]:
@@ -480,6 +446,16 @@ def _context_from_milvus_row(
     )
 
 
+def _chunk_to_lexical_document(chunk: KnowledgeChunk) -> LexicalDocument:
+    return LexicalDocument(
+        chunk_id=chunk.chunk_id,
+        title=chunk.title,
+        source_url=chunk.source_url,
+        content=chunk.content,
+        tags=chunk.tags,
+    )
+
+
 def _retrieve_contexts_from_file(
     request: "RuntimeRagRequest",
     *,
@@ -488,7 +464,13 @@ def _retrieve_contexts_from_file(
     max_chars_per_snippet: int,
     query_message_limit: int,
     allowed_source_prefixes: tuple[str, ...] = (),
+    lexical_engine: str = DEFAULT_LEXICAL_ENGINE,
+    bm25_cache_dir: str = DEFAULT_BM25_CACHE_DIR,
+    bm25_use_disk_cache: bool = True,
+    bm25_fallback_to_simple: bool = True,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[RetrievedContext]:
+    diagnostics_payload: dict[str, Any] = diagnostics if isinstance(diagnostics, dict) else {}
     out: list[RetrievedContext] = []
     seen_chunk_ids: set[str] = set()
 
@@ -505,28 +487,69 @@ def _retrieve_contexts_from_file(
         )
         seen_chunk_ids.add("topic-context-seed")
         if len(out) >= max_snippets:
+            diagnostics_payload.update(
+                {
+                    "lexicalEngineConfigured": lexical_engine,
+                    "lexicalEngineEffective": "disabled",
+                    "lexicalIndexCacheHit": False,
+                    "lexicalIndexBuildMs": 0.0,
+                    "lexicalIndexLoadMs": 0.0,
+                    "lexicalFallbackReason": None,
+                    "lexicalDocCount": 0,
+                    "lexicalTokenizerProfile": LEXICAL_TOKENIZER_PROFILE,
+                }
+            )
             return out
 
     chunks = _load_knowledge_file(knowledge_file)
-    query_tokens = _build_query_tokens(request, query_message_limit)
+    documents = [
+        _chunk_to_lexical_document(chunk)
+        for chunk in chunks
+        if _source_allowed(chunk.source_url, allowed_source_prefixes)
+    ]
+    lexical_result = search_lexical(
+        LexicalSearchRequest(
+            knowledge_file=knowledge_file,
+            documents=documents,
+            query_text=_build_query_text(request, query_message_limit),
+            top_k=max(0, max_snippets - len(out)),
+            configured_engine=lexical_engine,
+            bm25_cache_dir=bm25_cache_dir,
+            bm25_use_disk_cache=bm25_use_disk_cache,
+            fallback_to_simple=bm25_fallback_to_simple,
+        )
+    )
+    document_map = {document.chunk_id: document for document in documents}
+    diagnostics_payload.update(
+        {
+            "lexicalEngineConfigured": lexical_result.configured_engine,
+            "lexicalEngineEffective": lexical_result.effective_engine,
+            "lexicalIndexCacheHit": lexical_result.index_cache_hit,
+            "lexicalIndexBuildMs": round(float(lexical_result.index_build_ms), 2),
+            "lexicalIndexLoadMs": round(float(lexical_result.index_load_ms), 2),
+            "lexicalFallbackReason": lexical_result.fallback_reason,
+            "lexicalDocCount": lexical_result.doc_count,
+            "lexicalTokenizerProfile": lexical_result.tokenizer_profile,
+        }
+    )
+    if lexical_result.error_code:
+        diagnostics_payload.setdefault("errorCode", lexical_result.error_code)
+
     ranked: list[RetrievedContext] = []
-    for chunk in chunks:
-        if not _source_allowed(chunk.source_url, allowed_source_prefixes):
-            continue
-        score = _score_chunk(chunk, query_tokens)
-        if score <= 0:
+    for hit in lexical_result.hits:
+        document = document_map.get(hit.chunk_id)
+        if document is None:
             continue
         ranked.append(
             RetrievedContext(
-                chunk_id=chunk.chunk_id,
-                title=chunk.title,
-                source_url=chunk.source_url,
-                content=_safe_text(chunk.content, max_len=max_chars_per_snippet),
-                score=score,
+                chunk_id=document.chunk_id,
+                title=document.title,
+                source_url=document.source_url,
+                content=_safe_text(document.content, max_len=max_chars_per_snippet),
+                score=float(hit.score),
             )
         )
 
-    ranked.sort(key=lambda item: (-item.score, item.chunk_id))
     for item in ranked:
         if item.chunk_id in seen_chunk_ids:
             continue
@@ -658,6 +681,10 @@ def retrieve_contexts(
     hybrid_rrf_k: int = 60,
     hybrid_vector_limit_multiplier: int = 1,
     hybrid_lexical_limit_multiplier: int = 2,
+    lexical_engine: str = DEFAULT_LEXICAL_ENGINE,
+    bm25_cache_dir: str = DEFAULT_BM25_CACHE_DIR,
+    bm25_use_disk_cache: bool = True,
+    bm25_fallback_to_simple: bool = True,
     rerank_query_weight: float = 0.7,
     rerank_base_weight: float = 0.3,
     rerank_engine: str = "bge",
@@ -704,6 +731,14 @@ def retrieve_contexts(
                 "hybridApplied": False,
                 "rerankApplied": False,
                 "tuning": diagnostics_tuning,
+                "lexicalEngineConfigured": lexical_engine,
+                "lexicalEngineEffective": "disabled",
+                "lexicalIndexCacheHit": False,
+                "lexicalIndexBuildMs": 0.0,
+                "lexicalIndexLoadMs": 0.0,
+                "lexicalFallbackReason": None,
+                "lexicalDocCount": 0,
+                "lexicalTokenizerProfile": LEXICAL_TOKENIZER_PROFILE,
                 "rerankEngineConfigured": rerank_engine,
                 "rerankEngineEffective": "disabled",
                 "rerankModel": rerank_model,
@@ -728,6 +763,14 @@ def retrieve_contexts(
                 "hybridApplied": False,
                 "rerankApplied": False,
                 "tuning": diagnostics_tuning,
+                "lexicalEngineConfigured": lexical_engine,
+                "lexicalEngineEffective": "disabled",
+                "lexicalIndexCacheHit": False,
+                "lexicalIndexBuildMs": 0.0,
+                "lexicalIndexLoadMs": 0.0,
+                "lexicalFallbackReason": None,
+                "lexicalDocCount": 0,
+                "lexicalTokenizerProfile": LEXICAL_TOKENIZER_PROFILE,
                 "rerankEngineConfigured": rerank_engine,
                 "rerankEngineEffective": "disabled",
                 "rerankModel": rerank_model,
@@ -757,6 +800,7 @@ def retrieve_contexts(
         )
         lexical_contexts: list[RetrievedContext] = []
         if hybrid_enabled:
+            lexical_diagnostics: dict[str, Any] = {}
             lexical_contexts = _retrieve_contexts_from_file(
                 request,
                 knowledge_file=knowledge_file,
@@ -764,7 +808,14 @@ def retrieve_contexts(
                 max_chars_per_snippet=max_chars_per_snippet,
                 query_message_limit=query_message_limit,
                 allowed_source_prefixes=allowed_source_prefixes,
+                lexical_engine=lexical_engine,
+                bm25_cache_dir=bm25_cache_dir,
+                bm25_use_disk_cache=bm25_use_disk_cache,
+                bm25_fallback_to_simple=bm25_fallback_to_simple,
+                diagnostics=lexical_diagnostics,
             )
+            if lexical_diagnostics.get("errorCode"):
+                diagnostics_payload.setdefault("errorCode", lexical_diagnostics["errorCode"])
         fused_contexts = (
             _rrf_fuse([vector_contexts, lexical_contexts], rrf_k=rrf_k)
             if hybrid_enabled and lexical_contexts
@@ -809,11 +860,51 @@ def retrieve_contexts(
                 "hybridApplied": hybrid_enabled and bool(lexical_contexts),
                 "rerankApplied": rerank_enabled,
                 "tuning": diagnostics_tuning,
+                "lexicalEngineConfigured": lexical_diagnostics.get(
+                    "lexicalEngineConfigured",
+                    lexical_engine,
+                )
+                if hybrid_enabled
+                else lexical_engine,
+                "lexicalEngineEffective": lexical_diagnostics.get(
+                    "lexicalEngineEffective",
+                    "disabled",
+                )
+                if hybrid_enabled
+                else "disabled",
+                "lexicalIndexCacheHit": bool(
+                    lexical_diagnostics.get("lexicalIndexCacheHit", False)
+                )
+                if hybrid_enabled
+                else False,
+                "lexicalIndexBuildMs": float(
+                    lexical_diagnostics.get("lexicalIndexBuildMs", 0.0)
+                )
+                if hybrid_enabled
+                else 0.0,
+                "lexicalIndexLoadMs": float(
+                    lexical_diagnostics.get("lexicalIndexLoadMs", 0.0)
+                )
+                if hybrid_enabled
+                else 0.0,
+                "lexicalFallbackReason": lexical_diagnostics.get("lexicalFallbackReason")
+                if hybrid_enabled
+                else None,
+                "lexicalDocCount": int(lexical_diagnostics.get("lexicalDocCount", 0))
+                if hybrid_enabled
+                else 0,
+                "lexicalTokenizerProfile": lexical_diagnostics.get(
+                    "lexicalTokenizerProfile",
+                    LEXICAL_TOKENIZER_PROFILE,
+                )
+                if hybrid_enabled
+                else LEXICAL_TOKENIZER_PROFILE,
                 **rerank_meta,
             }
         )
         return final_contexts
 
+    lexical_diagnostics = {}
     lexical_limit = max(limit * lexical_limit_multiplier, limit) if rerank_enabled else limit
     lexical_contexts = _retrieve_contexts_from_file(
         request,
@@ -822,7 +913,14 @@ def retrieve_contexts(
         max_chars_per_snippet=max_chars_per_snippet,
         query_message_limit=query_message_limit,
         allowed_source_prefixes=allowed_source_prefixes,
+        lexical_engine=lexical_engine,
+        bm25_cache_dir=bm25_cache_dir,
+        bm25_use_disk_cache=bm25_use_disk_cache,
+        bm25_fallback_to_simple=bm25_fallback_to_simple,
+        diagnostics=lexical_diagnostics,
     )
+    if lexical_diagnostics.get("errorCode"):
+        diagnostics_payload.setdefault("errorCode", lexical_diagnostics["errorCode"])
     rerank_meta = {
         "rerankEngineConfigured": rerank_engine,
         "rerankEngineEffective": "disabled",
@@ -861,6 +959,23 @@ def retrieve_contexts(
             "hybridApplied": False,
             "rerankApplied": rerank_enabled,
             "tuning": diagnostics_tuning,
+            "lexicalEngineConfigured": lexical_diagnostics.get(
+                "lexicalEngineConfigured",
+                lexical_engine,
+            ),
+            "lexicalEngineEffective": lexical_diagnostics.get(
+                "lexicalEngineEffective",
+                lexical_engine,
+            ),
+            "lexicalIndexCacheHit": bool(lexical_diagnostics.get("lexicalIndexCacheHit", False)),
+            "lexicalIndexBuildMs": float(lexical_diagnostics.get("lexicalIndexBuildMs", 0.0)),
+            "lexicalIndexLoadMs": float(lexical_diagnostics.get("lexicalIndexLoadMs", 0.0)),
+            "lexicalFallbackReason": lexical_diagnostics.get("lexicalFallbackReason"),
+            "lexicalDocCount": int(lexical_diagnostics.get("lexicalDocCount", 0)),
+            "lexicalTokenizerProfile": lexical_diagnostics.get(
+                "lexicalTokenizerProfile",
+                LEXICAL_TOKENIZER_PROFILE,
+            ),
             **rerank_meta,
         }
     )

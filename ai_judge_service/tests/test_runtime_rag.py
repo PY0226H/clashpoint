@@ -163,6 +163,10 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertEqual(kwargs["hybrid_rrf_k"], 60)
         self.assertEqual(kwargs["hybrid_vector_limit_multiplier"], 1)
         self.assertEqual(kwargs["hybrid_lexical_limit_multiplier"], 2)
+        self.assertEqual(kwargs["lexical_engine"], "bm25")
+        self.assertIn(".cache/bm25", kwargs["bm25_cache_dir"])
+        self.assertTrue(kwargs["bm25_use_disk_cache"])
+        self.assertTrue(kwargs["bm25_fallback_to_simple"])
         self.assertEqual(kwargs["rerank_query_weight"], 0.7)
         self.assertEqual(kwargs["rerank_base_weight"], 0.3)
         self.assertEqual(kwargs["rerank_engine"], "heuristic")
@@ -232,6 +236,7 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertEqual(result.retrieval_diagnostics["profileResolved"], "hybrid_v1")
         self.assertTrue(result.retrieval_diagnostics["hybridEnabledEffective"])
         self.assertTrue(result.retrieval_diagnostics["rerankEnabledEffective"])
+        self.assertEqual(result.retrieval_diagnostics["lexicalEngineConfigured"], "bm25")
 
     def test_retrieve_runtime_contexts_with_meta_should_fallback_unknown_profile_to_default(self) -> None:
         settings = _build_settings(rag_enabled=True)

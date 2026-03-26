@@ -1,6 +1,6 @@
 # AI Judge Service
 
-用于接收 `chat_server` 的 v3 phase/final 派发请求，执行评审逻辑，并回调内部接口写入 phase/final 报告。RAG 支持 `file` 与 `milvus` 两种后端。
+用于接收 `chat_server` 的 v3 phase/final 派发请求，执行评审逻辑，并回调内部接口写入 phase/final 报告。RAG 支持 `file(bm25s lexical)` 与 `milvus` 两种后端；hybrid 路径为 `Milvus vector + BM25 lexical + RRF + BGE/heuristic rerank`。
 
 ## 目录结构
 
@@ -16,12 +16,14 @@
 
 ```bash
 cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
-python3 -m venv .venv
+test -x .venv/bin/python
 cd /Users/panyihang/Documents/EchoIsle
 ./scripts/pip install -r ai_judge_service/requirements.txt
-cd ai_judge_service
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 ../scripts/py -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 ```
+
+仓库内所有 Python 安装、测试、脚本执行都应通过 `scripts/py` / `scripts/pip` 完成，不直接使用全局 `python`、`python3`、`pip`、`pip3`。
 
 手工知识导入 Milvus（MVP 推荐）：
 
@@ -67,6 +69,10 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 - `AI_JUDGE_RAG_QUERY_MESSAGE_LIMIT`: 检索查询使用最近消息条数，默认 `80`
 - `AI_JUDGE_RAG_SOURCE_WHITELIST`: 允许知识来源的 URL 前缀列表（逗号/分号/换行分隔），默认 `https://teamfighttactics.leagueoflegends.com/en-us/news/`
 - `AI_JUDGE_RAG_BACKEND`: `file|milvus`，默认 `file`
+- `AI_JUDGE_RAG_LEXICAL_ENGINE`: 词法检索引擎，当前固定为 `bm25`
+- `AI_JUDGE_RAG_BM25_CACHE_DIR`: BM25 sidecar 索引缓存目录，默认 `ai_judge_service/.cache/bm25`
+- `AI_JUDGE_RAG_BM25_USE_DISK_CACHE`: 是否启用 BM25 磁盘缓存，默认 `true`
+- `AI_JUDGE_RAG_BM25_FALLBACK_TO_SIMPLE`: BM25 不可用时是否回退简单 overlap lexical，默认 `true`
 - `AI_JUDGE_RAG_OPENAI_EMBEDDING_MODEL`: Milvus 检索生成查询向量的 embedding 模型，默认 `text-embedding-3-small`
 - `AI_JUDGE_RAG_MILVUS_URI`: Milvus 连接地址（例如 `http://127.0.0.1:19530`）
 - `AI_JUDGE_RAG_MILVUS_TOKEN`: Milvus token（可空）
@@ -181,6 +187,12 @@ M6 phase4 告警状态机：
 ]
 ```
 
+## 检索链路说明
+
+- `file` backend: `BM25 lexical -> topK -> BGE/heuristic rerank`
+- `milvus` backend 且 `AI_JUDGE_RAG_HYBRID_ENABLED=true`: `Milvus vector + BM25 lexical -> RRF -> BGE/heuristic rerank`
+- 当前不接 Elasticsearch；若后续知识规模、过滤条件和运维复杂度明显上升，再升级为外部 lexical backend。
+
 ## 运行测试
 
 依赖安装完成后执行：
@@ -222,7 +234,7 @@ bash scripts/release/ai_judge_m7_stage_acceptance_gate.sh \
 
 ```bash
 cd ai_judge_service
-.venv/bin/python scripts/rag_eval_baseline.py \
+../scripts/py scripts/rag_eval_baseline.py \
   --dataset-file ./tests/fixtures/rag_eval_cases.json \
   --knowledge-file ./knowledge.json \
   --output-file /tmp/rag_eval_result.json

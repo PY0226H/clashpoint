@@ -31,6 +31,10 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.topic_memory_enabled)
         self.assertTrue(settings.rag_hybrid_enabled)
         self.assertTrue(settings.rag_rerank_enabled)
+        self.assertEqual(settings.rag_lexical_engine, "bm25")
+        self.assertTrue(settings.rag_bm25_use_disk_cache)
+        self.assertTrue(settings.rag_bm25_fallback_to_simple)
+        self.assertIn(".cache/bm25", settings.rag_bm25_cache_dir)
         self.assertEqual(settings.rag_rerank_engine, "bge")
         self.assertEqual(settings.rag_rerank_model, "BAAI/bge-reranker-v2-m3")
         self.assertEqual(settings.rag_rerank_batch_size, 16)
@@ -100,6 +104,10 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_TOPIC_MEMORY_ENABLED": "false",
                 "AI_JUDGE_RAG_HYBRID_ENABLED": "false",
                 "AI_JUDGE_RAG_RERANK_ENABLED": "false",
+                "AI_JUDGE_RAG_LEXICAL_ENGINE": "bm25",
+                "AI_JUDGE_RAG_BM25_CACHE_DIR": "/tmp/bm25-cache",
+                "AI_JUDGE_RAG_BM25_USE_DISK_CACHE": "false",
+                "AI_JUDGE_RAG_BM25_FALLBACK_TO_SIMPLE": "false",
                 "AI_JUDGE_RAG_RERANK_ENGINE": "heuristic",
                 "AI_JUDGE_RAG_RERANK_MODEL": "BAAI/bge-reranker-v2-m3",
                 "AI_JUDGE_RAG_RERANK_BATCH_SIZE": "8",
@@ -161,6 +169,10 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(settings.topic_memory_enabled)
         self.assertFalse(settings.rag_hybrid_enabled)
         self.assertFalse(settings.rag_rerank_enabled)
+        self.assertEqual(settings.rag_lexical_engine, "bm25")
+        self.assertEqual(settings.rag_bm25_cache_dir, "/tmp/bm25-cache")
+        self.assertFalse(settings.rag_bm25_use_disk_cache)
+        self.assertFalse(settings.rag_bm25_fallback_to_simple)
         self.assertEqual(settings.rag_rerank_engine, "heuristic")
         self.assertEqual(settings.rag_rerank_model, "BAAI/bge-reranker-v2-m3")
         self.assertEqual(settings.rag_rerank_batch_size, 8)
