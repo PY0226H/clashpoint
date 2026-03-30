@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use chrono::{DateTime, Utc};
 use rdkafka::{
     consumer::{CommitMode, Consumer, StreamConsumer},
@@ -147,6 +147,101 @@ pub struct EventOutboxRelayMetricsSnapshot {
     pub retried_total: u64,
     pub failed_total: u64,
     pub dead_letter_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct KafkaConsumerRuntimeMetrics {
+    receive_error_total: AtomicU64,
+    process_succeeded_total: AtomicU64,
+    process_duplicated_total: AtomicU64,
+    process_retrying_total: AtomicU64,
+    process_failed_total: AtomicU64,
+    process_error_total: AtomicU64,
+    commit_success_total: AtomicU64,
+    commit_error_total: AtomicU64,
+    dropped_total: AtomicU64,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KafkaConsumerRuntimeMetricsSnapshot {
+    pub receive_error_total: u64,
+    pub process_succeeded_total: u64,
+    pub process_duplicated_total: u64,
+    pub process_retrying_total: u64,
+    pub process_failed_total: u64,
+    pub process_error_total: u64,
+    pub commit_success_total: u64,
+    pub commit_error_total: u64,
+    pub dropped_total: u64,
+}
+
+impl KafkaConsumerRuntimeMetrics {
+    fn observe_receive_error(&self) {
+        self.receive_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_process_outcome(&self, outcome: ConsumeProcessOutcome) {
+        match outcome {
+            ConsumeProcessOutcome::Succeeded => {
+                self.process_succeeded_total.fetch_add(1, Ordering::Relaxed);
+            }
+            ConsumeProcessOutcome::Duplicated => {
+                self.process_duplicated_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            ConsumeProcessOutcome::Retrying => {
+                self.process_retrying_total.fetch_add(1, Ordering::Relaxed);
+            }
+            ConsumeProcessOutcome::Failed => {
+                self.process_failed_total.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn observe_process_error(&self) {
+        self.process_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_commit_success(&self) {
+        self.commit_success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_commit_error(&self) {
+        self.commit_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_dropped(&self) {
+        self.dropped_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> KafkaConsumerRuntimeMetricsSnapshot {
+        KafkaConsumerRuntimeMetricsSnapshot {
+            receive_error_total: self.receive_error_total.load(Ordering::Relaxed),
+            process_succeeded_total: self.process_succeeded_total.load(Ordering::Relaxed),
+            process_duplicated_total: self.process_duplicated_total.load(Ordering::Relaxed),
+            process_retrying_total: self.process_retrying_total.load(Ordering::Relaxed),
+            process_failed_total: self.process_failed_total.load(Ordering::Relaxed),
+            process_error_total: self.process_error_total.load(Ordering::Relaxed),
+            commit_success_total: self.commit_success_total.load(Ordering::Relaxed),
+            commit_error_total: self.commit_error_total.load(Ordering::Relaxed),
+            dropped_total: self.dropped_total.load(Ordering::Relaxed),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn overwrite_error_metrics_for_test(
+        &self,
+        commit_error_total: u64,
+        process_error_total: u64,
+        dropped_total: u64,
+    ) {
+        self.commit_error_total
+            .store(commit_error_total, Ordering::Relaxed);
+        self.process_error_total
+            .store(process_error_total, Ordering::Relaxed);
+        self.dropped_total.store(dropped_total, Ordering::Relaxed);
+    }
 }
 
 impl EventOutboxRelayMetrics {
@@ -612,7 +707,11 @@ impl EventBus {
         Ok(report)
     }
 
-    pub fn maybe_spawn_consumer_worker(&self, pool: PgPool) -> anyhow::Result<()> {
+    pub fn maybe_spawn_consumer_worker(
+        &self,
+        pool: PgPool,
+        metrics: Arc<KafkaConsumerRuntimeMetrics>,
+    ) -> anyhow::Result<()> {
         let EventBus::Kafka(bus) = self else {
             return Ok(());
         };
@@ -662,7 +761,10 @@ impl EventBus {
             );
             loop {
                 match consumer.recv().await {
-                    Err(e) => warn!("kafka consume failed: {}", e),
+                    Err(e) => {
+                        metrics.observe_receive_error();
+                        warn!("kafka consume failed: {}", e);
+                    }
                     Ok(msg) => {
                         let topic = msg.topic().to_string();
                         let partition = msg.partition();
@@ -685,15 +787,23 @@ impl EventBus {
                         .await;
                         match outcome {
                             Ok(ret) => {
+                                metrics.observe_process_outcome(ret.outcome);
+                                if ret.should_commit
+                                    && matches!(ret.outcome, ConsumeProcessOutcome::Failed)
+                                {
+                                    metrics.observe_dropped();
+                                }
                                 if ret.should_commit {
                                     if let Err(err) =
                                         consumer.commit_message(&msg, CommitMode::Async)
                                     {
+                                        metrics.observe_commit_error();
                                         warn!(
                                             "kafka commit failed topic={} partition={} offset={}: {}",
                                             topic, partition, offset, err
                                         );
                                     } else {
+                                        metrics.observe_commit_success();
                                         info!(
                                             "kafka worker consumed topic={} partition={} offset={} key={:?} outcome={}",
                                             topic, partition, offset, key, ret.outcome
@@ -714,6 +824,7 @@ impl EventBus {
                                 }
                             }
                             Err(err) => {
+                                metrics.observe_process_error();
                                 warn!(
                                     "kafka worker process failed topic={} partition={} offset={} key={:?}: {}",
                                     topic, partition, offset, key, err
@@ -1024,7 +1135,7 @@ pub(crate) async fn process_worker_envelope(
         .await?
     };
 
-    let _ = apply_worker_business_logic(&mut tx, envelope).await?;
+    let _ = apply_worker_business_logic(&mut tx, meta, envelope).await?;
     sqlx::query(
         r#"
         UPDATE kafka_consume_ledger
@@ -1057,27 +1168,526 @@ pub(crate) async fn process_worker_envelope(
 
 async fn apply_worker_business_logic(
     tx: &mut Transaction<'_, Postgres>,
+    meta: &WorkerEnvelopeMeta,
     envelope: &EventEnvelope,
 ) -> anyhow::Result<BusinessProcessOutcome> {
     let event = decode_worker_event(envelope)?;
     match event {
         WorkerEvent::DebateParticipantJoined(v) => {
-            let _ = (tx, v);
+            apply_participant_joined_effect(tx, &v).await?;
+            record_worker_effect(
+                tx,
+                meta,
+                envelope,
+                WorkerEffectInput {
+                    session_id: to_i64(v.session_id, "session_id")?,
+                    user_id: Some(to_i64(v.user_id, "user_id")?),
+                    side: Some(normalize_debate_side(&v.side)?.to_string()),
+                    ..WorkerEffectInput::default()
+                },
+            )
+            .await?;
             Ok(BusinessProcessOutcome::Succeeded)
         }
         WorkerEvent::DebateSessionStatusChanged(v) => {
-            let _ = (tx, v);
+            apply_session_status_changed_effect(tx, &v).await?;
+            record_worker_effect(
+                tx,
+                meta,
+                envelope,
+                WorkerEffectInput {
+                    session_id: to_i64(v.session_id, "session_id")?,
+                    from_status: Some(normalize_debate_session_status(&v.from_status)?.to_string()),
+                    to_status: Some(normalize_debate_session_status(&v.to_status)?.to_string()),
+                    ..WorkerEffectInput::default()
+                },
+            )
+            .await?;
             Ok(BusinessProcessOutcome::Succeeded)
         }
         WorkerEvent::DebateMessageCreated(v) => {
-            let _ = (tx, v);
+            apply_message_created_effect(tx, &v).await?;
+            record_worker_effect(
+                tx,
+                meta,
+                envelope,
+                WorkerEffectInput {
+                    session_id: to_i64(v.session_id, "session_id")?,
+                    user_id: Some(to_i64(v.user_id, "user_id")?),
+                    message_id: Some(to_i64(v.message_id, "message_id")?),
+                    side: Some(normalize_debate_side(&v.side)?.to_string()),
+                    ..WorkerEffectInput::default()
+                },
+            )
+            .await?;
             Ok(BusinessProcessOutcome::Succeeded)
         }
         WorkerEvent::DebateMessagePinned(v) => {
-            let _ = (tx, v);
+            apply_message_pinned_effect(tx, &v).await?;
+            record_worker_effect(
+                tx,
+                meta,
+                envelope,
+                WorkerEffectInput {
+                    session_id: to_i64(v.session_id, "session_id")?,
+                    user_id: Some(to_i64(v.user_id, "user_id")?),
+                    message_id: Some(to_i64(v.message_id, "message_id")?),
+                    pin_id: Some(to_i64(v.pin_id, "pin_id")?),
+                    ledger_id: Some(to_i64(v.ledger_id, "ledger_id")?),
+                    cost_coins: Some(v.cost_coins),
+                    pin_seconds: Some(v.pin_seconds),
+                    expires_at: Some(v.expires_at),
+                    ..WorkerEffectInput::default()
+                },
+            )
+            .await?;
             Ok(BusinessProcessOutcome::Succeeded)
         }
     }
+}
+
+#[derive(Debug, Default)]
+struct WorkerEffectInput {
+    session_id: i64,
+    user_id: Option<i64>,
+    message_id: Option<i64>,
+    pin_id: Option<i64>,
+    ledger_id: Option<i64>,
+    from_status: Option<String>,
+    to_status: Option<String>,
+    side: Option<String>,
+    cost_coins: Option<i64>,
+    pin_seconds: Option<i32>,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkerMessageRow {
+    session_id: i64,
+    user_id: i64,
+    side: String,
+    content: String,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkerPinnedRow {
+    session_id: i64,
+    message_id: i64,
+    user_id: i64,
+    ledger_id: i64,
+    cost_coins: i64,
+    pin_seconds: i32,
+    expires_at: DateTime<Utc>,
+    status: String,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkerLedgerRow {
+    user_id: i64,
+    entry_type: String,
+    amount_delta: i64,
+}
+
+fn to_i64(value: u64, field: &str) -> anyhow::Result<i64> {
+    value
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{field} is out of i64 range"))
+}
+
+fn normalize_debate_side(side: &str) -> anyhow::Result<&'static str> {
+    match side.trim().to_ascii_lowercase().as_str() {
+        "pro" => Ok("pro"),
+        "con" => Ok("con"),
+        _ => Err(anyhow::anyhow!("unsupported debate side={side}")),
+    }
+}
+
+fn normalize_debate_session_status(status: &str) -> anyhow::Result<&'static str> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "scheduled" => Ok("scheduled"),
+        "open" => Ok("open"),
+        "running" => Ok("running"),
+        "judging" => Ok("judging"),
+        "closed" => Ok("closed"),
+        "canceled" => Ok("canceled"),
+        _ => Err(anyhow::anyhow!(
+            "unsupported debate session status={status}"
+        )),
+    }
+}
+
+fn debate_status_rank(status: &str) -> anyhow::Result<i32> {
+    Ok(match normalize_debate_session_status(status)? {
+        "scheduled" => 0,
+        "open" => 1,
+        "running" => 2,
+        "judging" => 3,
+        "closed" => 4,
+        "canceled" => 5,
+        _ => 0,
+    })
+}
+
+async fn apply_participant_joined_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &DebateParticipantJoinedEvent,
+) -> anyhow::Result<()> {
+    let session_id = to_i64(event.session_id, "session_id")?;
+    let user_id = to_i64(event.user_id, "user_id")?;
+    let side = normalize_debate_side(&event.side)?;
+    ensure!(
+        event.pro_count >= 0 && event.con_count >= 0,
+        "participant counts cannot be negative, pro_count={}, con_count={}",
+        event.pro_count,
+        event.con_count
+    );
+
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT side FROM session_participants WHERE session_id = $1 AND user_id = $2",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(existing_side) = row else {
+        return Err(anyhow::anyhow!(
+            "participant join event references missing row, session_id={}, user_id={}",
+            session_id,
+            user_id
+        ));
+    };
+    ensure!(
+        existing_side.eq_ignore_ascii_case(side),
+        "participant side mismatch, session_id={}, user_id={}, event_side={}, db_side={}",
+        session_id,
+        user_id,
+        side,
+        existing_side
+    );
+
+    let actual_counts: (i64, i64) = sqlx::query_as(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE side = 'pro')::bigint AS pro_count,
+            COUNT(*) FILTER (WHERE side = 'con')::bigint AS con_count
+        FROM session_participants
+        WHERE session_id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    ensure!(
+        (event.pro_count as i64) <= actual_counts.0 && (event.con_count as i64) <= actual_counts.1,
+        "participant count mismatch, event=({}, {}), actual=({}, {}), session_id={}",
+        event.pro_count,
+        event.con_count,
+        actual_counts.0,
+        actual_counts.1,
+        session_id
+    );
+
+    let affected = sqlx::query(
+        r#"
+        UPDATE debate_sessions
+        SET pro_count = GREATEST(pro_count, $2),
+            con_count = GREATEST(con_count, $3),
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(session_id)
+    .bind(event.pro_count)
+    .bind(event.con_count)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    ensure!(
+        affected == 1,
+        "participant join event references missing session_id={}",
+        session_id
+    );
+    Ok(())
+}
+
+async fn apply_session_status_changed_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &DebateSessionStatusChangedEvent,
+) -> anyhow::Result<()> {
+    let session_id = to_i64(event.session_id, "session_id")?;
+    let from_status = normalize_debate_session_status(&event.from_status)?;
+    let to_status = normalize_debate_session_status(&event.to_status)?;
+    let row: Option<String> =
+        sqlx::query_scalar("SELECT status FROM debate_sessions WHERE id = $1 FOR UPDATE")
+            .bind(session_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some(current_status) = row else {
+        return Err(anyhow::anyhow!(
+            "status change event references missing session_id={}",
+            session_id
+        ));
+    };
+    let current_status = normalize_debate_session_status(&current_status)?;
+    ensure!(
+        debate_status_rank(to_status)? >= debate_status_rank(from_status)?,
+        "invalid status transition in event, from={}, to={}, session_id={}",
+        from_status,
+        to_status,
+        session_id
+    );
+
+    if current_status == to_status {
+        return Ok(());
+    }
+
+    // Ignore stale transitions (e.g. running event arrives after closed).
+    if debate_status_rank(to_status)? < debate_status_rank(current_status)? {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE debate_sessions
+        SET status = $2,
+            updated_at = GREATEST(updated_at, $3)
+        WHERE id = $1
+        "#,
+    )
+    .bind(session_id)
+    .bind(to_status)
+    .bind(event.changed_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn apply_message_created_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &DebateMessageCreatedEvent,
+) -> anyhow::Result<()> {
+    let session_id = to_i64(event.session_id, "session_id")?;
+    let message_id = to_i64(event.message_id, "message_id")?;
+    let user_id = to_i64(event.user_id, "user_id")?;
+    let side = normalize_debate_side(&event.side)?;
+
+    let row: Option<WorkerMessageRow> = sqlx::query_as(
+        r#"
+        SELECT session_id, user_id, side, content
+        FROM session_messages
+        WHERE id = $1
+        "#,
+    )
+    .bind(message_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(row) = row else {
+        return Err(anyhow::anyhow!(
+            "message created event references missing message_id={}",
+            message_id
+        ));
+    };
+    ensure!(
+        row.session_id == session_id,
+        "message created session mismatch, message_id={}, event_session_id={}, db_session_id={}",
+        message_id,
+        session_id,
+        row.session_id
+    );
+    ensure!(
+        row.user_id == user_id,
+        "message created user mismatch, message_id={}, event_user_id={}, db_user_id={}",
+        message_id,
+        user_id,
+        row.user_id
+    );
+    ensure!(
+        row.side.eq_ignore_ascii_case(side),
+        "message created side mismatch, message_id={}, event_side={}, db_side={}",
+        message_id,
+        side,
+        row.side
+    );
+    ensure!(
+        row.content == event.content,
+        "message content mismatch, message_id={}",
+        message_id
+    );
+    Ok(())
+}
+
+async fn apply_message_pinned_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &DebateMessagePinnedEvent,
+) -> anyhow::Result<()> {
+    let pin_id = to_i64(event.pin_id, "pin_id")?;
+    let session_id = to_i64(event.session_id, "session_id")?;
+    let message_id = to_i64(event.message_id, "message_id")?;
+    let user_id = to_i64(event.user_id, "user_id")?;
+    let ledger_id = to_i64(event.ledger_id, "ledger_id")?;
+    ensure!(
+        event.cost_coins > 0,
+        "pinned event cost_coins should be positive, pin_id={}, cost_coins={}",
+        pin_id,
+        event.cost_coins
+    );
+
+    let pin_row: Option<WorkerPinnedRow> = sqlx::query_as(
+        r#"
+        SELECT session_id, message_id, user_id, ledger_id, cost_coins, pin_seconds, expires_at, status
+        FROM session_pinned_messages
+        WHERE id = $1
+        "#,
+    )
+    .bind(pin_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(pin_row) = pin_row else {
+        return Err(anyhow::anyhow!(
+            "message pinned event references missing pin_id={}",
+            pin_id
+        ));
+    };
+    ensure!(
+        pin_row.session_id == session_id
+            && pin_row.message_id == message_id
+            && pin_row.user_id == user_id
+            && pin_row.ledger_id == ledger_id,
+        "pinned event identity mismatch, pin_id={}",
+        pin_id
+    );
+    ensure!(
+        pin_row.cost_coins == event.cost_coins && pin_row.pin_seconds == event.pin_seconds,
+        "pinned event billing mismatch, pin_id={}, event=(cost={},seconds={}), db=(cost={},seconds={})",
+        pin_id,
+        event.cost_coins,
+        event.pin_seconds,
+        pin_row.cost_coins,
+        pin_row.pin_seconds
+    );
+    ensure!(
+        pin_row.expires_at == event.expires_at,
+        "pinned event expires_at mismatch, pin_id={}",
+        pin_id
+    );
+    ensure!(
+        pin_row.status.eq_ignore_ascii_case("active"),
+        "pinned event status not active, pin_id={}, status={}",
+        pin_id,
+        pin_row.status
+    );
+
+    let ledger_row: Option<WorkerLedgerRow> = sqlx::query_as(
+        r#"
+        SELECT user_id, entry_type, amount_delta
+        FROM wallet_ledger
+        WHERE id = $1
+        "#,
+    )
+    .bind(ledger_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(ledger_row) = ledger_row else {
+        return Err(anyhow::anyhow!(
+            "pinned event references missing wallet_ledger id={}",
+            ledger_id
+        ));
+    };
+    ensure!(
+        ledger_row.user_id == user_id,
+        "wallet ledger user mismatch, ledger_id={}, event_user_id={}, db_user_id={}",
+        ledger_id,
+        user_id,
+        ledger_row.user_id
+    );
+    ensure!(
+        ledger_row.entry_type == "pin_debit",
+        "wallet ledger entry_type mismatch, ledger_id={}, entry_type={}",
+        ledger_id,
+        ledger_row.entry_type
+    );
+    ensure!(
+        ledger_row.amount_delta == -event.cost_coins,
+        "wallet ledger amount mismatch, ledger_id={}, amount_delta={}, cost_coins={}",
+        ledger_id,
+        ledger_row.amount_delta,
+        event.cost_coins
+    );
+    Ok(())
+}
+
+async fn record_worker_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    meta: &WorkerEnvelopeMeta,
+    envelope: &EventEnvelope,
+    input: WorkerEffectInput,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO kafka_consume_worker_effects(
+            consumer_group, topic, partition, message_offset,
+            event_id, event_type, source, aggregate_id,
+            session_id, user_id, message_id, pin_id, ledger_id,
+            from_status, to_status, side,
+            cost_coins, pin_seconds, expires_at,
+            payload, applied_at, created_at, updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7, $8,
+            $9, $10, $11, $12, $13,
+            $14, $15, $16,
+            $17, $18, $19,
+            $20, $21, NOW(), NOW()
+        )
+        ON CONFLICT (consumer_group, event_id)
+        DO UPDATE SET
+            topic = EXCLUDED.topic,
+            partition = EXCLUDED.partition,
+            message_offset = EXCLUDED.message_offset,
+            event_type = EXCLUDED.event_type,
+            source = EXCLUDED.source,
+            aggregate_id = EXCLUDED.aggregate_id,
+            session_id = EXCLUDED.session_id,
+            user_id = EXCLUDED.user_id,
+            message_id = EXCLUDED.message_id,
+            pin_id = EXCLUDED.pin_id,
+            ledger_id = EXCLUDED.ledger_id,
+            from_status = EXCLUDED.from_status,
+            to_status = EXCLUDED.to_status,
+            side = EXCLUDED.side,
+            cost_coins = EXCLUDED.cost_coins,
+            pin_seconds = EXCLUDED.pin_seconds,
+            expires_at = EXCLUDED.expires_at,
+            payload = EXCLUDED.payload,
+            applied_at = EXCLUDED.applied_at,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(&meta.consumer_group)
+    .bind(&meta.topic)
+    .bind(meta.partition)
+    .bind(meta.offset)
+    .bind(&envelope.event_id)
+    .bind(&envelope.event_type)
+    .bind(&envelope.source)
+    .bind(&envelope.aggregate_id)
+    .bind(input.session_id)
+    .bind(input.user_id)
+    .bind(input.message_id)
+    .bind(input.pin_id)
+    .bind(input.ledger_id)
+    .bind(input.from_status)
+    .bind(input.to_status)
+    .bind(input.side)
+    .bind(input.cost_coins)
+    .bind(input.pin_seconds)
+    .bind(input.expires_at)
+    .bind(&envelope.payload)
+    .bind(envelope.occurred_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn decode_worker_event(envelope: &EventEnvelope) -> anyhow::Result<WorkerEvent> {
@@ -1242,6 +1852,57 @@ impl KafkaConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
+    use chrono::Duration;
+
+    async fn seed_topic_and_session(state: &crate::AppState, status: &str) -> Result<i64> {
+        let topic_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO debate_topics(title, description, category, stance_pro, stance_con, context_seed, is_active, created_by)
+            VALUES ('worker-topic', 'worker-desc', 'game', 'pro', 'con', 'seed', true, 1)
+            RETURNING id
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let now = Utc::now();
+        let session_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO debate_sessions(topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side)
+            VALUES ($1, $2, $3, $4, $5, 50)
+            RETURNING id
+            "#,
+        )
+        .bind(topic_id.0)
+        .bind(status)
+        .bind(now - Duration::minutes(10))
+        .bind(now - Duration::minutes(8))
+        .bind(now + Duration::minutes(30))
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(session_id.0)
+    }
+
+    async fn insert_participant(
+        state: &crate::AppState,
+        session_id: i64,
+        user_id: i64,
+        side: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO session_participants(session_id, user_id, side)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (session_id, user_id) DO NOTHING
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(side)
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
 
     #[test]
     fn kafka_topic_name_should_apply_prefix() {
@@ -1372,5 +2033,165 @@ mod tests {
         assert_eq!(relay_backoff_ms(2, &cfg), 1_000);
         assert_eq!(relay_backoff_ms(3, &cfg), 2_000);
         assert_eq!(relay_backoff_ms(20, &cfg), 60_000);
+    }
+
+    #[tokio::test]
+    async fn process_worker_envelope_should_record_effect_once_for_duplicate_message_event(
+    ) -> Result<()> {
+        let (_tdb, state) = crate::AppState::new_for_test().await?;
+        let session_id = seed_topic_and_session(&state, "running").await?;
+        insert_participant(&state, session_id, 1, "pro").await?;
+        let msg_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO session_messages(session_id, user_id, side, content)
+            VALUES ($1, $2, 'pro', 'worker-msg')
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(1_i64)
+        .fetch_one(&state.pool)
+        .await?;
+        let envelope = EventEnvelope::new(
+            EVENT_TYPE_DEBATE_MESSAGE_CREATED,
+            "chat-server",
+            format!("session:{session_id}"),
+            serde_json::to_value(DebateMessageCreatedEvent {
+                session_id: session_id as u64,
+                message_id: msg_id.0 as u64,
+                user_id: 1,
+                side: "pro".to_string(),
+                content: "worker-msg".to_string(),
+                created_at: Utc::now(),
+            })?,
+        );
+        let meta = WorkerEnvelopeMeta {
+            consumer_group: "worker-test-group".to_string(),
+            topic: TOPIC_DEBATE_MESSAGE_CREATED.to_string(),
+            partition: 0,
+            offset: 1,
+        };
+
+        let first = process_worker_envelope(&state.pool, &meta, &envelope).await?;
+        assert!(matches!(first, WorkerProcessOutcome::Succeeded));
+        let second = process_worker_envelope(&state.pool, &meta, &envelope).await?;
+        assert!(matches!(second, WorkerProcessOutcome::Duplicated));
+
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_consume_worker_effects
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(&meta.consumer_group)
+        .bind(&envelope.event_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_worker_envelope_should_validate_and_record_pinned_effect() -> Result<()> {
+        let (_tdb, state) = crate::AppState::new_for_test().await?;
+        let session_id = seed_topic_and_session(&state, "running").await?;
+        insert_participant(&state, session_id, 1, "pro").await?;
+        let message_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO session_messages(session_id, user_id, side, content)
+            VALUES ($1, $2, 'pro', 'pin-target-msg')
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(1_i64)
+        .fetch_one(&state.pool)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO user_wallets(user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET balance = EXCLUDED.balance, updated_at = NOW()
+            "#,
+        )
+        .bind(1_i64)
+        .bind(80_i64)
+        .execute(&state.pool)
+        .await?;
+        let ledger_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO wallet_ledger(user_id, order_id, entry_type, amount_delta, balance_after, idempotency_key, metadata)
+            VALUES ($1, NULL, 'pin_debit', $2, $3, $4, '{}'::jsonb)
+            RETURNING id
+            "#,
+        )
+        .bind(1_i64)
+        .bind(-20_i64)
+        .bind(80_i64)
+        .bind("worker-pin-ledger-1")
+        .fetch_one(&state.pool)
+        .await?;
+        let expires_at = Utc::now() + Duration::seconds(60);
+        let pin_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO session_pinned_messages(
+                session_id, message_id, user_id, ledger_id, cost_coins, pin_seconds, pinned_at, expires_at, status
+            )
+            VALUES ($1, $2, $3, $4, 20, 60, NOW(), $5, 'active')
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(message_id.0)
+        .bind(1_i64)
+        .bind(ledger_id.0)
+        .bind(expires_at)
+        .fetch_one(&state.pool)
+        .await?;
+
+        let envelope = EventEnvelope::new(
+            EVENT_TYPE_DEBATE_MESSAGE_PINNED,
+            "chat-server",
+            format!("session:{session_id}"),
+            serde_json::to_value(DebateMessagePinnedEvent {
+                pin_id: pin_id.0 as u64,
+                session_id: session_id as u64,
+                message_id: message_id.0 as u64,
+                user_id: 1,
+                ledger_id: ledger_id.0 as u64,
+                cost_coins: 20,
+                pin_seconds: 60,
+                pinned_at: Utc::now(),
+                expires_at,
+            })?,
+        );
+        let meta = WorkerEnvelopeMeta {
+            consumer_group: "worker-test-group".to_string(),
+            topic: TOPIC_DEBATE_MESSAGE_PINNED.to_string(),
+            partition: 1,
+            offset: 9,
+        };
+        let outcome = process_worker_envelope(&state.pool, &meta, &envelope).await?;
+        assert!(matches!(outcome, WorkerProcessOutcome::Succeeded));
+
+        let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+            r#"
+            SELECT user_id, message_id, pin_id, ledger_id
+            FROM kafka_consume_worker_effects
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(&meta.consumer_group)
+        .bind(&envelope.event_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row.0, Some(1));
+        assert_eq!(row.1, Some(message_id.0));
+        assert_eq!(row.2, Some(pin_id.0));
+        assert_eq!(row.3, Some(ledger_id.0));
+        Ok(())
     }
 }

@@ -33,7 +33,7 @@ pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
     DebateMessageCreatedEvent, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
     DebateSessionStatusChangedEvent, DomainEvent, EventBus, EventOutboxRelayConfig,
-    EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher,
+    EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher, KafkaConsumerRuntimeMetrics,
 };
 use models::JudgeDispatchTrigger;
 pub use models::*;
@@ -64,6 +64,7 @@ pub struct AppStateInner {
     pub(crate) event_bus: EventBus,
     pub(crate) dispatch_metrics: AiJudgeDispatchMetrics,
     pub(crate) event_outbox_metrics: EventOutboxRelayMetrics,
+    pub(crate) kafka_consumer_metrics: Arc<KafkaConsumerRuntimeMetrics>,
     pub(crate) dispatch_trigger_tx: Option<UnboundedSender<JudgeDispatchTrigger>>,
 }
 
@@ -397,9 +398,10 @@ impl AppState {
             .await
             .context("init redis store failed")?;
         let event_bus = EventBus::from_config(&config.kafka).context("init event bus failed")?;
+        let kafka_consumer_metrics = Arc::new(KafkaConsumerRuntimeMetrics::default());
         if mode == AppBootstrapMode::ApiServer {
             event_bus
-                .maybe_spawn_consumer_worker(pool.clone())
+                .maybe_spawn_consumer_worker(pool.clone(), kafka_consumer_metrics.clone())
                 .context("start kafka consumer worker failed")?;
         }
         let (dispatch_trigger_tx, dispatch_trigger_rx) = if mode == AppBootstrapMode::ApiServer
@@ -420,6 +422,7 @@ impl AppState {
                 event_bus,
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
+                kafka_consumer_metrics,
                 dispatch_trigger_tx,
             }),
         };
@@ -454,6 +457,7 @@ impl AppState {
                 event_bus,
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
+                kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
                 dispatch_trigger_tx: None,
             }),
         })
@@ -646,6 +650,7 @@ mod test_util {
                     event_bus: EventBus::Disabled,
                     dispatch_metrics: AiJudgeDispatchMetrics::default(),
                     event_outbox_metrics: EventOutboxRelayMetrics::default(),
+                    kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
                     dispatch_trigger_tx: None,
                 }),
             };
