@@ -7,6 +7,8 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
     #[serde(default)]
+    pub kafka: KafkaConfig,
+    #[serde(default)]
     pub redis: RedisConfig,
 }
 
@@ -19,6 +21,38 @@ pub struct AuthConfig {
 pub struct ServerConfig {
     pub port: u16,
     pub db_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KafkaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_kafka_disable_pg_listener")]
+    pub disable_pg_listener: bool,
+    #[serde(default = "default_kafka_brokers")]
+    pub brokers: String,
+    #[serde(default = "default_kafka_topic_prefix")]
+    pub topic_prefix: String,
+    #[serde(default = "default_kafka_client_id")]
+    pub client_id: String,
+    #[serde(default = "default_kafka_group_id")]
+    pub group_id: String,
+    #[serde(default)]
+    pub consume_topics: Vec<String>,
+}
+
+impl Default for KafkaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            disable_pg_listener: default_kafka_disable_pg_listener(),
+            brokers: default_kafka_brokers(),
+            topic_prefix: default_kafka_topic_prefix(),
+            client_id: default_kafka_client_id(),
+            group_id: default_kafka_group_id(),
+            consume_topics: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +102,26 @@ fn default_redis_default_ttl_secs() -> u64 {
 
 fn default_redis_startup_policy() -> String {
     "fail_open".to_string()
+}
+
+fn default_kafka_disable_pg_listener() -> bool {
+    false
+}
+
+fn default_kafka_brokers() -> String {
+    "127.0.0.1:9092".to_string()
+}
+
+fn default_kafka_topic_prefix() -> String {
+    String::new()
+}
+
+fn default_kafka_client_id() -> String {
+    "notify-server".to_string()
+}
+
+fn default_kafka_group_id() -> String {
+    "notify-server-group".to_string()
 }
 
 impl AppConfig {

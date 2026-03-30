@@ -63,6 +63,7 @@ mod tests {
             auth: crate::config::AuthConfig {
                 pk: include_str!("../../chat_core/fixtures/decoding.pem").to_string(),
             },
+            kafka: crate::config::KafkaConfig::default(),
             redis: crate::config::RedisConfig::default(),
         };
         Ok(AppState::new(config))

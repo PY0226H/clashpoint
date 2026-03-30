@@ -6,6 +6,14 @@ auth:
     -----BEGIN PUBLIC KEY-----
     MCowBQYDK2VwAyEAfM+lwNHj6TRJ3EGP38lIJcOo9Dlt2u2JzcwWMbu7jQY=
     -----END PUBLIC KEY-----
+kafka:
+  enabled: false
+  disable_pg_listener: false
+  brokers: 127.0.0.1:9092
+  topic_prefix: ""
+  client_id: notify-server
+  group_id: notify-server-group
+  consume_topics: []
 redis:
   enabled: false
   url: redis://127.0.0.1:6379/1

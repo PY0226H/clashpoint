@@ -4,6 +4,10 @@ use crate::AppState;
 use chat_core::{Chat, Message};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use rdkafka::{
+    consumer::{CommitMode, Consumer, StreamConsumer},
+    ClientConfig, Message as KafkaMessage,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgListener;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -12,6 +16,20 @@ use tracing::{info, warn};
 const PG_LISTENER_RECONNECT_BASE_MS: u64 = 1_000;
 const PG_LISTENER_RECONNECT_MAX_MS: u64 = 30_000;
 const PG_LISTENER_HEALTH_LOG_INTERVAL_SECS: u64 = 30;
+const KAFKA_CONSUMER_RECONNECT_BASE_MS: u64 = 1_000;
+const KAFKA_CONSUMER_RECONNECT_MAX_MS: u64 = 30_000;
+
+const KAFKA_EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined";
+const KAFKA_EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
+const KAFKA_EVENT_TYPE_DEBATE_MESSAGE_CREATED: &str = "debate.message.created";
+const KAFKA_EVENT_TYPE_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned";
+
+const KAFKA_DEFAULT_BASE_TOPICS: [&str; 4] = [
+    "debate.participant.joined.v1",
+    "debate.session.status.changed.v1",
+    "debate.message.created.v1",
+    "debate.message.pinned.v1",
+];
 
 const PG_LISTEN_CHANNELS: [&str; 9] = [
     "chat_updated",
@@ -232,6 +250,13 @@ struct OpsObservabilityAlertPayload {
     user_ids: Vec<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KafkaEventEnvelope {
+    event_type: String,
+    payload: serde_json::Value,
+}
+
 pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     let db_url = state.config.server.db_url.clone();
     tokio::spawn(async move {
@@ -316,6 +341,135 @@ pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
+    if !state.config.kafka.enabled {
+        return Ok(());
+    }
+    let kafka_config = state.config.kafka.clone();
+    tokio::spawn(async move {
+        let mut reconnect_attempt: u32 = 0;
+        loop {
+            let consumer = match build_kafka_consumer(&kafka_config) {
+                Ok(consumer) => {
+                    reconnect_attempt = 0;
+                    info!(
+                        "kafka consumer connected: brokers={}, topics={:?}",
+                        kafka_config.brokers,
+                        resolved_kafka_topics(&kafka_config)
+                    );
+                    consumer
+                }
+                Err(err) => {
+                    reconnect_attempt = reconnect_attempt.saturating_add(1);
+                    let delay = compute_kafka_consumer_reconnect_delay(reconnect_attempt);
+                    warn!(
+                        "kafka consumer connect failed (attempt={}): {}. retry in {}ms",
+                        reconnect_attempt,
+                        err,
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            };
+
+            loop {
+                match consumer.recv().await {
+                    Err(err) => {
+                        warn!("kafka consumer recv failed (will reconnect): {}", err);
+                        break;
+                    }
+                    Ok(msg) => {
+                        let topic = msg.topic().to_string();
+                        let partition = msg.partition();
+                        let offset = msg.offset();
+                        let payload = match msg.payload_view::<str>() {
+                            Some(Ok(v)) => v,
+                            _ => "",
+                        };
+
+                        match handle_kafka_payload(&state, payload).await {
+                            Ok(()) => {
+                                if let Err(err) = consumer.commit_message(&msg, CommitMode::Async) {
+                                    warn!(
+                                        "kafka consumer commit failed topic={} partition={} offset={}: {}",
+                                        topic, partition, offset, err
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "kafka payload process failed topic={} partition={} offset={} (will retry): {}",
+                                    topic, partition, offset, err
+                                );
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            reconnect_attempt = reconnect_attempt.saturating_add(1);
+            let delay = compute_kafka_consumer_reconnect_delay(reconnect_attempt);
+            warn!(
+                "kafka consumer restarting after stream exit (attempt={}, backoff={}ms)",
+                reconnect_attempt,
+                delay.as_millis()
+            );
+            tokio::time::sleep(delay).await;
+        }
+    });
+
+    Ok(())
+}
+
+fn compute_kafka_consumer_reconnect_delay(attempt: u32) -> Duration {
+    let power = attempt.saturating_sub(1).min(10);
+    let exp = KAFKA_CONSUMER_RECONNECT_BASE_MS.saturating_mul(2_u64.saturating_pow(power));
+    Duration::from_millis(exp.min(KAFKA_CONSUMER_RECONNECT_MAX_MS))
+}
+
+fn build_kafka_consumer(kafka: &crate::config::KafkaConfig) -> anyhow::Result<StreamConsumer> {
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("bootstrap.servers", &kafka.brokers)
+        .set("group.id", &kafka.group_id)
+        .set("client.id", &kafka.client_id)
+        .set("enable.partition.eof", "false")
+        .set("session.timeout.ms", "6000")
+        .set("enable.auto.commit", "false")
+        .create()
+        .map_err(|err| anyhow::anyhow!("create kafka consumer failed: {}", err))?;
+    let topics = resolved_kafka_topics(kafka);
+    let topic_refs: Vec<&str> = topics.iter().map(String::as_str).collect();
+    consumer
+        .subscribe(&topic_refs)
+        .map_err(|err| anyhow::anyhow!("subscribe kafka topics failed: {}", err))?;
+    Ok(consumer)
+}
+
+fn resolved_kafka_topics(kafka: &crate::config::KafkaConfig) -> Vec<String> {
+    if kafka.consume_topics.is_empty() {
+        return KAFKA_DEFAULT_BASE_TOPICS
+            .iter()
+            .map(|base| kafka_topic_name(&kafka.topic_prefix, base))
+            .collect();
+    }
+    kafka
+        .consume_topics
+        .iter()
+        .map(|topic| kafka_topic_name(&kafka.topic_prefix, topic))
+        .collect()
+}
+
+fn kafka_topic_name(prefix: &str, base_topic: &str) -> String {
+    let prefix = prefix.trim();
+    if prefix.is_empty() {
+        base_topic.to_string()
+    } else {
+        format!("{}.{}", prefix, base_topic)
+    }
+}
+
 async fn connect_and_listen(db_url: &str) -> anyhow::Result<PgListener> {
     let mut listener = PgListener::connect(db_url).await?;
     for channel in PG_LISTEN_CHANNELS {
@@ -329,6 +483,37 @@ async fn dispatch_notification(
     notif: &sqlx::postgres::PgNotification,
 ) -> anyhow::Result<()> {
     let notification = Notification::load(notif.channel(), notif.payload())?;
+    dispatch_loaded_notification(state, notification).await
+}
+
+async fn handle_kafka_payload(state: &AppState, payload: &str) -> anyhow::Result<()> {
+    let envelope = match serde_json::from_str::<KafkaEventEnvelope>(payload) {
+        Ok(v) => v,
+        Err(err) => {
+            warn!("drop invalid kafka envelope payload: {}", err);
+            return Ok(());
+        }
+    };
+    let notification = match Notification::from_kafka_event(state, &envelope).await {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(
+                "drop invalid kafka event payload: event_type={}, err={}",
+                envelope.event_type, err
+            );
+            return Ok(());
+        }
+    };
+    let Some(notification) = notification else {
+        return Ok(());
+    };
+    dispatch_loaded_notification(state, notification).await
+}
+
+async fn dispatch_loaded_notification(
+    state: &AppState,
+    notification: Notification,
+) -> anyhow::Result<()> {
     let replay_event = match state
         .persist_debate_event(notification.event.as_ref())
         .await
@@ -358,6 +543,23 @@ async fn dispatch_notification(
     Ok(())
 }
 
+async fn load_debate_session_user_ids(
+    state: &AppState,
+    session_id: i64,
+) -> anyhow::Result<HashSet<u64>> {
+    let user_ids: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(array_agg(user_id), ARRAY[]::bigint[])
+        FROM session_participants
+        WHERE session_id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(user_ids.into_iter().map(|v| v as u64).collect())
+}
+
 fn compute_pg_listener_reconnect_delay(attempt: u32) -> Duration {
     let power = attempt.saturating_sub(1).min(10);
     let exp = PG_LISTENER_RECONNECT_BASE_MS.saturating_mul(2_u64.saturating_pow(power));
@@ -365,6 +567,49 @@ fn compute_pg_listener_reconnect_delay(attempt: u32) -> Duration {
 }
 
 impl Notification {
+    async fn from_kafka_event(
+        state: &AppState,
+        envelope: &KafkaEventEnvelope,
+    ) -> anyhow::Result<Option<Self>> {
+        match envelope.event_type.as_str() {
+            KAFKA_EVENT_TYPE_DEBATE_PARTICIPANT_JOINED => {
+                let event: DebateParticipantJoined =
+                    serde_json::from_value(envelope.payload.clone())?;
+                let user_ids = load_debate_session_user_ids(state, event.session_id).await?;
+                Ok(Some(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateParticipantJoined(event)),
+                }))
+            }
+            KAFKA_EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED => {
+                let event: DebateSessionStatusChanged =
+                    serde_json::from_value(envelope.payload.clone())?;
+                let user_ids = load_debate_session_user_ids(state, event.session_id).await?;
+                Ok(Some(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateSessionStatusChanged(event)),
+                }))
+            }
+            KAFKA_EVENT_TYPE_DEBATE_MESSAGE_CREATED => {
+                let event: DebateMessageCreated = serde_json::from_value(envelope.payload.clone())?;
+                let user_ids = load_debate_session_user_ids(state, event.session_id).await?;
+                Ok(Some(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateMessageCreated(event)),
+                }))
+            }
+            KAFKA_EVENT_TYPE_DEBATE_MESSAGE_PINNED => {
+                let event: DebateMessagePinned = serde_json::from_value(envelope.payload.clone())?;
+                let user_ids = load_debate_session_user_ids(state, event.session_id).await?;
+                Ok(Some(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateMessagePinned(event)),
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn load(r#type: &str, payload: &str) -> anyhow::Result<Self> {
         match r#type {
             "chat_updated" => {
@@ -900,5 +1145,56 @@ mod tests {
             compute_pg_listener_reconnect_delay(99),
             Duration::from_millis(30_000)
         );
+    }
+
+    #[test]
+    fn compute_kafka_consumer_reconnect_delay_should_backoff_and_cap() {
+        assert_eq!(
+            compute_kafka_consumer_reconnect_delay(1),
+            Duration::from_millis(1_000)
+        );
+        assert_eq!(
+            compute_kafka_consumer_reconnect_delay(2),
+            Duration::from_millis(2_000)
+        );
+        assert_eq!(
+            compute_kafka_consumer_reconnect_delay(3),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            compute_kafka_consumer_reconnect_delay(10),
+            Duration::from_millis(30_000)
+        );
+        assert_eq!(
+            compute_kafka_consumer_reconnect_delay(99),
+            Duration::from_millis(30_000)
+        );
+    }
+
+    #[test]
+    fn kafka_topic_name_should_apply_prefix() {
+        assert_eq!(
+            kafka_topic_name("", "debate.message.created.v1"),
+            "debate.message.created.v1"
+        );
+        assert_eq!(
+            kafka_topic_name("echoisle", "debate.message.created.v1"),
+            "echoisle.debate.message.created.v1"
+        );
+    }
+
+    #[test]
+    fn resolved_kafka_topics_should_use_defaults_when_consume_topics_empty() {
+        let cfg = crate::config::KafkaConfig {
+            enabled: true,
+            topic_prefix: "echoisle".to_string(),
+            ..Default::default()
+        };
+        let topics = resolved_kafka_topics(&cfg);
+        assert_eq!(topics.len(), 4);
+        assert_eq!(topics[0], "echoisle.debate.participant.joined.v1");
+        assert_eq!(topics[1], "echoisle.debate.session.status.changed.v1");
+        assert_eq!(topics[2], "echoisle.debate.message.created.v1");
+        assert_eq!(topics[3], "echoisle.debate.message.pinned.v1");
     }
 }

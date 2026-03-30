@@ -87,7 +87,13 @@ const INDEX_HTML: &str = include_str!("../index.html");
 
 pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
     let state = AppState::new(config);
-    notif::setup_pg_listener(state.clone()).await?;
+    let kafka_only = state.config.kafka.enabled && state.config.kafka.disable_pg_listener;
+    if kafka_only {
+        info!("notify ingress mode: kafka-only (pg listener disabled by config)");
+    } else {
+        notif::setup_pg_listener(state.clone()).await?;
+    }
+    notif::setup_kafka_consumer(state.clone()).await?;
 
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource

@@ -485,6 +485,7 @@ impl AppState {
             .enqueue_in_tx(
                 &mut tx,
                 DomainEvent::DebateMessagePinned(DebateMessagePinnedEvent {
+                    pin_id: pin.id as u64,
                     session_id: pin.session_id as u64,
                     message_id: pin.message_id as u64,
                     user_id: user.id as u64,

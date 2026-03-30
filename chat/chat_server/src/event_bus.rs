@@ -479,6 +479,7 @@ pub struct DebateMessageCreatedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebateMessagePinnedEvent {
+    pub pin_id: u64,
     pub session_id: u64,
     pub message_id: u64,
     pub user_id: u64,
