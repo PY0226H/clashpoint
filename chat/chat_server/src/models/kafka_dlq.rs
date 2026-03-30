@@ -15,6 +15,8 @@ use utoipa::{IntoParams, ToSchema};
 const DLQ_STATUS_PENDING: &str = "pending";
 const DLQ_STATUS_REPLAYED: &str = "replayed";
 const DLQ_STATUS_DISCARDED: &str = "discarded";
+const NOTIFY_RUNTIME_SERVICE_NAME: &str = "notify_server";
+const NOTIFY_RUNTIME_SIGNAL_STALE_SECS: i64 = 300;
 
 #[derive(Debug, Clone, Deserialize, ToSchema, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +143,15 @@ struct KafkaDlqActionRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, FromRow)]
+struct NotifyRuntimeSignalRow {
+    kafka_enabled: bool,
+    disable_pg_listener: bool,
+    kafka_connected_at: Option<DateTime<Utc>>,
+    kafka_last_commit_at: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
+}
+
 fn normalize_limit(limit: Option<u64>) -> i64 {
     limit.unwrap_or(20).clamp(1, 100) as i64
 }
@@ -231,8 +242,23 @@ impl AppState {
         .bind(DLQ_STATUS_PENDING)
         .fetch_one(&self.pool)
         .await?;
-        // Kafka consume -> notify fanout bridge is intentionally not switched in this round.
-        let notify_consume_chain_ready = false;
+        let notify_runtime_signal: Option<NotifyRuntimeSignalRow> = sqlx::query_as(
+            r#"
+            SELECT
+                kafka_enabled,
+                disable_pg_listener,
+                kafka_connected_at,
+                kafka_last_commit_at,
+                updated_at
+            FROM notify_runtime_signals
+            WHERE service_name = $1
+            "#,
+        )
+        .bind(NOTIFY_RUNTIME_SERVICE_NAME)
+        .fetch_optional(&self.pool)
+        .await?;
+        let (notify_consume_chain_ready, notify_chain_blockers) =
+            evaluate_notify_consume_chain_runtime(notify_runtime_signal.as_ref(), Utc::now());
         let dlq_replay_loop_ready = pending_dlq_count == 0;
         let consumer_metrics = self.kafka_consumer_metrics.snapshot();
 
@@ -267,9 +293,7 @@ impl AppState {
                 consumer_metrics.process_error_total
             ));
         }
-        if !notify_consume_chain_ready {
-            blockers.push("notify consume chain is not wired to Kafka yet".to_string());
-        }
+        blockers.extend(notify_chain_blockers);
         if pending_dlq_count > 0 {
             blockers.push(format!(
                 "pending dlq events detected: {}",
@@ -477,10 +501,52 @@ impl AppState {
     }
 }
 
+fn evaluate_notify_consume_chain_runtime(
+    signal: Option<&NotifyRuntimeSignalRow>,
+    now: DateTime<Utc>,
+) -> (bool, Vec<String>) {
+    let mut blockers = Vec::new();
+    let Some(signal) = signal else {
+        blockers.push("notify runtime signal is missing".to_string());
+        return (false, blockers);
+    };
+
+    if !signal.kafka_enabled {
+        blockers.push("notify kafka ingress is disabled".to_string());
+    }
+    if !signal.disable_pg_listener {
+        blockers.push("notify kafka-only mode is disabled".to_string());
+    }
+    if signal.kafka_connected_at.is_none() {
+        blockers.push("notify kafka consumer has not connected".to_string());
+    }
+    match signal.kafka_last_commit_at {
+        None => blockers.push("notify kafka consumer has not committed any event".to_string()),
+        Some(ts) => {
+            let stale_secs = (now - ts).num_seconds().max(0);
+            if stale_secs > NOTIFY_RUNTIME_SIGNAL_STALE_SECS {
+                blockers.push(format!(
+                    "notify kafka consumer commit heartbeat is stale: {}s",
+                    stale_secs
+                ));
+            }
+        }
+    }
+    let signal_stale_secs = (now - signal.updated_at).num_seconds().max(0);
+    if signal_stale_secs > NOTIFY_RUNTIME_SIGNAL_STALE_SECS {
+        blockers.push(format!(
+            "notify runtime signal is stale: {}s",
+            signal_stale_secs
+        ));
+    }
+    (blockers.is_empty(), blockers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Result;
+    use chrono::Duration;
     use serde_json::json;
 
     async fn setup_ops_owner(state: &AppState) -> Result<User> {
@@ -518,6 +584,47 @@ mod tests {
             "occurredAt": "2026-03-30T00:00:00Z",
             "payload": {}
         }))
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn upsert_notify_runtime_signal_for_test(
+        state: &AppState,
+        kafka_enabled: bool,
+        disable_pg_listener: bool,
+        kafka_connected_at: Option<DateTime<Utc>>,
+        kafka_last_commit_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO notify_runtime_signals(
+                service_name,
+                kafka_enabled,
+                disable_pg_listener,
+                kafka_connected_at,
+                kafka_last_commit_at,
+                kafka_last_error,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, NULL, $6)
+            ON CONFLICT (service_name)
+            DO UPDATE SET
+                kafka_enabled = EXCLUDED.kafka_enabled,
+                disable_pg_listener = EXCLUDED.disable_pg_listener,
+                kafka_connected_at = EXCLUDED.kafka_connected_at,
+                kafka_last_commit_at = EXCLUDED.kafka_last_commit_at,
+                kafka_last_error = EXCLUDED.kafka_last_error,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(NOTIFY_RUNTIME_SERVICE_NAME)
+        .bind(kafka_enabled)
+        .bind(disable_pg_listener)
+        .bind(kafka_connected_at)
+        .bind(kafka_last_commit_at)
+        .bind(updated_at)
         .execute(&state.pool)
         .await?;
         Ok(())
@@ -562,6 +669,10 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item == "pending dlq events detected: 1"));
+        assert!(output
+            .blockers
+            .iter()
+            .any(|item| item == "notify runtime signal is missing"));
         Ok(())
     }
 
@@ -578,6 +689,31 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item.starts_with("pending dlq events detected:")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_mark_notify_chain_ready_with_fresh_signal(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        upsert_notify_runtime_signal_for_test(
+            &state,
+            true,
+            true,
+            Some(now - Duration::seconds(2)),
+            Some(now - Duration::seconds(1)),
+            now,
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(output.notify_consume_chain_ready);
+        assert!(!output
+            .blockers
+            .iter()
+            .any(|item| item.starts_with("notify ")));
         Ok(())
     }
 }
