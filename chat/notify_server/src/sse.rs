@@ -18,16 +18,26 @@ pub(crate) async fn sse_handler(
     let rx = state.subscribe_user_events(user_id);
     info!("User {} subscribed", user_id);
 
-    let stream = BroadcastStream::new(rx).filter_map(|v| v.ok()).map(|v| {
-        let name = v.app_event.event_name();
-        let v = serde_json::to_string(v.app_event.as_ref()).expect("Failed to serialize event");
-        debug!("Sending event {}: {:?}", name, v);
-        Ok(Event::default().data(v).event(name))
-    });
+    let stream = BroadcastStream::new(rx)
+        .filter_map(|v| v.ok())
+        .filter_map(move |event| {
+            if event.app_event.is_debate_event() {
+                debug!(
+                    "skip debate event on SSE path: user_id={}, event_name={}",
+                    user_id,
+                    event.app_event.event_name()
+                );
+                return None;
+            }
+            let name = event.app_event.event_name();
+            let payload =
+                serde_json::to_string(event.app_event.as_ref()).expect("Failed to serialize event");
+            Some(Ok(Event::default().data(payload).event(name)))
+        });
 
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(1))
-            .text("keep-alive-text"),
+            .interval(Duration::from_secs(15))
+            .text("ka"),
     )
 }

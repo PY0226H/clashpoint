@@ -105,6 +105,7 @@ async fn websocket_loop(
 enum RoomClientMessage {
     Ping,
     Pong,
+    Ack { event_seq: u64 },
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -119,7 +120,9 @@ enum RoomServerMessage {
     Welcome {
         session_id: i64,
         user_id: u64,
+        baseline_ack_seq: u64,
         last_event_seq: u64,
+        replay_count: usize,
         heartbeat_interval_ms: u64,
         heartbeat_timeout_ms: u64,
     },
@@ -138,6 +141,12 @@ enum RoomServerMessage {
     SyncRequired {
         reason: String,
         skipped: u64,
+        expected_from_seq: Option<u64>,
+        gap_from_seq: Option<u64>,
+        gap_to_seq: Option<u64>,
+        suggested_last_ack_seq: u64,
+        latest_event_seq: Option<u64>,
+        strategy: String,
     },
 }
 
@@ -149,6 +158,8 @@ async fn debate_room_loop(
     last_ack_seq: Option<u64>,
     state: AppState,
 ) {
+    let mut client_last_ack_seq = last_ack_seq.unwrap_or(0);
+    let mut last_sent_event_seq = client_last_ack_seq;
     let mut last_client_heartbeat = Instant::now();
     let mut heartbeat_tick = tokio::time::interval(ROOM_HEARTBEAT_INTERVAL);
     heartbeat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -156,13 +167,21 @@ async fn debate_room_loop(
     let replay_window = state
         .replay_debate_events_for_user(user_id, session_id, last_ack_seq)
         .await;
+    let should_replay = !replay_window.has_gap;
+    let replay_count = if should_replay {
+        replay_window.events.len()
+    } else {
+        0
+    };
 
     if !send_room_message(
         &mut socket,
         &RoomServerMessage::Welcome {
             session_id,
             user_id,
+            baseline_ack_seq: client_last_ack_seq,
             last_event_seq: replay_window.latest_seq,
+            replay_count,
             heartbeat_interval_ms: ROOM_HEARTBEAT_INTERVAL.as_millis() as u64,
             heartbeat_timeout_ms: ROOM_HEARTBEAT_TIMEOUT.as_millis() as u64,
         },
@@ -172,17 +191,33 @@ async fn debate_room_loop(
         return;
     }
     if replay_window.has_gap {
+        let expected_from_seq = client_last_ack_seq.saturating_add(1);
+        let first_available_seq = replay_window
+            .events
+            .first()
+            .map(|v| v.event_seq)
+            .unwrap_or(replay_window.latest_seq.saturating_add(1));
+        let gap_to_seq = first_available_seq.saturating_sub(1);
         let sync_msg = RoomServerMessage::SyncRequired {
             reason: "replay_window_miss".to_string(),
             skipped: replay_window.skipped,
+            expected_from_seq: Some(expected_from_seq),
+            gap_from_seq: Some(expected_from_seq),
+            gap_to_seq: (gap_to_seq >= expected_from_seq).then_some(gap_to_seq),
+            suggested_last_ack_seq: client_last_ack_seq,
+            latest_event_seq: Some(replay_window.latest_seq),
+            strategy: "snapshot_then_reconnect".to_string(),
         };
         if !send_room_message(&mut socket, &sync_msg).await {
             return;
         }
     }
-    for replay_event in replay_window.events {
-        if !send_room_message(&mut socket, &room_event_message(&replay_event)).await {
-            return;
+    if should_replay {
+        for replay_event in replay_window.events {
+            if !send_room_message(&mut socket, &room_event_message(&replay_event)).await {
+                return;
+            }
+            last_sent_event_seq = last_sent_event_seq.max(replay_event.event_seq);
         }
     }
 
@@ -219,6 +254,10 @@ async fn debate_room_loop(
                             Ok(RoomClientMessage::Pong) => {
                                 last_client_heartbeat = Instant::now();
                             }
+                            Ok(RoomClientMessage::Ack { event_seq }) => {
+                                last_client_heartbeat = Instant::now();
+                                client_last_ack_seq = client_last_ack_seq.max(event_seq);
+                            }
                             Err(_) => {}
                         }
                     }
@@ -252,15 +291,25 @@ async fn debate_room_loop(
                         if !send_room_message(&mut socket, &msg).await {
                             break;
                         }
+                        last_sent_event_seq = last_sent_event_seq.max(replay_event.event_seq);
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!(
                             "debate room websocket lagged for user {}, session {}, skipped {} events",
                             user_id, session_id, skipped
                         );
+                        let expected_from_seq = last_sent_event_seq.saturating_add(1);
+                        let gap_to_seq =
+                            expected_from_seq.saturating_add(skipped.saturating_sub(1));
                         let sync_msg = RoomServerMessage::SyncRequired {
                             reason: "lagged_receiver".to_string(),
                             skipped,
+                            expected_from_seq: Some(expected_from_seq),
+                            gap_from_seq: Some(expected_from_seq),
+                            gap_to_seq: Some(gap_to_seq),
+                            suggested_last_ack_seq: client_last_ack_seq,
+                            latest_event_seq: Some(last_sent_event_seq.saturating_add(skipped)),
+                            strategy: "snapshot_then_reconnect".to_string(),
                         };
                         if !send_room_message(&mut socket, &sync_msg).await {
                             break;
@@ -428,6 +477,18 @@ mod tests {
             .and_then(|v| v.as_i64())
             .expect("welcome should carry session id");
         assert_eq!(welcome_session_id, 12);
+        let baseline_ack_seq = welcome_json
+            .get("baselineAckSeq")
+            .or_else(|| welcome_json.get("baseline_ack_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("welcome should carry baselineAckSeq");
+        assert_eq!(baseline_ack_seq, 0);
+        let replay_count = welcome_json
+            .get("replayCount")
+            .or_else(|| welcome_json.get("replay_count"))
+            .and_then(|v| v.as_u64())
+            .expect("welcome should carry replayCount");
+        assert_eq!(replay_count, 0);
         let heartbeat_interval_ms = welcome_json
             .get("heartbeatIntervalMs")
             .or_else(|| welcome_json.get("heartbeat_interval_ms"))
@@ -544,6 +605,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn debate_room_ws_handler_should_accept_ack_frame() -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/ws/debate/12?token={notify_ticket}")).await?;
+        let _welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+
+        for _ in 0..40 {
+            if state.users.contains_key(&1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let tx = state.users.get(&1).expect("user channel should exist");
+        let first_event = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(
+                crate::notif::DebateParticipantJoined {
+                    session_id: 12,
+                    user_id: 1,
+                    side: "pro".to_string(),
+                    pro_count: 2,
+                    con_count: 1,
+                },
+            )),
+            None,
+        );
+        tx.send(Arc::new(first_event))?;
+
+        let first_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let first_text = first_msg
+            .expect("should receive first room event")
+            .expect("first room event should be ws ok")
+            .into_text()?
+            .to_string();
+        let first_json: serde_json::Value = serde_json::from_str(&first_text)?;
+        assert_eq!(first_json["type"], "roomEvent");
+        let first_seq = first_json
+            .get("eventSeq")
+            .or_else(|| first_json.get("event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("first room event should carry event seq");
+
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(format!(
+                r#"{{"type":"ack","eventSeq":{first_seq}}}"#
+            )))
+            .await?;
+
+        let second_event = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(
+                crate::notif::DebateParticipantJoined {
+                    session_id: 12,
+                    user_id: 2,
+                    side: "con".to_string(),
+                    pro_count: 2,
+                    con_count: 2,
+                },
+            )),
+            None,
+        );
+        tx.send(Arc::new(second_event))?;
+
+        let second_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let second_text = second_msg
+            .expect("should receive second room event")
+            .expect("second room event should be ws ok")
+            .into_text()?
+            .to_string();
+        let second_json: serde_json::Value = serde_json::from_str(&second_text)?;
+        assert_eq!(second_json["type"], "roomEvent");
+        let second_seq = second_json
+            .get("eventSeq")
+            .or_else(|| second_json.get("event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("second room event should carry event seq");
+        assert!(second_seq > first_seq);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn debate_room_ws_handler_should_replay_from_last_ack_seq() -> Result<()> {
         let state = test_state();
         let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
@@ -603,6 +759,121 @@ mod tests {
             .and_then(|v| v.as_u64())
             .expect("replay event should carry event seq");
         assert_eq!(event_seq, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_room_ws_handler_should_require_sync_when_replay_window_has_gap() -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let event_payload = AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+            session_id: 12,
+            user_id: 1,
+            side: "pro".to_string(),
+            pro_count: 2,
+            con_count: 1,
+        });
+        let event_value = serde_json::to_value(&event_payload)?;
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(event_payload),
+            Some(DebateReplayEvent {
+                session_id: 12,
+                event_seq: 50,
+                event_name: "DebateParticipantJoined".to_string(),
+                payload: event_value.clone(),
+                event_at_ms: now_unix_ms(),
+            }),
+        );
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                session_id: 12,
+                user_id: 2,
+                side: "con".to_string(),
+                pro_count: 2,
+                con_count: 2,
+            })),
+            Some(DebateReplayEvent {
+                session_id: 12,
+                event_seq: 51,
+                event_name: "DebateParticipantJoined".to_string(),
+                payload: event_value,
+                event_at_ms: now_unix_ms(),
+            }),
+        );
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) = connect_async(format!(
+            "ws://{addr}/ws/debate/12?token={notify_ticket}&lastAckSeq=1"
+        ))
+        .await?;
+        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome_msg = welcome
+            .expect("should receive welcome message")
+            .expect("welcome message should be ws ok");
+        let welcome_text = welcome_msg.into_text()?.to_string();
+        let welcome_json: serde_json::Value = serde_json::from_str(&welcome_text)?;
+        assert_eq!(welcome_json["type"], "welcome");
+        let replay_count = welcome_json
+            .get("replayCount")
+            .or_else(|| welcome_json.get("replay_count"))
+            .and_then(|v| v.as_u64())
+            .expect("welcome should carry replayCount");
+        assert_eq!(replay_count, 0);
+        let last_event_seq = welcome_json
+            .get("lastEventSeq")
+            .or_else(|| welcome_json.get("last_event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("welcome should carry lastEventSeq");
+        assert_eq!(last_event_seq, 51);
+
+        let sync_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let sync_text = sync_msg
+            .expect("should receive syncRequired message")
+            .expect("syncRequired should be ws ok")
+            .into_text()?
+            .to_string();
+        let sync_json: serde_json::Value = serde_json::from_str(&sync_text)?;
+        assert_eq!(sync_json["type"], "syncRequired");
+        assert_eq!(sync_json["reason"], "replay_window_miss");
+        let suggested_last_ack_seq = sync_json
+            .get("suggestedLastAckSeq")
+            .or_else(|| sync_json.get("suggested_last_ack_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry suggestedLastAckSeq");
+        assert_eq!(suggested_last_ack_seq, 1);
+        let gap_from_seq = sync_json
+            .get("gapFromSeq")
+            .or_else(|| sync_json.get("gap_from_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry gapFromSeq");
+        assert_eq!(gap_from_seq, 2);
+        let gap_to_seq = sync_json
+            .get("gapToSeq")
+            .or_else(|| sync_json.get("gap_to_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry gapToSeq");
+        assert_eq!(gap_to_seq, 49);
+        assert_eq!(sync_json["strategy"], "snapshot_then_reconnect");
+
+        let no_replay = tokio::time::timeout(Duration::from_millis(200), socket.next()).await;
+        assert!(
+            no_replay.is_err(),
+            "gap replay should not stream room events"
+        );
         Ok(())
     }
 

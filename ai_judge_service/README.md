@@ -67,6 +67,12 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 - `AI_JUDGE_RAG_MAX_SNIPPETS`: 检索片段上限，默认 `4`
 - `AI_JUDGE_RAG_MAX_CHARS_PER_SNIPPET`: 单片段最大字符数，默认 `280`
 - `AI_JUDGE_RAG_QUERY_MESSAGE_LIMIT`: 检索查询使用最近消息条数，默认 `80`
+- `AI_JUDGE_TOKENIZER_FALLBACK_ENCODING`: tokenizer 编码回退名，默认 `o200k_base`
+- `AI_JUDGE_PHASE_PROMPT_MAX_TOKENS`: A2/A3 单次 prompt 总预算，默认 `3200`
+- `AI_JUDGE_AGENT2_PROMPT_MAX_TOKENS`: A6/A7 单次 prompt 总预算，默认 `3600`
+- `AI_JUDGE_RAG_QUERY_MAX_TOKENS`: RAG query 文本 token 上限，默认 `1600`
+- `AI_JUDGE_RAG_SNIPPET_MAX_TOKENS`: RAG snippet token 上限，默认 `180`
+- `AI_JUDGE_EMBED_INPUT_MAX_TOKENS`: embedding 输入 token 上限，默认 `2000`
 - `AI_JUDGE_RAG_SOURCE_WHITELIST`: 允许知识来源的 URL 前缀列表（逗号/分号/换行分隔），默认 `https://teamfighttactics.leagueoflegends.com/en-us/news/`
 - `AI_JUDGE_RAG_BACKEND`: `file|milvus`，默认 `file`
 - `AI_JUDGE_RAG_LEXICAL_ENGINE`: 词法检索引擎，当前固定为 `bm25`

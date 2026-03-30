@@ -211,18 +211,6 @@ export default createStore({
         onError: () => {
           dispatch('scheduleSSEReconnect');
         },
-        onDebateJudgeReportReady: (payload) => {
-          commit('setLatestJudgeReportEvent', {
-            ...payload,
-            receivedAt: Date.now(),
-          });
-        },
-        onDebateDrawVoteResolved: (payload) => {
-          commit('setLatestDrawVoteResolvedEvent', {
-            ...payload,
-            receivedAt: Date.now(),
-          });
-        },
       });
       commit('setSSE', sse);
     },

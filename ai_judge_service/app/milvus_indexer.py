@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from .token_budget import truncate_text_to_tokens
+
 
 @dataclass(frozen=True)
 class KnowledgeRecord:
@@ -37,6 +39,9 @@ class MilvusIndexerConfig:
     source_url_field: str = "source_url"
     content_field: str = "content"
     tags_field: str = "tags"
+    embed_input_max_tokens: int = 2000
+    tokenizer_model: str = "gpt-4.1-mini"
+    tokenizer_fallback_encoding: str = "o200k_base"
 
 
 def _safe_text(value: Any, *, max_len: int = 4000) -> str:
@@ -101,9 +106,24 @@ def load_knowledge_records(path: str) -> list[KnowledgeRecord]:
     return records
 
 
-def _build_embedding_input(record: KnowledgeRecord) -> str:
+def _build_embedding_input(
+    record: KnowledgeRecord,
+    *,
+    embed_input_max_tokens: int = 0,
+    tokenizer_model: str = "gpt-4.1-mini",
+    tokenizer_fallback_encoding: str = "o200k_base",
+) -> str:
     tags_text = " ".join(record.tags)
-    return f"{record.title}\n{record.content}\n{tags_text}".strip()
+    base = f"{record.title}\n{record.content}\n{tags_text}".strip()
+    token_budget = max(0, int(embed_input_max_tokens))
+    if token_budget <= 0:
+        return base
+    return truncate_text_to_tokens(
+        tokenizer_model,
+        base,
+        token_budget,
+        fallback_encoding=tokenizer_fallback_encoding,
+    ).text
 
 
 def _iter_batches(items: list[KnowledgeRecord], batch_size: int) -> list[list[KnowledgeRecord]]:
@@ -224,7 +244,15 @@ def import_knowledge_to_milvus(cfg: MilvusIndexerConfig) -> dict[str, Any]:
     collection_checked = False
 
     for batch in _iter_batches(records, cfg.batch_size):
-        texts = [_build_embedding_input(item) for item in batch]
+        texts = [
+            _build_embedding_input(
+                item,
+                embed_input_max_tokens=cfg.embed_input_max_tokens,
+                tokenizer_model=cfg.tokenizer_model,
+                tokenizer_fallback_encoding=cfg.tokenizer_fallback_encoding,
+            )
+            for item in batch
+        ]
         embeddings = _embed_batch_with_openai(texts, cfg=cfg)
         stats["embeddingCallCount"] += 1
         if len(embeddings) != len(batch):

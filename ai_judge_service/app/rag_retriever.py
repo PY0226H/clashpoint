@@ -22,6 +22,7 @@ from .reranker_engine import (
     RerankRequest,
     rerank_with_fallback,
 )
+from .token_budget import count_tokens, truncate_text_to_tokens
 
 if TYPE_CHECKING:
     from .runtime_types import RuntimeRagRequest
@@ -78,6 +79,27 @@ def _safe_text(value: Any, *, max_len: int = 4000) -> str:
     if not text:
         return ""
     return text[:max_len]
+
+
+def _truncate_snippet_text(
+    *,
+    text: str,
+    max_chars_per_snippet: int,
+    snippet_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
+) -> str:
+    base = _safe_text(text, max_len=max_chars_per_snippet)
+    token_budget = max(0, int(snippet_max_tokens))
+    if token_budget <= 0 or not base:
+        return base
+    result = truncate_text_to_tokens(
+        tokenizer_model,
+        base,
+        token_budget,
+        fallback_encoding=tokenizer_fallback_encoding,
+    )
+    return result.text
 
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
@@ -180,7 +202,7 @@ def _load_knowledge_file(path: str) -> list[KnowledgeChunk]:
     return rows
 
 
-def _build_query_text(request: "RuntimeRagRequest", query_message_limit: int) -> str:
+def _build_query_text_raw(request: "RuntimeRagRequest", query_message_limit: int) -> str:
     topic = request.topic
     topic_text = " ".join(
         [
@@ -198,8 +220,44 @@ def _build_query_text(request: "RuntimeRagRequest", query_message_limit: int) ->
     return f"{topic_text}\n{message_text}"
 
 
-def _build_query_tokens(request: "RuntimeRagRequest", query_message_limit: int) -> set[str]:
-    return _tokenize(_build_query_text(request, query_message_limit))
+def _build_query_text(
+    request: "RuntimeRagRequest",
+    query_message_limit: int,
+    *,
+    query_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
+) -> str:
+    query_text = _build_query_text_raw(request, query_message_limit)
+    token_budget = max(0, int(query_max_tokens))
+    if token_budget <= 0:
+        return query_text
+    truncated = truncate_text_to_tokens(
+        tokenizer_model,
+        query_text,
+        token_budget,
+        fallback_encoding=tokenizer_fallback_encoding,
+    )
+    return truncated.text
+
+
+def _build_query_tokens(
+    request: "RuntimeRagRequest",
+    query_message_limit: int,
+    *,
+    query_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
+) -> set[str]:
+    return _tokenize(
+        _build_query_text(
+            request,
+            query_message_limit,
+            query_max_tokens=query_max_tokens,
+            tokenizer_model=tokenizer_model,
+            tokenizer_fallback_encoding=tokenizer_fallback_encoding,
+        )
+    )
 
 
 def _score_chunk(chunk: KnowledgeChunk, query_tokens: set[str]) -> float:
@@ -343,9 +401,22 @@ def _embed_query_with_openai(
     openai_base_url: str,
     openai_embedding_model: str,
     openai_timeout_secs: float,
+    embed_input_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
 ) -> list[float]:
     if not query_text.strip() or not openai_api_key.strip():
         return []
+
+    token_budget = max(0, int(embed_input_max_tokens))
+    prepared_query = query_text
+    if token_budget > 0:
+        prepared_query = truncate_text_to_tokens(
+            tokenizer_model,
+            query_text,
+            token_budget,
+            fallback_encoding=tokenizer_fallback_encoding,
+        ).text
 
     url = openai_base_url.rstrip("/") + "/embeddings"
     headers = {
@@ -354,7 +425,7 @@ def _embed_query_with_openai(
     }
     body = {
         "model": openai_embedding_model,
-        "input": query_text[:8000],
+        "input": prepared_query[:8000],
     }
     try:
         with httpx.Client(timeout=max(1.0, openai_timeout_secs)) as client:
@@ -423,6 +494,9 @@ def _context_from_milvus_row(
     cfg: RagMilvusConfig,
     rank: int,
     max_chars_per_snippet: int,
+    snippet_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
 ) -> RetrievedContext | None:
     entity = row.get("entity")
     fields = entity if isinstance(entity, dict) else row
@@ -432,7 +506,13 @@ def _context_from_milvus_row(
     )
     title = _safe_text(fields.get(cfg.title_field), max_len=300) or chunk_id
     source_url = _safe_text(fields.get(cfg.source_url_field), max_len=1000)
-    content = _safe_text(fields.get(cfg.content_field), max_len=max_chars_per_snippet)
+    content = _truncate_snippet_text(
+        text=_safe_text(fields.get(cfg.content_field), max_len=max_chars_per_snippet),
+        max_chars_per_snippet=max_chars_per_snippet,
+        snippet_max_tokens=snippet_max_tokens,
+        tokenizer_model=tokenizer_model,
+        tokenizer_fallback_encoding=tokenizer_fallback_encoding,
+    )
     if not content:
         return None
     distance = _safe_float(row.get("distance"), default=0.0)
@@ -459,10 +539,13 @@ def _chunk_to_lexical_document(chunk: KnowledgeChunk) -> LexicalDocument:
 def _retrieve_contexts_from_file(
     request: "RuntimeRagRequest",
     *,
+    query_text: str,
     knowledge_file: str,
     max_snippets: int,
     max_chars_per_snippet: int,
-    query_message_limit: int,
+    snippet_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
     allowed_source_prefixes: tuple[str, ...] = (),
     lexical_engine: str = DEFAULT_LEXICAL_ENGINE,
     bm25_cache_dir: str = DEFAULT_BM25_CACHE_DIR,
@@ -474,7 +557,13 @@ def _retrieve_contexts_from_file(
     out: list[RetrievedContext] = []
     seen_chunk_ids: set[str] = set()
 
-    context_seed = _safe_text(request.topic.context_seed, max_len=max_chars_per_snippet)
+    context_seed = _truncate_snippet_text(
+        text=_safe_text(request.topic.context_seed, max_len=max_chars_per_snippet),
+        max_chars_per_snippet=max_chars_per_snippet,
+        snippet_max_tokens=snippet_max_tokens,
+        tokenizer_model=tokenizer_model,
+        tokenizer_fallback_encoding=tokenizer_fallback_encoding,
+    )
     if context_seed:
         out.append(
             RetrievedContext(
@@ -511,7 +600,7 @@ def _retrieve_contexts_from_file(
         LexicalSearchRequest(
             knowledge_file=knowledge_file,
             documents=documents,
-            query_text=_build_query_text(request, query_message_limit),
+            query_text=query_text,
             top_k=max(0, max_snippets - len(out)),
             configured_engine=lexical_engine,
             bm25_cache_dir=bm25_cache_dir,
@@ -545,7 +634,13 @@ def _retrieve_contexts_from_file(
                 chunk_id=document.chunk_id,
                 title=document.title,
                 source_url=document.source_url,
-                content=_safe_text(document.content, max_len=max_chars_per_snippet),
+                content=_truncate_snippet_text(
+                    text=document.content,
+                    max_chars_per_snippet=max_chars_per_snippet,
+                    snippet_max_tokens=snippet_max_tokens,
+                    tokenizer_model=tokenizer_model,
+                    tokenizer_fallback_encoding=tokenizer_fallback_encoding,
+                ),
                 score=float(hit.score),
             )
         )
@@ -563,20 +658,30 @@ def _retrieve_contexts_from_file(
 def _retrieve_contexts_from_milvus(
     request: "RuntimeRagRequest",
     *,
+    query_text: str,
     max_snippets: int,
     max_chars_per_snippet: int,
-    query_message_limit: int,
+    snippet_max_tokens: int,
     allowed_source_prefixes: tuple[str, ...],
     milvus_config: RagMilvusConfig,
     openai_api_key: str,
     openai_base_url: str,
     openai_embedding_model: str,
     openai_timeout_secs: float,
+    embed_input_max_tokens: int,
+    tokenizer_model: str,
+    tokenizer_fallback_encoding: str,
 ) -> list[RetrievedContext]:
     out: list[RetrievedContext] = []
     seen_chunk_ids: set[str] = set()
 
-    context_seed = _safe_text(request.topic.context_seed, max_len=max_chars_per_snippet)
+    context_seed = _truncate_snippet_text(
+        text=_safe_text(request.topic.context_seed, max_len=max_chars_per_snippet),
+        max_chars_per_snippet=max_chars_per_snippet,
+        snippet_max_tokens=snippet_max_tokens,
+        tokenizer_model=tokenizer_model,
+        tokenizer_fallback_encoding=tokenizer_fallback_encoding,
+    )
     if context_seed:
         out.append(
             RetrievedContext(
@@ -591,13 +696,15 @@ def _retrieve_contexts_from_milvus(
         if len(out) >= max_snippets:
             return out
 
-    query_text = _build_query_text(request, query_message_limit)
     embedding = _embed_query_with_openai(
         query_text=query_text,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
         openai_embedding_model=openai_embedding_model,
         openai_timeout_secs=openai_timeout_secs,
+        embed_input_max_tokens=embed_input_max_tokens,
+        tokenizer_model=tokenizer_model,
+        tokenizer_fallback_encoding=tokenizer_fallback_encoding,
     )
     rows = _fetch_milvus_candidates(query_embedding=embedding, cfg=milvus_config)
     for rank, row in enumerate(rows):
@@ -606,6 +713,9 @@ def _retrieve_contexts_from_milvus(
             cfg=milvus_config,
             rank=rank,
             max_chars_per_snippet=max_chars_per_snippet,
+            snippet_max_tokens=snippet_max_tokens,
+            tokenizer_model=tokenizer_model,
+            tokenizer_fallback_encoding=tokenizer_fallback_encoding,
         )
         if item is None:
             continue
@@ -669,6 +779,11 @@ def retrieve_contexts(
     max_snippets: int,
     max_chars_per_snippet: int,
     query_message_limit: int,
+    query_max_tokens: int = 1600,
+    snippet_max_tokens: int = 180,
+    tokenizer_model: str = "gpt-4.1-mini",
+    tokenizer_fallback_encoding: str = "o200k_base",
+    embed_input_max_tokens: int = 2000,
     allowed_source_prefixes: tuple[str, ...] = (),
     backend: str = RAG_BACKEND_FILE,
     milvus_config: RagMilvusConfig | None = None,
@@ -783,30 +898,62 @@ def retrieve_contexts(
         return []
 
     selected_backend = parse_rag_backend(backend)
-    query_text = _build_query_text(request, query_message_limit)
+    raw_query_text = _build_query_text_raw(request, query_message_limit)
+    query_text = _build_query_text(
+        request,
+        query_message_limit,
+        query_max_tokens=query_max_tokens,
+        tokenizer_model=tokenizer_model,
+        tokenizer_fallback_encoding=tokenizer_fallback_encoding,
+    )
+    raw_query_tokens = count_tokens(
+        tokenizer_model,
+        raw_query_text,
+        fallback_encoding=tokenizer_fallback_encoding,
+    )
+    final_query_tokens = count_tokens(
+        tokenizer_model,
+        query_text,
+        fallback_encoding=tokenizer_fallback_encoding,
+    )
+    query_clipped = final_query_tokens < raw_query_tokens
+    diagnostics_payload["queryTokenClip"] = {
+        "enabled": int(query_max_tokens) > 0,
+        "budget": max(0, int(query_max_tokens)),
+        "rawTokens": raw_query_tokens,
+        "finalTokens": final_query_tokens,
+        "clipped": query_clipped,
+    }
     if selected_backend == RAG_BACKEND_MILVUS and milvus_config is not None:
         vector_limit = max(limit, milvus_config.search_limit * vector_limit_multiplier)
+        lexical_diagnostics: dict[str, Any] = {}
         vector_contexts = _retrieve_contexts_from_milvus(
             request,
+            query_text=query_text,
             max_snippets=vector_limit,
             max_chars_per_snippet=max_chars_per_snippet,
-            query_message_limit=query_message_limit,
+            snippet_max_tokens=snippet_max_tokens,
             allowed_source_prefixes=allowed_source_prefixes,
             milvus_config=milvus_config,
             openai_api_key=openai_api_key,
             openai_base_url=openai_base_url,
             openai_embedding_model=openai_embedding_model,
             openai_timeout_secs=openai_timeout_secs,
+            embed_input_max_tokens=embed_input_max_tokens,
+            tokenizer_model=tokenizer_model,
+            tokenizer_fallback_encoding=tokenizer_fallback_encoding,
         )
         lexical_contexts: list[RetrievedContext] = []
         if hybrid_enabled:
-            lexical_diagnostics: dict[str, Any] = {}
             lexical_contexts = _retrieve_contexts_from_file(
                 request,
+                query_text=query_text,
                 knowledge_file=knowledge_file,
                 max_snippets=max(limit * lexical_limit_multiplier, limit),
                 max_chars_per_snippet=max_chars_per_snippet,
-                query_message_limit=query_message_limit,
+                snippet_max_tokens=snippet_max_tokens,
+                tokenizer_model=tokenizer_model,
+                tokenizer_fallback_encoding=tokenizer_fallback_encoding,
                 allowed_source_prefixes=allowed_source_prefixes,
                 lexical_engine=lexical_engine,
                 bm25_cache_dir=bm25_cache_dir,
@@ -908,10 +1055,13 @@ def retrieve_contexts(
     lexical_limit = max(limit * lexical_limit_multiplier, limit) if rerank_enabled else limit
     lexical_contexts = _retrieve_contexts_from_file(
         request,
+        query_text=query_text,
         knowledge_file=knowledge_file,
         max_snippets=lexical_limit,
         max_chars_per_snippet=max_chars_per_snippet,
-        query_message_limit=query_message_limit,
+        snippet_max_tokens=snippet_max_tokens,
+        tokenizer_model=tokenizer_model,
+        tokenizer_fallback_encoding=tokenizer_fallback_encoding,
         allowed_source_prefixes=allowed_source_prefixes,
         lexical_engine=lexical_engine,
         bm25_cache_dir=bm25_cache_dir,

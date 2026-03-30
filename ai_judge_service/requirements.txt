@@ -6,3 +6,4 @@ redis==7.3.0
 bm25s>=0.3.2
 pymilvus>=2.5.0
 sentence-transformers>=3.0.0
+tiktoken>=0.8.0

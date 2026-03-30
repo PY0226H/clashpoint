@@ -56,6 +56,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.topic_memory_min_evidence_refs, 1)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 20)
         self.assertEqual(settings.topic_memory_min_quality_score, 0.55)
+        self.assertEqual(settings.tokenizer_fallback_encoding, "o200k_base")
+        self.assertEqual(settings.phase_prompt_max_tokens, 3200)
+        self.assertEqual(settings.agent2_prompt_max_tokens, 3600)
+        self.assertEqual(settings.rag_query_max_tokens, 1600)
+        self.assertEqual(settings.rag_snippet_max_tokens, 180)
+        self.assertEqual(settings.embed_input_max_tokens, 2000)
         self.assertEqual(settings.runtime_retry_max_attempts, 2)
         self.assertEqual(settings.runtime_retry_backoff_ms, 200)
         self.assertTrue(settings.compliance_block_enabled)
@@ -129,6 +135,12 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS": "2",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS": "60",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE": "0.7",
+                "AI_JUDGE_TOKENIZER_FALLBACK_ENCODING": "cl100k_base",
+                "AI_JUDGE_PHASE_PROMPT_MAX_TOKENS": "4096",
+                "AI_JUDGE_AGENT2_PROMPT_MAX_TOKENS": "5000",
+                "AI_JUDGE_RAG_QUERY_MAX_TOKENS": "1200",
+                "AI_JUDGE_RAG_SNIPPET_MAX_TOKENS": "220",
+                "AI_JUDGE_EMBED_INPUT_MAX_TOKENS": "1800",
                 "AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS": "4",
                 "AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS": "500",
                 "AI_JUDGE_COMPLIANCE_BLOCK_ENABLED": "false",
@@ -194,6 +206,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.topic_memory_min_evidence_refs, 2)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 60)
         self.assertEqual(settings.topic_memory_min_quality_score, 0.7)
+        self.assertEqual(settings.tokenizer_fallback_encoding, "cl100k_base")
+        self.assertEqual(settings.phase_prompt_max_tokens, 4096)
+        self.assertEqual(settings.agent2_prompt_max_tokens, 5000)
+        self.assertEqual(settings.rag_query_max_tokens, 1200)
+        self.assertEqual(settings.rag_snippet_max_tokens, 220)
+        self.assertEqual(settings.embed_input_max_tokens, 1800)
         self.assertEqual(settings.runtime_retry_max_attempts, 4)
         self.assertEqual(settings.runtime_retry_backoff_ms, 500)
         self.assertFalse(settings.compliance_block_enabled)
@@ -307,6 +325,20 @@ class SettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError,
                 "AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS must be between 0 and 10000",
+            ):
+                load_settings()
+
+    def test_load_settings_should_reject_invalid_phase_prompt_max_tokens(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_PHASE_PROMPT_MAX_TOKENS": "100",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_PHASE_PROMPT_MAX_TOKENS must be between 256 and 32000",
             ):
                 load_settings()
 

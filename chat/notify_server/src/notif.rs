@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use crate::AppState;
 use chat_core::{Chat, Message};
@@ -6,7 +6,24 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgListener;
+use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{info, warn};
+
+const PG_LISTENER_RECONNECT_BASE_MS: u64 = 1_000;
+const PG_LISTENER_RECONNECT_MAX_MS: u64 = 30_000;
+const PG_LISTENER_HEALTH_LOG_INTERVAL_SECS: u64 = 30;
+
+const PG_LISTEN_CHANNELS: [&str; 9] = [
+    "chat_updated",
+    "chat_message_created",
+    "debate_participant_joined",
+    "debate_session_status_changed",
+    "debate_message_created",
+    "debate_message_pinned",
+    "debate_judge_report_ready",
+    "debate_draw_vote_resolved",
+    "ops_observability_alert",
+];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event")]
@@ -216,55 +233,135 @@ struct OpsObservabilityAlertPayload {
 }
 
 pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
-    let mut listener = PgListener::connect(&state.config.server.db_url).await?;
-    listener.listen("chat_updated").await?;
-    listener.listen("chat_message_created").await?;
-    listener.listen("debate_participant_joined").await?;
-    listener.listen("debate_session_status_changed").await?;
-    listener.listen("debate_message_created").await?;
-    listener.listen("debate_message_pinned").await?;
-    listener.listen("debate_judge_report_ready").await?;
-    listener.listen("debate_draw_vote_resolved").await?;
-    listener.listen("ops_observability_alert").await?;
-
-    let mut stream = listener.into_stream();
-
+    let db_url = state.config.server.db_url.clone();
     tokio::spawn(async move {
-        while let Some(Ok(notif)) = stream.next().await {
-            info!("Received notification: {:?}", notif);
-            let notification = Notification::load(notif.channel(), notif.payload())?;
-            let replay_event = match state
-                .persist_debate_event(notification.event.as_ref())
-                .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(
-                        "persist debate replay event failed, fallback to memory-only replay: {}",
-                        e
+        let mut reconnect_attempt: u32 = 0;
+        loop {
+            match connect_and_listen(&db_url).await {
+                Ok(listener) => {
+                    reconnect_attempt = 0;
+                    info!(
+                        "pg listener connected: channels={}",
+                        PG_LISTEN_CHANNELS.join(",")
                     );
-                    None
-                }
-            };
-            let users = &state.users;
-            for user_id in notification.user_ids {
-                let user_event = Arc::new(state.build_user_event_for_recipient(
-                    user_id,
-                    notification.event.clone(),
-                    replay_event.clone(),
-                ));
-                if let Some(tx) = users.get(&user_id) {
-                    info!("Sending notification to user {}", user_id);
-                    if let Err(e) = tx.send(user_event) {
-                        warn!("Failed to send notification to user {}: {}", user_id, e);
+                    let mut stream = listener.into_stream();
+                    let mut processed_events: u64 = 0;
+                    let mut last_event_at = Instant::now();
+                    let mut health_tick = tokio::time::interval(Duration::from_secs(
+                        PG_LISTENER_HEALTH_LOG_INTERVAL_SECS,
+                    ));
+                    health_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                    health_tick.tick().await;
+                    loop {
+                        tokio::select! {
+                            maybe_notif = stream.next() => {
+                                match maybe_notif {
+                                    Some(Ok(notif)) => {
+                                        last_event_at = Instant::now();
+                                        processed_events = processed_events.saturating_add(1);
+                                        if let Err(e) = dispatch_notification(&state, &notif).await {
+                                            warn!(
+                                                "pg listener drop invalid payload: channel={}, err={}",
+                                                notif.channel(),
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Some(Err(e)) => {
+                                        warn!("pg listener stream error (will reconnect): {}", e);
+                                        break;
+                                    }
+                                    None => {
+                                        warn!("pg listener stream ended (will reconnect)");
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = health_tick.tick() => {
+                                let idle_ms = Instant::now()
+                                    .saturating_duration_since(last_event_at)
+                                    .as_millis();
+                                info!(
+                                    "pg listener healthy: processed_events={}, idle_ms={}",
+                                    processed_events, idle_ms
+                                );
+                            }
+                        }
                     }
                 }
+                Err(e) => {
+                    reconnect_attempt = reconnect_attempt.saturating_add(1);
+                    let delay = compute_pg_listener_reconnect_delay(reconnect_attempt);
+                    warn!(
+                        "pg listener connect failed (attempt={}): {}. retry in {}ms",
+                        reconnect_attempt,
+                        e,
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
             }
+            reconnect_attempt = reconnect_attempt.saturating_add(1);
+            let delay = compute_pg_listener_reconnect_delay(reconnect_attempt);
+            warn!(
+                "pg listener restarting after stream exit (attempt={}, backoff={}ms)",
+                reconnect_attempt,
+                delay.as_millis()
+            );
+            tokio::time::sleep(delay).await;
         }
-        Ok::<_, anyhow::Error>(())
     });
 
     Ok(())
+}
+
+async fn connect_and_listen(db_url: &str) -> anyhow::Result<PgListener> {
+    let mut listener = PgListener::connect(db_url).await?;
+    for channel in PG_LISTEN_CHANNELS {
+        listener.listen(channel).await?;
+    }
+    Ok(listener)
+}
+
+async fn dispatch_notification(
+    state: &AppState,
+    notif: &sqlx::postgres::PgNotification,
+) -> anyhow::Result<()> {
+    let notification = Notification::load(notif.channel(), notif.payload())?;
+    let replay_event = match state
+        .persist_debate_event(notification.event.as_ref())
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                "persist debate replay event failed, fallback to memory-only replay: {}",
+                e
+            );
+            None
+        }
+    };
+    let users = &state.users;
+    for user_id in notification.user_ids {
+        let user_event = Arc::new(state.build_user_event_for_recipient(
+            user_id,
+            notification.event.clone(),
+            replay_event.clone(),
+        ));
+        if let Some(tx) = users.get(&user_id) {
+            if let Err(e) = tx.send(user_event) {
+                warn!("failed to send notification to user {}: {}", user_id, e);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compute_pg_listener_reconnect_delay(attempt: u32) -> Duration {
+    let power = attempt.saturating_sub(1).min(10);
+    let exp = PG_LISTENER_RECONNECT_BASE_MS.saturating_mul(2_u64.saturating_pow(power));
+    Duration::from_millis(exp.min(PG_LISTENER_RECONNECT_MAX_MS))
 }
 
 impl Notification {
@@ -465,6 +562,18 @@ impl AppEvent {
             AppEvent::DebateDrawVoteResolved(v) => Some(format!("vote:{}", v.vote_id)),
             _ => None,
         }
+    }
+
+    pub fn is_debate_event(&self) -> bool {
+        matches!(
+            self,
+            AppEvent::DebateParticipantJoined(_)
+                | AppEvent::DebateSessionStatusChanged(_)
+                | AppEvent::DebateMessageCreated(_)
+                | AppEvent::DebateMessagePinned(_)
+                | AppEvent::DebateJudgeReportReady(_)
+                | AppEvent::DebateDrawVoteResolved(_)
+        )
     }
 }
 
@@ -739,5 +848,57 @@ mod tests {
             }
             _ => panic!("expected OpsObservabilityAlert event"),
         }
+    }
+
+    #[test]
+    fn app_event_is_debate_event_should_match_debate_variants() {
+        let debate_event = AppEvent::DebateMessagePinned(DebateMessagePinned {
+            pin_id: 1,
+            session_id: 11,
+            message_id: 22,
+            user_id: 3,
+            cost_coins: 30,
+            pin_seconds: 60,
+            expires_at: chrono::DateTime::parse_from_rfc3339("2026-02-23T12:10:00Z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc),
+        });
+        assert!(debate_event.is_debate_event());
+
+        let non_debate_event = AppEvent::OpsObservabilityAlert(OpsObservabilityAlert {
+            scope_id: 1,
+            alert_key: "high_retry".to_string(),
+            rule_type: "high_retry".to_string(),
+            severity: "warning".to_string(),
+            status: "raised".to_string(),
+            title: "title".to_string(),
+            message: "message".to_string(),
+            metrics: serde_json::json!({}),
+        });
+        assert!(!non_debate_event.is_debate_event());
+    }
+
+    #[test]
+    fn compute_pg_listener_reconnect_delay_should_backoff_and_cap() {
+        assert_eq!(
+            compute_pg_listener_reconnect_delay(1),
+            Duration::from_millis(1_000)
+        );
+        assert_eq!(
+            compute_pg_listener_reconnect_delay(2),
+            Duration::from_millis(2_000)
+        );
+        assert_eq!(
+            compute_pg_listener_reconnect_delay(3),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            compute_pg_listener_reconnect_delay(10),
+            Duration::from_millis(30_000)
+        );
+        assert_eq!(
+            compute_pg_listener_reconnect_delay(99),
+            Duration::from_millis(30_000)
+        );
     }
 }

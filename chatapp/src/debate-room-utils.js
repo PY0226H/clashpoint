@@ -69,6 +69,25 @@ export function parseDebateRoomWsMessage(raw) {
   }
 }
 
+export function toNonNegativeInt(value, fallback = null) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+export function buildDebateRoomAckMessage(eventSeq) {
+  const normalized = toNonNegativeInt(eventSeq, null);
+  if (normalized == null) {
+    return null;
+  }
+  return JSON.stringify({
+    type: 'ack',
+    eventSeq: normalized,
+  });
+}
+
 export function extractDebateRoomEvent(message, expectedEventName = '') {
   if (!message || message.type !== 'roomEvent') {
     return null;

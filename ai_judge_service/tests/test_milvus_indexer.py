@@ -9,6 +9,7 @@ from app.milvus_indexer import (
     import_knowledge_to_milvus,
     load_knowledge_records,
 )
+from app.token_budget import count_tokens
 
 
 class _FakeMilvusClient:
@@ -73,6 +74,31 @@ class MilvusIndexerTests(unittest.TestCase):
         self.assertIn("A", text)
         self.assertIn("content a", text)
         self.assertIn("x y", text)
+
+    def test_build_embedding_input_should_apply_token_cap(self) -> None:
+        rows = [
+            {
+                "chunkId": "a",
+                "title": "A",
+                "sourceUrl": "https://example.com/a",
+                "content": "很长内容 " * 300,
+                "tags": ["x", "Y"],
+            }
+        ]
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as file:
+            json.dump(rows, file, ensure_ascii=False)
+            file.flush()
+            records = load_knowledge_records(file.name)
+        text = _build_embedding_input(
+            records[0],
+            embed_input_max_tokens=60,
+            tokenizer_model="gpt-4.1-mini",
+            tokenizer_fallback_encoding="o200k_base",
+        )
+        self.assertLessEqual(
+            count_tokens("gpt-4.1-mini", text, fallback_encoding="o200k_base"),
+            60,
+        )
 
     @patch("app.milvus_indexer._embed_batch_with_openai")
     @patch("app.milvus_indexer._new_milvus_client")

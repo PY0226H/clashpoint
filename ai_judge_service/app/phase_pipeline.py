@@ -12,7 +12,7 @@ from .models import (
     PhaseDispatchMessage,
     PhaseDispatchRequest,
 )
-from .openai_judge_client import call_openai_json
+from .openai_judge_client import OPENAI_META_KEY, call_openai_json
 from .runtime_errors import classify_openai_failure
 from .runtime_policy import should_use_openai
 from .runtime_rag import RuntimeRagResult, retrieve_runtime_contexts_with_meta
@@ -20,6 +20,7 @@ from .runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
 from .rag_retriever import RetrievedContext
 from .reranker_engine import RerankCandidate, RerankRequest, rerank_with_fallback
 from .settings import Settings
+from .token_budget import TokenSegment, count_tokens, pack_segments_with_budget
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 SUMMARY_PROMPT_VERSION = "v3.a2a3.summary.v1"
@@ -33,6 +34,8 @@ AGENT2_DIMENSION_WEIGHTS = {
 DEFAULT_SUMMARY_COVERAGE_MIN_RATIO = 1.0
 MAX_SUMMARY_TEXT_CHARS = 8000
 MAX_SUMMARY_MESSAGE_CHARS = 640
+TOKEN_CLIP_ERROR_SUMMARY = "summary_prompt_token_clipped"
+TOKEN_CLIP_ERROR_AGENT2 = "agent2_prompt_token_clipped"
 REBUTTAL_MARKERS = (
     "但是",
     "然而",
@@ -114,6 +117,8 @@ class SideSummaryResult:
     coverage_ratio: float
     fallback_reason: str | None
     error_codes: list[str]
+    usage_records: list[dict[str, Any]]
+    token_clip_summaries: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,8 @@ class Agent2PathResult:
     source: str
     fallback_reason: str | None
     error_codes: list[str]
+    usage_records: list[dict[str, Any]]
+    token_clip_summaries: list[dict[str, Any]]
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -189,6 +196,111 @@ def _summary_coverage_threshold(settings: Settings) -> float:
     return _clamp(threshold, 0.0, 1.0)
 
 
+def _count_tokens_for_model(settings: Settings, *, model: str, text: str) -> int:
+    return count_tokens(
+        model,
+        text,
+        fallback_encoding=settings.tokenizer_fallback_encoding,
+    )
+
+
+def _available_prompt_budget(
+    settings: Settings,
+    *,
+    model: str,
+    system_prompt: str,
+    total_budget: int,
+    minimum_user_budget: int = 128,
+) -> int:
+    budget = max(0, int(total_budget))
+    if budget == 0:
+        return 0
+    system_tokens = _count_tokens_for_model(settings, model=model, text=system_prompt)
+    available = max(0, budget - system_tokens)
+    if available == 0:
+        return 0
+    if available < minimum_user_budget:
+        return available
+    return available
+
+
+def _pack_user_prompt_segments(
+    settings: Settings,
+    *,
+    model: str,
+    budget_tokens: int,
+    segments: list[TokenSegment],
+) -> tuple[str, dict[str, Any]]:
+    packed = pack_segments_with_budget(
+        model,
+        segments,
+        budget_tokens,
+        strategy="priority",
+        fallback_encoding=settings.tokenizer_fallback_encoding,
+    )
+    prompt = "\n".join(
+        segment.text for segment in packed.segments if segment.included and segment.text
+    ).strip()
+    return prompt, packed.clip_summary()
+
+
+def _extract_llm_usage_record(
+    *,
+    settings: Settings,
+    cfg: _SummaryConfig,
+    call_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_payload: dict[str, Any],
+) -> dict[str, Any]:
+    usage_payload: dict[str, Any] | None = None
+    meta = response_payload.get(OPENAI_META_KEY)
+    if isinstance(meta, dict):
+        usage_payload = meta.get("usage") if isinstance(meta.get("usage"), dict) else None
+
+    if usage_payload is None:
+        prompt_tokens = _count_tokens_for_model(
+            settings,
+            model=cfg.model,
+            text=f"{system_prompt}\n{user_prompt}",
+        )
+        completion_tokens = _count_tokens_for_model(
+            settings,
+            model=cfg.model,
+            text=json.dumps(response_payload, ensure_ascii=False, sort_keys=True),
+        )
+        total_tokens = prompt_tokens + completion_tokens
+        return {
+            "callId": call_id,
+            "model": cfg.model,
+            "prompt": prompt_tokens,
+            "completion": completion_tokens,
+            "total": total_tokens,
+            "usageEstimated": True,
+        }
+
+    prompt_tokens = max(0, int(usage_payload.get("prompt_tokens") or 0))
+    completion_tokens = max(0, int(usage_payload.get("completion_tokens") or 0))
+    total_tokens = max(
+        0,
+        int(usage_payload.get("total_tokens") or (prompt_tokens + completion_tokens)),
+    )
+    return {
+        "callId": call_id,
+        "model": cfg.model,
+        "prompt": prompt_tokens,
+        "completion": completion_tokens,
+        "total": total_tokens,
+        "usageEstimated": False,
+    }
+
+
+def _clean_openai_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    if OPENAI_META_KEY not in raw:
+        return raw
+    return {key: value for key, value in raw.items() if key != OPENAI_META_KEY}
+
+
 def _build_summary_system_prompt(*, side: str, topic_domain: str) -> str:
     return (
         "你是辩论阶段总结Agent。"
@@ -202,25 +314,64 @@ def _build_summary_system_prompt(*, side: str, topic_domain: str) -> str:
 def _build_summary_user_prompt(
     *,
     request: PhaseDispatchRequest,
+    settings: Settings,
+    system_prompt: str,
     side: str,
     side_messages: list[PhaseDispatchMessage],
-) -> str:
-    lines: list[str] = []
-    for msg in side_messages:
+) -> tuple[str, dict[str, Any]]:
+    segments: list[TokenSegment] = [
+        TokenSegment(
+            segment_id="summary_instruction",
+            priority=0,
+            required=True,
+            text=(
+                "请输出保真总结并覆盖输入消息中的所有观点、反驳与关键论据。\n"
+                "要求:\n"
+                "1) 仅使用输入消息，不得引入外部信息。\n"
+                "2) message_ids 只能填写输入中出现过的消息ID。\n"
+                "3) summary_text 使用中文。\n"
+                "4) 仅输出JSON，不要输出其他文本。"
+            ),
+        ),
+        TokenSegment(
+            segment_id="summary_meta",
+            priority=1,
+            required=True,
+            text=f"phase_no={request.phase_no}, side={side}, message_count={len(side_messages)}",
+        ),
+        TokenSegment(
+            segment_id="summary_messages_header",
+            priority=2,
+            required=True,
+            text="messages:",
+        ),
+    ]
+
+    for idx, msg in enumerate(side_messages):
         content = str(msg.content or "").strip().replace("\n", " ")
-        lines.append(f"[{msg.message_id}] {content[:MAX_SUMMARY_MESSAGE_CHARS]}")
-    payload = "\n".join(lines)
-    return (
-        "请输出保真总结并覆盖输入消息中的所有观点、反驳与关键论据。\n"
-        "要求:\n"
-        "1) 仅使用输入消息，不得引入外部信息。\n"
-        "2) message_ids 只能填写输入中出现过的消息ID。\n"
-        "3) summary_text 使用中文。\n"
-        "4) 仅输出JSON，不要输出其他文本。\n\n"
-        f"phase_no={request.phase_no}, side={side}, message_count={len(side_messages)}\n"
-        "messages:\n"
-        f"{payload}"
+        segments.append(
+            TokenSegment(
+                segment_id=f"message_{msg.message_id}",
+                priority=10 + idx,
+                required=False,
+                text=f"[{msg.message_id}] {content}",
+            )
+        )
+
+    budget_tokens = _available_prompt_budget(
+        settings,
+        model=settings.openai_model,
+        system_prompt=system_prompt,
+        total_budget=settings.phase_prompt_max_tokens,
+        minimum_user_budget=256,
     )
+    prompt, clip_summary = _pack_user_prompt_segments(
+        settings,
+        model=settings.openai_model,
+        budget_tokens=budget_tokens,
+        segments=segments,
+    )
+    return prompt, clip_summary
 
 
 def _normalize_summary_message_ids(
@@ -267,6 +418,26 @@ async def _build_side_summary_with_guard(
     fallback_summary = _build_grounded_summary(request, side=side)
     expected_ids = fallback_summary["messageIds"]
     threshold = _summary_coverage_threshold(settings)
+    system_prompt = _build_summary_system_prompt(
+        side=side,
+        topic_domain=request.topic_domain,
+    )
+    user_prompt, clip_summary = _build_summary_user_prompt(
+        request=request,
+        settings=settings,
+        system_prompt=system_prompt,
+        side=side,
+        side_messages=side_messages,
+    )
+    token_clip_summaries = [
+        {
+            "callId": f"a2a3_summary_{side}",
+            "stage": "summary",
+            "side": side,
+            **clip_summary,
+        }
+    ]
+    clip_error_codes = [TOKEN_CLIP_ERROR_SUMMARY] if bool(clip_summary.get("clipped")) else []
 
     if not should_use_openai(settings.provider, settings.openai_api_key):
         return SideSummaryResult(
@@ -274,7 +445,9 @@ async def _build_side_summary_with_guard(
             source="extractive_fallback",
             coverage_ratio=1.0,
             fallback_reason="provider_disabled_or_missing_key",
-            error_codes=[],
+            error_codes=clip_error_codes,
+            usage_records=[],
+            token_clip_summaries=token_clip_summaries,
         )
 
     cfg = _SummaryConfig(
@@ -288,23 +461,31 @@ async def _build_side_summary_with_guard(
     try:
         raw = await call_openai_json(
             cfg=cfg,
-            system_prompt=_build_summary_system_prompt(
-                side=side,
-                topic_domain=request.topic_domain,
-            ),
-            user_prompt=_build_summary_user_prompt(
-                request=request,
-                side=side,
-                side_messages=side_messages,
-            ),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
         )
+        usage_record = _extract_llm_usage_record(
+            settings=settings,
+            cfg=cfg,
+            call_id=f"a2a3_summary_{side}",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_payload=raw,
+        )
+        raw = _clean_openai_payload(raw)
     except Exception as err:
         return SideSummaryResult(
             summary=fallback_summary,
             source="extractive_fallback",
             coverage_ratio=0.0,
             fallback_reason="openai_call_failed",
-            error_codes=[f"summary_model_error_{side}", classify_openai_failure(str(err))],
+            error_codes=[
+                f"summary_model_error_{side}",
+                classify_openai_failure(str(err)),
+                *clip_error_codes,
+            ],
+            usage_records=[],
+            token_clip_summaries=token_clip_summaries,
         )
 
     summary_text = str(
@@ -326,7 +507,9 @@ async def _build_side_summary_with_guard(
             source="extractive_fallback",
             coverage_ratio=coverage_ratio,
             fallback_reason="summary_text_empty",
-            error_codes=[f"summary_schema_invalid_{side}"],
+            error_codes=[f"summary_schema_invalid_{side}", *clip_error_codes],
+            usage_records=[usage_record],
+            token_clip_summaries=token_clip_summaries,
         )
     if has_invalid_ids:
         return SideSummaryResult(
@@ -334,7 +517,9 @@ async def _build_side_summary_with_guard(
             source="extractive_fallback",
             coverage_ratio=coverage_ratio,
             fallback_reason="summary_message_ids_invalid",
-            error_codes=[f"summary_schema_invalid_{side}"],
+            error_codes=[f"summary_schema_invalid_{side}", *clip_error_codes],
+            usage_records=[usage_record],
+            token_clip_summaries=token_clip_summaries,
         )
     if coverage_ratio < threshold:
         return SideSummaryResult(
@@ -342,7 +527,9 @@ async def _build_side_summary_with_guard(
             source="extractive_fallback",
             coverage_ratio=coverage_ratio,
             fallback_reason="summary_coverage_below_threshold",
-            error_codes=[f"summary_coverage_low_{side}"],
+            error_codes=[f"summary_coverage_low_{side}", *clip_error_codes],
+            usage_records=[usage_record],
+            token_clip_summaries=token_clip_summaries,
         )
 
     return SideSummaryResult(
@@ -353,7 +540,9 @@ async def _build_side_summary_with_guard(
         source="llm",
         coverage_ratio=coverage_ratio,
         fallback_reason=None,
-        error_codes=[],
+        error_codes=clip_error_codes,
+        usage_records=[usage_record],
+        token_clip_summaries=token_clip_summaries,
     )
 
 
@@ -1028,27 +1217,85 @@ def _build_agent2_a6_system_prompt(*, source_side: str, target_side: str, topic_
 
 def _build_agent2_a6_user_prompt(
     *,
+    settings: Settings,
+    system_prompt: str,
     source_summary: dict[str, Any],
     source_messages: list[PhaseDispatchMessage],
     source_bundle: dict[str, Any],
-) -> str:
-    message_lines = "\n".join(
-        f"[{msg.message_id}] {str(msg.content or '').strip()[:200]}"
-        for msg in source_messages[-6:]
+) -> tuple[str, dict[str, Any]]:
+    segments: list[TokenSegment] = [
+        TokenSegment(
+            segment_id="a6_instruction",
+            priority=0,
+            required=True,
+            text=(
+                "请为对方阵营生成理想反驳答案，并提炼关键点（3-8条）。\n"
+                "要求：\n"
+                "1) 不得引入输入之外的事实。\n"
+                "2) key_points必须可用于后续命中评估。\n"
+                "3) 仅输出JSON。"
+            ),
+        ),
+        TokenSegment(
+            segment_id="a6_source_summary_header",
+            priority=1,
+            required=True,
+            text="source_summary:",
+        ),
+        TokenSegment(
+            segment_id="a6_source_summary_body",
+            priority=2,
+            required=True,
+            text=str(source_summary.get("text") or ""),
+        ),
+        TokenSegment(
+            segment_id="a6_source_messages_header",
+            priority=3,
+            required=False,
+            text="source_messages:",
+        ),
+    ]
+    for idx, msg in enumerate(source_messages[-8:]):
+        segments.append(
+            TokenSegment(
+                segment_id=f"a6_message_{msg.message_id}",
+                priority=10 + idx,
+                required=False,
+                text=f"[{msg.message_id}] {str(msg.content or '').strip()}",
+            )
+        )
+    segments.append(
+        TokenSegment(
+            segment_id="a6_source_retrieval_header",
+            priority=30,
+            required=False,
+            text="source_retrieval:",
+        )
     )
-    retrieval_lines = "\n".join(
-        f"- {str((item or {}).get('title') or '')}: {str((item or {}).get('snippet') or '')[:140]}"
-        for item in (source_bundle.get("items") or [])[:6]
+    for idx, item in enumerate((source_bundle.get("items") or [])[:8]):
+        title = str((item or {}).get("title") or "").strip()
+        snippet = str((item or {}).get("snippet") or "").strip()
+        segments.append(
+            TokenSegment(
+                segment_id=f"a6_retrieval_{idx}",
+                priority=40 + idx,
+                required=False,
+                text=f"- {title}: {snippet}",
+            )
+        )
+
+    budget_tokens = _available_prompt_budget(
+        settings,
+        model=settings.openai_model,
+        system_prompt=system_prompt,
+        total_budget=settings.agent2_prompt_max_tokens,
+        minimum_user_budget=256,
     )
-    return (
-        "请为对方阵营生成理想反驳答案，并提炼关键点（3-8条）。\n"
-        "要求：\n"
-        "1) 不得引入输入之外的事实。\n"
-        "2) key_points必须可用于后续命中评估。\n"
-        "3) 仅输出JSON。\n\n"
-        f"source_summary:\n{str(source_summary.get('text') or '')[:1800]}\n\n"
-        f"source_messages:\n{message_lines}\n\n"
-        f"source_retrieval:\n{retrieval_lines}"
+    return _pack_user_prompt_segments(
+        settings,
+        model=settings.openai_model,
+        budget_tokens=budget_tokens,
+        segments=segments,
     )
 
 
@@ -1064,27 +1311,99 @@ def _build_agent2_a7_system_prompt(*, target_side: str) -> str:
 
 def _build_agent2_a7_user_prompt(
     *,
+    settings: Settings,
+    system_prompt: str,
     ideal_rebuttal: str,
     key_points: list[str],
     target_summary: dict[str, Any],
     target_messages: list[PhaseDispatchMessage],
-) -> str:
-    message_lines = "\n".join(
-        f"[{msg.message_id}] {str(msg.content or '').strip()[:200]}"
-        for msg in target_messages[-6:]
+) -> tuple[str, dict[str, Any]]:
+    segments: list[TokenSegment] = [
+        TokenSegment(
+            segment_id="a7_instruction",
+            priority=0,
+            required=True,
+            text=(
+                "请评估真实内容命中了理想反驳多少关键点，并给出0-100分。\n"
+                "要求：\n"
+                "1) score范围0到100。\n"
+                "2) hit_points/miss_points 只写关键点短语。\n"
+                "3) dimension_scores包含coverage/depth/evidence_fit/key_point_hit_rate，逐项给0-100分。\n"
+                "4) 仅输出JSON。"
+            ),
+        ),
+        TokenSegment(
+            segment_id="a7_ideal_rebuttal_header",
+            priority=1,
+            required=True,
+            text="ideal_rebuttal:",
+        ),
+        TokenSegment(
+            segment_id="a7_ideal_rebuttal_body",
+            priority=2,
+            required=True,
+            text=ideal_rebuttal,
+        ),
+        TokenSegment(
+            segment_id="a7_key_points_header",
+            priority=3,
+            required=True,
+            text="key_points:",
+        ),
+    ]
+    for idx, item in enumerate(key_points[:12]):
+        segments.append(
+            TokenSegment(
+                segment_id=f"a7_key_point_{idx}",
+                priority=10 + idx,
+                required=False,
+                text=f"- {item}",
+            )
+        )
+    segments.extend(
+        [
+            TokenSegment(
+                segment_id="a7_target_summary_header",
+                priority=30,
+                required=False,
+                text="target_summary:",
+            ),
+            TokenSegment(
+                segment_id="a7_target_summary_body",
+                priority=31,
+                required=False,
+                text=str(target_summary.get("text") or ""),
+            ),
+            TokenSegment(
+                segment_id="a7_target_messages_header",
+                priority=32,
+                required=False,
+                text="target_messages:",
+            ),
+        ]
     )
-    key_points_text = "\n".join(f"- {item}" for item in key_points)
-    return (
-        "请评估真实内容命中了理想反驳多少关键点，并给出0-100分。\n"
-        "要求：\n"
-        "1) score范围0到100。\n"
-        "2) hit_points/miss_points 只写关键点短语。\n"
-        "3) dimension_scores包含coverage/depth/evidence_fit/key_point_hit_rate，逐项给0-100分。\n"
-        "4) 仅输出JSON。\n\n"
-        f"ideal_rebuttal:\n{ideal_rebuttal[:1800]}\n\n"
-        f"key_points:\n{key_points_text}\n\n"
-        f"target_summary:\n{str(target_summary.get('text') or '')[:1800]}\n\n"
-        f"target_messages:\n{message_lines}"
+    for idx, msg in enumerate(target_messages[-8:]):
+        segments.append(
+            TokenSegment(
+                segment_id=f"a7_message_{msg.message_id}",
+                priority=40 + idx,
+                required=False,
+                text=f"[{msg.message_id}] {str(msg.content or '').strip()}",
+            )
+        )
+
+    budget_tokens = _available_prompt_budget(
+        settings,
+        model=settings.openai_model,
+        system_prompt=system_prompt,
+        total_budget=settings.agent2_prompt_max_tokens,
+        minimum_user_budget=256,
+    )
+    return _pack_user_prompt_segments(
+        settings,
+        model=settings.openai_model,
+        budget_tokens=budget_tokens,
+        segments=segments,
     )
 
 
@@ -1165,6 +1484,8 @@ def _build_agent2_heuristic_path(
         source=source,
         fallback_reason=fallback_reason,
         error_codes=error_codes,
+        usage_records=[],
+        token_clip_summaries=[],
     )
 
 
@@ -1194,20 +1515,45 @@ async def _run_agent2_path(
 
     cfg_a6 = _build_llm_cfg(settings, temperature=0.2)
     cfg_a7 = _build_llm_cfg(settings, temperature=0.1)
+    a6_system_prompt = _build_agent2_a6_system_prompt(
+        source_side=source_side,
+        target_side=target_side,
+        topic_domain=topic_domain,
+    )
+    a6_user_prompt, a6_clip_summary = _build_agent2_a6_user_prompt(
+        settings=settings,
+        system_prompt=a6_system_prompt,
+        source_summary=source_summary,
+        source_messages=source_messages,
+        source_bundle=source_bundle,
+    )
+    token_clip_summaries = [
+        {
+            "callId": f"a6_{target_side}",
+            "stage": "agent2_a6",
+            "targetSide": target_side,
+            **a6_clip_summary,
+        }
+    ]
+    clip_error_codes: list[str] = []
+    if bool(a6_clip_summary.get("clipped")):
+        clip_error_codes.append(TOKEN_CLIP_ERROR_AGENT2)
+
     try:
         a6_raw = await call_openai_json(
             cfg=cfg_a6,
-            system_prompt=_build_agent2_a6_system_prompt(
-                source_side=source_side,
-                target_side=target_side,
-                topic_domain=topic_domain,
-            ),
-            user_prompt=_build_agent2_a6_user_prompt(
-                source_summary=source_summary,
-                source_messages=source_messages,
-                source_bundle=source_bundle,
-            ),
+            system_prompt=a6_system_prompt,
+            user_prompt=a6_user_prompt,
         )
+        a6_usage = _extract_llm_usage_record(
+            settings=settings,
+            cfg=cfg_a6,
+            call_id=f"a6_{target_side}",
+            system_prompt=a6_system_prompt,
+            user_prompt=a6_user_prompt,
+            response_payload=a6_raw,
+        )
+        a6_raw = _clean_openai_payload(a6_raw)
         ideal_rebuttal = str(
             a6_raw.get("ideal_rebuttal")
             or a6_raw.get("idealRebuttal")
@@ -1227,16 +1573,40 @@ async def _run_agent2_path(
         if not ideal_rebuttal:
             ideal_rebuttal = "; ".join(key_points)[:1200]
 
+        a7_system_prompt = _build_agent2_a7_system_prompt(target_side=target_side)
+        a7_user_prompt, a7_clip_summary = _build_agent2_a7_user_prompt(
+            settings=settings,
+            system_prompt=a7_system_prompt,
+            ideal_rebuttal=ideal_rebuttal,
+            key_points=key_points,
+            target_summary=target_summary,
+            target_messages=target_messages,
+        )
+        token_clip_summaries.append(
+            {
+                "callId": f"a7_{target_side}",
+                "stage": "agent2_a7",
+                "targetSide": target_side,
+                **a7_clip_summary,
+            }
+        )
+        if bool(a7_clip_summary.get("clipped")) and TOKEN_CLIP_ERROR_AGENT2 not in clip_error_codes:
+            clip_error_codes.append(TOKEN_CLIP_ERROR_AGENT2)
+
         a7_raw = await call_openai_json(
             cfg=cfg_a7,
-            system_prompt=_build_agent2_a7_system_prompt(target_side=target_side),
-            user_prompt=_build_agent2_a7_user_prompt(
-                ideal_rebuttal=ideal_rebuttal,
-                key_points=key_points,
-                target_summary=target_summary,
-                target_messages=target_messages,
-            ),
+            system_prompt=a7_system_prompt,
+            user_prompt=a7_user_prompt,
         )
+        a7_usage = _extract_llm_usage_record(
+            settings=settings,
+            cfg=cfg_a7,
+            call_id=f"a7_{target_side}",
+            system_prompt=a7_system_prompt,
+            user_prompt=a7_user_prompt,
+            response_payload=a7_raw,
+        )
+        a7_raw = _clean_openai_payload(a7_raw)
         score_raw = a7_raw.get("score") or a7_raw.get("hit_score") or a7_raw.get("hitScore")
         llm_score = _safe_score(score_raw)
         hit_points = _normalize_text_list(
@@ -1295,7 +1665,9 @@ async def _run_agent2_path(
             key_points=key_points,
             source="llm",
             fallback_reason=None,
-            error_codes=[],
+            error_codes=clip_error_codes,
+            usage_records=[a6_usage, a7_usage],
+            token_clip_summaries=token_clip_summaries,
         )
     except Exception as err:
         return _build_agent2_heuristic_path(
@@ -1309,6 +1681,7 @@ async def _run_agent2_path(
             error_codes=[
                 f"agent2_path_failed_{target_side}",
                 classify_openai_failure(str(err)),
+                *clip_error_codes,
             ],
         )
 
@@ -1339,7 +1712,13 @@ async def _build_agent2_bidirectional_score(
     con_bundle: dict[str, Any],
     baseline_agent2_score: dict[str, Any],
     settings: Settings,
-) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    list[str],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     con_path, pro_path = await asyncio.gather(
         _run_agent2_path(
             topic_domain=topic_domain,
@@ -1368,6 +1747,12 @@ async def _build_agent2_bidirectional_score(
     error_codes: list[str] = []
     error_codes.extend(con_path.error_codes)
     error_codes.extend(pro_path.error_codes)
+    usage_records: list[dict[str, Any]] = []
+    usage_records.extend(con_path.usage_records)
+    usage_records.extend(pro_path.usage_records)
+    token_clip_summaries: list[dict[str, Any]] = []
+    token_clip_summaries.extend(con_path.token_clip_summaries)
+    token_clip_summaries.extend(pro_path.token_clip_summaries)
 
     pro_failed = any(code.startswith("agent2_path_failed_pro") for code in pro_path.error_codes)
     con_failed = any(code.startswith("agent2_path_failed_con") for code in con_path.error_codes)
@@ -1458,7 +1843,7 @@ async def _build_agent2_bidirectional_score(
             continue
         seen_codes.add(code)
         deduped_codes.append(code)
-    return agent2_score, audit, deduped_codes
+    return agent2_score, audit, deduped_codes, usage_records, token_clip_summaries
 
 
 def _count_rebuttals(messages: list[PhaseDispatchMessage]) -> int:
@@ -1772,6 +2157,12 @@ async def build_phase_report_payload(
     )
     pro_summary = pro_summary_result.summary
     con_summary = con_summary_result.summary
+    usage_records: list[dict[str, Any]] = []
+    usage_records.extend(pro_summary_result.usage_records)
+    usage_records.extend(con_summary_result.usage_records)
+    token_clip_summaries: list[dict[str, Any]] = []
+    token_clip_summaries.extend(pro_summary_result.token_clip_summaries)
+    token_clip_summaries.extend(con_summary_result.token_clip_summaries)
     summary_latency_ms = (perf_counter() - summary_started) * 1000.0
 
     retrieval_started = perf_counter()
@@ -1806,7 +2197,13 @@ async def build_phase_report_payload(
         pro_retrieval_items=pro_items,
         con_retrieval_items=con_items,
     )
-    agent2_score, agent2_audit, agent2_error_codes = await _build_agent2_bidirectional_score(
+    (
+        agent2_score,
+        agent2_audit,
+        agent2_error_codes,
+        agent2_usage_records,
+        agent2_token_clip_summaries,
+    ) = await _build_agent2_bidirectional_score(
         topic_domain=request.topic_domain,
         pro_summary=pro_summary,
         con_summary=con_summary,
@@ -1817,6 +2214,8 @@ async def build_phase_report_payload(
         baseline_agent2_score=baseline_agent2_score,
         settings=settings,
     )
+    usage_records.extend(agent2_usage_records)
+    token_clip_summaries.extend(agent2_token_clip_summaries)
 
     if "agent2_both_paths_failed" in agent2_error_codes:
         fusion_w1, fusion_w2 = 1.0, 0.0
@@ -1844,6 +2243,11 @@ async def build_phase_report_payload(
             continue
         seen_codes.add(code)
         deduped_error_codes.append(code)
+
+    prompt_tokens = sum(max(0, int(item.get("prompt", 0))) for item in usage_records)
+    completion_tokens = sum(max(0, int(item.get("completion", 0))) for item in usage_records)
+    total_tokens = sum(max(0, int(item.get("total", 0))) for item in usage_records)
+    usage_estimated = any(bool(item.get("usageEstimated")) for item in usage_records)
 
     degradation_level = _resolve_degradation_level(
         pro_items=pro_items,
@@ -1876,9 +2280,10 @@ async def build_phase_report_payload(
         "agent3WeightedScore": agent3_score,
         "promptHashes": prompt_hashes,
         "tokenUsage": {
-            "prompt": 0,
-            "completion": 0,
-            "total": 0,
+            "prompt": prompt_tokens,
+            "completion": completion_tokens,
+            "total": total_tokens if total_tokens > 0 else prompt_tokens + completion_tokens,
+            "usageEstimated": usage_estimated,
         },
         "latencyMs": {
             "summary": round(summary_latency_ms, 2),
@@ -1919,5 +2324,7 @@ async def build_phase_report_payload(
                 "fallbackReasonPro": pro_retrieval_result.backend_fallback_reason,
                 "fallbackReasonCon": con_retrieval_result.backend_fallback_reason,
             },
+            "tokenClipSummary": token_clip_summaries,
+            "tokenUsageBreakdown": usage_records,
         },
     }

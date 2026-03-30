@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  buildDebateRoomAckMessage,
   buildDebateRoomWsUrl,
   canSubmitDrawVote,
   computeWsReconnectDelayMs,
@@ -14,6 +15,7 @@ import {
   parseDebateRoomWsMessage,
   shouldShowManualJudgeTrigger,
   shouldPollJudgeReportStatus,
+  toNonNegativeInt,
 } from './debate-room-utils.js';
 
 const wsUrl = buildDebateRoomWsUrl({
@@ -64,6 +66,12 @@ assert.equal(extractDebateRoomEvent(roomEvent, 'DebateMessagePinned'), null);
 assert.equal(parseDebateRoomWsMessage('{'), null);
 assert.equal(parseDebateRoomWsMessage(''), null);
 assert.equal(parseDebateRoomWsMessage('[]'), null);
+assert.equal(toNonNegativeInt('11'), 11);
+assert.equal(toNonNegativeInt('11.9'), 11);
+assert.equal(toNonNegativeInt('-1', 7), 7);
+assert.equal(toNonNegativeInt(undefined, 5), 5);
+assert.equal(buildDebateRoomAckMessage(9), '{"type":"ack","eventSeq":9}');
+assert.equal(buildDebateRoomAckMessage(-1), null);
 
 assert.equal(normalizeJudgeReportStatus('ready'), 'ready');
 assert.equal(normalizeJudgeReportStatus('PENDING'), 'pending');

@@ -42,6 +42,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-url-field", default="source_url")
     parser.add_argument("--content-field", default="content")
     parser.add_argument("--tags-field", default="tags")
+    parser.add_argument(
+        "--embed-input-max-tokens",
+        type=int,
+        default=int(os.getenv("AI_JUDGE_EMBED_INPUT_MAX_TOKENS", "2000")),
+    )
+    parser.add_argument(
+        "--tokenizer-model",
+        default=os.getenv("AI_JUDGE_OPENAI_MODEL", "gpt-4.1-mini"),
+    )
+    parser.add_argument(
+        "--tokenizer-fallback-encoding",
+        default=os.getenv("AI_JUDGE_TOKENIZER_FALLBACK_ENCODING", "o200k_base"),
+    )
     return parser
 
 
@@ -66,6 +79,9 @@ def main() -> int:
         source_url_field=args.source_url_field,
         content_field=args.content_field,
         tags_field=args.tags_field,
+        embed_input_max_tokens=args.embed_input_max_tokens,
+        tokenizer_model=args.tokenizer_model,
+        tokenizer_fallback_encoding=args.tokenizer_fallback_encoding,
     )
     stats = import_knowledge_to_milvus(cfg)
     print(json.dumps(stats, ensure_ascii=False))

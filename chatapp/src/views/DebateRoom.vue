@@ -271,6 +271,7 @@ import {
   drawVoteResolutionText as drawVoteResolutionTextLabel,
 } from '../judge-report-utils';
 import {
+  buildDebateRoomAckMessage,
   buildDebateRoomWsUrl,
   canSubmitDrawVote as canSubmitDrawVoteNow,
   computeWsReconnectDelayMs,
@@ -285,6 +286,7 @@ import {
   parseDebateRoomWsMessage,
   shouldShowManualJudgeTrigger,
   shouldPollJudgeReportStatus,
+  toNonNegativeInt,
 } from '../debate-room-utils';
 
 const WS_HEARTBEAT_SEND_INTERVAL_MS = 20_000;
@@ -320,6 +322,7 @@ export default {
       wsHeartbeatWatchdogTimer: null,
       wsLastMessageAt: 0,
       lastAckSeq: 0,
+      wsSyncInFlight: false,
       roomRecovering: false,
       lastRoomRecoverAt: 0,
       judgeLoading: false,
@@ -747,6 +750,65 @@ export default {
     markWsActivity() {
       this.wsLastMessageAt = Date.now();
     },
+    sendWsAck(ws, eventSeq) {
+      if (this.destroyed || this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const payload = buildDebateRoomAckMessage(eventSeq);
+      if (!payload) {
+        return;
+      }
+      try {
+        ws.send(payload);
+      } catch (_) {
+        ws.close();
+      }
+    },
+    handleWelcomeMessage(ws, msg) {
+      const baselineAckSeq = toNonNegativeInt(
+        msg?.baselineAckSeq ?? msg?.baseline_ack_seq,
+        null,
+      );
+      if (baselineAckSeq != null) {
+        this.setLastAckSeq(baselineAckSeq);
+      }
+      const replayCount = toNonNegativeInt(msg?.replayCount ?? msg?.replay_count, 0);
+      const lastEventSeq = toNonNegativeInt(msg?.lastEventSeq ?? msg?.last_event_seq, null);
+      if (lastEventSeq != null && replayCount === 0) {
+        this.setLastAckSeq(lastEventSeq);
+        this.sendWsAck(ws, lastEventSeq);
+      }
+    },
+    async handleSyncRequiredMessage(rawMsg = {}) {
+      if (this.destroyed || this.wsSyncInFlight) {
+        return;
+      }
+      this.wsSyncInFlight = true;
+      const suggestedLastAckSeq = toNonNegativeInt(
+        rawMsg?.suggestedLastAckSeq ?? rawMsg?.suggested_last_ack_seq,
+        null,
+      );
+      const latestEventSeq = toNonNegativeInt(
+        rawMsg?.latestEventSeq ?? rawMsg?.latest_event_seq,
+        null,
+      );
+      if (suggestedLastAckSeq != null) {
+        this.setLastAckSeq(suggestedLastAckSeq);
+      }
+      try {
+        await this.recoverRoomStateAfterReconnect({ force: true });
+        if (latestEventSeq != null) {
+          this.setLastAckSeq(latestEventSeq);
+        }
+        this.disconnectWs();
+        await this.connectRoomWs();
+      } catch (_) {
+        this.disconnectWs();
+        this.scheduleWsReconnect();
+      } finally {
+        this.wsSyncInFlight = false;
+      }
+    },
     clearWsHeartbeatTimers() {
       if (this.wsHeartbeatTimer) {
         clearInterval(this.wsHeartbeatTimer);
@@ -792,28 +854,37 @@ export default {
         return true;
       }
       if (type === 'welcome') {
+        this.handleWelcomeMessage(ws, msg);
         return true;
       }
       if (type === 'pong') {
         return true;
       }
       if (type === 'syncRequired') {
-        this.disconnectWs();
-        this.connectRoomWs();
+        void this.handleSyncRequiredMessage(msg);
         return true;
       }
       return false;
     },
-    handleRoomEventMessage(msg) {
+    handleRoomEventMessage(ws, msg) {
       const eventSeqRaw = Number(msg?.eventSeq ?? msg?.event_seq);
       if (Number.isFinite(eventSeqRaw) && eventSeqRaw > 0) {
         const eventSeq = Math.floor(eventSeqRaw);
         if (eventSeq <= this.lastAckSeq) {
+          this.sendWsAck(ws, eventSeq);
           return;
         }
         if (eventSeq > this.lastAckSeq + 1) {
-          this.disconnectWs();
-          this.connectRoomWs();
+          void this.handleSyncRequiredMessage({
+            type: 'syncRequired',
+            reason: 'client_gap_detected',
+            strategy: 'snapshot_then_reconnect',
+            suggestedLastAckSeq: this.lastAckSeq,
+            latestEventSeq: eventSeq - 1,
+            gapFromSeq: this.lastAckSeq + 1,
+            gapToSeq: eventSeq - 1,
+            skipped: Math.max(0, eventSeq - this.lastAckSeq - 1),
+          });
           return;
         }
         const payload = extractDebateRoomEvent(msg);
@@ -821,6 +892,7 @@ export default {
           this.handleRoomPayload(payload);
         }
         this.setLastAckSeq(eventSeq);
+        this.sendWsAck(ws, eventSeq);
         return;
       }
       const payload = extractDebateRoomEvent(msg);
@@ -851,12 +923,12 @@ export default {
         this.wsReconnectAttempts = 0;
       }
     },
-    async recoverRoomStateAfterReconnect() {
+    async recoverRoomStateAfterReconnect({ force = false } = {}) {
       if (!this.sessionId || this.roomRecovering) {
         return;
       }
       const now = Date.now();
-      if (now - this.lastRoomRecoverAt < 3000) {
+      if (!force && now - this.lastRoomRecoverAt < 3000) {
         return;
       }
       this.roomRecovering = true;
@@ -914,6 +986,7 @@ export default {
           this.wsConnected = true;
           this.wsReconnectAttempts = 0;
           this.startWsHeartbeat(ws);
+          this.sendWsAck(ws, this.lastAckSeq);
           this.recoverRoomStateAfterReconnect();
         };
         ws.onmessage = (event) => {
@@ -924,7 +997,7 @@ export default {
           if (this.handleWsControlMessage(ws, msg)) {
             return;
           }
-          this.handleRoomEventMessage(msg);
+          this.handleRoomEventMessage(ws, msg);
         };
         ws.onerror = () => {
           if (this.ws !== ws) {

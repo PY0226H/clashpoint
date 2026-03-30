@@ -380,6 +380,62 @@ class PhasePipelineTests(unittest.TestCase):
         self.assertEqual(payload["judgeTrace"]["summaryAudit"]["pro"]["source"], "extractive_fallback")
         self.assertEqual(payload["judgeTrace"]["summaryAudit"]["con"]["source"], "extractive_fallback")
 
+    def test_build_phase_report_payload_should_track_token_usage_and_clip_audit(self) -> None:
+        request = _build_phase_request_for_pipeline()
+        for item in request.messages:
+            item.content = (item.content + " ") * 600
+        settings = _build_settings(
+            provider="openai",
+            openai_api_key="test-key",
+            rag_enabled=False,
+            rag_knowledge_file="",
+            rag_source_whitelist=(),
+            phase_prompt_max_tokens=300,
+            agent2_prompt_max_tokens=300,
+        )
+
+        async def _mock_call_openai_json(*, cfg, system_prompt, user_prompt):
+            _ = cfg
+            _ = user_prompt
+            if "辩论阶段总结Agent" in system_prompt:
+                if "当前阵营: pro" in system_prompt:
+                    return {"summary_text": "正方总结", "message_ids": [1, 3]}
+                return {"summary_text": "反方总结", "message_ids": [2, 4]}
+            if "顶级辩手" in system_prompt:
+                return {"ideal_rebuttal": "理想反驳", "key_points": ["关键点1", "关键点2", "关键点3"]}
+            if "命中度评估器" in system_prompt:
+                return {
+                    "score": 70,
+                    "hit_points": ["关键点1"],
+                    "miss_points": ["关键点2"],
+                    "dimension_scores": {
+                        "coverage": 70,
+                        "depth": 66,
+                        "evidence_fit": 62,
+                        "key_point_hit_rate": 60,
+                    },
+                }
+            raise AssertionError("unexpected prompt")
+
+        with patch("app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)):
+            payload = asyncio.run(
+                build_phase_report_payload(
+                    request=request,
+                    settings=settings,
+                )
+            )
+
+        self.assertGreater(payload["tokenUsage"]["total"], 0)
+        self.assertTrue(payload["tokenUsage"]["usageEstimated"])
+        self.assertGreaterEqual(len(payload["judgeTrace"]["tokenClipSummary"]), 1)
+        self.assertTrue(
+            any(
+                bool(item.get("clipped"))
+                for item in payload["judgeTrace"]["tokenClipSummary"]
+            )
+        )
+        self.assertIn("summary_prompt_token_clipped", payload["errorCodes"])
+
 
 if __name__ == "__main__":
     unittest.main()

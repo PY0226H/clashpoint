@@ -14,6 +14,7 @@ from app.rag_retriever import (
     retrieve_contexts,
     summarize_retrieved_contexts,
 )
+from app.token_budget import count_tokens
 
 
 def _build_request():
@@ -391,6 +392,106 @@ class RagRetrieverTests(unittest.TestCase):
         self.assertEqual(diagnostics["tuning"]["rerankBaseWeight"], 0.0)
         self.assertEqual(diagnostics["rerankEngineConfigured"], "heuristic")
         self.assertEqual(diagnostics["rerankEngineEffective"], "heuristic")
+
+    def test_retrieve_contexts_should_apply_query_and_snippet_token_cap(self) -> None:
+        request = _build_request()
+        request.messages = request.messages + [
+            SimpleNamespace(
+                message_id=3,
+                user_id=12,
+                side="pro",
+                content="超长消息 " * 400,
+                created_at=request.messages[0].created_at,
+            )
+        ]
+        chunks = [
+            {
+                "chunkId": "long-chunk",
+                "title": "长片段",
+                "sourceUrl": "https://example.com/long",
+                "content": "超长知识片段 " * 500,
+                "tags": ["long"],
+            },
+        ]
+        diagnostics: dict = {}
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", encoding="utf-8") as f:
+            json.dump(chunks, f, ensure_ascii=False)
+            f.flush()
+            with tempfile.TemporaryDirectory() as cache_dir:
+                contexts = retrieve_contexts(
+                    request,
+                    enabled=True,
+                    knowledge_file=f.name,
+                    max_snippets=3,
+                    max_chars_per_snippet=6000,
+                    query_message_limit=100,
+                    query_max_tokens=40,
+                    snippet_max_tokens=30,
+                    bm25_cache_dir=cache_dir,
+                    diagnostics=diagnostics,
+                )
+        self.assertTrue(diagnostics["queryTokenClip"]["clipped"])
+        for item in contexts:
+            self.assertLessEqual(
+                count_tokens("gpt-4.1-mini", item.content, fallback_encoding="o200k_base"),
+                30,
+            )
+
+    @patch("app.rag_retriever._fetch_milvus_candidates")
+    @patch("app.rag_retriever._embed_query_with_openai")
+    def test_retrieve_contexts_milvus_should_forward_embed_budget_and_capped_query(
+        self,
+        mock_embed_query_with_openai,
+        mock_fetch_milvus_candidates,
+    ) -> None:
+        request = _build_request()
+        request.messages = request.messages + [
+            SimpleNamespace(
+                message_id=3,
+                user_id=12,
+                side="pro",
+                content="query-message " * 400,
+                created_at=request.messages[0].created_at,
+            )
+        ]
+        mock_fetch_milvus_candidates.return_value = []
+
+        captured: dict[str, object] = {}
+
+        def _fake_embed(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        mock_embed_query_with_openai.side_effect = _fake_embed
+        diagnostics: dict = {}
+        _ = retrieve_contexts(
+            request,
+            enabled=True,
+            knowledge_file="",
+            max_snippets=2,
+            max_chars_per_snippet=400,
+            query_message_limit=100,
+            query_max_tokens=24,
+            snippet_max_tokens=50,
+            backend=RAG_BACKEND_MILVUS,
+            milvus_config=RagMilvusConfig(
+                uri="http://milvus:19530",
+                collection="debate_knowledge",
+            ),
+            openai_api_key="sk-test",
+            embed_input_max_tokens=18,
+            diagnostics=diagnostics,
+        )
+        self.assertEqual(captured["embed_input_max_tokens"], 18)
+        self.assertLessEqual(
+            count_tokens(
+                "gpt-4.1-mini",
+                str(captured["query_text"]),
+                fallback_encoding="o200k_base",
+            ),
+            24,
+        )
+        self.assertTrue(diagnostics["queryTokenClip"]["clipped"])
 
 
 if __name__ == "__main__":

@@ -91,6 +91,11 @@ def retrieve_runtime_contexts_with_meta(
         "max_snippets": settings.rag_max_snippets,
         "max_chars_per_snippet": settings.rag_max_chars_per_snippet,
         "query_message_limit": settings.rag_query_message_limit,
+        "query_max_tokens": settings.rag_query_max_tokens,
+        "snippet_max_tokens": settings.rag_snippet_max_tokens,
+        "tokenizer_model": settings.openai_model,
+        "tokenizer_fallback_encoding": settings.tokenizer_fallback_encoding,
+        "embed_input_max_tokens": settings.embed_input_max_tokens,
         "allowed_source_prefixes": settings.rag_source_whitelist,
         "backend": effective_backend,
         "milvus_config": milvus_config if effective_backend == RAG_BACKEND_MILVUS else None,
@@ -129,6 +134,11 @@ def retrieve_runtime_contexts_with_meta(
         retrieve_kwargs.pop("hybrid_rrf_k", None)
         retrieve_kwargs.pop("hybrid_vector_limit_multiplier", None)
         retrieve_kwargs.pop("hybrid_lexical_limit_multiplier", None)
+        retrieve_kwargs.pop("query_max_tokens", None)
+        retrieve_kwargs.pop("snippet_max_tokens", None)
+        retrieve_kwargs.pop("tokenizer_model", None)
+        retrieve_kwargs.pop("tokenizer_fallback_encoding", None)
+        retrieve_kwargs.pop("embed_input_max_tokens", None)
         retrieve_kwargs.pop("lexical_engine", None)
         retrieve_kwargs.pop("bm25_cache_dir", None)
         retrieve_kwargs.pop("bm25_use_disk_cache", None)

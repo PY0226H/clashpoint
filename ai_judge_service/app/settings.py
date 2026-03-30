@@ -120,6 +120,12 @@ class Settings:
     topic_memory_min_evidence_refs: int
     topic_memory_min_rationale_chars: int
     topic_memory_min_quality_score: float
+    tokenizer_fallback_encoding: str = "o200k_base"
+    phase_prompt_max_tokens: int = 3200
+    agent2_prompt_max_tokens: int = 3600
+    rag_query_max_tokens: int = 1600
+    rag_snippet_max_tokens: int = 180
+    embed_input_max_tokens: int = 2000
     runtime_retry_max_attempts: int = 2
     runtime_retry_backoff_ms: int = 200
     compliance_block_enabled: bool = True
@@ -224,6 +230,26 @@ def load_settings() -> Settings:
         topic_memory_min_quality_score=float(
             os.getenv("AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE", "0.55")
         ),
+        tokenizer_fallback_encoding=os.getenv(
+            "AI_JUDGE_TOKENIZER_FALLBACK_ENCODING",
+            "o200k_base",
+        ).strip()
+        or "o200k_base",
+        phase_prompt_max_tokens=int(
+            os.getenv("AI_JUDGE_PHASE_PROMPT_MAX_TOKENS", "3200")
+        ),
+        agent2_prompt_max_tokens=int(
+            os.getenv("AI_JUDGE_AGENT2_PROMPT_MAX_TOKENS", "3600")
+        ),
+        rag_query_max_tokens=int(
+            os.getenv("AI_JUDGE_RAG_QUERY_MAX_TOKENS", "1600")
+        ),
+        rag_snippet_max_tokens=int(
+            os.getenv("AI_JUDGE_RAG_SNIPPET_MAX_TOKENS", "180")
+        ),
+        embed_input_max_tokens=int(
+            os.getenv("AI_JUDGE_EMBED_INPUT_MAX_TOKENS", "2000")
+        ),
         runtime_retry_max_attempts=int(
             os.getenv("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS", "2")
         ),
@@ -302,6 +328,18 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS must be between 0 and 2000")
     if settings.topic_memory_min_quality_score < 0.0 or settings.topic_memory_min_quality_score > 1.0:
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE must be between 0 and 1")
+    if not settings.tokenizer_fallback_encoding.strip():
+        raise ValueError("AI_JUDGE_TOKENIZER_FALLBACK_ENCODING cannot be empty")
+    if settings.phase_prompt_max_tokens < 256 or settings.phase_prompt_max_tokens > 32000:
+        raise ValueError("AI_JUDGE_PHASE_PROMPT_MAX_TOKENS must be between 256 and 32000")
+    if settings.agent2_prompt_max_tokens < 256 or settings.agent2_prompt_max_tokens > 32000:
+        raise ValueError("AI_JUDGE_AGENT2_PROMPT_MAX_TOKENS must be between 256 and 32000")
+    if settings.rag_query_max_tokens < 64 or settings.rag_query_max_tokens > 32000:
+        raise ValueError("AI_JUDGE_RAG_QUERY_MAX_TOKENS must be between 64 and 32000")
+    if settings.rag_snippet_max_tokens < 16 or settings.rag_snippet_max_tokens > 8000:
+        raise ValueError("AI_JUDGE_RAG_SNIPPET_MAX_TOKENS must be between 16 and 8000")
+    if settings.embed_input_max_tokens < 64 or settings.embed_input_max_tokens > 32000:
+        raise ValueError("AI_JUDGE_EMBED_INPUT_MAX_TOKENS must be between 64 and 32000")
     if settings.runtime_retry_max_attempts < 1 or settings.runtime_retry_max_attempts > 10:
         raise ValueError("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS must be between 1 and 10")
     if settings.runtime_retry_backoff_ms < 0 or settings.runtime_retry_backoff_ms > 10000:
