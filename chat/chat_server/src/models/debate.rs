@@ -1,6 +1,6 @@
 use crate::{
-    AppError, AppState, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
-    DebateSessionStatusChangedEvent, DomainEvent, EventPublisher,
+    AppError, AppState, DebateMessageCreatedEvent, DebateMessagePinnedEvent,
+    DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent, DomainEvent, EventPublisher,
 };
 use chat_core::User;
 use chrono::{DateTime, Utc};

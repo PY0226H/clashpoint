@@ -91,6 +91,7 @@ pub(crate) trait OpenApiRouter {
             crate::handlers::debate_ops::apply_ops_observability_anomaly_action_handler,
             crate::handlers::debate_ops::run_ops_observability_evaluation_once_handler,
             crate::handlers::debate_ops::list_ops_alert_notifications_handler,
+            crate::handlers::debate_ops::get_kafka_transport_readiness_handler,
             crate::handlers::debate_ops::list_kafka_dlq_events_handler,
             crate::handlers::debate_ops::replay_kafka_dlq_event_handler,
             crate::handlers::debate_ops::discard_kafka_dlq_event_handler,

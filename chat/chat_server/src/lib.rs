@@ -31,9 +31,9 @@ use tracing::{info, warn};
 use application::runtime_workers::spawn_background_workers;
 pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
-    DebateMessagePinnedEvent, DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent,
-    DomainEvent, EventBus, EventOutboxRelayConfig, EventOutboxRelayMetrics, EventOutboxRelayReport,
-    EventPublisher,
+    DebateMessageCreatedEvent, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
+    DebateSessionStatusChangedEvent, DomainEvent, EventBus, EventOutboxRelayConfig,
+    EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher,
 };
 use models::JudgeDispatchTrigger;
 pub use models::*;
@@ -158,6 +158,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route(
             "/ops/observability/alerts",
             get(list_ops_alert_notifications_handler),
+        )
+        .route(
+            "/ops/kafka/readiness",
+            get(get_kafka_transport_readiness_handler),
         )
         .route("/ops/kafka/dlq", get(list_kafka_dlq_events_handler))
         .route(

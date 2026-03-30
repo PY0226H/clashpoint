@@ -66,6 +66,20 @@ impl AppState {
         .execute(&mut *tx)
         .await?;
 
+        self.event_bus
+            .enqueue_in_tx(
+                &mut tx,
+                DomainEvent::DebateMessageCreated(DebateMessageCreatedEvent {
+                    session_id: msg.session_id as u64,
+                    message_id: msg.id as u64,
+                    user_id: user.id as u64,
+                    side: msg.side.clone(),
+                    content: msg.content.clone(),
+                    created_at: msg.created_at,
+                }),
+            )
+            .await?;
+
         tx.commit().await?;
         if let Err(err) = self
             .maybe_log_phase_trigger_checkpoint(msg.session_id, msg.id)

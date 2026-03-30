@@ -24,7 +24,12 @@ use crate::config::{KafkaConfig, WorkerRuntimeConfig};
 
 pub const TOPIC_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined.v1";
 pub const TOPIC_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed.v1";
+pub const TOPIC_DEBATE_MESSAGE_CREATED: &str = "debate.message.created.v1";
 pub const TOPIC_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned.v1";
+pub const EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined";
+pub const EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
+pub const EVENT_TYPE_DEBATE_MESSAGE_CREATED: &str = "debate.message.created";
+pub const EVENT_TYPE_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned";
 
 const OUTBOX_STATUS_PENDING: &str = "pending";
 const OUTBOX_STATUS_SENDING: &str = "sending";
@@ -37,6 +42,7 @@ const OUTBOX_ERROR_MAX_LEN: usize = 1000;
 pub enum DomainEvent {
     DebateParticipantJoined(DebateParticipantJoinedEvent),
     DebateSessionStatusChanged(DebateSessionStatusChangedEvent),
+    DebateMessageCreated(DebateMessageCreatedEvent),
     DebateMessagePinned(DebateMessagePinnedEvent),
 }
 
@@ -45,21 +51,28 @@ impl DomainEvent {
         match self {
             Self::DebateParticipantJoined(event) => build_outbox_message(
                 TOPIC_DEBATE_PARTICIPANT_JOINED,
-                "debate.participant.joined",
+                EVENT_TYPE_DEBATE_PARTICIPANT_JOINED,
                 format!("session:{}", event.session_id),
                 Utc::now(),
                 serde_json::to_value(event)?,
             ),
             Self::DebateSessionStatusChanged(event) => build_outbox_message(
                 TOPIC_DEBATE_SESSION_STATUS_CHANGED,
-                "debate.session.status.changed",
+                EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED,
                 format!("session:{}", event.session_id),
                 event.changed_at,
                 serde_json::to_value(event)?,
             ),
+            Self::DebateMessageCreated(event) => build_outbox_message(
+                TOPIC_DEBATE_MESSAGE_CREATED,
+                EVENT_TYPE_DEBATE_MESSAGE_CREATED,
+                format!("session:{}", event.session_id),
+                event.created_at,
+                serde_json::to_value(event)?,
+            ),
             Self::DebateMessagePinned(event) => build_outbox_message(
                 TOPIC_DEBATE_MESSAGE_PINNED,
-                "debate.message.pinned",
+                EVENT_TYPE_DEBATE_MESSAGE_PINNED,
                 format!("session:{}", event.session_id),
                 event.pinned_at,
                 serde_json::to_value(event)?,
@@ -124,6 +137,18 @@ pub struct EventOutboxRelayMetrics {
     dead_letter_total: AtomicU64,
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventOutboxRelayMetricsSnapshot {
+    pub tick_success_total: u64,
+    pub tick_error_total: u64,
+    pub claimed_total: u64,
+    pub sent_total: u64,
+    pub retried_total: u64,
+    pub failed_total: u64,
+    pub dead_letter_total: u64,
+}
+
 impl EventOutboxRelayMetrics {
     pub(crate) fn observe_tick_success(&self, report: &EventOutboxRelayReport) {
         self.tick_success_total.fetch_add(1, Ordering::Relaxed);
@@ -141,6 +166,18 @@ impl EventOutboxRelayMetrics {
 
     pub(crate) fn observe_tick_error(&self) {
         self.tick_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> EventOutboxRelayMetricsSnapshot {
+        EventOutboxRelayMetricsSnapshot {
+            tick_success_total: self.tick_success_total.load(Ordering::Relaxed),
+            tick_error_total: self.tick_error_total.load(Ordering::Relaxed),
+            claimed_total: self.claimed_total.load(Ordering::Relaxed),
+            sent_total: self.sent_total.load(Ordering::Relaxed),
+            retried_total: self.retried_total.load(Ordering::Relaxed),
+            failed_total: self.failed_total.load(Ordering::Relaxed),
+            dead_letter_total: self.dead_letter_total.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -430,6 +467,17 @@ pub struct DebateSessionStatusChangedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DebateMessageCreatedEvent {
+    pub session_id: u64,
+    pub message_id: u64,
+    pub user_id: u64,
+    pub side: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DebateMessagePinnedEvent {
     pub session_id: u64,
     pub message_id: u64,
@@ -575,6 +623,7 @@ impl EventBus {
             vec![
                 bus.config.topic_name(TOPIC_DEBATE_PARTICIPANT_JOINED),
                 bus.config.topic_name(TOPIC_DEBATE_SESSION_STATUS_CHANGED),
+                bus.config.topic_name(TOPIC_DEBATE_MESSAGE_CREATED),
                 bus.config.topic_name(TOPIC_DEBATE_MESSAGE_PINNED),
             ]
         } else {
@@ -749,6 +798,24 @@ impl std::fmt::Display for ConsumeProcessOutcome {
 #[derive(Debug)]
 enum BusinessProcessOutcome {
     Succeeded,
+}
+
+#[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
+enum WorkerEvent {
+    DebateParticipantJoined(DebateParticipantJoinedEvent),
+    DebateSessionStatusChanged(DebateSessionStatusChangedEvent),
+    DebateMessageCreated(DebateMessageCreatedEvent),
+    DebateMessagePinned(DebateMessagePinnedEvent),
+}
+
+pub(crate) fn worker_supported_event_types() -> &'static [&'static str] {
+    &[
+        EVENT_TYPE_DEBATE_PARTICIPANT_JOINED,
+        EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED,
+        EVENT_TYPE_DEBATE_MESSAGE_CREATED,
+        EVENT_TYPE_DEBATE_MESSAGE_PINNED,
+    ]
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -991,8 +1058,47 @@ async fn apply_worker_business_logic(
     tx: &mut Transaction<'_, Postgres>,
     envelope: &EventEnvelope,
 ) -> anyhow::Result<BusinessProcessOutcome> {
-    let _ = (tx, envelope);
-    Ok(BusinessProcessOutcome::Succeeded)
+    let event = decode_worker_event(envelope)?;
+    match event {
+        WorkerEvent::DebateParticipantJoined(v) => {
+            let _ = (tx, v);
+            Ok(BusinessProcessOutcome::Succeeded)
+        }
+        WorkerEvent::DebateSessionStatusChanged(v) => {
+            let _ = (tx, v);
+            Ok(BusinessProcessOutcome::Succeeded)
+        }
+        WorkerEvent::DebateMessageCreated(v) => {
+            let _ = (tx, v);
+            Ok(BusinessProcessOutcome::Succeeded)
+        }
+        WorkerEvent::DebateMessagePinned(v) => {
+            let _ = (tx, v);
+            Ok(BusinessProcessOutcome::Succeeded)
+        }
+    }
+}
+
+fn decode_worker_event(envelope: &EventEnvelope) -> anyhow::Result<WorkerEvent> {
+    match envelope.event_type.as_str() {
+        EVENT_TYPE_DEBATE_PARTICIPANT_JOINED => Ok(WorkerEvent::DebateParticipantJoined(
+            serde_json::from_value(envelope.payload.clone())?,
+        )),
+        EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED => Ok(WorkerEvent::DebateSessionStatusChanged(
+            serde_json::from_value(envelope.payload.clone())?,
+        )),
+        EVENT_TYPE_DEBATE_MESSAGE_CREATED => Ok(WorkerEvent::DebateMessageCreated(
+            serde_json::from_value(envelope.payload.clone())?,
+        )),
+        EVENT_TYPE_DEBATE_MESSAGE_PINNED => Ok(WorkerEvent::DebateMessagePinned(
+            serde_json::from_value(envelope.payload.clone())?,
+        )),
+        _ => Err(anyhow::anyhow!(
+            "unsupported kafka event_type={}, expected one of {:?}",
+            envelope.event_type,
+            worker_supported_event_types()
+        )),
+    }
 }
 
 struct FailedConsumeRow {
@@ -1151,6 +1257,10 @@ mod tests {
             "echoisle.debate.session.status.changed.v1"
         );
         assert_eq!(
+            cfg.topic_name(TOPIC_DEBATE_MESSAGE_CREATED),
+            "echoisle.debate.message.created.v1"
+        );
+        assert_eq!(
             cfg.topic_name(TOPIC_DEBATE_MESSAGE_PINNED),
             "echoisle.debate.message.pinned.v1"
         );
@@ -1221,21 +1331,31 @@ mod tests {
 
     #[test]
     fn domain_event_into_message_should_fill_topic_key_and_payload() {
-        let event = DomainEvent::DebateMessagePinned(DebateMessagePinnedEvent {
+        let event = DomainEvent::DebateMessageCreated(DebateMessageCreatedEvent {
             session_id: 11,
             message_id: 22,
             user_id: 33,
-            ledger_id: 44,
-            cost_coins: 10,
-            pin_seconds: 60,
-            pinned_at: Utc::now(),
-            expires_at: Utc::now(),
+            side: "pro".to_string(),
+            content: "hello".to_string(),
+            created_at: Utc::now(),
         });
         let outbox = event.into_message().expect("build outbox message");
-        assert_eq!(outbox.topic, TOPIC_DEBATE_MESSAGE_PINNED);
+        assert_eq!(outbox.topic, TOPIC_DEBATE_MESSAGE_CREATED);
         assert_eq!(outbox.key, "session:11");
-        assert_eq!(outbox.event_type, "debate.message.pinned");
+        assert_eq!(outbox.event_type, EVENT_TYPE_DEBATE_MESSAGE_CREATED);
         assert_eq!(outbox.payload["payload"]["messageId"], 22);
+    }
+
+    #[test]
+    fn decode_worker_event_should_reject_unknown_event_type() {
+        let envelope = EventEnvelope::new(
+            "unknown.event.type",
+            "chat-server",
+            "session:1",
+            serde_json::json!({}),
+        );
+        let err = decode_worker_event(&envelope).expect_err("unknown event should be rejected");
+        assert!(err.to_string().contains("unsupported kafka event_type"));
     }
 
     #[test]

@@ -1,5 +1,8 @@
 use crate::{
-    event_bus::{process_worker_envelope, EventEnvelope, WorkerEnvelopeMeta, WorkerProcessOutcome},
+    event_bus::{
+        process_worker_envelope, worker_supported_event_types, EventEnvelope, WorkerEnvelopeMeta,
+        WorkerProcessOutcome,
+    },
     AppError, AppState, OpsPermission,
 };
 use chat_core::User;
@@ -62,6 +65,33 @@ pub struct KafkaDlqActionOutput {
     pub replayed_at: Option<DateTime<Utc>>,
     pub discarded_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KafkaOutboxRelayMetricsSnapshotOutput {
+    pub tick_success_total: u64,
+    pub tick_error_total: u64,
+    pub claimed_total: u64,
+    pub sent_total: u64,
+    pub retried_total: u64,
+    pub failed_total: u64,
+    pub dead_letter_total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetKafkaTransportReadinessOutput {
+    pub ready_to_switch: bool,
+    pub kafka_enabled: bool,
+    pub outbox_relay_worker_enabled: bool,
+    pub consumer_worker_enabled: bool,
+    pub consumer_business_logic_ready: bool,
+    pub notify_consume_chain_ready: bool,
+    pub dlq_replay_loop_ready: bool,
+    pub supported_event_types: Vec<String>,
+    pub blockers: Vec<String>,
+    pub outbox_metrics: KafkaOutboxRelayMetricsSnapshotOutput,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -162,6 +192,69 @@ fn map_dlq_action_row(row: KafkaDlqActionRow) -> KafkaDlqActionOutput {
 }
 
 impl AppState {
+    pub async fn get_kafka_transport_readiness(
+        &self,
+        user: &User,
+    ) -> Result<GetKafkaTransportReadinessOutput, AppError> {
+        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+            .await?;
+
+        let kafka_enabled = self.config.kafka.enabled;
+        let outbox_relay_worker_enabled =
+            self.config.worker_runtime.event_outbox_relay_worker_enabled;
+        let consumer_worker_enabled =
+            self.config.kafka.consume_enabled || self.config.kafka.consumer.worker_enabled;
+        let consumer_business_logic_ready = !worker_supported_event_types().is_empty();
+        // Kafka consume -> notify fanout bridge is intentionally not switched in this round.
+        let notify_consume_chain_ready = false;
+        let dlq_replay_loop_ready = true;
+
+        let mut blockers = Vec::new();
+        if !kafka_enabled {
+            blockers.push("kafka.enabled=false".to_string());
+        }
+        if !outbox_relay_worker_enabled {
+            blockers.push("worker_runtime.event_outbox_relay_worker_enabled=false".to_string());
+        }
+        if !consumer_worker_enabled {
+            blockers.push("kafka consumer worker is disabled".to_string());
+        }
+        if !consumer_business_logic_ready {
+            blockers.push("consumer business logic handler is empty".to_string());
+        }
+        if !notify_consume_chain_ready {
+            blockers.push("notify consume chain is not wired to Kafka yet".to_string());
+        }
+        if !dlq_replay_loop_ready {
+            blockers.push("DLQ replay loop is not ready".to_string());
+        }
+
+        let metrics = self.event_outbox_metrics.snapshot();
+        Ok(GetKafkaTransportReadinessOutput {
+            ready_to_switch: blockers.is_empty(),
+            kafka_enabled,
+            outbox_relay_worker_enabled,
+            consumer_worker_enabled,
+            consumer_business_logic_ready,
+            notify_consume_chain_ready,
+            dlq_replay_loop_ready,
+            supported_event_types: worker_supported_event_types()
+                .iter()
+                .map(|v| (*v).to_string())
+                .collect(),
+            blockers,
+            outbox_metrics: KafkaOutboxRelayMetricsSnapshotOutput {
+                tick_success_total: metrics.tick_success_total,
+                tick_error_total: metrics.tick_error_total,
+                claimed_total: metrics.claimed_total,
+                sent_total: metrics.sent_total,
+                retried_total: metrics.retried_total,
+                failed_total: metrics.failed_total,
+                dead_letter_total: metrics.dead_letter_total,
+            },
+        })
+    }
+
     pub async fn list_kafka_dlq_events(
         &self,
         user: &User,

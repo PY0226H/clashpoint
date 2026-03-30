@@ -462,6 +462,26 @@ pub(crate) async fn list_kafka_dlq_events_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
+/// Get Kafka transport cutover readiness and outbox relay metrics snapshot.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/kafka/readiness",
+    responses(
+        (status = 200, description = "Kafka transport readiness", body = crate::GetKafkaTransportReadinessOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn get_kafka_transport_readiness_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.get_kafka_transport_readiness(&user).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
 /// Replay Kafka DLQ event by id.
 #[utoipa::path(
     post,
