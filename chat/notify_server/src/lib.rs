@@ -29,7 +29,7 @@ use std::{
 };
 use tokio::sync::broadcast;
 use tower_http::cors::{self, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 use ws::{debate_room_ws_handler, ws_handler};
 
 pub use config::AppConfig;
@@ -83,6 +83,8 @@ pub struct DebateReplayWindow {
     pub latest_seq: u64,
     pub has_gap: bool,
     pub skipped: u64,
+    pub sync_required_reason: Option<String>,
+    pub sync_required_strategy: Option<String>,
 }
 
 #[derive(Clone)]
@@ -259,8 +261,15 @@ impl AppState {
             // DB has persisted sequence for this session: use DB replay as source of truth.
             Ok(window) if window.latest_seq > 0 => window,
             // DB is empty for this session (or unavailable): fallback to in-memory replay window.
-            Ok(_) | Err(_) => {
-                self.replay_debate_events_from_memory(user_id, session_id, last_ack_seq)
+            Ok(_) => self.replay_debate_events_from_memory(user_id, session_id, last_ack_seq),
+            Err(err) => {
+                warn!(
+                    "replay_debate_events_from_db failed: user_id={}, session_id={}, err={}",
+                    user_id, session_id, err
+                );
+                let window =
+                    self.replay_debate_events_from_memory(user_id, session_id, last_ack_seq);
+                mark_sync_required_for_replay_storage_unavailable(window, last_ack_seq.unwrap_or(0))
             }
         }
     }
@@ -288,6 +297,8 @@ impl AppState {
                 latest_seq,
                 has_gap: false,
                 skipped: 0,
+                sync_required_reason: None,
+                sync_required_strategy: None,
             });
         }
         let rows = sqlx::query(
@@ -338,6 +349,8 @@ impl AppState {
             latest_seq,
             has_gap,
             skipped,
+            sync_required_reason: None,
+            sync_required_strategy: None,
         })
     }
 
@@ -354,6 +367,8 @@ impl AppState {
                 latest_seq: 0,
                 has_gap: false,
                 skipped: 0,
+                sync_required_reason: None,
+                sync_required_strategy: None,
             };
         };
         let latest_seq = history.latest_seq();
@@ -363,6 +378,8 @@ impl AppState {
                 latest_seq,
                 has_gap: false,
                 skipped: 0,
+                sync_required_reason: None,
+                sync_required_strategy: None,
             };
         }
 
@@ -390,6 +407,8 @@ impl AppState {
             latest_seq,
             has_gap,
             skipped,
+            sync_required_reason: None,
+            sync_required_strategy: None,
         }
     }
 
@@ -581,6 +600,17 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn mark_sync_required_for_replay_storage_unavailable(
+    mut window: DebateReplayWindow,
+    requested_last_ack_seq: u64,
+) -> DebateReplayWindow {
+    if requested_last_ack_seq > 0 && window.latest_seq == 0 {
+        window.sync_required_reason = Some("replay_storage_unavailable".to_string());
+        window.sync_required_strategy = Some("snapshot_then_reconnect".to_string());
+    }
+    window
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,5 +618,28 @@ mod tests {
     #[tokio::test]
     async fn health_handler_should_return_ok() {
         assert_eq!(health_handler().await, "ok");
+    }
+
+    #[test]
+    fn mark_sync_required_for_replay_storage_unavailable_should_require_sync_for_resumed_client_without_replay_source(
+    ) {
+        let window = DebateReplayWindow::default();
+        let marked = mark_sync_required_for_replay_storage_unavailable(window, 3);
+        assert_eq!(
+            marked.sync_required_reason.as_deref(),
+            Some("replay_storage_unavailable")
+        );
+        assert_eq!(
+            marked.sync_required_strategy.as_deref(),
+            Some("snapshot_then_reconnect")
+        );
+    }
+
+    #[test]
+    fn mark_sync_required_for_replay_storage_unavailable_should_skip_fresh_client() {
+        let window = DebateReplayWindow::default();
+        let marked = mark_sync_required_for_replay_storage_unavailable(window, 0);
+        assert_eq!(marked.sync_required_reason, None);
+        assert_eq!(marked.sync_required_strategy, None);
     }
 }

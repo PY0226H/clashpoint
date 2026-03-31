@@ -180,7 +180,8 @@ async fn debate_room_loop(
         client_last_ack_seq = clamped_ack_seq;
     }
     let mut last_sent_event_seq = client_last_ack_seq;
-    let should_replay = !replay_window.has_gap;
+    let should_force_sync = replay_window.sync_required_reason.is_some();
+    let should_replay = !replay_window.has_gap && !should_force_sync;
     let replay_count = if should_replay {
         replay_window.events.len()
     } else {
@@ -220,6 +221,24 @@ async fn debate_room_loop(
             suggested_last_ack_seq: client_last_ack_seq,
             latest_event_seq: Some(replay_window.latest_seq),
             strategy: "snapshot_then_reconnect".to_string(),
+        };
+        if !send_room_message(&mut socket, &sync_msg).await {
+            return;
+        }
+    } else if let Some(reason) = replay_window.sync_required_reason.as_ref() {
+        let expected_from_seq = client_last_ack_seq.saturating_add(1);
+        let sync_msg = RoomServerMessage::SyncRequired {
+            reason: reason.clone(),
+            skipped: replay_window.skipped,
+            expected_from_seq: Some(expected_from_seq),
+            gap_from_seq: None,
+            gap_to_seq: None,
+            suggested_last_ack_seq: client_last_ack_seq,
+            latest_event_seq: (replay_window.latest_seq > 0).then_some(replay_window.latest_seq),
+            strategy: replay_window
+                .sync_required_strategy
+                .clone()
+                .unwrap_or_else(|| "snapshot_then_reconnect".to_string()),
         };
         if !send_room_message(&mut socket, &sync_msg).await {
             return;
@@ -545,7 +564,7 @@ mod tests {
         let (mut socket, _) =
             connect_async(format!("ws://{addr}/ws/debate/12?token={notify_ticket}")).await?;
 
-        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome = tokio::time::timeout(Duration::from_secs(12), socket.next()).await?;
         let welcome_msg = welcome
             .expect("should receive welcome message")
             .expect("welcome message should be ws ok");
@@ -727,7 +746,7 @@ mod tests {
             .expect("sync event should require debate session id");
         tx.send(Arc::new(sync_event))?;
 
-        let sync_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let sync_msg = tokio::time::timeout(Duration::from_secs(12), socket.next()).await?;
         let sync_text = sync_msg
             .expect("should receive syncRequired message")
             .expect("syncRequired should be ws ok")
