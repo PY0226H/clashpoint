@@ -820,6 +820,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn debate_room_ws_handler_should_clamp_future_last_ack_seq_and_stream_new_event(
+    ) -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                session_id: 12,
+                user_id: 1,
+                side: "pro".to_string(),
+                pro_count: 2,
+                con_count: 1,
+            })),
+            None,
+        );
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                session_id: 12,
+                user_id: 2,
+                side: "con".to_string(),
+                pro_count: 2,
+                con_count: 2,
+            })),
+            None,
+        );
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) = connect_async(format!(
+            "ws://{addr}/ws/debate/12?token={notify_ticket}&lastAckSeq=999"
+        ))
+        .await?;
+
+        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome_text = welcome
+            .expect("should receive welcome message")
+            .expect("welcome message should be ws ok")
+            .into_text()?
+            .to_string();
+        let welcome_json: serde_json::Value = serde_json::from_str(&welcome_text)?;
+        assert_eq!(welcome_json["type"], "welcome");
+        let baseline_ack_seq = welcome_json
+            .get("baselineAckSeq")
+            .or_else(|| welcome_json.get("baseline_ack_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("welcome should carry baselineAckSeq");
+        assert_eq!(baseline_ack_seq, 2);
+
+        for _ in 0..40 {
+            if state.users.contains_key(&1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let tx = state.users.get(&1).expect("user channel should exist");
+        let third_event = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                session_id: 12,
+                user_id: 3,
+                side: "pro".to_string(),
+                pro_count: 3,
+                con_count: 2,
+            })),
+            None,
+        );
+        tx.send(Arc::new(third_event))?;
+
+        let room_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let room_text = room_msg
+            .expect("should receive new room event after clamp")
+            .expect("room event should be ws ok")
+            .into_text()?
+            .to_string();
+        let room_json: serde_json::Value = serde_json::from_str(&room_text)?;
+        assert_eq!(room_json["type"], "roomEvent");
+        let event_seq = room_json
+            .get("eventSeq")
+            .or_else(|| room_json.get("event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("room event should carry event seq");
+        assert_eq!(event_seq, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn debate_room_ws_handler_should_require_sync_when_replay_window_has_gap() -> Result<()> {
         let state = test_state();
         let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
