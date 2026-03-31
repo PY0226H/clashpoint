@@ -77,6 +77,18 @@ export function toNonNegativeInt(value, fallback = null) {
   return Math.floor(parsed);
 }
 
+export function advanceDebateAckSeq(currentSeq, nextSeq, { force = false } = {}) {
+  const current = toNonNegativeInt(currentSeq, 0);
+  const next = toNonNegativeInt(nextSeq, null);
+  if (next == null) {
+    return current;
+  }
+  if (force) {
+    return next;
+  }
+  return next > current ? next : current;
+}
+
 export function buildDebateRoomAckMessage(eventSeq) {
   const normalized = toNonNegativeInt(eventSeq, null);
   if (normalized == null) {

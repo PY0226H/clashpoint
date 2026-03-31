@@ -116,6 +116,10 @@ pub struct GetKafkaTransportReadinessOutput {
     pub pending_dlq_oldest_failed_age_secs: Option<u64>,
     pub pending_dlq_blocking_count_threshold: u64,
     pub pending_dlq_oldest_age_blocking_secs: u64,
+    pub pending_dlq_replay_rate_window_secs: u64,
+    pub pending_dlq_min_replay_actions_per_minute: f64,
+    pub pending_dlq_replay_actions_per_minute: Option<f64>,
+    pub recent_dlq_replay_action_count: u64,
     pub last_dlq_replay_action_at: Option<DateTime<Utc>>,
     pub dlq_replay_progressing: bool,
 }
@@ -156,6 +160,7 @@ struct KafkaDlqRuntimeRow {
     pending_dlq_count: i64,
     pending_dlq_oldest_failed_at: Option<DateTime<Utc>>,
     last_dlq_replay_action_at: Option<DateTime<Utc>>,
+    recent_dlq_replay_action_count: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -249,18 +254,32 @@ impl AppState {
         let consumer_worker_enabled =
             self.config.kafka.consume_enabled || self.config.kafka.consumer.worker_enabled;
         let consumer_business_logic_ready = !worker_supported_event_types().is_empty();
+        let pending_dlq_replay_rate_window_secs = self
+            .config
+            .worker_runtime
+            .kafka_readiness_pending_dlq_replay_rate_window_secs;
+        let pending_dlq_min_replay_actions_per_minute = self
+            .config
+            .worker_runtime
+            .kafka_readiness_pending_dlq_min_replay_actions_per_minute;
+        let pending_dlq_replay_rate_window_secs_i64 = pending_dlq_replay_rate_window_secs as i64;
         let dlq_runtime: KafkaDlqRuntimeRow = sqlx::query_as(
             r#"
             SELECT
                 COUNT(1) FILTER (WHERE status = $1) AS pending_dlq_count,
                 MIN(first_failed_at) FILTER (WHERE status = $1) AS pending_dlq_oldest_failed_at,
-                MAX(updated_at) FILTER (WHERE status IN ($2, $3)) AS last_dlq_replay_action_at
+                MAX(updated_at) FILTER (WHERE status IN ($2, $3)) AS last_dlq_replay_action_at,
+                COUNT(1) FILTER (
+                    WHERE status IN ($2, $3)
+                      AND updated_at >= NOW() - ($4::bigint * INTERVAL '1 second')
+                ) AS recent_dlq_replay_action_count
             FROM kafka_dlq_events
             "#,
         )
         .bind(DLQ_STATUS_PENDING)
         .bind(DLQ_STATUS_REPLAYED)
         .bind(DLQ_STATUS_DISCARDED)
+        .bind(pending_dlq_replay_rate_window_secs_i64)
         .fetch_one(&self.pool)
         .await?;
         let notify_runtime_signals: Vec<NotifyRuntimeSignalRow> = sqlx::query_as(
@@ -285,10 +304,20 @@ impl AppState {
         let (notify_consume_chain_ready, notify_chain_blockers) =
             evaluate_notify_consume_chain_runtime(&notify_runtime_signals, now);
         let pending_dlq_count = dlq_runtime.pending_dlq_count.max(0) as u64;
+        let recent_dlq_replay_action_count =
+            dlq_runtime.recent_dlq_replay_action_count.max(0) as u64;
         let dlq_replay_progressing = dlq_runtime
             .last_dlq_replay_action_at
             .map(|ts| (now - ts).num_seconds().max(0) <= DLQ_REPLAY_PROGRESS_STALE_SECS)
             .unwrap_or(false);
+        let pending_dlq_replay_actions_per_minute = if pending_dlq_replay_rate_window_secs > 0 {
+            Some(
+                recent_dlq_replay_action_count as f64
+                    / (pending_dlq_replay_rate_window_secs as f64 / 60.0),
+            )
+        } else {
+            None
+        };
         let dlq_replay_loop_ready = pending_dlq_count == 0 || dlq_replay_progressing;
         let pending_dlq_blocking_count_threshold = self
             .config
@@ -309,6 +338,12 @@ impl AppState {
             pending_dlq_oldest_age_blocking_secs,
             now,
         );
+        let (pending_dlq_replay_rate_should_block_switch, pending_dlq_replay_rate_blockers) =
+            evaluate_pending_dlq_replay_rate_blocking(
+                pending_dlq_count,
+                pending_dlq_replay_actions_per_minute,
+                pending_dlq_min_replay_actions_per_minute,
+            );
         let consumer_metrics = self.kafka_consumer_metrics.snapshot();
 
         let mut blockers = Vec::new();
@@ -350,6 +385,9 @@ impl AppState {
             }
             if pending_dlq_should_block_switch {
                 blockers.extend(pending_dlq_blockers);
+            }
+            if pending_dlq_replay_rate_should_block_switch {
+                blockers.extend(pending_dlq_replay_rate_blockers);
             }
         }
         if !dlq_replay_loop_ready {
@@ -395,6 +433,10 @@ impl AppState {
             pending_dlq_oldest_failed_age_secs,
             pending_dlq_blocking_count_threshold,
             pending_dlq_oldest_age_blocking_secs,
+            pending_dlq_replay_rate_window_secs,
+            pending_dlq_min_replay_actions_per_minute,
+            pending_dlq_replay_actions_per_minute,
+            recent_dlq_replay_action_count,
             last_dlq_replay_action_at: dlq_runtime.last_dlq_replay_action_at,
             dlq_replay_progressing,
         })
@@ -697,6 +739,36 @@ fn evaluate_pending_dlq_switch_blocking(
     )
 }
 
+fn evaluate_pending_dlq_replay_rate_blocking(
+    pending_dlq_count: u64,
+    pending_dlq_replay_actions_per_minute: Option<f64>,
+    pending_dlq_min_replay_actions_per_minute: f64,
+) -> (bool, Vec<String>) {
+    if pending_dlq_count == 0 || pending_dlq_min_replay_actions_per_minute <= 0.0 {
+        return (false, Vec::new());
+    }
+
+    let Some(replay_actions_per_minute) = pending_dlq_replay_actions_per_minute else {
+        return (
+            true,
+            vec![
+                "pending dlq replay rate is unavailable while min replay rate threshold is enabled"
+                    .to_string(),
+            ],
+        );
+    };
+    if replay_actions_per_minute < pending_dlq_min_replay_actions_per_minute {
+        return (
+            true,
+            vec![format!(
+                "pending dlq replay rate below threshold: rate={:.3} actions/min, threshold={:.3} actions/min",
+                replay_actions_per_minute, pending_dlq_min_replay_actions_per_minute
+            )],
+        );
+    }
+    (false, Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,6 +992,22 @@ mod tests {
         assert!(blockers.iter().any(
             |item| item.starts_with("oldest pending dlq event exceeded blocking age threshold")
         ));
+    }
+
+    #[test]
+    fn evaluate_pending_dlq_replay_rate_blocking_should_allow_when_threshold_disabled() {
+        let (should_block, blockers) = evaluate_pending_dlq_replay_rate_blocking(5, Some(0.1), 0.0);
+        assert!(!should_block);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn evaluate_pending_dlq_replay_rate_blocking_should_block_when_rate_below_threshold() {
+        let (should_block, blockers) = evaluate_pending_dlq_replay_rate_blocking(5, Some(0.2), 1.0);
+        assert!(should_block);
+        assert!(blockers
+            .iter()
+            .any(|item| item.starts_with("pending dlq replay rate below threshold")));
     }
 
     #[tokio::test]

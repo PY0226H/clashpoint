@@ -178,6 +178,14 @@ pub struct WorkerRuntimeConfig {
         default = "default_worker_runtime_kafka_readiness_pending_dlq_oldest_age_blocking_secs"
     )]
     pub kafka_readiness_pending_dlq_oldest_age_blocking_secs: u64,
+    #[serde(
+        default = "default_worker_runtime_kafka_readiness_pending_dlq_replay_rate_window_secs"
+    )]
+    pub kafka_readiness_pending_dlq_replay_rate_window_secs: u64,
+    #[serde(
+        default = "default_worker_runtime_kafka_readiness_pending_dlq_min_replay_actions_per_minute"
+    )]
+    pub kafka_readiness_pending_dlq_min_replay_actions_per_minute: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +257,10 @@ impl Default for WorkerRuntimeConfig {
                 default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold(),
             kafka_readiness_pending_dlq_oldest_age_blocking_secs:
                 default_worker_runtime_kafka_readiness_pending_dlq_oldest_age_blocking_secs(),
+            kafka_readiness_pending_dlq_replay_rate_window_secs:
+                default_worker_runtime_kafka_readiness_pending_dlq_replay_rate_window_secs(),
+            kafka_readiness_pending_dlq_min_replay_actions_per_minute:
+                default_worker_runtime_kafka_readiness_pending_dlq_min_replay_actions_per_minute(),
         }
     }
 }
@@ -516,6 +528,14 @@ fn default_worker_runtime_kafka_readiness_pending_dlq_oldest_age_blocking_secs()
     300
 }
 
+fn default_worker_runtime_kafka_readiness_pending_dlq_replay_rate_window_secs() -> u64 {
+    300
+}
+
+fn default_worker_runtime_kafka_readiness_pending_dlq_min_replay_actions_per_minute() -> f64 {
+    0.0
+}
+
 fn default_payment_verify_mode() -> String {
     "apple".to_string()
 }
@@ -747,6 +767,11 @@ mod tests {
         assert_eq!(
             cfg.kafka_readiness_pending_dlq_oldest_age_blocking_secs,
             300
+        );
+        assert_eq!(cfg.kafka_readiness_pending_dlq_replay_rate_window_secs, 300);
+        assert!(
+            (cfg.kafka_readiness_pending_dlq_min_replay_actions_per_minute - 0.0).abs()
+                < f64::EPSILON
         );
     }
 }

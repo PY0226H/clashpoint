@@ -271,6 +271,7 @@ import {
   drawVoteResolutionText as drawVoteResolutionTextLabel,
 } from '../judge-report-utils';
 import {
+  advanceDebateAckSeq,
   buildDebateRoomAckMessage,
   buildDebateRoomWsUrl,
   canSubmitDrawVote as canSubmitDrawVoteNow,
@@ -442,16 +443,12 @@ export default {
       }
       globalThis.sessionStorage.setItem(key, String(this.lastAckSeq));
     },
-    setLastAckSeq(seq) {
-      const next = Number(seq);
-      if (!Number.isFinite(next) || next < 0) {
+    setLastAckSeq(seq, { force = false } = {}) {
+      const nextAckSeq = advanceDebateAckSeq(this.lastAckSeq, seq, { force });
+      if (nextAckSeq === this.lastAckSeq) {
         return;
       }
-      const normalized = Math.floor(next);
-      if (normalized <= this.lastAckSeq) {
-        return;
-      }
-      this.lastAckSeq = normalized;
+      this.lastAckSeq = nextAckSeq;
       this.persistLastAckSeq();
     },
     formatDateTime(value) {
@@ -770,12 +767,12 @@ export default {
         null,
       );
       if (baselineAckSeq != null) {
-        this.setLastAckSeq(baselineAckSeq);
+        this.setLastAckSeq(baselineAckSeq, { force: true });
       }
       const replayCount = toNonNegativeInt(msg?.replayCount ?? msg?.replay_count, 0);
       const lastEventSeq = toNonNegativeInt(msg?.lastEventSeq ?? msg?.last_event_seq, null);
       if (lastEventSeq != null && replayCount === 0) {
-        this.setLastAckSeq(lastEventSeq);
+        this.setLastAckSeq(lastEventSeq, { force: true });
         this.sendWsAck(ws, lastEventSeq);
       }
     },
@@ -793,12 +790,12 @@ export default {
         null,
       );
       if (suggestedLastAckSeq != null) {
-        this.setLastAckSeq(suggestedLastAckSeq);
+        this.setLastAckSeq(suggestedLastAckSeq, { force: true });
       }
       try {
         await this.recoverRoomStateAfterReconnect({ force: true });
         if (latestEventSeq != null) {
-          this.setLastAckSeq(latestEventSeq);
+          this.setLastAckSeq(latestEventSeq, { force: true });
         }
         this.disconnectWs();
         await this.connectRoomWs();

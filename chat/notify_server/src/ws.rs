@@ -159,7 +159,6 @@ async fn debate_room_loop(
     state: AppState,
 ) {
     let mut client_last_ack_seq = last_ack_seq.unwrap_or(0);
-    let mut last_sent_event_seq = client_last_ack_seq;
     let mut last_client_heartbeat = Instant::now();
     let mut heartbeat_tick = tokio::time::interval(ROOM_HEARTBEAT_INTERVAL);
     heartbeat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -167,6 +166,20 @@ async fn debate_room_loop(
     let replay_window = state
         .replay_debate_events_for_user(user_id, session_id, last_ack_seq)
         .await;
+    let clamped_ack_seq =
+        clamp_requested_last_ack_seq(client_last_ack_seq, replay_window.latest_seq);
+    if clamped_ack_seq != client_last_ack_seq {
+        warn!(
+            "debate room websocket received out-of-range lastAckSeq, clamp to latest seq: user={}, session={}, requested_last_ack_seq={}, latest_event_seq={}, applied_last_ack_seq={}",
+            user_id,
+            session_id,
+            client_last_ack_seq,
+            replay_window.latest_seq,
+            clamped_ack_seq
+        );
+        client_last_ack_seq = clamped_ack_seq;
+    }
+    let mut last_sent_event_seq = client_last_ack_seq;
     let should_replay = !replay_window.has_gap;
     let replay_count = if should_replay {
         replay_window.events.len()
@@ -256,7 +269,21 @@ async fn debate_room_loop(
                             }
                             Ok(RoomClientMessage::Ack { event_seq }) => {
                                 last_client_heartbeat = Instant::now();
-                                client_last_ack_seq = client_last_ack_seq.max(event_seq);
+                                match apply_client_ack_seq(
+                                    client_last_ack_seq,
+                                    last_sent_event_seq,
+                                    event_seq,
+                                ) {
+                                    Some(next_ack_seq) => {
+                                        client_last_ack_seq = next_ack_seq;
+                                    }
+                                    None => {
+                                        warn!(
+                                            "debate room websocket ignored out-of-range ack: user={}, session={}, ack_event_seq={}, last_sent_event_seq={}",
+                                            user_id, session_id, event_seq, last_sent_event_seq
+                                        );
+                                    }
+                                }
                             }
                             Err(_) => {}
                         }
@@ -340,6 +367,21 @@ async fn debate_room_loop(
     state.cleanup_user_events_if_unused(user_id);
 }
 
+fn clamp_requested_last_ack_seq(requested_last_ack_seq: u64, latest_event_seq: u64) -> u64 {
+    requested_last_ack_seq.min(latest_event_seq)
+}
+
+fn apply_client_ack_seq(
+    client_last_ack_seq: u64,
+    last_sent_event_seq: u64,
+    ack_event_seq: u64,
+) -> Option<u64> {
+    if ack_event_seq > last_sent_event_seq {
+        return None;
+    }
+    Some(client_last_ack_seq.max(ack_event_seq))
+}
+
 fn room_event_message(event: &DebateReplayEvent) -> RoomServerMessage {
     RoomServerMessage::RoomEvent {
         event_seq: event.event_seq,
@@ -393,6 +435,20 @@ mod tests {
             redis: crate::config::RedisConfig::default(),
         };
         AppState::new(config)
+    }
+
+    #[test]
+    fn clamp_requested_last_ack_seq_should_not_exceed_latest_event_seq() {
+        assert_eq!(clamp_requested_last_ack_seq(10, 3), 3);
+        assert_eq!(clamp_requested_last_ack_seq(2, 3), 2);
+        assert_eq!(clamp_requested_last_ack_seq(0, 0), 0);
+    }
+
+    #[test]
+    fn apply_client_ack_seq_should_reject_ack_beyond_last_sent_event_seq() {
+        assert_eq!(apply_client_ack_seq(3, 5, 4), Some(4));
+        assert_eq!(apply_client_ack_seq(3, 5, 5), Some(5));
+        assert_eq!(apply_client_ack_seq(3, 5, 6), None);
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  advanceDebateAckSeq,
   buildDebateRoomAckMessage,
   buildDebateRoomWsUrl,
   canSubmitDrawVote,
@@ -70,6 +71,10 @@ assert.equal(toNonNegativeInt('11'), 11);
 assert.equal(toNonNegativeInt('11.9'), 11);
 assert.equal(toNonNegativeInt('-1', 7), 7);
 assert.equal(toNonNegativeInt(undefined, 5), 5);
+assert.equal(advanceDebateAckSeq(4, 6), 6);
+assert.equal(advanceDebateAckSeq(6, 4), 6);
+assert.equal(advanceDebateAckSeq(6, 4, { force: true }), 4);
+assert.equal(advanceDebateAckSeq(6, 'x', { force: true }), 6);
 assert.equal(buildDebateRoomAckMessage(9), '{"type":"ack","eventSeq":9}');
 assert.equal(buildDebateRoomAckMessage(-1), null);
 
