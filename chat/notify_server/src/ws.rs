@@ -479,10 +479,14 @@ mod tests {
     use tokio_tungstenite::{connect_async, tungstenite::Error as WsError};
 
     fn test_state() -> AppState {
+        test_state_with_db_url("postgres://localhost:5432/chat")
+    }
+
+    fn test_state_with_db_url(db_url: &str) -> AppState {
         let config = AppConfig {
             server: ServerConfig {
                 port: 0,
-                db_url: "postgres://localhost:5432/chat".to_string(),
+                db_url: db_url.to_string(),
             },
             auth: AuthConfig {
                 pk: include_str!("../../chat_core/fixtures/decoding.pem").to_string(),
@@ -1046,6 +1050,213 @@ mod tests {
             .and_then(|v| v.as_u64())
             .expect("room event should carry event seq");
         assert_eq!(event_seq, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_room_ws_handler_should_emit_replay_storage_unavailable_when_db_unavailable_and_memory_has_gap(
+    ) -> Result<()> {
+        let state = test_state_with_db_url("postgres://localhost:1/chat?connect_timeout=1");
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let event_payload = AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+            session_id: 12,
+            user_id: 1,
+            side: "pro".to_string(),
+            pro_count: 2,
+            con_count: 1,
+        });
+        let event_value = serde_json::to_value(&event_payload)?;
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(event_payload),
+            Some(DebateReplayEvent {
+                session_id: 12,
+                event_seq: 50,
+                event_name: "DebateParticipantJoined".to_string(),
+                payload: event_value.clone(),
+                event_at_ms: now_unix_ms(),
+            }),
+        );
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                session_id: 12,
+                user_id: 2,
+                side: "con".to_string(),
+                pro_count: 2,
+                con_count: 2,
+            })),
+            Some(DebateReplayEvent {
+                session_id: 12,
+                event_seq: 51,
+                event_name: "DebateParticipantJoined".to_string(),
+                payload: event_value,
+                event_at_ms: now_unix_ms(),
+            }),
+        );
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) = connect_async(format!(
+            "ws://{addr}/ws/debate/12?token={notify_ticket}&lastAckSeq=1"
+        ))
+        .await?;
+        let _welcome = tokio::time::timeout(Duration::from_secs(40), socket.next()).await?;
+
+        let sync_msg = tokio::time::timeout(Duration::from_secs(40), socket.next()).await?;
+        let sync_text = sync_msg
+            .expect("should receive syncRequired message")
+            .expect("syncRequired should be ws ok")
+            .into_text()?
+            .to_string();
+        let sync_json: serde_json::Value = serde_json::from_str(&sync_text)?;
+        assert_eq!(sync_json["type"], "syncRequired");
+        assert_eq!(sync_json["reason"], "replay_storage_unavailable");
+        let suggested_last_ack_seq = sync_json
+            .get("suggestedLastAckSeq")
+            .or_else(|| sync_json.get("suggested_last_ack_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry suggestedLastAckSeq");
+        assert_eq!(suggested_last_ack_seq, 1);
+        let gap_from_seq = sync_json
+            .get("gapFromSeq")
+            .or_else(|| sync_json.get("gap_from_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry gapFromSeq");
+        assert_eq!(gap_from_seq, 2);
+        let gap_to_seq = sync_json
+            .get("gapToSeq")
+            .or_else(|| sync_json.get("gap_to_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry gapToSeq");
+        assert_eq!(gap_to_seq, 49);
+        let latest_event_seq = sync_json
+            .get("latestEventSeq")
+            .or_else(|| sync_json.get("latest_event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry latestEventSeq");
+        assert_eq!(latest_event_seq, 51);
+        assert_eq!(sync_json["strategy"], "snapshot_then_reconnect");
+
+        if let Ok(Some(Ok(msg))) =
+            tokio::time::timeout(Duration::from_millis(200), socket.next()).await
+        {
+            if let Ok(text) = msg.into_text() {
+                let payload = text.to_string();
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    assert_ne!(
+                        json["type"], "roomEvent",
+                        "forced sync should not stream room events before recovery"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_room_ws_handler_should_replay_events_when_db_unavailable_but_memory_window_is_contiguous(
+    ) -> Result<()> {
+        let state = test_state_with_db_url("postgres://localhost:1/chat?connect_timeout=1");
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let first_payload = AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+            session_id: 12,
+            user_id: 1,
+            side: "pro".to_string(),
+            pro_count: 2,
+            con_count: 1,
+        });
+        let first_value = serde_json::to_value(&first_payload)?;
+        let second_payload = AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+            session_id: 12,
+            user_id: 2,
+            side: "con".to_string(),
+            pro_count: 2,
+            con_count: 2,
+        });
+        let second_value = serde_json::to_value(&second_payload)?;
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(first_payload),
+            Some(DebateReplayEvent {
+                session_id: 12,
+                event_seq: 2,
+                event_name: "DebateParticipantJoined".to_string(),
+                payload: first_value,
+                event_at_ms: now_unix_ms(),
+            }),
+        );
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(second_payload),
+            Some(DebateReplayEvent {
+                session_id: 12,
+                event_seq: 3,
+                event_name: "DebateParticipantJoined".to_string(),
+                payload: second_value,
+                event_at_ms: now_unix_ms(),
+            }),
+        );
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) = connect_async(format!(
+            "ws://{addr}/ws/debate/12?token={notify_ticket}&lastAckSeq=1"
+        ))
+        .await?;
+        let _welcome = tokio::time::timeout(Duration::from_secs(40), socket.next()).await?;
+
+        let first_msg = tokio::time::timeout(Duration::from_secs(40), socket.next()).await?;
+        let first_text = first_msg
+            .expect("should receive first replay event")
+            .expect("first replay event should be ws ok")
+            .into_text()?
+            .to_string();
+        let first_json: serde_json::Value = serde_json::from_str(&first_text)?;
+        assert_eq!(first_json["type"], "roomEvent");
+        let first_seq = first_json
+            .get("eventSeq")
+            .or_else(|| first_json.get("event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("first replay event should carry seq");
+        assert_eq!(first_seq, 2);
+
+        let second_msg = tokio::time::timeout(Duration::from_secs(40), socket.next()).await?;
+        let second_text = second_msg
+            .expect("should receive second replay event")
+            .expect("second replay event should be ws ok")
+            .into_text()?
+            .to_string();
+        let second_json: serde_json::Value = serde_json::from_str(&second_text)?;
+        assert_eq!(second_json["type"], "roomEvent");
+        let second_seq = second_json
+            .get("eventSeq")
+            .or_else(|| second_json.get("event_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("second replay event should carry seq");
+        assert_eq!(second_seq, 3);
         Ok(())
     }
 
