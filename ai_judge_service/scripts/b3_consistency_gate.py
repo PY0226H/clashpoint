@@ -14,18 +14,17 @@ if str(ROOT) not in sys.path:
 from app.b3_consistency_gate import (  # noqa: E402
     B3GateRunResult,
     B3GateThresholds,
+    build_default_report_path,
     evaluate_b3_gate,
+    prune_report_files,
     render_markdown_report,
     run_idempotency_race,
     run_outbox_delivery_race,
+    write_report_with_collision_retry,
 )
 from app.trace_store import RedisTraceStore, TraceStore, TraceStoreProtocol  # noqa: E402
 
-
-def _default_report_path() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    date_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return root / "docs" / "dev_plan" / f"AI裁判B3一致性验收报告-{date_tag}.md"
+DEFAULT_REPORT_PREFIX = "AI裁判B3一致性验收报告"
 
 
 class _EvalFailureRedisProxy:
@@ -68,7 +67,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-replay-p95-ms", type=float, default=200.0)
     parser.add_argument("--max-outbox-p95-ms", type=float, default=200.0)
     parser.add_argument("--skip-lua-fallback-drill", action="store_true")
-    parser.add_argument("--report-out", default=str(_default_report_path()))
+    parser.add_argument("--report-out", default="")
+    parser.add_argument("--report-dir", default="")
+    parser.add_argument("--report-prefix", default=DEFAULT_REPORT_PREFIX)
+    parser.add_argument("--report-retention-max-files", type=int, default=60)
+    parser.add_argument("--report-retention-max-days", type=int, default=30)
+    parser.add_argument("--skip-report-prune", action="store_true")
+    parser.add_argument("--report-collision-retries", type=int, default=8)
     return parser
 
 
@@ -155,16 +160,46 @@ def main() -> int:
         mode=resolved_mode,
     )
 
-    report_path = Path(str(args.report_out)).resolve()
+    if str(args.report_out or "").strip():
+        report_path = Path(str(args.report_out)).resolve()
+        report_dir = report_path.parent
+    else:
+        root = Path(__file__).resolve().parents[2]
+        report_dir = (
+            Path(str(args.report_dir)).resolve()
+            if str(args.report_dir or "").strip()
+            else root / "docs" / "consistency_reports"
+        )
+        report_path = build_default_report_path(
+            report_dir=report_dir,
+            report_prefix=str(args.report_prefix),
+            mode=resolved_mode,
+            now=result.generated_at,
+        )
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(render_markdown_report(result), encoding="utf-8")
+    report_path = write_report_with_collision_retry(
+        report_path=report_path,
+        content=render_markdown_report(result),
+        max_collision_retries=int(args.report_collision_retries),
+    )
+    removed: list[Path] = []
+    if not bool(args.skip_report_prune):
+        removed = prune_report_files(
+            report_dir=report_dir,
+            report_prefix=str(args.report_prefix),
+            max_files=int(args.report_retention_max_files),
+            max_days=int(args.report_retention_max_days),
+            now=result.generated_at,
+            keep_filenames={report_path.name},
+        )
 
     print(f"[b3-consistency-gate] mode={resolved_mode}")
     print(f"[b3-consistency-gate] result={'PASS' if result.passed else 'FAIL'}")
     print(f"[b3-consistency-gate] report={report_path}")
+    if removed:
+        print(f"[b3-consistency-gate] pruned={len(removed)}")
     return 0 if result.passed else 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

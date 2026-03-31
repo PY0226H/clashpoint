@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import secrets
 from time import perf_counter
 from typing import Any
 
@@ -75,6 +77,95 @@ def percentile(values: list[float], p: float) -> float:
     sorted_values = sorted(values)
     rank = max(0, min(len(sorted_values) - 1, int(round((p / 100.0) * len(sorted_values) + 0.5)) - 1))
     return float(sorted_values[rank])
+
+
+def _normalize_report_mode(mode: str) -> str:
+    token = (mode or "").strip().lower()
+    if not token:
+        return "unknown"
+    out: list[str] = []
+    for char in token:
+        if char.isalnum() or char in ("-", "_"):
+            out.append(char)
+        else:
+            out.append("-")
+    return "".join(out).strip("-") or "unknown"
+
+
+def build_default_report_path(
+    *,
+    report_dir: Path,
+    report_prefix: str,
+    mode: str,
+    now: datetime | None = None,
+) -> Path:
+    ts = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    mode_token = _normalize_report_mode(mode)
+    filename = f"{report_prefix}-{mode_token}-{ts}.md"
+    return report_dir / filename
+
+
+def prune_report_files(
+    *,
+    report_dir: Path,
+    report_prefix: str,
+    max_files: int,
+    max_days: int,
+    now: datetime | None = None,
+    keep_filenames: set[str] | None = None,
+) -> list[Path]:
+    if not report_dir.exists():
+        return []
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    keep = keep_filenames or set()
+    candidates = sorted(
+        report_dir.glob(f"{report_prefix}-*.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    removed: list[Path] = []
+    max_keep = max(0, int(max_files))
+    max_age_days = max(0, int(max_days))
+    age_cutoff = current - timedelta(days=max_age_days) if max_age_days > 0 else None
+    for index, path in enumerate(candidates):
+        if path.name in keep:
+            continue
+        by_count = max_keep > 0 and index >= max_keep
+        by_age = False
+        if age_cutoff is not None:
+            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            by_age = modified < age_cutoff
+        if not by_count and not by_age:
+            continue
+        try:
+            path.unlink()
+            removed.append(path)
+        except Exception:
+            continue
+    return removed
+
+
+def write_report_with_collision_retry(
+    *,
+    report_path: Path,
+    content: str,
+    max_collision_retries: int = 8,
+) -> Path:
+    base_name = report_path.stem
+    suffix = report_path.suffix
+    attempts = max(0, int(max_collision_retries))
+    for index in range(attempts + 1):
+        if index == 0:
+            candidate = report_path
+        else:
+            candidate = report_path.with_name(f"{base_name}-{secrets.token_hex(3)}{suffix}")
+        try:
+            with candidate.open("x", encoding="utf-8") as handle:
+                handle.write(content)
+            return candidate
+        except FileExistsError:
+            continue
+    raise RuntimeError("failed to allocate unique report path after collision retries")
 
 
 def _run_concurrent(total_requests: int, concurrency: int, fn: Any) -> tuple[list[Any], list[float]]:
