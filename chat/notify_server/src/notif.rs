@@ -554,6 +554,7 @@ async fn upsert_notify_runtime_signal(
     kafka_last_error: Option<String>,
 ) -> anyhow::Result<()> {
     let service_name = notify_runtime_signal_service_name(state);
+    let sync_required_metrics = state.sync_required_metrics_snapshot();
     sqlx::query(
         r#"
         INSERT INTO notify_runtime_signals(
@@ -564,9 +565,11 @@ async fn upsert_notify_runtime_signal(
             kafka_last_receive_at,
             kafka_last_commit_at,
             kafka_last_error,
+            sync_required_persist_failed_total,
+            sync_required_replay_storage_unavailable_total,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
         ON CONFLICT (service_name)
         DO UPDATE SET
             kafka_enabled = EXCLUDED.kafka_enabled,
@@ -575,6 +578,14 @@ async fn upsert_notify_runtime_signal(
             kafka_last_receive_at = COALESCE(EXCLUDED.kafka_last_receive_at, notify_runtime_signals.kafka_last_receive_at),
             kafka_last_commit_at = COALESCE(EXCLUDED.kafka_last_commit_at, notify_runtime_signals.kafka_last_commit_at),
             kafka_last_error = EXCLUDED.kafka_last_error,
+            sync_required_persist_failed_total = GREATEST(
+                notify_runtime_signals.sync_required_persist_failed_total,
+                EXCLUDED.sync_required_persist_failed_total
+            ),
+            sync_required_replay_storage_unavailable_total = GREATEST(
+                notify_runtime_signals.sync_required_replay_storage_unavailable_total,
+                EXCLUDED.sync_required_replay_storage_unavailable_total
+            ),
             updated_at = NOW()
         "#,
     )
@@ -585,6 +596,8 @@ async fn upsert_notify_runtime_signal(
     .bind(kafka_last_receive_at)
     .bind(kafka_last_commit_at)
     .bind(kafka_last_error)
+    .bind(sync_required_metrics.persist_failed_total as i64)
+    .bind(sync_required_metrics.replay_storage_unavailable_total as i64)
     .execute(&state.db)
     .await?;
     sqlx::query(
@@ -1069,6 +1082,24 @@ fn normalize_draw_vote_decision_source(raw: Option<&str>, status: &str) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AuthConfig, KafkaConfig, RedisConfig, ServerConfig};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    fn test_state_with_db_url(db_url: &str) -> AppState {
+        let config = crate::config::AppConfig {
+            server: ServerConfig {
+                port: 0,
+                db_url: db_url.to_string(),
+            },
+            auth: AuthConfig {
+                pk: include_str!("../../chat_core/fixtures/decoding.pem").to_string(),
+            },
+            kafka: KafkaConfig::default(),
+            redis: RedisConfig::default(),
+        };
+        AppState::new(config)
+    }
 
     #[test]
     fn notification_load_should_parse_debate_participant_joined() {
@@ -1092,6 +1123,40 @@ mod tests {
             }
             _ => panic!("expected DebateParticipantJoined event"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatch_loaded_notification_should_emit_sync_required_when_persist_fails() {
+        let state = test_state_with_db_url("postgres://localhost:1/chat?connect_timeout=1");
+        let mut rx = state.subscribe_user_events(7);
+        let notification = Notification {
+            user_ids: HashSet::from([7_u64]),
+            event: Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                session_id: 11,
+                user_id: 7,
+                side: "pro".to_string(),
+                pro_count: 3,
+                con_count: 2,
+            })),
+        };
+
+        let ret = dispatch_loaded_notification(&state, notification).await;
+        assert!(
+            ret.is_ok(),
+            "dispatch should degrade to syncRequired on persist failure"
+        );
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("should receive user event")
+            .expect("broadcast should deliver event");
+        let sync = event
+            .debate_sync_required
+            .as_ref()
+            .expect("persist failure should emit syncRequired");
+        assert_eq!(sync.reason, "persist_failed");
+        assert_eq!(sync.session_id, 11);
+        assert!(event.debate_replay.is_none());
     }
 
     #[test]

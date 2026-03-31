@@ -24,7 +24,10 @@ use sse::sse_handler;
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::broadcast;
@@ -39,6 +42,7 @@ pub use notif::AppEvent;
 const CHANNEL_CAPACITY: usize = 256;
 const DEBATE_REPLAY_HISTORY_CAPACITY: usize = 400;
 const DEBATE_REPLAY_MAX_ON_CONNECT: usize = 200;
+const SYNC_REQUIRED_WARN_EVERY: u64 = 20;
 
 pub type UserMap = Arc<DashMap<u64, broadcast::Sender<Arc<UserEvent>>>>;
 type DebateReplayMap = Arc<DashMap<(u64, i64), DebateReplayHistory>>;
@@ -87,6 +91,41 @@ pub struct DebateReplayWindow {
     pub sync_required_strategy: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NotifySyncRequiredMetricsSnapshot {
+    pub persist_failed_total: u64,
+    pub replay_storage_unavailable_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NotifySyncRequiredMetrics {
+    persist_failed_total: AtomicU64,
+    replay_storage_unavailable_total: AtomicU64,
+}
+
+impl NotifySyncRequiredMetrics {
+    fn observe_reason(&self, reason: &str) -> Option<u64> {
+        match reason {
+            "persist_failed" => Some(self.persist_failed_total.fetch_add(1, Ordering::Relaxed) + 1),
+            "replay_storage_unavailable" => Some(
+                self.replay_storage_unavailable_total
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1,
+            ),
+            _ => None,
+        }
+    }
+
+    fn snapshot(&self) -> NotifySyncRequiredMetricsSnapshot {
+        NotifySyncRequiredMetricsSnapshot {
+            persist_failed_total: self.persist_failed_total.load(Ordering::Relaxed),
+            replay_storage_unavailable_total: self
+                .replay_storage_unavailable_total
+                .load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState(Arc<AppStateInner>);
 
@@ -94,6 +133,7 @@ pub struct AppStateInner {
     pub config: AppConfig,
     users: UserMap,
     debate_replays: DebateReplayMap,
+    sync_required_metrics: NotifySyncRequiredMetrics,
     db: PgPool,
     dk: DecodingKey,
 }
@@ -181,6 +221,7 @@ impl AppState {
             dk,
             users,
             debate_replays,
+            sync_required_metrics: NotifySyncRequiredMetrics::default(),
             db,
         }))
     }
@@ -246,6 +287,23 @@ impl AppState {
                 strategy: "snapshot_then_reconnect".to_string(),
             }),
         })
+    }
+
+    pub(crate) fn observe_sync_required_reason(&self, reason: &str) {
+        let Some(next_total) = self.sync_required_metrics.observe_reason(reason) else {
+            return;
+        };
+        if next_total % SYNC_REQUIRED_WARN_EVERY == 0 {
+            warn!(
+                reason,
+                total = next_total,
+                "syncRequired emission reached warning threshold"
+            );
+        }
+    }
+
+    pub(crate) fn sync_required_metrics_snapshot(&self) -> NotifySyncRequiredMetricsSnapshot {
+        self.sync_required_metrics.snapshot()
     }
 
     pub(crate) async fn replay_debate_events_for_user(
@@ -604,7 +662,7 @@ fn mark_sync_required_for_replay_storage_unavailable(
     mut window: DebateReplayWindow,
     requested_last_ack_seq: u64,
 ) -> DebateReplayWindow {
-    if requested_last_ack_seq > 0 && window.latest_seq == 0 {
+    if requested_last_ack_seq > 0 && (window.latest_seq == 0 || window.has_gap) {
         window.sync_required_reason = Some("replay_storage_unavailable".to_string());
         window.sync_required_strategy = Some("snapshot_then_reconnect".to_string());
     }
@@ -641,5 +699,59 @@ mod tests {
         let marked = mark_sync_required_for_replay_storage_unavailable(window, 0);
         assert_eq!(marked.sync_required_reason, None);
         assert_eq!(marked.sync_required_strategy, None);
+    }
+
+    #[test]
+    fn mark_sync_required_for_replay_storage_unavailable_should_require_sync_for_resumed_client_with_memory_gap(
+    ) {
+        let window = DebateReplayWindow {
+            events: vec![],
+            latest_seq: 20,
+            has_gap: true,
+            skipped: 4,
+            sync_required_reason: None,
+            sync_required_strategy: None,
+        };
+        let marked = mark_sync_required_for_replay_storage_unavailable(window, 3);
+        assert_eq!(
+            marked.sync_required_reason.as_deref(),
+            Some("replay_storage_unavailable")
+        );
+        assert_eq!(
+            marked.sync_required_strategy.as_deref(),
+            Some("snapshot_then_reconnect")
+        );
+    }
+
+    #[test]
+    fn mark_sync_required_for_replay_storage_unavailable_should_skip_resumed_client_with_contiguous_memory_window(
+    ) {
+        let window = DebateReplayWindow {
+            events: vec![],
+            latest_seq: 8,
+            has_gap: false,
+            skipped: 0,
+            sync_required_reason: None,
+            sync_required_strategy: None,
+        };
+        let marked = mark_sync_required_for_replay_storage_unavailable(window, 5);
+        assert_eq!(marked.sync_required_reason, None);
+        assert_eq!(marked.sync_required_strategy, None);
+    }
+
+    #[test]
+    fn notify_sync_required_metrics_should_count_supported_reasons_only() {
+        let metrics = NotifySyncRequiredMetrics::default();
+        assert_eq!(metrics.observe_reason("persist_failed"), Some(1));
+        assert_eq!(metrics.observe_reason("persist_failed"), Some(2));
+        assert_eq!(
+            metrics.observe_reason("replay_storage_unavailable"),
+            Some(1)
+        );
+        assert_eq!(metrics.observe_reason("lagged_receiver"), None);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.persist_failed_total, 2);
+        assert_eq!(snapshot.replay_storage_unavailable_total, 1);
     }
 }

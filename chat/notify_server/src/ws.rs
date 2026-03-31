@@ -204,7 +204,35 @@ async fn debate_room_loop(
     {
         return;
     }
-    if replay_window.has_gap {
+    if let Some(reason) = replay_window.sync_required_reason.as_ref() {
+        let expected_from_seq = client_last_ack_seq.saturating_add(1);
+        let first_available_seq = replay_window
+            .events
+            .first()
+            .map(|v| v.event_seq)
+            .unwrap_or(replay_window.latest_seq.saturating_add(1));
+        let gap_to_seq = first_available_seq.saturating_sub(1);
+        let sync_msg = RoomServerMessage::SyncRequired {
+            reason: reason.clone(),
+            skipped: replay_window.skipped,
+            expected_from_seq: Some(expected_from_seq),
+            gap_from_seq: replay_window.has_gap.then_some(expected_from_seq),
+            gap_to_seq: replay_window
+                .has_gap
+                .then_some(gap_to_seq)
+                .filter(|to| *to >= expected_from_seq),
+            suggested_last_ack_seq: client_last_ack_seq,
+            latest_event_seq: (replay_window.latest_seq > 0).then_some(replay_window.latest_seq),
+            strategy: replay_window
+                .sync_required_strategy
+                .clone()
+                .unwrap_or_else(|| "snapshot_then_reconnect".to_string()),
+        };
+        if !send_room_message(&mut socket, &sync_msg).await {
+            return;
+        }
+        state.observe_sync_required_reason(reason);
+    } else if replay_window.has_gap {
         let expected_from_seq = client_last_ack_seq.saturating_add(1);
         let first_available_seq = replay_window
             .events
@@ -225,24 +253,7 @@ async fn debate_room_loop(
         if !send_room_message(&mut socket, &sync_msg).await {
             return;
         }
-    } else if let Some(reason) = replay_window.sync_required_reason.as_ref() {
-        let expected_from_seq = client_last_ack_seq.saturating_add(1);
-        let sync_msg = RoomServerMessage::SyncRequired {
-            reason: reason.clone(),
-            skipped: replay_window.skipped,
-            expected_from_seq: Some(expected_from_seq),
-            gap_from_seq: None,
-            gap_to_seq: None,
-            suggested_last_ack_seq: client_last_ack_seq,
-            latest_event_seq: (replay_window.latest_seq > 0).then_some(replay_window.latest_seq),
-            strategy: replay_window
-                .sync_required_strategy
-                .clone()
-                .unwrap_or_else(|| "snapshot_then_reconnect".to_string()),
-        };
-        if !send_room_message(&mut socket, &sync_msg).await {
-            return;
-        }
+        state.observe_sync_required_reason("replay_window_miss");
     }
     if should_replay {
         for replay_event in replay_window.events {
@@ -345,6 +356,7 @@ async fn debate_room_loop(
                             if !send_room_message(&mut socket, &sync_msg).await {
                                 break;
                             }
+                            state.observe_sync_required_reason(&sync_required.reason);
                             continue;
                         }
                         let Some(replay_event) = event.debate_replay.as_ref() else {
@@ -384,6 +396,7 @@ async fn debate_room_loop(
                         if !send_room_message(&mut socket, &sync_msg).await {
                             break;
                         }
+                        state.observe_sync_required_reason("lagged_receiver");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
