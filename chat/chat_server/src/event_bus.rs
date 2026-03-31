@@ -2036,6 +2036,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_worker_envelope_should_validate_and_record_participant_joined_effect(
+    ) -> Result<()> {
+        let (_tdb, state) = crate::AppState::new_for_test().await?;
+        let session_id = seed_topic_and_session(&state, "running").await?;
+        insert_participant(&state, session_id, 1, "pro").await?;
+        insert_participant(&state, session_id, 2, "con").await?;
+
+        let envelope = EventEnvelope::new(
+            EVENT_TYPE_DEBATE_PARTICIPANT_JOINED,
+            "chat-server",
+            format!("session:{session_id}"),
+            serde_json::to_value(DebateParticipantJoinedEvent {
+                session_id: session_id as u64,
+                user_id: 1,
+                side: "pro".to_string(),
+                pro_count: 1,
+                con_count: 1,
+            })?,
+        );
+        let meta = WorkerEnvelopeMeta {
+            consumer_group: "worker-test-group".to_string(),
+            topic: TOPIC_DEBATE_PARTICIPANT_JOINED.to_string(),
+            partition: 0,
+            offset: 7,
+        };
+        let outcome = process_worker_envelope(&state.pool, &meta, &envelope).await?;
+        assert!(matches!(outcome, WorkerProcessOutcome::Succeeded));
+
+        let session_counts: (i32, i32) = sqlx::query_as(
+            r#"
+            SELECT pro_count, con_count
+            FROM debate_sessions
+            WHERE id = $1
+            "#,
+        )
+        .bind(session_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(session_counts.0, 1);
+        assert_eq!(session_counts.1, 1);
+
+        let effect_row: (Option<i64>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT user_id, side
+            FROM kafka_consume_worker_effects
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(&meta.consumer_group)
+        .bind(&envelope.event_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(effect_row.0, Some(1));
+        assert_eq!(effect_row.1.as_deref(), Some("pro"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_worker_envelope_should_validate_and_record_status_changed_effect() -> Result<()>
+    {
+        let (_tdb, state) = crate::AppState::new_for_test().await?;
+        let session_id = seed_topic_and_session(&state, "running").await?;
+
+        let changed_at = Utc::now();
+        let envelope = EventEnvelope::new(
+            EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED,
+            "chat-server",
+            format!("session:{session_id}"),
+            serde_json::to_value(DebateSessionStatusChangedEvent {
+                session_id: session_id as u64,
+                from_status: "running".to_string(),
+                to_status: "judging".to_string(),
+                changed_at,
+            })?,
+        );
+        let meta = WorkerEnvelopeMeta {
+            consumer_group: "worker-test-group".to_string(),
+            topic: TOPIC_DEBATE_SESSION_STATUS_CHANGED.to_string(),
+            partition: 0,
+            offset: 8,
+        };
+        let outcome = process_worker_envelope(&state.pool, &meta, &envelope).await?;
+        assert!(matches!(outcome, WorkerProcessOutcome::Succeeded));
+
+        let session_status: String =
+            sqlx::query_scalar("SELECT status FROM debate_sessions WHERE id = $1")
+                .bind(session_id)
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(session_status, "judging");
+
+        let effect_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT from_status, to_status
+            FROM kafka_consume_worker_effects
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind(&meta.consumer_group)
+        .bind(&envelope.event_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(effect_row.0.as_deref(), Some("running"));
+        assert_eq!(effect_row.1.as_deref(), Some("judging"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn process_worker_envelope_should_record_effect_once_for_duplicate_message_event(
     ) -> Result<()> {
         let (_tdb, state) = crate::AppState::new_for_test().await?;
