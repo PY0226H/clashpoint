@@ -15,8 +15,9 @@ use utoipa::{IntoParams, ToSchema};
 const DLQ_STATUS_PENDING: &str = "pending";
 const DLQ_STATUS_REPLAYED: &str = "replayed";
 const DLQ_STATUS_DISCARDED: &str = "discarded";
-const NOTIFY_RUNTIME_SERVICE_NAME: &str = "notify_server";
+const NOTIFY_RUNTIME_SERVICE_NAME_PREFIX: &str = "notify_server";
 const NOTIFY_RUNTIME_SIGNAL_STALE_SECS: i64 = 300;
+const NOTIFY_RUNTIME_NO_COMMIT_WARMUP_SECS: i64 = 300;
 
 #[derive(Debug, Clone, Deserialize, ToSchema, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +146,7 @@ struct KafkaDlqActionRow {
 
 #[derive(Debug, Clone, FromRow)]
 struct NotifyRuntimeSignalRow {
+    service_name: String,
     kafka_enabled: bool,
     disable_pg_listener: bool,
     kafka_connected_at: Option<DateTime<Utc>>,
@@ -243,9 +245,10 @@ impl AppState {
         .bind(DLQ_STATUS_PENDING)
         .fetch_one(&self.pool)
         .await?;
-        let notify_runtime_signal: Option<NotifyRuntimeSignalRow> = sqlx::query_as(
+        let notify_runtime_signals: Vec<NotifyRuntimeSignalRow> = sqlx::query_as(
             r#"
             SELECT
+                service_name,
                 kafka_enabled,
                 disable_pg_listener,
                 kafka_connected_at,
@@ -253,14 +256,15 @@ impl AppState {
                 kafka_last_commit_at,
                 updated_at
             FROM notify_runtime_signals
-            WHERE service_name = $1
+            WHERE service_name LIKE $1
+            ORDER BY updated_at DESC
             "#,
         )
-        .bind(NOTIFY_RUNTIME_SERVICE_NAME)
-        .fetch_optional(&self.pool)
+        .bind(format!("{}%", NOTIFY_RUNTIME_SERVICE_NAME_PREFIX))
+        .fetch_all(&self.pool)
         .await?;
         let (notify_consume_chain_ready, notify_chain_blockers) =
-            evaluate_notify_consume_chain_runtime(notify_runtime_signal.as_ref(), Utc::now());
+            evaluate_notify_consume_chain_runtime(&notify_runtime_signals, Utc::now());
         let dlq_replay_loop_ready = pending_dlq_count == 0;
         let consumer_metrics = self.kafka_consumer_metrics.snapshot();
 
@@ -504,14 +508,39 @@ impl AppState {
 }
 
 fn evaluate_notify_consume_chain_runtime(
-    signal: Option<&NotifyRuntimeSignalRow>,
+    signals: &[NotifyRuntimeSignalRow],
+    now: DateTime<Utc>,
+) -> (bool, Vec<String>) {
+    if signals.is_empty() {
+        return (false, vec!["notify runtime signal is missing".to_string()]);
+    }
+
+    if signals
+        .iter()
+        .any(|signal| evaluate_notify_consume_chain_signal(signal, now).0)
+    {
+        return (true, Vec::new());
+    }
+
+    let latest = signals
+        .iter()
+        .max_by_key(|signal| signal.updated_at)
+        .expect("signals is not empty");
+    let (_, mut blockers) = evaluate_notify_consume_chain_signal(latest, now);
+    if signals.len() > 1 {
+        blockers = blockers
+            .into_iter()
+            .map(|item| format!("{} [{}]", item, latest.service_name))
+            .collect();
+    }
+    (false, blockers)
+}
+
+fn evaluate_notify_consume_chain_signal(
+    signal: &NotifyRuntimeSignalRow,
     now: DateTime<Utc>,
 ) -> (bool, Vec<String>) {
     let mut blockers = Vec::new();
-    let Some(signal) = signal else {
-        blockers.push("notify runtime signal is missing".to_string());
-        return (false, blockers);
-    };
 
     if !signal.kafka_enabled {
         blockers.push("notify kafka ingress is disabled".to_string());
@@ -525,8 +554,31 @@ fn evaluate_notify_consume_chain_runtime(
     let receive_stale_secs = signal
         .kafka_last_receive_at
         .map(|ts| (now - ts).num_seconds().max(0));
+    let connected_stale_secs = signal
+        .kafka_connected_at
+        .map(|ts| (now - ts).num_seconds().max(0));
     match signal.kafka_last_commit_at {
-        None => blockers.push("notify kafka consumer has not committed any event".to_string()),
+        None => {
+            let has_recent_receive = receive_stale_secs
+                .map(|recv_stale| recv_stale <= NOTIFY_RUNTIME_SIGNAL_STALE_SECS)
+                .unwrap_or(false);
+            if has_recent_receive {
+                blockers.push(
+                    "notify kafka consumer received events but has not committed yet".to_string(),
+                );
+            } else {
+                let within_no_commit_warmup = connected_stale_secs
+                    .map(|connected_stale| connected_stale <= NOTIFY_RUNTIME_NO_COMMIT_WARMUP_SECS)
+                    .unwrap_or(false);
+                if !within_no_commit_warmup {
+                    let connected_age = connected_stale_secs.unwrap_or(0);
+                    blockers.push(format!(
+                        "notify kafka consumer has not committed any event after warmup: {}s",
+                        connected_age
+                    ));
+                }
+            }
+        }
         Some(ts) => {
             let stale_secs = (now - ts).num_seconds().max(0);
             if stale_secs > NOTIFY_RUNTIME_SIGNAL_STALE_SECS {
@@ -610,6 +662,30 @@ mod tests {
         kafka_last_commit_at: Option<DateTime<Utc>>,
         updated_at: DateTime<Utc>,
     ) -> Result<()> {
+        upsert_notify_runtime_signal_with_service_name_for_test(
+            state,
+            "notify_server",
+            kafka_enabled,
+            disable_pg_listener,
+            kafka_connected_at,
+            kafka_last_receive_at,
+            kafka_last_commit_at,
+            updated_at,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_notify_runtime_signal_with_service_name_for_test(
+        state: &AppState,
+        service_name: &str,
+        kafka_enabled: bool,
+        disable_pg_listener: bool,
+        kafka_connected_at: Option<DateTime<Utc>>,
+        kafka_last_receive_at: Option<DateTime<Utc>>,
+        kafka_last_commit_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO notify_runtime_signals(
@@ -634,7 +710,7 @@ mod tests {
                 updated_at = EXCLUDED.updated_at
             "#,
         )
-        .bind(NOTIFY_RUNTIME_SERVICE_NAME)
+        .bind(service_name)
         .bind(kafka_enabled)
         .bind(disable_pg_listener)
         .bind(kafka_connected_at)
@@ -643,6 +719,44 @@ mod tests {
         .bind(updated_at)
         .execute(&state.pool)
         .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_allow_when_any_notify_signal_is_ready(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        upsert_notify_runtime_signal_with_service_name_for_test(
+            &state,
+            "notify_server:stale",
+            true,
+            true,
+            Some(now - Duration::seconds(700)),
+            Some(now - Duration::seconds(700)),
+            Some(now - Duration::seconds(700)),
+            now - Duration::seconds(300),
+        )
+        .await?;
+        upsert_notify_runtime_signal_with_service_name_for_test(
+            &state,
+            "notify_server:fresh",
+            true,
+            true,
+            Some(now - Duration::seconds(2)),
+            Some(now - Duration::seconds(1)),
+            Some(now - Duration::seconds(1)),
+            now,
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(output.notify_consume_chain_ready);
+        assert!(!output
+            .blockers
+            .iter()
+            .any(|item| item.starts_with("notify ")));
         Ok(())
     }
 
@@ -783,6 +897,54 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item.starts_with("notify kafka consumer commit heartbeat is stale")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_allow_no_commit_within_warmup() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        upsert_notify_runtime_signal_for_test(
+            &state,
+            true,
+            true,
+            Some(now - Duration::seconds(30)),
+            None,
+            None,
+            now,
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(output.notify_consume_chain_ready);
+        assert!(!output
+            .blockers
+            .iter()
+            .any(|item| item.contains("has not committed any event after warmup")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_block_no_commit_after_warmup() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        upsert_notify_runtime_signal_for_test(
+            &state,
+            true,
+            true,
+            Some(now - Duration::seconds(NOTIFY_RUNTIME_NO_COMMIT_WARMUP_SECS + 30)),
+            None,
+            None,
+            now,
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(!output.notify_consume_chain_ready);
+        assert!(output.blockers.iter().any(|item| item
+            .starts_with("notify kafka consumer has not committed any event after warmup")));
         Ok(())
     }
 }

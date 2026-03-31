@@ -19,6 +19,7 @@ const PG_LISTENER_HEALTH_LOG_INTERVAL_SECS: u64 = 30;
 const KAFKA_CONSUMER_RECONNECT_BASE_MS: u64 = 1_000;
 const KAFKA_CONSUMER_RECONNECT_MAX_MS: u64 = 30_000;
 const KAFKA_CONSUMER_SIGNAL_HEARTBEAT_SECS: u64 = 30;
+const NOTIFY_RUNTIME_SIGNAL_RETENTION_SECS: i64 = 24 * 60 * 60;
 
 const KAFKA_EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined";
 const KAFKA_EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
@@ -552,6 +553,7 @@ async fn upsert_notify_runtime_signal(
     kafka_last_commit_at: Option<DateTime<Utc>>,
     kafka_last_error: Option<String>,
 ) -> anyhow::Result<()> {
+    let service_name = notify_runtime_signal_service_name(state);
     sqlx::query(
         r#"
         INSERT INTO notify_runtime_signals(
@@ -576,7 +578,7 @@ async fn upsert_notify_runtime_signal(
             updated_at = NOW()
         "#,
     )
-    .bind("notify_server")
+    .bind(&service_name)
     .bind(state.config.kafka.enabled)
     .bind(state.config.kafka.disable_pg_listener)
     .bind(kafka_connected_at)
@@ -585,7 +587,35 @@ async fn upsert_notify_runtime_signal(
     .bind(kafka_last_error)
     .execute(&state.db)
     .await?;
+    sqlx::query(
+        r#"
+        DELETE FROM notify_runtime_signals
+        WHERE service_name LIKE $1
+          AND service_name <> $2
+          AND updated_at < NOW() - ($3::bigint * INTERVAL '1 second')
+        "#,
+    )
+    .bind("notify_server%")
+    .bind(&service_name)
+    .bind(NOTIFY_RUNTIME_SIGNAL_RETENTION_SECS)
+    .execute(&state.db)
+    .await?;
     Ok(())
+}
+
+fn notify_runtime_signal_service_name(state: &AppState) -> String {
+    let host = std::env::var("HOSTNAME").unwrap_or_else(|_| format!("pid-{}", std::process::id()));
+    compose_notify_runtime_signal_service_name(&state.config.kafka.client_id, &host)
+}
+
+fn compose_notify_runtime_signal_service_name(kafka_client_id: &str, host: &str) -> String {
+    let kafka_client_id = kafka_client_id.trim();
+    let kafka_client_id = if kafka_client_id.is_empty() {
+        "default"
+    } else {
+        kafka_client_id
+    };
+    format!("notify_server:{}:{}", kafka_client_id, host)
 }
 
 fn compute_kafka_consumer_reconnect_delay(attempt: u32) -> Duration {
@@ -1361,5 +1391,21 @@ mod tests {
         assert_eq!(topics[1], "echoisle.debate.session.status.changed.v1");
         assert_eq!(topics[2], "echoisle.debate.message.created.v1");
         assert_eq!(topics[3], "echoisle.debate.message.pinned.v1");
+    }
+
+    #[test]
+    fn compose_notify_runtime_signal_service_name_should_include_client_and_host() {
+        assert_eq!(
+            compose_notify_runtime_signal_service_name("notify-client", "node-a"),
+            "notify_server:notify-client:node-a"
+        );
+    }
+
+    #[test]
+    fn compose_notify_runtime_signal_service_name_should_fallback_default_client() {
+        assert_eq!(
+            compose_notify_runtime_signal_service_name("   ", "node-a"),
+            "notify_server:default:node-a"
+        );
     }
 }
