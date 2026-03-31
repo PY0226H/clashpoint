@@ -1393,16 +1393,15 @@ pub(crate) async fn logout_all_handler(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     let mut tx = state.pool.begin().await?;
-    let new_ver: i64 = sqlx::query_scalar(
+    sqlx::query(
         r#"
         UPDATE users
         SET token_version = token_version + 1
         WHERE id = $1
-        RETURNING token_version
         "#,
     )
     .bind(user.id)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
 
     let affected = sqlx::query(
@@ -1418,7 +1417,7 @@ pub(crate) async fn logout_all_handler(
     .rows_affected() as u64;
 
     tx.commit().await?;
-    cache_user_token_version(&state, user.id, new_ver).await?;
+    invalidate_user_token_version_cache_best_effort(&state, user.id).await;
 
     let mut resp_headers = HeaderMap::new();
     clear_refresh_cookie_header(&mut resp_headers)?;
@@ -1670,32 +1669,24 @@ async fn cache_user_token_version(
     handle_auth_redis_unit_result(state, ret, "auth_refresh_invalid")
 }
 
+async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_id: i64) {
+    if let Err(err) = state
+        .redis
+        .delete_key("auth:user:token_version", &user_id.to_string())
+        .await
+    {
+        tracing::warn!(
+            "auth token_version cache invalidation failed (ignored), user_id={}, err={}",
+            user_id,
+            err
+        );
+    }
+}
+
 pub(crate) async fn load_user_token_version(
     state: &AppState,
     user_id: i64,
 ) -> Result<i64, AppError> {
-    let cached = state
-        .redis
-        .get_value("auth:user:token_version", &user_id.to_string())
-        .await;
-    match cached {
-        Ok(Some(value)) => {
-            if let Ok(parsed) = value.parse::<i64>() {
-                return Ok(parsed.max(0));
-            }
-        }
-        Ok(None) => {}
-        Err(err) => {
-            if auth_fail_closed_enabled(state) {
-                tracing::warn!(
-                    "auth redis token_version read failed under fail-closed: {}",
-                    err
-                );
-                return Err(AppError::AuthError("auth_access_invalid".to_string()));
-            }
-        }
-    }
-
     let value: Option<i64> = sqlx::query_scalar("SELECT token_version FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(&state.pool)
@@ -1710,19 +1701,6 @@ pub(crate) async fn ensure_access_session_active(
     user_id: i64,
     sid: &str,
 ) -> Result<(), AppError> {
-    let redis_ret = state.redis.get_value("auth:rt:session", sid).await;
-    match redis_ret {
-        Ok(Some(_)) => return Ok(()),
-        Ok(None) => {}
-        Err(err) => {
-            if auth_fail_closed_enabled(state) {
-                tracing::warn!("auth redis session read failed under fail-closed: {}", err);
-                return Err(AppError::AuthError("auth_session_revoked".to_string()));
-            }
-            tracing::warn!("auth redis session read degraded as fail-open: {}", err);
-        }
-    }
-
     let row: Option<(Option<DateTime<Utc>>, DateTime<Utc>, String)> = sqlx::query_as(
         r#"
         SELECT revoked_at, expires_at, current_jti
@@ -2458,6 +2436,7 @@ fn handle_auth_redis_unit_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AuthVerifyError, TokenVerify};
     use anyhow::Result;
     use axum::http::header::SET_COOKIE;
     use http_body_util::BodyExt;
@@ -2530,6 +2509,71 @@ mod tests {
         let body = refreshed.into_body().collect().await?.to_bytes();
         let ret: RefreshOutput = serde_json::from_slice(&body)?;
         assert!(!ret.access_token.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_all_should_invalidate_existing_access_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let decoded = state.dk.verify_access(&auth.access_token)?;
+        let old_ver = decoded.ver;
+        let user = decoded.user.clone();
+
+        let _ = logout_all_handler(Extension(user), State(state.clone()))
+            .await?
+            .into_response();
+
+        let current_ver = load_user_token_version(&state, decoded.user.id).await?;
+        assert!(current_ver > old_ver);
+        let verify_ret = TokenVerify::verify(&state, &auth.access_token).await;
+        assert!(matches!(
+            verify_ret,
+            Err(AuthVerifyError::TokenVersionMismatch) | Err(AuthVerifyError::SessionRevoked)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ensure_access_session_active_should_check_db_revocation_even_without_redis_hit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let decoded = state.dk.verify_access(&auth.access_token)?;
+        sqlx::query(
+            r#"
+            UPDATE auth_refresh_sessions
+            SET revoked_at = NOW(), revoke_reason = 'manual_test', updated_at = NOW()
+            WHERE sid = $1
+            "#,
+        )
+        .bind(&decoded.sid)
+        .execute(&state.pool)
+        .await?;
+
+        let err = ensure_access_session_active(&state, decoded.user.id, &decoded.sid)
+            .await
+            .expect_err("revoked session should be rejected");
+        match err {
+            AppError::AuthError(code) => assert_eq!(code, "auth_session_revoked"),
+            _ => panic!("expect auth error"),
+        }
         Ok(())
     }
 
