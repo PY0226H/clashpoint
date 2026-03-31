@@ -56,6 +56,7 @@ def _build_store(mode: str, redis_url: str, key_prefix: str) -> tuple[TraceStore
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run AI Judge B3 consistency gate.")
     parser.add_argument("--mode", choices=("auto", "memory", "redis"), default="auto")
+    parser.add_argument("--key-prefix", default="")
     parser.add_argument("--redis-url", default="redis://127.0.0.1:6379/0")
     parser.add_argument("--pending-total-requests", type=int, default=100)
     parser.add_argument("--pending-concurrency", type=int, default=16)
@@ -80,7 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     mode = str(args.mode or "auto").strip().lower()
-    key_prefix = f"ai_judge:b3_gate:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    key_prefix = (
+        str(args.key_prefix).strip()
+        if str(args.key_prefix or "").strip()
+        else f"ai_judge:b3_gate:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    )
     store, resolved_mode = _build_store(mode, str(args.redis_url), key_prefix)
 
     pending_key = f"{key_prefix}:pending"

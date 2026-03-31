@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _run_worker(
     *,
     index: int,
+    py_runner: Path,
     script_path: Path,
     report_out: Path,
     mode: str,
@@ -50,12 +51,15 @@ def _run_worker(
     replay_concurrency: int,
     outbox_total_updates: int,
     outbox_concurrency: int,
+    key_prefix: str,
 ) -> CollisionStressRun:
     cmd = [
-        str(sys.executable),
+        str(py_runner),
         str(script_path),
         "--mode",
         mode,
+        "--key-prefix",
+        key_prefix,
         "--report-out",
         str(report_out),
         "--report-collision-retries",
@@ -106,6 +110,8 @@ def main() -> int:
     )
     target_report_out = report_dir / "b3-collision-stress-target.md"
     gate_script = Path(__file__).resolve().parent / "b3_consistency_gate.py"
+    py_runner = (workspace_root / "scripts" / "py").resolve()
+    run_prefix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
 
     runs: list[CollisionStressRun] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -113,6 +119,7 @@ def main() -> int:
             pool.submit(
                 _run_worker,
                 index=index,
+                py_runner=py_runner,
                 script_path=gate_script,
                 report_out=target_report_out,
                 mode=str(args.mode),
@@ -123,6 +130,7 @@ def main() -> int:
                 replay_concurrency=int(args.replay_concurrency),
                 outbox_total_updates=int(args.outbox_total_updates),
                 outbox_concurrency=int(args.outbox_concurrency),
+                key_prefix=f"ai_judge:b3_stress:{run_prefix}:worker:{index}",
             )
             for index in range(workers)
         ]
