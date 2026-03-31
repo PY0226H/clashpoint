@@ -1,0 +1,4 @@
+interface:
+  display_name: "Post Module Plan Sync"
+  short_description: "Sync the active product plan doc after each module delivery."
+  default_prompt: "After each module implementation, update the currently active development plan document by syncing matrix status, next-step recommendations, and module completion history."

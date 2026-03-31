@@ -79,6 +79,49 @@ class IdempotencyRecord:
     expires_at: datetime
 
 
+IDEMPOTENCY_RESOLUTION_ACQUIRED = "acquired"
+IDEMPOTENCY_RESOLUTION_REPLAY = "replay"
+IDEMPOTENCY_RESOLUTION_CONFLICT = "conflict"
+IDEMPOTENCY_RESOLUTION_VALUES = {
+    IDEMPOTENCY_RESOLUTION_ACQUIRED,
+    IDEMPOTENCY_RESOLUTION_REPLAY,
+    IDEMPOTENCY_RESOLUTION_CONFLICT,
+}
+_RESOLVE_IDEMPOTENCY_LUA = """
+local key = KEYS[1]
+local pending_payload = ARGV[1]
+local ttl_secs = tonumber(ARGV[2]) or 60
+local job_id = tostring(ARGV[3] or "")
+
+local existed = redis.call("GET", key)
+if not existed then
+  redis.call("SET", key, pending_payload, "EX", ttl_secs)
+  return {"acquired", ""}
+end
+
+local ok, decoded = pcall(cjson.decode, existed)
+if not ok or type(decoded) ~= "table" then
+  return {"conflict", existed}
+end
+
+if tostring(decoded["job_id"] or "") ~= job_id then
+  return {"conflict", existed}
+end
+
+if type(decoded["response"]) == "table" then
+  return {"replay", existed}
+end
+
+return {"conflict", existed}
+"""
+
+
+@dataclass
+class IdempotencyResolution:
+    status: str
+    record: IdempotencyRecord | None = None
+
+
 @dataclass
 class TopicMemoryRecord:
     created_at: datetime
@@ -326,6 +369,15 @@ class TraceStoreProtocol(Protocol):
         ...
 
     def get_idempotency(self, key: str) -> IdempotencyRecord | None:
+        ...
+
+    def resolve_idempotency(
+        self,
+        *,
+        key: str,
+        job_id: int,
+        ttl_secs: int | None = None,
+    ) -> IdempotencyResolution:
         ...
 
     def clear_idempotency(self, key: str) -> None:
@@ -647,6 +699,45 @@ class TraceStore(TraceStoreProtocol):
         with self._lock:
             self._prune_locked(now)
             return self._idempotency.get(key)
+
+    def resolve_idempotency(
+        self,
+        *,
+        key: str,
+        job_id: int,
+        ttl_secs: int | None = None,
+    ) -> IdempotencyResolution:
+        now = _utcnow()
+        expires_at = now + timedelta(seconds=max(60, ttl_secs or self._ttl_secs))
+        with self._lock:
+            self._prune_locked(now)
+            existed = self._idempotency.get(key)
+            if existed is None:
+                record = IdempotencyRecord(
+                    key=key,
+                    job_id=job_id,
+                    response=None,
+                    expires_at=expires_at,
+                )
+                self._idempotency[key] = record
+                return IdempotencyResolution(
+                    status=IDEMPOTENCY_RESOLUTION_ACQUIRED,
+                    record=record,
+                )
+            if existed.job_id != job_id:
+                return IdempotencyResolution(
+                    status=IDEMPOTENCY_RESOLUTION_CONFLICT,
+                    record=existed,
+                )
+            if isinstance(existed.response, dict):
+                return IdempotencyResolution(
+                    status=IDEMPOTENCY_RESOLUTION_REPLAY,
+                    record=existed,
+                )
+            return IdempotencyResolution(
+                status=IDEMPOTENCY_RESOLUTION_CONFLICT,
+                record=existed,
+            )
 
     def clear_idempotency(self, key: str) -> None:
         with self._lock:
@@ -1139,6 +1230,12 @@ class RedisTraceStore(TraceStoreProtocol):
     def _alerts_outbox_key(self) -> str:
         return f"{self._key_prefix}:alerts:outbox"
 
+    def _alerts_outbox_stream_key(self) -> str:
+        return f"{self._key_prefix}:alerts:outbox:stream"
+
+    def _alerts_outbox_meta_key(self) -> str:
+        return f"{self._key_prefix}:alerts:outbox:meta"
+
     def _topic_key(self, topic_domain: str, rubric_version: str) -> str:
         domain = topic_domain.strip().lower()
         rubric = rubric_version.strip().lower()
@@ -1171,6 +1268,9 @@ class RedisTraceStore(TraceStoreProtocol):
             raw = self._redis.get(key)
         except Exception:
             return None
+        return self._decode_json_dict(raw)
+
+    def _decode_json_dict(self, raw: Any) -> dict[str, Any] | None:
         text = _decode_blob(raw)
         if not text:
             return None
@@ -1181,6 +1281,14 @@ class RedisTraceStore(TraceStoreProtocol):
         if not isinstance(payload, dict):
             return None
         return payload
+
+    def _decode_redis_map(self, raw: Any) -> dict[str, str]:
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, str] = {}
+        for key, value in raw.items():
+            out[_decode_blob(key)] = _decode_blob(value)
+        return out
 
     def _serialize_trace(self, record: TraceRecord) -> dict[str, Any]:
         return {
@@ -1466,25 +1574,104 @@ class RedisTraceStore(TraceStoreProtocol):
             updated_at=_parse_datetime(payload.get("updated_at")),
         )
 
-    def _read_outbox(self) -> list[AlertOutboxEvent]:
+    def _read_outbox_meta_event(self, event_id: str) -> AlertOutboxEvent | None:
+        try:
+            raw = self._redis.hget(self._alerts_outbox_meta_key(), event_id)
+        except Exception:
+            return None
+        text = _decode_blob(raw)
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return self._deserialize_outbox_event(payload)
+
+    def _write_outbox_meta_event(self, row: AlertOutboxEvent) -> None:
+        payload = self._serialize_outbox_event(row)
+        try:
+            self._redis.hset(
+                self._alerts_outbox_meta_key(),
+                row.event_id,
+                json.dumps(payload, ensure_ascii=False),
+            )
+            self._redis.expire(self._alerts_outbox_meta_key(), self._ttl_secs)
+        except Exception:
+            return
+
+    def _list_outbox_event_ids_from_stream(self, *, scan_limit: int) -> list[str]:
+        cap = max(1, min(5000, scan_limit))
+        try:
+            rows = self._redis.xrevrange(
+                self._alerts_outbox_stream_key(),
+                count=cap,
+            )
+        except Exception:
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for _stream_id, raw_fields in rows:
+            fields = self._decode_redis_map(raw_fields)
+            event_id = fields.get("event_id", "").strip()
+            if not event_id and fields.get("event"):
+                try:
+                    payload = json.loads(fields["event"])
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict):
+                    event_id = str(payload.get("event_id") or "").strip()
+            if not event_id or event_id in seen:
+                continue
+            seen.add(event_id)
+            out.append(event_id)
+        return out
+
+    def _prune_outbox_meta(self, *, keep_event_ids: set[str]) -> None:
+        if not keep_event_ids:
+            return
+        try:
+            raw_ids = self._redis.hkeys(self._alerts_outbox_meta_key())
+        except Exception:
+            return
+        stale_ids: list[str] = []
+        for raw in raw_ids:
+            event_id = _decode_blob(raw).strip()
+            if not event_id:
+                continue
+            if event_id not in keep_event_ids:
+                stale_ids.append(event_id)
+        if not stale_ids:
+            return
+        try:
+            self._redis.hdel(self._alerts_outbox_meta_key(), *stale_ids)
+        except Exception:
+            return
+
+    def _read_outbox(self, *, scan_limit: int = 500) -> list[AlertOutboxEvent]:
+        event_ids = self._list_outbox_event_ids_from_stream(scan_limit=scan_limit)
+        out: list[AlertOutboxEvent] = []
+        for event_id in event_ids:
+            row = self._read_outbox_meta_event(event_id)
+            if row is not None:
+                out.append(row)
+        if out:
+            return out
+
         payload = self._read_json(self._alerts_outbox_key())
         if payload is None:
             return []
         rows = payload.get("events")
         if not isinstance(rows, list):
             return []
-        out: list[AlertOutboxEvent] = []
+        fallback: list[AlertOutboxEvent] = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            out.append(self._deserialize_outbox_event(row))
-        return out
-
-    def _write_outbox(self, rows: list[AlertOutboxEvent]) -> None:
-        self._write_json(
-            self._alerts_outbox_key(),
-            {"events": [self._serialize_outbox_event(row) for row in rows]},
-        )
+            fallback.append(self._deserialize_outbox_event(row))
+        return fallback
 
     def _enqueue_outbox_event(
         self,
@@ -1521,10 +1708,24 @@ class RedisTraceStore(TraceStoreProtocol):
             created_at=now,
             updated_at=now,
         )
-        outbox = self._read_outbox()
-        outbox.insert(0, event)
-        outbox = outbox[:500]
-        self._write_outbox(outbox)
+        serialized = self._serialize_outbox_event(event)
+        try:
+            self._redis.xadd(
+                self._alerts_outbox_stream_key(),
+                {
+                    "event_id": event.event_id,
+                    "event": json.dumps(serialized, ensure_ascii=False),
+                },
+                maxlen=500,
+                approximate=True,
+            )
+            self._redis.expire(self._alerts_outbox_stream_key(), self._ttl_secs)
+        except Exception:
+            pass
+        self._write_outbox_meta_event(event)
+        keep_event_ids = set(self._list_outbox_event_ids_from_stream(scan_limit=500))
+        if keep_event_ids:
+            self._prune_outbox_meta(keep_event_ids=keep_event_ids)
         return event
 
     def register_start(self, *, job_id: int, trace_id: str, request: dict[str, Any]) -> TraceRecord:
@@ -1628,6 +1829,117 @@ class RedisTraceStore(TraceStoreProtocol):
         if payload is None:
             return None
         return self._deserialize_idempotency(key, payload)
+
+    def _resolve_idempotency_with_lua(
+        self,
+        *,
+        key: str,
+        idempotency_key: str,
+        pending_payload: dict[str, Any],
+        ttl: int,
+        job_id: int,
+        expires_at: datetime,
+    ) -> IdempotencyResolution | None:
+        eval_fn = getattr(self._redis, "eval", None)
+        if not callable(eval_fn):
+            return None
+        try:
+            raw_result = eval_fn(
+                _RESOLVE_IDEMPOTENCY_LUA,
+                1,
+                idempotency_key,
+                json.dumps(pending_payload, ensure_ascii=False),
+                str(ttl),
+                str(job_id),
+            )
+        except Exception:
+            return None
+        if not isinstance(raw_result, (list, tuple)) or not raw_result:
+            return None
+        status = _decode_blob(raw_result[0]).strip().lower()
+        if status not in IDEMPOTENCY_RESOLUTION_VALUES:
+            return None
+        if status == IDEMPOTENCY_RESOLUTION_ACQUIRED:
+            return IdempotencyResolution(
+                status=IDEMPOTENCY_RESOLUTION_ACQUIRED,
+                record=IdempotencyRecord(
+                    key=key,
+                    job_id=job_id,
+                    response=None,
+                    expires_at=expires_at,
+                ),
+            )
+        payload = self._decode_json_dict(raw_result[1] if len(raw_result) > 1 else None)
+        record = self._deserialize_idempotency(key, payload) if payload else None
+        return IdempotencyResolution(status=status, record=record)
+
+    def resolve_idempotency(
+        self,
+        *,
+        key: str,
+        job_id: int,
+        ttl_secs: int | None = None,
+    ) -> IdempotencyResolution:
+        now = _utcnow()
+        ttl = max(60, ttl_secs or self._ttl_secs)
+        expires_at = now + timedelta(seconds=ttl)
+        pending_payload = {
+            "key": key,
+            "job_id": job_id,
+            "response": None,
+            "expires_at": expires_at.isoformat(),
+        }
+        idempotency_key = self._idempotency_key(key)
+        lua_resolution = self._resolve_idempotency_with_lua(
+            key=key,
+            idempotency_key=idempotency_key,
+            pending_payload=pending_payload,
+            ttl=ttl,
+            job_id=job_id,
+            expires_at=expires_at,
+        )
+        if lua_resolution is not None:
+            return lua_resolution
+        for _ in range(2):
+            try:
+                created = self._redis.set(
+                    idempotency_key,
+                    json.dumps(pending_payload, ensure_ascii=False),
+                    ex=ttl,
+                    nx=True,
+                )
+            except Exception:
+                created = None
+            if created:
+                return IdempotencyResolution(
+                    status=IDEMPOTENCY_RESOLUTION_ACQUIRED,
+                    record=IdempotencyRecord(
+                        key=key,
+                        job_id=job_id,
+                        response=None,
+                        expires_at=expires_at,
+                    ),
+                )
+
+            payload = self._read_json(idempotency_key)
+            if payload is None:
+                continue
+            existed = self._deserialize_idempotency(key, payload)
+            if existed.job_id != job_id:
+                return IdempotencyResolution(
+                    status=IDEMPOTENCY_RESOLUTION_CONFLICT,
+                    record=existed,
+                )
+            if isinstance(existed.response, dict):
+                return IdempotencyResolution(
+                    status=IDEMPOTENCY_RESOLUTION_REPLAY,
+                    record=existed,
+                )
+            return IdempotencyResolution(
+                status=IDEMPOTENCY_RESOLUTION_CONFLICT,
+                record=existed,
+            )
+        return IdempotencyResolution(status=IDEMPOTENCY_RESOLUTION_CONFLICT, record=None)
 
     def clear_idempotency(self, key: str) -> None:
         try:
@@ -1795,7 +2107,7 @@ class RedisTraceStore(TraceStoreProtocol):
     ) -> list[AlertOutboxEvent]:
         cap = max(1, min(200, limit))
         norm_status = _normalize_delivery_status(delivery_status, default="")
-        rows = self._read_outbox()
+        rows = self._read_outbox(scan_limit=max(500, cap * 8))
         out: list[AlertOutboxEvent] = []
         for row in rows:
             if norm_status and row.delivery_status != norm_status:
@@ -1814,15 +2126,26 @@ class RedisTraceStore(TraceStoreProtocol):
     ) -> AlertOutboxEvent | None:
         target = _normalize_delivery_status(delivery_status)
         now = _utcnow()
-        rows = self._read_outbox()
-        for row in rows:
-            if row.event_id != event_id:
-                continue
+        row = self._read_outbox_meta_event(event_id)
+        if row is not None:
             row.delivery_status = target
             row.error_message = (error_message or "").strip() or None
             row.updated_at = now
-            self._write_outbox(rows)
+            self._write_outbox_meta_event(row)
             return row
+
+        rows = self._read_outbox(scan_limit=1000)
+        for fallback in rows:
+            if fallback.event_id != event_id:
+                continue
+            fallback.delivery_status = target
+            fallback.error_message = (error_message or "").strip() or None
+            fallback.updated_at = now
+            self._write_json(
+                self._alerts_outbox_key(),
+                {"events": [self._serialize_outbox_event(item) for item in rows]},
+            )
+            return fallback
         return None
 
     def _list_indexed_job_ids(self, *, scan_limit: int) -> list[int]:
@@ -2177,6 +2500,7 @@ __all__ = [
     "TraceRecord",
     "TraceReplayRecord",
     "IdempotencyRecord",
+    "IdempotencyResolution",
     "TopicMemoryRecord",
     "TraceQuery",
     "AuditAlertTransition",

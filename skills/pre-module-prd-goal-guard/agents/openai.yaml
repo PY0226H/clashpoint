@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pre Module PRD Goal Guard"
+  short_description: "Read full PRD before module development/refactor/optimization."
+  default_prompt: "Before any module-level development, refactor, or optimization, fully read docs/PRD/在线辩论AI裁判平台完整PRD.md and align decisions with the product's target end-state."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Post Optimization Plan Sync"
+  short_description: "Sync backend optimization plan after each optimization module."
+  default_prompt: "Use $post-optimization-plan-sync to rewrite optimization matrix and next-step suggestion after each completed optimization module."

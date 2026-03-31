@@ -1,0 +1,4 @@
+interface:
+  display_name: "Post Module Test Guard"
+  short_description: "Generate tests and run post-module quality gates."
+  default_prompt: "After finishing a module implementation, add or update tests for changed behavior and run the full repository test gate until it passes."

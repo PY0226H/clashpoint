@@ -247,20 +247,17 @@ def _resolve_idempotency_or_raise(
     job_id: int,
     conflict_detail: str,
 ) -> dict[str, Any] | None:
-    existed = runtime.trace_store.get_idempotency(key)
-    if existed and existed.job_id != job_id:
-        raise HTTPException(status_code=409, detail=conflict_detail)
-    if existed and existed.response:
-        replayed = dict(existed.response)
-        replayed["idempotentReplay"] = True
-        return replayed
-    if existed:
-        raise HTTPException(status_code=409, detail=conflict_detail)
-    runtime.trace_store.set_idempotency_pending(
+    resolution = runtime.trace_store.resolve_idempotency(
         key=key,
         job_id=job_id,
         ttl_secs=runtime.settings.idempotency_ttl_secs,
     )
+    if resolution.status == "replay" and resolution.record and resolution.record.response:
+        replayed = dict(resolution.record.response)
+        replayed["idempotentReplay"] = True
+        return replayed
+    if resolution.status != "acquired":
+        raise HTTPException(status_code=409, detail=conflict_detail)
     return None
 
 

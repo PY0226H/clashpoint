@@ -1,7 +1,12 @@
+import json
 import unittest
 from datetime import datetime, timezone
 
 from app.trace_store import (
+    ALERT_STATUS_RAISED,
+    OUTBOX_DELIVERY_PENDING,
+    OUTBOX_DELIVERY_SENT,
+    RedisTraceStore,
     TraceQuery,
     TraceStore,
     build_trace_store_from_settings,
@@ -51,6 +56,26 @@ class TraceStoreTests(unittest.TestCase):
         self.assertIsNotNone(store.get_idempotency("k2"))
         store.clear_idempotency("k2")
         self.assertIsNone(store.get_idempotency("k2"))
+
+    def test_resolve_idempotency_should_return_acquired_replay_and_conflict(self) -> None:
+        store = TraceStore(ttl_secs=3600)
+        acquired = store.resolve_idempotency(key="k3", job_id=31, ttl_secs=3600)
+        self.assertEqual(acquired.status, "acquired")
+        conflict_same_pending = store.resolve_idempotency(key="k3", job_id=31, ttl_secs=3600)
+        self.assertEqual(conflict_same_pending.status, "conflict")
+        store.set_idempotency_success(
+            key="k3",
+            job_id=31,
+            response={"accepted": True, "jobId": 31},
+            ttl_secs=3600,
+        )
+        replay = store.resolve_idempotency(key="k3", job_id=31, ttl_secs=3600)
+        self.assertEqual(replay.status, "replay")
+        self.assertIsNotNone(replay.record)
+        assert replay.record is not None
+        self.assertEqual(replay.record.response["jobId"], 31)
+        conflict_other_job = store.resolve_idempotency(key="k3", job_id=32, ttl_secs=3600)
+        self.assertEqual(conflict_other_job.status, "conflict")
 
     def test_mark_replay_should_append_history(self) -> None:
         store = TraceStore(ttl_secs=3600)
@@ -296,6 +321,166 @@ class _DummySettings:
     topic_memory_min_evidence_refs = 1
     topic_memory_min_rationale_chars = 20
     topic_memory_min_quality_score = 0.55
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.kv: dict[str, str] = {}
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self._stream_seq = 0
+        self.eval_calls = 0
+
+    def ping(self) -> bool:
+        return True
+
+    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+        if nx and key in self.kv:
+            return False
+        self.kv[key] = value
+        return True
+
+    def get(self, key: str) -> str | None:
+        return self.kv.get(key)
+
+    def delete(self, key: str) -> int:
+        existed = key in self.kv
+        self.kv.pop(key, None)
+        return 1 if existed else 0
+
+    def expire(self, key: str, ttl: int) -> bool:
+        _ = key
+        _ = ttl
+        return True
+
+    def hset(self, name: str, key: str, value: str) -> int:
+        bucket = self.hashes.setdefault(name, {})
+        bucket[key] = value
+        return 1
+
+    def hget(self, name: str, key: str) -> str | None:
+        return self.hashes.get(name, {}).get(key)
+
+    def hkeys(self, name: str) -> list[str]:
+        return list(self.hashes.get(name, {}).keys())
+
+    def hdel(self, name: str, *keys: str) -> int:
+        bucket = self.hashes.setdefault(name, {})
+        removed = 0
+        for key in keys:
+            if key in bucket:
+                removed += 1
+                bucket.pop(key, None)
+        return removed
+
+    def xadd(
+        self,
+        name: str,
+        fields: dict[str, str],
+        maxlen: int | None = None,
+        approximate: bool = True,
+    ) -> str:
+        _ = approximate
+        self._stream_seq += 1
+        stream_id = f"{self._stream_seq}-0"
+        stream = self.streams.setdefault(name, [])
+        stream.append((stream_id, dict(fields)))
+        if isinstance(maxlen, int) and maxlen > 0 and len(stream) > maxlen:
+            self.streams[name] = stream[-maxlen:]
+        return stream_id
+
+    def xrevrange(self, name: str, count: int | None = None) -> list[tuple[str, dict[str, str]]]:
+        rows = list(reversed(self.streams.get(name, [])))
+        if isinstance(count, int) and count >= 0:
+            return rows[:count]
+        return rows
+
+    def eval(self, script: str, numkeys: int, *args: str) -> list[str]:
+        _ = script
+        _ = numkeys
+        self.eval_calls += 1
+        key = args[0]
+        pending_payload = args[1]
+        job_id = str(args[3])
+        existed = self.kv.get(key)
+        if existed is None:
+            self.kv[key] = pending_payload
+            return ["acquired", ""]
+        try:
+            decoded = json.loads(existed)
+        except Exception:
+            return ["conflict", existed]
+        if str(decoded.get("job_id") or "") != job_id:
+            return ["conflict", existed]
+        response = decoded.get("response")
+        if isinstance(response, dict):
+            return ["replay", existed]
+        return ["conflict", existed]
+
+
+class RedisTraceStoreTests(unittest.TestCase):
+    def test_resolve_idempotency_should_follow_atomic_set_nx_semantics(self) -> None:
+        fake_redis = _FakeRedis()
+        store = RedisTraceStore(redis_client=fake_redis, ttl_secs=3600, key_prefix="ai_judge:test")
+
+        acquired = store.resolve_idempotency(key="rk1", job_id=401, ttl_secs=3600)
+        self.assertEqual(acquired.status, "acquired")
+        self.assertGreaterEqual(fake_redis.eval_calls, 1)
+        pending_conflict = store.resolve_idempotency(key="rk1", job_id=401, ttl_secs=3600)
+        self.assertEqual(pending_conflict.status, "conflict")
+
+        store.set_idempotency_success(
+            key="rk1",
+            job_id=401,
+            response={"accepted": True, "jobId": 401},
+            ttl_secs=3600,
+        )
+        replay = store.resolve_idempotency(key="rk1", job_id=401, ttl_secs=3600)
+        self.assertEqual(replay.status, "replay")
+        self.assertIsNotNone(replay.record)
+        assert replay.record is not None
+        self.assertEqual(replay.record.response["jobId"], 401)
+
+        other_job_conflict = store.resolve_idempotency(key="rk1", job_id=402, ttl_secs=3600)
+        self.assertEqual(other_job_conflict.status, "conflict")
+
+    def test_alert_outbox_should_use_stream_and_meta_without_whole_json_overwrite(self) -> None:
+        fake_redis = _FakeRedis()
+        store = RedisTraceStore(redis_client=fake_redis, ttl_secs=3600, key_prefix="ai_judge:test")
+        alert = store.upsert_audit_alert(
+            job_id=501,
+            scope_id=10,
+            trace_id="trace-501",
+            alert_type="compliance_violation",
+            severity="warning",
+            title="AI Judge Compliance Violation",
+            message="violations=display_missing_rationale",
+            details={"violations": ["display_missing_rationale"]},
+        )
+        self.assertEqual(alert.status, ALERT_STATUS_RAISED)
+
+        pending_rows = store.list_alert_outbox(delivery_status=OUTBOX_DELIVERY_PENDING, limit=10)
+        self.assertEqual(len(pending_rows), 1)
+        event = pending_rows[0]
+        self.assertIn("scopeId", event.payload)
+
+        updated = store.mark_alert_outbox_delivery(
+            event_id=event.event_id,
+            delivery_status=OUTBOX_DELIVERY_SENT,
+            error_message=None,
+        )
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated.delivery_status, OUTBOX_DELIVERY_SENT)
+
+        pending_after = store.list_alert_outbox(delivery_status=OUTBOX_DELIVERY_PENDING, limit=10)
+        self.assertEqual(len(pending_after), 0)
+
+        all_rows = store.list_alert_outbox(limit=10)
+        self.assertEqual(len(all_rows), 1)
+        self.assertEqual(all_rows[0].delivery_status, OUTBOX_DELIVERY_SENT)
+        self.assertIn(store._alerts_outbox_stream_key(), fake_redis.streams)
+        self.assertNotIn(store._alerts_outbox_key(), fake_redis.kv)
 
 
 class TraceStoreBuilderTests(unittest.TestCase):
