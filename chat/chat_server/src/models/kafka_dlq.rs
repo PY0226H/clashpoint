@@ -18,6 +18,7 @@ const DLQ_STATUS_DISCARDED: &str = "discarded";
 const NOTIFY_RUNTIME_SERVICE_NAME_PREFIX: &str = "notify_server";
 const NOTIFY_RUNTIME_SIGNAL_STALE_SECS: i64 = 300;
 const NOTIFY_RUNTIME_NO_COMMIT_WARMUP_SECS: i64 = 300;
+const DLQ_REPLAY_PROGRESS_STALE_SECS: i64 = 300;
 
 #[derive(Debug, Clone, Deserialize, ToSchema, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +112,9 @@ pub struct GetKafkaTransportReadinessOutput {
     pub outbox_metrics: KafkaOutboxRelayMetricsSnapshotOutput,
     pub consumer_metrics: KafkaConsumerRuntimeMetricsSnapshotOutput,
     pub pending_dlq_count: u64,
+    pub pending_dlq_oldest_failed_at: Option<DateTime<Utc>>,
+    pub last_dlq_replay_action_at: Option<DateTime<Utc>>,
+    pub dlq_replay_progressing: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -142,6 +146,13 @@ struct KafkaDlqActionRow {
     replayed_at: Option<DateTime<Utc>>,
     discarded_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct KafkaDlqRuntimeRow {
+    pending_dlq_count: i64,
+    pending_dlq_oldest_failed_at: Option<DateTime<Utc>>,
+    last_dlq_replay_action_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -235,14 +246,18 @@ impl AppState {
         let consumer_worker_enabled =
             self.config.kafka.consume_enabled || self.config.kafka.consumer.worker_enabled;
         let consumer_business_logic_ready = !worker_supported_event_types().is_empty();
-        let pending_dlq_count: i64 = sqlx::query_scalar(
+        let dlq_runtime: KafkaDlqRuntimeRow = sqlx::query_as(
             r#"
-            SELECT COUNT(1)
+            SELECT
+                COUNT(1) FILTER (WHERE status = $1) AS pending_dlq_count,
+                MIN(first_failed_at) FILTER (WHERE status = $1) AS pending_dlq_oldest_failed_at,
+                MAX(updated_at) FILTER (WHERE status IN ($2, $3)) AS last_dlq_replay_action_at
             FROM kafka_dlq_events
-            WHERE status = $1
             "#,
         )
         .bind(DLQ_STATUS_PENDING)
+        .bind(DLQ_STATUS_REPLAYED)
+        .bind(DLQ_STATUS_DISCARDED)
         .fetch_one(&self.pool)
         .await?;
         let notify_runtime_signals: Vec<NotifyRuntimeSignalRow> = sqlx::query_as(
@@ -263,9 +278,15 @@ impl AppState {
         .bind(format!("{}%", NOTIFY_RUNTIME_SERVICE_NAME_PREFIX))
         .fetch_all(&self.pool)
         .await?;
+        let now = Utc::now();
         let (notify_consume_chain_ready, notify_chain_blockers) =
-            evaluate_notify_consume_chain_runtime(&notify_runtime_signals, Utc::now());
-        let dlq_replay_loop_ready = pending_dlq_count == 0;
+            evaluate_notify_consume_chain_runtime(&notify_runtime_signals, now);
+        let pending_dlq_count = dlq_runtime.pending_dlq_count.max(0) as u64;
+        let dlq_replay_progressing = dlq_runtime
+            .last_dlq_replay_action_at
+            .map(|ts| (now - ts).num_seconds().max(0) <= DLQ_REPLAY_PROGRESS_STALE_SECS)
+            .unwrap_or(false);
+        let dlq_replay_loop_ready = pending_dlq_count == 0 || dlq_replay_progressing;
         let consumer_metrics = self.kafka_consumer_metrics.snapshot();
 
         let mut blockers = Vec::new();
@@ -305,6 +326,10 @@ impl AppState {
                 "pending dlq events detected: {}",
                 pending_dlq_count
             ));
+            if !dlq_replay_progressing {
+                blockers
+                    .push("dlq replay progress is stale while pending events exist".to_string());
+            }
         }
         if !dlq_replay_loop_ready {
             blockers.push("DLQ replay loop is not ready".to_string());
@@ -344,7 +369,10 @@ impl AppState {
                 commit_error_total: consumer_metrics.commit_error_total,
                 dropped_total: consumer_metrics.dropped_total,
             },
-            pending_dlq_count: pending_dlq_count.max(0) as u64,
+            pending_dlq_count,
+            pending_dlq_oldest_failed_at: dlq_runtime.pending_dlq_oldest_failed_at,
+            last_dlq_replay_action_at: dlq_runtime.last_dlq_replay_action_at,
+            dlq_replay_progressing,
         })
     }
 
@@ -653,6 +681,43 @@ mod tests {
         Ok(())
     }
 
+    async fn insert_replayed_dlq_event(
+        state: &AppState,
+        event_id: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO kafka_dlq_events(
+                consumer_group, topic, partition, message_offset,
+                event_id, event_type, aggregate_id, payload,
+                status, failure_count, error_message,
+                first_failed_at, last_failed_at, replayed_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'replayed', 1, 'replayed', $9, $9, $9, $9)
+            "#,
+        )
+        .bind("test-group")
+        .bind("debate.message.created")
+        .bind(0_i32)
+        .bind(2_i64)
+        .bind(event_id)
+        .bind("DebateMessageCreated")
+        .bind("session:1")
+        .bind(json!({
+            "eventId": event_id,
+            "eventType": "DebateMessageCreated",
+            "source": "test",
+            "aggregateId": "session:1",
+            "occurredAt": "2026-03-30T00:00:00Z",
+            "payload": {}
+        }))
+        .bind(updated_at)
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn upsert_notify_runtime_signal_for_test(
         state: &AppState,
         kafka_enabled: bool,
@@ -819,6 +884,30 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item.starts_with("pending dlq events detected:")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_mark_dlq_loop_ready_when_replay_progressing(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        insert_pending_dlq_event(&state, "dlq-event-pending-progress").await?;
+        insert_replayed_dlq_event(
+            &state,
+            "dlq-event-replayed-progress",
+            Utc::now() - Duration::seconds(30),
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert_eq!(output.pending_dlq_count, 1);
+        assert!(output.dlq_replay_progressing);
+        assert!(output.dlq_replay_loop_ready);
+        assert!(!output
+            .blockers
+            .iter()
+            .any(|item| item == "DLQ replay loop is not ready"));
         Ok(())
     }
 
