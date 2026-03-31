@@ -263,17 +263,27 @@ fn spawn_auth_token_version_invalidation_retry_worker(state: AppState) {
     const RETRY_BATCH_SIZE: usize = 128;
     tokio::spawn(async move {
         loop {
-            let report = state
+            match state
                 .retry_auth_token_version_invalidation_queue_once(RETRY_BATCH_SIZE)
-                .await;
-            if report.attempted > 0 || report.requeued > 0 || report.dropped > 0 {
-                debug!(
-                    attempted = report.attempted,
-                    succeeded = report.succeeded,
-                    requeued = report.requeued,
-                    dropped = report.dropped,
-                    "auth token_version invalidation retry worker tick"
-                );
+                .await
+            {
+                Ok(report) => {
+                    if report.attempted > 0 || report.requeued > 0 || report.dropped > 0 {
+                        debug!(
+                            attempted = report.attempted,
+                            succeeded = report.succeeded,
+                            requeued = report.requeued,
+                            dropped = report.dropped,
+                            "auth token_version invalidation retry worker tick"
+                        );
+                    }
+                }
+                Err(err) => {
+                    debug!(
+                        "auth token_version invalidation retry worker tick failed: {}",
+                        err
+                    );
+                }
             }
             sleep(Duration::from_secs(RETRY_INTERVAL_SECS)).await;
         }

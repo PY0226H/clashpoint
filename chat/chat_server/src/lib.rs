@@ -66,8 +66,6 @@ pub struct AppStateInner {
     pub(crate) event_outbox_metrics: EventOutboxRelayMetrics,
     pub(crate) kafka_consumer_metrics: Arc<KafkaConsumerRuntimeMetrics>,
     pub(crate) auth_consistency_metrics: AuthConsistencyMetrics,
-    pub(crate) auth_token_version_invalidation_queue:
-        tokio::sync::Mutex<std::collections::VecDeque<(i64, u32)>>,
     pub(crate) dispatch_trigger_tx: Option<UnboundedSender<JudgeDispatchTrigger>>,
 }
 
@@ -431,9 +429,6 @@ impl AppState {
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 kafka_consumer_metrics,
                 auth_consistency_metrics: AuthConsistencyMetrics::default(),
-                auth_token_version_invalidation_queue: tokio::sync::Mutex::new(
-                    std::collections::VecDeque::new(),
-                ),
                 dispatch_trigger_tx,
             }),
         };
@@ -470,9 +465,6 @@ impl AppState {
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
                 auth_consistency_metrics: AuthConsistencyMetrics::default(),
-                auth_token_version_invalidation_queue: tokio::sync::Mutex::new(
-                    std::collections::VecDeque::new(),
-                ),
                 dispatch_trigger_tx: None,
             }),
         })
@@ -667,9 +659,6 @@ mod test_util {
                     event_outbox_metrics: EventOutboxRelayMetrics::default(),
                     kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
                     auth_consistency_metrics: AuthConsistencyMetrics::default(),
-                    auth_token_version_invalidation_queue: tokio::sync::Mutex::new(
-                        std::collections::VecDeque::new(),
-                    ),
                     dispatch_trigger_tx: None,
                 }),
             };

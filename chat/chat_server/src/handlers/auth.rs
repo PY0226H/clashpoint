@@ -16,9 +16,9 @@ use chat_core::User;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use sqlx::FromRow;
+use sqlx::{Executor, FromRow};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
         LazyLock, Mutex,
@@ -40,8 +40,12 @@ const WECHAT_CHALLENGE_TTL_SECS: u64 = 300;
 const WECHAT_BIND_TICKET_TTL_SECS: u64 = 600;
 const SMS_PROVIDER_MOCK: &str = "mock";
 const WECHAT_PROVIDER: &str = "wechat";
-const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_QUEUE_MAX: usize = 2048;
-const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_ATTEMPTS: u32 = 8;
+const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_QUEUE_MAX: i64 = 2048;
+const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_ATTEMPTS: i32 = 8;
+const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_LOCK_SECS: i64 = 15;
+const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_BASE_BACKOFF_MS: u64 = 500;
+const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_BACKOFF_MS: u64 = 30_000;
+const AUTH_TOKEN_VERSION_INVALIDATION_ERROR_MAX_LEN: usize = 512;
 
 #[derive(Debug, Clone)]
 struct SmsFallbackEntry {
@@ -157,6 +161,12 @@ pub(crate) struct AuthTokenVersionInvalidationRetryReport {
     pub dropped: usize,
 }
 
+#[derive(Debug, Clone, Copy, FromRow)]
+struct ClaimedAuthTokenVersionInvalidationJob {
+    user_id: i64,
+    attempts: i32,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct AuthConsistencyMetrics {
     immediate_invalidation_success_total: AtomicU64,
@@ -184,29 +194,26 @@ impl AuthConsistencyMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    fn observe_retry_enqueued(&self, queue_depth: usize) {
+    fn observe_retry_enqueued(&self, queue_depth: u64) {
         self.retry_enqueue_total.fetch_add(1, Ordering::Relaxed);
-        self.queue_depth
-            .store(queue_depth as u64, Ordering::Relaxed);
+        self.queue_depth.store(queue_depth, Ordering::Relaxed);
     }
 
-    fn observe_retry_dedup(&self, queue_depth: usize) {
+    fn observe_retry_dedup(&self, queue_depth: u64) {
         self.retry_dedup_total.fetch_add(1, Ordering::Relaxed);
-        self.queue_depth
-            .store(queue_depth as u64, Ordering::Relaxed);
+        self.queue_depth.store(queue_depth, Ordering::Relaxed);
     }
 
-    fn observe_retry_overflow_drop(&self, queue_depth: usize) {
+    fn observe_retry_overflow_drop(&self, queue_depth: u64) {
         self.retry_overflow_drop_total
             .fetch_add(1, Ordering::Relaxed);
-        self.queue_depth
-            .store(queue_depth as u64, Ordering::Relaxed);
+        self.queue_depth.store(queue_depth, Ordering::Relaxed);
     }
 
     fn observe_retry_tick(
         &self,
         report: AuthTokenVersionInvalidationRetryReport,
-        queue_depth: usize,
+        queue_depth: u64,
     ) {
         self.retry_tick_total.fetch_add(1, Ordering::Relaxed);
         self.retry_attempt_total
@@ -217,8 +224,15 @@ impl AuthConsistencyMetrics {
             .fetch_add(report.requeued as u64, Ordering::Relaxed);
         self.retry_terminal_drop_total
             .fetch_add(report.dropped as u64, Ordering::Relaxed);
-        self.queue_depth
-            .store(queue_depth as u64, Ordering::Relaxed);
+        self.queue_depth.store(queue_depth, Ordering::Relaxed);
+    }
+
+    fn observe_retry_tick_error(&self) {
+        self.retry_tick_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_queue_depth(&self, queue_depth: u64) {
+        self.queue_depth.store(queue_depth, Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> GetAuthConsistencyMetricsOutput {
@@ -1796,14 +1810,22 @@ async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_
         }
         Err(err) => {
             state.auth_consistency_metrics.observe_immediate_failure();
-            state
+            let enqueue_ret = state
                 .enqueue_auth_token_version_invalidation_retry(user_id)
                 .await;
-            tracing::warn!(
-                "auth token_version cache invalidation failed, queued retry: user_id={}, err={}",
-                user_id,
-                err
-            );
+            match enqueue_ret {
+                Ok(_) => tracing::warn!(
+                    "auth token_version cache invalidation failed, queued retry: user_id={}, err={}",
+                    user_id,
+                    err
+                ),
+                Err(queue_err) => tracing::warn!(
+                    "auth token_version cache invalidation failed and enqueue retry failed: user_id={}, err={}, enqueue_err={}",
+                    user_id,
+                    err,
+                    queue_err
+                ),
+            }
         }
     }
 }
@@ -1813,96 +1835,233 @@ impl AppState {
         self.auth_consistency_metrics.snapshot()
     }
 
-    pub(crate) async fn enqueue_auth_token_version_invalidation_retry(&self, user_id: i64) {
-        let mut queue = self.auth_token_version_invalidation_queue.lock().await;
-        if queue
-            .iter()
-            .any(|(queued_user_id, _)| *queued_user_id == user_id)
-        {
-            self.auth_consistency_metrics
-                .observe_retry_dedup(queue.len());
-            return;
+    pub(crate) async fn enqueue_auth_token_version_invalidation_retry(
+        &self,
+        user_id: i64,
+    ) -> Result<(), AppError> {
+        let mut tx = self.pool.begin().await?;
+
+        let mut overflow_drop = false;
+        let depth_before = get_auth_token_version_invalidation_queue_depth(&mut *tx).await?;
+        if depth_before >= AUTH_TOKEN_VERSION_INVALIDATION_RETRY_QUEUE_MAX as u64 {
+            let dropped_user_id: Option<i64> = sqlx::query_scalar(
+                r#"
+                WITH candidate AS (
+                    SELECT user_id
+                    FROM auth_token_version_invalidation_jobs
+                    ORDER BY next_retry_at ASC, created_at ASC, user_id ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                DELETE FROM auth_token_version_invalidation_jobs q
+                USING candidate c
+                WHERE q.user_id = c.user_id
+                RETURNING q.user_id
+                "#,
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            overflow_drop = dropped_user_id.is_some();
         }
-        if queue.len() >= AUTH_TOKEN_VERSION_INVALIDATION_RETRY_QUEUE_MAX {
-            queue.pop_front();
+
+        let inserted_user_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            INSERT INTO auth_token_version_invalidation_jobs(
+                user_id, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
+            )
+            VALUES ($1, 0, NOW(), NULL, NULL, NOW(), NOW())
+            ON CONFLICT (user_id) DO NOTHING
+            RETURNING user_id
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let depth_after = get_auth_token_version_invalidation_queue_depth(&mut *tx).await?;
+        tx.commit().await?;
+
+        if overflow_drop {
             self.auth_consistency_metrics
-                .observe_retry_overflow_drop(queue.len());
+                .observe_retry_overflow_drop(depth_after);
         }
-        queue.push_back((user_id, 0));
-        self.auth_consistency_metrics
-            .observe_retry_enqueued(queue.len());
+        if inserted_user_id.is_some() {
+            self.auth_consistency_metrics
+                .observe_retry_enqueued(depth_after);
+        } else {
+            self.auth_consistency_metrics
+                .observe_retry_dedup(depth_after);
+        }
+        Ok(())
     }
 
     pub(crate) async fn retry_auth_token_version_invalidation_queue_once(
         &self,
         batch_size: usize,
-    ) -> AuthTokenVersionInvalidationRetryReport {
-        let mut batch: Vec<(i64, u32)> = Vec::with_capacity(batch_size.max(1));
-        {
-            let mut queue = self.auth_token_version_invalidation_queue.lock().await;
-            for _ in 0..batch_size.max(1) {
-                let Some(item) = queue.pop_front() else {
-                    break;
-                };
-                batch.push(item);
-            }
-            self.auth_consistency_metrics
-                .queue_depth
-                .store(queue.len() as u64, Ordering::Relaxed);
-        }
+    ) -> Result<AuthTokenVersionInvalidationRetryReport, AppError> {
+        let run = async {
+            let claimed = claim_auth_token_version_invalidation_jobs(
+                &self.pool,
+                batch_size.max(1) as i64,
+            )
+            .await?;
+            let mut report = AuthTokenVersionInvalidationRetryReport {
+                attempted: claimed.len(),
+                ..Default::default()
+            };
 
-        let mut report = AuthTokenVersionInvalidationRetryReport {
-            attempted: batch.len(),
-            ..Default::default()
-        };
-        let mut requeue: VecDeque<(i64, u32)> = VecDeque::new();
-
-        for (user_id, attempt) in batch.into_iter() {
-            match self
-                .redis
-                .delete_key("auth:user:token_version", &user_id.to_string())
-                .await
-            {
-                Ok(_) => {
-                    report.succeeded += 1;
-                }
-                Err(err) => {
-                    let next_attempt = attempt.saturating_add(1);
-                    if next_attempt >= AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_ATTEMPTS {
-                        report.dropped += 1;
-                        tracing::warn!(
-                            "drop auth token_version invalidation retry after max attempts: user_id={}, attempts={}, err={}",
-                            user_id,
-                            next_attempt,
-                            err
-                        );
-                    } else {
-                        report.requeued += 1;
-                        requeue.push_back((user_id, next_attempt));
+            for job in claimed {
+                match self
+                    .redis
+                    .delete_key("auth:user:token_version", &job.user_id.to_string())
+                    .await
+                {
+                    Ok(_) => {
+                        delete_auth_token_version_invalidation_job(&self.pool, job.user_id).await?;
+                        report.succeeded += 1;
+                    }
+                    Err(err) => {
+                        let sanitized =
+                            sanitize_auth_token_version_invalidation_error(&err.to_string());
+                        if job.attempts >= AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_ATTEMPTS {
+                            delete_auth_token_version_invalidation_job(&self.pool, job.user_id)
+                                .await?;
+                            report.dropped += 1;
+                            tracing::warn!(
+                                "drop auth token_version invalidation retry after max attempts: user_id={}, attempts={}, err={}",
+                                job.user_id,
+                                job.attempts,
+                                sanitized
+                            );
+                        } else {
+                            let backoff_ms =
+                                auth_token_version_invalidation_retry_backoff_ms(job.attempts);
+                            reschedule_auth_token_version_invalidation_job(
+                                &self.pool,
+                                job.user_id,
+                                backoff_ms,
+                                &sanitized,
+                            )
+                            .await?;
+                            report.requeued += 1;
+                        }
                     }
                 }
             }
-        }
 
-        if !requeue.is_empty() {
-            let mut queue = self.auth_token_version_invalidation_queue.lock().await;
-            while let Some(task) = requeue.pop_front() {
-                if queue.len() >= AUTH_TOKEN_VERSION_INVALIDATION_RETRY_QUEUE_MAX {
-                    queue.pop_front();
-                    self.auth_consistency_metrics
-                        .observe_retry_overflow_drop(queue.len());
-                }
-                queue.push_back(task);
-            }
+            let queue_depth = get_auth_token_version_invalidation_queue_depth(&self.pool).await?;
             self.auth_consistency_metrics
-                .observe_retry_tick(report, queue.len());
-        } else {
-            let queue = self.auth_token_version_invalidation_queue.lock().await;
-            self.auth_consistency_metrics
-                .observe_retry_tick(report, queue.len());
+                .observe_retry_tick(report, queue_depth);
+            Ok(report)
         }
-        report
+        .await;
+
+        if let Err(err) = &run {
+            self.auth_consistency_metrics.observe_retry_tick_error();
+            tracing::warn!(
+                "auth token_version invalidation retry worker tick failed: {}",
+                err
+            );
+            if let Ok(depth) = get_auth_token_version_invalidation_queue_depth(&self.pool).await {
+                self.auth_consistency_metrics.observe_queue_depth(depth);
+            }
+        }
+        run
     }
+}
+
+async fn get_auth_token_version_invalidation_queue_depth<'e, E>(
+    executor: E,
+) -> Result<u64, AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
+    let depth: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM auth_token_version_invalidation_jobs")
+            .fetch_one(executor)
+            .await?;
+    Ok(depth.max(0) as u64)
+}
+
+async fn claim_auth_token_version_invalidation_jobs(
+    pool: &sqlx::PgPool,
+    batch_size: i64,
+) -> Result<Vec<ClaimedAuthTokenVersionInvalidationJob>, AppError> {
+    let rows = sqlx::query_as::<_, ClaimedAuthTokenVersionInvalidationJob>(
+        r#"
+        WITH due AS (
+            SELECT user_id
+            FROM auth_token_version_invalidation_jobs
+            WHERE next_retry_at <= NOW()
+              AND (locked_until IS NULL OR locked_until <= NOW())
+            ORDER BY next_retry_at ASC, created_at ASC, user_id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE auth_token_version_invalidation_jobs q
+        SET attempts = q.attempts + 1,
+            locked_until = NOW() + ($2::bigint * INTERVAL '1 second'),
+            updated_at = NOW()
+        FROM due
+        WHERE q.user_id = due.user_id
+        RETURNING q.user_id, q.attempts
+        "#,
+    )
+    .bind(batch_size.max(1))
+    .bind(AUTH_TOKEN_VERSION_INVALIDATION_RETRY_LOCK_SECS)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn delete_auth_token_version_invalidation_job(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM auth_token_version_invalidation_jobs WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn reschedule_auth_token_version_invalidation_job(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    backoff_ms: u64,
+    last_error: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE auth_token_version_invalidation_jobs
+        SET next_retry_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+            locked_until = NULL,
+            last_error = $3,
+            updated_at = NOW()
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .bind(backoff_ms as i64)
+    .bind(last_error)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn auth_token_version_invalidation_retry_backoff_ms(attempts: i32) -> u64 {
+    let attempt = attempts.max(1) as u32;
+    let pow = attempt.saturating_sub(1).min(16);
+    let scaled = AUTH_TOKEN_VERSION_INVALIDATION_RETRY_BASE_BACKOFF_MS.saturating_mul(1_u64 << pow);
+    scaled.clamp(1, AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_BACKOFF_MS)
+}
+
+fn sanitize_auth_token_version_invalidation_error(raw: &str) -> String {
+    let mut text = raw.trim().to_string();
+    if text.len() > AUTH_TOKEN_VERSION_INVALIDATION_ERROR_MAX_LEN {
+        text.truncate(AUTH_TOKEN_VERSION_INVALIDATION_ERROR_MAX_LEN);
+    }
+    text
 }
 
 pub(crate) async fn load_user_token_version(
@@ -2803,11 +2962,11 @@ mod tests {
     async fn auth_token_version_invalidation_retry_queue_should_dedupe() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         state
-            .enqueue_auth_token_version_invalidation_retry(42)
-            .await;
+            .enqueue_auth_token_version_invalidation_retry(1)
+            .await?;
         state
-            .enqueue_auth_token_version_invalidation_retry(42)
-            .await;
+            .enqueue_auth_token_version_invalidation_retry(1)
+            .await?;
         let metrics = state.get_auth_consistency_metrics();
         assert_eq!(metrics.queue_depth, 1);
         assert_eq!(metrics.retry_enqueue_total, 1);
@@ -2820,11 +2979,11 @@ mod tests {
     {
         let (_tdb, state) = AppState::new_for_test().await?;
         state
-            .enqueue_auth_token_version_invalidation_retry(99)
-            .await;
+            .enqueue_auth_token_version_invalidation_retry(2)
+            .await?;
         let report = state
             .retry_auth_token_version_invalidation_queue_once(32)
-            .await;
+            .await?;
         assert_eq!(report.attempted, 1);
         assert_eq!(report.succeeded, 1);
         assert_eq!(report.requeued, 0);
