@@ -98,6 +98,25 @@ pub(crate) async fn get_redis_health_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
+/// Internal endpoint to inspect auth consistency metrics and retry queue health.
+#[utoipa::path(
+    get,
+    path = "/api/internal/ai/auth/consistency/metrics",
+    responses(
+        (status = 200, description = "Auth consistency metrics snapshot", body = crate::GetAuthConsistencyMetricsOutput),
+        (status = 401, description = "Missing or invalid internal key"),
+    ),
+    security(
+        ("internal_key" = [])
+    )
+)]
+pub(crate) async fn get_auth_consistency_metrics_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.get_auth_consistency_metrics();
+    Ok((StatusCode::OK, Json(ret)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +216,46 @@ mod tests {
             )
             .await?;
         assert_eq!(authorized.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_auth_consistency_metrics_handler_should_require_internal_key_and_return_snapshot(
+    ) -> Result<()> {
+        let state = test_state()?;
+        let app = Router::new()
+            .route(
+                "/auth/consistency/metrics",
+                get(get_auth_consistency_metrics_handler),
+            )
+            .layer(from_fn_with_state(
+                state.clone(),
+                crate::verify_ai_internal_key,
+            ))
+            .with_state(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/auth/consistency/metrics")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri("/auth/consistency/metrics")
+                    .header("x-ai-internal-key", "secret-key")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(authorized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(authorized.into_body(), usize::MAX).await?;
+        let payload: crate::GetAuthConsistencyMetricsOutput = serde_json::from_slice(&body)?;
+        assert_eq!(payload.queue_depth, 0);
         Ok(())
     }
 }

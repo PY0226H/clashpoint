@@ -65,6 +65,9 @@ pub struct AppStateInner {
     pub(crate) dispatch_metrics: AiJudgeDispatchMetrics,
     pub(crate) event_outbox_metrics: EventOutboxRelayMetrics,
     pub(crate) kafka_consumer_metrics: Arc<KafkaConsumerRuntimeMetrics>,
+    pub(crate) auth_consistency_metrics: AuthConsistencyMetrics,
+    pub(crate) auth_token_version_invalidation_queue:
+        tokio::sync::Mutex<std::collections::VecDeque<(i64, u32)>>,
     pub(crate) dispatch_trigger_tx: Option<UnboundedSender<JudgeDispatchTrigger>>,
 }
 
@@ -252,6 +255,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         )
         .route("/infra/redis/health", get(get_redis_health_handler))
         .route(
+            "/auth/consistency/metrics",
+            get(get_auth_consistency_metrics_handler),
+        )
+        .route(
             "/judge/dispatch/metrics",
             get(get_judge_dispatch_metrics_handler),
         )
@@ -423,6 +430,10 @@ impl AppState {
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 kafka_consumer_metrics,
+                auth_consistency_metrics: AuthConsistencyMetrics::default(),
+                auth_token_version_invalidation_queue: tokio::sync::Mutex::new(
+                    std::collections::VecDeque::new(),
+                ),
                 dispatch_trigger_tx,
             }),
         };
@@ -458,6 +469,10 @@ impl AppState {
                 dispatch_metrics: AiJudgeDispatchMetrics::default(),
                 event_outbox_metrics: EventOutboxRelayMetrics::default(),
                 kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
+                auth_consistency_metrics: AuthConsistencyMetrics::default(),
+                auth_token_version_invalidation_queue: tokio::sync::Mutex::new(
+                    std::collections::VecDeque::new(),
+                ),
                 dispatch_trigger_tx: None,
             }),
         })
@@ -651,6 +666,10 @@ mod test_util {
                     dispatch_metrics: AiJudgeDispatchMetrics::default(),
                     event_outbox_metrics: EventOutboxRelayMetrics::default(),
                     kafka_consumer_metrics: Arc::new(KafkaConsumerRuntimeMetrics::default()),
+                    auth_consistency_metrics: AuthConsistencyMetrics::default(),
+                    auth_token_version_invalidation_queue: tokio::sync::Mutex::new(
+                        std::collections::VecDeque::new(),
+                    ),
                     dispatch_trigger_tx: None,
                 }),
             };

@@ -36,8 +36,10 @@ pub(crate) fn spawn_background_workers(
     }
 
     if runtime.event_outbox_relay_worker_enabled {
-        spawn_event_outbox_relay_worker(state);
+        spawn_event_outbox_relay_worker(state.clone());
     }
+
+    spawn_auth_token_version_invalidation_retry_worker(state);
 }
 
 fn spawn_debate_session_worker(state: AppState) {
@@ -252,6 +254,28 @@ fn spawn_event_outbox_relay_worker(state: AppState) {
                 }
             }
             sleep(Duration::from_secs(interval_secs)).await;
+        }
+    });
+}
+
+fn spawn_auth_token_version_invalidation_retry_worker(state: AppState) {
+    const RETRY_INTERVAL_SECS: u64 = 2;
+    const RETRY_BATCH_SIZE: usize = 128;
+    tokio::spawn(async move {
+        loop {
+            let report = state
+                .retry_auth_token_version_invalidation_queue_once(RETRY_BATCH_SIZE)
+                .await;
+            if report.attempted > 0 || report.requeued > 0 || report.dropped > 0 {
+                debug!(
+                    attempted = report.attempted,
+                    succeeded = report.succeeded,
+                    requeued = report.requeued,
+                    dropped = report.dropped,
+                    "auth token_version invalidation retry worker tick"
+                );
+            }
+            sleep(Duration::from_secs(RETRY_INTERVAL_SECS)).await;
         }
     });
 }
