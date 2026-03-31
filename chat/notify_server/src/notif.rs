@@ -18,6 +18,7 @@ const PG_LISTENER_RECONNECT_MAX_MS: u64 = 30_000;
 const PG_LISTENER_HEALTH_LOG_INTERVAL_SECS: u64 = 30;
 const KAFKA_CONSUMER_RECONNECT_BASE_MS: u64 = 1_000;
 const KAFKA_CONSUMER_RECONNECT_MAX_MS: u64 = 30_000;
+const KAFKA_CONSUMER_SIGNAL_HEARTBEAT_SECS: u64 = 30;
 
 const KAFKA_EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined";
 const KAFKA_EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
@@ -343,7 +344,7 @@ pub async fn setup_pg_listener(state: AppState) -> anyhow::Result<()> {
 
 pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
     if !state.config.kafka.enabled {
-        if let Err(err) = upsert_notify_runtime_signal(&state, None, None, None).await {
+        if let Err(err) = upsert_notify_runtime_signal(&state, None, None, None, None).await {
             warn!(
                 "failed to persist notify runtime signal (kafka disabled): {}",
                 err
@@ -351,7 +352,7 @@ pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    if let Err(err) = upsert_notify_runtime_signal(&state, None, None, None).await {
+    if let Err(err) = upsert_notify_runtime_signal(&state, None, None, None, None).await {
         warn!(
             "failed to persist notify runtime signal on kafka bootstrap: {}",
             err
@@ -365,7 +366,8 @@ pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
                 Ok(consumer) => {
                     reconnect_attempt = 0;
                     if let Err(err) =
-                        upsert_notify_runtime_signal(&state, Some(Utc::now()), None, None).await
+                        upsert_notify_runtime_signal(&state, Some(Utc::now()), None, None, None)
+                            .await
                     {
                         warn!(
                             "failed to persist notify runtime signal on kafka connect: {}",
@@ -380,9 +382,14 @@ pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
                     consumer
                 }
                 Err(err) => {
-                    if let Err(persist_err) =
-                        upsert_notify_runtime_signal(&state, None, None, Some(err.to_string()))
-                            .await
+                    if let Err(persist_err) = upsert_notify_runtime_signal(
+                        &state,
+                        None,
+                        None,
+                        None,
+                        Some(err.to_string()),
+                    )
+                    .await
                     {
                         warn!(
                             "failed to persist notify runtime signal on kafka connect error: {}",
@@ -402,74 +409,108 @@ pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
                 }
             };
 
+            let mut heartbeat_tick =
+                tokio::time::interval(Duration::from_secs(KAFKA_CONSUMER_SIGNAL_HEARTBEAT_SECS));
+            heartbeat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            heartbeat_tick.tick().await;
             loop {
-                match consumer.recv().await {
-                    Err(err) => {
-                        warn!("kafka consumer recv failed (will reconnect): {}", err);
-                        break;
+                tokio::select! {
+                    _ = heartbeat_tick.tick() => {
+                        if let Err(err) = upsert_notify_runtime_signal(&state, None, None, None, None).await {
+                            warn!(
+                                "failed to persist notify runtime signal on heartbeat: {}",
+                                err
+                            );
+                        }
                     }
-                    Ok(msg) => {
-                        let topic = msg.topic().to_string();
-                        let partition = msg.partition();
-                        let offset = msg.offset();
-                        let payload = match msg.payload_view::<str>() {
-                            Some(Ok(v)) => v,
-                            _ => "",
-                        };
-
-                        match handle_kafka_payload(&state, payload).await {
-                            Ok(()) => {
-                                if let Err(err) = consumer.commit_message(&msg, CommitMode::Async) {
-                                    if let Err(persist_err) = upsert_notify_runtime_signal(
-                                        &state,
-                                        None,
-                                        None,
-                                        Some(err.to_string()),
-                                    )
-                                    .await
-                                    {
-                                        warn!(
-                                            "failed to persist notify runtime signal on kafka commit error: {}",
-                                            persist_err
-                                        );
-                                    }
-                                    warn!(
-                                        "kafka consumer commit failed topic={} partition={} offset={}: {}",
-                                        topic, partition, offset, err
-                                    );
-                                } else if let Err(err) = upsert_notify_runtime_signal(
+                    recv = consumer.recv() => {
+                        match recv {
+                            Err(err) => {
+                                warn!("kafka consumer recv failed (will reconnect): {}", err);
+                                break;
+                            }
+                            Ok(msg) => {
+                                let topic = msg.topic().to_string();
+                                let partition = msg.partition();
+                                let offset = msg.offset();
+                                let payload = match msg.payload_view::<str>() {
+                                    Some(Ok(v)) => v,
+                                    _ => "",
+                                };
+                                let received_at = Utc::now();
+                                if let Err(err) = upsert_notify_runtime_signal(
                                     &state,
                                     None,
-                                    Some(Utc::now()),
+                                    Some(received_at),
+                                    None,
                                     None,
                                 )
                                 .await
                                 {
                                     warn!(
-                                        "failed to persist notify runtime signal on kafka commit: {}",
+                                        "failed to persist notify runtime signal on kafka receive: {}",
                                         err
                                     );
                                 }
-                            }
-                            Err(err) => {
-                                if let Err(persist_err) = upsert_notify_runtime_signal(
-                                    &state,
-                                    None,
-                                    None,
-                                    Some(err.to_string()),
-                                )
-                                .await
-                                {
-                                    warn!(
-                                        "failed to persist notify runtime signal on kafka payload error: {}",
-                                        persist_err
-                                    );
+
+                                match handle_kafka_payload(&state, payload).await {
+                                    Ok(()) => {
+                                        if let Err(err) = consumer.commit_message(&msg, CommitMode::Async) {
+                                            if let Err(persist_err) = upsert_notify_runtime_signal(
+                                                &state,
+                                                None,
+                                                None,
+                                                None,
+                                                Some(err.to_string()),
+                                            )
+                                            .await
+                                            {
+                                                warn!(
+                                                    "failed to persist notify runtime signal on kafka commit error: {}",
+                                                    persist_err
+                                                );
+                                            }
+                                            warn!(
+                                                "kafka consumer commit failed topic={} partition={} offset={}: {}",
+                                                topic, partition, offset, err
+                                            );
+                                        } else if let Err(err) = upsert_notify_runtime_signal(
+                                            &state,
+                                            None,
+                                            None,
+                                            Some(Utc::now()),
+                                            None,
+                                        )
+                                        .await
+                                        {
+                                            warn!(
+                                                "failed to persist notify runtime signal on kafka commit: {}",
+                                                err
+                                            );
+                                        }
+                                    }
+                                    Err(err) => {
+                                        if let Err(persist_err) = upsert_notify_runtime_signal(
+                                            &state,
+                                            None,
+                                            None,
+                                            None,
+                                            Some(err.to_string()),
+                                        )
+                                        .await
+                                        {
+                                            warn!(
+                                                "failed to persist notify runtime signal on kafka payload error: {}",
+                                                persist_err
+                                            );
+                                        }
+                                        warn!(
+                                            "kafka payload process failed topic={} partition={} offset={} (will retry): {}",
+                                            topic, partition, offset, err
+                                        );
+                                        tokio::time::sleep(Duration::from_millis(500)).await;
+                                    }
                                 }
-                                warn!(
-                                    "kafka payload process failed topic={} partition={} offset={} (will retry): {}",
-                                    topic, partition, offset, err
-                                );
-                                tokio::time::sleep(Duration::from_millis(500)).await;
                             }
                         }
                     }
@@ -478,6 +519,7 @@ pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
 
             if let Err(err) = upsert_notify_runtime_signal(
                 &state,
+                None,
                 None,
                 None,
                 Some("consumer recv stream exited".to_string()),
@@ -506,6 +548,7 @@ pub async fn setup_kafka_consumer(state: AppState) -> anyhow::Result<()> {
 async fn upsert_notify_runtime_signal(
     state: &AppState,
     kafka_connected_at: Option<DateTime<Utc>>,
+    kafka_last_receive_at: Option<DateTime<Utc>>,
     kafka_last_commit_at: Option<DateTime<Utc>>,
     kafka_last_error: Option<String>,
 ) -> anyhow::Result<()> {
@@ -516,16 +559,18 @@ async fn upsert_notify_runtime_signal(
             kafka_enabled,
             disable_pg_listener,
             kafka_connected_at,
+            kafka_last_receive_at,
             kafka_last_commit_at,
             kafka_last_error,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
         ON CONFLICT (service_name)
         DO UPDATE SET
             kafka_enabled = EXCLUDED.kafka_enabled,
             disable_pg_listener = EXCLUDED.disable_pg_listener,
             kafka_connected_at = COALESCE(EXCLUDED.kafka_connected_at, notify_runtime_signals.kafka_connected_at),
+            kafka_last_receive_at = COALESCE(EXCLUDED.kafka_last_receive_at, notify_runtime_signals.kafka_last_receive_at),
             kafka_last_commit_at = COALESCE(EXCLUDED.kafka_last_commit_at, notify_runtime_signals.kafka_last_commit_at),
             kafka_last_error = EXCLUDED.kafka_last_error,
             updated_at = NOW()
@@ -535,6 +580,7 @@ async fn upsert_notify_runtime_signal(
     .bind(state.config.kafka.enabled)
     .bind(state.config.kafka.disable_pg_listener)
     .bind(kafka_connected_at)
+    .bind(kafka_last_receive_at)
     .bind(kafka_last_commit_at)
     .bind(kafka_last_error)
     .execute(&state.db)

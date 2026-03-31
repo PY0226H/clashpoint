@@ -148,6 +148,7 @@ struct NotifyRuntimeSignalRow {
     kafka_enabled: bool,
     disable_pg_listener: bool,
     kafka_connected_at: Option<DateTime<Utc>>,
+    kafka_last_receive_at: Option<DateTime<Utc>>,
     kafka_last_commit_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
 }
@@ -248,6 +249,7 @@ impl AppState {
                 kafka_enabled,
                 disable_pg_listener,
                 kafka_connected_at,
+                kafka_last_receive_at,
                 kafka_last_commit_at,
                 updated_at
             FROM notify_runtime_signals
@@ -520,15 +522,25 @@ fn evaluate_notify_consume_chain_runtime(
     if signal.kafka_connected_at.is_none() {
         blockers.push("notify kafka consumer has not connected".to_string());
     }
+    let receive_stale_secs = signal
+        .kafka_last_receive_at
+        .map(|ts| (now - ts).num_seconds().max(0));
     match signal.kafka_last_commit_at {
         None => blockers.push("notify kafka consumer has not committed any event".to_string()),
         Some(ts) => {
             let stale_secs = (now - ts).num_seconds().max(0);
             if stale_secs > NOTIFY_RUNTIME_SIGNAL_STALE_SECS {
-                blockers.push(format!(
-                    "notify kafka consumer commit heartbeat is stale: {}s",
-                    stale_secs
-                ));
+                // Low-traffic exemption: if receive heartbeat is also stale, treat it as idle traffic
+                // instead of a consume/commit mismatch.
+                let has_recent_receive = receive_stale_secs
+                    .map(|recv_stale| recv_stale <= NOTIFY_RUNTIME_SIGNAL_STALE_SECS)
+                    .unwrap_or(false);
+                if has_recent_receive {
+                    blockers.push(format!(
+                        "notify kafka consumer commit heartbeat is stale: {}s",
+                        stale_secs
+                    ));
+                }
             }
         }
     }
@@ -594,6 +606,7 @@ mod tests {
         kafka_enabled: bool,
         disable_pg_listener: bool,
         kafka_connected_at: Option<DateTime<Utc>>,
+        kafka_last_receive_at: Option<DateTime<Utc>>,
         kafka_last_commit_at: Option<DateTime<Utc>>,
         updated_at: DateTime<Utc>,
     ) -> Result<()> {
@@ -604,16 +617,18 @@ mod tests {
                 kafka_enabled,
                 disable_pg_listener,
                 kafka_connected_at,
+                kafka_last_receive_at,
                 kafka_last_commit_at,
                 kafka_last_error,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, NULL, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, NULL, $7)
             ON CONFLICT (service_name)
             DO UPDATE SET
                 kafka_enabled = EXCLUDED.kafka_enabled,
                 disable_pg_listener = EXCLUDED.disable_pg_listener,
                 kafka_connected_at = EXCLUDED.kafka_connected_at,
+                kafka_last_receive_at = EXCLUDED.kafka_last_receive_at,
                 kafka_last_commit_at = EXCLUDED.kafka_last_commit_at,
                 kafka_last_error = EXCLUDED.kafka_last_error,
                 updated_at = EXCLUDED.updated_at
@@ -623,6 +638,7 @@ mod tests {
         .bind(kafka_enabled)
         .bind(disable_pg_listener)
         .bind(kafka_connected_at)
+        .bind(kafka_last_receive_at)
         .bind(kafka_last_commit_at)
         .bind(updated_at)
         .execute(&state.pool)
@@ -704,6 +720,7 @@ mod tests {
             true,
             Some(now - Duration::seconds(2)),
             Some(now - Duration::seconds(1)),
+            Some(now - Duration::seconds(1)),
             now,
         )
         .await?;
@@ -714,6 +731,58 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item.starts_with("notify ")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_allow_stale_commit_when_receive_is_idle(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        upsert_notify_runtime_signal_for_test(
+            &state,
+            true,
+            true,
+            Some(now - Duration::seconds(700)),
+            Some(now - Duration::seconds(700)),
+            Some(now - Duration::seconds(700)),
+            now,
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(output.notify_consume_chain_ready);
+        assert!(!output
+            .blockers
+            .iter()
+            .any(|item| item.starts_with("notify kafka consumer commit heartbeat is stale")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_block_stale_commit_when_receive_is_recent(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        upsert_notify_runtime_signal_for_test(
+            &state,
+            true,
+            true,
+            Some(now - Duration::seconds(700)),
+            Some(now - Duration::seconds(2)),
+            Some(now - Duration::seconds(700)),
+            now,
+        )
+        .await?;
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(!output.notify_consume_chain_ready);
+        assert!(output
+            .blockers
+            .iter()
+            .any(|item| item.starts_with("notify kafka consumer commit heartbeat is stale")));
         Ok(())
     }
 }
