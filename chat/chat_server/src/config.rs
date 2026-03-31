@@ -170,6 +170,14 @@ pub struct WorkerRuntimeConfig {
     pub event_outbox_base_backoff_ms: u64,
     #[serde(default = "default_worker_runtime_event_outbox_max_backoff_ms")]
     pub event_outbox_max_backoff_ms: u64,
+    #[serde(
+        default = "default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold"
+    )]
+    pub kafka_readiness_pending_dlq_blocking_count_threshold: u64,
+    #[serde(
+        default = "default_worker_runtime_kafka_readiness_pending_dlq_oldest_age_blocking_secs"
+    )]
+    pub kafka_readiness_pending_dlq_oldest_age_blocking_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,6 +245,10 @@ impl Default for WorkerRuntimeConfig {
             event_outbox_max_attempts: default_worker_runtime_event_outbox_max_attempts(),
             event_outbox_base_backoff_ms: default_worker_runtime_event_outbox_base_backoff_ms(),
             event_outbox_max_backoff_ms: default_worker_runtime_event_outbox_max_backoff_ms(),
+            kafka_readiness_pending_dlq_blocking_count_threshold:
+                default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold(),
+            kafka_readiness_pending_dlq_oldest_age_blocking_secs:
+                default_worker_runtime_kafka_readiness_pending_dlq_oldest_age_blocking_secs(),
         }
     }
 }
@@ -496,6 +508,14 @@ fn default_worker_runtime_event_outbox_max_backoff_ms() -> u64 {
     60_000
 }
 
+fn default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold() -> u64 {
+    1
+}
+
+fn default_worker_runtime_kafka_readiness_pending_dlq_oldest_age_blocking_secs() -> u64 {
+    300
+}
+
 fn default_payment_verify_mode() -> String {
     "apple".to_string()
 }
@@ -723,5 +743,10 @@ mod tests {
         assert_eq!(cfg.event_outbox_max_attempts, 12);
         assert_eq!(cfg.event_outbox_base_backoff_ms, 500);
         assert_eq!(cfg.event_outbox_max_backoff_ms, 60_000);
+        assert_eq!(cfg.kafka_readiness_pending_dlq_blocking_count_threshold, 1);
+        assert_eq!(
+            cfg.kafka_readiness_pending_dlq_oldest_age_blocking_secs,
+            300
+        );
     }
 }

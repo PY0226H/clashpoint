@@ -113,6 +113,9 @@ pub struct GetKafkaTransportReadinessOutput {
     pub consumer_metrics: KafkaConsumerRuntimeMetricsSnapshotOutput,
     pub pending_dlq_count: u64,
     pub pending_dlq_oldest_failed_at: Option<DateTime<Utc>>,
+    pub pending_dlq_oldest_failed_age_secs: Option<u64>,
+    pub pending_dlq_blocking_count_threshold: u64,
+    pub pending_dlq_oldest_age_blocking_secs: u64,
     pub last_dlq_replay_action_at: Option<DateTime<Utc>>,
     pub dlq_replay_progressing: bool,
 }
@@ -287,6 +290,25 @@ impl AppState {
             .map(|ts| (now - ts).num_seconds().max(0) <= DLQ_REPLAY_PROGRESS_STALE_SECS)
             .unwrap_or(false);
         let dlq_replay_loop_ready = pending_dlq_count == 0 || dlq_replay_progressing;
+        let pending_dlq_blocking_count_threshold = self
+            .config
+            .worker_runtime
+            .kafka_readiness_pending_dlq_blocking_count_threshold;
+        let pending_dlq_oldest_age_blocking_secs = self
+            .config
+            .worker_runtime
+            .kafka_readiness_pending_dlq_oldest_age_blocking_secs;
+        let (
+            pending_dlq_should_block_switch,
+            pending_dlq_blockers,
+            pending_dlq_oldest_failed_age_secs,
+        ) = evaluate_pending_dlq_switch_blocking(
+            pending_dlq_count,
+            dlq_runtime.pending_dlq_oldest_failed_at,
+            pending_dlq_blocking_count_threshold,
+            pending_dlq_oldest_age_blocking_secs,
+            now,
+        );
         let consumer_metrics = self.kafka_consumer_metrics.snapshot();
 
         let mut blockers = Vec::new();
@@ -322,13 +344,12 @@ impl AppState {
         }
         blockers.extend(notify_chain_blockers);
         if pending_dlq_count > 0 {
-            blockers.push(format!(
-                "pending dlq events detected: {}",
-                pending_dlq_count
-            ));
             if !dlq_replay_progressing {
                 blockers
                     .push("dlq replay progress is stale while pending events exist".to_string());
+            }
+            if pending_dlq_should_block_switch {
+                blockers.extend(pending_dlq_blockers);
             }
         }
         if !dlq_replay_loop_ready {
@@ -371,6 +392,9 @@ impl AppState {
             },
             pending_dlq_count,
             pending_dlq_oldest_failed_at: dlq_runtime.pending_dlq_oldest_failed_at,
+            pending_dlq_oldest_failed_age_secs,
+            pending_dlq_blocking_count_threshold,
+            pending_dlq_oldest_age_blocking_secs,
             last_dlq_replay_action_at: dlq_runtime.last_dlq_replay_action_at,
             dlq_replay_progressing,
         })
@@ -634,6 +658,45 @@ fn evaluate_notify_consume_chain_signal(
     (blockers.is_empty(), blockers)
 }
 
+fn evaluate_pending_dlq_switch_blocking(
+    pending_dlq_count: u64,
+    pending_dlq_oldest_failed_at: Option<DateTime<Utc>>,
+    pending_dlq_blocking_count_threshold: u64,
+    pending_dlq_oldest_age_blocking_secs: u64,
+    now: DateTime<Utc>,
+) -> (bool, Vec<String>, Option<u64>) {
+    let pending_dlq_oldest_failed_age_secs =
+        pending_dlq_oldest_failed_at.map(|ts| (now - ts).num_seconds().max(0) as u64);
+    if pending_dlq_count == 0 {
+        return (false, Vec::new(), pending_dlq_oldest_failed_age_secs);
+    }
+
+    let mut blockers = Vec::new();
+    if pending_dlq_blocking_count_threshold > 0
+        && pending_dlq_count >= pending_dlq_blocking_count_threshold
+    {
+        blockers.push(format!(
+            "pending dlq events reached blocking count threshold: count={}, threshold={}",
+            pending_dlq_count, pending_dlq_blocking_count_threshold
+        ));
+    }
+    if pending_dlq_oldest_age_blocking_secs > 0 {
+        if let Some(oldest_age_secs) = pending_dlq_oldest_failed_age_secs {
+            if oldest_age_secs >= pending_dlq_oldest_age_blocking_secs {
+                blockers.push(format!(
+                    "oldest pending dlq event exceeded blocking age threshold: age={}s, threshold={}s",
+                    oldest_age_secs, pending_dlq_oldest_age_blocking_secs
+                ));
+            }
+        }
+    }
+    (
+        !blockers.is_empty(),
+        blockers,
+        pending_dlq_oldest_failed_age_secs,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,6 +895,33 @@ mod tests {
         assert!(normalize_status_filter(None).is_ok());
     }
 
+    #[test]
+    fn evaluate_pending_dlq_switch_blocking_should_allow_when_within_thresholds() {
+        let now = Utc::now();
+        let (should_block, blockers, oldest_age_secs) =
+            evaluate_pending_dlq_switch_blocking(1, Some(now - Duration::seconds(10)), 5, 300, now);
+        assert!(!should_block);
+        assert!(blockers.is_empty());
+        assert_eq!(oldest_age_secs, Some(10));
+    }
+
+    #[test]
+    fn evaluate_pending_dlq_switch_blocking_should_block_by_age_threshold() {
+        let now = Utc::now();
+        let (should_block, blockers, oldest_age_secs) = evaluate_pending_dlq_switch_blocking(
+            1,
+            Some(now - Duration::seconds(900)),
+            5,
+            300,
+            now,
+        );
+        assert!(should_block);
+        assert_eq!(oldest_age_secs, Some(900));
+        assert!(blockers.iter().any(
+            |item| item.starts_with("oldest pending dlq event exceeded blocking age threshold")
+        ));
+    }
+
     #[tokio::test]
     async fn get_kafka_transport_readiness_should_include_consumer_and_dlq_blockers() -> Result<()>
     {
@@ -860,10 +950,8 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item == "consumer dropped messages detected: 4"));
-        assert!(output
-            .blockers
-            .iter()
-            .any(|item| item == "pending dlq events detected: 1"));
+        assert!(output.blockers.iter().any(|item| item
+            == "pending dlq events reached blocking count threshold: count=1, threshold=1"));
         assert!(output
             .blockers
             .iter()
@@ -883,7 +971,7 @@ mod tests {
         assert!(!output
             .blockers
             .iter()
-            .any(|item| item.starts_with("pending dlq events detected:")));
+            .any(|item| item.starts_with("pending dlq events reached blocking count threshold")));
         Ok(())
     }
 
