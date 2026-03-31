@@ -709,26 +709,42 @@ async fn dispatch_loaded_notification(
     state: &AppState,
     notification: Notification,
 ) -> anyhow::Result<()> {
-    let replay_event = match state
+    let (replay_event, replay_persist_failed) = match state
         .persist_debate_event(notification.event.as_ref())
         .await
     {
-        Ok(v) => v,
+        Ok(v) => (v, false),
         Err(e) => {
             warn!(
-                "persist debate replay event failed, fallback to memory-only replay: {}",
+                "persist debate replay event failed, broadcast sync-required instead of memory-only replay: {}",
                 e
             );
-            None
+            (None, true)
         }
     };
     let users = &state.users;
     for user_id in notification.user_ids {
-        let user_event = Arc::new(state.build_user_event_for_recipient(
-            user_id,
-            notification.event.clone(),
-            replay_event.clone(),
-        ));
+        let user_event = if replay_persist_failed {
+            state
+                .build_sync_required_user_event_for_recipient(
+                    notification.event.clone(),
+                    "persist_failed",
+                )
+                .map(Arc::new)
+                .unwrap_or_else(|| {
+                    Arc::new(state.build_user_event_for_recipient(
+                        user_id,
+                        notification.event.clone(),
+                        replay_event.clone(),
+                    ))
+                })
+        } else {
+            Arc::new(state.build_user_event_for_recipient(
+                user_id,
+                notification.event.clone(),
+                replay_event.clone(),
+            ))
+        };
         if let Some(tx) = users.get(&user_id) {
             if let Err(e) = tx.send(user_event) {
                 warn!("failed to send notification to user {}: {}", user_id, e);

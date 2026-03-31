@@ -53,9 +53,22 @@ pub struct DebateReplayEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct DebateSyncRequiredSignal {
+    pub session_id: i64,
+    pub reason: String,
+    pub skipped: u64,
+    pub expected_from_seq: Option<u64>,
+    pub gap_from_seq: Option<u64>,
+    pub gap_to_seq: Option<u64>,
+    pub latest_event_seq: Option<u64>,
+    pub strategy: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct UserEvent {
     pub app_event: Arc<AppEvent>,
     pub debate_replay: Option<DebateReplayEvent>,
+    pub debate_sync_required: Option<DebateSyncRequiredSignal>,
 }
 
 #[derive(Debug)]
@@ -207,7 +220,30 @@ impl AppState {
         UserEvent {
             app_event,
             debate_replay,
+            debate_sync_required: None,
         }
+    }
+
+    pub(crate) fn build_sync_required_user_event_for_recipient(
+        &self,
+        app_event: Arc<AppEvent>,
+        reason: impl Into<String>,
+    ) -> Option<UserEvent> {
+        let session_id = app_event.debate_session_id()?;
+        Some(UserEvent {
+            app_event,
+            debate_replay: None,
+            debate_sync_required: Some(DebateSyncRequiredSignal {
+                session_id,
+                reason: reason.into(),
+                skipped: 0,
+                expected_from_seq: None,
+                gap_from_seq: None,
+                gap_to_seq: None,
+                latest_event_seq: None,
+                strategy: "snapshot_then_reconnect".to_string(),
+            }),
+        })
     }
 
     pub(crate) async fn replay_debate_events_for_user(

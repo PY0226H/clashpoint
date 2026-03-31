@@ -304,6 +304,30 @@ async fn debate_room_loop(
                         if event.debate_session_id() != Some(session_id) {
                             continue;
                         }
+                        if let Some(sync_required) = event.debate_sync_required.as_ref() {
+                            if sync_required.session_id != session_id {
+                                continue;
+                            }
+                            let expected_from_seq = sync_required
+                                .expected_from_seq
+                                .or(Some(last_sent_event_seq.saturating_add(1)));
+                            let sync_msg = RoomServerMessage::SyncRequired {
+                                reason: sync_required.reason.clone(),
+                                skipped: sync_required.skipped,
+                                expected_from_seq,
+                                gap_from_seq: sync_required.gap_from_seq.or(expected_from_seq),
+                                gap_to_seq: sync_required.gap_to_seq,
+                                suggested_last_ack_seq: client_last_ack_seq,
+                                latest_event_seq: sync_required
+                                    .latest_event_seq
+                                    .or(Some(last_sent_event_seq)),
+                                strategy: sync_required.strategy.clone(),
+                            };
+                            if !send_room_message(&mut socket, &sync_msg).await {
+                                break;
+                            }
+                            continue;
+                        }
                         let Some(replay_event) = event.debate_replay.as_ref() else {
                             warn!(
                                 "debate room event missing replay metadata for user {}, session {}",
@@ -658,6 +682,82 @@ mod tests {
         let text = msg.into_text()?.to_string();
         let json: serde_json::Value = serde_json::from_str(&text)?;
         assert_eq!(json["type"], "pong");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_room_ws_handler_should_emit_sync_required_when_persist_failed() -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/ws/debate/12?token={notify_ticket}")).await?;
+        let _welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+
+        for _ in 0..40 {
+            if state.users.contains_key(&1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let tx = state.users.get(&1).expect("user channel should exist");
+        let sync_event = state
+            .build_sync_required_user_event_for_recipient(
+                Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                    session_id: 12,
+                    user_id: 1,
+                    side: "pro".to_string(),
+                    pro_count: 2,
+                    con_count: 1,
+                })),
+                "persist_failed",
+            )
+            .expect("sync event should require debate session id");
+        tx.send(Arc::new(sync_event))?;
+
+        let sync_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let sync_text = sync_msg
+            .expect("should receive syncRequired message")
+            .expect("syncRequired should be ws ok")
+            .into_text()?
+            .to_string();
+        let sync_json: serde_json::Value = serde_json::from_str(&sync_text)?;
+        assert_eq!(sync_json["type"], "syncRequired");
+        assert_eq!(sync_json["reason"], "persist_failed");
+        let strategy = sync_json
+            .get("strategy")
+            .and_then(|v| v.as_str())
+            .expect("syncRequired should carry strategy");
+        assert_eq!(strategy, "snapshot_then_reconnect");
+        let suggested_last_ack_seq = sync_json
+            .get("suggestedLastAckSeq")
+            .or_else(|| sync_json.get("suggested_last_ack_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry suggestedLastAckSeq");
+        assert_eq!(suggested_last_ack_seq, 0);
+        let expected_from_seq = sync_json
+            .get("expectedFromSeq")
+            .or_else(|| sync_json.get("expected_from_seq"))
+            .and_then(|v| v.as_u64())
+            .expect("syncRequired should carry expectedFromSeq");
+        assert_eq!(expected_from_seq, 1);
+        let no_room_event = tokio::time::timeout(Duration::from_millis(200), socket.next()).await;
+        assert!(
+            no_room_event.is_err(),
+            "persist_failed should not stream a roomEvent before recovery"
+        );
         Ok(())
     }
 
