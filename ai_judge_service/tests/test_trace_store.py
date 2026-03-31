@@ -482,6 +482,36 @@ class RedisTraceStoreTests(unittest.TestCase):
         self.assertIn(store._alerts_outbox_stream_key(), fake_redis.streams)
         self.assertNotIn(store._alerts_outbox_key(), fake_redis.kv)
 
+    def test_resolve_idempotency_should_fallback_when_eval_is_missing(self) -> None:
+        fake_redis = _FakeRedis()
+        setattr(fake_redis, "eval", None)
+        store = RedisTraceStore(redis_client=fake_redis, ttl_secs=3600, key_prefix="ai_judge:test")
+        acquired = store.resolve_idempotency(key="rk-fallback-1", job_id=501, ttl_secs=3600)
+        self.assertEqual(acquired.status, "acquired")
+        conflict = store.resolve_idempotency(key="rk-fallback-1", job_id=501, ttl_secs=3600)
+        self.assertEqual(conflict.status, "conflict")
+
+    def test_resolve_idempotency_should_fallback_when_eval_raises(self) -> None:
+        fake_redis = _FakeRedis()
+
+        def _raise_eval(*args: object, **kwargs: object) -> object:
+            _ = args
+            _ = kwargs
+            raise RuntimeError("eval unavailable")
+
+        setattr(fake_redis, "eval", _raise_eval)
+        store = RedisTraceStore(redis_client=fake_redis, ttl_secs=3600, key_prefix="ai_judge:test")
+        acquired = store.resolve_idempotency(key="rk-fallback-2", job_id=601, ttl_secs=3600)
+        self.assertEqual(acquired.status, "acquired")
+        store.set_idempotency_success(
+            key="rk-fallback-2",
+            job_id=601,
+            response={"accepted": True, "jobId": 601},
+            ttl_secs=3600,
+        )
+        replay = store.resolve_idempotency(key="rk-fallback-2", job_id=601, ttl_secs=3600)
+        self.assertEqual(replay.status, "replay")
+
 
 class TraceStoreBuilderTests(unittest.TestCase):
     def test_build_store_should_fallback_to_memory_when_redis_unavailable(self) -> None:
