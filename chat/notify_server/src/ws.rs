@@ -21,6 +21,8 @@ use tracing::{info, warn};
 
 const ROOM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const ROOM_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(65);
+const ROOM_SYNC_REQUIRED_COOLDOWN: Duration = Duration::from_millis(1500);
+const ROOM_SYNC_REQUIRED_SUPPRESS_LOG_EVERY: u64 = 10;
 
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -159,6 +161,7 @@ async fn debate_room_loop(
     state: AppState,
 ) {
     let mut client_last_ack_seq = last_ack_seq.unwrap_or(0);
+    let mut sync_required_throttle = SyncRequiredThrottleState::default();
     let mut last_client_heartbeat = Instant::now();
     let mut heartbeat_tick = tokio::time::interval(ROOM_HEARTBEAT_INTERVAL);
     heartbeat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -228,10 +231,19 @@ async fn debate_room_loop(
                 .clone()
                 .unwrap_or_else(|| "snapshot_then_reconnect".to_string()),
         };
-        if !send_room_message(&mut socket, &sync_msg).await {
+        if !emit_sync_required_message(
+            &mut socket,
+            &state,
+            sync_msg,
+            reason,
+            user_id,
+            session_id,
+            &mut sync_required_throttle,
+        )
+        .await
+        {
             return;
         }
-        state.observe_sync_required_reason(reason);
     } else if replay_window.has_gap {
         let expected_from_seq = client_last_ack_seq.saturating_add(1);
         let first_available_seq = replay_window
@@ -250,10 +262,19 @@ async fn debate_room_loop(
             latest_event_seq: Some(replay_window.latest_seq),
             strategy: "snapshot_then_reconnect".to_string(),
         };
-        if !send_room_message(&mut socket, &sync_msg).await {
+        if !emit_sync_required_message(
+            &mut socket,
+            &state,
+            sync_msg,
+            "replay_window_miss",
+            user_id,
+            session_id,
+            &mut sync_required_throttle,
+        )
+        .await
+        {
             return;
         }
-        state.observe_sync_required_reason("replay_window_miss");
     }
     if should_replay {
         for replay_event in replay_window.events {
@@ -353,10 +374,19 @@ async fn debate_room_loop(
                                     .or(Some(last_sent_event_seq)),
                                 strategy: sync_required.strategy.clone(),
                             };
-                            if !send_room_message(&mut socket, &sync_msg).await {
+                            if !emit_sync_required_message(
+                                &mut socket,
+                                &state,
+                                sync_msg,
+                                &sync_required.reason,
+                                user_id,
+                                session_id,
+                                &mut sync_required_throttle,
+                            )
+                            .await
+                            {
                                 break;
                             }
-                            state.observe_sync_required_reason(&sync_required.reason);
                             continue;
                         }
                         let Some(replay_event) = event.debate_replay.as_ref() else {
@@ -393,10 +423,19 @@ async fn debate_room_loop(
                             latest_event_seq: Some(last_sent_event_seq.saturating_add(skipped)),
                             strategy: "snapshot_then_reconnect".to_string(),
                         };
-                        if !send_room_message(&mut socket, &sync_msg).await {
+                        if !emit_sync_required_message(
+                            &mut socket,
+                            &state,
+                            sync_msg,
+                            "lagged_receiver",
+                            user_id,
+                            session_id,
+                            &mut sync_required_throttle,
+                        )
+                        .await
+                        {
                             break;
                         }
-                        state.observe_sync_required_reason("lagged_receiver");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -436,6 +475,82 @@ fn apply_client_ack_seq(
         return None;
     }
     Some(client_last_ack_seq.max(ack_event_seq))
+}
+
+#[derive(Debug, Default)]
+struct SyncRequiredThrottleState {
+    last_sent_at: Option<Instant>,
+    last_reason: Option<String>,
+    suppressed_count: u64,
+}
+
+fn should_emit_sync_required(
+    last_sent_at: Option<Instant>,
+    last_reason: Option<&str>,
+    reason: &str,
+    now: Instant,
+) -> bool {
+    match last_sent_at {
+        None => true,
+        Some(last_at) => {
+            if last_reason != Some(reason) {
+                return true;
+            }
+            now.saturating_duration_since(last_at) >= ROOM_SYNC_REQUIRED_COOLDOWN
+        }
+    }
+}
+
+async fn emit_sync_required_message(
+    socket: &mut WebSocket,
+    state: &AppState,
+    sync_msg: RoomServerMessage,
+    reason: &str,
+    user_id: u64,
+    session_id: i64,
+    throttle: &mut SyncRequiredThrottleState,
+) -> bool {
+    let now = Instant::now();
+    let should_emit = should_emit_sync_required(
+        throttle.last_sent_at,
+        throttle.last_reason.as_deref(),
+        reason,
+        now,
+    );
+    if !should_emit {
+        throttle.suppressed_count = throttle.suppressed_count.saturating_add(1);
+        if throttle
+            .suppressed_count
+            .is_multiple_of(ROOM_SYNC_REQUIRED_SUPPRESS_LOG_EVERY)
+        {
+            warn!(
+                user_id,
+                session_id,
+                reason,
+                suppressed_count = throttle.suppressed_count,
+                cooldown_ms = ROOM_SYNC_REQUIRED_COOLDOWN.as_millis(),
+                "debate room syncRequired suppressed by cooldown"
+            );
+        }
+        return true;
+    }
+    if throttle.suppressed_count > 0 {
+        info!(
+            user_id,
+            session_id,
+            reason,
+            released_suppressed_count = throttle.suppressed_count,
+            "debate room syncRequired cooldown released"
+        );
+        throttle.suppressed_count = 0;
+    }
+    if !send_room_message(socket, &sync_msg).await {
+        return false;
+    }
+    state.observe_sync_required_reason(reason);
+    throttle.last_sent_at = Some(now);
+    throttle.last_reason = Some(reason.to_string());
+    true
 }
 
 fn room_event_message(event: &DebateReplayEvent) -> RoomServerMessage {
@@ -509,6 +624,35 @@ mod tests {
         assert_eq!(apply_client_ack_seq(3, 5, 4), Some(4));
         assert_eq!(apply_client_ack_seq(3, 5, 5), Some(5));
         assert_eq!(apply_client_ack_seq(3, 5, 6), None);
+    }
+
+    #[test]
+    fn should_emit_sync_required_should_suppress_same_reason_within_cooldown() {
+        let now = Instant::now();
+        assert!(should_emit_sync_required(None, None, "persist_failed", now));
+        assert!(!should_emit_sync_required(
+            Some(now),
+            Some("persist_failed"),
+            "persist_failed",
+            now + Duration::from_millis(200)
+        ));
+        assert!(should_emit_sync_required(
+            Some(now),
+            Some("persist_failed"),
+            "persist_failed",
+            now + ROOM_SYNC_REQUIRED_COOLDOWN + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn should_emit_sync_required_should_allow_reason_switch() {
+        let now = Instant::now();
+        assert!(should_emit_sync_required(
+            Some(now),
+            Some("persist_failed"),
+            "lagged_receiver",
+            now + Duration::from_millis(100)
+        ));
     }
 
     #[tokio::test]
@@ -794,6 +938,88 @@ mod tests {
             no_room_event.is_err(),
             "persist_failed should not stream a roomEvent before recovery"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_room_ws_handler_should_throttle_repeated_sync_required_with_same_reason(
+    ) -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let app = Router::new()
+            .route("/ws/debate/:session_id", get(debate_room_ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/ws/debate/12?token={notify_ticket}")).await?;
+        let _welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+
+        for _ in 0..40 {
+            if state.users.contains_key(&1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let tx = state.users.get(&1).expect("user channel should exist");
+        let make_sync_event = || {
+            state
+                .build_sync_required_user_event_for_recipient(
+                    Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
+                        session_id: 12,
+                        user_id: 1,
+                        side: "pro".to_string(),
+                        pro_count: 2,
+                        con_count: 1,
+                    })),
+                    "persist_failed",
+                )
+                .expect("sync event should require debate session id")
+        };
+
+        tx.send(Arc::new(make_sync_event()))?;
+        let first_sync = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let first_sync_json: serde_json::Value = serde_json::from_str(
+            &first_sync
+                .expect("should receive first sync message")
+                .expect("first sync should be ws ok")
+                .into_text()?
+                .to_string(),
+        )?;
+        assert_eq!(first_sync_json["type"], "syncRequired");
+        assert_eq!(first_sync_json["reason"], "persist_failed");
+
+        tx.send(Arc::new(make_sync_event()))?;
+        let maybe_second = tokio::time::timeout(Duration::from_millis(250), socket.next()).await;
+        if let Ok(Some(Ok(msg))) = maybe_second {
+            let text = msg.into_text()?.to_string();
+            let json: serde_json::Value = serde_json::from_str(&text)?;
+            assert_ne!(
+                json["type"], "syncRequired",
+                "second syncRequired should be throttled within cooldown"
+            );
+        }
+
+        tokio::time::sleep(ROOM_SYNC_REQUIRED_COOLDOWN + Duration::from_millis(100)).await;
+        tx.send(Arc::new(make_sync_event()))?;
+        let third_sync = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let third_sync_json: serde_json::Value = serde_json::from_str(
+            &third_sync
+                .expect("should receive syncRequired after cooldown")
+                .expect("syncRequired after cooldown should be ws ok")
+                .into_text()?
+                .to_string(),
+        )?;
+        assert_eq!(third_sync_json["type"], "syncRequired");
+        assert_eq!(third_sync_json["reason"], "persist_failed");
         Ok(())
     }
 

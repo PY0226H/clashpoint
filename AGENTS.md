@@ -12,6 +12,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 - `post-module-test-guard`: Generate or update tests for changed module behavior and run repository quality gates after implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/SKILL.md`)
 - `post-module-interview-journal`: Generate interview-ready development records after each module implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-interview-journal/SKILL.md`)
 - `post-module-explanation-journal`: Generate deep Chinese explanation documents for newly added or modified module code under `docs/explanation`. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-explanation-journal/SKILL.md`)
+- `post-module-commit-message`: After each development round, generate a Conventional Commits compliant commit title that best matches the current Git changes. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-commit-message/SKILL.md`)
 - `post-module-plan-sync`: After each code development turn that adds or changes module behavior, sync the currently active development plan document with module status, next-step suggestions, and completion history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-plan-sync/SKILL.md`)
 - `python-venv-guard`: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. (file: `/Users/panyihang/Documents/EchoIsle/skills/python-venv-guard/SKILL.md`)
 - `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, fully read the PRD and align implementation decisions with the product target end-state. (file: `/Users/panyihang/Documents/EchoIsle/skills/pre-module-prd-goal-guard/SKILL.md`)
@@ -67,6 +68,7 @@ For any module-level code development or module-level refactor/optimization turn
 1. `post-module-test-guard`
 2. `post-module-interview-journal`
 3. `post-module-explanation-journal`
+4. `post-module-commit-message`
 
 The three hooks above are mandatory for:
 
@@ -78,7 +80,7 @@ The three hooks above are mandatory for:
 
 Only for code development turns run additionally:
 
-4. `post-module-plan-sync`
+5. `post-module-plan-sync`
 
 `Code development` includes functional additions and behavior-changing fixes.
 `post-module-plan-sync` must run when the task is feature development, code implementation, or behavior-changing bug fixing.
@@ -102,6 +104,10 @@ Only for code development turns run additionally:
   - sync the currently active development plan document (dynamic resolution; do not hardcode a single path)
   - update module status matrix and next-step suggestions
   - append module completion sync history
+- Commit message hook must:
+  - generate at least 1 recommended commit title for current round changes
+  - ensure the title follows Conventional Commits format
+  - ensure title semantics align with actual diff intent (`feat/fix/refactor/docs/style/test/chore/...`)
 
 ## Mandatory post-optimization hook
 
@@ -116,5 +122,5 @@ Only for code development turns run additionally:
 ## Hook matrix
 
 - `Non-development work`: no mandatory pre/post module hooks unless a named skill is explicitly requested.
-- `Code development`: run `pre-module-prd-goal-guard` before coding, then run `post-module-test-guard`, `post-module-interview-journal`, `post-module-explanation-journal`, and `post-module-plan-sync`.
-- `Refactor/optimization`: run `pre-module-prd-goal-guard` before coding, then run `post-module-test-guard`, `post-module-interview-journal`, `post-module-explanation-journal`, and `post-optimization-plan-sync`.
+- `Code development`: run `pre-module-prd-goal-guard` before coding, then run `post-module-test-guard`, `post-module-interview-journal`, `post-module-explanation-journal`, `post-module-commit-message`, and `post-module-plan-sync`.
+- `Refactor/optimization`: run `pre-module-prd-goal-guard` before coding, then run `post-module-test-guard`, `post-module-interview-journal`, `post-module-explanation-journal`, `post-module-commit-message`, and `post-optimization-plan-sync`.
