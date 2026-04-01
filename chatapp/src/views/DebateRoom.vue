@@ -1,14 +1,15 @@
 <template>
-  <div class="flex h-screen">
+  <div class="flex h-screen echo-shell">
     <Sidebar />
-    <div class="flex-1 flex flex-col bg-gray-50 min-h-0">
-      <div class="border-b bg-white px-5 py-3 flex items-center justify-between gap-3">
+    <div class="echo-main flex flex-col min-h-0">
+      <div class="px-5 pt-4">
+        <div class="echo-panel-strong p-4 flex items-center justify-between gap-3">
         <div>
-          <div class="text-xs uppercase text-gray-500">Debate Room</div>
-          <div class="text-lg font-semibold text-gray-900">Session {{ sessionId || '-' }}</div>
+          <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Debate Room</div>
+          <div class="text-lg font-semibold text-slate-900">Session {{ sessionId || '-' }}</div>
         </div>
         <div class="flex items-center gap-2">
-          <span class="text-xs text-gray-700 bg-gray-100 border border-gray-200 rounded px-2 py-1">
+          <span class="text-xs text-slate-700 bg-white border border-slate-200 rounded-xl px-2 py-1">
             余额: {{ walletLoading ? '...' : walletBalance }}
           </span>
           <span
@@ -21,16 +22,17 @@
           <button
             @click="refreshRoom"
             :disabled="loading"
-            class="px-3 py-1.5 text-sm rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+            class="echo-btn-secondary disabled:opacity-50"
           >
             {{ loading ? '刷新中...' : '刷新' }}
           </button>
           <button
             @click="goLobby"
-            class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white"
+            class="echo-btn-primary"
           >
             返回大厅
           </button>
+        </div>
         </div>
       </div>
 
@@ -42,10 +44,10 @@
       </div>
 
       <div class="px-5 pt-4">
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-start justify-between gap-3">
             <div>
-              <div class="text-xs uppercase text-gray-500">AI Judge</div>
+              <div class="text-xs uppercase tracking-[0.2em] text-slate-500">AI Judge</div>
               <div class="text-sm text-gray-700">
                 status:
                 <span class="font-semibold" :class="judgeStatusClass">{{ judgeStatus }}</span>
@@ -55,7 +57,7 @@
               <button
                 @click="refreshJudgeReport"
                 :disabled="judgeLoading"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 {{ judgeLoading ? '刷新中...' : '刷新状态' }}
               </button>
@@ -63,13 +65,13 @@
                 v-if="showManualJudgeTrigger"
                 @click="requestJudgeJob"
                 :disabled="judgeRequesting"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 {{ judgeRequesting ? '请求中...' : '手动补触发（兜底）' }}
               </button>
               <button
                 @click="openJudgeReportPage"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100"
+                class="echo-btn-secondary text-xs px-3 py-1.5"
               >
                 打开判决详情页
               </button>
@@ -101,7 +103,7 @@
               <button
                 @click="refreshDrawVote"
                 :disabled="drawVoteLoading || voteSubmitting"
-                class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-2 py-1 disabled:opacity-50"
               >
                 {{ drawVoteLoading ? '刷新中...' : '刷新投票状态' }}
               </button>
@@ -161,15 +163,15 @@
       </div>
 
       <div class="px-5 py-3">
-        <div class="text-xs uppercase text-gray-500 mb-2">置顶消息</div>
-        <div v-if="pins.length === 0" class="text-sm text-gray-500 bg-white rounded border p-3">
+        <div class="text-xs uppercase tracking-[0.2em] text-slate-500 mb-2">置顶消息</div>
+        <div v-if="pins.length === 0" class="text-sm text-slate-500 echo-panel p-3">
           当前没有有效置顶消息
         </div>
         <div v-else class="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1">
           <div
             v-for="pin in pins"
             :key="pin.id"
-            class="bg-white border rounded p-3 text-sm"
+            class="echo-panel p-3 text-sm"
           >
             <div class="flex items-center justify-between">
               <div class="font-semibold text-gray-900">
@@ -185,14 +187,14 @@
       </div>
 
       <div class="flex-1 min-h-0 px-5 pb-4">
-        <div class="text-xs uppercase text-gray-500 mb-2">发言流</div>
-        <div class="bg-white border rounded-lg h-full flex flex-col min-h-0">
+        <div class="text-xs uppercase tracking-[0.2em] text-slate-500 mb-2">发言流</div>
+        <div class="echo-panel-strong h-full flex flex-col min-h-0">
           <div ref="messageScrollBox" class="flex-1 overflow-y-auto p-3 space-y-2">
             <div v-if="historyHasMore" class="flex justify-center pb-2">
               <button
                 @click="loadOlderMessages"
                 :disabled="historyLoading || loading"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 {{ historyLoading ? '加载中...' : '加载更早消息' }}
               </button>
@@ -203,7 +205,7 @@
             <div
               v-for="message in messages"
               :key="message.id"
-              class="rounded border p-3"
+              class="rounded-xl border p-3"
               :class="isOwnMessage(message) ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'"
             >
               <div class="flex items-center justify-between mb-1">
@@ -244,13 +246,13 @@
               <textarea
                 v-model="messageInput"
                 rows="2"
-                class="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="echo-field flex-1"
                 placeholder="输入你的辩论发言..."
               />
               <button
                 @click="sendMessage"
                 :disabled="sending"
-                class="px-4 py-2 h-fit rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+                class="echo-btn-primary h-fit disabled:opacity-50"
               >
                 {{ sending ? '发送中...' : '发送' }}
               </button>

@@ -1,26 +1,27 @@
 <template>
-  <div class="flex h-screen">
+  <div class="flex h-screen echo-shell">
     <Sidebar />
-    <div class="flex-1 overflow-y-auto bg-gray-50">
-      <div class="max-w-5xl mx-auto p-6 space-y-4">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900">AI Judge Report</h1>
-          <p class="text-sm text-gray-600 mt-1">
+    <div class="echo-main">
+      <div class="max-w-5xl mx-auto p-6 lg:p-8 space-y-4 echo-fade-in">
+        <div class="echo-panel-strong p-5">
+          <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">AI Judge Report</div>
+          <h1 class="text-2xl font-semibold text-slate-900 mt-1">裁判报告中心</h1>
+          <p class="text-sm text-slate-600 mt-1">
             输入辩论 session id，查看 AI 判决与阶段摘要。
           </p>
         </div>
 
-        <div class="bg-white rounded-lg border p-4 flex gap-3 items-center">
+        <div class="echo-panel p-4 flex gap-3 items-center">
           <input
             v-model="sessionIdInput"
             type="text"
-            class="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="echo-field flex-1"
             placeholder="例如：123"
           />
           <button
             @click="loadReport"
             :disabled="loading"
-            class="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+            class="echo-btn-primary disabled:opacity-50"
           >
             {{ loading ? '查询中...' : '查询' }}
           </button>
@@ -30,7 +31,7 @@
           {{ errorText }}
         </div>
 
-        <div class="bg-white rounded-lg border p-4">
+        <div class="echo-panel p-4">
           <div class="text-xs uppercase text-gray-500 mb-2">Realtime Refresh</div>
           <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
             <div>
@@ -61,7 +62,7 @@
           </div>
         </div>
 
-        <div class="bg-white rounded-lg border p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-center justify-between">
             <div>
               <div class="text-xs uppercase text-gray-500">Refresh Summary (Analytics)</div>
@@ -73,7 +74,7 @@
             <button
               @click="refreshSummary"
               :disabled="summaryLoading || loading"
-              class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+              class="echo-btn-secondary text-xs px-3 py-1 disabled:opacity-50"
             >
               {{ summaryLoading ? '刷新中...' : '刷新汇总' }}
             </button>
@@ -115,7 +116,7 @@
           </div>
         </div>
 
-        <div class="bg-white rounded-lg border p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-center justify-between">
             <div>
               <div class="text-xs uppercase text-gray-500">Summary Metrics (Debug)</div>
@@ -133,7 +134,7 @@
               <button
                 @click="refreshSummaryMetrics"
                 :disabled="summaryMetricsLoading || loading"
-                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1 disabled:opacity-50"
               >
                 {{ summaryMetricsLoading ? '刷新中...' : '刷新指标' }}
               </button>
@@ -194,7 +195,7 @@
         </div>
 
         <div v-if="reportData" class="space-y-4">
-          <div class="bg-white rounded-lg border p-4">
+          <div class="echo-panel p-4">
             <div class="flex items-center justify-between">
               <div>
                 <div class="text-xs uppercase text-gray-500">Session</div>
@@ -209,7 +210,7 @@
             </div>
           </div>
 
-          <div v-if="finalDispatchDiagnostics" class="bg-white rounded-lg border p-4 space-y-3">
+          <div v-if="finalDispatchDiagnostics" class="echo-panel p-4 space-y-3">
             <div class="text-xs uppercase text-gray-500">Final Dispatch Diagnostics</div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div>
@@ -264,12 +265,12 @@
             </div>
           </div>
 
-          <div v-if="!report" class="bg-white rounded-lg border p-4 text-sm text-gray-600">
+          <div v-if="!report" class="echo-panel p-4 text-sm text-gray-600">
             当前还没有可展示的判决报告（可能仍在处理中）。
           </div>
 
           <template v-else>
-            <div class="bg-white rounded-lg border p-4">
+            <div class="echo-panel p-4">
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <div class="text-xs uppercase text-gray-500">Winner</div>
@@ -290,13 +291,13 @@
               </div>
             </div>
 
-            <div v-if="showDrawVoteCard" class="bg-white rounded-lg border p-4 space-y-3">
+            <div v-if="showDrawVoteCard" class="echo-panel p-4 space-y-3">
               <div class="flex items-center justify-between">
                 <div class="text-xs uppercase text-gray-500">Draw Vote</div>
                 <button
                   @click="refreshDrawVote(reportData.sessionId)"
                   :disabled="drawVoteLoading || voteSubmitting"
-                  class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+                  class="echo-btn-secondary text-xs px-3 py-1 disabled:opacity-50"
                 >
                   {{ drawVoteLoading ? '刷新中...' : '刷新投票状态' }}
                 </button>
@@ -366,12 +367,12 @@
               </template>
             </div>
 
-            <div class="bg-white rounded-lg border p-4">
+            <div class="echo-panel p-4">
               <div class="text-xs uppercase text-gray-500 mb-2">Rationale</div>
               <p class="text-sm text-gray-800 whitespace-pre-wrap">{{ report.rationale }}</p>
             </div>
 
-            <div class="bg-white rounded-lg border p-4">
+            <div class="echo-panel p-4">
               <div class="text-xs uppercase text-gray-500 mb-2">RAG</div>
               <div v-if="report.rag" class="text-sm text-gray-700 space-y-1">
                 <div>snippetCount: {{ report.rag.snippetCount ?? 0 }}</div>
@@ -381,7 +382,7 @@
               <div v-else class="text-sm text-gray-500">无 RAG 元信息</div>
             </div>
 
-            <div class="bg-white rounded-lg border p-4">
+            <div class="echo-panel p-4">
               <div class="flex items-center justify-between mb-3">
                 <div class="text-xs uppercase text-gray-500">Stage Summaries</div>
                 <div v-if="stageMeta" class="text-xs text-gray-500">

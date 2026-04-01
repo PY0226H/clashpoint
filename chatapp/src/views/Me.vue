@@ -1,94 +1,95 @@
 <template>
-  <div class="flex h-screen">
+  <div class="flex h-screen echo-shell">
     <Sidebar />
-    <div class="flex-1 overflow-y-auto bg-gray-50">
-      <div class="max-w-4xl mx-auto p-6 space-y-4">
-        <div class="flex items-start justify-between gap-3">
+    <div class="echo-main">
+      <div class="max-w-4xl mx-auto p-6 lg:p-8 space-y-4 echo-fade-in">
+        <div class="echo-panel-strong p-5 flex items-start justify-between gap-3">
           <div>
-            <h1 class="text-2xl font-bold text-gray-900">个人资料</h1>
-            <p class="text-sm text-gray-600 mt-1">查看账号信息、通知入口与充值入口。</p>
+            <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Profile</div>
+            <h1 class="text-2xl font-semibold text-slate-900 mt-1">个人资料</h1>
+            <p class="text-sm text-slate-600 mt-1">查看账号信息、通知入口与充值入口。</p>
           </div>
           <button
             @click="refreshMe"
             :disabled="loading"
-            class="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+            class="echo-btn-primary disabled:opacity-60"
           >
             {{ loading ? '刷新中...' : '刷新' }}
           </button>
         </div>
 
-        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm">
+        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-sm">
           {{ errorText }}
         </div>
 
-        <div class="bg-white border rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+        <div class="echo-panel p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
           <div>
-            <div class="text-xs uppercase text-gray-500">userId</div>
-            <div class="text-gray-900 font-semibold mt-1">{{ user?.id || '-' }}</div>
+            <div class="text-xs uppercase text-slate-500">userId</div>
+            <div class="text-slate-900 font-semibold mt-1">{{ user?.id || '-' }}</div>
           </div>
           <div>
-            <div class="text-xs uppercase text-gray-500">account</div>
-            <div class="text-gray-900 font-semibold mt-1">{{ accountIdentifier }}</div>
-            <div v-if="accountHint" class="text-xs text-gray-500 mt-1">{{ accountHint }}</div>
+            <div class="text-xs uppercase text-slate-500">account</div>
+            <div class="text-slate-900 font-semibold mt-1">{{ accountIdentifier }}</div>
+            <div v-if="accountHint" class="text-xs text-slate-500 mt-1">{{ accountHint }}</div>
           </div>
           <div>
-            <div class="text-xs uppercase text-gray-500">wallet balance</div>
-            <div class="text-gray-900 font-semibold mt-1">{{ walletBalance }}</div>
+            <div class="text-xs uppercase text-slate-500">wallet balance</div>
+            <div class="text-slate-900 font-semibold mt-1">{{ walletBalance }}</div>
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4">
-          <div class="text-sm font-semibold text-gray-900 mb-3">账号密码</div>
+        <div class="echo-panel p-4">
+          <div class="text-sm font-semibold text-slate-900 mb-3">账号密码</div>
           <form class="space-y-3" @submit.prevent="submitSetPassword">
-            <div class="text-xs text-gray-600">
+            <div class="text-xs text-slate-600">
               已绑定手机号：{{ boundPhone || '未绑定' }}
             </div>
-            <label class="block text-sm text-gray-700">
+            <label class="block text-sm text-slate-700">
               新密码
               <input
                 v-model="newPassword"
                 type="password"
                 minlength="6"
                 required
-                class="mt-1 block w-full px-3 py-2 border rounded-md"
+                class="echo-field mt-1"
                 placeholder="至少 6 位"
               />
             </label>
-            <label class="block text-sm text-gray-700">
+            <label class="block text-sm text-slate-700">
               确认新密码
               <input
                 v-model="confirmPassword"
                 type="password"
                 minlength="6"
                 required
-                class="mt-1 block w-full px-3 py-2 border rounded-md"
+                class="echo-field mt-1"
               />
             </label>
-            <label class="block text-sm text-gray-700">
+            <label class="block text-sm text-slate-700">
               短信验证码
               <div class="mt-1 flex items-center gap-2">
                 <input
                   v-model="smsCode"
                   type="text"
-                  class="flex-1 px-3 py-2 border rounded-md"
+                  class="echo-field flex-1"
                   placeholder="6位验证码"
                 />
                 <button
                   type="button"
                   @click="sendSetPasswordSmsCode"
                   :disabled="smsSending || !hasBoundPhone"
-                  class="px-3 py-2 rounded bg-blue-600 text-white text-xs disabled:opacity-50"
+                  class="echo-btn-secondary text-xs px-3 py-2 disabled:opacity-50"
                 >
                   {{ smsSending ? '发送中...' : '发送验证码' }}
                 </button>
               </div>
             </label>
-            <p v-if="passwordSmsTips" class="text-xs text-gray-600">{{ passwordSmsTips }}</p>
+            <p v-if="passwordSmsTips" class="text-xs text-slate-600">{{ passwordSmsTips }}</p>
             <div class="flex items-center gap-3">
               <button
                 type="submit"
                 :disabled="passwordSaving || !hasBoundPhone"
-                class="px-3 py-2 rounded bg-emerald-600 text-white text-sm disabled:opacity-50"
+                class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-50"
               >
                 {{ passwordSaving ? '保存中...' : '设置密码' }}
               </button>
@@ -97,24 +98,24 @@
           </form>
         </div>
 
-        <div class="bg-white border rounded-lg p-4">
-          <div class="text-sm font-semibold text-gray-900 mb-3">快捷入口</div>
+        <div class="echo-panel p-4">
+          <div class="text-sm font-semibold text-slate-900 mb-3">快捷入口</div>
           <div class="flex flex-wrap gap-2">
             <button
               @click="goTo('/notifications')"
-              class="px-3 py-2 rounded border bg-white hover:bg-gray-100 text-sm"
+              class="echo-btn-secondary"
             >
               通知中心
             </button>
             <button
               @click="goTo('/wallet')"
-              class="px-3 py-2 rounded bg-blue-600 text-white text-sm"
+              class="echo-btn-primary"
             >
               前往充值
             </button>
             <button
               @click="goTo('/chat')"
-              class="px-3 py-2 rounded border bg-white hover:bg-gray-100 text-sm"
+              class="echo-btn-secondary"
             >
               返回会话
             </button>

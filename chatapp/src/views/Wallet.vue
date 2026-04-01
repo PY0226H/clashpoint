@@ -1,32 +1,33 @@
 <template>
-  <div class="flex h-screen">
+  <div class="flex h-screen echo-shell">
     <Sidebar />
-    <div class="flex-1 overflow-y-auto bg-gray-50">
-      <div class="max-w-6xl mx-auto p-6 space-y-4">
-        <div class="flex items-start justify-between gap-3">
+    <div class="echo-main">
+      <div class="max-w-6xl mx-auto p-6 lg:p-8 space-y-4 echo-fade-in">
+        <div class="echo-panel-strong p-5 flex items-start justify-between gap-3">
           <div>
-            <h1 class="text-2xl font-bold text-gray-900">Wallet & IAP</h1>
-            <p class="text-sm text-gray-600 mt-1">
+            <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Wallet & IAP</div>
+            <h1 class="text-2xl font-semibold text-slate-900 mt-1">充值与验单工作台</h1>
+            <p class="text-sm text-slate-600 mt-1">
               用于演示充值验单链路：商品列表、验单入账、余额与账本收敛。
             </p>
           </div>
           <button
             @click="refreshPage"
             :disabled="loading"
-            class="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+            class="echo-btn-primary disabled:opacity-60"
           >
             {{ loading ? '刷新中...' : '刷新' }}
           </button>
         </div>
 
-        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm">
+        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-sm">
           {{ errorText }}
         </div>
-        <div v-if="successText" class="bg-green-50 text-green-700 border border-green-200 rounded p-3 text-sm">
+        <div v-if="successText" class="bg-green-50 text-green-700 border border-green-200 rounded-xl p-3 text-sm">
           {{ successText }}
         </div>
 
-        <div class="bg-white border rounded-lg p-4 flex items-center justify-between gap-3">
+        <div class="echo-panel p-4 flex items-center justify-between gap-3">
           <div>
             <div class="text-xs uppercase text-gray-500">Wallet Balance</div>
             <div class="text-2xl font-bold text-gray-900">{{ walletBalance }}</div>
@@ -34,19 +35,19 @@
           <button
             @click="refreshWallet"
             :disabled="loading"
-            class="px-3 py-2 rounded border bg-white hover:bg-gray-100 text-sm disabled:opacity-50"
+            class="echo-btn-secondary disabled:opacity-50"
           >
             刷新余额
           </button>
         </div>
 
-        <div v-if="tauriReady" class="bg-white border rounded-lg p-4 space-y-2">
+        <div v-if="tauriReady" class="echo-panel p-4 space-y-2">
           <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">Native Bridge 诊断</div>
             <button
               @click="refreshNativeBridgeDiagnostics"
               :disabled="nativeBridgeDiagnosticsLoading"
-              class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+              class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
             >
               {{ nativeBridgeDiagnosticsLoading ? '检查中...' : '刷新诊断' }}
             </button>
@@ -97,7 +98,7 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">IAP 商品</div>
             <div class="text-xs text-gray-500">products: {{ products.length }}</div>
@@ -138,14 +139,14 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="text-sm font-semibold text-gray-900">手动验单</div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <div class="text-xs uppercase text-gray-500 mb-1">productId</div>
               <select
                 v-model="form.productId"
-                class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="echo-field"
               >
                 <option value="">请选择商品</option>
                 <option v-for="product in products" :key="product.productId" :value="product.productId">
@@ -158,7 +159,7 @@
               <input
                 v-model.trim="form.transactionId"
                 type="text"
-                class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="echo-field"
               />
             </div>
             <div>
@@ -166,7 +167,7 @@
               <input
                 v-model.trim="form.originalTransactionId"
                 type="text"
-                class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="echo-field"
               />
             </div>
             <div class="md:col-span-2">
@@ -174,7 +175,7 @@
               <textarea
                 v-model.trim="form.receiptData"
                 rows="3"
-                class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="echo-field"
               />
             </div>
           </div>
@@ -182,21 +183,21 @@
             <button
               @click="submitVerify"
               :disabled="verifying"
-              class="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+              class="echo-btn-primary disabled:opacity-50"
             >
               {{ verifying ? '验单中...' : '提交验单' }}
             </button>
             <button
               @click="clearForm"
               :disabled="verifying"
-              class="px-4 py-2 rounded border bg-white hover:bg-gray-100 text-sm disabled:opacity-50"
+              class="echo-btn-secondary disabled:opacity-50"
             >
               清空
             </button>
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">
               待重试交易队列
@@ -208,21 +209,21 @@
               <button
                 @click="dropAllExhaustedPending"
                 :disabled="retryingAll || exhaustedPendingCount === 0"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 清理已达上限({{ exhaustedPendingCount }})
               </button>
               <button
                 @click="recoverAllExhaustedPending"
                 :disabled="retryingAll || exhaustedPendingCount === 0"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 恢复已达上限({{ exhaustedPendingCount }})
               </button>
               <button
                 @click="retryAllPending"
                 :disabled="retryingAll || pendingQueue.length === 0"
-                class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 {{ retryingAll ? '重试中...' : '重试全部' }}
               </button>
@@ -266,14 +267,14 @@
                     v-if="isPendingExhausted(item)"
                     @click="recoverPendingItem(item)"
                     :disabled="isRetryingItem(item.transactionId)"
-                    class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                    class="echo-btn-secondary text-xs px-2 py-1 disabled:opacity-50"
                   >
                     恢复重试
                   </button>
                   <button
                     @click="ignorePendingItem(item)"
                     :disabled="isRetryingItem(item.transactionId)"
-                    class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+                    class="echo-btn-secondary text-xs px-2 py-1 disabled:opacity-50"
                   >
                     忽略
                   </button>
@@ -283,13 +284,13 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">钱包账本</div>
             <button
               @click="refreshLedger"
               :disabled="loading"
-              class="px-3 py-1.5 text-xs rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+              class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
             >
               刷新账本
             </button>

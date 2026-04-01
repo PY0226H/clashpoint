@@ -1,89 +1,98 @@
 <template>
-  <div class="flex h-screen">
+  <div class="flex h-screen echo-shell">
     <Sidebar />
-    <div class="flex-1 overflow-y-auto bg-gray-50">
-      <div class="max-w-6xl mx-auto p-6 space-y-4">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h1 class="text-2xl font-bold text-gray-900">首页</h1>
-            <p class="text-sm text-gray-600 mt-1">
-              四入口：会话、辩论广场、搜索、个人中心。
+    <div class="echo-main">
+      <div class="max-w-6xl mx-auto p-6 lg:p-8 space-y-5 echo-fade-in">
+        <div class="echo-panel-strong p-6 flex flex-wrap items-start justify-between gap-4">
+          <div class="space-y-2">
+            <div class="text-[11px] uppercase tracking-[0.28em] text-slate-500">Mac 控制台</div>
+            <h1 class="text-3xl font-semibold text-slate-900">EchoIsle 首页工作台</h1>
+            <p class="text-sm text-slate-600 max-w-2xl">
+              四入口保持与你 PRD 一致：会话、辩论广场、搜索、个人中心。
             </p>
           </div>
-          <button
-            @click="refreshHome"
-            :disabled="loading"
-            class="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
-          >
-            {{ loading ? '刷新中...' : '刷新首页' }}
-          </button>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="px-3 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs text-slate-600">
+              群聊 {{ groupChannels.length }} · 单聊 {{ singleChannels.length }}
+            </div>
+            <div class="px-3 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs text-slate-600">
+              场次 {{ debateStats.total }} · 进行中 {{ debateStats.live }}
+            </div>
+            <button
+              @click="refreshHome"
+              :disabled="loading"
+              class="echo-btn-primary disabled:opacity-60"
+            >
+              {{ loading ? '刷新中...' : '刷新首页' }}
+            </button>
+          </div>
         </div>
 
-        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm">
+        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-sm">
           {{ errorText }}
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <button
             @click="goTo('/chat')"
-            class="bg-white border rounded-lg p-4 text-left hover:border-blue-300 hover:shadow-sm transition"
+            class="echo-panel p-5 text-left hover:-translate-y-0.5 transition"
           >
-            <div class="text-xs uppercase text-gray-500">入口 1</div>
-            <div class="text-lg font-semibold text-gray-900 mt-1">会话</div>
-            <div class="text-sm text-gray-600 mt-2">
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-500">入口 1</div>
+            <div class="text-lg font-semibold text-slate-900 mt-1">会话</div>
+            <div class="text-sm text-slate-600 mt-2">
               群聊 {{ groupChannels.length }} · 单聊 {{ singleChannels.length }}
             </div>
           </button>
 
           <button
             @click="goTo('/debate')"
-            class="bg-white border rounded-lg p-4 text-left hover:border-blue-300 hover:shadow-sm transition"
+            class="echo-panel p-5 text-left hover:-translate-y-0.5 transition"
           >
-            <div class="text-xs uppercase text-gray-500">入口 2</div>
-            <div class="text-lg font-semibold text-gray-900 mt-1">辩论广场</div>
-            <div class="text-sm text-gray-600 mt-2">
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-500">入口 2</div>
+            <div class="text-lg font-semibold text-slate-900 mt-1">辩论广场</div>
+            <div class="text-sm text-slate-600 mt-2">
               场次 {{ debateStats.total }} · 进行中 {{ debateStats.live }} · 可加入 {{ debateStats.joinable }}
             </div>
           </button>
 
-          <div class="bg-white border rounded-lg p-4">
-            <div class="text-xs uppercase text-gray-500">入口 3</div>
-            <div class="text-lg font-semibold text-gray-900 mt-1">搜索</div>
-            <div class="text-sm text-gray-600 mt-2 mb-3">
+          <div class="echo-panel p-5">
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-500">入口 3</div>
+            <div class="text-lg font-semibold text-slate-900 mt-1">搜索</div>
+            <div class="text-sm text-slate-600 mt-2 mb-3">
               检索会话/辩题/场次并一键跳转。
             </div>
             <input
               v-model.trim="searchQuery"
               type="text"
               placeholder="输入关键词，例如：平衡 / session 12 / General"
-              class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="echo-field"
             />
           </div>
 
-          <div class="bg-white border rounded-lg p-4 text-left hover:border-blue-300 hover:shadow-sm transition">
-            <div class="text-xs uppercase text-gray-500">入口 4</div>
-            <div class="text-lg font-semibold text-gray-900 mt-1">个人中心</div>
-            <div class="text-sm text-gray-600 mt-2">
+          <div class="echo-panel p-5 text-left">
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-500">入口 4</div>
+            <div class="text-lg font-semibold text-slate-900 mt-1">个人中心</div>
+            <div class="text-sm text-slate-600 mt-2">
               当前余额 {{ walletBalance }} · 通知 {{ notificationCount }}
             </div>
             <div class="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
-                class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100"
+                class="echo-btn-secondary text-xs px-3 py-1.5"
                 @click="goTo('/me')"
               >
                 个人资料
               </button>
               <button
                 type="button"
-                class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100"
+                class="echo-btn-secondary text-xs px-3 py-1.5"
                 @click="goTo('/notifications')"
               >
                 通知中心
               </button>
               <button
                 type="button"
-                class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100"
+                class="echo-btn-secondary text-xs px-3 py-1.5"
                 @click="goTo('/wallet')"
               >
                 去充值
@@ -92,12 +101,12 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-2">
+        <div class="echo-panel-strong p-4 space-y-2">
           <div class="flex items-center justify-between">
-            <div class="text-sm font-semibold text-gray-900">搜索结果</div>
-            <div class="text-xs text-gray-500">items: {{ searchResults.length }}</div>
+            <div class="text-sm font-semibold text-slate-900">搜索结果</div>
+            <div class="text-xs text-slate-500">items: {{ searchResults.length }}</div>
           </div>
-          <div v-if="searchResults.length === 0" class="text-sm text-gray-600">
+          <div v-if="searchResults.length === 0" class="text-sm text-slate-600">
             暂无匹配结果，请尝试其它关键词。
           </div>
           <div v-else class="space-y-2">
@@ -105,10 +114,10 @@
               v-for="item in searchResults"
               :key="item.key"
               @click="openSearchItem(item)"
-              class="w-full text-left border rounded p-3 bg-gray-50 hover:bg-gray-100"
+              class="w-full text-left border rounded-xl p-3 bg-white/85 border-slate-200 hover:border-blue-300 transition"
             >
-              <div class="text-sm font-semibold text-gray-900">{{ item.title }}</div>
-              <div class="text-xs text-gray-600 mt-1">{{ item.subtitle }}</div>
+              <div class="text-sm font-semibold text-slate-900">{{ item.title }}</div>
+              <div class="text-xs text-slate-600 mt-1">{{ item.subtitle }}</div>
             </button>
           </div>
         </div>

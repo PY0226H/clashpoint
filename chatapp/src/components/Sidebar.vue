@@ -1,96 +1,165 @@
 <template>
-  <div class="w-64 bg-gray-800 text-white flex flex-col h-screen p-4 text-sm">
-    <div class="flex items-center justify-between mb-6">
-      <div class="font-bold text-base truncate cursor-pointer" @click="toggleDropdown">
-        <span>{{ displayName }}</span>
-        <button class="text-gray-400 ml-1">&nbsp;▼</button>
-      </div>
-      <div v-if="dropdownVisible" class="absolute top-12 left-0 w-48 bg-gray-800 border border-gray-700 rounded-md shadow-lg z-10">
+  <aside class="w-72 bg-slate-950 text-slate-100 flex flex-col h-screen px-4 py-5 border-r border-slate-800/90 shadow-[18px_0_34px_rgba(2,6,23,0.35)] text-sm">
+    <div class="flex items-center justify-between mb-6 relative">
+      <button type="button" class="min-w-0 text-left" @click="toggleDropdown">
+        <div class="text-[11px] uppercase tracking-[0.24em] text-slate-400">EchoIsle</div>
+        <div class="font-semibold text-base truncate mt-1">{{ displayName }}</div>
+      </button>
+      <button
+        type="button"
+        @click="addChannel"
+        class="w-8 h-8 rounded-full border border-slate-700 text-slate-300 text-lg hover:text-white hover:border-slate-500 transition"
+      >
+        +
+      </button>
+      <div
+        v-if="dropdownVisible"
+        class="absolute top-14 left-0 w-48 bg-slate-900 border border-slate-700/80 rounded-lg shadow-lg z-20"
+      >
         <ul class="py-1">
-          <li @click="logout" class="px-4 py-2 hover:bg-gray-700 cursor-pointer">Logout</li>
-          <!-- Add more dropdown items here as needed -->
+          <li @click="logout" class="px-4 py-2 hover:bg-slate-800 cursor-pointer">Logout</li>
         </ul>
       </div>
-      <button @click="addChannel" class="text-gray-400 text-xl hover:text-white">+</button>
     </div>
 
     <div class="mb-6">
-      <h2 class="text-xs uppercase text-gray-400 mb-2">Navigation</h2>
-      <ul>
+      <h2 class="text-[11px] uppercase tracking-[0.22em] text-slate-500 mb-2">Workspace</h2>
+      <ul class="space-y-1">
         <li
           @click="goRoute('/home')"
-          :class="['px-2 py-1 rounded cursor-pointer mb-1', { 'bg-blue-600': isRouteActive('/home') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/home')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Home
+          总览 Home
         </li>
         <li
           @click="goRoute('/chat')"
-          :class="['px-2 py-1 rounded cursor-pointer mb-1', { 'bg-blue-600': isRouteActive('/chat') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/chat')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Chat
+          会话 Chat
         </li>
         <li
           @click="goRoute('/judge-report')"
-          :class="['px-2 py-1 rounded cursor-pointer', { 'bg-blue-600': isRouteActive('/judge-report') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/judge-report')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          AI Judge
+          裁判报告
         </li>
         <li
           @click="goRoute('/debate')"
-          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/debate') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/debate')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Debate
+          辩论大厅
         </li>
         <li
           v-if="canAccessDebateOps"
           @click="goRoute('/debate/ops')"
-          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/debate/ops') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/debate/ops')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Debate Ops
+          Ops 后台
         </li>
         <li
           @click="goRoute('/wallet')"
-          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/wallet') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/wallet')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Wallet
+          钱包
         </li>
         <li
           @click="goRoute('/me')"
-          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/me') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/me')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Me
+          个人中心
         </li>
         <li
           @click="goRoute('/notifications')"
-          :class="['px-2 py-1 rounded cursor-pointer mt-1', { 'bg-blue-600': isRouteActive('/notifications') }]"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer transition',
+            isRouteActive('/notifications')
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
         >
-          Notifications
+          通知
         </li>
       </ul>
     </div>
 
-    <div class="mb-6">
-      <h2 class="text-xs uppercase text-gray-400 mb-2">Channels</h2>
-      <ul>
-        <li v-for="channel in channels" :key="channel.id" @click="selectChannel(channel.id)"
-            :class="['px-2 py-1 rounded cursor-pointer', { 'bg-blue-600': channel.id === activeChannelId }]">
+    <div class="mb-6 min-h-0">
+      <h2 class="text-[11px] uppercase tracking-[0.22em] text-slate-500 mb-2">Channels</h2>
+      <ul class="space-y-1 max-h-40 overflow-y-auto pr-1">
+        <li
+          v-for="channel in channels"
+          :key="channel.id"
+          @click="selectChannel(channel.id)"
+          :class="[
+            'px-3 py-2 rounded-lg cursor-pointer truncate transition',
+            channel.id === activeChannelId
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
+        >
           # {{ channel.name }}
         </li>
       </ul>
     </div>
 
-    <div>
-      <h2 class="text-xs uppercase text-gray-400 mb-2">Direct Messages</h2>
-      <ul>
-        <li v-for="channel in singleChannels" :key="channel.id" @click="selectChannel(channel.id)"
-            :class="['flex items-center px-2 py-1 rounded cursor-pointer', { 'bg-blue-600': channel.id === activeChannelId }]">
-          <img :src="`https://ui-avatars.com/api/?name=${channel.recipient.fullname.replace(' ', '+')}`"
-               class="w-6 h-6 rounded-full mr-2" alt="Avatar" />
+    <div class="min-h-0 flex-1">
+      <h2 class="text-[11px] uppercase tracking-[0.22em] text-slate-500 mb-2">Direct Messages</h2>
+      <ul class="space-y-1 max-h-[calc(100vh-490px)] overflow-y-auto pr-1">
+        <li
+          v-for="channel in singleChannels"
+          :key="channel.id"
+          @click="selectChannel(channel.id)"
+          :class="[
+            'flex items-center px-3 py-2 rounded-lg cursor-pointer transition',
+            channel.id === activeChannelId
+              ? 'bg-blue-600/85 text-white'
+              : 'text-slate-300 hover:bg-slate-800 hover:text-white',
+          ]"
+        >
+          <img
+            :src="`https://ui-avatars.com/api/?name=${channel.recipient.fullname.replace(' ', '+')}`"
+            class="w-6 h-6 rounded-full mr-2 border border-slate-700"
+            alt="Avatar"
+          />
           {{ channel.recipient.fullname }}
         </li>
       </ul>
     </div>
-  </div>
+  </aside>
 </template>
 
 <script>

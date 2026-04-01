@@ -1,92 +1,114 @@
 <template>
-  <div class="flex items-center justify-center min-h-screen bg-gray-100">
-    <div class="w-full max-w-md p-8 space-y-6 bg-white rounded-xl shadow-2xl">
-      <h1 class="text-3xl font-bold text-center text-gray-800">登录</h1>
-      <p class="text-center text-gray-600">支持邮箱/手机号/验证码登录</p>
-
-      <div class="grid grid-cols-3 gap-2">
-        <button
-          v-for="item in modes"
-          :key="item.value"
-          type="button"
-          @click="mode = item.value"
-          class="px-2 py-2 text-xs rounded-md border"
-          :class="mode === item.value ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'"
-        >
-          {{ item.label }}
-        </button>
-      </div>
-
-      <form @submit.prevent="login" class="space-y-4">
-        <template v-if="mode === 'email_password'">
-          <div>
-            <label class="block text-sm font-medium text-gray-700">邮箱</label>
-            <input v-model="email" type="email" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
+  <div class="min-h-screen flex items-center justify-center p-4 sm:p-8">
+    <div class="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 overflow-hidden rounded-3xl border border-slate-200/80 bg-white/85 backdrop-blur-md shadow-[0_28px_80px_rgba(15,23,42,0.12)]">
+      <div class="hidden lg:flex flex-col justify-between p-10 bg-slate-950 text-slate-100">
+        <div>
+          <div class="text-[11px] uppercase tracking-[0.28em] text-slate-400">EchoIsle</div>
+          <h1 class="text-4xl font-semibold mt-3 leading-tight">在线辩论 AI 裁判平台</h1>
+          <p class="mt-4 text-sm text-slate-300 leading-relaxed">
+            mac 端优先工作台，聚焦赛后判决、平局治理与实时辩论流程。
+          </p>
+        </div>
+        <div class="space-y-3">
+          <div class="text-xs text-slate-400">支持登录方式</div>
+          <div class="grid grid-cols-3 gap-2 text-xs">
+            <div class="rounded-xl border border-slate-700 px-3 py-2 text-center">邮箱</div>
+            <div class="rounded-xl border border-slate-700 px-3 py-2 text-center">手机密码</div>
+            <div class="rounded-xl border border-slate-700 px-3 py-2 text-center">短信验证码</div>
           </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700">密码</label>
-            <input v-model="password" type="password" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
-          </div>
-        </template>
-
-        <template v-else-if="mode === 'phone_password'">
-          <div>
-            <label class="block text-sm font-medium text-gray-700">手机号(+86)</label>
-            <input v-model="phone" type="text" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700">密码</label>
-            <input v-model="password" type="password" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
-          </div>
-        </template>
-
-        <template v-else>
-          <div>
-            <label class="block text-sm font-medium text-gray-700">手机号(+86)</label>
-            <input v-model="phone" type="text" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700">验证码</label>
-            <div class="mt-1 flex gap-2">
-              <input v-model="smsCode" type="text" required class="flex-1 px-3 py-2 border rounded-md" />
-              <button type="button" @click="sendOtpCode" class="px-3 py-2 text-xs text-white bg-blue-600 rounded-md">
-                发码
-              </button>
-            </div>
-          </div>
-        </template>
-
-        <p v-if="tips" class="text-xs text-gray-600">{{ tips }}</p>
-        <p v-if="errorText" class="text-sm text-red-600">{{ errorText }}</p>
-
-        <button type="submit" class="w-full py-2 px-4 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700">
-          登录
-        </button>
-      </form>
-
-      <div class="pt-4 border-t">
-        <button
-          type="button"
-          @click="startWechatLogin"
-          class="w-full py-2 px-4 text-sm text-white bg-green-600 rounded-md hover:bg-green-700"
-        >
-          微信登录（占位）
-        </button>
-        <div v-if="wechatState" class="mt-3 space-y-2">
-          <p class="text-xs text-gray-500">当前仓库未接入 iOS 微信 SDK，可用 mock code 调试（示例：`mock_user01:union01:昵称`）。</p>
-          <input v-model="wechatCode" type="text" placeholder="输入微信授权 code" class="w-full px-3 py-2 border rounded-md text-sm" />
-          <button type="button" @click="submitWechatSignin" class="w-full py-2 px-4 text-sm text-white bg-emerald-600 rounded-md">
-            提交微信授权结果
-          </button>
         </div>
       </div>
 
-      <p class="text-center text-sm text-gray-600">
-        没有账号？
-        <router-link to="/register" class="font-medium text-blue-600 hover:text-blue-500">
-          去注册
-        </router-link>
-      </p>
+      <div class="p-6 sm:p-10 space-y-6">
+        <div>
+          <h2 class="text-3xl font-semibold text-slate-900">登录</h2>
+          <p class="text-sm text-slate-600 mt-2">支持邮箱/手机号/验证码登录</p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <button
+            v-for="item in modes"
+            :key="item.value"
+            type="button"
+            @click="mode = item.value"
+            class="px-2 py-2 text-xs rounded-xl border transition"
+            :class="mode === item.value ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:border-slate-400'"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+
+        <form @submit.prevent="login" class="space-y-4">
+          <template v-if="mode === 'email_password'">
+            <div>
+              <label class="block text-sm font-medium text-slate-700">邮箱</label>
+              <input v-model="email" type="email" required class="echo-field mt-1" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700">密码</label>
+              <input v-model="password" type="password" required class="echo-field mt-1" />
+            </div>
+          </template>
+
+          <template v-else-if="mode === 'phone_password'">
+            <div>
+              <label class="block text-sm font-medium text-slate-700">手机号(+86)</label>
+              <input v-model="phone" type="text" required class="echo-field mt-1" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700">密码</label>
+              <input v-model="password" type="password" required class="echo-field mt-1" />
+            </div>
+          </template>
+
+          <template v-else>
+            <div>
+              <label class="block text-sm font-medium text-slate-700">手机号(+86)</label>
+              <input v-model="phone" type="text" required class="echo-field mt-1" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700">验证码</label>
+              <div class="mt-1 flex gap-2">
+                <input v-model="smsCode" type="text" required class="echo-field flex-1" />
+                <button type="button" @click="sendOtpCode" class="echo-btn-secondary text-xs px-3 py-2 whitespace-nowrap">
+                  发码
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <p v-if="tips" class="text-xs text-slate-600">{{ tips }}</p>
+          <p v-if="errorText" class="text-sm text-red-600">{{ errorText }}</p>
+
+          <button type="submit" class="w-full echo-btn-primary py-2.5">
+            登录
+          </button>
+        </form>
+
+        <div class="pt-4 border-t border-slate-200">
+          <button
+            type="button"
+            @click="startWechatLogin"
+            class="w-full py-2.5 px-4 text-sm text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition"
+          >
+            微信登录（占位）
+          </button>
+          <div v-if="wechatState" class="mt-3 space-y-2">
+            <p class="text-xs text-slate-500">当前仓库未接入 iOS 微信 SDK，可用 mock code 调试（示例：`mock_user01:union01:昵称`）。</p>
+            <input v-model="wechatCode" type="text" placeholder="输入微信授权 code" class="echo-field text-sm" />
+            <button type="button" @click="submitWechatSignin" class="w-full py-2 px-4 text-sm text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition">
+              提交微信授权结果
+            </button>
+          </div>
+        </div>
+
+        <p class="text-center text-sm text-slate-600">
+          没有账号？
+          <router-link to="/register" class="font-medium text-blue-600 hover:text-blue-500">
+            去注册
+          </router-link>
+        </p>
+      </div>
     </div>
   </div>
 </template>
