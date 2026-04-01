@@ -1,4 +1,10 @@
-import { createRouter, createWebHistory } from 'vue-router';
+import {
+  createRouter,
+  createWebHistory,
+  type NavigationGuardNext,
+  type RouteLocationNormalized,
+  type RouteRecordRaw,
+} from 'vue-router';
 import Login from '../views/Login.vue';
 import Register from '../views/Register.vue';
 import Home from '../views/Home.vue';
@@ -17,8 +23,27 @@ import {
   hasRequiredOpsPermissions,
   normalizeOpsRbacMe,
 } from '../ops-permission-utils.ts';
+import type { OpsPermissionInputKey, OpsRbacMe } from '../types/api';
+import type { AuthUserProfile, RootGettersSnapshot } from '../store/types';
 
-const routes = [
+type StoreLike = {
+  getters: RootGettersSnapshot;
+  dispatch: (type: string, payload?: unknown) => Promise<unknown>;
+};
+
+interface AppRouteMeta {
+  requiresAuth?: boolean;
+  requiresOpsAccess?: boolean;
+  requiredOpsPermissions?: OpsPermissionInputKey[];
+}
+
+type AppRouteRecord = RouteRecordRaw & {
+  meta?: AppRouteMeta;
+};
+
+const appStore = store as unknown as StoreLike;
+
+const routes: AppRouteRecord[] = [
   { path: '/', redirect: '/home' },
   { path: '/home', name: 'Home', component: Home, meta: { requiresAuth: true } },
   { path: '/chat', name: 'Chat', component: Chat, meta: { requiresAuth: true } },
@@ -37,7 +62,6 @@ const routes = [
   { path: '/bind-phone', name: 'PhoneBind', component: PhoneBind, meta: { requiresAuth: true } },
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
-
 ];
 
 const router = createRouter({
@@ -45,7 +69,7 @@ const router = createRouter({
   routes,
 });
 
-function isPhoneBindRequired(user) {
+function isPhoneBindRequired(user: AuthUserProfile | null | undefined): boolean {
   if (!user) {
     return false;
   }
@@ -57,12 +81,12 @@ function isPhoneBindRequired(user) {
   return !phone;
 }
 
-async function loadOpsSnapshotForGuard() {
+async function loadOpsSnapshotForGuard(): Promise<OpsRbacMe> {
   try {
-    const response = await store.dispatch('getOpsRbacMe');
-    return normalizeOpsRbacMe(response);
+    const response = await appStore.dispatch('getOpsRbacMe');
+    return normalizeOpsRbacMe(response as Record<string, unknown>);
   } catch (error) {
-    const cached = store.getters.getOpsRbacMe;
+    const cached = appStore.getters.getOpsRbacMe;
     if (cached) {
       return normalizeOpsRbacMe(cached);
     }
@@ -70,14 +94,18 @@ async function loadOpsSnapshotForGuard() {
   }
 }
 
-// Navigation guard for authenticated routes and ops permissions
-router.beforeEach(async (to, from, next) => {
-  const isAuthenticated = !!store.getters.getUser;
-  if (to.matched.some((record) => record.meta.requiresAuth) && !isAuthenticated) {
+// Navigation guard for authenticated routes and ops permissions.
+router.beforeEach(async (
+  to: RouteLocationNormalized,
+  _from: RouteLocationNormalized,
+  next: NavigationGuardNext,
+) => {
+  const isAuthenticated = !!appStore.getters.getUser;
+  if (to.matched.some((record) => (record.meta as AppRouteMeta)?.requiresAuth) && !isAuthenticated) {
     return next({ name: 'Login' });
   }
 
-  const user = store.getters.getUser;
+  const user = appStore.getters.getUser;
   const phoneBindRequired = isPhoneBindRequired(user);
   if (isAuthenticated && phoneBindRequired && to.name !== 'PhoneBind') {
     return next({ name: 'PhoneBind' });
@@ -86,14 +114,14 @@ router.beforeEach(async (to, from, next) => {
     return next({ name: 'Home' });
   }
 
-  const requiresOpsAccess = to.matched.some((record) => record.meta.requiresOpsAccess);
+  const requiresOpsAccess = to.matched.some((record) => (record.meta as AppRouteMeta)?.requiresOpsAccess);
   if (!requiresOpsAccess) {
     return next();
   }
 
   const requiredOpsPermissions = to.matched.flatMap(
-    (record) => record.meta.requiredOpsPermissions || [],
-  );
+    (record) => ((record.meta as AppRouteMeta)?.requiredOpsPermissions || []),
+  ) as OpsPermissionInputKey[];
 
   try {
     const snapshot = await loadOpsSnapshotForGuard();

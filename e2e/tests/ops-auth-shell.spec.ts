@@ -92,6 +92,15 @@ test('phone bind page should render refreshed auth shell', async ({ page }) => {
   await expect(page.getByRole('button', { name: '绑定并继续' })).toBeVisible();
 });
 
+test('unbound phone user should be redirected to bind-phone from home', async ({ page }) => {
+  await bootstrapAuthState(page, { phoneBound: false });
+  await mockOpsAndAuthApis(page);
+
+  await page.goto('http://127.0.0.1:1420/home');
+  await expect(page).toHaveURL(/\/bind-phone/);
+  await expect(page.getByRole('heading', { name: '绑定手机号' })).toBeVisible();
+});
+
 test('ops page should render refreshed desktop shell', async ({ page }) => {
   await bootstrapAuthState(page);
   await mockOpsAndAuthApis(page);
