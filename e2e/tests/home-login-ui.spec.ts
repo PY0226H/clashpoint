@@ -146,4 +146,5 @@ test('home page should render four-entry dashboard with new shell', async ({ pag
 
   await page.getByRole('button', { name: '辩论广场' }).click();
   await expect(page).toHaveURL(/\/debate/);
+  await expect(page.getByRole('heading', { name: '辩论场次总览' })).toBeVisible();
 });

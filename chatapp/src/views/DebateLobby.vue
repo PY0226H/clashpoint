@@ -309,7 +309,7 @@ import {
   normalizeLobbyLane,
   normalizeSessionTopicId,
   splitLobbySessionsByLane,
-} from '../debate-lobby-utils';
+} from '../debate-lobby-utils.ts';
 
 function routeQuerySnapshot(query = {}) {
   return [

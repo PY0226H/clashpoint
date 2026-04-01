@@ -164,7 +164,7 @@
 
 <script>
 import { pickDefaultPeerUserId } from '../channel-utils';
-import { hasAnyOpsPermission, normalizeOpsRbacMe } from '../ops-permission-utils';
+import { hasAnyOpsPermission, normalizeOpsRbacMe } from '../ops-permission-utils.ts';
 
 export default {
   data() {

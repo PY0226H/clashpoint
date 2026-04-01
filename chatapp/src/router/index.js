@@ -16,7 +16,7 @@ import {
   hasAnyOpsPermission,
   hasRequiredOpsPermissions,
   normalizeOpsRbacMe,
-} from '../ops-permission-utils';
+} from '../ops-permission-utils.ts';
 
 const routes = [
   { path: '/', redirect: '/home' },

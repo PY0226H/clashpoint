@@ -1411,7 +1411,7 @@ import {
   emptyOpsRbacMe,
   normalizeOpsRbacMe,
   resolveOpsErrorText,
-} from '../ops-permission-utils';
+} from '../ops-permission-utils.ts';
 
 function toLocalInputValue(date) {
   const d = new Date(date);
