@@ -1,19 +1,20 @@
 <template>
-  <div class="flex h-screen">
+  <div class="flex h-screen echo-shell">
     <Sidebar />
-    <div class="flex-1 overflow-y-auto bg-gray-50">
-      <div class="max-w-6xl mx-auto p-6 space-y-5">
-        <div class="flex items-start justify-between gap-3">
+    <div class="echo-main">
+      <div class="max-w-6xl mx-auto p-6 lg:p-8 space-y-5 echo-fade-in">
+        <div class="echo-panel-strong p-5 flex items-start justify-between gap-3">
           <div>
-            <h1 class="text-2xl font-bold text-gray-900">Debate Ops Admin</h1>
-            <p class="text-sm text-gray-600 mt-1">
+            <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Debate Ops Admin</div>
+            <h1 class="text-2xl font-semibold text-slate-900 mt-1">运营控制台</h1>
+            <p class="text-sm text-slate-600 mt-1">
               创建辩题、排期场次并管理定时窗口，保证“到点开放、过时收口”。
             </p>
           </div>
           <button
             @click="refreshData"
             :disabled="loading"
-            class="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+            class="echo-btn-primary disabled:opacity-50"
           >
             {{ loading ? '刷新中...' : '刷新' }}
           </button>
@@ -23,7 +24,7 @@
           {{ errorText }}
         </div>
 
-        <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-700 space-y-2">
+        <div class="echo-panel p-3 text-xs text-slate-700 space-y-2">
           <div>
             当前身份：
             <span v-if="opsRbacMe.isOwner" class="font-semibold text-slate-900">platform admin</span>
@@ -46,7 +47,7 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-4">
+        <div class="echo-panel p-4 space-y-4">
           <div class="flex items-start justify-between gap-3">
             <div>
               <div class="text-sm font-semibold text-gray-900">Trace / Replay 运维闭环</div>
@@ -59,14 +60,14 @@
               <button
                 @click="refreshTraceReplayOps"
                 :disabled="traceReplayLoading || !canJudgeReview"
-                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-compact disabled:opacity-50"
               >
                 {{ traceReplayLoading ? '刷新中...' : '刷新 Trace/Replay' }}
               </button>
               <button
                 @click="refreshReplayActionsOps"
                 :disabled="replayActionsLoading || !canJudgeReview"
-                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-compact disabled:opacity-50"
               >
                 {{ replayActionsLoading ? '刷新中...' : '刷新 Replay Actions' }}
               </button>
@@ -91,19 +92,19 @@
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-8 gap-2">
               <label class="text-xs text-gray-600">
                 开始时间
-                <input v-model="traceReplayFilter.fromLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model="traceReplayFilter.fromLocal" type="datetime-local" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 结束时间
-                <input v-model="traceReplayFilter.toLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model="traceReplayFilter.toLocal" type="datetime-local" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 Session
-                <input v-model.trim="traceReplayFilter.sessionId" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.trim="traceReplayFilter.sessionId" type="text" placeholder="可选" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 Scope
-                <select v-model="traceReplayFilter.scope" class="w-full border rounded px-2 py-1 mt-1">
+                <select v-model="traceReplayFilter.scope" class="echo-field-compact mt-1">
                   <option value="">all</option>
                   <option value="phase">phase</option>
                   <option value="final">final</option>
@@ -111,7 +112,7 @@
               </label>
               <label class="text-xs text-gray-600">
                 Status
-                <select v-model="traceReplayFilter.status" class="w-full border rounded px-2 py-1 mt-1">
+                <select v-model="traceReplayFilter.status" class="echo-field-compact mt-1">
                   <option value="">all</option>
                   <option value="queued">queued</option>
                   <option value="dispatched">dispatched</option>
@@ -121,7 +122,7 @@
               </label>
               <label class="text-xs text-gray-600">
                 Limit
-                <input v-model.number="traceReplayFilter.limit" type="number" min="1" max="500" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.number="traceReplayFilter.limit" type="number" min="1" max="500" class="echo-field-compact mt-1" />
               </label>
               <div class="flex items-end">
                 <button
@@ -139,7 +140,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2 items-end">
                 <label class="text-xs text-gray-600">
                   失败类型
-                  <select v-model="traceReplayViewFilter.failureType" class="w-full border rounded px-2 py-1 mt-1">
+                  <select v-model="traceReplayViewFilter.failureType" class="echo-field-compact mt-1">
                     <option value="">all</option>
                     <option value="contract_failure_only">仅合同类失败</option>
                     <option value="unknown_contract_failure">unknown_contract_failure</option>
@@ -154,14 +155,14 @@
                 </label>
                 <label class="text-xs text-gray-600">
                   Replay候选
-                  <select v-model="traceReplayViewFilter.replayEligibleOnly" class="w-full border rounded px-2 py-1 mt-1">
+                  <select v-model="traceReplayViewFilter.replayEligibleOnly" class="echo-field-compact mt-1">
                     <option :value="false">all</option>
                     <option :value="true">only replayable</option>
                   </select>
                 </label>
                 <label class="text-xs text-gray-600">
                   Replay历史
-                  <select v-model="traceReplayViewFilter.withoutReplayActionOnly" class="w-full border rounded px-2 py-1 mt-1">
+                  <select v-model="traceReplayViewFilter.withoutReplayActionOnly" class="echo-field-compact mt-1">
                     <option :value="false">all</option>
                     <option :value="true">仅未回放</option>
                   </select>
@@ -327,15 +328,15 @@
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-9 gap-2">
               <label class="text-xs text-gray-600">
                 开始时间
-                <input v-model="replayActionsFilter.fromLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model="replayActionsFilter.fromLocal" type="datetime-local" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 结束时间
-                <input v-model="replayActionsFilter.toLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model="replayActionsFilter.toLocal" type="datetime-local" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 Scope
-                <select v-model="replayActionsFilter.scope" class="w-full border rounded px-2 py-1 mt-1">
+                <select v-model="replayActionsFilter.scope" class="echo-field-compact mt-1">
                   <option value="">all</option>
                   <option value="phase">phase</option>
                   <option value="final">final</option>
@@ -343,23 +344,23 @@
               </label>
               <label class="text-xs text-gray-600">
                 Session
-                <input v-model.trim="replayActionsFilter.sessionId" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.trim="replayActionsFilter.sessionId" type="text" placeholder="可选" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 Job
-                <input v-model.trim="replayActionsFilter.jobId" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.trim="replayActionsFilter.jobId" type="text" placeholder="可选" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 RequestedBy
-                <input v-model.trim="replayActionsFilter.requestedBy" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.trim="replayActionsFilter.requestedBy" type="text" placeholder="可选" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 Limit
-                <input v-model.number="replayActionsFilter.limit" type="number" min="1" max="500" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.number="replayActionsFilter.limit" type="number" min="1" max="500" class="echo-field-compact mt-1" />
               </label>
               <label class="text-xs text-gray-600">
                 Offset
-                <input v-model.number="replayActionsFilter.offset" type="number" min="0" max="10000" class="w-full border rounded px-2 py-1 mt-1" />
+                <input v-model.number="replayActionsFilter.offset" type="number" min="0" max="10000" class="echo-field-compact mt-1" />
               </label>
               <div class="flex items-end">
                 <button
@@ -376,7 +377,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
                 <label class="text-xs text-gray-600">
                   PreviousStatus
-                  <select v-model="replayActionsViewFilter.previousStatus" class="w-full border rounded px-2 py-1 mt-1">
+                  <select v-model="replayActionsViewFilter.previousStatus" class="echo-field-compact mt-1">
                     <option value="">all</option>
                     <option
                       v-for="status in replayActionStatusOptions"
@@ -389,7 +390,7 @@
                 </label>
                 <label class="text-xs text-gray-600">
                   NewStatus
-                  <select v-model="replayActionsViewFilter.newStatus" class="w-full border rounded px-2 py-1 mt-1">
+                  <select v-model="replayActionsViewFilter.newStatus" class="echo-field-compact mt-1">
                     <option value="">all</option>
                     <option
                       v-for="status in replayActionStatusOptions"
@@ -402,11 +403,11 @@
                 </label>
                 <label class="text-xs text-gray-600">
                   Reason 关键词
-                  <input v-model.trim="replayActionsViewFilter.reasonKeyword" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                  <input v-model.trim="replayActionsViewFilter.reasonKeyword" type="text" placeholder="可选" class="echo-field-compact mt-1" />
                 </label>
                 <label class="text-xs text-gray-600">
                   Trace 关键词
-                  <input v-model.trim="replayActionsViewFilter.traceKeyword" type="text" placeholder="可选" class="w-full border rounded px-2 py-1 mt-1" />
+                  <input v-model.trim="replayActionsViewFilter.traceKeyword" type="text" placeholder="可选" class="echo-field-compact mt-1" />
                 </label>
                 <div class="flex items-end">
                   <button
@@ -482,7 +483,7 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-start justify-between gap-3">
             <div>
               <div class="text-sm font-semibold text-gray-900">Ops RBAC 角色管理</div>
@@ -491,7 +492,7 @@
             <button
               @click="refreshRoleAssignments"
               :disabled="roleLoading || !canRoleManage"
-              class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+              class="echo-btn-compact disabled:opacity-50"
             >
               {{ roleLoading ? '刷新中...' : '刷新角色列表' }}
             </button>
@@ -558,7 +559,7 @@
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div class="bg-white border rounded-lg p-4 space-y-3">
+          <div class="echo-panel p-4 space-y-3">
             <div class="text-sm font-semibold text-gray-900">创建辩题</div>
             <input v-model="topicForm.title" class="w-full border rounded px-3 py-2 text-sm" placeholder="标题" />
             <textarea
@@ -593,7 +594,7 @@
             </button>
           </div>
 
-          <div class="bg-white border rounded-lg p-4 space-y-3">
+          <div class="echo-panel p-4 space-y-3">
             <div class="text-sm font-semibold text-gray-900">创建场次</div>
             <select v-model="sessionForm.topicId" class="w-full border rounded px-3 py-2 text-sm">
               <option value="">选择辩题</option>
@@ -642,7 +643,7 @@
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div class="bg-white border rounded-lg p-4 space-y-3">
+          <div class="echo-panel p-4 space-y-3">
             <div class="text-sm font-semibold text-gray-900">编辑辩题</div>
             <select v-model="topicEditForm.topicId" @change="syncTopicEditFormFromId(topicEditForm.topicId)" class="w-full border rounded px-3 py-2 text-sm">
               <option value="">选择辩题</option>
@@ -683,7 +684,7 @@
             </button>
           </div>
 
-          <div class="bg-white border rounded-lg p-4 space-y-3">
+          <div class="echo-panel p-4 space-y-3">
             <div class="text-sm font-semibold text-gray-900">编辑场次</div>
             <select v-model="sessionEditForm.sessionId" @change="syncSessionEditFormFromId(sessionEditForm.sessionId)" class="w-full border rounded px-3 py-2 text-sm">
               <option value="">选择场次</option>
@@ -744,7 +745,7 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">场次看板</div>
             <div class="text-xs text-gray-500">topics: {{ topics.length }} · sessions: {{ sessions.length }}</div>
@@ -821,7 +822,7 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-start justify-between gap-3">
             <div>
               <div class="text-sm font-semibold text-gray-900">判决证据审阅与复核</div>
@@ -832,7 +833,7 @@
             <button
               @click="refreshJudgeReviews"
               :disabled="reviewLoading || !canJudgeReview"
-              class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+              class="echo-btn-compact disabled:opacity-50"
             >
               {{ reviewLoading ? '刷新中...' : '刷新审阅列表' }}
             </button>
@@ -845,15 +846,15 @@
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-2">
             <label class="text-xs text-gray-600">
               开始时间
-              <input v-model="reviewFilter.fromLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+              <input v-model="reviewFilter.fromLocal" type="datetime-local" class="echo-field-compact mt-1" />
             </label>
             <label class="text-xs text-gray-600">
               结束时间
-              <input v-model="reviewFilter.toLocal" type="datetime-local" class="w-full border rounded px-2 py-1 mt-1" />
+              <input v-model="reviewFilter.toLocal" type="datetime-local" class="echo-field-compact mt-1" />
             </label>
             <label class="text-xs text-gray-600">
               Winner
-              <select v-model="reviewFilter.winner" class="w-full border rounded px-2 py-1 mt-1">
+              <select v-model="reviewFilter.winner" class="echo-field-compact mt-1">
                 <option value="">all</option>
                 <option value="pro">pro</option>
                 <option value="con">con</option>
@@ -862,7 +863,7 @@
             </label>
             <label class="text-xs text-gray-600">
               Rejudge
-              <select v-model="reviewFilter.rejudgeTriggered" class="w-full border rounded px-2 py-1 mt-1">
+              <select v-model="reviewFilter.rejudgeTriggered" class="echo-field-compact mt-1">
                 <option value="">all</option>
                 <option value="true">yes</option>
                 <option value="false">no</option>
@@ -870,7 +871,7 @@
             </label>
             <label class="text-xs text-gray-600">
               Evidence
-              <select v-model="reviewFilter.hasVerdictEvidence" class="w-full border rounded px-2 py-1 mt-1">
+              <select v-model="reviewFilter.hasVerdictEvidence" class="echo-field-compact mt-1">
                 <option value="">all</option>
                 <option value="true">has refs</option>
                 <option value="false">no refs</option>
@@ -878,7 +879,7 @@
             </label>
             <label class="text-xs text-gray-600">
               Limit
-              <input v-model.number="reviewFilter.limit" type="number" min="1" max="200" class="w-full border rounded px-2 py-1 mt-1" />
+              <input v-model.number="reviewFilter.limit" type="number" min="1" max="200" class="echo-field-compact mt-1" />
             </label>
             <label class="inline-flex items-center gap-2 text-xs text-gray-700 mt-5">
               <input v-model="reviewFilter.anomalyOnly" type="checkbox" class="rounded border-gray-300" />
@@ -933,7 +934,7 @@
           </div>
         </div>
 
-        <div class="bg-white border rounded-lg p-4 space-y-3">
+        <div class="echo-panel p-4 space-y-3">
           <div class="flex items-start justify-between gap-3">
             <div>
               <div class="text-sm font-semibold text-gray-900">裁判观测汇总（Ops Dashboard）</div>
@@ -952,7 +953,7 @@
               <button
                 @click="refreshJudgeObservability"
                 :disabled="observabilityLoading || !canJudgeReview"
-                class="px-3 py-1 rounded border text-xs bg-white hover:bg-gray-100 disabled:opacity-50"
+                class="echo-btn-compact disabled:opacity-50"
               >
                 {{ observabilityLoading ? '刷新中...' : '刷新观测汇总' }}
               </button>
@@ -977,7 +978,7 @@
                 type="number"
                 min="1"
                 max="168"
-                class="w-full border rounded px-2 py-1 mt-1"
+                class="echo-field-compact mt-1"
               />
             </label>
             <label class="text-xs text-gray-600">
@@ -987,7 +988,7 @@
                 type="number"
                 min="1"
                 max="200"
-                class="w-full border rounded px-2 py-1 mt-1"
+                class="echo-field-compact mt-1"
               />
             </label>
             <label class="text-xs text-gray-600">
@@ -996,7 +997,7 @@
                 v-model.trim="observabilityFilter.debateSessionId"
                 type="text"
                 placeholder="例如 123"
-                class="w-full border rounded px-2 py-1 mt-1"
+                class="echo-field-compact mt-1"
               />
             </label>
             <div class="flex items-end gap-2">
@@ -1031,7 +1032,7 @@
                   min="1"
                   max="99.99"
                   step="0.01"
-                  class="w-full border rounded px-2 py-1 mt-1"
+                  class="echo-field-compact mt-1"
                 />
               </label>
               <label class="text-xs text-gray-600">
@@ -1042,7 +1043,7 @@
                   min="0.1"
                   max="10"
                   step="0.1"
-                  class="w-full border rounded px-2 py-1 mt-1"
+                  class="echo-field-compact mt-1"
                 />
               </label>
               <label class="text-xs text-gray-600">
@@ -1053,7 +1054,7 @@
                   min="0.1"
                   max="20"
                   step="0.1"
-                  class="w-full border rounded px-2 py-1 mt-1"
+                  class="echo-field-compact mt-1"
                 />
               </label>
               <label class="text-xs text-gray-600">
@@ -1063,7 +1064,7 @@
                   type="number"
                   min="1"
                   max="60000"
-                  class="w-full border rounded px-2 py-1 mt-1"
+                  class="echo-field-compact mt-1"
                 />
               </label>
               <label class="text-xs text-gray-600">
@@ -1074,7 +1075,7 @@
                   min="0"
                   max="99.99"
                   step="0.01"
-                  class="w-full border rounded px-2 py-1 mt-1"
+                  class="echo-field-compact mt-1"
                 />
               </label>
               <label class="text-xs text-gray-600">
@@ -1084,7 +1085,7 @@
                   type="number"
                   min="1"
                   max="1000000"
-                  class="w-full border rounded px-2 py-1 mt-1"
+                  class="echo-field-compact mt-1"
                 />
               </label>
             </div>

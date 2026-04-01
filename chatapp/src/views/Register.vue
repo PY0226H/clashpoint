@@ -1,25 +1,25 @@
 <template>
-  <div class="flex items-center justify-center min-h-screen bg-gray-100">
-    <div class="w-full max-w-md p-8 space-y-6 bg-white rounded-xl shadow-2xl">
-      <h1 class="text-3xl font-bold text-center text-gray-800">
+  <div class="echo-auth-shell">
+    <div class="echo-auth-card space-y-6 echo-fade-in">
+      <h1 class="text-3xl font-semibold text-center text-slate-900">
         {{ wechatTicket ? '微信绑定手机号' : '注册账号' }}
       </h1>
 
       <template v-if="!wechatTicket">
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-100/70 border border-slate-200/80">
           <button
             type="button"
             @click="mode = 'phone_signup'"
-            class="px-2 py-2 text-xs rounded-md border"
-            :class="mode === 'phone_signup' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'"
+            class="px-2 py-2 text-xs rounded-xl border transition"
+            :class="mode === 'phone_signup' ? 'bg-gradient-to-r from-[#0f6adf] to-[#3085f2] text-white border-[#0f6adf]' : 'bg-white/90 text-slate-700 border-slate-300'"
           >
             手机号注册
           </button>
           <button
             type="button"
             @click="mode = 'email_signup'"
-            class="px-2 py-2 text-xs rounded-md border"
-            :class="mode === 'email_signup' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'"
+            class="px-2 py-2 text-xs rounded-xl border transition"
+            :class="mode === 'email_signup' ? 'bg-gradient-to-r from-[#0f6adf] to-[#3085f2] text-white border-[#0f6adf]' : 'bg-white/90 text-slate-700 border-slate-300'"
           >
             邮箱注册(绑手机)
           </button>
@@ -28,53 +28,53 @@
 
       <form @submit.prevent="register" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-gray-700">昵称</label>
-          <input v-model="fullName" type="text" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
+          <label class="block text-sm font-medium text-slate-700">昵称</label>
+          <input v-model="fullName" type="text" required class="mt-1 echo-field" />
         </div>
 
         <div v-if="mode === 'email_signup'">
-          <label class="block text-sm font-medium text-gray-700">邮箱</label>
-          <input v-model="email" type="email" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
+          <label class="block text-sm font-medium text-slate-700">邮箱</label>
+          <input v-model="email" type="email" required class="mt-1 echo-field" />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700">手机号(+86)</label>
-          <input v-model="phone" type="text" required class="mt-1 block w-full px-3 py-2 border rounded-md" />
+          <label class="block text-sm font-medium text-slate-700">手机号(+86)</label>
+          <input v-model="phone" type="text" required class="mt-1 echo-field" />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700">
+          <label class="block text-sm font-medium text-slate-700">
             {{ wechatTicket ? '密码（可选）' : '密码' }}
           </label>
           <input
             v-model="password"
             type="password"
             :required="!wechatTicket"
-            class="mt-1 block w-full px-3 py-2 border rounded-md"
+            class="mt-1 echo-field"
           />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700">验证码</label>
+          <label class="block text-sm font-medium text-slate-700">验证码</label>
           <div class="mt-1 flex gap-2">
-            <input v-model="smsCode" type="text" required class="flex-1 px-3 py-2 border rounded-md" />
-            <button type="button" @click="sendCode" class="px-3 py-2 text-xs text-white bg-blue-600 rounded-md">
+            <input v-model="smsCode" type="text" required class="echo-field flex-1" />
+            <button type="button" @click="sendCode" class="echo-btn-secondary px-3 py-2 text-xs whitespace-nowrap">
               发码
             </button>
           </div>
         </div>
 
-        <p v-if="tips" class="text-xs text-gray-600">{{ tips }}</p>
+        <p v-if="tips" class="text-xs text-slate-600">{{ tips }}</p>
         <p v-if="errorText" class="text-sm text-red-600">{{ errorText }}</p>
 
-        <button type="submit" class="w-full py-2 px-4 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700">
+        <button type="submit" class="echo-btn-primary w-full py-2 px-4 text-sm">
           {{ wechatTicket ? '绑定并创建账号' : '注册' }}
         </button>
       </form>
 
-      <p v-if="!wechatTicket" class="text-center text-sm text-gray-600">
+      <p v-if="!wechatTicket" class="text-center text-sm text-slate-600">
         已有账号？
-        <router-link to="/login" class="font-medium text-blue-600 hover:text-blue-500">
+        <router-link to="/login" class="font-medium text-[#0f6adf] hover:text-[#0a5ac1]">
           去登录
         </router-link>
       </p>
