@@ -101,6 +101,19 @@ test('unbound phone user should be redirected to bind-phone from home', async ({
   await expect(page.getByRole('heading', { name: '绑定手机号' })).toBeVisible();
 });
 
+test('unauthenticated user should be redirected to login for ops route', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.removeItem('user');
+    localStorage.removeItem('channels');
+    localStorage.removeItem('single_channels');
+    localStorage.removeItem('users');
+  });
+
+  await page.goto('http://127.0.0.1:1420/debate/ops');
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByRole('heading', { name: '登录' })).toBeVisible();
+});
+
 test('ops page should render refreshed desktop shell', async ({ page }) => {
   await bootstrapAuthState(page);
   await mockOpsAndAuthApis(page);

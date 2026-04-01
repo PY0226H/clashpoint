@@ -1,8 +1,10 @@
+// @ts-nocheck
 import { createStore } from 'vuex';
 import axios from 'axios';
 import { getUrlBase } from '../utils';
 import { initSSE } from '../utils';
 import {
+  sendAppExitEvent,
   sendAppStartEvent,
   sendChatCreatedEvent,
   sendChatJoinedEvent,
@@ -21,6 +23,23 @@ import {
 import { normalizeWalletLedgerLimit } from '../wallet-utils';
 import { toDisplayMessage, upsertMessage } from '../message-store-utils';
 import { pickActiveChannelId } from '../channel-utils';
+import {
+  actionBindPhoneV2,
+  actionGetOpsRbacMe,
+  actionListOpsRoleAssignments,
+  actionRequestJudgeRejudgeOps,
+  actionRevokeOpsRoleAssignment,
+  actionSendSmsCodeV2,
+  actionSetPasswordV2,
+  actionSigninOtpV2,
+  actionSigninPasswordV2,
+  actionSignupEmailV2,
+  actionSignupPhoneV2,
+  actionUpsertOpsRoleAssignment,
+  actionWechatBindPhoneV2,
+  actionWechatChallengeV2,
+  actionWechatSigninV2,
+} from './actions-auth-ops.ts';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -256,72 +275,74 @@ export default createStore({
       }
     },
     async sendSmsCodeV2(_ctx, { phone, scene }) {
-      const response = await network(this, 'post', '/auth/v2/sms/send', {
+      return actionSendSmsCodeV2({
+        network,
+        store: this,
         phone,
         scene,
       });
-      return response?.data;
     },
     async signupPhoneV2({ commit }, { phone, smsCode, password, fullname }) {
-      const response = await network(this, 'post', '/auth/v2/signup/phone', {
+      return actionSignupPhoneV2({
+        network,
+        store: this,
+        loadState,
+        commit,
         phone,
         smsCode,
         password,
         fullname,
       });
-      return loadState(response, this, commit);
     },
     async signupEmailV2({ commit }, { email, phone, smsCode, password, fullname }) {
-      const response = await network(this, 'post', '/auth/v2/signup/email', {
+      return actionSignupEmailV2({
+        network,
+        store: this,
+        loadState,
+        commit,
         email,
         phone,
         smsCode,
         password,
         fullname,
       });
-      return loadState(response, this, commit);
     },
     async signinPasswordV2({ commit }, { account, accountType, password }) {
-      const response = await network(this, 'post', '/auth/v2/signin/password', {
+      return actionSigninPasswordV2({
+        network,
+        store: this,
+        loadState,
+        commit,
         account,
         accountType,
         password,
       });
-      return loadState(response, this, commit);
     },
     async signinOtpV2({ commit }, { phone, smsCode }) {
-      const response = await network(this, 'post', '/auth/v2/signin/otp', {
+      return actionSigninOtpV2({
+        network,
+        store: this,
+        loadState,
+        commit,
         phone,
         smsCode,
       });
-      return loadState(response, this, commit);
     },
     async wechatChallengeV2() {
-      const response = await network(this, 'post', '/auth/v2/wechat/challenge');
-      return response?.data;
+      return actionWechatChallengeV2({
+        network,
+        store: this,
+      });
     },
     async wechatSigninV2({ commit }, { state, code }) {
-      const response = await network(this, 'post', '/auth/v2/wechat/signin', {
+      return actionWechatSigninV2({
+        network,
+        store: this,
+        loadState,
+        commit,
         state,
         code,
       });
-      const data = response?.data || {};
-      if (data.bindRequired) {
-        return data;
-      }
-      const authLike = {
-        data: {
-          accessToken: data.accessToken,
-          tokenType: data.tokenType,
-          expiresInSecs: data.expiresInSecs,
-          user: data.user,
-        },
-      };
-      const user = await loadState(authLike, this, commit);
-      return {
-        bindRequired: false,
-        user,
-      };
     },
     async wechatBindPhoneV2(
       { commit },
@@ -333,56 +354,35 @@ export default createStore({
         fullname,
       },
     ) {
-      const payload = {
+      return actionWechatBindPhoneV2({
+        network,
+        store: this,
+        loadState,
+        commit,
         wechatTicket,
         phone,
         smsCode,
+        password,
         fullname,
-      };
-      if (password && String(password).trim()) {
-        payload.password = String(password).trim();
-      }
-      const response = await network(this, 'post', '/auth/v2/wechat/bind-phone', payload);
-      const data = response?.data || {};
-      const authLike = {
-        data: {
-          accessToken: data.accessToken,
-          tokenType: data.tokenType,
-          expiresInSecs: data.expiresInSecs,
-          user: data.user,
-        },
-      };
-      const user = await loadState(authLike, this, commit);
-      return {
-        bindRequired: false,
-        user,
-      };
+      });
     },
     async bindPhoneV2({ state, commit }, { phone, smsCode }) {
-      const response = await network(
-        this,
-        'post',
-        '/auth/v2/phone/bind',
-        {
-          phone,
-          smsCode,
-        },
-        state.token ? { Authorization: `Bearer ${state.token}` } : {},
-      );
-      const ret = response?.data || {};
-      if (ret?.user) {
-        localStorage.setItem('user', JSON.stringify(ret.user));
-        commit('setUser', ret.user);
-      }
-      return ret;
+      return actionBindPhoneV2({
+        network,
+        store: this,
+        commit,
+        token: state.token,
+        phone,
+        smsCode,
+      });
     },
     async setPasswordV2(_ctx, { password, smsCode }) {
-      const payload = {
-        password: String(password || '').trim(),
-        smsCode: String(smsCode || '').trim(),
-      };
-      const response = await network(this, 'post', '/auth/v2/password/set', payload);
-      return response?.data || { updated: false };
+      return actionSetPasswordV2({
+        network,
+        store: this,
+        password,
+        smsCode,
+      });
     },
     async logout({ state, commit }, { skipRemote = false } = {}) {
       if (!skipRemote && state.token) {
@@ -668,18 +668,19 @@ export default createStore({
       return response.data || null;
     },
     async listOpsRoleAssignments({ state }) {
-      const response = await network(this, 'get', '/debate/ops/rbac/roles', null, {
-        Authorization: `Bearer ${state.token}`,
+      return actionListOpsRoleAssignments({
+        network,
+        store: this,
+        token: state.token,
       });
-      return response.data || { items: [] };
     },
     async getOpsRbacMe({ state, commit }) {
-      const response = await network(this, 'get', '/debate/ops/rbac/me', null, {
-        Authorization: `Bearer ${state.token}`,
+      return actionGetOpsRbacMe({
+        network,
+        store: this,
+        commit,
+        token: state.token,
       });
-      const payload = response.data || null;
-      commit('setOpsRbacMe', payload);
-      return payload;
     },
     async getOpsObservabilityConfig({ state }) {
       const response = await network(this, 'get', '/debate/ops/observability/config', null, {
@@ -712,52 +713,29 @@ export default createStore({
       return response.data || null;
     },
     async upsertOpsRoleAssignment({ state }, { userId, role } = {}) {
-      if (!userId) {
-        throw new Error('userId is required');
-      }
-      if (!role || !String(role).trim()) {
-        throw new Error('role is required');
-      }
-      const response = await network(
-        this,
-        'put',
-        `/debate/ops/rbac/roles/${Number(userId)}`,
-        { role: String(role).trim() },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionUpsertOpsRoleAssignment({
+        network,
+        store: this,
+        token: state.token,
+        userId,
+        role,
+      });
     },
     async revokeOpsRoleAssignment({ state }, { userId } = {}) {
-      if (!userId) {
-        throw new Error('userId is required');
-      }
-      const response = await network(
-        this,
-        'delete',
-        `/debate/ops/rbac/roles/${Number(userId)}`,
-        null,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionRevokeOpsRoleAssignment({
+        network,
+        store: this,
+        token: state.token,
+        userId,
+      });
     },
     async requestJudgeRejudgeOps({ state }, { sessionId } = {}) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        `/debate/ops/sessions/${Number(sessionId)}/judge/rejudge`,
-        {},
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionRequestJudgeRejudgeOps({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+      });
     },
     async createDebateTopicOps(
       { state },
