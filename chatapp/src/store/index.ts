@@ -40,6 +40,18 @@ import {
   actionWechatChallengeV2,
   actionWechatSigninV2,
 } from './actions-auth-ops.ts';
+import {
+  actionCreateDebateSessionOps,
+  actionCreateDebateTopicOps,
+  actionExecuteJudgeReplayOps,
+  actionGetJudgeReplayPreviewOps,
+  actionGetOpsObservabilityConfig,
+  actionListJudgeReplayActionsOps,
+  actionUpdateDebateSessionOps,
+  actionUpdateDebateTopicOps,
+  actionUpsertOpsObservabilityAnomalyState,
+  actionUpsertOpsObservabilityThresholds,
+} from './actions-debate-ops.ts';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -597,75 +609,33 @@ export default createStore({
       };
     },
     async listJudgeReplayActionsOps({ state }, payload = {}) {
-      const sessionId = Number(payload.sessionId || 0);
-      const jobId = Number(payload.jobId || 0);
-      const requestedBy = Number(payload.requestedBy || 0);
-      const offset = Number(payload.offset || 0);
-      const suffix = buildQueryString({
-        from: payload.from,
-        to: payload.to,
-        scope: payload.scope,
-        sessionId: sessionId > 0 ? sessionId : null,
-        jobId: jobId > 0 ? jobId : null,
-        requestedBy: requestedBy > 0 ? requestedBy : null,
-        previousStatus: payload.previousStatus,
-        newStatus: payload.newStatus,
-        reasonKeyword: payload.reasonKeyword,
-        traceKeyword: payload.traceKeyword,
-        limit: payload.limit,
-        offset: offset >= 0 ? offset : 0,
+      return actionListJudgeReplayActionsOps({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        payload,
       });
-      const response = await network(this, 'get', `/debate/ops/judge-replay/actions${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || {
-        scannedCount: 0,
-        returnedCount: 0,
-        hasMore: false,
-        items: [],
-      };
     },
     async getJudgeReplayPreviewOps({ state }, { scope, jobId } = {}) {
-      const normalizedScope = String(scope || '').trim();
-      const normalizedJobId = Number(jobId || 0);
-      if (!normalizedScope) {
-        throw new Error('scope is required');
-      }
-      if (!normalizedJobId) {
-        throw new Error('jobId is required');
-      }
-      const suffix = buildQueryString({
-        scope: normalizedScope,
-        jobId: normalizedJobId,
+      return actionGetJudgeReplayPreviewOps({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        scope,
+        jobId,
       });
-      const response = await network(this, 'get', `/debate/ops/judge-replay/preview${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || null;
     },
     async executeJudgeReplayOps({ state }, { scope, jobId, reason = null } = {}) {
-      const normalizedScope = String(scope || '').trim();
-      const normalizedJobId = Number(jobId || 0);
-      if (!normalizedScope) {
-        throw new Error('scope is required');
-      }
-      if (!normalizedJobId) {
-        throw new Error('jobId is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        '/debate/ops/judge-replay/execute',
-        {
-          scope: normalizedScope,
-          jobId: normalizedJobId,
-          reason: reason == null ? null : String(reason).trim() || null,
-        },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data || null;
+      return actionExecuteJudgeReplayOps({
+        network,
+        store: this,
+        token: state.token,
+        scope,
+        jobId,
+        reason,
+      });
     },
     async listOpsRoleAssignments({ state }) {
       return actionListOpsRoleAssignments({
@@ -683,34 +653,27 @@ export default createStore({
       });
     },
     async getOpsObservabilityConfig({ state }) {
-      const response = await network(this, 'get', '/debate/ops/observability/config', null, {
-        Authorization: `Bearer ${state.token}`,
+      return actionGetOpsObservabilityConfig({
+        network,
+        store: this,
+        token: state.token,
       });
-      return response.data || null;
     },
     async upsertOpsObservabilityThresholds({ state }, payload = {}) {
-      const response = await network(
-        this,
-        'put',
-        '/debate/ops/observability/thresholds',
+      return actionUpsertOpsObservabilityThresholds({
+        network,
+        store: this,
+        token: state.token,
         payload,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data || null;
+      });
     },
     async upsertOpsObservabilityAnomalyState({ state }, payload = {}) {
-      const response = await network(
-        this,
-        'put',
-        '/debate/ops/observability/anomaly-state',
+      return actionUpsertOpsObservabilityAnomalyState({
+        network,
+        store: this,
+        token: state.token,
         payload,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data || null;
+      });
     },
     async upsertOpsRoleAssignment({ state }, { userId, role } = {}) {
       return actionUpsertOpsRoleAssignment({
@@ -749,40 +712,18 @@ export default createStore({
         isActive = true,
       } = {},
     ) {
-      if (!title || !String(title).trim()) {
-        throw new Error('title is required');
-      }
-      if (!description || !String(description).trim()) {
-        throw new Error('description is required');
-      }
-      if (!category || !String(category).trim()) {
-        throw new Error('category is required');
-      }
-      if (!stancePro || !String(stancePro).trim()) {
-        throw new Error('stancePro is required');
-      }
-      if (!stanceCon || !String(stanceCon).trim()) {
-        throw new Error('stanceCon is required');
-      }
-
-      const response = await network(
-        this,
-        'post',
-        '/debate/ops/topics',
-        {
-          title: String(title).trim(),
-          description: String(description).trim(),
-          category: String(category).trim(),
-          stancePro: String(stancePro).trim(),
-          stanceCon: String(stanceCon).trim(),
-          contextSeed: contextSeed == null ? null : String(contextSeed).trim() || null,
-          isActive: !!isActive,
-        },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionCreateDebateTopicOps({
+        network,
+        store: this,
+        token: state.token,
+        title,
+        description,
+        category,
+        stancePro,
+        stanceCon,
+        contextSeed,
+        isActive,
+      });
     },
     async updateDebateTopicOps(
       { state },
@@ -797,42 +738,19 @@ export default createStore({
         isActive = true,
       } = {},
     ) {
-      if (!topicId) {
-        throw new Error('topicId is required');
-      }
-      if (!title || !String(title).trim()) {
-        throw new Error('title is required');
-      }
-      if (!description || !String(description).trim()) {
-        throw new Error('description is required');
-      }
-      if (!category || !String(category).trim()) {
-        throw new Error('category is required');
-      }
-      if (!stancePro || !String(stancePro).trim()) {
-        throw new Error('stancePro is required');
-      }
-      if (!stanceCon || !String(stanceCon).trim()) {
-        throw new Error('stanceCon is required');
-      }
-      const response = await network(
-        this,
-        'put',
-        `/debate/ops/topics/${Number(topicId)}`,
-        {
-          title: String(title).trim(),
-          description: String(description).trim(),
-          category: String(category).trim(),
-          stancePro: String(stancePro).trim(),
-          stanceCon: String(stanceCon).trim(),
-          contextSeed: contextSeed == null ? null : String(contextSeed).trim() || null,
-          isActive: !!isActive,
-        },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionUpdateDebateTopicOps({
+        network,
+        store: this,
+        token: state.token,
+        topicId,
+        title,
+        description,
+        category,
+        stancePro,
+        stanceCon,
+        contextSeed,
+        isActive,
+      });
     },
     async createDebateSessionOps(
       { state },
@@ -844,31 +762,16 @@ export default createStore({
         maxParticipantsPerSide = 500,
       } = {},
     ) {
-      if (!topicId) {
-        throw new Error('topicId is required');
-      }
-      if (!scheduledStartAt || !String(scheduledStartAt).trim()) {
-        throw new Error('scheduledStartAt is required');
-      }
-      if (!endAt || !String(endAt).trim()) {
-        throw new Error('endAt is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        '/debate/ops/sessions',
-        {
-          topicId: Number(topicId),
-          status: String(status || 'scheduled').trim(),
-          scheduledStartAt: String(scheduledStartAt).trim(),
-          endAt: String(endAt).trim(),
-          maxParticipantsPerSide: Number(maxParticipantsPerSide),
-        },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionCreateDebateSessionOps({
+        network,
+        store: this,
+        token: state.token,
+        topicId,
+        status,
+        scheduledStartAt,
+        endAt,
+        maxParticipantsPerSide,
+      });
     },
     async updateDebateSessionOps(
       { state },
@@ -880,32 +783,16 @@ export default createStore({
         maxParticipantsPerSide = null,
       } = {},
     ) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const payload = {};
-      if (status != null && String(status).trim()) {
-        payload.status = String(status).trim();
-      }
-      if (scheduledStartAt != null && String(scheduledStartAt).trim()) {
-        payload.scheduledStartAt = String(scheduledStartAt).trim();
-      }
-      if (endAt != null && String(endAt).trim()) {
-        payload.endAt = String(endAt).trim();
-      }
-      if (maxParticipantsPerSide != null) {
-        payload.maxParticipantsPerSide = Number(maxParticipantsPerSide);
-      }
-      const response = await network(
-        this,
-        'put',
-        `/debate/ops/sessions/${Number(sessionId)}`,
-        payload,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionUpdateDebateSessionOps({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+        status,
+        scheduledStartAt,
+        endAt,
+        maxParticipantsPerSide,
+      });
     },
     async joinDebateSession({ state }, { sessionId, side }) {
       if (!sessionId) {

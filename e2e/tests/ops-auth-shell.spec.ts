@@ -13,7 +13,7 @@ async function bootstrapAuthState(page, options = { phoneBound: true }) {
   }, options);
 }
 
-async function mockOpsAndAuthApis(page) {
+async function mockOpsAndAuthApis(page, hooks = {}) {
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -54,6 +54,21 @@ async function mockOpsAndAuthApis(page) {
             judgeRejudge: true,
             roleManage: false,
           },
+        }),
+      });
+      return;
+    }
+
+    if (pathname.startsWith('/api/debate/ops/judge-replay/actions')) {
+      hooks.onJudgeReplayActions?.();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          scannedCount: 0,
+          returnedCount: 0,
+          hasMore: false,
+          items: [],
         }),
       });
       return;
@@ -122,4 +137,19 @@ test('ops page should render refreshed desktop shell', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '运营控制台' })).toBeVisible();
   await expect(page.getByText('当前身份：')).toBeVisible();
   await expect(page.getByRole('button', { name: '刷新 Trace/Replay' })).toBeVisible();
+});
+
+test('ops replay actions refresh should trigger replay actions request', async ({ page }) => {
+  await bootstrapAuthState(page);
+  let replayActionsCalls = 0;
+  await mockOpsAndAuthApis(page, {
+    onJudgeReplayActions: () => {
+      replayActionsCalls += 1;
+    },
+  });
+
+  await page.goto('http://127.0.0.1:1420/debate/ops');
+  const baselineCalls = replayActionsCalls;
+  await page.getByRole('button', { name: '刷新 Replay Actions' }).click();
+  await expect.poll(() => replayActionsCalls).toBeGreaterThan(baselineCalls);
 });
