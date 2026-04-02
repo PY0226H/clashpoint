@@ -215,6 +215,8 @@ test.describe('Debate Room WS Recovery', () => {
     page,
   }) => {
     await page.goto('http://127.0.0.1:1420/debate/sessions/201');
+    await expect(page.getByRole('heading', { name: /实时辩论控制台/ })).toBeVisible();
+    await expect(page.getByText('消息总量')).toBeVisible();
 
     await page.waitForFunction(() => (window as any).__mockDebateWs.urls().length >= 1);
     await page.waitForFunction(() => (window as any).__mockDebateWs.isOpen(0) === true);

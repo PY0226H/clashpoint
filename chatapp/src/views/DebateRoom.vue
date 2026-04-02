@@ -3,36 +3,64 @@
     <Sidebar />
     <div class="echo-main flex flex-col min-h-0">
       <div class="px-5 pt-4">
-        <div class="echo-panel-strong p-4 flex items-center justify-between gap-3">
-        <div>
-          <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Debate Room</div>
-          <div class="text-lg font-semibold text-slate-900">Session {{ sessionId || '-' }}</div>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-xs text-slate-700 bg-white border border-slate-200 rounded-xl px-2 py-1">
-            余额: {{ walletLoading ? '...' : walletBalance }}
-          </span>
-          <span
-            :class="[
-              'inline-block w-2.5 h-2.5 rounded-full',
-              wsConnected ? 'bg-green-500' : 'bg-gray-400',
-            ]"
-          />
-          <span class="text-xs text-gray-600">{{ wsStatusText }}</span>
-          <button
-            @click="refreshRoom"
-            :disabled="loading"
-            class="echo-btn-secondary disabled:opacity-50"
-          >
-            {{ loading ? '刷新中...' : '刷新' }}
-          </button>
-          <button
-            @click="goLobby"
-            class="echo-btn-primary"
-          >
-            返回大厅
-          </button>
-        </div>
+        <div class="echo-panel-strong relative overflow-hidden p-5 lg:p-6">
+          <div class="absolute inset-0 bg-gradient-to-br from-emerald-100/60 via-white to-cyan-100/60"></div>
+          <div class="absolute -left-28 -top-20 h-72 w-72 rounded-full bg-emerald-200/35 blur-3xl"></div>
+          <div class="absolute -right-24 -bottom-24 h-72 w-72 rounded-full bg-cyan-200/35 blur-3xl"></div>
+          <div class="relative flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div class="max-w-3xl space-y-3">
+              <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Debate Room</div>
+              <h1 class="text-2xl font-semibold text-slate-900">Session {{ sessionId || '-' }} 实时辩论控制台</h1>
+              <p class="text-sm text-slate-700">
+                实时发言、AI 判决、平局投票与置顶消费在同一工作面完成，优先保证比赛链路可见且可恢复。
+              </p>
+              <div class="flex flex-wrap gap-2 text-xs">
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-slate-700">
+                  消息总量 {{ messages.length }}
+                </span>
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-slate-700">
+                  置顶中 {{ pins.length }}
+                </span>
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-slate-700">
+                  钱包 {{ walletLoading ? '...' : walletBalance }}
+                </span>
+              </div>
+            </div>
+            <div class="w-full xl:w-[350px] space-y-3">
+              <div class="echo-panel p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-xs uppercase tracking-[0.18em] text-slate-500">连接状态</div>
+                  <span
+                    :class="[
+                      'inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold',
+                      wsStatusBadgeClass,
+                    ]"
+                  >
+                    {{ wsStatusText }}
+                  </span>
+                </div>
+                <div class="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                  <span :class="['inline-block h-2.5 w-2.5 rounded-full', wsDotClass]" />
+                  <span>{{ wsConnected ? '实时链路稳定，可持续收包。' : '实时链路未连接，系统将自动重连。' }}</span>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  @click="refreshRoom"
+                  :disabled="loading"
+                  class="echo-btn-secondary disabled:opacity-50"
+                >
+                  {{ loading ? '刷新中...' : '刷新' }}
+                </button>
+                <button
+                  @click="goLobby"
+                  class="echo-btn-primary"
+                >
+                  返回大厅
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -412,6 +440,24 @@ export default {
         return `WS Reconnecting (#${this.wsReconnectAttempts})`;
       }
       return 'WS Disconnected';
+    },
+    wsDotClass() {
+      if (this.wsConnected) {
+        return 'bg-emerald-500 ring-2 ring-emerald-200';
+      }
+      if (this.wsReconnectTimer) {
+        return 'bg-amber-500 ring-2 ring-amber-200';
+      }
+      return 'bg-slate-400';
+    },
+    wsStatusBadgeClass() {
+      if (this.wsConnected) {
+        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      }
+      if (this.wsReconnectTimer) {
+        return 'bg-amber-50 text-amber-700 border-amber-200';
+      }
+      return 'bg-slate-50 text-slate-600 border-slate-200';
     },
   },
   methods: {
