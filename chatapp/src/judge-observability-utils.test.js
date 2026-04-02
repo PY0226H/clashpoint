@@ -15,7 +15,7 @@ import {
   normalizeObservabilityThresholds,
   projectObservabilityAnomalies,
   summarizeObservabilityAnomalyTrend,
-} from './judge-observability-utils.js';
+} from './judge-observability-utils';
 
 test('normalizeObservabilitySessionId should normalize valid id', () => {
   assert.equal(normalizeObservabilitySessionId('42'), 42);

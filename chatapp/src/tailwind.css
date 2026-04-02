@@ -76,6 +76,11 @@
     background: linear-gradient(135deg, var(--echo-accent-hover) 0%, #1f76e5 100%);
   }
 
+  .echo-btn-primary:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+
   .echo-btn-secondary {
     @apply rounded-xl border px-4 py-2 text-sm font-medium transition;
     border-color: rgba(148, 163, 184, 0.4);
@@ -86,6 +91,11 @@
   .echo-btn-secondary:hover {
     background: rgba(255, 255, 255, 0.98);
     border-color: rgba(100, 116, 139, 0.45);
+  }
+
+  .echo-btn-secondary:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
   }
 
   .echo-field-compact {
@@ -109,6 +119,31 @@
   .echo-btn-compact:hover {
     border-color: rgba(100, 116, 139, 0.45);
     background: rgba(255, 255, 255, 1);
+  }
+
+  .echo-btn-compact:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+
+  .echo-feedback {
+    @apply rounded-xl border p-3 text-sm;
+  }
+
+  .echo-feedback-error {
+    @apply bg-red-50 text-red-700 border-red-200;
+  }
+
+  .echo-feedback-success {
+    @apply bg-emerald-50 text-emerald-700 border-emerald-200;
+  }
+
+  .echo-feedback-info {
+    @apply bg-slate-100 text-slate-700 border-slate-200;
+  }
+
+  .echo-empty-state {
+    @apply rounded-xl border border-dashed border-slate-300 bg-white/55 text-slate-600 text-sm px-3 py-4 text-center;
   }
 
   .echo-auth-shell {

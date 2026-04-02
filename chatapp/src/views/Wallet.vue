@@ -20,10 +20,13 @@
           </button>
         </div>
 
-        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-sm">
+        <div v-if="loading" class="echo-feedback echo-feedback-info">
+          正在同步钱包、商品与账本数据...
+        </div>
+        <div v-if="errorText" class="echo-feedback echo-feedback-error">
           {{ errorText }}
         </div>
-        <div v-if="successText" class="bg-green-50 text-green-700 border border-green-200 rounded-xl p-3 text-sm">
+        <div v-if="successText" class="echo-feedback echo-feedback-success">
           {{ successText }}
         </div>
 
@@ -103,7 +106,7 @@
             <div class="text-sm font-semibold text-gray-900">IAP 商品</div>
             <div class="text-xs text-gray-500">products: {{ products.length }}</div>
           </div>
-          <div v-if="products.length === 0" class="text-sm text-gray-600">暂无可用商品。</div>
+          <div v-if="products.length === 0" class="echo-empty-state">暂无可用商品。</div>
           <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div
               v-for="product in products"
@@ -115,14 +118,14 @@
               <div class="flex gap-2">
                 <button
                   @click="prepareMockPayload(product)"
-                  class="px-2 py-1 text-xs rounded border bg-white hover:bg-gray-100"
+                  class="echo-btn-secondary text-xs px-2 py-1"
                 >
                   填充 mock 参数
                 </button>
                 <button
                   @click="quickMockVerify(product)"
                   :disabled="verifying"
-                  class="px-2 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
+                  class="echo-btn-primary text-xs px-2 py-1"
                 >
                   {{ verifying ? '处理中...' : '一键 mock 验单' }}
                 </button>
@@ -130,7 +133,7 @@
                   v-if="tauriReady"
                   @click="purchaseAndVerifyViaTauri(product)"
                   :disabled="verifying"
-                  class="px-2 py-1 text-xs rounded bg-emerald-600 text-white disabled:opacity-50"
+                  class="echo-btn-secondary text-xs px-2 py-1"
                 >
                   {{ verifying ? '处理中...' : 'Tauri 购买并验单' }}
                 </button>
@@ -229,7 +232,7 @@
               </button>
             </div>
           </div>
-          <div v-if="pendingQueue.length === 0" class="text-sm text-gray-600">
+          <div v-if="pendingQueue.length === 0" class="echo-empty-state">
             当前没有待重试交易。
           </div>
           <div v-else class="space-y-2">
@@ -259,7 +262,7 @@
                   <button
                     @click="retryPendingItem(item)"
                     :disabled="isRetryingItem(item.transactionId) || !isPendingRetryable(item)"
-                    class="px-2 py-1 text-xs rounded bg-blue-600 text-white disabled:opacity-50"
+                    class="echo-btn-primary text-xs px-2 py-1"
                   >
                     {{ isRetryingItem(item.transactionId) ? '重试中...' : '重试' }}
                   </button>
@@ -295,7 +298,7 @@
               刷新账本
             </button>
           </div>
-          <div v-if="ledger.length === 0" class="text-sm text-gray-600">暂无账本记录。</div>
+          <div v-if="ledger.length === 0" class="echo-empty-state">暂无账本记录。</div>
           <div v-else class="overflow-x-auto">
             <table class="min-w-full text-sm">
               <thead>

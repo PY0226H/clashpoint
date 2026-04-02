@@ -20,8 +20,11 @@
           </button>
         </div>
 
-        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm">
+        <div v-if="errorText" class="echo-feedback echo-feedback-error">
           {{ errorText }}
+        </div>
+        <div v-if="loading" class="echo-feedback echo-feedback-info">
+          正在刷新运营数据，请稍候...
         </div>
 
         <div class="echo-panel p-3 text-xs text-slate-700 space-y-2">
@@ -74,16 +77,16 @@
             </div>
           </div>
 
-          <div v-if="traceReplayErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+          <div v-if="traceReplayErrorText" class="echo-feedback echo-feedback-error text-xs">
             {{ traceReplayErrorText }}
           </div>
-          <div v-if="replayActionsErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+          <div v-if="replayActionsErrorText" class="echo-feedback echo-feedback-error text-xs">
             {{ replayActionsErrorText }}
           </div>
-          <div v-if="replayExecuteNoticeText" class="bg-emerald-50 text-emerald-700 border border-emerald-200 rounded p-2 text-xs">
+          <div v-if="replayExecuteNoticeText" class="echo-feedback echo-feedback-success text-xs">
             {{ replayExecuteNoticeText }}
           </div>
-          <div v-if="replayBatchNoticeText" class="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded p-2 text-xs whitespace-pre-line">
+          <div v-if="replayBatchNoticeText" class="echo-feedback echo-feedback-info text-xs whitespace-pre-line">
             {{ replayBatchNoticeText }}
           </div>
 
@@ -128,7 +131,7 @@
                 <button
                   @click="refreshTraceReplayOps"
                   :disabled="traceReplayLoading || !canJudgeReview"
-                  class="px-3 py-2 rounded bg-slate-700 text-white text-xs disabled:opacity-50"
+                  class="echo-btn-compact px-3 py-2"
                 >
                   查询
                 </button>
@@ -366,7 +369,7 @@
                 <button
                   @click="queryReplayActionsOps"
                   :disabled="replayActionsLoading || !canJudgeReview"
-                  class="px-3 py-2 rounded bg-slate-700 text-white text-xs disabled:opacity-50"
+                  class="echo-btn-compact px-3 py-2"
                 >
                   查询
                 </button>
@@ -498,7 +501,7 @@
             </button>
           </div>
 
-          <div v-if="roleErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+          <div v-if="roleErrorText" class="echo-feedback echo-feedback-error text-xs">
             {{ roleErrorText }}
           </div>
 
@@ -839,7 +842,7 @@
             </button>
           </div>
 
-          <div v-if="reviewErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+          <div v-if="reviewErrorText" class="echo-feedback echo-feedback-error text-xs">
             {{ reviewErrorText }}
           </div>
 
@@ -960,12 +963,12 @@
             </div>
           </div>
 
-          <div v-if="observabilityErrorText" class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs">
+          <div v-if="observabilityErrorText" class="echo-feedback echo-feedback-error text-xs">
             {{ observabilityErrorText }}
           </div>
           <div
             v-if="observabilityMetricsErrorText"
-            class="bg-red-50 text-red-700 border border-red-200 rounded p-2 text-xs"
+            class="echo-feedback echo-feedback-error text-xs"
           >
             {{ observabilityMetricsErrorText }}
           </div>

@@ -3,11 +3,27 @@ import { invoke } from '@tauri-apps/api/core';
 const URL_BASE = 'http://localhost:6688/api';
 const SSE_URL = 'http://localhost:6687/events';
 
-let config = null;
+type AppRuntimeConfig = {
+  server?: {
+    chat?: string;
+    notification?: string;
+  };
+};
+
+type StoreLike = {
+  commit: (type: string, payload?: unknown) => void;
+};
+
+type InitSseHandlers = {
+  onOpen?: ((event: Event) => void) | null;
+  onError?: ((error: unknown) => void) | null;
+};
+
+let config: AppRuntimeConfig | null = null;
 try {
   if (invoke) {
-    invoke('get_config').then((c) => {
-      config = c;
+    invoke('get_config').then((c: unknown) => {
+      config = (c as AppRuntimeConfig) || null;
       console.log('config:', c);
     });
   }
@@ -15,27 +31,27 @@ try {
   console.warn('failed to get config: fallback');
 }
 
-const getUrlBase = () => {
+const getUrlBase = (): string => {
   if (config && config.server.chat) {
     return config.server.chat;
   }
   return URL_BASE;
-}
+};
 
-const getNotifyBase = () => {
+const getNotifyBase = (): string => {
   if (config && config.server.notification) {
     return config.server.notification;
   }
   return SSE_URL;
-}
+};
 
-const initSSE = (store, notifyTicket, handlers = {}) => {
+const initSSE = (store: StoreLike, notifyTicket: string, handlers: InitSseHandlers = {}) => {
   const {
     onOpen = null,
     onError = null,
   } = handlers;
-  let sse_base = getNotifyBase();
-  let url = `${sse_base}?token=${notifyTicket}`;
+  const sseBase = getNotifyBase();
+  const url = `${sseBase}?token=${notifyTicket}`;
   const sse = new EventSource(url);
 
   sse.onopen = (event) => {
@@ -45,8 +61,9 @@ const initSSE = (store, notifyTicket, handlers = {}) => {
     }
   };
 
-  sse.addEventListener("NewMessage", (e) => {
-    let data = JSON.parse(e.data);
+  sse.addEventListener('NewMessage', (e) => {
+    const event = e as MessageEvent<string>;
+    const data = JSON.parse(event.data || '{}') as Record<string, unknown>;
     console.log('message:', e.data);
     delete data.event;
     store.commit('addMessage', { channelId: data.chatId, message: data });
@@ -67,7 +84,7 @@ const initSSE = (store, notifyTicket, handlers = {}) => {
   };
 
   return sse;
-}
+};
 
 export {
   getUrlBase,
@@ -75,10 +92,10 @@ export {
   initSSE,
 };
 
-export function formatMessageDate(timestamp) {
-  const date = new Date(timestamp);
+export function formatMessageDate(timestamp: unknown): string {
+  const date = timestamp instanceof Date ? timestamp : new Date((timestamp as string | number) ?? '');
   const now = new Date();
-  const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
   const timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (diffDays === 0) {

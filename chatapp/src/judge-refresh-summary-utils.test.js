@@ -4,7 +4,7 @@ import {
   clampInt,
   normalizeJudgeRefreshSummaryMetrics,
   normalizeJudgeRefreshSummaryQuery,
-} from './judge-refresh-summary-utils.js';
+} from './judge-refresh-summary-utils';
 
 test('clampInt should fallback when value is invalid', () => {
   assert.equal(clampInt(undefined, 1, 10, 3), 3);

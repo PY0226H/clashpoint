@@ -11,7 +11,7 @@ import {
   normalizeSessionStatus,
   normalizeSessionTopicId,
   splitLobbySessionsByLane,
-} from './debate-lobby-utils.js';
+} from './debate-lobby-utils';
 
 assert.equal(normalizeSessionStatus(' Running '), 'running');
 assert.equal(normalizeSessionStatus(null), '');

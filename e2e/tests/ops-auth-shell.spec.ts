@@ -93,8 +93,34 @@ async function mockOpsAndAuthApis(page, hooks = {}) {
 test('register page should render refreshed auth shell', async ({ page }) => {
   await page.goto('http://127.0.0.1:1420/register');
   await expect(page.getByRole('heading', { name: '注册账号' })).toBeVisible();
+  await expect(page.getByText('请输入基础信息并完成短信校验')).toBeVisible();
   await expect(page.getByRole('button', { name: '手机号注册' })).toBeVisible();
   await expect(page.getByRole('button', { name: '邮箱注册(绑手机)' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '发码' })).toBeVisible();
+});
+
+test('register send code should show busy text while request is pending', async ({ page }) => {
+  await mockOpsAndAuthApis(page);
+  let releaseSendSms: () => void = () => {};
+  const sendSmsPending = new Promise<void>((resolve) => {
+    releaseSendSms = resolve;
+  });
+  await page.route('**/api/auth/v2/sms/send', async (route) => {
+    await sendSmsPending;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        debugCode: '123456',
+      }),
+    });
+  });
+
+  await page.goto('http://127.0.0.1:1420/register');
+  await page.locator('input').nth(1).fill('13800138000');
+  await page.getByRole('button', { name: '发码' }).click();
+  await expect(page.getByRole('button', { name: '发送中...' })).toBeVisible();
+  releaseSendSms();
   await expect(page.getByRole('button', { name: '发码' })).toBeVisible();
 });
 
@@ -107,6 +133,40 @@ test('phone bind page should render refreshed auth shell', async ({ page }) => {
   await expect(page.getByText('为了继续使用功能，请先完成手机号验证码绑定')).toBeVisible();
   await expect(page.getByRole('button', { name: '发送验证码' })).toBeVisible();
   await expect(page.getByRole('button', { name: '绑定并继续' })).toBeVisible();
+});
+
+test('phone bind submit should show busy text while binding is pending', async ({ page }) => {
+  await bootstrapAuthState(page, { phoneBound: false });
+  await mockOpsAndAuthApis(page);
+  let releaseBindPhone: () => void = () => {};
+  const bindPhonePending = new Promise<void>((resolve) => {
+    releaseBindPhone = resolve;
+  });
+  await page.route('**/api/auth/v2/phone/bind', async (route) => {
+    await bindPhonePending;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accessToken: 'bind-phone-token',
+        tokenType: 'Bearer',
+        expiresInSecs: 3600,
+        user: {
+          id: 3001,
+          email: 'ops-auth-e2e@acme.org',
+          phoneE164: '+8613800000011',
+        },
+      }),
+    });
+  });
+
+  await page.goto('http://127.0.0.1:1420/bind-phone');
+  await page.locator('input').first().fill('13800138000');
+  await page.getByPlaceholder('6位验证码').fill('123456');
+  await page.getByRole('button', { name: '绑定并继续' }).click();
+  await expect(page.getByRole('button', { name: '绑定中...' })).toBeVisible();
+  releaseBindPhone();
+  await expect(page).toHaveURL(/\/home/);
 });
 
 test('unbound phone user should be redirected to bind-phone from home', async ({ page }) => {

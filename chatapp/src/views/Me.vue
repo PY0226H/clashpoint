@@ -18,11 +18,23 @@
           </button>
         </div>
 
-        <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-sm">
+        <div v-if="errorText" class="echo-feedback echo-feedback-error">
           {{ errorText }}
         </div>
+        <div v-if="loading" class="echo-feedback echo-feedback-info">
+          正在同步个人资料与钱包余额...
+        </div>
 
-        <div class="echo-panel p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+        <div
+          v-if="!profileLoaded && loading"
+          class="echo-empty-state"
+        >
+          个人资料加载中，请稍候。
+        </div>
+        <div
+          v-else
+          class="echo-panel p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm"
+        >
           <div>
             <div class="text-xs uppercase text-slate-500">userId</div>
             <div class="text-slate-900 font-semibold mt-1">{{ user?.id || '-' }}</div>
@@ -84,17 +96,20 @@
                 </button>
               </div>
             </label>
-            <p v-if="passwordSmsTips" class="text-xs text-slate-600">{{ passwordSmsTips }}</p>
+            <p v-if="passwordSmsTips" class="echo-feedback echo-feedback-info text-xs">{{ passwordSmsTips }}</p>
+            <p v-if="!hasBoundPhone" class="echo-feedback echo-feedback-info text-xs">
+              当前账号未绑定手机号，暂不可设置密码。
+            </p>
             <div class="flex items-center gap-3">
               <button
                 type="submit"
                 :disabled="passwordSaving || !hasBoundPhone"
-                class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-50"
+                class="echo-btn-primary"
               >
                 {{ passwordSaving ? '保存中...' : '设置密码' }}
               </button>
-              <span v-if="passwordSuccessText" class="text-sm text-emerald-700">{{ passwordSuccessText }}</span>
             </div>
+            <p v-if="passwordSuccessText" class="echo-feedback echo-feedback-success">{{ passwordSuccessText }}</p>
           </form>
         </div>
 
@@ -137,6 +152,7 @@ export default {
   data() {
     return {
       loading: false,
+      profileLoaded: false,
       errorText: '',
       walletBalance: 0,
       newPassword: '',
@@ -182,6 +198,7 @@ export default {
       } catch (error) {
         this.errorText = error?.response?.data?.error || error?.message || '刷新失败';
       } finally {
+        this.profileLoaded = true;
         this.loading = false;
       }
     },

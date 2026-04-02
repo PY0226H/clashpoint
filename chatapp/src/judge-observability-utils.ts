@@ -1,4 +1,4 @@
-function toNumber(value, fallback = 0) {
+function toNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -19,7 +19,7 @@ export const DEFAULT_OBSERVABILITY_SLO_TARGETS = {
   avgDbLatencyMaxMs: 1000,
 };
 
-function clampFloat(value, min, max, fallback) {
+function clampFloat(value: unknown, min: number, max: number, fallback: number): number {
   const n = Number(value);
   if (!Number.isFinite(n)) {
     return fallback;
@@ -27,7 +27,7 @@ function clampFloat(value, min, max, fallback) {
   return Math.min(max, Math.max(min, n));
 }
 
-function clampInt(value, min, max, fallback) {
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const n = Number(value);
   if (!Number.isFinite(n)) {
     return fallback;
@@ -36,7 +36,7 @@ function clampInt(value, min, max, fallback) {
   return Math.min(max, Math.max(min, v));
 }
 
-export function normalizeObservabilityThresholds(input = {}) {
+export function normalizeObservabilityThresholds(input: any = {}) {
   return {
     lowSuccessRateThreshold: clampFloat(
       input.lowSuccessRateThreshold,
@@ -77,7 +77,7 @@ export function normalizeObservabilityThresholds(input = {}) {
   };
 }
 
-export function normalizeObservabilitySloTargets(input = {}) {
+export function normalizeObservabilitySloTargets(input: any = {}) {
   return {
     refreshSuccessRateMin: clampFloat(
       input.refreshSuccessRateMin,
@@ -106,7 +106,7 @@ export function normalizeObservabilitySloTargets(input = {}) {
   };
 }
 
-function resolveIndicatorStatus(value, target, comparator = 'gte') {
+function resolveIndicatorStatus(value: number, target: number, comparator = 'gte') {
   if (!Number.isFinite(value) || !Number.isFinite(target)) {
     return 'warning';
   }
@@ -129,8 +129,8 @@ function resolveIndicatorStatus(value, target, comparator = 'gte') {
 }
 
 export function buildObservabilitySliSnapshot(
-  { rows = [], metrics = {} } = {},
-  inputTargets = {},
+  { rows = [], metrics = {} }: { rows?: any[]; metrics?: any } = {},
+  inputTargets: any = {},
 ) {
   const targets = normalizeObservabilitySloTargets(inputTargets);
   const normalizedRows = Array.isArray(rows) ? rows : [];
@@ -199,7 +199,7 @@ export function buildObservabilitySliSnapshot(
   };
 }
 
-function topRowsByMetric(rows, predicate, limit = 3) {
+function topRowsByMetric(rows: any[], predicate: (row: any) => boolean, limit = 3) {
   return rows
     .filter((row) => predicate(row))
     .slice(0, limit)
@@ -210,8 +210,8 @@ function topRowsByMetric(rows, predicate, limit = 3) {
     }));
 }
 
-function pickSessionIds(rows = [], limit = 3) {
-  const ids = [];
+function pickSessionIds(rows: any[] = [], limit = 3): number[] {
+  const ids: number[] = [];
   rows.forEach((item) => {
     const normalized = normalizeObservabilitySessionId(item?.sessionId);
     if (!normalized) {
@@ -225,8 +225,8 @@ function pickSessionIds(rows = [], limit = 3) {
 }
 
 export function buildJudgeObservabilityAnomalies(
-  { rows = [], metrics = {} } = {},
-  inputThresholds = {},
+  { rows = [], metrics = {} }: { rows?: any[]; metrics?: any } = {},
+  inputThresholds: any = {},
 ) {
   const {
     lowSuccessRateThreshold,
@@ -329,7 +329,7 @@ export function buildJudgeObservabilityAnomalies(
   return anomalies;
 }
 
-export function normalizeObservabilitySessionId(value) {
+export function normalizeObservabilitySessionId(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n)) {
     return 0;
@@ -341,7 +341,7 @@ export function normalizeObservabilitySessionId(value) {
   return id;
 }
 
-function normalizeTimestampMs(value) {
+function normalizeTimestampMs(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n)) {
     return 0;
@@ -350,7 +350,12 @@ function normalizeTimestampMs(value) {
   return ts > 0 ? ts : 0;
 }
 
-export function buildObservabilityAnomalyStateKey(anomaly = {}) {
+type ObservabilityAnomalyState = {
+  acknowledgedAtMs: number;
+  suppressUntilMs: number;
+};
+
+export function buildObservabilityAnomalyStateKey(anomaly: any = {}) {
   const code = String(anomaly?.code || '').trim();
   const safeCode = code || 'unknown';
   const sessionIds = [];
@@ -370,16 +375,19 @@ export function buildObservabilityAnomalyStateKey(anomaly = {}) {
   return `${safeCode}:${sessionIds.join(',')}`;
 }
 
-export function normalizeObservabilityAnomalyStateMap(input = {}, nowMs = Date.now()) {
+export function normalizeObservabilityAnomalyStateMap(
+  input: any = {},
+  nowMs = Date.now(),
+): Record<string, ObservabilityAnomalyState> {
   const source = input && typeof input === 'object' ? input : {};
   const now = normalizeTimestampMs(nowMs) || Date.now();
-  const normalized = {};
+  const normalized: Record<string, ObservabilityAnomalyState> = {};
   Object.entries(source).forEach(([key, raw]) => {
     const stateKey = String(key || '').trim();
     if (!stateKey) {
       return;
     }
-    const item = raw && typeof raw === 'object' ? raw : {};
+    const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     const acknowledgedAtMs = normalizeTimestampMs(item.acknowledgedAtMs);
     const suppressUntilRaw = normalizeTimestampMs(item.suppressUntilMs);
     const suppressUntilMs = suppressUntilRaw > now ? suppressUntilRaw : 0;
@@ -394,13 +402,13 @@ export function normalizeObservabilityAnomalyStateMap(input = {}, nowMs = Date.n
   return normalized;
 }
 
-export function projectObservabilityAnomalies(anomalies = [], state = {}, nowMs = Date.now()) {
+export function projectObservabilityAnomalies(anomalies: any[] = [], state: any = {}, nowMs = Date.now()) {
   const now = normalizeTimestampMs(nowMs) || Date.now();
   const normalizedState = normalizeObservabilityAnomalyStateMap(state, now);
   const source = Array.isArray(anomalies) ? anomalies : [];
   const all = source.map((anomaly) => {
     const key = buildObservabilityAnomalyStateKey(anomaly);
-    const item = normalizedState[key] || {};
+    const item = normalizedState[key] || { acknowledgedAtMs: 0, suppressUntilMs: 0 };
     const suppressUntilMs = normalizeTimestampMs(item.suppressUntilMs);
     const acknowledgedAtMs = normalizeTimestampMs(item.acknowledgedAtMs);
     const suppressed = suppressUntilMs > now;
@@ -424,9 +432,9 @@ export function projectObservabilityAnomalies(anomalies = [], state = {}, nowMs 
 export const OBSERVABILITY_TREND_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const OBSERVABILITY_TREND_MAX_POINTS = 1000;
 
-export function buildObservabilityAnomalyCodeStats(anomalies = []) {
+export function buildObservabilityAnomalyCodeStats(anomalies: any[] = []) {
   const source = Array.isArray(anomalies) ? anomalies : [];
-  const counts = {};
+  const counts: Record<string, number> = {};
   source.forEach((anomaly) => {
     const code = String(anomaly?.code || '').trim() || 'unknown';
     counts[code] = Number(counts[code] || 0) + 1;
@@ -449,9 +457,9 @@ export function buildObservabilityAnomalyCodeStats(anomalies = []) {
   };
 }
 
-function normalizeTrendCounts(input = {}) {
+function normalizeTrendCounts(input: any = {}) {
   const source = input && typeof input === 'object' ? input : {};
-  const counts = {};
+  const counts: Record<string, number> = {};
   Object.entries(source).forEach(([codeRaw, valueRaw]) => {
     const code = String(codeRaw || '').trim();
     if (!code) {
@@ -470,7 +478,7 @@ function normalizeTrendCounts(input = {}) {
 }
 
 export function normalizeObservabilityAnomalyTrendHistory(
-  input = [],
+  input: any[] = [],
   nowMs = Date.now(),
   windowMs = OBSERVABILITY_TREND_WINDOW_MS,
   maxPoints = OBSERVABILITY_TREND_MAX_POINTS,
@@ -480,7 +488,7 @@ export function normalizeObservabilityAnomalyTrendHistory(
   const safeWindowMs = Math.max(1, Math.trunc(Number(windowMs) || OBSERVABILITY_TREND_WINDOW_MS));
   const safeMaxPoints = Math.max(1, Math.trunc(Number(maxPoints) || OBSERVABILITY_TREND_MAX_POINTS));
   const lowerBound = now - safeWindowMs;
-  const items = [];
+  const items: Array<{ atMs: number; counts: Record<string, number> }> = [];
   source.forEach((entry) => {
     const row = entry && typeof entry === 'object' ? entry : {};
     const atMs = normalizeTimestampMs(row.atMs);
@@ -499,7 +507,7 @@ export function normalizeObservabilityAnomalyTrendHistory(
   return items;
 }
 
-function mergeTrendTotals(target = {}, counts = {}) {
+function mergeTrendTotals(target: Record<string, number> = {}, counts: Record<string, number> = {}) {
   Object.entries(counts).forEach(([code, value]) => {
     const n = Number(value || 0);
     if (n <= 0) {
@@ -510,8 +518,8 @@ function mergeTrendTotals(target = {}, counts = {}) {
 }
 
 export function appendObservabilityAnomalyTrendSnapshot(
-  history = [],
-  anomalies = [],
+  history: any[] = [],
+  anomalies: any[] = [],
   nowMs = Date.now(),
 ) {
   const atMs = normalizeTimestampMs(nowMs) || Date.now();
@@ -527,15 +535,15 @@ export function appendObservabilityAnomalyTrendSnapshot(
   return normalizeObservabilityAnomalyTrendHistory(next, atMs);
 }
 
-export function summarizeObservabilityAnomalyTrend(history = [], nowMs = Date.now()) {
+export function summarizeObservabilityAnomalyTrend(history: any[] = [], nowMs = Date.now()) {
   const now = normalizeTimestampMs(nowMs) || Date.now();
   const normalizedHistory = normalizeObservabilityAnomalyTrendHistory(history, now);
   const recentStartMs = now - (24 * 60 * 60 * 1000);
   const previousStartMs = now - (48 * 60 * 60 * 1000);
   let recentSamples = 0;
   let previousSamples = 0;
-  const recentTotals = {};
-  const previousTotals = {};
+  const recentTotals: Record<string, number> = {};
+  const previousTotals: Record<string, number> = {};
 
   normalizedHistory.forEach((entry) => {
     const atMs = normalizeTimestampMs(entry?.atMs);

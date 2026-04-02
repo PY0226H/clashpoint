@@ -8,7 +8,7 @@ import {
   normalizeOpsRbacMe,
   parseOpsPermissionDenied,
   resolveOpsErrorText,
-} from './ops-permission-utils.js';
+} from './ops-permission-utils';
 
 assert.deepEqual(emptyOpsRbacMe(), {
   userId: 0,

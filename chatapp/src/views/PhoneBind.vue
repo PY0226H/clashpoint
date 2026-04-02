@@ -30,21 +30,23 @@
             <button
               type="button"
               @click="sendCode"
+              :disabled="sendingCode || submitting"
               class="echo-btn-secondary px-3 py-2 text-sm whitespace-nowrap"
             >
-              发送验证码
+              {{ sendingCode ? '发送中...' : '发送验证码' }}
             </button>
           </div>
         </div>
 
-        <p v-if="tips" class="text-xs text-slate-600">{{ tips }}</p>
-        <p v-if="errorText" class="text-sm text-red-600">{{ errorText }}</p>
+        <p v-if="tips" class="echo-feedback echo-feedback-info text-xs">{{ tips }}</p>
+        <p v-if="errorText" class="echo-feedback echo-feedback-error">{{ errorText }}</p>
 
         <button
           type="submit"
+          :disabled="submitting || sendingCode"
           class="echo-btn-primary w-full py-2 px-4"
         >
-          绑定并继续
+          {{ submitting ? '绑定中...' : '绑定并继续' }}
         </button>
       </form>
     </div>
@@ -59,12 +61,15 @@ export default {
       smsCode: '',
       tips: '',
       errorText: '',
+      sendingCode: false,
+      submitting: false,
     };
   },
   methods: {
     async sendCode() {
       this.errorText = '';
       this.tips = '';
+      this.sendingCode = true;
       try {
         const ret = await this.$store.dispatch('sendSmsCodeV2', {
           phone: this.phone,
@@ -77,10 +82,13 @@ export default {
         }
       } catch (error) {
         this.errorText = error?.response?.data?.error || '发送验证码失败';
+      } finally {
+        this.sendingCode = false;
       }
     },
     async bindPhone() {
       this.errorText = '';
+      this.submitting = true;
       try {
         await this.$store.dispatch('bindPhoneV2', {
           phone: this.phone,
@@ -89,6 +97,8 @@ export default {
         this.$router.push('/home');
       } catch (error) {
         this.errorText = error?.response?.data?.error || '绑定失败';
+      } finally {
+        this.submitting = false;
       }
     },
   },

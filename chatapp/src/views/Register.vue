@@ -4,12 +4,16 @@
       <h1 class="text-3xl font-semibold text-center text-slate-900">
         {{ wechatTicket ? '微信绑定手机号' : '注册账号' }}
       </h1>
+      <p class="text-sm text-center text-slate-600">
+        请输入基础信息并完成短信校验，完成后即可进入首页与广场主链路。
+      </p>
 
       <template v-if="!wechatTicket">
         <div class="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-100/70 border border-slate-200/80">
           <button
             type="button"
             @click="mode = 'phone_signup'"
+            :disabled="submitting"
             class="px-2 py-2 text-xs rounded-xl border transition"
             :class="mode === 'phone_signup' ? 'bg-gradient-to-r from-[#0f6adf] to-[#3085f2] text-white border-[#0f6adf]' : 'bg-white/90 text-slate-700 border-slate-300'"
           >
@@ -18,6 +22,7 @@
           <button
             type="button"
             @click="mode = 'email_signup'"
+            :disabled="submitting"
             class="px-2 py-2 text-xs rounded-xl border transition"
             :class="mode === 'email_signup' ? 'bg-gradient-to-r from-[#0f6adf] to-[#3085f2] text-white border-[#0f6adf]' : 'bg-white/90 text-slate-700 border-slate-300'"
           >
@@ -58,17 +63,26 @@
           <label class="block text-sm font-medium text-slate-700">验证码</label>
           <div class="mt-1 flex gap-2">
             <input v-model="smsCode" type="text" required class="echo-field flex-1" />
-            <button type="button" @click="sendCode" class="echo-btn-secondary px-3 py-2 text-xs whitespace-nowrap">
-              发码
+            <button
+              type="button"
+              @click="sendCode"
+              :disabled="sendingCode || submitting"
+              class="echo-btn-secondary px-3 py-2 text-xs whitespace-nowrap"
+            >
+              {{ sendingCode ? '发送中...' : '发码' }}
             </button>
           </div>
         </div>
 
-        <p v-if="tips" class="text-xs text-slate-600">{{ tips }}</p>
-        <p v-if="errorText" class="text-sm text-red-600">{{ errorText }}</p>
+        <p v-if="tips" class="echo-feedback echo-feedback-info text-xs">{{ tips }}</p>
+        <p v-if="errorText" class="echo-feedback echo-feedback-error">{{ errorText }}</p>
 
-        <button type="submit" class="echo-btn-primary w-full py-2 px-4 text-sm">
-          {{ wechatTicket ? '绑定并创建账号' : '注册' }}
+        <button
+          type="submit"
+          :disabled="submitting || sendingCode"
+          class="echo-btn-primary w-full py-2 px-4 text-sm"
+        >
+          {{ submitting ? '提交中...' : (wechatTicket ? '绑定并创建账号' : '注册') }}
         </button>
       </form>
 
@@ -95,6 +109,8 @@ export default {
       tips: '',
       errorText: '',
       wechatTicket: '',
+      sendingCode: false,
+      submitting: false,
     };
   },
   mounted() {
@@ -108,6 +124,7 @@ export default {
       this.errorText = '';
       this.tips = '';
       const scene = this.mode === 'phone_signup' ? 'signup_phone' : 'bind_phone';
+      this.sendingCode = true;
       try {
         const ret = await this.$store.dispatch('sendSmsCodeV2', {
           phone: this.phone,
@@ -120,11 +137,14 @@ export default {
         }
       } catch (error) {
         this.errorText = error?.response?.data?.error || '发送验证码失败';
+      } finally {
+        this.sendingCode = false;
       }
     },
     async register() {
       this.errorText = '';
       this.tips = '';
+      this.submitting = true;
       try {
         let user = null;
         let accountType = 'unknown';
@@ -172,6 +192,8 @@ export default {
         this.$router.push('/home');
       } catch (error) {
         this.errorText = error?.response?.data?.error || '注册失败';
+      } finally {
+        this.submitting = false;
       }
     },
   },

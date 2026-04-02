@@ -1,6 +1,23 @@
 export const ANALYTICS_API_BASE_URL = 'http://localhost:6690/api';
 
-export function clampInt(value, min, max, fallback) {
+type JudgeRefreshSummaryQuery = {
+  hours: number;
+  limit: number;
+  debateSessionId: number | null;
+};
+
+type JudgeRefreshSummaryMetrics = {
+  requestTotal: number;
+  cacheHitTotal: number;
+  cacheMissTotal: number;
+  cacheHitRate: number;
+  dbQueryTotal: number;
+  dbErrorTotal: number;
+  avgDbLatencyMs: number;
+  lastDbLatencyMs: number;
+};
+
+export function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const n = Number(value);
   if (!Number.isFinite(n)) {
     return fallback;
@@ -8,7 +25,7 @@ export function clampInt(value, min, max, fallback) {
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
-export function normalizeJudgeRefreshSummaryQuery(payload = {}) {
+export function normalizeJudgeRefreshSummaryQuery(payload: any = {}): JudgeRefreshSummaryQuery {
   const hours = clampInt(payload.hours, 1, 168, 24);
   const limit = clampInt(payload.limit, 1, 200, 20);
   let debateSessionId = null;
@@ -28,12 +45,12 @@ export function normalizeJudgeRefreshSummaryQuery(payload = {}) {
   };
 }
 
-function toNumberOrFallback(value, fallback = 0) {
+function toNumberOrFallback(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function normalizeJudgeRefreshSummaryMetrics(payload = {}) {
+export function normalizeJudgeRefreshSummaryMetrics(payload: any = {}): JudgeRefreshSummaryMetrics {
   return {
     requestTotal: Math.max(0, toNumberOrFallback(payload.requestTotal, 0)),
     cacheHitTotal: Math.max(0, toNumberOrFallback(payload.cacheHitTotal, 0)),
