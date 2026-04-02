@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(authorized.status(), StatusCode::OK);
         let body = axum::body::to_bytes(authorized.into_body(), usize::MAX).await?;
         let payload: crate::GetAuthConsistencyMetricsOutput = serde_json::from_slice(&body)?;
-        assert_eq!(payload.queue_depth, 0);
+        assert_eq!(payload.token_version_retry_queue_depth, 0);
         Ok(())
     }
 }

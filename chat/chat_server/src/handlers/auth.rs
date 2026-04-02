@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use chat_core::User;
+use chat_core::{middlewares::AuthVerifyError, JwtError, User};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -48,6 +48,14 @@ const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_LOCK_SECS: i64 = 15;
 const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_BASE_BACKOFF_MS: u64 = 500;
 const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_BACKOFF_MS: u64 = 30_000;
 const AUTH_TOKEN_VERSION_INVALIDATION_ERROR_MAX_LEN: usize = 512;
+const AUTH_REFRESH_CONFLICT_GRACE_SECS: i64 = 3;
+const AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS: u64 = 1;
+pub(crate) const AUTH_REFRESH_OUTBOX_BATCH_SIZE: usize = 64;
+const AUTH_REFRESH_OUTBOX_MAX_ATTEMPTS: i32 = 12;
+const AUTH_REFRESH_OUTBOX_LOCK_SECS: i64 = 15;
+const AUTH_REFRESH_OUTBOX_BASE_BACKOFF_MS: u64 = 500;
+const AUTH_REFRESH_OUTBOX_MAX_BACKOFF_MS: u64 = 60_000;
+const AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN: usize = 512;
 
 #[derive(Debug, Clone)]
 struct SmsFallbackEntry {
@@ -152,7 +160,26 @@ pub struct GetAuthConsistencyMetricsOutput {
     pub retry_terminal_drop_total: u64,
     pub retry_tick_total: u64,
     pub retry_tick_error_total: u64,
-    pub queue_depth: u64,
+    pub token_version_retry_queue_depth: u64,
+    pub refresh_total: u64,
+    pub refresh_success_total: u64,
+    pub refresh_failed_total: u64,
+    pub refresh_failed_missing_total: u64,
+    pub refresh_failed_invalid_total: u64,
+    pub refresh_failed_expired_total: u64,
+    pub refresh_failed_conflict_total: u64,
+    pub refresh_failed_replayed_total: u64,
+    pub refresh_failed_session_revoked_total: u64,
+    pub refresh_failed_degraded_retryable_total: u64,
+    pub refresh_lock_wait_ms_total: u64,
+    pub refresh_lock_wait_samples_total: u64,
+    pub refresh_outbox_enqueue_total: u64,
+    pub refresh_outbox_delivered_total: u64,
+    pub refresh_outbox_requeue_total: u64,
+    pub refresh_outbox_drop_total: u64,
+    pub refresh_outbox_tick_total: u64,
+    pub refresh_outbox_tick_error_total: u64,
+    pub refresh_outbox_queue_depth: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -163,9 +190,48 @@ pub(crate) struct AuthTokenVersionInvalidationRetryReport {
     pub dropped: usize,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct AuthRefreshConsistencyOutboxRetryReport {
+    pub attempted: usize,
+    pub delivered: usize,
+    pub requeued: usize,
+    pub dropped: usize,
+}
+
 #[derive(Debug, Clone, Copy, FromRow)]
 struct ClaimedAuthTokenVersionInvalidationJob {
     user_id: i64,
+    attempts: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthRefreshOutboxOp {
+    SetWithTtl,
+}
+
+impl AuthRefreshOutboxOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SetWithTtl => "set_with_ttl",
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "set_with_ttl" => Some(Self::SetWithTtl),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct ClaimedAuthRefreshConsistencyOutboxJob {
+    id: i64,
+    op_type: String,
+    scope: String,
+    raw_key: String,
+    value: String,
+    ttl_secs: i64,
     attempts: i32,
 }
 
@@ -182,7 +248,26 @@ pub(crate) struct AuthConsistencyMetrics {
     retry_terminal_drop_total: AtomicU64,
     retry_tick_total: AtomicU64,
     retry_tick_error_total: AtomicU64,
-    queue_depth: AtomicU64,
+    token_version_retry_queue_depth: AtomicU64,
+    refresh_total: AtomicU64,
+    refresh_success_total: AtomicU64,
+    refresh_failed_total: AtomicU64,
+    refresh_failed_missing_total: AtomicU64,
+    refresh_failed_invalid_total: AtomicU64,
+    refresh_failed_expired_total: AtomicU64,
+    refresh_failed_conflict_total: AtomicU64,
+    refresh_failed_replayed_total: AtomicU64,
+    refresh_failed_session_revoked_total: AtomicU64,
+    refresh_failed_degraded_retryable_total: AtomicU64,
+    refresh_lock_wait_ms_total: AtomicU64,
+    refresh_lock_wait_samples_total: AtomicU64,
+    refresh_outbox_enqueue_total: AtomicU64,
+    refresh_outbox_delivered_total: AtomicU64,
+    refresh_outbox_requeue_total: AtomicU64,
+    refresh_outbox_drop_total: AtomicU64,
+    refresh_outbox_tick_total: AtomicU64,
+    refresh_outbox_tick_error_total: AtomicU64,
+    refresh_outbox_queue_depth: AtomicU64,
 }
 
 impl AuthConsistencyMetrics {
@@ -198,18 +283,21 @@ impl AuthConsistencyMetrics {
 
     fn observe_retry_enqueued(&self, queue_depth: u64) {
         self.retry_enqueue_total.fetch_add(1, Ordering::Relaxed);
-        self.queue_depth.store(queue_depth, Ordering::Relaxed);
+        self.token_version_retry_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
     }
 
     fn observe_retry_dedup(&self, queue_depth: u64) {
         self.retry_dedup_total.fetch_add(1, Ordering::Relaxed);
-        self.queue_depth.store(queue_depth, Ordering::Relaxed);
+        self.token_version_retry_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
     }
 
     fn observe_retry_overflow_drop(&self, queue_depth: u64) {
         self.retry_overflow_drop_total
             .fetch_add(1, Ordering::Relaxed);
-        self.queue_depth.store(queue_depth, Ordering::Relaxed);
+        self.token_version_retry_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
     }
 
     fn observe_retry_tick(
@@ -226,7 +314,8 @@ impl AuthConsistencyMetrics {
             .fetch_add(report.requeued as u64, Ordering::Relaxed);
         self.retry_terminal_drop_total
             .fetch_add(report.dropped as u64, Ordering::Relaxed);
-        self.queue_depth.store(queue_depth, Ordering::Relaxed);
+        self.token_version_retry_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
     }
 
     fn observe_retry_tick_error(&self) {
@@ -234,7 +323,94 @@ impl AuthConsistencyMetrics {
     }
 
     fn observe_queue_depth(&self, queue_depth: u64) {
-        self.queue_depth.store(queue_depth, Ordering::Relaxed);
+        self.token_version_retry_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_start(&self) {
+        self.refresh_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_lock_wait(&self, wait_ms: u64) {
+        self.refresh_lock_wait_ms_total
+            .fetch_add(wait_ms, Ordering::Relaxed);
+        self.refresh_lock_wait_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_success(&self) {
+        self.refresh_success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_failure_code(&self, code: &str) {
+        self.refresh_failed_total.fetch_add(1, Ordering::Relaxed);
+        match code {
+            "auth_refresh_missing" => {
+                self.refresh_failed_missing_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            "auth_refresh_invalid" => {
+                self.refresh_failed_invalid_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            "auth_refresh_expired" => {
+                self.refresh_failed_expired_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            "auth_refresh_conflict_retry" => {
+                self.refresh_failed_conflict_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            "auth_refresh_replayed" => {
+                self.refresh_failed_replayed_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            "auth_session_revoked" => {
+                self.refresh_failed_session_revoked_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            "auth_refresh_degraded_retryable" => {
+                self.refresh_failed_degraded_retryable_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    fn observe_refresh_outbox_enqueued(&self, queue_depth: u64) {
+        self.refresh_outbox_enqueue_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.refresh_outbox_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_outbox_tick(
+        &self,
+        delivered: usize,
+        requeued: usize,
+        dropped: usize,
+        queue_depth: u64,
+    ) {
+        self.refresh_outbox_tick_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.refresh_outbox_delivered_total
+            .fetch_add(delivered as u64, Ordering::Relaxed);
+        self.refresh_outbox_requeue_total
+            .fetch_add(requeued as u64, Ordering::Relaxed);
+        self.refresh_outbox_drop_total
+            .fetch_add(dropped as u64, Ordering::Relaxed);
+        self.refresh_outbox_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_outbox_tick_error(&self) {
+        self.refresh_outbox_tick_error_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_outbox_depth(&self, queue_depth: u64) {
+        self.refresh_outbox_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> GetAuthConsistencyMetricsOutput {
@@ -254,7 +430,42 @@ impl AuthConsistencyMetrics {
             retry_terminal_drop_total: self.retry_terminal_drop_total.load(Ordering::Relaxed),
             retry_tick_total: self.retry_tick_total.load(Ordering::Relaxed),
             retry_tick_error_total: self.retry_tick_error_total.load(Ordering::Relaxed),
-            queue_depth: self.queue_depth.load(Ordering::Relaxed),
+            token_version_retry_queue_depth: self
+                .token_version_retry_queue_depth
+                .load(Ordering::Relaxed),
+            refresh_total: self.refresh_total.load(Ordering::Relaxed),
+            refresh_success_total: self.refresh_success_total.load(Ordering::Relaxed),
+            refresh_failed_total: self.refresh_failed_total.load(Ordering::Relaxed),
+            refresh_failed_missing_total: self.refresh_failed_missing_total.load(Ordering::Relaxed),
+            refresh_failed_invalid_total: self.refresh_failed_invalid_total.load(Ordering::Relaxed),
+            refresh_failed_expired_total: self.refresh_failed_expired_total.load(Ordering::Relaxed),
+            refresh_failed_conflict_total: self
+                .refresh_failed_conflict_total
+                .load(Ordering::Relaxed),
+            refresh_failed_replayed_total: self
+                .refresh_failed_replayed_total
+                .load(Ordering::Relaxed),
+            refresh_failed_session_revoked_total: self
+                .refresh_failed_session_revoked_total
+                .load(Ordering::Relaxed),
+            refresh_failed_degraded_retryable_total: self
+                .refresh_failed_degraded_retryable_total
+                .load(Ordering::Relaxed),
+            refresh_lock_wait_ms_total: self.refresh_lock_wait_ms_total.load(Ordering::Relaxed),
+            refresh_lock_wait_samples_total: self
+                .refresh_lock_wait_samples_total
+                .load(Ordering::Relaxed),
+            refresh_outbox_enqueue_total: self.refresh_outbox_enqueue_total.load(Ordering::Relaxed),
+            refresh_outbox_delivered_total: self
+                .refresh_outbox_delivered_total
+                .load(Ordering::Relaxed),
+            refresh_outbox_requeue_total: self.refresh_outbox_requeue_total.load(Ordering::Relaxed),
+            refresh_outbox_drop_total: self.refresh_outbox_drop_total.load(Ordering::Relaxed),
+            refresh_outbox_tick_total: self.refresh_outbox_tick_total.load(Ordering::Relaxed),
+            refresh_outbox_tick_error_total: self
+                .refresh_outbox_tick_error_total
+                .load(Ordering::Relaxed),
+            refresh_outbox_queue_depth: self.refresh_outbox_queue_depth.load(Ordering::Relaxed),
         }
     }
 }
@@ -265,6 +476,7 @@ struct AuthRefreshSessionRow {
     family_id: String,
     user_id: i64,
     current_jti: String,
+    rotated_from_jti: Option<String>,
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
     revoke_reason: Option<String>,
@@ -1359,25 +1571,40 @@ pub(crate) async fn refresh_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
+    state.auth_consistency_metrics.observe_refresh_start();
+    validate_refresh_csrf_headers(&headers)
+        .map_err(|_| refresh_auth_error(&state, "auth_refresh_invalid"))?;
+
     let refresh_token = extract_refresh_token(&headers)
-        .ok_or_else(|| AppError::AuthError("auth_refresh_missing".to_string()))?;
+        .ok_or_else(|| refresh_auth_error(&state, "auth_refresh_missing"))?;
 
     let decoded = state
         .dk
         .verify_refresh(&refresh_token)
-        .map_err(|err| AppError::AuthError(err.to_auth_verify_error().code().to_string()))?;
+        .map_err(|err| refresh_auth_error(&state, refresh_verify_error_code(&err)))?;
 
-    if is_refresh_blacklisted(&state, &decoded.jti).await? {
+    if is_refresh_blacklisted(&state, &decoded.jti)
+        .await
+        .map_err(|err| map_refresh_error_with_metrics(&state, err))?
+    {
         revoke_family_by_id(&state, &decoded.family_id, "replay_detected").await?;
-        return Err(AppError::AuthError("auth_refresh_replayed".to_string()));
+        tracing::warn!(
+            sid = %decoded.sid,
+            family_id = %decoded.family_id,
+            user_id = decoded.user_id,
+            decision = "blacklist_replayed",
+            "auth refresh rejected by blacklist"
+        );
+        return Err(refresh_auth_error(&state, "auth_refresh_replayed"));
     }
 
     let now = Utc::now();
     let mut tx = state.pool.begin().await?;
+    let lock_wait_started_at = std::time::Instant::now();
     let row: Option<AuthRefreshSessionRow> = sqlx::query_as(
         r#"
         SELECT
-            sid, family_id, user_id, current_jti, expires_at, revoked_at,
+            sid, family_id, user_id, current_jti, rotated_from_jti, expires_at, revoked_at,
             revoke_reason, user_agent, ip_hash, created_at, updated_at
         FROM auth_refresh_sessions
         WHERE sid = $1 AND user_id = $2
@@ -1388,15 +1615,34 @@ pub(crate) async fn refresh_handler(
     .bind(decoded.user_id)
     .fetch_optional(&mut *tx)
     .await?;
+    state.auth_consistency_metrics.observe_refresh_lock_wait(
+        lock_wait_started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64,
+    );
 
     let Some(session) = row else {
         tx.rollback().await.ok();
-        return Err(AppError::AuthError("auth_refresh_invalid".to_string()));
+        tracing::warn!(
+            sid = %decoded.sid,
+            user_id = decoded.user_id,
+            decision = "session_missing",
+            "auth refresh rejected due to missing session"
+        );
+        return Err(refresh_auth_error(&state, "auth_refresh_invalid"));
     };
 
     if session.revoked_at.is_some() {
         tx.rollback().await.ok();
-        return Err(AppError::AuthError("auth_session_revoked".to_string()));
+        tracing::warn!(
+            sid = %session.sid,
+            family_id = %session.family_id,
+            user_id = session.user_id,
+            decision = "session_revoked",
+            "auth refresh rejected due to revoked session"
+        );
+        return Err(refresh_auth_error(&state, "auth_session_revoked"));
     }
 
     if session.expires_at <= now {
@@ -1410,12 +1656,39 @@ pub(crate) async fn refresh_handler(
         .bind(&session.sid)
         .execute(&mut *tx)
         .await?;
+        enqueue_auth_refresh_consistency_set_with_ttl_tx(
+            &state,
+            &mut *tx,
+            "auth:rt:blacklist",
+            &decoded.jti,
+            "1",
+            ttl_from_exp(decoded.exp),
+        )
+        .await?;
         tx.commit().await?;
-        blacklist_refresh_jti(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await?;
-        return Err(AppError::AuthError("auth_refresh_invalid".to_string()));
+        best_effort_set_refresh_blacklist(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await;
+        tracing::warn!(
+            sid = %session.sid,
+            family_id = %session.family_id,
+            user_id = session.user_id,
+            decision = "session_expired",
+            "auth refresh rejected due to expired session"
+        );
+        return Err(refresh_auth_error(&state, "auth_refresh_expired"));
     }
 
     if session.current_jti != decoded.jti {
+        if is_refresh_conflict_retry_candidate(&session, &decoded.jti, now) {
+            tx.rollback().await.ok();
+            tracing::warn!(
+                sid = %session.sid,
+                family_id = %session.family_id,
+                user_id = session.user_id,
+                decision = "conflict_retry",
+                "auth refresh conflict detected within grace window"
+            );
+            return Err(refresh_auth_error(&state, "auth_refresh_conflict_retry"));
+        }
         sqlx::query(
             r#"
             UPDATE auth_refresh_sessions
@@ -1426,13 +1699,40 @@ pub(crate) async fn refresh_handler(
         .bind(&session.family_id)
         .execute(&mut *tx)
         .await?;
+        enqueue_auth_refresh_consistency_set_with_ttl_tx(
+            &state,
+            &mut *tx,
+            "auth:rt:blacklist",
+            &decoded.jti,
+            "1",
+            ttl_from_exp(decoded.exp),
+        )
+        .await?;
+        enqueue_auth_refresh_consistency_set_with_ttl_tx(
+            &state,
+            &mut *tx,
+            "auth:rt:family",
+            &session.family_id,
+            "revoked",
+            REFRESH_TOKEN_TTL_SECS,
+        )
+        .await?;
         tx.commit().await?;
-        blacklist_refresh_jti(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await?;
-        mark_family_revoked_in_redis(&state, &session.family_id).await?;
-        return Err(AppError::AuthError("auth_refresh_replayed".to_string()));
+        best_effort_set_refresh_blacklist(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await;
+        best_effort_set_refresh_family_revoked(&state, &session.family_id).await;
+        tracing::warn!(
+            sid = %session.sid,
+            family_id = %session.family_id,
+            user_id = session.user_id,
+            decision = "replay_detected",
+            "auth refresh replay detected and family revoked"
+        );
+        return Err(refresh_auth_error(&state, "auth_refresh_replayed"));
     }
 
-    let token_version = load_user_token_version(&state, session.user_id).await?;
+    let token_version = load_user_token_version(&state, session.user_id)
+        .await
+        .map_err(|err| map_refresh_error_with_metrics(&state, err))?;
     let new_refresh_jti = Uuid::now_v7().to_string();
     let new_access_jti = Uuid::now_v7().to_string();
     let access_token = state.ek.sign_access_token_with_jti(
@@ -1466,10 +1766,27 @@ pub(crate) async fn refresh_handler(
     .bind(REFRESH_TOKEN_TTL_SECS as i64)
     .execute(&mut *tx)
     .await?;
+    enqueue_auth_refresh_consistency_set_with_ttl_tx(
+        &state,
+        &mut *tx,
+        "auth:rt:blacklist",
+        &decoded.jti,
+        "1",
+        ttl_from_exp(decoded.exp),
+    )
+    .await?;
+    enqueue_auth_refresh_consistency_set_with_ttl_tx(
+        &state,
+        &mut *tx,
+        "auth:rt:session",
+        &session.sid,
+        &new_refresh_jti,
+        REFRESH_TOKEN_TTL_SECS,
+    )
+    .await?;
     tx.commit().await?;
-
-    blacklist_refresh_jti(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await?;
-    set_refresh_session_in_redis(&state, &session.sid, &new_refresh_jti).await?;
+    best_effort_set_refresh_blacklist(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await;
+    best_effort_set_refresh_session(&state, &session.sid, &new_refresh_jti).await;
 
     let mut resp_headers = HeaderMap::new();
     set_refresh_cookie_header(
@@ -1477,6 +1794,14 @@ pub(crate) async fn refresh_handler(
         &refresh_token_new,
         REFRESH_TOKEN_TTL_SECS,
     )?;
+    state.auth_consistency_metrics.observe_refresh_success();
+    tracing::info!(
+        sid = %session.sid,
+        family_id = %session.family_id,
+        user_id = session.user_id,
+        decision = "refresh_rotated",
+        "auth refresh rotated successfully"
+    );
     Ok((
         StatusCode::OK,
         resp_headers,
@@ -1586,7 +1911,7 @@ pub(crate) async fn list_auth_sessions_handler(
     let rows: Vec<AuthRefreshSessionRow> = sqlx::query_as(
         r#"
         SELECT
-            sid, family_id, user_id, current_jti, expires_at, revoked_at,
+            sid, family_id, user_id, current_jti, rotated_from_jti, expires_at, revoked_at,
             revoke_reason, user_agent, ip_hash, created_at, updated_at
         FROM auth_refresh_sessions
         WHERE user_id = $1
@@ -1765,25 +2090,14 @@ async fn set_family_active_in_redis(state: &AppState, family_id: &str) -> Result
     handle_auth_redis_unit_result(state, ret, "auth_refresh_invalid")
 }
 
-async fn mark_family_revoked_in_redis(state: &AppState, family_id: &str) -> Result<(), AppError> {
-    let ret = state
-        .redis
-        .set_value_with_ttl(
-            "auth:rt:family",
-            family_id,
-            "revoked",
-            REFRESH_TOKEN_TTL_SECS,
-        )
-        .await;
-    handle_auth_redis_unit_result(state, ret, "auth_refresh_invalid")
-}
-
 async fn is_refresh_blacklisted(state: &AppState, jti: &str) -> Result<bool, AppError> {
     match state.redis.get_value("auth:rt:blacklist", jti).await {
         Ok(ret) => Ok(ret.is_some()),
         Err(err) => {
             if auth_fail_closed_enabled(state) {
-                Err(AppError::AuthError("auth_refresh_invalid".to_string()))
+                Err(AppError::AuthError(
+                    "auth_refresh_degraded_retryable".to_string(),
+                ))
             } else {
                 tracing::warn!("auth redis blacklist read degraded as fail-open: {}", err);
                 Ok(false)
@@ -1793,14 +2107,97 @@ async fn is_refresh_blacklisted(state: &AppState, jti: &str) -> Result<bool, App
 }
 
 async fn blacklist_refresh_jti(state: &AppState, jti: &str, ttl_secs: u64) -> Result<(), AppError> {
-    if ttl_secs == 0 {
-        return Ok(());
-    }
+    let ttl_secs = ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS);
     let ret = state
         .redis
         .set_value_with_ttl("auth:rt:blacklist", jti, "1", ttl_secs)
         .await;
     handle_auth_redis_unit_result(state, ret, "auth_refresh_invalid")
+}
+
+async fn best_effort_set_refresh_blacklist(state: &AppState, jti: &str, ttl_secs: u64) {
+    let ttl_secs = ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS);
+    let ret = state
+        .redis
+        .set_value_with_ttl("auth:rt:blacklist", jti, "1", ttl_secs)
+        .await;
+    if let Err(err) = ret {
+        tracing::warn!(
+            jti = %jti,
+            ttl_secs,
+            "best-effort set refresh blacklist failed: {}",
+            err
+        );
+    }
+}
+
+async fn best_effort_set_refresh_session(state: &AppState, sid: &str, refresh_jti: &str) {
+    let ret = state
+        .redis
+        .set_value_with_ttl("auth:rt:session", sid, refresh_jti, REFRESH_TOKEN_TTL_SECS)
+        .await;
+    if let Err(err) = ret {
+        tracing::warn!(
+            sid = %sid,
+            "best-effort set refresh session mapping failed: {}",
+            err
+        );
+    }
+}
+
+async fn best_effort_set_refresh_family_revoked(state: &AppState, family_id: &str) {
+    let ret = state
+        .redis
+        .set_value_with_ttl(
+            "auth:rt:family",
+            family_id,
+            "revoked",
+            REFRESH_TOKEN_TTL_SECS,
+        )
+        .await;
+    if let Err(err) = ret {
+        tracing::warn!(
+            family_id = %family_id,
+            "best-effort set family revoked failed: {}",
+            err
+        );
+    }
+}
+
+async fn enqueue_auth_refresh_consistency_set_with_ttl_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    scope: &str,
+    raw_key: &str,
+    value: &str,
+    ttl_secs: u64,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
+    let ttl_secs = ttl_secs.max(1);
+    sqlx::query(
+        r#"
+        INSERT INTO auth_refresh_consistency_outbox_jobs(
+            op_type, scope, raw_key, value, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 0, NOW(), NULL, NULL, NOW(), NOW())
+        "#,
+    )
+    .bind(AuthRefreshOutboxOp::SetWithTtl.as_str())
+    .bind(scope)
+    .bind(raw_key)
+    .bind(value)
+    .bind(ttl_secs as i64)
+    .execute(executor)
+    .await?;
+    let depth = get_auth_refresh_consistency_outbox_queue_depth(&state.pool)
+        .await
+        .unwrap_or(0);
+    state
+        .auth_consistency_metrics
+        .observe_refresh_outbox_enqueued(depth);
+    Ok(())
 }
 
 async fn cache_user_token_version(
@@ -1989,6 +2386,89 @@ impl AppState {
         }
         run
     }
+
+    pub(crate) async fn retry_auth_refresh_consistency_outbox_once(
+        &self,
+        batch_size: usize,
+    ) -> Result<AuthRefreshConsistencyOutboxRetryReport, AppError> {
+        let run = async {
+            let claimed =
+                claim_auth_refresh_consistency_outbox_jobs(&self.pool, batch_size.max(1) as i64)
+                    .await?;
+            let mut report = AuthRefreshConsistencyOutboxRetryReport {
+                attempted: claimed.len(),
+                ..Default::default()
+            };
+
+            for job in claimed {
+                let op = AuthRefreshOutboxOp::parse(&job.op_type)
+                    .ok_or_else(|| anyhow::anyhow!("unknown auth refresh outbox op_type"))?;
+                let apply_result = match op {
+                    AuthRefreshOutboxOp::SetWithTtl => {
+                        self.redis
+                            .set_value_with_ttl(
+                                &job.scope,
+                                &job.raw_key,
+                                &job.value,
+                                job.ttl_secs.max(1) as u64,
+                            )
+                            .await
+                    }
+                };
+                match apply_result {
+                    Ok(_) => {
+                        delete_auth_refresh_consistency_outbox_job(&self.pool, job.id).await?;
+                        report.delivered += 1;
+                    }
+                    Err(err) => {
+                        let sanitized =
+                            sanitize_auth_refresh_consistency_outbox_error(&err.to_string());
+                        if job.attempts >= AUTH_REFRESH_OUTBOX_MAX_ATTEMPTS {
+                            delete_auth_refresh_consistency_outbox_job(&self.pool, job.id).await?;
+                            report.dropped += 1;
+                            tracing::warn!(
+                                job_id = job.id,
+                                attempts = job.attempts,
+                                "drop auth refresh outbox job after max attempts: {}",
+                                sanitized
+                            );
+                        } else {
+                            let backoff_ms = auth_refresh_outbox_retry_backoff_ms(job.attempts);
+                            reschedule_auth_refresh_consistency_outbox_job(
+                                &self.pool, job.id, backoff_ms, &sanitized,
+                            )
+                            .await?;
+                            report.requeued += 1;
+                        }
+                    }
+                }
+            }
+
+            let depth = get_auth_refresh_consistency_outbox_queue_depth(&self.pool).await?;
+            self.auth_consistency_metrics.observe_refresh_outbox_tick(
+                report.delivered,
+                report.requeued,
+                report.dropped,
+                depth,
+            );
+            Ok(report)
+        }
+        .await;
+
+        if let Err(err) = &run {
+            self.auth_consistency_metrics
+                .observe_refresh_outbox_tick_error();
+            tracing::warn!(
+                "auth refresh consistency outbox retry worker tick failed: {}",
+                err
+            );
+            if let Ok(depth) = get_auth_refresh_consistency_outbox_queue_depth(&self.pool).await {
+                self.auth_consistency_metrics
+                    .observe_refresh_outbox_depth(depth);
+            }
+        }
+        run
+    }
 }
 
 async fn get_auth_token_version_invalidation_queue_depth<'e, E>(
@@ -2085,10 +2565,116 @@ fn sanitize_auth_token_version_invalidation_error(raw: &str) -> String {
     text
 }
 
+async fn get_auth_refresh_consistency_outbox_queue_depth<'e, E>(
+    executor: E,
+) -> Result<u64, AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
+    let depth: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL",
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(depth.max(0) as u64)
+}
+
+async fn claim_auth_refresh_consistency_outbox_jobs(
+    pool: &sqlx::PgPool,
+    batch_size: i64,
+) -> Result<Vec<ClaimedAuthRefreshConsistencyOutboxJob>, AppError> {
+    let rows = sqlx::query_as::<_, ClaimedAuthRefreshConsistencyOutboxJob>(
+        r#"
+        WITH due AS (
+            SELECT id
+            FROM auth_refresh_consistency_outbox_jobs
+            WHERE delivered_at IS NULL
+              AND next_retry_at <= NOW()
+              AND (locked_until IS NULL OR locked_until <= NOW())
+            ORDER BY next_retry_at ASC, created_at ASC, id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE auth_refresh_consistency_outbox_jobs q
+        SET attempts = q.attempts + 1,
+            locked_until = NOW() + ($2::bigint * INTERVAL '1 second'),
+            updated_at = NOW()
+        FROM due
+        WHERE q.id = due.id
+        RETURNING q.id, q.op_type, q.scope, q.raw_key, q.value, q.ttl_secs, q.attempts
+        "#,
+    )
+    .bind(batch_size.max(1))
+    .bind(AUTH_REFRESH_OUTBOX_LOCK_SECS.max(1))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn delete_auth_refresh_consistency_outbox_job(
+    pool: &sqlx::PgPool,
+    id: i64,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM auth_refresh_consistency_outbox_jobs WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn reschedule_auth_refresh_consistency_outbox_job(
+    pool: &sqlx::PgPool,
+    id: i64,
+    backoff_ms: u64,
+    last_error: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE auth_refresh_consistency_outbox_jobs
+        SET next_retry_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+            locked_until = NULL,
+            last_error = $3,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(backoff_ms as i64)
+    .bind(last_error)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn auth_refresh_outbox_retry_backoff_ms(attempts: i32) -> u64 {
+    let attempt = attempts.max(1) as u32;
+    let pow = attempt.saturating_sub(1).min(16);
+    let scaled = AUTH_REFRESH_OUTBOX_BASE_BACKOFF_MS.saturating_mul(1_u64 << pow);
+    scaled.clamp(1, AUTH_REFRESH_OUTBOX_MAX_BACKOFF_MS)
+}
+
+fn sanitize_auth_refresh_consistency_outbox_error(raw: &str) -> String {
+    let mut text = raw.trim().to_string();
+    if text.len() > AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN {
+        text.truncate(AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN);
+    }
+    text
+}
+
 pub(crate) async fn load_user_token_version(
     state: &AppState,
     user_id: i64,
 ) -> Result<i64, AppError> {
+    if let Ok(Some(cached)) = state
+        .redis
+        .get_value("auth:user:token_version", &user_id.to_string())
+        .await
+    {
+        if let Ok(parsed) = cached.trim().parse::<i64>() {
+            return Ok(parsed.max(0));
+        }
+    }
+
     let value: Option<i64> = sqlx::query_scalar("SELECT token_version FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(&state.pool)
@@ -2131,6 +2717,7 @@ async fn revoke_family_by_id(
     family_id: &str,
     reason: &str,
 ) -> Result<u64, AppError> {
+    let mut tx = state.pool.begin().await?;
     let affected = sqlx::query(
         r#"
         UPDATE auth_refresh_sessions
@@ -2140,10 +2727,20 @@ async fn revoke_family_by_id(
     )
     .bind(family_id)
     .bind(reason)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected() as u64;
-    mark_family_revoked_in_redis(state, family_id).await?;
+    enqueue_auth_refresh_consistency_set_with_ttl_tx(
+        state,
+        &mut *tx,
+        "auth:rt:family",
+        family_id,
+        "revoked",
+        REFRESH_TOKEN_TTL_SECS,
+    )
+    .await?;
+    tx.commit().await?;
+    best_effort_set_refresh_family_revoked(state, family_id).await;
     Ok(affected)
 }
 
@@ -2760,6 +3357,92 @@ fn extract_ip_hash(headers: &HeaderMap) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
+fn refresh_verify_error_code(err: &JwtError) -> &'static str {
+    match err.to_auth_verify_error() {
+        AuthVerifyError::AccessExpired => "auth_refresh_expired",
+        _ => "auth_refresh_invalid",
+    }
+}
+
+fn refresh_auth_error(state: &AppState, code: &str) -> AppError {
+    state
+        .auth_consistency_metrics
+        .observe_refresh_failure_code(code);
+    AppError::AuthError(code.to_string())
+}
+
+fn map_refresh_error_with_metrics(state: &AppState, err: AppError) -> AppError {
+    if let AppError::AuthError(code) = &err {
+        state
+            .auth_consistency_metrics
+            .observe_refresh_failure_code(code);
+    }
+    err
+}
+
+fn refresh_conflict_grace_window_secs() -> i64 {
+    std::env::var("AUTH_REFRESH_CONFLICT_GRACE_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(AUTH_REFRESH_CONFLICT_GRACE_SECS)
+}
+
+fn is_refresh_conflict_retry_candidate(
+    session: &AuthRefreshSessionRow,
+    decoded_jti: &str,
+    now: DateTime<Utc>,
+) -> bool {
+    let rotated_from = match session.rotated_from_jti.as_deref() {
+        Some(v) if !v.trim().is_empty() => v.trim(),
+        _ => return false,
+    };
+    if rotated_from != decoded_jti {
+        return false;
+    }
+    let grace_secs = refresh_conflict_grace_window_secs();
+    let elapsed_secs = now
+        .signed_duration_since(session.updated_at)
+        .num_seconds()
+        .max(0);
+    elapsed_secs <= grace_secs
+}
+
+fn is_allowed_local_referer(raw: &str) -> bool {
+    let referer = raw.trim().to_ascii_lowercase();
+    referer.starts_with("http://localhost:")
+        || referer.starts_with("http://127.0.0.1:")
+        || referer.starts_with("https://localhost:")
+        || referer.starts_with("https://127.0.0.1:")
+        || referer.starts_with("http://tauri.localhost")
+        || referer.starts_with("https://tauri.localhost")
+}
+
+fn validate_refresh_csrf_headers(headers: &HeaderMap) -> Result<(), AppError> {
+    let requested_with = headers
+        .get("x-requested-with")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| AppError::AuthError("auth_refresh_invalid".to_string()))?;
+    if requested_with != "xmlhttprequest" && requested_with != "fetch" {
+        return Err(AppError::AuthError("auth_refresh_invalid".to_string()));
+    }
+
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        if !crate::is_allowed_local_origin(origin) {
+            return Err(AppError::AuthError("auth_refresh_invalid".to_string()));
+        }
+    }
+
+    if let Some(referer) = headers.get(header::REFERER).and_then(|v| v.to_str().ok()) {
+        if !is_allowed_local_referer(referer) {
+            return Err(AppError::AuthError("auth_refresh_invalid".to_string()));
+        }
+    }
+    Ok(())
+}
+
 fn set_refresh_cookie_header(
     headers: &mut HeaderMap,
     refresh_token: &str,
@@ -2915,6 +3598,10 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(header::COOKIE, HeaderValue::from_str(&cookie)?);
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
         let refreshed = refresh_handler(State(state), headers)
             .await?
             .into_response();
@@ -2923,6 +3610,124 @@ mod tests {
         let body = refreshed.into_body().collect().await?.to_bytes();
         let ret: RefreshOutput = serde_json::from_slice(&body)?;
         assert!(!ret.access_token.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_should_reject_when_csrf_header_missing() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let set_cookie = signin
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let cookie = set_cookie.split(';').next().unwrap_or_default().to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie)?);
+        let err = match refresh_handler(State(state), headers).await {
+            Ok(_) => panic!("refresh should reject without csrf header"),
+            Err(err) => err,
+        };
+        match err {
+            AppError::AuthError(code) => assert_eq!(code, "auth_refresh_invalid"),
+            _ => panic!("expected auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_should_return_conflict_retry_for_previous_jti_within_grace() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let set_cookie = signin
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let cookie = set_cookie.split(';').next().unwrap_or_default().to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie)?);
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let _ = refresh_handler(State(state.clone()), headers.clone())
+            .await?
+            .into_response();
+
+        let err = match refresh_handler(State(state), headers).await {
+            Ok(_) => panic!("duplicate refresh should be treated as conflict retry"),
+            Err(err) => err,
+        };
+        match err {
+            AppError::AuthError(code) => assert_eq!(code, "auth_refresh_conflict_retry"),
+            _ => panic!("expected auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_outbox_worker_should_deliver_enqueued_jobs() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let set_cookie = signin
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let cookie = set_cookie.split(';').next().unwrap_or_default().to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie)?);
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let _ = refresh_handler(State(state.clone()), headers)
+            .await?
+            .into_response();
+
+        let depth_before: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert!(depth_before >= 2);
+
+        let report = state.retry_auth_refresh_consistency_outbox_once(32).await?;
+        assert!(report.attempted >= 2);
+        assert!(report.delivered >= 2);
+
+        let depth_after: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(depth_after, 0);
         Ok(())
     }
 
@@ -3001,7 +3806,7 @@ mod tests {
             .enqueue_auth_token_version_invalidation_retry(1)
             .await?;
         let metrics = state.get_auth_consistency_metrics();
-        assert_eq!(metrics.queue_depth, 1);
+        assert_eq!(metrics.token_version_retry_queue_depth, 1);
         assert_eq!(metrics.retry_enqueue_total, 1);
         assert_eq!(metrics.retry_dedup_total, 1);
         Ok(())
@@ -3022,7 +3827,7 @@ mod tests {
         assert_eq!(report.requeued, 0);
         assert_eq!(report.dropped, 0);
         let metrics = state.get_auth_consistency_metrics();
-        assert_eq!(metrics.queue_depth, 0);
+        assert_eq!(metrics.token_version_retry_queue_depth, 0);
         assert_eq!(metrics.retry_success_total, 1);
         Ok(())
     }

@@ -125,6 +125,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             header::CACHE_CONTROL,
             header::CONTENT_TYPE,
             header::ORIGIN,
+            header::HeaderName::from_static("x-requested-with"),
             header::PRAGMA,
         ]);
     let debate = Router::new()
@@ -347,7 +348,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
     Ok(set_layer(app))
 }
 
-fn is_allowed_local_origin(origin: &HeaderValue) -> bool {
+pub(crate) fn is_allowed_local_origin(origin: &HeaderValue) -> bool {
     let raw = match origin.to_str() {
         Ok(value) => value.trim().to_ascii_lowercase(),
         Err(_) => return false,
@@ -401,7 +402,10 @@ fn map_auth_app_error(err: AppError) -> AuthVerifyError {
             "auth_session_revoked" => AuthVerifyError::SessionRevoked,
             "auth_access_invalid"
             | "auth_refresh_invalid"
+            | "auth_refresh_expired"
+            | "auth_refresh_conflict_retry"
             | "auth_refresh_missing"
+            | "auth_refresh_degraded_retryable"
             | "auth_refresh_replayed" => AuthVerifyError::AccessInvalid,
             _ => AuthVerifyError::Internal,
         },

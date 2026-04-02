@@ -39,6 +39,7 @@ pub(crate) fn spawn_background_workers(
         spawn_event_outbox_relay_worker(state.clone());
     }
 
+    spawn_auth_refresh_consistency_outbox_worker(state.clone());
     spawn_auth_token_version_invalidation_retry_worker(state);
 }
 
@@ -254,6 +255,36 @@ fn spawn_event_outbox_relay_worker(state: AppState) {
                 }
             }
             sleep(Duration::from_secs(interval_secs)).await;
+        }
+    });
+}
+
+fn spawn_auth_refresh_consistency_outbox_worker(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            match state
+                .retry_auth_refresh_consistency_outbox_once(
+                    crate::handlers::AUTH_REFRESH_OUTBOX_BATCH_SIZE,
+                )
+                .await
+            {
+                Ok(report) => {
+                    debug!(
+                        attempted = report.attempted,
+                        delivered = report.delivered,
+                        requeued = report.requeued,
+                        dropped = report.dropped,
+                        "auth refresh consistency outbox worker tick success"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "auth refresh consistency outbox worker tick failed: {}",
+                        err
+                    );
+                }
+            }
+            sleep(Duration::from_secs(1)).await;
         }
     });
 }
