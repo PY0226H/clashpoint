@@ -77,7 +77,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import MessageList from '../components/MessageList.vue';
 import MessageSend from '../components/MessageSend.vue';

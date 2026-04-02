@@ -166,7 +166,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import {
   buildHomeSearchIndex,
@@ -204,11 +204,17 @@ export default {
     },
     searchIndex() {
       const channels = [...this.groupChannels, ...this.singleChannels];
-      return buildHomeSearchIndex({
+      const buildHomeSearchIndexSafe = buildHomeSearchIndex as unknown as (payload: {
+        channels: unknown[];
+        topics: unknown[];
+        sessions: unknown[];
+        topicTitleById: (topicId: unknown) => string;
+      }) => unknown[];
+      return buildHomeSearchIndexSafe({
         channels,
         topics: this.topics,
         sessions: this.sessions,
-        topicTitleById: (topicId) => {
+        topicTitleById: (topicId: unknown) => {
           const topic = this.topics.find((item) => item.id === topicId);
           return topic?.title || '';
         },

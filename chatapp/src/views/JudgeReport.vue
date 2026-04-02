@@ -460,7 +460,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import {
   drawVoteChoiceText as drawVoteChoiceTextLabel,
@@ -828,7 +828,14 @@ export default {
       let lastRunErrorMessage = '';
       this.autoRefreshBusy = true;
       try {
-        const result = await runAutoRefreshWithRetry({
+        const runAutoRefreshWithRetrySafe = runAutoRefreshWithRetry as unknown as (payload: Record<string, unknown>) => Promise<{
+          ok: boolean;
+          attempt: number;
+          sourceEventType: string;
+          at: number;
+          error?: unknown;
+        }>;
+        const result = await runAutoRefreshWithRetrySafe({
           fetchOnce: () => this.fetchReportForSession(pending.sessionId, { silent: true, throwOnError: true }),
           sourceEventType: pending.sourceEventType,
           shouldRetry: shouldRetryAutoRefresh,

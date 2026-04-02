@@ -148,6 +148,11 @@ test('home page should render four-entry dashboard with new shell', async ({ pag
   await expect(page.getByText('入口 3')).toBeVisible();
   await expect(page.getByText('入口 4')).toBeVisible();
 
+  await page.getByRole('button', { name: /入口 1/ }).click();
+  await expect(page).toHaveURL(/\/chat/);
+  await expect(page.getByRole('heading', { name: '会话工作台' })).toBeVisible();
+
+  await page.goto('http://127.0.0.1:1420/home');
   await page.getByRole('button', { name: '辩论广场' }).click();
   await expect(page).toHaveURL(/\/debate/);
   await expect(page.getByRole('heading', { name: '辩论场次总览' })).toBeVisible();
