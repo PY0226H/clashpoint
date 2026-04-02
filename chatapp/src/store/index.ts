@@ -60,6 +60,15 @@ import {
   actionPinDebateMessage,
   actionVerifyIapOrder,
 } from './actions-payment-wallet.ts';
+import {
+  actionCreateDebateMessage,
+  actionFetchJudgeRefreshSummary,
+  actionFetchJudgeRefreshSummaryMetrics,
+  actionListDebateMessages,
+  actionListDebatePinnedMessages,
+  actionSendMessage,
+  actionUploadFiles,
+} from './actions-realtime-analytics.ts';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -821,42 +830,26 @@ export default createStore({
       return response.data;
     },
     async listDebateMessages({ state }, { sessionId, lastId = null, limit = 80 } = {}) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const suffix = buildQueryString({
+      return actionListDebateMessages({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        sessionId,
         lastId,
         limit,
       });
-      const response = await network(
-        this,
-        'get',
-        `/debate/sessions/${sessionId}/messages${suffix}`,
-        null,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data || [];
     },
     async listDebatePinnedMessages({ state }, { sessionId, activeOnly = true, limit = 20 } = {}) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const suffix = buildQueryString({
+      return actionListDebatePinnedMessages({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        sessionId,
         activeOnly,
         limit,
       });
-      const response = await network(
-        this,
-        'get',
-        `/debate/sessions/${sessionId}/pins${suffix}`,
-        null,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data || [];
     },
     async listIapProducts({ state }, { activeOnly = true } = {}) {
       return actionListIapProducts({
@@ -914,22 +907,13 @@ export default createStore({
       });
     },
     async createDebateMessage({ state }, { sessionId, content }) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      if (!content || !content.trim()) {
-        throw new Error('content is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        `/debate/sessions/${sessionId}/messages`,
-        { content: content.trim() },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionCreateDebateMessage({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+        content,
+      });
     },
     async pinDebateMessage({ state }, { messageId, pinSeconds, idempotencyKey }) {
       return actionPinDebateMessage({
@@ -943,39 +927,31 @@ export default createStore({
     },
     async uploadFiles({ state, commit }, files) {
       try {
-        await this.dispatch('refreshAccessTickets');
-        const formData = new FormData();
-        files.forEach(file => {
-          formData.append(`files`, file);
+        return await actionUploadFiles({
+          network,
+          store: this,
+          dispatch: (action, payload) => this.dispatch(action, payload),
+          token: state.token,
+          files,
+          getUrlBase,
+          getAccessTicketToken: () => this.state.accessTickets?.fileToken,
         });
-
-        const response = await network(this, 'post', '/upload', formData, {
-          'Authorization': `Bearer ${state.token}`,
-          'Content-Type': 'multipart/form-data'
-        });
-
-        const uploadedFiles = response.data.map(path => ({
-          path,
-          fullUrl: `${getUrlBase()}${path}?token=${state.accessTickets?.fileToken || ''}`
-        }));
-
-        return uploadedFiles;
       } catch (error) {
         console.error('Failed to upload files:', error);
         throw error;
       }
     },
     async sendMessage({ state, commit }, payload) {
-      if (!payload.chatId) {
-        throw new Error('active channel is required before sending message');
-      }
       try {
-        const response = await network(this, 'post', `/chats/${payload.chatId}`, payload, {
-          Authorization: `Bearer ${state.token}`,
+        const message = await actionSendMessage({
+          network,
+          store: this,
+          commit,
+          token: state.token,
+          payload,
         });
-        commit('addMessage', { channelId: payload.chatId, message: response.data });
-        console.log('Message sent:', response.data);
-        return response.data;
+        console.log('Message sent:', message);
+        return message;
       } catch (error) {
         console.error('Failed to send message:', error);
         throw error;
@@ -1034,36 +1010,22 @@ export default createStore({
       await sendJudgeRealtimeRefreshEvent(state.context, state.token, payload);
     },
     async fetchJudgeRefreshSummary({ state }, payload = {}) {
-      const {
-        hours,
-        limit,
-        debateSessionId,
-      } = normalizeJudgeRefreshSummaryQuery(payload);
-      const params = {
-        hours,
-        limit,
-      };
-      if (debateSessionId != null) {
-        params.debateSessionId = debateSessionId;
-      }
-      const response = await network(
-        this,
-        'get',
-        `/analytics/judge-refresh/summary${buildQueryString(params)}`,
-        null,
-        state.token ? { Authorization: `Bearer ${state.token}` } : {},
-      );
-      return response?.data;
+      return actionFetchJudgeRefreshSummary({
+        network,
+        store: this,
+        buildQueryString,
+        normalizeJudgeRefreshSummaryQuery,
+        token: state.token,
+        payload,
+      });
     },
     async fetchJudgeRefreshSummaryMetrics({ state }) {
-      const response = await network(
-        this,
-        'get',
-        '/analytics/judge-refresh/summary/metrics',
-        null,
-        state.token ? { Authorization: `Bearer ${state.token}` } : {},
-      );
-      return normalizeJudgeRefreshSummaryMetrics(response?.data || {});
+      return actionFetchJudgeRefreshSummaryMetrics({
+        network,
+        store: this,
+        normalizeJudgeRefreshSummaryMetrics,
+        token: state.token,
+      });
     },
     async refreshSession({ commit, dispatch }) {
       const response = await network(this, 'post', '/auth/refresh', null, {}, false);

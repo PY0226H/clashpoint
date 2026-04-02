@@ -78,6 +78,7 @@ async function mockCommonApis(page, hooks = {}) {
     }
 
     if (pathname === '/api/analytics/judge-refresh/summary') {
+      hooks.onJudgeRefreshSummary?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -87,6 +88,7 @@ async function mockCommonApis(page, hooks = {}) {
     }
 
     if (pathname === '/api/analytics/judge-refresh/summary/metrics') {
+      hooks.onJudgeRefreshSummaryMetrics?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -129,6 +131,26 @@ test('judge report shell should render with refreshed desktop style', async ({ p
   await page.goto('http://127.0.0.1:1420/judge-report');
   await expect(page.getByRole('heading', { name: '裁判报告中心' })).toBeVisible();
   await expect(page.getByRole('button', { name: '查询' })).toBeVisible();
+});
+
+test('judge report page should request summary and metrics endpoints', async ({ page }) => {
+  let summaryCalls = 0;
+  let metricsCalls = 0;
+  await mockCommonApis(page, {
+    onJudgeRefreshSummary: () => {
+      summaryCalls += 1;
+    },
+    onJudgeRefreshSummaryMetrics: () => {
+      metricsCalls += 1;
+    },
+  });
+
+  await page.goto('http://127.0.0.1:1420/judge-report');
+  await page.getByPlaceholder('例如：123').fill('123');
+  await page.getByRole('button', { name: '查询' }).click();
+  await expect(page.getByRole('heading', { name: '裁判报告中心' })).toBeVisible();
+  await expect.poll(() => summaryCalls).toBeGreaterThan(0);
+  await expect.poll(() => metricsCalls).toBeGreaterThan(0);
 });
 
 test('wallet shell should render with refreshed desktop style', async ({ page }) => {
