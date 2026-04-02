@@ -162,6 +162,8 @@ test.describe('Debate Lobby Phase3', () => {
     await page.goto('http://127.0.0.1:1420/debate');
     await expect(page.getByRole('heading', { name: '辩论场次总览' })).toBeVisible();
     await expect(page.getByText('当前可见场次')).toBeVisible();
+    await expect(page.getByText('进行中（观战）')).toBeVisible();
+    await expect(page.getByText('待开启（可加入）').first()).toBeVisible();
     await expect.poll(() => topicsCalls).toBeGreaterThan(0);
     await expect.poll(() => sessionsCalls).toBeGreaterThan(0);
   });

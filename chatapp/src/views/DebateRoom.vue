@@ -83,7 +83,7 @@
             </div>
             <div class="flex gap-2">
               <button
-                @click="refreshJudgeReport"
+                @click="refreshJudgeReport()"
                 :disabled="judgeLoading"
                 class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
               >
@@ -129,7 +129,7 @@
             <div class="flex items-center justify-between gap-2">
               <div class="font-semibold text-amber-900">平局投票</div>
               <button
-                @click="refreshDrawVote"
+                @click="refreshDrawVote()"
                 :disabled="drawVoteLoading || voteSubmitting"
                 class="echo-btn-secondary text-xs px-2 py-1 disabled:opacity-50"
               >
@@ -292,7 +292,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import { getNotifyBase } from '../utils';
 import {
@@ -824,7 +824,7 @@ export default {
         this.sendWsAck(ws, lastEventSeq);
       }
     },
-    async handleSyncRequiredMessage(rawMsg = {}) {
+    async handleSyncRequiredMessage(rawMsg: Record<string, unknown> = {}) {
       if (this.destroyed || this.wsSyncInFlight) {
         return;
       }

@@ -359,7 +359,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import {
   classifyLobbySessionLane,
@@ -369,7 +369,7 @@ import {
   splitLobbySessionsByLane,
 } from '../debate-lobby-utils.ts';
 
-function routeQuerySnapshot(query = {}) {
+function routeQuerySnapshot(query: Record<string, unknown> = {}) {
   return [
     String(query.topic || ''),
     String(query.q || ''),
@@ -488,7 +488,7 @@ export default {
       }
     },
     buildRouteQuery() {
-      const query = {};
+      const query: Record<string, string> = {};
       if (this.selectedTopicId) {
         query.topic = this.selectedTopicId;
       }
