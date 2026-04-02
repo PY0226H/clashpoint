@@ -1,22 +1,31 @@
 <template>
-  <div class="flex-1 overflow-y-auto p-5 mb-10" ref="messageContainer">
-    <div v-if="messages.length === 0" class="text-center text-gray-400 mt-5">
-      No messages in this channel yet.
+  <div class="flex-1 overflow-y-auto px-5 py-4" ref="messageContainer">
+    <div v-if="messages.length === 0" class="mt-8 text-center text-sm text-slate-500">
+      当前会话还没有消息，发送第一条消息开始协作。
     </div>
-    <div v-else>
-      <div v-for="message in messages" :key="message.id" class="flex items-start mb-5">
-        <img :src="`https://ui-avatars.com/api/?name=${getSender(message.senderId).fullname.replace(' ', '+')}`" class="w-10 h-10 rounded-full mr-3" alt="Avatar" />
-        <div class="max-w-4/5">
-          <div class="flex items-center mb-1">
-            <span class="font-bold mr-2">{{ getSender(message.senderId).fullname }}</span>
-            <span class="text-xs text-gray-500">{{ message.formattedCreatedAt }}</span>
+    <div v-else class="space-y-4">
+      <div v-for="message in messages" :key="message.id" class="flex items-start gap-3">
+        <img
+          :src="`https://ui-avatars.com/api/?name=${getSender(message.senderId).fullname.replace(' ', '+')}`"
+          class="w-9 h-9 rounded-full border border-slate-200"
+          alt="Avatar"
+        />
+        <div class="max-w-[82%]">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-semibold text-sm text-slate-900">{{ getSender(message.senderId).fullname }}</span>
+            <span class="text-xs text-slate-500">{{ message.formattedCreatedAt }}</span>
           </div>
-          <div class="text-sm leading-relaxed break-words whitespace-pre-wrap">{{ getMessageContent(message) }}</div>
-          <div v-if="message.files && message.files.length > 0" class="grid grid-cols-3 gap-2 mt-2">
-            <div v-for="(file, index) in message.files" :key="index" class="relative">
+          <div class="rounded-2xl border border-slate-200 bg-white/85 px-3 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap text-slate-800">
+            {{ getMessageContent(message) }}
+          </div>
+          <div v-if="message.files && message.files.length > 0" class="grid grid-cols-3 gap-2 mt-2 max-w-[540px]">
+            <div v-for="(file, index) in message.files" :key="index">
               <img
                 :src="getFileUrl(file)"
-                :class="{'h-32 object-cover cursor-pointer': true, 'w-auto h-auto': enlargedImage[message.id]}"
+                :class="{
+                  'h-28 w-full rounded-xl border border-slate-200 object-cover cursor-pointer': true,
+                  'w-auto h-auto': enlargedImage[message.id],
+                }"
                 @click="toggleImage(message.id)"
                 alt="Uploaded file"
               />
