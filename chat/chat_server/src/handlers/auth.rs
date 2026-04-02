@@ -10,12 +10,15 @@ use crate::{
     AppError, AppState, ErrorOutput,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use chat_core::{middlewares::AuthVerifyError, JwtError, User};
+use chat_core::{
+    middlewares::{AuthContext, AuthVerifyError},
+    JwtError, User,
+};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -69,6 +72,15 @@ const AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN: usize = 512;
 const LOGOUT_ALL_IDEMPOTENCY_TTL_SECS: u64 = 3;
 const SESSION_REVOKE_RATE_LIMIT_PER_WINDOW: u64 = 1;
 const SESSION_REVOKE_RATE_LIMIT_WINDOW_SECS: u64 = 5;
+const LIST_AUTH_SESSIONS_USER_RATE_LIMIT_PER_WINDOW: u64 = 60;
+const LIST_AUTH_SESSIONS_IP_RATE_LIMIT_PER_WINDOW: u64 = 120;
+const LIST_AUTH_SESSIONS_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const LIST_AUTH_SESSIONS_DEFAULT_LIMIT: u32 = 20;
+const LIST_AUTH_SESSIONS_MAX_LIMIT: u32 = 100;
+const AUTH_SESSIONS_RETENTION_DEFAULT_DAYS: i64 = 180;
+const AUTH_SESSIONS_RETENTION_MIN_DAYS: i64 = 7;
+const AUTH_SESSIONS_RETENTION_MAX_DAYS: i64 = 3650;
+const AUTH_SESSIONS_RETENTION_WORKER_INTERVAL_DEFAULT_SECS: u64 = 3600;
 const SMS_CODE_HASH_ALGO_HMAC_SHA256: &str = "hmac_sha256";
 const SMS_DEFAULT_HMAC_KEY_ID: &str = "v1";
 
@@ -146,11 +158,13 @@ pub struct SessionRevokeOutput {
     result: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthSessionItem {
     pub sid: String,
     pub family_id: String,
+    pub status: String,
+    pub is_current: bool,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub revoke_reason: Option<String>,
@@ -160,10 +174,22 @@ pub struct AuthSessionItem {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListAuthSessionsOutput {
     pub items: Vec<AuthSessionItem>,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAuthSessionsQueryInput {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -265,6 +291,15 @@ pub struct GetAuthConsistencyMetricsOutput {
     pub sms_delivery_callback_total: u64,
     pub sms_delivery_callback_delivered_total: u64,
     pub sms_delivery_callback_failed_total: u64,
+    pub auth_sessions_list_total: u64,
+    pub auth_sessions_list_success_total: u64,
+    pub auth_sessions_list_failed_total: u64,
+    pub auth_sessions_list_rate_limited_total: u64,
+    pub auth_sessions_list_items_total: u64,
+    pub auth_sessions_list_items_samples_total: u64,
+    pub auth_sessions_retention_worker_tick_total: u64,
+    pub auth_sessions_retention_worker_failed_total: u64,
+    pub auth_sessions_retention_worker_deleted_total: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -444,6 +479,15 @@ pub(crate) struct AuthConsistencyMetrics {
     sms_delivery_callback_total: AtomicU64,
     sms_delivery_callback_delivered_total: AtomicU64,
     sms_delivery_callback_failed_total: AtomicU64,
+    auth_sessions_list_total: AtomicU64,
+    auth_sessions_list_success_total: AtomicU64,
+    auth_sessions_list_failed_total: AtomicU64,
+    auth_sessions_list_rate_limited_total: AtomicU64,
+    auth_sessions_list_items_total: AtomicU64,
+    auth_sessions_list_items_samples_total: AtomicU64,
+    auth_sessions_retention_worker_tick_total: AtomicU64,
+    auth_sessions_retention_worker_failed_total: AtomicU64,
+    auth_sessions_retention_worker_deleted_total: AtomicU64,
 }
 
 impl AuthConsistencyMetrics {
@@ -691,6 +735,42 @@ impl AuthConsistencyMetrics {
             self.sms_delivery_callback_failed_total
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    fn observe_auth_sessions_list_start(&self) {
+        self.auth_sessions_list_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_auth_sessions_list_rate_limited(&self) {
+        self.auth_sessions_list_rate_limited_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_auth_sessions_list_success(&self, items_count: usize) {
+        self.auth_sessions_list_success_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.auth_sessions_list_items_total
+            .fetch_add(items_count as u64, Ordering::Relaxed);
+        self.auth_sessions_list_items_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_auth_sessions_list_failure(&self) {
+        self.auth_sessions_list_failed_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_auth_sessions_retention_worker_tick(&self, deleted: u64) {
+        self.auth_sessions_retention_worker_tick_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.auth_sessions_retention_worker_deleted_total
+            .fetch_add(deleted, Ordering::Relaxed);
+    }
+
+    fn observe_auth_sessions_retention_worker_failure(&self) {
+        self.auth_sessions_retention_worker_failed_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     fn observe_logout_start(&self) {
@@ -967,6 +1047,31 @@ impl AuthConsistencyMetrics {
             sms_delivery_callback_failed_total: self
                 .sms_delivery_callback_failed_total
                 .load(Ordering::Relaxed),
+            auth_sessions_list_total: self.auth_sessions_list_total.load(Ordering::Relaxed),
+            auth_sessions_list_success_total: self
+                .auth_sessions_list_success_total
+                .load(Ordering::Relaxed),
+            auth_sessions_list_failed_total: self
+                .auth_sessions_list_failed_total
+                .load(Ordering::Relaxed),
+            auth_sessions_list_rate_limited_total: self
+                .auth_sessions_list_rate_limited_total
+                .load(Ordering::Relaxed),
+            auth_sessions_list_items_total: self
+                .auth_sessions_list_items_total
+                .load(Ordering::Relaxed),
+            auth_sessions_list_items_samples_total: self
+                .auth_sessions_list_items_samples_total
+                .load(Ordering::Relaxed),
+            auth_sessions_retention_worker_tick_total: self
+                .auth_sessions_retention_worker_tick_total
+                .load(Ordering::Relaxed),
+            auth_sessions_retention_worker_failed_total: self
+                .auth_sessions_retention_worker_failed_total
+                .load(Ordering::Relaxed),
+            auth_sessions_retention_worker_deleted_total: self
+                .auth_sessions_retention_worker_deleted_total
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -987,6 +1092,23 @@ struct AuthRefreshSessionRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+struct ListAuthSessionsCursor {
+    created_at: DateTime<Utc>,
+    sid: String,
+}
+
+#[derive(Debug, Clone)]
+struct ListAuthSessionsRequestContext {
+    request_id: Option<String>,
+    ip_hash: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct AuthSessionsRetentionCleanupReport {
+    pub deleted_rows: u64,
+}
+
 #[derive(Debug)]
 struct SessionContext {
     user_agent: Option<String>,
@@ -1005,6 +1127,50 @@ struct SmsSendRequestContext {
     request_id: Option<String>,
     rate_limit_ip_hash: Option<String>,
     audit_ip_hash: Option<String>,
+}
+
+fn format_cursor_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+fn encode_list_auth_sessions_cursor(value: DateTime<Utc>, sid: &str) -> String {
+    format!("{}|{}", format_cursor_timestamp(value), sid)
+}
+
+fn decode_list_auth_sessions_cursor(raw: &str) -> Result<ListAuthSessionsCursor, AppError> {
+    let trimmed = raw.trim();
+    let Some((created_at_raw, sid_raw)) = trimmed.split_once('|') else {
+        return Err(AppError::ValidationError(
+            "auth_sessions_cursor_invalid".to_string(),
+        ));
+    };
+    let created_at = DateTime::parse_from_rfc3339(created_at_raw.trim())
+        .map(|ts| ts.with_timezone(&Utc))
+        .map_err(|_| AppError::ValidationError("auth_sessions_cursor_invalid".to_string()))?;
+    let sid = sid_raw.trim();
+    if sid.is_empty() {
+        return Err(AppError::ValidationError(
+            "auth_sessions_cursor_invalid".to_string(),
+        ));
+    }
+    Ok(ListAuthSessionsCursor {
+        created_at,
+        sid: sid.to_string(),
+    })
+}
+
+fn auth_session_status(
+    revoked_at: Option<DateTime<Utc>>,
+    expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> &'static str {
+    if revoked_at.is_some() {
+        "revoked"
+    } else if expires_at <= now {
+        "expired"
+    } else {
+        "active"
+    }
 }
 
 struct SessionRevokeAuditInput<'a> {
@@ -3029,46 +3195,220 @@ fn build_logout_all_response(
 #[utoipa::path(
     get,
     path = "/api/auth/sessions",
+    params(
+        ("cursor" = Option<String>, Query, description = "分页游标，格式为 `<createdAt>|<sid>`"),
+        ("limit" = Option<u32>, Query, description = "分页大小，默认20，最大100")
+    ),
     responses(
         (status = 200, description = "List auth sessions", body = ListAuthSessionsOutput),
+        (status = 400, description = "Validation error", body = ErrorOutput),
         (status = 401, description = "Auth error", body = ErrorOutput),
+        (status = 429, description = "Rate limited", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
     ),
     security(("token" = []))
 )]
 pub(crate) async fn list_auth_sessions_handler(
-    Extension(user): Extension<User>,
+    Extension(auth_ctx): Extension<AuthContext>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    let rows: Vec<AuthRefreshSessionRow> = sqlx::query_as(
-        r#"
-        SELECT
-            sid, family_id, user_id, current_jti, rotated_from_jti, expires_at, revoked_at,
-            revoke_reason, user_agent, ip_hash, created_at, updated_at
-        FROM auth_refresh_sessions
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        "#,
-    )
-    .bind(user.id)
-    .fetch_all(&state.pool)
-    .await?;
+    headers: HeaderMap,
+    Query(query): Query<ListAuthSessionsQueryInput>,
+) -> Result<Response, AppError> {
+    state
+        .auth_consistency_metrics
+        .observe_auth_sessions_list_start();
+    let AuthContext {
+        user,
+        sid: current_sid,
+    } = auth_ctx;
+    let req_ctx = list_auth_sessions_request_context_from_headers(&headers);
 
+    let user_limit_key = user.id.to_string();
+    let user_decision = enforce_rate_limit(
+        &state,
+        "auth_list_sessions_user",
+        &user_limit_key,
+        LIST_AUTH_SESSIONS_USER_RATE_LIMIT_PER_WINDOW,
+        LIST_AUTH_SESSIONS_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    let resp_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        state
+            .auth_consistency_metrics
+            .observe_auth_sessions_list_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = req_ctx.request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "list auth sessions blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "auth_list_sessions",
+            resp_headers,
+        ));
+    }
+
+    let ip_limit_key = req_ctx
+        .ip_hash
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .unwrap_or("unknown")
+        .to_string();
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "auth_list_sessions_ip",
+        &ip_limit_key,
+        LIST_AUTH_SESSIONS_IP_RATE_LIMIT_PER_WINDOW,
+        LIST_AUTH_SESSIONS_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    if !ip_decision.allowed {
+        state
+            .auth_consistency_metrics
+            .observe_auth_sessions_list_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = req_ctx.request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "list auth sessions blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "auth_list_sessions",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    ensure_access_session_active(&state, user.id, &current_sid)
+        .await
+        .inspect_err(|_| {
+            state
+                .auth_consistency_metrics
+                .observe_auth_sessions_list_failure();
+        })?;
+
+    let limit = query
+        .limit
+        .unwrap_or(LIST_AUTH_SESSIONS_DEFAULT_LIMIT)
+        .clamp(1, LIST_AUTH_SESSIONS_MAX_LIMIT);
+    let limit_plus_one = (limit as i64) + 1;
+    let cursor = match query.cursor.as_deref().filter(|raw| !raw.trim().is_empty()) {
+        Some(raw) => Some(decode_list_auth_sessions_cursor(raw).inspect_err(|_| {
+            state
+                .auth_consistency_metrics
+                .observe_auth_sessions_list_failure();
+        })?),
+        None => None,
+    };
+
+    let rows: Vec<AuthRefreshSessionRow> = match cursor.as_ref() {
+        Some(cursor) => {
+            sqlx::query_as(
+                r#"
+                SELECT
+                    sid, family_id, user_id, current_jti, rotated_from_jti, expires_at, revoked_at,
+                    revoke_reason, user_agent, ip_hash, created_at, updated_at
+                FROM auth_refresh_sessions
+                WHERE user_id = $1
+                  AND (created_at < $2 OR (created_at = $2 AND sid < $3))
+                ORDER BY created_at DESC, sid DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(user.id)
+            .bind(cursor.created_at)
+            .bind(&cursor.sid)
+            .bind(limit_plus_one)
+            .fetch_all(&state.pool)
+            .await
+        }
+        None => {
+            sqlx::query_as(
+                r#"
+                SELECT
+                    sid, family_id, user_id, current_jti, rotated_from_jti, expires_at, revoked_at,
+                    revoke_reason, user_agent, ip_hash, created_at, updated_at
+                FROM auth_refresh_sessions
+                WHERE user_id = $1
+                ORDER BY created_at DESC, sid DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(user.id)
+            .bind(limit_plus_one)
+            .fetch_all(&state.pool)
+            .await
+        }
+    }
+    .inspect_err(|_| {
+        state
+            .auth_consistency_metrics
+            .observe_auth_sessions_list_failure();
+    })?;
+
+    let mut rows = rows;
+    let has_more = rows.len() > limit as usize;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let now = Utc::now();
     let items = rows
-        .into_iter()
+        .iter()
         .map(|row| AuthSessionItem {
-            sid: row.sid,
-            family_id: row.family_id,
+            sid: row.sid.clone(),
+            family_id: row.family_id.clone(),
+            status: auth_session_status(row.revoked_at, row.expires_at, now).to_string(),
+            is_current: row.sid == current_sid.as_str(),
             expires_at: row.expires_at,
             revoked_at: row.revoked_at,
-            revoke_reason: row.revoke_reason,
-            user_agent: row.user_agent,
-            ip_hash: row.ip_hash,
+            revoke_reason: row.revoke_reason.clone(),
+            user_agent: row.user_agent.clone(),
+            ip_hash: row.ip_hash.clone(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|last| encode_list_auth_sessions_cursor(last.created_at, &last.sid))
+    } else {
+        None
+    };
+    let session_revision: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT MAX(updated_at) FROM auth_refresh_sessions WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_one(&state.pool)
+            .await
+            .inspect_err(|_| {
+                state
+                    .auth_consistency_metrics
+                    .observe_auth_sessions_list_failure();
+            })?;
+    state
+        .auth_consistency_metrics
+        .observe_auth_sessions_list_success(items.len());
+    tracing::info!(
+        user_id = user.id,
+        sid = %current_sid,
+        request_id = req_ctx.request_id.as_deref().unwrap_or_default(),
+        has_more,
+        items_count = items.len(),
+        limit,
+        decision = "success",
+        "list auth sessions served"
+    );
 
-    Ok((StatusCode::OK, Json(ListAuthSessionsOutput { items })))
+    Ok((
+        StatusCode::OK,
+        resp_headers,
+        Json(ListAuthSessionsOutput {
+            items,
+            has_more,
+            next_cursor,
+            session_revision: session_revision.map(format_cursor_timestamp),
+        }),
+    )
+        .into_response())
 }
 
 #[utoipa::path(
@@ -3610,6 +3950,34 @@ async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_
 impl AppState {
     pub(crate) fn get_auth_consistency_metrics(&self) -> GetAuthConsistencyMetricsOutput {
         self.auth_consistency_metrics.snapshot()
+    }
+
+    pub(crate) async fn cleanup_auth_sessions_retention_once(
+        &self,
+    ) -> Result<AuthSessionsRetentionCleanupReport, AppError> {
+        let run = async {
+            let retention_days = auth_sessions_retention_days();
+            let cutoff = Utc::now() - chrono::Duration::days(retention_days);
+            let deleted_rows = sqlx::query(
+                r#"
+                DELETE FROM auth_refresh_sessions
+                WHERE COALESCE(revoked_at, expires_at) < $1
+                "#,
+            )
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+            self.auth_consistency_metrics
+                .observe_auth_sessions_retention_worker_tick(deleted_rows);
+            Ok(AuthSessionsRetentionCleanupReport { deleted_rows })
+        }
+        .await;
+        if run.is_err() {
+            self.auth_consistency_metrics
+                .observe_auth_sessions_retention_worker_failure();
+        }
+        run
     }
 
     pub(crate) async fn enqueue_auth_token_version_invalidation_retry(
@@ -5268,15 +5636,27 @@ fn session_context_from_headers(headers: &HeaderMap) -> SessionContext {
     }
 }
 
-fn session_revoke_request_context_from_headers(headers: &HeaderMap) -> SessionRevokeRequestContext {
-    let request_id = headers
+fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
         .get("x-request-id")
         .or_else(|| headers.get("x-requestid"))
         .or_else(|| headers.get("request-id"))
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(|v| v.chars().take(128).collect::<String>());
+        .map(|v| v.chars().take(128).collect::<String>())
+}
+
+fn list_auth_sessions_request_context_from_headers(
+    headers: &HeaderMap,
+) -> ListAuthSessionsRequestContext {
+    ListAuthSessionsRequestContext {
+        request_id: request_id_from_headers(headers),
+        ip_hash: extract_ip_hash(headers),
+    }
+}
+
+fn session_revoke_request_context_from_headers(headers: &HeaderMap) -> SessionRevokeRequestContext {
     let ua_hash = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -5284,21 +5664,13 @@ fn session_revoke_request_context_from_headers(headers: &HeaderMap) -> SessionRe
         .filter(|v| !v.is_empty())
         .map(hash_with_sha1);
     SessionRevokeRequestContext {
-        request_id,
+        request_id: request_id_from_headers(headers),
         ip_hash: extract_ip_hash(headers),
         ua_hash,
     }
 }
 
 fn sms_send_request_context_from_headers(headers: &HeaderMap) -> SmsSendRequestContext {
-    let request_id = headers
-        .get("x-request-id")
-        .or_else(|| headers.get("x-requestid"))
-        .or_else(|| headers.get("request-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|v| v.chars().take(128).collect::<String>());
     let trusted = sms_forwarded_headers_trusted(headers);
     let raw_rate_limit_ip = if trusted {
         extract_raw_ip_from_forwarded_headers(headers)
@@ -5310,7 +5682,7 @@ fn sms_send_request_context_from_headers(headers: &HeaderMap) -> SmsSendRequestC
         .as_deref()
         .map(hash_with_sha1);
     SmsSendRequestContext {
-        request_id,
+        request_id: request_id_from_headers(headers),
         rate_limit_ip_hash,
         audit_ip_hash,
     }
@@ -5570,6 +5942,37 @@ fn auth_fail_closed_enabled(state: &AppState) -> bool {
     refresh_cookie_secure_enabled()
 }
 
+pub(crate) fn auth_sessions_retention_worker_enabled() -> bool {
+    std::env::var("AUTH_SESSIONS_RETENTION_CLEANUP_ENABLED")
+        .ok()
+        .map(|raw| {
+            let normalized = raw.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        })
+        .unwrap_or(true)
+}
+
+pub(crate) fn auth_sessions_retention_worker_interval_secs() -> u64 {
+    std::env::var("AUTH_SESSIONS_RETENTION_CLEANUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(AUTH_SESSIONS_RETENTION_WORKER_INTERVAL_DEFAULT_SECS)
+}
+
+fn auth_sessions_retention_days() -> i64 {
+    std::env::var("AUTH_SESSIONS_RETENTION_DAYS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .map(|days| {
+            days.clamp(
+                AUTH_SESSIONS_RETENTION_MIN_DAYS,
+                AUTH_SESSIONS_RETENTION_MAX_DAYS,
+            )
+        })
+        .unwrap_or(AUTH_SESSIONS_RETENTION_DEFAULT_DAYS)
+}
+
 fn sms_fail_closed_enabled_for_scene(state: &AppState, scene: SmsScene) -> bool {
     if state.config.redis.startup_fail_closed() {
         return true;
@@ -5615,6 +6018,7 @@ mod tests {
     use crate::{AuthVerifyError, TokenVerify};
     use anyhow::Result;
     use axum::http::header::SET_COOKIE;
+    use chat_core::middlewares::AuthContext;
     use http_body_util::BodyExt;
     use sqlx::FromRow;
 
@@ -5982,6 +6386,156 @@ mod tests {
             .filter(|v| *v)
             .count();
         assert!(revoked_total >= 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_auth_sessions_should_support_pagination_and_current_session_marker() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let _ = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let (user, sid) = signin_and_decode_session(&state).await?;
+
+        let first = list_auth_sessions_handler(
+            Extension(AuthContext {
+                user: user.clone(),
+                sid: sid.clone(),
+            }),
+            State(state.clone()),
+            HeaderMap::new(),
+            Query(ListAuthSessionsQueryInput {
+                cursor: None,
+                limit: Some(1),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_body = first.into_body().collect().await?.to_bytes();
+        let first_out: ListAuthSessionsOutput = serde_json::from_slice(&first_body)?;
+        assert_eq!(first_out.items.len(), 1);
+        assert!(first_out.has_more);
+        assert!(first_out.next_cursor.is_some());
+        assert!(first_out.session_revision.is_some());
+        assert!(first_out.items[0].is_current);
+        assert_eq!(first_out.items[0].status, "active");
+
+        let second = list_auth_sessions_handler(
+            Extension(AuthContext { user, sid }),
+            State(state),
+            HeaderMap::new(),
+            Query(ListAuthSessionsQueryInput {
+                cursor: first_out.next_cursor,
+                limit: Some(10),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_body = second.into_body().collect().await?.to_bytes();
+        let second_out: ListAuthSessionsOutput = serde_json::from_slice(&second_body)?;
+        assert!(!second_out.items.is_empty());
+        assert!(second_out.items.iter().any(|item| !item.is_current));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_auth_sessions_should_reject_when_current_sid_is_revoked() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, sid) = signin_and_decode_session(&state).await?;
+        sqlx::query(
+            r#"
+            UPDATE auth_refresh_sessions
+            SET revoked_at = NOW(), revoke_reason = 'manual_test', updated_at = NOW()
+            WHERE sid = $1
+            "#,
+        )
+        .bind(&sid)
+        .execute(&state.pool)
+        .await?;
+
+        let err = list_auth_sessions_handler(
+            Extension(AuthContext { user, sid }),
+            State(state),
+            HeaderMap::new(),
+            Query(ListAuthSessionsQueryInput {
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await
+        .expect_err("revoked current sid should be rejected");
+        match err {
+            AppError::AuthError(code) => assert_eq!(code, "auth_session_revoked"),
+            _ => panic!("expected auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_auth_sessions_should_return_validation_error_for_bad_cursor() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, sid) = signin_and_decode_session(&state).await?;
+        let err = list_auth_sessions_handler(
+            Extension(AuthContext { user, sid }),
+            State(state),
+            HeaderMap::new(),
+            Query(ListAuthSessionsQueryInput {
+                cursor: Some("bad-cursor".to_string()),
+                limit: Some(10),
+            }),
+        )
+        .await
+        .expect_err("invalid cursor should be rejected");
+        match err {
+            AppError::ValidationError(code) => assert_eq!(code, "auth_sessions_cursor_invalid"),
+            _ => panic!("expected validation error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auth_sessions_retention_cleanup_should_delete_stale_rows() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, _) = signin_and_decode_session(&state).await?;
+        let stale_sid = format!("stale-{}", Uuid::now_v7());
+        let stale_family = Uuid::now_v7().to_string();
+        let stale_jti = Uuid::now_v7().to_string();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO auth_refresh_sessions(
+                user_id, sid, family_id, current_jti, rotated_from_jti, expires_at, revoked_at,
+                revoke_reason, user_agent, ip_hash, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, NULL, $5, $6, 'expired', NULL, NULL, $7, $8)
+            "#,
+        )
+        .bind(user.id)
+        .bind(&stale_sid)
+        .bind(&stale_family)
+        .bind(&stale_jti)
+        .bind(now - chrono::Duration::days(220))
+        .bind(now - chrono::Duration::days(210))
+        .bind(now - chrono::Duration::days(220))
+        .bind(now - chrono::Duration::days(210))
+        .execute(&state.pool)
+        .await?;
+
+        let report = state.cleanup_auth_sessions_retention_once().await?;
+        assert!(report.deleted_rows >= 1);
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM auth_refresh_sessions WHERE sid = $1")
+                .bind(stale_sid)
+                .fetch_optional(&state.pool)
+                .await?;
+        assert!(exists.is_none());
         Ok(())
     }
 

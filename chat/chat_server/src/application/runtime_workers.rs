@@ -40,7 +40,8 @@ pub(crate) fn spawn_background_workers(
     }
 
     spawn_auth_refresh_consistency_outbox_worker(state.clone());
-    spawn_auth_token_version_invalidation_retry_worker(state);
+    spawn_auth_token_version_invalidation_retry_worker(state.clone());
+    spawn_auth_sessions_retention_cleanup_worker(state);
 }
 
 fn spawn_debate_session_worker(state: AppState) {
@@ -317,6 +318,32 @@ fn spawn_auth_token_version_invalidation_retry_worker(state: AppState) {
                 }
             }
             sleep(Duration::from_secs(RETRY_INTERVAL_SECS)).await;
+        }
+    });
+}
+
+fn spawn_auth_sessions_retention_cleanup_worker(state: AppState) {
+    if !crate::handlers::auth_sessions_retention_worker_enabled() {
+        return;
+    }
+    tokio::spawn(async move {
+        let interval_secs = crate::handlers::auth_sessions_retention_worker_interval_secs().max(1);
+        loop {
+            match state.cleanup_auth_sessions_retention_once().await {
+                Ok(report) => {
+                    debug!(
+                        deleted_rows = report.deleted_rows,
+                        "auth sessions retention cleanup worker tick success"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "auth sessions retention cleanup worker tick failed: {}",
+                        err
+                    );
+                }
+            }
+            sleep(Duration::from_secs(interval_secs)).await;
         }
     });
 }

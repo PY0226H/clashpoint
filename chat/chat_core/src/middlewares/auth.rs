@@ -127,8 +127,9 @@ where
     T: TokenVerify + Clone + Send + Sync + 'static,
 {
     match state.verify(token).await {
-        Ok(user) => {
-            req.extensions_mut().insert(user);
+        Ok(auth_ctx) => {
+            req.extensions_mut().insert(auth_ctx.user.clone());
+            req.extensions_mut().insert(auth_ctx);
             Ok(())
         }
         Err(err) => {
@@ -146,6 +147,7 @@ fn map_auth_verify_error(err: AuthVerifyError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::middlewares::AuthContext;
     use crate::{DecodingKey, EncodingKey, User};
     use anyhow::Result;
     use axum::{
@@ -163,11 +165,14 @@ mod tests {
     }
 
     impl TokenVerify for AppState {
-        async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+        async fn verify(&self, token: &str) -> Result<AuthContext, AuthVerifyError> {
             self.0
                 .dk
                 .verify_access(token)
-                .map(|decoded| decoded.user)
+                .map(|decoded| AuthContext {
+                    user: decoded.user,
+                    sid: decoded.sid,
+                })
                 .map_err(|e| e.to_auth_verify_error())
         }
     }

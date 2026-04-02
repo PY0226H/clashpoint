@@ -13,8 +13,8 @@ mod test_fixtures;
 
 use anyhow::Context;
 use chat_core::{
-    middlewares::{set_layer, verify_token_header_only, AuthVerifyError, TokenVerify},
-    DecodingKey, EncodingKey, User,
+    middlewares::{set_layer, verify_token_header_only, AuthContext, AuthVerifyError, TokenVerify},
+    DecodingKey, EncodingKey,
 };
 use handlers::*;
 use middlewares::{require_phone_bound, verify_ai_internal_key, verify_chat, verify_file_ticket};
@@ -380,7 +380,7 @@ impl Deref for AppState {
 }
 
 impl TokenVerify for AppState {
-    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+    async fn verify(&self, token: &str) -> Result<AuthContext, AuthVerifyError> {
         let decoded = self
             .dk
             .verify_access(token)
@@ -394,7 +394,10 @@ impl TokenVerify for AppState {
         ensure_access_session_active(self, decoded.user.id, &decoded.sid)
             .await
             .map_err(map_auth_app_error)?;
-        Ok(decoded.user)
+        Ok(AuthContext {
+            user: decoded.user,
+            sid: decoded.sid,
+        })
     }
 }
 

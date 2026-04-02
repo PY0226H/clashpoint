@@ -13,8 +13,8 @@ use axum::{
     Router,
 };
 use chat_core::{
-    middlewares::{AuthVerifyError, TokenVerify},
-    DecodingKey, User,
+    middlewares::{AuthContext, AuthVerifyError, TokenVerify},
+    DecodingKey,
 };
 use dashmap::DashMap;
 use middlewares::verify_notify_ticket;
@@ -208,10 +208,13 @@ async fn health_handler() -> &'static str {
 }
 
 impl TokenVerify for AppState {
-    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError> {
+    async fn verify(&self, token: &str) -> Result<AuthContext, AuthVerifyError> {
         self.dk
             .verify_access(token)
-            .map(|decoded| decoded.user)
+            .map(|decoded| AuthContext {
+                user: decoded.user,
+                sid: decoded.sid,
+            })
             .map_err(|err| err.to_auth_verify_error())
     }
 }

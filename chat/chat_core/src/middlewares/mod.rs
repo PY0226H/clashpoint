@@ -37,9 +37,15 @@ impl AuthVerifyError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    pub user: User,
+    pub sid: String,
+}
+
 pub trait TokenVerify {
     #[allow(async_fn_in_trait)]
-    async fn verify(&self, token: &str) -> Result<User, AuthVerifyError>;
+    async fn verify(&self, token: &str) -> Result<AuthContext, AuthVerifyError>;
 }
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
