@@ -187,8 +187,10 @@ test('profile and notifications should render with refreshed desktop style', asy
   await page.goto('http://127.0.0.1:1420/me');
   await expect(page.getByRole('heading', { name: '个人资料' })).toBeVisible();
   await expect(page.getByText('账号密码')).toBeVisible();
+  await expect(page.getByText('查看账号信息、通知入口与充值入口。')).toBeVisible();
 
   await page.goto('http://127.0.0.1:1420/notifications');
   await expect(page.getByRole('heading', { name: '通知中心' })).toBeVisible();
   await expect(page.getByText('通知列表')).toBeVisible();
+  await expect(page.getByText('聚合关键赛事通知：判决生成、平局投票决议。')).toBeVisible();
 });

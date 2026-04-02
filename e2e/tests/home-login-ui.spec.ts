@@ -128,6 +128,7 @@ test('login page should render refreshed visual structure', async ({ page }) => 
   await page.goto('http://127.0.0.1:1420/login');
 
   await expect(page.getByText('在线辩论 AI 裁判平台')).toBeVisible();
+  await expect(page.getByText('mac 端优先工作台，聚焦赛后判决、平局治理与实时辩论流程。')).toBeVisible();
   await expect(page.getByRole('heading', { name: '登录' })).toBeVisible();
   await expect(page.getByRole('button', { name: '邮箱+密码' })).toBeVisible();
   await expect(page.getByRole('button', { name: '手机+密码' })).toBeVisible();

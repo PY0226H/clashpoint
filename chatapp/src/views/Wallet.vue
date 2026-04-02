@@ -45,7 +45,7 @@
           <div class="flex items-center justify-between">
             <div class="text-sm font-semibold text-gray-900">Native Bridge 诊断</div>
             <button
-              @click="refreshNativeBridgeDiagnostics"
+              @click="refreshNativeBridgeDiagnostics()"
               :disabled="nativeBridgeDiagnosticsLoading"
               class="echo-btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
             >
@@ -324,7 +324,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import {
   getIapNativeBridgeDiagnostics,
