@@ -323,6 +323,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/signup", post(signup_handler))
         .route("/auth/refresh", post(refresh_handler))
         .route("/auth/v2/sms/send", post(send_sms_code_v2_handler))
+        .route(
+            "/auth/v2/sms/delivery/callback",
+            post(sms_delivery_callback_v2_handler),
+        )
         .route("/auth/v2/signup/phone", post(signup_phone_v2_handler))
         .route("/auth/v2/signup/email", post(signup_email_v2_handler))
         .route("/auth/v2/signin/password", post(signin_password_v2_handler))

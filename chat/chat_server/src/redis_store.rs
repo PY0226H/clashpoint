@@ -37,6 +37,23 @@ pub(crate) enum SmsCodeVerifyDecision {
     Passed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SmsCodeIssueDecision {
+    Issued,
+    CooldownActive,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SmsCodeIssueInput<'a> {
+    pub code_scope: &'a str,
+    pub cooldown_scope: &'a str,
+    pub attempt_scope: &'a str,
+    pub raw_key: &'a str,
+    pub code: &'a str,
+    pub code_ttl_secs: u64,
+    pub cooldown_ttl_secs: u64,
+}
+
 #[derive(Clone)]
 pub(crate) enum RedisStore {
     Disabled {
@@ -428,6 +445,56 @@ return 3
                     2 => Ok(SmsCodeVerifyDecision::Exhausted),
                     3 => Ok(SmsCodeVerifyDecision::Passed),
                     other => anyhow::bail!("unexpected verify sms code result: {other}"),
+                }
+            }
+        }
+    }
+
+    pub async fn issue_sms_code_atomically(
+        &self,
+        input: SmsCodeIssueInput<'_>,
+    ) -> anyhow::Result<SmsCodeIssueDecision> {
+        match self {
+            Self::Disabled { .. } => anyhow::bail!("redis disabled"),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let code_key = self.namespaced_key(input.code_scope, input.raw_key);
+                let cooldown_key = self.namespaced_key(input.cooldown_scope, input.raw_key);
+                let attempt_key = self.namespaced_key(input.attempt_scope, input.raw_key);
+                let script = r#"
+local code_key = KEYS[1]
+local cooldown_key = KEYS[2]
+local attempt_key = KEYS[3]
+local code = ARGV[1]
+local code_ttl = tonumber(ARGV[2])
+local cooldown_ttl = tonumber(ARGV[3])
+
+local cooldown_exists = redis.call('EXISTS', cooldown_key)
+if cooldown_exists == 1 then
+  return 0
+end
+
+redis.call('SET', code_key, code, 'EX', code_ttl)
+redis.call('SET', cooldown_key, '1', 'EX', cooldown_ttl)
+redis.call('DEL', attempt_key)
+return 1
+"#;
+                let ret: i64 = redis::cmd("EVAL")
+                    .arg(script)
+                    .arg(3)
+                    .arg(&code_key)
+                    .arg(&cooldown_key)
+                    .arg(&attempt_key)
+                    .arg(input.code)
+                    .arg(input.code_ttl_secs.max(1) as i64)
+                    .arg(input.cooldown_ttl_secs.max(1) as i64)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis EVAL issue sms code failed")?;
+                match ret {
+                    0 => Ok(SmsCodeIssueDecision::CooldownActive),
+                    1 => Ok(SmsCodeIssueDecision::Issued),
+                    other => anyhow::bail!("unexpected issue sms code result: {other}"),
                 }
             }
         }

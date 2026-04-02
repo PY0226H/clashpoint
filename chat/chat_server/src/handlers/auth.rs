@@ -6,7 +6,7 @@ use crate::{
     models::{
         CreateUser, CreateUserWithPhoneAndSessionInput, CreateUserWithPhoneInput, SigninUser,
     },
-    redis_store::{RedisStore, SmsCodeVerifyDecision},
+    redis_store::{RedisStore, SmsCodeIssueDecision, SmsCodeIssueInput, SmsCodeVerifyDecision},
     AppError, AppState, ErrorOutput,
 };
 use axum::{
@@ -17,11 +17,14 @@ use axum::{
 };
 use chat_core::{middlewares::AuthVerifyError, JwtError, User};
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use sqlx::{Executor, FromRow};
 use std::{
     collections::{HashMap, HashSet},
+    net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         LazyLock, Mutex,
@@ -39,9 +42,15 @@ const AUTH_V1_SUNSET_DATE: &str = "Wed, 30 Apr 2026 00:00:00 GMT";
 const SMS_CODE_TTL_SECS: u64 = 300;
 const SMS_COOLDOWN_SECS: u64 = 60;
 const SMS_MAX_FAILED_ATTEMPTS: u64 = 5;
+const SMS_SEND_PHONE_RATE_LIMIT_PER_WINDOW: u64 = 5;
+const SMS_SEND_IP_RATE_LIMIT_PER_WINDOW: u64 = 20;
+const SMS_SEND_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const WECHAT_CHALLENGE_TTL_SECS: u64 = 300;
 const WECHAT_BIND_TICKET_TTL_SECS: u64 = 600;
 const SMS_PROVIDER_MOCK: &str = "mock";
+const SMS_PROVIDER_HTTP: &str = "http";
+const SMS_PROVIDER_PROVIDER_KEY_HEADER: &str = "x-sms-provider-key";
+const SMS_PROVIDER_CALLBACK_KEY_ENV: &str = "AUTH_SMS_CALLBACK_KEY";
 const WECHAT_PROVIDER: &str = "wechat";
 const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_QUEUE_MAX: i64 = 2048;
 const AUTH_TOKEN_VERSION_INVALIDATION_RETRY_MAX_ATTEMPTS: i32 = 8;
@@ -60,6 +69,8 @@ const AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN: usize = 512;
 const LOGOUT_ALL_IDEMPOTENCY_TTL_SECS: u64 = 3;
 const SESSION_REVOKE_RATE_LIMIT_PER_WINDOW: u64 = 1;
 const SESSION_REVOKE_RATE_LIMIT_WINDOW_SECS: u64 = 5;
+const SMS_CODE_HASH_ALGO_HMAC_SHA256: &str = "hmac_sha256";
+const SMS_DEFAULT_HMAC_KEY_ID: &str = "v1";
 
 #[derive(Debug, Clone)]
 struct SmsFallbackEntry {
@@ -242,6 +253,18 @@ pub struct GetAuthConsistencyMetricsOutput {
     pub session_revoke_sid_cleanup_degraded_total: u64,
     pub session_revoke_rate_limited_total: u64,
     pub session_revoke_outbox_drop_total: u64,
+    pub sms_send_requests_total: u64,
+    pub sms_send_success_total: u64,
+    pub sms_send_validation_failed_total: u64,
+    pub sms_send_phone_rate_limited_total: u64,
+    pub sms_send_ip_rate_limited_total: u64,
+    pub sms_send_cooldown_limited_total: u64,
+    pub sms_send_degraded_fail_open_total: u64,
+    pub sms_send_degraded_fail_closed_total: u64,
+    pub sms_send_provider_accept_total: u64,
+    pub sms_delivery_callback_total: u64,
+    pub sms_delivery_callback_delivered_total: u64,
+    pub sms_delivery_callback_failed_total: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -409,6 +432,18 @@ pub(crate) struct AuthConsistencyMetrics {
     session_revoke_sid_cleanup_degraded_total: AtomicU64,
     session_revoke_rate_limited_total: AtomicU64,
     session_revoke_outbox_drop_total: AtomicU64,
+    sms_send_requests_total: AtomicU64,
+    sms_send_success_total: AtomicU64,
+    sms_send_validation_failed_total: AtomicU64,
+    sms_send_phone_rate_limited_total: AtomicU64,
+    sms_send_ip_rate_limited_total: AtomicU64,
+    sms_send_cooldown_limited_total: AtomicU64,
+    sms_send_degraded_fail_open_total: AtomicU64,
+    sms_send_degraded_fail_closed_total: AtomicU64,
+    sms_send_provider_accept_total: AtomicU64,
+    sms_delivery_callback_total: AtomicU64,
+    sms_delivery_callback_delivered_total: AtomicU64,
+    sms_delivery_callback_failed_total: AtomicU64,
 }
 
 impl AuthConsistencyMetrics {
@@ -600,6 +635,62 @@ impl AuthConsistencyMetrics {
     fn observe_session_revoke_outbox_drop(&self) {
         self.session_revoke_outbox_drop_total
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_sms_send_request(&self) {
+        self.sms_send_requests_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_sms_send_validation_failed(&self) {
+        self.sms_send_validation_failed_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_sms_send_rate_limited(&self, reason: SmsSendThrottleReason) {
+        match reason {
+            SmsSendThrottleReason::PhoneRateLimit => {
+                self.sms_send_phone_rate_limited_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            SmsSendThrottleReason::IpRateLimit => {
+                self.sms_send_ip_rate_limited_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            SmsSendThrottleReason::Cooldown => {
+                self.sms_send_cooldown_limited_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            SmsSendThrottleReason::DegradedFailClosed => {
+                self.sms_send_degraded_fail_closed_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn observe_sms_send_degraded_fail_open(&self) {
+        self.sms_send_degraded_fail_open_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_sms_provider_accepted(&self) {
+        self.sms_send_provider_accept_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_sms_send_success(&self) {
+        self.sms_send_success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_sms_delivery_callback(&self, delivered: bool) {
+        self.sms_delivery_callback_total
+            .fetch_add(1, Ordering::Relaxed);
+        if delivered {
+            self.sms_delivery_callback_delivered_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.sms_delivery_callback_failed_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn observe_logout_start(&self) {
@@ -846,6 +937,36 @@ impl AuthConsistencyMetrics {
             session_revoke_outbox_drop_total: self
                 .session_revoke_outbox_drop_total
                 .load(Ordering::Relaxed),
+            sms_send_requests_total: self.sms_send_requests_total.load(Ordering::Relaxed),
+            sms_send_success_total: self.sms_send_success_total.load(Ordering::Relaxed),
+            sms_send_validation_failed_total: self
+                .sms_send_validation_failed_total
+                .load(Ordering::Relaxed),
+            sms_send_phone_rate_limited_total: self
+                .sms_send_phone_rate_limited_total
+                .load(Ordering::Relaxed),
+            sms_send_ip_rate_limited_total: self
+                .sms_send_ip_rate_limited_total
+                .load(Ordering::Relaxed),
+            sms_send_cooldown_limited_total: self
+                .sms_send_cooldown_limited_total
+                .load(Ordering::Relaxed),
+            sms_send_degraded_fail_open_total: self
+                .sms_send_degraded_fail_open_total
+                .load(Ordering::Relaxed),
+            sms_send_degraded_fail_closed_total: self
+                .sms_send_degraded_fail_closed_total
+                .load(Ordering::Relaxed),
+            sms_send_provider_accept_total: self
+                .sms_send_provider_accept_total
+                .load(Ordering::Relaxed),
+            sms_delivery_callback_total: self.sms_delivery_callback_total.load(Ordering::Relaxed),
+            sms_delivery_callback_delivered_total: self
+                .sms_delivery_callback_delivered_total
+                .load(Ordering::Relaxed),
+            sms_delivery_callback_failed_total: self
+                .sms_delivery_callback_failed_total
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -877,6 +998,13 @@ struct SessionRevokeRequestContext {
     request_id: Option<String>,
     ip_hash: Option<String>,
     ua_hash: Option<String>,
+}
+
+#[derive(Debug)]
+struct SmsSendRequestContext {
+    request_id: Option<String>,
+    rate_limit_ip_hash: Option<String>,
+    audit_ip_hash: Option<String>,
 }
 
 struct SessionRevokeAuditInput<'a> {
@@ -914,6 +1042,31 @@ pub struct SendSmsCodeV2Output {
     pub cooldown_secs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_accepted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsDeliveryCallbackV2Input {
+    pub provider: String,
+    pub provider_message_id: String,
+    pub delivery_status: String,
+    #[serde(default)]
+    pub delivered_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsDeliveryCallbackV2Output {
+    pub accepted: bool,
+    pub updated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1050,6 +1203,56 @@ impl SmsScene {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmsSendThrottleReason {
+    PhoneRateLimit,
+    IpRateLimit,
+    Cooldown,
+    DegradedFailClosed,
+}
+
+#[derive(Debug)]
+struct SmsProviderSendInput<'a> {
+    phone_e164: &'a str,
+    scene: SmsScene,
+    code: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct SmsProviderSendResult {
+    provider: String,
+    provider_message_id: String,
+    accepted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpSmsProviderResponse {
+    accepted: bool,
+    #[serde(default)]
+    provider_message_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpSmsProviderRequest<'a> {
+    phone_e164: &'a str,
+    scene: &'a str,
+    code: &'a str,
+}
+
+#[derive(Debug)]
+struct SmsDispatchRecordInput<'a> {
+    scene: SmsScene,
+    phone_e164: &'a str,
+    provider: &'a str,
+    provider_message_id: &'a str,
+    send_status: &'a str,
+    accepted_at: DateTime<Utc>,
+    request_id: Option<&'a str>,
+    ip_hash: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountType {
     Email,
     Phone,
@@ -1093,6 +1296,72 @@ fn sms_provider_name() -> String {
         .unwrap_or_else(|_| SMS_PROVIDER_MOCK.to_string())
         .trim()
         .to_ascii_lowercase()
+}
+
+fn sms_provider_http_endpoint() -> Option<String> {
+    std::env::var("AUTH_SMS_PROVIDER_ENDPOINT")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn sms_provider_http_timeout_ms() -> u64 {
+    std::env::var("AUTH_SMS_PROVIDER_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(3_000)
+        .clamp(200, 30_000)
+}
+
+fn sms_provider_auth_token() -> Option<String> {
+    std::env::var("AUTH_SMS_PROVIDER_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn sms_provider_callback_key() -> String {
+    std::env::var(SMS_PROVIDER_CALLBACK_KEY_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "dev-sms-callback-key".to_string())
+}
+
+fn sms_code_hash_key() -> String {
+    std::env::var("AUTH_SMS_CODE_HASH_KEY")
+        .unwrap_or_else(|_| "echoisle-dev-sms-hash-key".to_string())
+        .trim()
+        .to_string()
+}
+
+fn sms_code_hash_key_id() -> String {
+    std::env::var("AUTH_SMS_CODE_HASH_KEY_ID")
+        .unwrap_or_else(|_| SMS_DEFAULT_HMAC_KEY_ID.to_string())
+        .trim()
+        .to_string()
+}
+
+fn sms_fallback_allowed_in_runtime() -> bool {
+    !runtime_env_is_production()
+}
+
+fn trusted_sms_proxy_ids() -> HashSet<String> {
+    std::env::var("AUTH_SMS_TRUSTED_PROXY_IDS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .collect()
+}
+
+fn trusted_sms_proxy_cidrs() -> Vec<SimpleIpv4Cidr> {
+    std::env::var("AUTH_SMS_TRUSTED_PROXY_CIDRS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(SimpleIpv4Cidr::parse)
+        .collect()
 }
 
 fn wechat_app_id() -> String {
@@ -1229,7 +1498,7 @@ fn build_signin_password_rate_limit_key(
 }
 
 fn generate_sms_code() -> String {
-    let seed = Uuid::now_v7().as_u128() % 1_000_000;
+    let seed = Uuid::new_v4().as_u128() % 1_000_000;
     format!("{seed:06}")
 }
 
@@ -1366,7 +1635,9 @@ pub(crate) async fn signin_handler(
     responses(
         (status = 200, description = "SMS code sent", body = SendSmsCodeV2Output),
         (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 401, description = "Unauthorized", body = ErrorOutput),
         (status = 429, description = "Rate limited", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
     )
 )]
 pub(crate) async fn send_sms_code_v2_handler(
@@ -1374,24 +1645,47 @@ pub(crate) async fn send_sms_code_v2_handler(
     headers: HeaderMap,
     Json(input): Json<SendSmsCodeV2Input>,
 ) -> Result<Response, AppError> {
+    state.auth_consistency_metrics.observe_sms_send_request();
     if runtime_env_is_production() && sms_provider_name() == SMS_PROVIDER_MOCK {
-        return Err(AppError::AuthError(
+        state
+            .auth_consistency_metrics
+            .observe_sms_send_rate_limited(SmsSendThrottleReason::DegradedFailClosed);
+        return Err(AppError::ThrottleError(
             "auth_sms_send_rate_limited".to_string(),
         ));
     }
 
-    let scene = SmsScene::parse(&input.scene)
-        .ok_or_else(|| AppError::AuthError("auth_sms_code_invalid".to_string()))?;
-    let phone_e164 = normalize_cn_phone_e164(&input.phone)
-        .ok_or_else(|| AppError::AuthError("auth_sms_code_invalid".to_string()))?;
-    let ip_hash = extract_ip_hash(&headers);
+    let scene = match SmsScene::parse(&input.scene) {
+        Some(v) => v,
+        None => {
+            state
+                .auth_consistency_metrics
+                .observe_sms_send_validation_failed();
+            return Err(AppError::ValidationError(
+                "auth_sms_code_invalid".to_string(),
+            ));
+        }
+    };
+    let phone_e164 = match normalize_cn_phone_e164(&input.phone) {
+        Some(v) => v,
+        None => {
+            state
+                .auth_consistency_metrics
+                .observe_sms_send_validation_failed();
+            return Err(AppError::ValidationError(
+                "auth_sms_code_invalid".to_string(),
+            ));
+        }
+    };
+    let req_ctx = sms_send_request_context_from_headers(&headers);
 
     let phone_decision = enforce_auth_rate_limit(
         &state,
         "sms_send_phone",
         &format!("{}:{phone_e164}", scene.as_str()),
-        5,
-        60,
+        SMS_SEND_PHONE_RATE_LIMIT_PER_WINDOW,
+        SMS_SEND_RATE_LIMIT_WINDOW_SECS,
+        scene,
     )
     .await?;
     let ip_decision = enforce_auth_rate_limit(
@@ -1400,25 +1694,70 @@ pub(crate) async fn send_sms_code_v2_handler(
         &format!(
             "{}:{}",
             scene.as_str(),
-            ip_hash.clone().unwrap_or_else(|| "unknown".to_string())
+            req_ctx
+                .rate_limit_ip_hash
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string())
         ),
-        20,
-        60,
+        SMS_SEND_IP_RATE_LIMIT_PER_WINDOW,
+        SMS_SEND_RATE_LIMIT_WINDOW_SECS,
+        scene,
     )
     .await?;
     let resp_headers = build_rate_limit_headers(&phone_decision)?;
-    if !phone_decision.allowed || !ip_decision.allowed {
+    if !phone_decision.allowed {
+        state
+            .auth_consistency_metrics
+            .observe_sms_send_rate_limited(SmsSendThrottleReason::PhoneRateLimit);
         let body = Json(ErrorOutput::new("auth_sms_send_rate_limited"));
         return Ok((StatusCode::TOO_MANY_REQUESTS, resp_headers, body).into_response());
     }
-
-    if sms_code_cooldown_active(&state, scene, &phone_e164).await? {
+    if !ip_decision.allowed {
+        state
+            .auth_consistency_metrics
+            .observe_sms_send_rate_limited(SmsSendThrottleReason::IpRateLimit);
         let body = Json(ErrorOutput::new("auth_sms_send_rate_limited"));
         return Ok((StatusCode::TOO_MANY_REQUESTS, resp_headers, body).into_response());
     }
 
     let code = generate_sms_code();
-    store_sms_code(&state, scene, &phone_e164, &code).await?;
+    let issue_decision = issue_sms_code_with_policy(&state, scene, &phone_e164, &code).await?;
+    if issue_decision == SmsCodeIssueDecision::CooldownActive {
+        state
+            .auth_consistency_metrics
+            .observe_sms_send_rate_limited(SmsSendThrottleReason::Cooldown);
+        let body = Json(ErrorOutput::new("auth_sms_send_rate_limited"));
+        return Ok((StatusCode::TOO_MANY_REQUESTS, resp_headers, body).into_response());
+    }
+
+    let provider_outcome = send_sms_via_provider(
+        &state,
+        SmsProviderSendInput {
+            phone_e164: &phone_e164,
+            scene,
+            code: &code,
+        },
+    )
+    .await?;
+    state
+        .auth_consistency_metrics
+        .observe_sms_provider_accepted();
+
+    insert_sms_dispatch_record(
+        &state,
+        SmsDispatchRecordInput {
+            scene,
+            phone_e164: &phone_e164,
+            provider: &provider_outcome.provider,
+            provider_message_id: &provider_outcome.provider_message_id,
+            send_status: "accepted",
+            accepted_at: provider_outcome.accepted_at,
+            request_id: req_ctx.request_id.as_deref(),
+            ip_hash: req_ctx.audit_ip_hash.as_deref(),
+        },
+    )
+    .await?;
+
     insert_sms_audit_log_best_effort(
         &state,
         SmsAuditLogInput {
@@ -1427,7 +1766,7 @@ pub(crate) async fn send_sms_code_v2_handler(
             action: "send",
             result: "sent",
             reason: None,
-            request_ip_hash: ip_hash.as_deref(),
+            request_ip_hash: req_ctx.audit_ip_hash.as_deref(),
             code_plain: Some(&code),
             user_id: None,
         },
@@ -1439,6 +1778,7 @@ pub(crate) async fn send_sms_code_v2_handler(
     } else {
         None
     };
+    state.auth_consistency_metrics.observe_sms_send_success();
     Ok((
         StatusCode::OK,
         resp_headers,
@@ -1447,9 +1787,257 @@ pub(crate) async fn send_sms_code_v2_handler(
             ttl_secs: SMS_CODE_TTL_SECS,
             cooldown_secs: SMS_COOLDOWN_SECS,
             debug_code,
+            provider_message_id: Some(provider_outcome.provider_message_id),
+            provider_accepted_at: Some(provider_outcome.accepted_at),
         }),
     )
         .into_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/v2/sms/delivery/callback",
+    request_body = SmsDeliveryCallbackV2Input,
+    responses(
+        (status = 200, description = "Delivery callback accepted", body = SmsDeliveryCallbackV2Output),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 401, description = "Unauthorized callback", body = ErrorOutput),
+    )
+)]
+pub(crate) async fn sms_delivery_callback_v2_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<SmsDeliveryCallbackV2Input>,
+) -> Result<impl IntoResponse, AppError> {
+    let expected_key = sms_provider_callback_key();
+    let provided_key = headers
+        .get(SMS_PROVIDER_PROVIDER_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| AppError::AuthError("auth_sms_callback_unauthorized".to_string()))?;
+    if provided_key != expected_key {
+        return Err(AppError::AuthError(
+            "auth_sms_callback_unauthorized".to_string(),
+        ));
+    }
+    let provider = input.provider.trim().to_ascii_lowercase();
+    let provider_message_id = input.provider_message_id.trim();
+    if provider.is_empty() || provider_message_id.is_empty() {
+        return Err(AppError::ValidationError(
+            "auth_sms_callback_invalid".to_string(),
+        ));
+    }
+    let normalized_status = normalize_sms_delivery_status(&input.delivery_status)
+        .ok_or_else(|| AppError::ValidationError("auth_sms_callback_invalid".to_string()))?;
+    let delivery_time = input.delivered_at.unwrap_or_else(Utc::now);
+    let updated = update_sms_dispatch_delivery_status(
+        &state,
+        &provider,
+        provider_message_id,
+        normalized_status,
+        delivery_time,
+        input.error_code.as_deref(),
+        input.error_message.as_deref(),
+    )
+    .await?;
+    state
+        .auth_consistency_metrics
+        .observe_sms_delivery_callback(normalized_status == "delivered");
+    Ok(Json(SmsDeliveryCallbackV2Output {
+        accepted: true,
+        updated,
+    }))
+}
+
+fn normalize_sms_delivery_status(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "delivered" | "success" => Some("delivered"),
+        "failed" | "undelivered" | "rejected" => Some("failed"),
+        _ => None,
+    }
+}
+
+async fn update_sms_dispatch_delivery_status(
+    state: &AppState,
+    provider: &str,
+    provider_message_id: &str,
+    delivery_status: &str,
+    delivered_at: DateTime<Utc>,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> Result<bool, AppError> {
+    let affected = sqlx::query(
+        r#"
+        UPDATE auth_sms_dispatch_records
+        SET delivery_status = $3,
+            delivery_error_code = $4,
+            delivery_error_message = $5,
+            delivered_at = $6,
+            updated_at = NOW()
+        WHERE provider = $1 AND provider_message_id = $2
+        "#,
+    )
+    .bind(provider)
+    .bind(provider_message_id)
+    .bind(delivery_status)
+    .bind(error_code)
+    .bind(error_message)
+    .bind(delivered_at)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    Ok(affected > 0)
+}
+
+async fn insert_sms_dispatch_record(
+    state: &AppState,
+    input: SmsDispatchRecordInput<'_>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO auth_sms_dispatch_records(
+            scene, phone_e164, provider, provider_message_id, send_status, accepted_at, request_id, request_ip_hash
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(input.scene.as_str())
+    .bind(input.phone_e164)
+    .bind(input.provider)
+    .bind(input.provider_message_id)
+    .bind(input.send_status)
+    .bind(input.accepted_at)
+    .bind(input.request_id)
+    .bind(input.ip_hash)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn send_sms_via_provider(
+    _state: &AppState,
+    input: SmsProviderSendInput<'_>,
+) -> Result<SmsProviderSendResult, AppError> {
+    let provider = sms_provider_name();
+    let accepted_at = Utc::now();
+    if provider == SMS_PROVIDER_MOCK {
+        return Ok(SmsProviderSendResult {
+            provider,
+            provider_message_id: format!("mock-{}", Uuid::new_v4()),
+            accepted_at,
+        });
+    }
+
+    if provider != SMS_PROVIDER_HTTP {
+        return Err(AppError::ServerError(
+            "auth_sms_provider_unknown".to_string(),
+        ));
+    }
+
+    let endpoint = sms_provider_http_endpoint()
+        .ok_or_else(|| AppError::ServerError("auth_sms_provider_misconfigured".to_string()))?;
+    let timeout = std::time::Duration::from_millis(sms_provider_http_timeout_ms());
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|err| AppError::AnyError(anyhow::anyhow!(err)))?;
+    let mut request = client.post(endpoint).json(&HttpSmsProviderRequest {
+        phone_e164: input.phone_e164,
+        scene: input.scene.as_str(),
+        code: input.code,
+    });
+    if let Some(token) = sms_provider_auth_token() {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| AppError::ThrottleError("auth_sms_send_rate_limited".to_string()))?;
+    if !response.status().is_success() {
+        return Err(AppError::ThrottleError(
+            "auth_sms_send_rate_limited".to_string(),
+        ));
+    }
+    let payload = response
+        .json::<HttpSmsProviderResponse>()
+        .await
+        .map_err(|_| AppError::ServerError("auth_sms_provider_invalid_response".to_string()))?;
+    if !payload.accepted {
+        return Err(AppError::ThrottleError(
+            "auth_sms_send_rate_limited".to_string(),
+        ));
+    }
+    let provider_message_id = payload
+        .provider_message_id
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| format!("http-{}", Uuid::new_v4()));
+    Ok(SmsProviderSendResult {
+        provider,
+        provider_message_id,
+        accepted_at,
+    })
+}
+
+async fn issue_sms_code_with_policy(
+    state: &AppState,
+    scene: SmsScene,
+    phone_e164: &str,
+    code: &str,
+) -> Result<SmsCodeIssueDecision, AppError> {
+    let code_scope = format!("auth:sms:code:{}", scene.as_str());
+    let cooldown_scope = format!("auth:sms:cooldown:{}", scene.as_str());
+    let attempt_scope = format!("auth:sms:attempt:{}", scene.as_str());
+
+    let ret = state
+        .redis
+        .issue_sms_code_atomically(SmsCodeIssueInput {
+            code_scope: &code_scope,
+            cooldown_scope: &cooldown_scope,
+            attempt_scope: &attempt_scope,
+            raw_key: phone_e164,
+            code,
+            code_ttl_secs: SMS_CODE_TTL_SECS,
+            cooldown_ttl_secs: SMS_COOLDOWN_SECS,
+        })
+        .await;
+
+    match ret {
+        Ok(decision) => Ok(decision),
+        Err(err) => {
+            if sms_fail_closed_enabled_for_scene(state, scene) {
+                tracing::warn!("sms issue failed under fail-closed: {}", err);
+                state
+                    .auth_consistency_metrics
+                    .observe_sms_send_rate_limited(SmsSendThrottleReason::DegradedFailClosed);
+                return Err(AppError::ThrottleError(
+                    "auth_sms_send_rate_limited".to_string(),
+                ));
+            }
+            if !sms_fallback_allowed_in_runtime() {
+                tracing::warn!("sms issue fallback disabled under current runtime: {}", err);
+                state
+                    .auth_consistency_metrics
+                    .observe_sms_send_rate_limited(SmsSendThrottleReason::DegradedFailClosed);
+                return Err(AppError::ThrottleError(
+                    "auth_sms_send_rate_limited".to_string(),
+                ));
+            }
+            tracing::warn!("sms issue degraded as fallback: {}", err);
+            state
+                .auth_consistency_metrics
+                .observe_sms_send_degraded_fail_open();
+            let fallback_entry = fallback_get_sms_entry(scene, phone_e164);
+            if let Some(entry) = fallback_entry {
+                if entry.cooldown_until_epoch_secs > now_epoch_secs() {
+                    return Ok(SmsCodeIssueDecision::CooldownActive);
+                }
+            }
+            fallback_set_sms_entry(scene, phone_e164, code);
+            Ok(SmsCodeIssueDecision::Issued)
+        }
+    }
 }
 
 #[utoipa::path(
@@ -4135,6 +4723,7 @@ async fn enforce_auth_rate_limit(
     key: &str,
     limit: u64,
     window_secs: u64,
+    scene: SmsScene,
 ) -> Result<crate::RateLimitDecision, AppError> {
     match state
         .redis
@@ -4143,14 +4732,17 @@ async fn enforce_auth_rate_limit(
     {
         Ok(v) => Ok(v),
         Err(err) => {
-            if auth_fail_closed_enabled(state) {
+            if sms_fail_closed_enabled_for_scene(state, scene) {
                 tracing::warn!(
                     "auth v2 rate limit failed under fail-closed, scope={}, key={}, err={}",
                     scope,
                     key,
                     err
                 );
-                return Err(AppError::AuthError(
+                state
+                    .auth_consistency_metrics
+                    .observe_sms_send_rate_limited(SmsSendThrottleReason::DegradedFailClosed);
+                return Err(AppError::ThrottleError(
                     "auth_sms_send_rate_limited".to_string(),
                 ));
             }
@@ -4160,6 +4752,9 @@ async fn enforce_auth_rate_limit(
                 key,
                 err
             );
+            state
+                .auth_consistency_metrics
+                .observe_sms_send_degraded_fail_open();
             let now = now_epoch_secs();
             Ok(crate::RateLimitDecision {
                 allowed: true,
@@ -4171,77 +4766,6 @@ async fn enforce_auth_rate_limit(
     }
 }
 
-async fn sms_code_cooldown_active(
-    state: &AppState,
-    scene: SmsScene,
-    phone_e164: &str,
-) -> Result<bool, AppError> {
-    let scope = format!("auth:sms:cooldown:{}", scene.as_str());
-    if redis_is_disabled(state) {
-        let entry = fallback_get_sms_entry(scene, phone_e164);
-        if let Some(entry) = entry {
-            return Ok(entry.cooldown_until_epoch_secs > now_epoch_secs());
-        }
-        return Ok(false);
-    }
-    match state.redis.get_value(&scope, phone_e164).await {
-        Ok(v) => Ok(v.is_some()),
-        Err(err) => {
-            if auth_fail_closed_enabled(state) {
-                tracing::warn!("sms cooldown read failed under fail-closed: {}", err);
-                return Err(AppError::AuthError(
-                    "auth_sms_send_rate_limited".to_string(),
-                ));
-            }
-            tracing::warn!("sms cooldown read degraded as fail-open: {}", err);
-            Ok(false)
-        }
-    }
-}
-
-async fn store_sms_code(
-    state: &AppState,
-    scene: SmsScene,
-    phone_e164: &str,
-    code: &str,
-) -> Result<(), AppError> {
-    if redis_is_disabled(state) {
-        fallback_set_sms_entry(scene, phone_e164, code);
-        return Ok(());
-    }
-    let code_scope = format!("auth:sms:code:{}", scene.as_str());
-    let cooldown_scope = format!("auth:sms:cooldown:{}", scene.as_str());
-    let attempt_scope = format!("auth:sms:attempt:{}", scene.as_str());
-
-    let code_ret = state
-        .redis
-        .set_value_with_ttl(&code_scope, phone_e164, code, SMS_CODE_TTL_SECS)
-        .await;
-    let cooldown_ret = state
-        .redis
-        .set_value_with_ttl(&cooldown_scope, phone_e164, "1", SMS_COOLDOWN_SECS.max(1))
-        .await;
-    let clear_attempt_ret = state.redis.delete_key(&attempt_scope, phone_e164).await;
-
-    let code_ok = code_ret.is_ok() && cooldown_ret.is_ok() && clear_attempt_ret.is_ok();
-    if code_ok {
-        return Ok(());
-    }
-    if auth_fail_closed_enabled(state) {
-        return Err(AppError::AuthError(
-            "auth_sms_send_rate_limited".to_string(),
-        ));
-    }
-    tracing::warn!(
-        "sms code redis write degraded as fallback, code_ret={:?}, cooldown_ret={:?}, clear_attempt_ret={:?}",
-        code_ret.err(),
-        cooldown_ret.err(),
-        clear_attempt_ret.err(),
-    );
-    fallback_set_sms_entry(scene, phone_e164, code);
-    Ok(())
-}
-
 async fn verify_sms_code(
     state: &AppState,
     scene: SmsScene,
@@ -4251,6 +4775,9 @@ async fn verify_sms_code(
 ) -> Result<(), AppError> {
     let sms_code = sms_code.trim();
     let decision = if redis_is_disabled(state) {
+        if !sms_fallback_allowed_in_runtime() {
+            return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
+        }
         verify_sms_code_via_fallback_store(scene, phone_e164, sms_code)
     } else {
         let verify_ret = state
@@ -4267,8 +4794,15 @@ async fn verify_sms_code(
         match verify_ret {
             Ok(decision) => decision,
             Err(err) => {
-                if auth_fail_closed_enabled(state) {
+                if sms_fail_closed_enabled_for_scene(state, scene) {
                     tracing::warn!("sms verify failed under fail-closed: {}", err);
+                    return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
+                }
+                if !sms_fallback_allowed_in_runtime() {
+                    tracing::warn!(
+                        "sms verify fallback disabled under current runtime: {}",
+                        err
+                    );
                     return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
                 }
                 tracing::warn!("sms verify degraded as fallback: {}", err);
@@ -4380,13 +4914,23 @@ async fn insert_sms_audit_log(
     state: &AppState,
     entry: SmsAuditLogInput<'_>,
 ) -> Result<(), AppError> {
-    let code_hash = entry.code_plain.map(hash_with_sha1);
+    let code_hash = entry.code_plain.map(hash_sms_code_hmac_sha256);
+    let code_hash_algo = if code_hash.is_some() {
+        Some(SMS_CODE_HASH_ALGO_HMAC_SHA256)
+    } else {
+        None
+    };
+    let code_hash_key_id = if code_hash.is_some() {
+        Some(sms_code_hash_key_id())
+    } else {
+        None
+    };
     sqlx::query(
         r#"
         INSERT INTO auth_sms_audit_logs(
-            phone_e164, scene, provider, action, result, reason, request_ip_hash, code_hash, user_id
+            phone_e164, scene, provider, action, result, reason, request_ip_hash, code_hash, code_hash_algo, code_hash_key_id, user_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         "#,
     )
     .bind(entry.phone_e164)
@@ -4397,6 +4941,8 @@ async fn insert_sms_audit_log(
     .bind(entry.reason)
     .bind(entry.request_ip_hash)
     .bind(code_hash)
+    .bind(code_hash_algo)
+    .bind(code_hash_key_id)
     .bind(entry.user_id)
     .execute(&state.pool)
     .await?;
@@ -4453,6 +4999,48 @@ fn hash_with_sha1(input: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(input.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn hash_sms_code_hmac_sha256(code: &str) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let key = sms_code_hash_key();
+    let mut mac =
+        HmacSha256::new_from_slice(key.as_bytes()).expect("hmac sha256 supports any key size");
+    mac.update(code.as_bytes());
+    let digest = mac.finalize().into_bytes();
+    hex::encode(digest)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SimpleIpv4Cidr {
+    network: u32,
+    mask: u32,
+}
+
+impl SimpleIpv4Cidr {
+    fn parse(raw: &str) -> Option<Self> {
+        let normalized = raw.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        let mut parts = normalized.split('/');
+        let base = parts.next()?.trim().parse::<std::net::Ipv4Addr>().ok()?;
+        let prefix = parts.next()?.trim().parse::<u8>().ok()?;
+        if prefix > 32 || parts.next().is_some() {
+            return None;
+        }
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - prefix)
+        };
+        let network = u32::from(base) & mask;
+        Some(Self { network, mask })
+    }
+
+    fn contains(&self, ip: std::net::Ipv4Addr) -> bool {
+        (u32::from(ip) & self.mask) == self.network
+    }
 }
 
 async fn store_wechat_challenge(
@@ -4702,24 +5290,91 @@ fn session_revoke_request_context_from_headers(headers: &HeaderMap) -> SessionRe
     }
 }
 
-fn extract_ip_hash(headers: &HeaderMap) -> Option<String> {
-    let raw_ip = headers
+fn sms_send_request_context_from_headers(headers: &HeaderMap) -> SmsSendRequestContext {
+    let request_id = headers
+        .get("x-request-id")
+        .or_else(|| headers.get("x-requestid"))
+        .or_else(|| headers.get("request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.chars().take(128).collect::<String>());
+    let trusted = sms_forwarded_headers_trusted(headers);
+    let raw_rate_limit_ip = if trusted {
+        extract_raw_ip_from_forwarded_headers(headers)
+    } else {
+        None
+    };
+    let rate_limit_ip_hash = raw_rate_limit_ip.as_deref().map(hash_with_sha1);
+    let audit_ip_hash = extract_raw_ip_from_forwarded_headers(headers)
+        .as_deref()
+        .map(hash_with_sha1);
+    SmsSendRequestContext {
+        request_id,
+        rate_limit_ip_hash,
+        audit_ip_hash,
+    }
+}
+
+fn sms_forwarded_headers_trusted(headers: &HeaderMap) -> bool {
+    let trusted_ids = trusted_sms_proxy_ids();
+    if !trusted_ids.is_empty() {
+        let proxy_id = headers
+            .get("x-echoisle-proxy-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        if let Some(id) = proxy_id {
+            if trusted_ids.contains(id) {
+                return true;
+            }
+        }
+    }
+
+    let trusted_cidrs = trusted_sms_proxy_cidrs();
+    if trusted_cidrs.is_empty() {
+        if !runtime_env_is_production() {
+            return true;
+        }
+        return false;
+    }
+    let Some(raw_peer_ip) = headers
+        .get("x-echoisle-peer-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    else {
+        return false;
+    };
+    let Ok(parsed_peer) = raw_peer_ip.parse::<IpAddr>() else {
+        return false;
+    };
+    let IpAddr::V4(peer_v4) = parsed_peer else {
+        return false;
+    };
+    trusted_cidrs.iter().any(|cidr| cidr.contains(peer_v4))
+}
+
+fn extract_raw_ip_from_forwarded_headers(headers: &HeaderMap) -> Option<String> {
+    headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .map(str::trim)
         .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
         .or_else(|| {
             headers
                 .get("x-real-ip")
                 .and_then(|v| v.to_str().ok())
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
-        })?;
+                .map(|v| v.to_string())
+        })
+}
 
-    let mut hasher = Sha1::new();
-    hasher.update(raw_ip.as_bytes());
-    Some(format!("{:x}", hasher.finalize()))
+fn extract_ip_hash(headers: &HeaderMap) -> Option<String> {
+    extract_raw_ip_from_forwarded_headers(headers).map(|ip| hash_with_sha1(&ip))
 }
 
 fn refresh_verify_error_code(err: &JwtError) -> &'static str {
@@ -4913,6 +5568,27 @@ fn auth_fail_closed_enabled(state: &AppState) -> bool {
         return true;
     }
     refresh_cookie_secure_enabled()
+}
+
+fn sms_fail_closed_enabled_for_scene(state: &AppState, scene: SmsScene) -> bool {
+    if state.config.redis.startup_fail_closed() {
+        return true;
+    }
+    let raw = std::env::var("AUTH_SMS_FAIL_CLOSED_SCENES").unwrap_or_default();
+    let configured: HashSet<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_ascii_lowercase())
+        .collect();
+    if configured.is_empty() {
+        if runtime_env_is_production() {
+            // 默认只对高风险场景走 fail-closed，降低短信入口全量抖动风险。
+            return scene == SmsScene::BindPhone;
+        }
+        return false;
+    }
+    configured.contains(scene.as_str())
 }
 
 fn handle_auth_redis_unit_result(
@@ -5736,6 +6412,147 @@ mod tests {
         let ret: SendSmsCodeV2Output = serde_json::from_slice(&body)?;
         assert!(ret.sent);
         assert!(ret.debug_code.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_sms_code_v2_should_return_400_when_scene_invalid() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let response = match send_sms_code_v2_handler(
+            State(state),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138000".to_string(),
+                scene: "invalid_scene".to_string(),
+            }),
+        )
+        .await
+        {
+            Ok(resp) => resp,
+            Err(err) => err.into_response(),
+        };
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await?.to_bytes();
+        let ret: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(ret.error, "auth_sms_code_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_sms_code_v2_should_rate_limit_when_cooldown_active() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let first = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138066".to_string(),
+                scene: "signup_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = send_sms_code_v2_handler(
+            State(state),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138066".to_string(),
+                scene: "signup_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = second.into_body().collect().await?.to_bytes();
+        let ret: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(ret.error, "auth_sms_send_rate_limited");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sms_delivery_callback_v2_should_update_dispatch_record() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let send_resp = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138123".to_string(),
+                scene: "signup_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(send_resp.status(), StatusCode::OK);
+        let send_body = send_resp.into_body().collect().await?.to_bytes();
+        let send_out: SendSmsCodeV2Output = serde_json::from_slice(&send_body)?;
+        let provider_message_id = send_out
+            .provider_message_id
+            .clone()
+            .expect("provider message id");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static("x-sms-provider-key"),
+            HeaderValue::from_static("dev-sms-callback-key"),
+        );
+        let callback = sms_delivery_callback_v2_handler(
+            State(state.clone()),
+            headers,
+            Json(SmsDeliveryCallbackV2Input {
+                provider: SMS_PROVIDER_MOCK.to_string(),
+                provider_message_id: provider_message_id.clone(),
+                delivery_status: "delivered".to_string(),
+                delivered_at: None,
+                error_code: None,
+                error_message: None,
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(callback.status(), StatusCode::OK);
+        let callback_body = callback.into_body().collect().await?.to_bytes();
+        let callback_out: SmsDeliveryCallbackV2Output = serde_json::from_slice(&callback_body)?;
+        assert!(callback_out.accepted);
+        assert!(callback_out.updated);
+
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT delivery_status FROM auth_sms_dispatch_records WHERE provider = $1 AND provider_message_id = $2",
+        )
+        .bind(SMS_PROVIDER_MOCK)
+        .bind(provider_message_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        assert_eq!(status.as_deref(), Some("delivered"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sms_delivery_callback_v2_should_reject_wrong_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static("x-sms-provider-key"),
+            HeaderValue::from_static("wrong-key"),
+        );
+        let ret = sms_delivery_callback_v2_handler(
+            State(state),
+            headers,
+            Json(SmsDeliveryCallbackV2Input {
+                provider: SMS_PROVIDER_MOCK.to_string(),
+                provider_message_id: "mock-abc".to_string(),
+                delivery_status: "delivered".to_string(),
+                delivered_at: None,
+                error_code: None,
+                error_message: None,
+            }),
+        )
+        .await;
+        match ret {
+            Ok(_) => panic!("wrong callback key should be rejected"),
+            Err(AppError::AuthError(code)) => assert_eq!(code, "auth_sms_callback_unauthorized"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
         Ok(())
     }
 
