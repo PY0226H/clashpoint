@@ -13,7 +13,7 @@ async function bootstrapAuthState(page) {
   });
 }
 
-async function mockCommonApis(page) {
+async function mockCommonApis(page, hooks = {}) {
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -42,6 +42,7 @@ async function mockCommonApis(page) {
     }
 
     if (pathname === '/api/pay/wallet') {
+      hooks.onWalletBalance?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -51,6 +52,7 @@ async function mockCommonApis(page) {
     }
 
     if (pathname === '/api/pay/wallet/ledger') {
+      hooks.onWalletLedger?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -60,6 +62,7 @@ async function mockCommonApis(page) {
     }
 
     if (pathname === '/api/pay/iap/products') {
+      hooks.onIapProducts?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -132,6 +135,29 @@ test('wallet shell should render with refreshed desktop style', async ({ page })
   await page.goto('http://127.0.0.1:1420/wallet');
   await expect(page.getByRole('heading', { name: '充值与验单工作台' })).toBeVisible();
   await expect(page.getByText('钱包账本')).toBeVisible();
+});
+
+test('wallet page should request wallet and ledger endpoints', async ({ page }) => {
+  let walletBalanceCalls = 0;
+  let walletLedgerCalls = 0;
+  let iapProductsCalls = 0;
+  await mockCommonApis(page, {
+    onWalletBalance: () => {
+      walletBalanceCalls += 1;
+    },
+    onWalletLedger: () => {
+      walletLedgerCalls += 1;
+    },
+    onIapProducts: () => {
+      iapProductsCalls += 1;
+    },
+  });
+
+  await page.goto('http://127.0.0.1:1420/wallet');
+  await expect(page.getByRole('heading', { name: '充值与验单工作台' })).toBeVisible();
+  await expect.poll(() => walletBalanceCalls).toBeGreaterThan(0);
+  await expect.poll(() => walletLedgerCalls).toBeGreaterThan(0);
+  await expect.poll(() => iapProductsCalls).toBeGreaterThan(0);
 });
 
 test('profile and notifications should render with refreshed desktop style', async ({ page }) => {

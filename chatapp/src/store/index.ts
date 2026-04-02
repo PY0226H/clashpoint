@@ -52,6 +52,14 @@ import {
   actionUpsertOpsObservabilityAnomalyState,
   actionUpsertOpsObservabilityThresholds,
 } from './actions-debate-ops.ts';
+import {
+  actionFetchWalletBalance,
+  actionGetIapOrderByTransaction,
+  actionListIapProducts,
+  actionListWalletLedger,
+  actionPinDebateMessage,
+  actionVerifyIapOrder,
+} from './actions-payment-wallet.ts';
 import { v4 as uuidv4 } from 'uuid';
 import packageJson from '../../package.json';
 
@@ -851,11 +859,13 @@ export default createStore({
       return response.data || [];
     },
     async listIapProducts({ state }, { activeOnly = true } = {}) {
-      const suffix = buildQueryString({ activeOnly });
-      const response = await network(this, 'get', `/pay/iap/products${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
+      return actionListIapProducts({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        activeOnly,
       });
-      return response.data || [];
     },
     async verifyIapOrder(
       { state },
@@ -866,60 +876,42 @@ export default createStore({
         receiptData,
       } = {},
     ) {
-      if (!productId || !String(productId).trim()) {
-        throw new Error('productId is required');
-      }
-      if (!transactionId || !String(transactionId).trim()) {
-        throw new Error('transactionId is required');
-      }
-      if (!receiptData || !String(receiptData).trim()) {
-        throw new Error('receiptData is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        '/pay/iap/verify',
-        {
-          productId: String(productId).trim(),
-          transactionId: String(transactionId).trim(),
-          originalTransactionId: originalTransactionId == null
-            ? null
-            : String(originalTransactionId).trim() || null,
-          receiptData: String(receiptData).trim(),
-        },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionVerifyIapOrder({
+        network,
+        store: this,
+        token: state.token,
+        productId,
+        transactionId,
+        originalTransactionId,
+        receiptData,
+      });
     },
     async getIapOrderByTransaction({ state }, { transactionId } = {}) {
-      if (!transactionId || !String(transactionId).trim()) {
-        throw new Error('transactionId is required');
-      }
-      const suffix = buildQueryString({
-        transactionId: String(transactionId).trim(),
+      return actionGetIapOrderByTransaction({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        transactionId,
       });
-      const response = await network(this, 'get', `/pay/iap/orders/by-transaction${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data;
     },
     async fetchWalletBalance({ state }) {
-      const response = await network(this, 'get', '/pay/wallet', null, {
-        Authorization: `Bearer ${state.token}`,
+      return actionFetchWalletBalance({
+        network,
+        store: this,
+        token: state.token,
       });
-      return response.data;
     },
     async listWalletLedger({ state }, { lastId = null, limit = 20 } = {}) {
-      const suffix = buildQueryString({
+      return actionListWalletLedger({
+        network,
+        store: this,
+        buildQueryString,
+        normalizeWalletLedgerLimit,
+        token: state.token,
         lastId,
-        limit: normalizeWalletLedgerLimit(limit),
+        limit,
       });
-      const response = await network(this, 'get', `/pay/wallet/ledger${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || [];
     },
     async createDebateMessage({ state }, { sessionId, content }) {
       if (!sessionId) {
@@ -940,28 +932,14 @@ export default createStore({
       return response.data;
     },
     async pinDebateMessage({ state }, { messageId, pinSeconds, idempotencyKey }) {
-      if (!messageId) {
-        throw new Error('messageId is required');
-      }
-      if (!pinSeconds) {
-        throw new Error('pinSeconds is required');
-      }
-      if (!idempotencyKey || !idempotencyKey.trim()) {
-        throw new Error('idempotencyKey is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        `/debate/messages/${messageId}/pin`,
-        {
-          pinSeconds,
-          idempotencyKey: idempotencyKey.trim(),
-        },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionPinDebateMessage({
+        network,
+        store: this,
+        token: state.token,
+        messageId,
+        pinSeconds,
+        idempotencyKey,
+      });
     },
     async uploadFiles({ state, commit }, files) {
       try {
