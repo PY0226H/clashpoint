@@ -123,6 +123,7 @@ const network = async (store, method, url, data = null, headers = {}, allowRefre
       && allowRefreshRetry
       && !AUTH_BYPASS_PATHS.has(url)
       && !store.state.logoutInProgress
+      && !store.state.logoutAllInProgress
     ) {
       try {
         await store.dispatch('refreshSession');
@@ -169,6 +170,7 @@ export default createStore({
     latestDrawVoteResolvedEvent: null,
     opsRbacMe: null,
     logoutInProgress: false,
+    logoutAllInProgress: false,
   },
   mutations: {
     setSSE(state, sse) {
@@ -200,6 +202,9 @@ export default createStore({
     },
     setLogoutInProgress(state, value) {
       state.logoutInProgress = !!value;
+    },
+    setLogoutAllInProgress(state, value) {
+      state.logoutAllInProgress = !!value;
     },
     setChannels(state, channels) {
       state.channels = channels;
@@ -444,7 +449,7 @@ export default createStore({
       });
     },
     async logout({ state, commit }, { skipRemote = false, emitSignal = true } = {}) {
-      if (state.logoutInProgress) {
+      if (state.logoutInProgress || state.logoutAllInProgress) {
         return;
       }
       commit('setLogoutInProgress', true);
@@ -481,6 +486,50 @@ export default createStore({
         // close SSE
         await this.dispatch('closeSSE');
         commit('setLogoutInProgress', false);
+      }
+    },
+    async logoutAll({ state, commit }, { emitSignal = true } = {}) {
+      if (state.logoutInProgress || state.logoutAllInProgress) {
+        return;
+      }
+      commit('setLogoutAllInProgress', true);
+      commit('setLogoutInProgress', true);
+      try {
+        if (state.token) {
+          try {
+            const response = await network(this, 'post', '/auth/logout-all', null, AUTH_INTENT_HEADERS, false);
+            const data = response?.data || {};
+            if (data.degraded || (Array.isArray(data.warnings) && data.warnings.length > 0)) {
+              console.warn('remote logout-all completed with warnings:', data.warnings || []);
+            }
+          } catch (error) {
+            console.warn('remote logout-all failed:', error);
+          }
+        }
+      } finally {
+        if (emitSignal) {
+          try {
+            localStorage.setItem('echoisle_logout_signal', String(Date.now()));
+          } catch (_error) {
+            // noop
+          }
+        }
+        localStorage.removeItem('user');
+        localStorage.removeItem('channels');
+        localStorage.removeItem('messages');
+        localStorage.removeItem('activeChannelId');
+
+        commit('setUser', null);
+        commit('setToken', null);
+        commit('setAccessTickets', null);
+        commit('setChannels', []);
+        commit('setLatestJudgeReportEvent', null);
+        commit('setLatestDrawVoteResolvedEvent', null);
+        commit('setOpsRbacMe', null);
+
+        await this.dispatch('closeSSE');
+        commit('setLogoutInProgress', false);
+        commit('setLogoutAllInProgress', false);
       }
     },
     setActiveChannel({ commit }, channel) {

@@ -1,6 +1,7 @@
 use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
+        release_idempotency_best_effort, try_acquire_idempotency_or_fail_open,
     },
     models::{
         CreateUser, CreateUserWithPhoneAndSessionInput, CreateUserWithPhoneInput, SigninUser,
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use sqlx::{Executor, FromRow};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         LazyLock, Mutex,
@@ -56,6 +57,7 @@ const AUTH_REFRESH_OUTBOX_LOCK_SECS: i64 = 15;
 const AUTH_REFRESH_OUTBOX_BASE_BACKOFF_MS: u64 = 500;
 const AUTH_REFRESH_OUTBOX_MAX_BACKOFF_MS: u64 = 60_000;
 const AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN: usize = 512;
+const LOGOUT_ALL_IDEMPOTENCY_TTL_SECS: u64 = 3;
 
 #[derive(Debug, Clone)]
 struct SmsFallbackEntry {
@@ -149,10 +151,23 @@ pub struct ListAuthSessionsOutput {
     pub items: Vec<AuthSessionItem>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutAllOutput {
-    pub revoked_count: u64,
+    pub logout_state: String,
+    pub server_revocation: String,
+    pub revoked_session_count: u64,
+    pub degraded: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogoutAllIdempotencySnapshot {
+    server_revocation: String,
+    revoked_session_count: u64,
+    degraded: bool,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -202,6 +217,17 @@ pub struct GetAuthConsistencyMetricsOutput {
     pub logout_warning_invalid_refresh_context_total: u64,
     pub logout_outbox_enqueue_total: u64,
     pub logout_outbox_queue_depth: u64,
+    pub logout_all_total: u64,
+    pub logout_all_success_total: u64,
+    pub logout_all_partial_total: u64,
+    pub logout_all_failed_total: u64,
+    pub logout_all_revoked_sessions_total: u64,
+    pub logout_all_warning_degraded_retryable_total: u64,
+    pub logout_all_warning_partial_success_total: u64,
+    pub logout_all_warning_idempotency_replay_total: u64,
+    pub logout_all_idempotency_hit_total: u64,
+    pub logout_all_outbox_enqueue_total: u64,
+    pub logout_all_outbox_queue_depth: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -328,6 +354,17 @@ pub(crate) struct AuthConsistencyMetrics {
     logout_warning_invalid_refresh_context_total: AtomicU64,
     logout_outbox_enqueue_total: AtomicU64,
     logout_outbox_queue_depth: AtomicU64,
+    logout_all_total: AtomicU64,
+    logout_all_success_total: AtomicU64,
+    logout_all_partial_total: AtomicU64,
+    logout_all_failed_total: AtomicU64,
+    logout_all_revoked_sessions_total: AtomicU64,
+    logout_all_warning_degraded_retryable_total: AtomicU64,
+    logout_all_warning_partial_success_total: AtomicU64,
+    logout_all_warning_idempotency_replay_total: AtomicU64,
+    logout_all_idempotency_hit_total: AtomicU64,
+    logout_all_outbox_enqueue_total: AtomicU64,
+    logout_all_outbox_queue_depth: AtomicU64,
 }
 
 impl AuthConsistencyMetrics {
@@ -535,6 +572,59 @@ impl AuthConsistencyMetrics {
             .store(queue_depth, Ordering::Relaxed);
     }
 
+    fn observe_logout_all_start(&self) {
+        self.logout_all_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_logout_all_success(
+        &self,
+        revoked_session_count: u64,
+        degraded: bool,
+        warnings: &[String],
+    ) {
+        self.logout_all_success_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.logout_all_revoked_sessions_total
+            .fetch_add(revoked_session_count, Ordering::Relaxed);
+        if degraded {
+            self.logout_all_partial_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        for warning in warnings {
+            match warning.as_str() {
+                "auth_logout_all_degraded_retryable" => {
+                    self.logout_all_warning_degraded_retryable_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                "auth_logout_all_partial_success" => {
+                    self.logout_all_warning_partial_success_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                "auth_logout_all_idempotency_replay" => {
+                    self.logout_all_warning_idempotency_replay_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn observe_logout_all_failure(&self) {
+        self.logout_all_failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_logout_all_idempotency_hit(&self) {
+        self.logout_all_idempotency_hit_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_logout_all_outbox_enqueued(&self, queue_depth: u64) {
+        self.logout_all_outbox_enqueue_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.logout_all_outbox_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(&self) -> GetAuthConsistencyMetricsOutput {
         GetAuthConsistencyMetricsOutput {
             immediate_invalidation_success_total: self
@@ -615,6 +705,31 @@ impl AuthConsistencyMetrics {
                 .load(Ordering::Relaxed),
             logout_outbox_enqueue_total: self.logout_outbox_enqueue_total.load(Ordering::Relaxed),
             logout_outbox_queue_depth: self.logout_outbox_queue_depth.load(Ordering::Relaxed),
+            logout_all_total: self.logout_all_total.load(Ordering::Relaxed),
+            logout_all_success_total: self.logout_all_success_total.load(Ordering::Relaxed),
+            logout_all_partial_total: self.logout_all_partial_total.load(Ordering::Relaxed),
+            logout_all_failed_total: self.logout_all_failed_total.load(Ordering::Relaxed),
+            logout_all_revoked_sessions_total: self
+                .logout_all_revoked_sessions_total
+                .load(Ordering::Relaxed),
+            logout_all_warning_degraded_retryable_total: self
+                .logout_all_warning_degraded_retryable_total
+                .load(Ordering::Relaxed),
+            logout_all_warning_partial_success_total: self
+                .logout_all_warning_partial_success_total
+                .load(Ordering::Relaxed),
+            logout_all_warning_idempotency_replay_total: self
+                .logout_all_warning_idempotency_replay_total
+                .load(Ordering::Relaxed),
+            logout_all_idempotency_hit_total: self
+                .logout_all_idempotency_hit_total
+                .load(Ordering::Relaxed),
+            logout_all_outbox_enqueue_total: self
+                .logout_all_outbox_enqueue_total
+                .load(Ordering::Relaxed),
+            logout_all_outbox_queue_depth: self
+                .logout_all_outbox_queue_depth
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -2069,42 +2184,115 @@ pub(crate) async fn logout_handler(
 pub(crate) async fn logout_all_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        r#"
-        UPDATE users
-        SET token_version = token_version + 1
-        WHERE id = $1
-        "#,
+    state.auth_consistency_metrics.observe_logout_all_start();
+    validate_logout_intent_headers(&headers).inspect_err(|_| {
+        state.auth_consistency_metrics.observe_logout_all_failure();
+    })?;
+    let idempotency_key = user.id.to_string();
+    let acquired = try_acquire_idempotency_or_fail_open(
+        &state,
+        "auth_logout_all",
+        &idempotency_key,
+        LOGOUT_ALL_IDEMPOTENCY_TTL_SECS,
     )
-    .bind(user.id)
-    .execute(&mut *tx)
-    .await?;
+    .await;
+    if !acquired {
+        state
+            .auth_consistency_metrics
+            .observe_logout_all_idempotency_hit();
+        let mut replay = load_logout_all_idempotency_snapshot(&state, user.id)
+            .await
+            .unwrap_or_else(|| LogoutAllIdempotencySnapshot {
+                server_revocation: "revoked_all".to_string(),
+                revoked_session_count: 0,
+                degraded: false,
+                warnings: Vec::new(),
+            });
+        push_logout_warning(&mut replay.warnings, "auth_logout_all_idempotency_replay");
+        state.auth_consistency_metrics.observe_logout_all_success(
+            replay.revoked_session_count,
+            replay.degraded,
+            &replay.warnings,
+        );
+        return build_logout_all_response(&state, user.id, replay);
+    }
 
-    let affected = sqlx::query(
-        r#"
-        UPDATE auth_refresh_sessions
-        SET revoked_at = NOW(), revoke_reason = 'logout_all', updated_at = NOW()
-        WHERE user_id = $1 AND revoked_at IS NULL
-        "#,
-    )
-    .bind(user.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected() as u64;
+    let outcome = match logout_all_apply_core(&state, user.id).await {
+        Ok(v) => v,
+        Err(err) => {
+            state.auth_consistency_metrics.observe_logout_all_failure();
+            release_idempotency_best_effort(&state, "auth_logout_all", &idempotency_key).await;
+            tracing::warn!(
+                user_id = user.id,
+                "auth logout-all core operation failed: {}",
+                err
+            );
+            return Err(AppError::ServerError(
+                "auth_logout_all_core_failed".to_string(),
+            ));
+        }
+    };
+    let mut degraded = false;
+    let mut warnings = Vec::new();
+    if logout_all_apply_best_effort_writes(&state, user.id, &outcome).await {
+        degraded = true;
+        push_logout_warning(&mut warnings, "auth_logout_all_degraded_retryable");
+        push_logout_warning(&mut warnings, "auth_logout_all_partial_success");
+    }
+    let snapshot = LogoutAllIdempotencySnapshot {
+        server_revocation: if outcome.revoked_session_count > 0 {
+            "revoked_all".to_string()
+        } else {
+            "no_active_sessions".to_string()
+        },
+        revoked_session_count: outcome.revoked_session_count,
+        degraded,
+        warnings,
+    };
+    cache_logout_all_idempotency_snapshot_best_effort(&state, user.id, &snapshot).await;
+    state.auth_consistency_metrics.observe_logout_all_success(
+        snapshot.revoked_session_count,
+        snapshot.degraded,
+        &snapshot.warnings,
+    );
+    tracing::info!(
+        user_id = user.id,
+        decision = "logout_all_completed",
+        server_revocation = snapshot.server_revocation.as_str(),
+        revoked_session_count = snapshot.revoked_session_count,
+        degraded = snapshot.degraded,
+        warning_codes = ?snapshot.warnings,
+        "auth logout-all completed"
+    );
+    build_logout_all_response(&state, user.id, snapshot)
+}
 
-    tx.commit().await?;
-    invalidate_user_token_version_cache_best_effort(&state, user.id).await;
+fn build_logout_all_output(snapshot: LogoutAllIdempotencySnapshot) -> LogoutAllOutput {
+    LogoutAllOutput {
+        logout_state: "logged_out".to_string(),
+        server_revocation: snapshot.server_revocation,
+        revoked_session_count: snapshot.revoked_session_count,
+        degraded: snapshot.degraded,
+        warnings: snapshot.warnings,
+    }
+}
 
+fn build_logout_all_response(
+    state: &AppState,
+    user_id: i64,
+    snapshot: LogoutAllIdempotencySnapshot,
+) -> Result<(StatusCode, HeaderMap, Json<LogoutAllOutput>), AppError> {
     let mut resp_headers = HeaderMap::new();
-    clear_refresh_cookie_header(&mut resp_headers)?;
+    clear_refresh_cookie_header(&mut resp_headers).inspect_err(|_| {
+        state.auth_consistency_metrics.observe_logout_all_failure();
+        tracing::warn!(user_id, "clear refresh cookie failed during logout-all");
+    })?;
     Ok((
         StatusCode::OK,
         resp_headers,
-        Json(LogoutAllOutput {
-            revoked_count: affected,
-        }),
+        Json(build_logout_all_output(snapshot)),
     ))
 }
 
@@ -2402,6 +2590,7 @@ async fn best_effort_remove_refresh_session_index(
 enum OutboxMetricTarget {
     Refresh,
     Logout,
+    LogoutAll,
 }
 
 struct AuthRefreshOutboxInsert<'a> {
@@ -2448,6 +2637,9 @@ where
             OutboxMetricTarget::Logout => state
                 .auth_consistency_metrics
                 .observe_logout_outbox_enqueued(depth),
+            OutboxMetricTarget::LogoutAll => state
+                .auth_consistency_metrics
+                .observe_logout_all_outbox_enqueued(depth),
         }
     }
     Ok(())
@@ -2545,7 +2737,7 @@ async fn cache_user_token_version(
     handle_auth_redis_unit_result(state, ret, "auth_refresh_invalid")
 }
 
-async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_id: i64) {
+async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_id: i64) -> bool {
     match state
         .redis
         .delete_key("auth:user:token_version", &user_id.to_string())
@@ -2553,6 +2745,7 @@ async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_
     {
         Ok(_) => {
             state.auth_consistency_metrics.observe_immediate_success();
+            false
         }
         Err(err) => {
             state.auth_consistency_metrics.observe_immediate_failure();
@@ -2572,6 +2765,7 @@ async fn invalidate_user_token_version_cache_best_effort(state: &AppState, user_
                     queue_err
                 ),
             }
+            true
         }
     }
 }
@@ -3241,6 +3435,220 @@ async fn logout_apply_best_effort_writes(
         degraded = true;
     }
     degraded
+}
+
+#[derive(Debug)]
+struct LogoutAllCoreOutcome {
+    revoked_session_count: u64,
+    session_ids: Vec<String>,
+    family_ids: Vec<String>,
+}
+
+async fn logout_all_apply_core(
+    state: &AppState,
+    user_id: i64,
+) -> Result<LogoutAllCoreOutcome, AppError> {
+    let mut tx = state.pool.begin().await?;
+    let user_id_key = user_id.to_string();
+    let session_rows: Vec<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT sid, family_id
+        FROM auth_refresh_sessions
+        WHERE user_id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut session_ids = Vec::with_capacity(session_rows.len());
+    let mut family_dedup = HashSet::new();
+    for (sid, family_id) in &session_rows {
+        session_ids.push(sid.clone());
+        family_dedup.insert(family_id.clone());
+    }
+    let family_ids = family_dedup.into_iter().collect::<Vec<_>>();
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET token_version = token_version + 1
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let revoked_session_count = sqlx::query(
+        r#"
+        UPDATE auth_refresh_sessions
+        SET revoked_at = NOW(), revoke_reason = 'logout_all', updated_at = NOW()
+        WHERE user_id = $1 AND revoked_at IS NULL
+        "#,
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected() as u64;
+
+    enqueue_auth_refresh_consistency_outbox_tx(
+        state,
+        &mut *tx,
+        AuthRefreshOutboxInsert {
+            op: AuthRefreshOutboxOp::DeleteKey,
+            scope: "auth:user:token_version",
+            raw_key: &user_id_key,
+            value: "",
+            ttl_secs: 1,
+        },
+        Some(OutboxMetricTarget::LogoutAll),
+    )
+    .await?;
+    for sid in &session_ids {
+        enqueue_auth_refresh_consistency_outbox_tx(
+            state,
+            &mut *tx,
+            AuthRefreshOutboxInsert {
+                op: AuthRefreshOutboxOp::RemoveSetMember,
+                scope: "auth:user:sessions",
+                raw_key: &user_id_key,
+                value: sid,
+                ttl_secs: 1,
+            },
+            Some(OutboxMetricTarget::LogoutAll),
+        )
+        .await?;
+        enqueue_auth_refresh_consistency_outbox_tx(
+            state,
+            &mut *tx,
+            AuthRefreshOutboxInsert {
+                op: AuthRefreshOutboxOp::DeleteKey,
+                scope: "auth:rt:session",
+                raw_key: sid,
+                value: "",
+                ttl_secs: 1,
+            },
+            Some(OutboxMetricTarget::LogoutAll),
+        )
+        .await?;
+    }
+    for family_id in &family_ids {
+        enqueue_auth_refresh_consistency_outbox_tx(
+            state,
+            &mut *tx,
+            AuthRefreshOutboxInsert {
+                op: AuthRefreshOutboxOp::SetWithTtl,
+                scope: "auth:rt:family",
+                raw_key: family_id,
+                value: "revoked",
+                ttl_secs: REFRESH_TOKEN_TTL_SECS,
+            },
+            Some(OutboxMetricTarget::LogoutAll),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+
+    Ok(LogoutAllCoreOutcome {
+        revoked_session_count,
+        session_ids,
+        family_ids,
+    })
+}
+
+async fn logout_all_apply_best_effort_writes(
+    state: &AppState,
+    user_id: i64,
+    outcome: &LogoutAllCoreOutcome,
+) -> bool {
+    let mut degraded = false;
+    if invalidate_user_token_version_cache_best_effort(state, user_id).await {
+        degraded = true;
+    }
+
+    for family_id in &outcome.family_ids {
+        if let Err(err) = state
+            .redis
+            .set_value_with_ttl(
+                "auth:rt:family",
+                family_id,
+                "revoked",
+                REFRESH_TOKEN_TTL_SECS,
+            )
+            .await
+        {
+            tracing::warn!(
+                family_id = %family_id,
+                "best-effort set family revoked failed during logout-all: {}",
+                err
+            );
+            degraded = true;
+        }
+    }
+
+    for sid in &outcome.session_ids {
+        if best_effort_remove_refresh_session_index(state, user_id, sid).await {
+            degraded = true;
+        }
+    }
+    degraded
+}
+
+async fn cache_logout_all_idempotency_snapshot_best_effort(
+    state: &AppState,
+    user_id: i64,
+    snapshot: &LogoutAllIdempotencySnapshot,
+) {
+    let encoded = match serde_json::to_string(snapshot) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(
+                user_id,
+                "serialize logout-all idempotency snapshot failed: {}",
+                err
+            );
+            return;
+        }
+    };
+    if let Err(err) = state
+        .redis
+        .set_value_with_ttl(
+            "auth:logout_all:result",
+            &user_id.to_string(),
+            &encoded,
+            LOGOUT_ALL_IDEMPOTENCY_TTL_SECS,
+        )
+        .await
+    {
+        tracing::warn!(
+            user_id,
+            "cache logout-all idempotency snapshot failed: {}",
+            err
+        );
+    }
+}
+
+async fn load_logout_all_idempotency_snapshot(
+    state: &AppState,
+    user_id: i64,
+) -> Option<LogoutAllIdempotencySnapshot> {
+    let raw = match state
+        .redis
+        .get_value("auth:logout_all:result", &user_id.to_string())
+        .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(
+                user_id,
+                "read logout-all idempotency snapshot failed: {}",
+                err
+            );
+            return None;
+        }
+    }?;
+    serde_json::from_str(raw.trim()).ok()
 }
 
 async fn issue_auth_success_response(
@@ -4406,7 +4814,12 @@ mod tests {
         let old_ver = decoded.ver;
         let user = decoded.user.clone();
 
-        let _ = logout_all_handler(Extension(user), State(state.clone()))
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let _ = logout_all_handler(Extension(user), State(state.clone()), headers)
             .await?
             .into_response();
 
@@ -4417,6 +4830,106 @@ mod tests {
             verify_ret,
             Err(AuthVerifyError::TokenVersionMismatch) | Err(AuthVerifyError::SessionRevoked)
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_all_should_reject_when_intent_header_missing() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let user = state.dk.verify_access(&auth.access_token)?.user;
+
+        let err = match logout_all_handler(Extension(user), State(state), HeaderMap::new()).await {
+            Ok(_) => panic!("logout-all should reject when intent header missing"),
+            Err(err) => err,
+        };
+        match err {
+            AppError::AuthError(code) => assert_eq!(code, "auth_logout_invalid_request"),
+            _ => panic!("expected auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_all_should_return_target_state_payload_and_enqueue_outbox_jobs() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let user = state.dk.verify_access(&auth.access_token)?.user;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let response = logout_all_handler(Extension(user), State(state.clone()), headers)
+            .await?
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(SET_COOKIE).is_some());
+        let body = response.into_body().collect().await?.to_bytes();
+        let output: LogoutAllOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.logout_state, "logged_out");
+        assert!(!output.server_revocation.is_empty());
+        assert!(output.revoked_session_count >= 1);
+
+        let outbox_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert!(outbox_count >= 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_all_should_remain_successful_under_duplicate_calls() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let user = state.dk.verify_access(&auth.access_token)?.user;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let _ = logout_all_handler(
+            Extension(user.clone()),
+            State(state.clone()),
+            headers.clone(),
+        )
+        .await?
+        .into_response();
+        let replay = logout_all_handler(Extension(user), State(state), headers)
+            .await?
+            .into_response();
+        assert_eq!(replay.status(), StatusCode::OK);
+        let body = replay.into_body().collect().await?.to_bytes();
+        let output: LogoutAllOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.logout_state, "logged_out");
         Ok(())
     }
 
