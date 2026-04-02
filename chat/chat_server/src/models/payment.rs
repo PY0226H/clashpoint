@@ -9,8 +9,8 @@ const MAX_RECEIPT_LEN: usize = 4096;
 
 pub use types::{
     GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderSnapshot, IapProduct,
-    ListIapProducts, ListWalletLedger, VerifyIapOrderInput, VerifyIapOrderOutput,
-    WalletBalanceOutput, WalletLedgerItem,
+    IapProductsEmptyReason, ListIapProducts, ListIapProductsOutput, ListWalletLedger,
+    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
 };
 
 #[cfg(test)]

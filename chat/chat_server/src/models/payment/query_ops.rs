@@ -2,32 +2,105 @@ use super::{
     helpers,
     types::{
         GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderSnapshot,
-        IapOrderSnapshotRow, IapProduct, ListIapProducts, ListWalletLedger, WalletBalanceOutput,
-        WalletLedgerItem,
+        IapOrderSnapshotRow, IapProduct, IapProductsEmptyReason, ListIapProducts,
+        ListIapProductsOutput, ListWalletLedger, WalletBalanceOutput, WalletLedgerItem,
     },
 };
 use crate::{AppError, AppState};
 use chat_core::User;
+use chrono::{DateTime, SecondsFormat, Utc};
+use std::{collections::HashMap, sync::LazyLock};
+use tokio::sync::RwLock;
+
+const IAP_PRODUCTS_CACHE_TTL_SECS: i64 = 10;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct IapProductsCacheKey {
+    db_scope_hash: String,
+    active_only: bool,
+}
+
+#[derive(Debug, Clone)]
+struct IapProductsCacheEntry {
+    expires_at_epoch_secs: i64,
+    revision: Option<String>,
+    output: ListIapProductsOutput,
+}
+
+static IAP_PRODUCTS_LIST_CACHE: LazyLock<
+    RwLock<HashMap<IapProductsCacheKey, IapProductsCacheEntry>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[allow(dead_code)]
 impl AppState {
     pub async fn list_iap_products(
         &self,
         input: ListIapProducts,
-    ) -> Result<Vec<IapProduct>, AppError> {
-        let rows = sqlx::query_as(
+    ) -> Result<ListIapProductsOutput, AppError> {
+        let (output, _) = self.list_iap_products_with_cache(input).await?;
+        Ok(output)
+    }
+
+    pub(crate) async fn list_iap_products_with_cache(
+        &self,
+        input: ListIapProducts,
+    ) -> Result<(ListIapProductsOutput, bool), AppError> {
+        let revision = query_iap_products_revision(&self.pool)
+            .await?
+            .map(format_iap_products_revision);
+        let cache_key = IapProductsCacheKey {
+            db_scope_hash: hash_cache_scope(&self.config.server.db_url),
+            active_only: input.active_only,
+        };
+        let now_epoch = Utc::now().timestamp();
+        if let Some(entry) = IAP_PRODUCTS_LIST_CACHE.read().await.get(&cache_key) {
+            if entry.expires_at_epoch_secs > now_epoch && entry.revision == revision {
+                return Ok((entry.output.clone(), true));
+            }
+        }
+
+        let rows: Vec<IapProduct> = sqlx::query_as(
             r#"
             SELECT product_id, coins, is_active
             FROM iap_products
             WHERE (NOT $1::boolean OR is_active = TRUE)
-            ORDER BY coins ASC
+            ORDER BY coins ASC, product_id ASC
             "#,
         )
         .bind(input.active_only)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows)
+        let empty_reason = if rows.is_empty() {
+            if input.active_only {
+                let total_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM iap_products")
+                    .fetch_one(&self.pool)
+                    .await?;
+                if total_count > 0 {
+                    Some(IapProductsEmptyReason::AllInactive)
+                } else {
+                    Some(IapProductsEmptyReason::NoConfig)
+                }
+            } else {
+                Some(IapProductsEmptyReason::NoConfig)
+            }
+        } else {
+            None
+        };
+        let output = ListIapProductsOutput {
+            items: rows,
+            revision: revision.clone(),
+            empty_reason,
+        };
+        IAP_PRODUCTS_LIST_CACHE.write().await.insert(
+            cache_key,
+            IapProductsCacheEntry {
+                expires_at_epoch_secs: now_epoch + IAP_PRODUCTS_CACHE_TTL_SECS,
+                revision,
+                output: output.clone(),
+            },
+        );
+        Ok((output, false))
     }
 
     pub async fn get_iap_order_by_transaction(
@@ -139,4 +212,25 @@ impl AppState {
 
         Ok(rows)
     }
+}
+
+async fn query_iap_products_revision(
+    pool: &sqlx::PgPool,
+) -> Result<Option<DateTime<Utc>>, AppError> {
+    let revision: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT MAX(updated_at) FROM iap_products")
+            .fetch_one(pool)
+            .await?;
+    Ok(revision)
+}
+
+fn format_iap_products_revision(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn hash_cache_scope(input: &str) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(input.as_bytes());
+    hex::encode(hasher.finalize())
 }

@@ -3,8 +3,8 @@ use super::receipt_verify::{
     select_matching_record, verify_receipt, ReceiptRecord, ReceiptVerifyResult,
 };
 use super::types::{
-    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, ListIapProducts, ListWalletLedger,
-    VerifyIapOrderInput, VerifyIapOrderOutput, WalletLedgerItem,
+    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapProductsEmptyReason,
+    ListIapProducts, ListWalletLedger, VerifyIapOrderInput, VerifyIapOrderOutput, WalletLedgerItem,
 };
 use crate::config::PaymentConfig;
 use crate::{AppError, AppState};
@@ -472,11 +472,86 @@ async fn verify_receipt_should_reject_when_transaction_not_found_in_apple_payloa
 #[tokio::test]
 async fn list_iap_products_should_return_seed_data() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
-    let rows = state
+    let output = state
         .list_iap_products(ListIapProducts { active_only: true })
         .await?;
-    assert!(rows.len() >= 3);
-    assert_eq!(rows[0].coins, 60);
+    assert!(output.items.len() >= 3);
+    assert_eq!(output.items[0].coins, 60);
+    assert!(output.revision.is_some());
+    assert!(output.empty_reason.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_iap_products_should_stably_sort_by_coins_then_product_id() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    sqlx::query(
+        r#"
+        INSERT INTO iap_products (product_id, coins, is_active, created_at, updated_at)
+        VALUES
+            ('com.echoisle.coins.060.a', 60, true, NOW(), NOW()),
+            ('com.echoisle.coins.060.z', 60, true, NOW(), NOW())
+        ON CONFLICT (product_id) DO UPDATE
+        SET coins = EXCLUDED.coins,
+            is_active = EXCLUDED.is_active,
+            updated_at = NOW()
+        "#,
+    )
+    .execute(&state.pool)
+    .await?;
+
+    let output = state
+        .list_iap_products(ListIapProducts { active_only: true })
+        .await?;
+    let first_three = output
+        .items
+        .iter()
+        .filter(|item| item.coins == 60)
+        .take(3)
+        .map(|item| item.product_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first_three,
+        vec![
+            "com.echoisle.coins.060.a",
+            "com.echoisle.coins.060.z",
+            "com.echoisle.coins.60"
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_iap_products_should_return_empty_reason_all_inactive() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    sqlx::query("UPDATE iap_products SET is_active = FALSE, updated_at = NOW()")
+        .execute(&state.pool)
+        .await?;
+
+    let output = state
+        .list_iap_products(ListIapProducts { active_only: true })
+        .await?;
+    assert!(output.items.is_empty());
+    assert_eq!(
+        output.empty_reason,
+        Some(IapProductsEmptyReason::AllInactive)
+    );
+    assert!(output.revision.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_iap_products_should_return_empty_reason_no_config() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    sqlx::query("DELETE FROM iap_products")
+        .execute(&state.pool)
+        .await?;
+
+    let output = state
+        .list_iap_products(ListIapProducts { active_only: false })
+        .await?;
+    assert!(output.items.is_empty());
+    assert_eq!(output.empty_reason, Some(IapProductsEmptyReason::NoConfig));
     Ok(())
 }
 
