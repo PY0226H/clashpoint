@@ -100,7 +100,7 @@ router.beforeEach(async (
   _from: RouteLocationNormalized,
   next: NavigationGuardNext,
 ) => {
-  const isAuthenticated = !!appStore.getters.getUser;
+  const isAuthenticated = !!appStore.getters.isAuthenticated;
   if (to.matched.some((record) => (record.meta as AppRouteMeta)?.requiresAuth) && !isAuthenticated) {
     return next({ name: 'Login' });
   }

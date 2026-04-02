@@ -6,7 +6,7 @@ mod sse;
 mod ws;
 
 use axum::{
-    http::Method,
+    http::{header, HeaderValue, Method},
     middleware::from_fn_with_state,
     response::{Html, IntoResponse},
     routing::get,
@@ -159,8 +159,18 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
             Method::DELETE,
             Method::PUT,
         ])
-        .allow_origin(cors::Any)
-        .allow_headers(cors::Any);
+        .allow_origin(cors::AllowOrigin::predicate(
+            |origin: &HeaderValue, _request| is_allowed_local_origin(origin),
+        ))
+        .allow_credentials(true)
+        .allow_headers([
+            header::ACCEPT,
+            header::AUTHORIZATION,
+            header::CACHE_CONTROL,
+            header::CONTENT_TYPE,
+            header::ORIGIN,
+            header::PRAGMA,
+        ]);
 
     let app = Router::new()
         .route("/events", get(sse_handler))
@@ -173,6 +183,20 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
         .with_state(state);
 
     Ok(app)
+}
+
+fn is_allowed_local_origin(origin: &HeaderValue) -> bool {
+    let raw = match origin.to_str() {
+        Ok(value) => value.trim().to_ascii_lowercase(),
+        Err(_) => return false,
+    };
+    raw == "tauri://localhost"
+        || raw == "http://tauri.localhost"
+        || raw == "https://tauri.localhost"
+        || raw.starts_with("http://localhost:")
+        || raw.starts_with("http://127.0.0.1:")
+        || raw.starts_with("https://localhost:")
+        || raw.starts_with("https://127.0.0.1:")
 }
 
 async fn index_handler() -> impl IntoResponse {

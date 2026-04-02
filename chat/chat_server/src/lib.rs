@@ -20,7 +20,7 @@ use handlers::*;
 use middlewares::{require_phone_bound, verify_ai_internal_key, verify_chat, verify_file_ticket};
 use openapi::OpenApiRouter;
 use sqlx::PgPool;
-use std::{fmt, ops::Deref, sync::Arc};
+use std::{env, fmt, ops::Deref, sync::Arc};
 use tokio::{
     fs,
     sync::mpsc::{unbounded_channel, UnboundedSender},
@@ -41,7 +41,7 @@ pub(crate) use redis_store::RateLimitDecision;
 pub use redis_store::RedisHealthOutput;
 
 use axum::{
-    http::Method,
+    http::{header, HeaderValue, Method},
     middleware::from_fn_with_state,
     routing::{get, post, put},
     Router,
@@ -73,6 +73,14 @@ pub struct AppStateInner {
 enum AppBootstrapMode {
     ApiServer,
     StandaloneWorker,
+}
+
+#[derive(Debug, Clone)]
+struct DevSuperAccountConfig {
+    email: String,
+    phone: String,
+    password: String,
+    fullname: String,
 }
 
 pub async fn get_router(state: AppState) -> Result<Router, AppError> {
@@ -107,8 +115,18 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             Method::DELETE,
             Method::PUT,
         ])
-        .allow_origin(cors::Any)
-        .allow_headers(cors::Any);
+        .allow_origin(cors::AllowOrigin::predicate(
+            |origin: &HeaderValue, _request| is_allowed_local_origin(origin),
+        ))
+        .allow_credentials(true)
+        .allow_headers([
+            header::ACCEPT,
+            header::AUTHORIZATION,
+            header::CACHE_CONTROL,
+            header::CONTENT_TYPE,
+            header::ORIGIN,
+            header::PRAGMA,
+        ]);
     let debate = Router::new()
         .route("/topics", get(list_debate_topics_handler))
         .route("/ops/topics", post(create_debate_topic_ops_handler))
@@ -329,6 +347,20 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
     Ok(set_layer(app))
 }
 
+fn is_allowed_local_origin(origin: &HeaderValue) -> bool {
+    let raw = match origin.to_str() {
+        Ok(value) => value.trim().to_ascii_lowercase(),
+        Err(_) => return false,
+    };
+    raw == "tauri://localhost"
+        || raw == "http://tauri.localhost"
+        || raw == "https://tauri.localhost"
+        || raw.starts_with("http://localhost:")
+        || raw.starts_with("http://127.0.0.1:")
+        || raw.starts_with("https://localhost:")
+        || raw.starts_with("https://127.0.0.1:")
+}
+
 async fn health_handler() -> &'static str {
     "ok"
 }
@@ -433,6 +465,9 @@ impl AppState {
             }),
         };
         if mode == AppBootstrapMode::ApiServer {
+            ensure_dev_super_account(&state).await?;
+        }
+        if mode == AppBootstrapMode::ApiServer {
             spawn_background_workers(state.clone(), dispatch_trigger_rx);
         }
         Ok(state)
@@ -500,6 +535,125 @@ impl AppState {
     pub(crate) fn observe_event_outbox_worker_error(&self) {
         self.event_outbox_metrics.observe_tick_error();
     }
+}
+
+fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn runtime_env() -> Option<String> {
+    for key in ["ECHOISLE_ENV", "APP_ENV", "RUST_ENV", "ENV"] {
+        if let Ok(value) = env::var(key) {
+            let normalized = value.trim();
+            if !normalized.is_empty() {
+                return Some(normalized.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
+fn is_production_env(value: &str) -> bool {
+    matches!(value.trim(), "prod" | "production")
+}
+
+fn dev_super_account_enabled() -> bool {
+    if let Ok(value) = env::var("ECHO_DEV_SUPER_ACCOUNT_ENABLED") {
+        if let Some(enabled) = parse_env_bool(&value) {
+            return enabled;
+        }
+    }
+    !runtime_env()
+        .as_deref()
+        .map(is_production_env)
+        .unwrap_or(false)
+}
+
+fn load_dev_super_account_config() -> Option<DevSuperAccountConfig> {
+    if !dev_super_account_enabled() {
+        return None;
+    }
+
+    let email = env::var("ECHO_DEV_SUPER_EMAIL").unwrap_or_else(|_| "super@none.org".to_string());
+    let phone = env::var("ECHO_DEV_SUPER_PHONE").unwrap_or_else(|_| "+8613900000000".to_string());
+    let password =
+        env::var("ECHO_DEV_SUPER_PASSWORD").unwrap_or_else(|_| "EchoSuper@123456".to_string());
+    let fullname =
+        env::var("ECHO_DEV_SUPER_FULLNAME").unwrap_or_else(|_| "EchoIsle Super Admin".to_string());
+
+    let email = email.trim().to_string();
+    let phone = phone.trim().to_string();
+    let password = password.trim().to_string();
+    let fullname = fullname.trim().to_string();
+
+    if email.is_empty() || phone.is_empty() || password.is_empty() || fullname.is_empty() {
+        warn!(
+            "skip dev super account bootstrap: one or more required fields are empty (email/phone/password/fullname)"
+        );
+        return None;
+    }
+
+    Some(DevSuperAccountConfig {
+        email,
+        phone,
+        password,
+        fullname,
+    })
+}
+
+async fn ensure_dev_super_account(state: &AppState) -> Result<(), AppError> {
+    let Some(cfg) = load_dev_super_account_config() else {
+        return Ok(());
+    };
+
+    let mut user = if let Some(existing) = state.find_user_by_email(&cfg.email).await? {
+        existing
+    } else if let Some(existing) = state.find_user_by_phone(&cfg.phone).await? {
+        existing
+    } else {
+        state
+            .create_user_with_phone(&CreateUserWithPhoneInput {
+                fullname: cfg.fullname.clone(),
+                email: Some(cfg.email.clone()),
+                phone_e164: cfg.phone.clone(),
+                password: cfg.password.clone(),
+                phone_bind_required: false,
+            })
+            .await?
+    };
+
+    state.set_user_password(user.id, &cfg.password).await?;
+    if user.phone_bind_required
+        || user.phone_verified_at.is_none()
+        || user.phone_e164.as_deref() != Some(cfg.phone.as_str())
+    {
+        match state.bind_phone_for_user(user.id, &cfg.phone).await {
+            Ok(updated) => {
+                user = updated;
+            }
+            Err(error) => {
+                warn!(
+                    user_id = user.id,
+                    target_phone = %cfg.phone,
+                    "bind phone for dev super account failed: {}",
+                    error
+                );
+            }
+        }
+    }
+
+    state.grant_platform_admin(user.id as u64).await?;
+    info!(
+        user_id = user.id,
+        super_email = %cfg.email,
+        super_phone = %cfg.phone,
+        "dev super account bootstrap ready"
+    );
+    Ok(())
 }
 
 impl fmt::Debug for AppStateInner {

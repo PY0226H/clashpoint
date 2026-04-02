@@ -267,8 +267,12 @@ export async function actionBindPhoneV2({
   );
   const ret = (responseData<Record<string, unknown>>(response) || {}) as Record<string, unknown>;
   if (ret?.user) {
-    localStorage.setItem('user', JSON.stringify(ret.user));
-    commit('setUser', ret.user);
+    const normalizedUser = {
+      ...(ret.user as Record<string, unknown>),
+      phoneBindRequired: false,
+    };
+    localStorage.setItem('user', JSON.stringify(normalizedUser));
+    commit('setUser', normalizedUser);
   }
   return ret;
 }

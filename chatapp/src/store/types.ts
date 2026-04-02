@@ -9,6 +9,7 @@ export interface AuthUserProfile {
 }
 
 export interface RootGettersSnapshot {
+  isAuthenticated?: boolean;
   getUser?: AuthUserProfile | null;
   getOpsRbacMe?: OpsRbacMe | null;
   [key: string]: unknown;

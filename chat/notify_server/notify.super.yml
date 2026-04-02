@@ -1,0 +1,23 @@
+server:
+  port: 6687
+  db_url: postgres://panyihang@localhost:5432/chat_super_trial
+auth:
+  pk: |
+    -----BEGIN PUBLIC KEY-----
+    MCowBQYDK2VwAyEAfM+lwNHj6TRJ3EGP38lIJcOo9Dlt2u2JzcwWMbu7jQY=
+    -----END PUBLIC KEY-----
+kafka:
+  enabled: false
+  disable_pg_listener: false
+  brokers: 127.0.0.1:9092
+  topic_prefix: ""
+  client_id: notify-server
+  group_id: notify-server-group
+  consume_topics: []
+redis:
+  enabled: false
+  url: redis://127.0.0.1:6379/1
+  pool_size: 16
+  key_prefix: echoisle_notify
+  default_ttl_secs: 300
+  startup_policy: fail_open

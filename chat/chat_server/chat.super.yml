@@ -1,0 +1,80 @@
+server:
+  port: 6688
+  db_url: postgres://panyihang@localhost:5432/chat_super_trial
+  base_dir: /tmp/chat_server
+auth:
+  sk: |
+    -----BEGIN PRIVATE KEY-----
+    MC4CAQAwBQYDK2VwBCIEIDnxJGEJGoW+mNKHn4vRY1V6BQ3MglSQSuZ8featmyC4
+    -----END PRIVATE KEY-----
+  pk: |
+    -----BEGIN PUBLIC KEY-----
+    MCowBQYDK2VwAyEAfM+lwNHj6TRJ3EGP38lIJcOo9Dlt2u2JzcwWMbu7jQY=
+    -----END PUBLIC KEY-----
+kafka:
+  enabled: false
+  brokers: 127.0.0.1:9092
+  topic_prefix: echoisle
+  client_id: chat-server
+  group_id: chat-server-bootstrap
+  consume_enabled: false
+  consume_topics: []
+  producer_timeout_ms: 1500
+  consumer:
+    worker_enabled: false
+    worker_group_id: chat-server-worker
+    max_inflight: 64
+    retry_policy: exponential
+redis:
+  enabled: false
+  url: redis://127.0.0.1:6379/0
+  pool_size: 32
+  key_prefix: echoisle
+  default_ttl_secs: 300
+  startup_policy: fail_open
+  healthcheck_timeout_ms: 500
+ai_judge:
+  internal_key: dev-ai-internal-key
+  style_mode: rational
+  dispatch_enabled: false
+  service_base_url: http://127.0.0.1:8787
+  dispatch_path: /internal/judge/v3/phase/dispatch
+  dispatch_interval_secs: 2
+  dispatch_batch_size: 20
+  dispatch_lock_secs: 30
+  dispatch_retry_backoff_max_multiplier: 8
+  dispatch_retry_jitter_ratio: 20
+  dispatch_timeout_ms: 8000
+  dispatch_max_attempts: 3
+  dispatch_callback_wait_secs: 60
+  alert_outbox_bridge_enabled: false
+  alert_outbox_poll_interval_secs: 5
+  alert_outbox_batch_size: 50
+  alert_outbox_path: /internal/judge/alerts/outbox
+  alert_outbox_delivery_path: /internal/judge/alerts/outbox/{event_id}/delivery
+  alert_outbox_timeout_ms: 5000
+analytics:
+  enabled: true
+  base_url: http://127.0.0.1:6690
+  timeout_ms: 3000
+worker_runtime:
+  debate_lifecycle_worker_enabled: true
+  ai_judge_dispatch_worker_enabled: true
+  ops_observability_worker_enabled: true
+  ai_judge_alert_outbox_bridge_worker_enabled: true
+  event_outbox_relay_worker_enabled: true
+  debate_lifecycle_interval_secs: 2
+  debate_lifecycle_batch_size: 200
+  ops_observability_interval_secs: 30
+  event_outbox_poll_interval_secs: 1
+  event_outbox_batch_size: 200
+  event_outbox_lock_secs: 30
+  event_outbox_max_attempts: 12
+  event_outbox_base_backoff_ms: 500
+  event_outbox_max_backoff_ms: 60000
+payment:
+  verify_mode: mock
+  apple_verify_url_prod: https://buy.itunes.apple.com/verifyReceipt
+  apple_verify_url_sandbox: https://sandbox.itunes.apple.com/verifyReceipt
+  apple_shared_secret: ""
+  verify_timeout_ms: 8000

@@ -335,6 +335,13 @@ impl AppState {
             return Err(AppError::NotFound(format!("user id {}", user_id)));
         }
 
+        // Prefer the conventional bootstrap granter (user id=1) when it exists.
+        // In local/dev databases that only have user id=0, fallback to self-grant.
+        let granted_by = sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE id = 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .unwrap_or(user_id as i64);
+
         sqlx::query(
             r#"
             INSERT INTO platform_user_roles(user_id, role, granted_by, created_at, updated_at)
@@ -348,7 +355,7 @@ impl AppState {
         )
         .bind(user_id as i64)
         .bind(ROLE_OPS_ADMIN)
-        .bind(1_i64)
+        .bind(granted_by)
         .execute(&self.pool)
         .await?;
         Ok(())

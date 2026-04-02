@@ -224,7 +224,9 @@ export default createStore({
       const storedActiveChannelId = localStorage.getItem('activeChannelId');
 
       if (storedUser) {
-        state.user = JSON.parse(storedUser);
+        const parsedUser = JSON.parse(storedUser);
+        state.user = normalizeUserForPhoneGate(parsedUser);
+        localStorage.setItem('user', JSON.stringify(state.user));
       }
       if (storedChannels) {
         state.channels = JSON.parse(storedChannels);
@@ -1143,10 +1145,13 @@ async function loadState(response, self, commit) {
 
 function resolvePhoneBindRequired(user) {
   const phone = String(user?.phoneE164 || '').trim();
+  if (phone) {
+    return false;
+  }
   if (Object.prototype.hasOwnProperty.call(user || {}, 'phoneBindRequired')) {
     return !!user.phoneBindRequired;
   }
-  return !phone;
+  return true;
 }
 
 function normalizeUserForPhoneGate(user) {
