@@ -22,13 +22,14 @@ async function bootstrapAuthState(page) {
   });
 }
 
-async function mockCommonApis(page) {
+async function mockCommonApis(page, hooks = {}) {
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const { pathname } = url;
 
     if (pathname === '/api/auth/refresh') {
+      hooks.onAuthRefresh?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -38,6 +39,7 @@ async function mockCommonApis(page) {
     }
 
     if (pathname === '/api/tickets') {
+      hooks.onTickets?.();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -147,4 +149,23 @@ test('home page should render four-entry dashboard with new shell', async ({ pag
   await page.getByRole('button', { name: '辩论广场' }).click();
   await expect(page).toHaveURL(/\/debate/);
   await expect(page.getByRole('heading', { name: '辩论场次总览' })).toBeVisible();
+});
+
+test('home bootstrap should request refresh session and tickets', async ({ page }) => {
+  await bootstrapAuthState(page);
+  let refreshCalls = 0;
+  let ticketsCalls = 0;
+  await mockCommonApis(page, {
+    onAuthRefresh: () => {
+      refreshCalls += 1;
+    },
+    onTickets: () => {
+      ticketsCalls += 1;
+    },
+  });
+
+  await page.goto('http://127.0.0.1:1420/home');
+  await expect(page.getByRole('heading', { name: 'EchoIsle 首页工作台' })).toBeVisible();
+  await expect.poll(() => refreshCalls).toBeGreaterThan(0);
+  await expect.poll(() => ticketsCalls).toBeGreaterThan(0);
 });

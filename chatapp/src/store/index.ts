@@ -53,6 +53,17 @@ import {
   actionUpsertOpsObservabilityThresholds,
 } from './actions-debate-ops.ts';
 import {
+  actionFetchDrawVoteStatus,
+  actionFetchJudgeReport,
+  actionJoinDebateSession,
+  actionListDebateSessions,
+  actionListDebateTopics,
+  actionListJudgeReviewsOps,
+  actionListJudgeTraceReplayOps,
+  actionRequestJudgeJob,
+  actionSubmitDrawVote,
+} from './actions-debate-lifecycle.ts';
+import {
   actionFetchWalletBalance,
   actionGetIapOrderByTransaction,
   actionListIapProducts,
@@ -60,6 +71,11 @@ import {
   actionPinDebateMessage,
   actionVerifyIapOrder,
 } from './actions-payment-wallet.ts';
+import {
+  actionLoadUserState,
+  actionRefreshAccessTickets,
+  actionRefreshSession,
+} from './actions-session-tickets.ts';
 import {
   actionCreateDebateMessage,
   actionFetchJudgeRefreshSummary,
@@ -487,143 +503,77 @@ export default createStore({
       }
     },
     async fetchJudgeReport({ state }, { sessionId, maxStageCount = 3, stageOffset = 0 }) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const query = new URLSearchParams();
-      if (maxStageCount != null) {
-        query.set('maxStageCount', String(maxStageCount));
-      }
-      if (stageOffset != null) {
-        query.set('stageOffset', String(stageOffset));
-      }
-      const suffix = query.toString() ? `?${query.toString()}` : '';
-      const response = await network(
-        this,
-        'get',
-        `/debate/sessions/${sessionId}/judge-report${suffix}`,
-        null,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionFetchJudgeReport({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+        maxStageCount,
+        stageOffset,
+      });
     },
     async fetchDrawVoteStatus({ state }, { sessionId }) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const response = await network(
-        this,
-        'get',
-        `/debate/sessions/${sessionId}/draw-vote`,
-        null,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionFetchDrawVoteStatus({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+      });
     },
     async submitDrawVote({ state }, { sessionId, agreeDraw }) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      if (typeof agreeDraw !== 'boolean') {
-        throw new Error('agreeDraw must be boolean');
-      }
-      const response = await network(
-        this,
-        'post',
-        `/debate/sessions/${sessionId}/draw-vote/ballots`,
-        { agreeDraw },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionSubmitDrawVote({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+        agreeDraw,
+      });
     },
     async requestJudgeJob({ state }, { sessionId, allowRejudge = false, styleMode = null } = {}) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      const payload = {
-        allowRejudge: !!allowRejudge,
-      };
-      if (styleMode != null && String(styleMode).trim()) {
-        payload.styleMode = String(styleMode).trim();
-      }
-      const response = await network(
-        this,
-        'post',
-        `/debate/sessions/${sessionId}/judge/jobs`,
-        payload,
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionRequestJudgeJob({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+        allowRejudge,
+        styleMode,
+      });
     },
     async listDebateTopics({ state }, payload = {}) {
-      const suffix = buildQueryString({
-        category: payload.category,
-        activeOnly: payload.activeOnly,
-        limit: payload.limit,
+      return actionListDebateTopics({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        payload,
       });
-      const response = await network(this, 'get', `/debate/topics${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || [];
     },
     async listDebateSessions({ state }, payload = {}) {
-      const suffix = buildQueryString({
-        status: payload.status,
-        topicId: payload.topicId,
-        from: payload.from,
-        to: payload.to,
-        limit: payload.limit,
+      return actionListDebateSessions({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        payload,
       });
-      const response = await network(this, 'get', `/debate/sessions${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || [];
     },
     async listJudgeReviewsOps({ state }, payload = {}) {
-      const suffix = buildQueryString({
-        from: payload.from,
-        to: payload.to,
-        winner: payload.winner,
-        rejudgeTriggered: payload.rejudgeTriggered,
-        hasVerdictEvidence: payload.hasVerdictEvidence,
-        anomalyOnly: payload.anomalyOnly,
-        limit: payload.limit,
+      return actionListJudgeReviewsOps({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        payload,
       });
-      const response = await network(this, 'get', `/debate/ops/judge-reviews${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || { scannedCount: 0, returnedCount: 0, items: [] };
     },
     async listJudgeTraceReplayOps({ state }, payload = {}) {
-      const sessionId = Number(payload.sessionId || 0);
-      const suffix = buildQueryString({
-        from: payload.from,
-        to: payload.to,
-        sessionId: sessionId > 0 ? sessionId : null,
-        scope: payload.scope,
-        status: payload.status,
-        limit: payload.limit,
+      return actionListJudgeTraceReplayOps({
+        network,
+        store: this,
+        buildQueryString,
+        token: state.token,
+        payload,
       });
-      const response = await network(this, 'get', `/debate/ops/judge-trace-replay${suffix}`, null, {
-        Authorization: `Bearer ${state.token}`,
-      });
-      return response.data || {
-        scannedCount: 0,
-        returnedCount: 0,
-        phaseCount: 0,
-        finalCount: 0,
-        failedCount: 0,
-        replayEligibleCount: 0,
-        items: [],
-      };
     },
     async listJudgeReplayActionsOps({ state }, payload = {}) {
       return actionListJudgeReplayActionsOps({
@@ -812,22 +762,13 @@ export default createStore({
       });
     },
     async joinDebateSession({ state }, { sessionId, side }) {
-      if (!sessionId) {
-        throw new Error('sessionId is required');
-      }
-      if (!side) {
-        throw new Error('side is required');
-      }
-      const response = await network(
-        this,
-        'post',
-        `/debate/sessions/${sessionId}/join`,
-        { side },
-        {
-          Authorization: `Bearer ${state.token}`,
-        },
-      );
-      return response.data;
+      return actionJoinDebateSession({
+        network,
+        store: this,
+        token: state.token,
+        sessionId,
+        side,
+      });
     },
     async listDebateMessages({ state }, { sessionId, lastId = null, limit = 80 } = {}) {
       return actionListDebateMessages({
@@ -961,16 +902,11 @@ export default createStore({
       commit('addMessage', { channelId, message });
     },
     async loadUserState({ commit, dispatch }) {
-      commit('loadUserState');
-      if (!this.state.user) {
-        return;
-      }
-      try {
-        await dispatch('refreshSession');
-        await dispatch('initSSE');
-      } catch (_error) {
-        await dispatch('logout', { skipRemote: true });
-      }
+      return actionLoadUserState({
+        commit,
+        dispatch: (action, payload) => dispatch(action, payload),
+        getUser: () => this.state.user,
+      });
     },
     async appStart({ state }) {
       await sendAppStartEvent(state.context, state.token);
@@ -1028,38 +964,21 @@ export default createStore({
       });
     },
     async refreshSession({ commit, dispatch }) {
-      const response = await network(this, 'post', '/auth/refresh', null, {}, false);
-      const accessToken = response?.data?.accessToken;
-      if (!accessToken) {
-        throw new Error('missing accessToken from refresh response');
-      }
-      commit('setToken', accessToken);
-      await dispatch('refreshAccessTickets');
-      return accessToken;
+      return actionRefreshSession({
+        network,
+        store: this,
+        commit,
+        dispatch: (action, payload) => dispatch(action, payload),
+      });
     },
     async refreshAccessTickets({ state, commit }) {
-      if (!state.token) {
-        commit('setAccessTickets', null);
-        return null;
-      }
-      const now = Date.now();
-      const expireAt = state.accessTickets?.expireAt || 0;
-      if (expireAt > now + 30_000) {
-        return state.accessTickets;
-      }
-
-      const response = await network(this, 'post', '/tickets', null, {
-        Authorization: `Bearer ${state.token}`,
+      return actionRefreshAccessTickets({
+        network,
+        store: this,
+        commit,
+        token: state.token,
+        accessTickets: state.accessTickets,
       });
-      const data = response.data;
-      const tickets = {
-        fileToken: data.fileToken,
-        notifyToken: data.notifyToken,
-        expiresInSecs: data.expiresInSecs,
-        expireAt: now + data.expiresInSecs * 1000,
-      };
-      commit('setAccessTickets', tickets);
-      return tickets;
     },
     scheduleSSEReconnect({ state, commit, dispatch }) {
       if (!state.token) {

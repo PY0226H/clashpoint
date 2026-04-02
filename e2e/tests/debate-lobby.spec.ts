@@ -40,13 +40,18 @@ const SESSIONS = [
 
 async function bootstrapAuthState(page) {
   await page.addInitScript(() => {
-    localStorage.setItem('user', JSON.stringify({ id: 1001, email: 'e2e@acme.org' }));
+    localStorage.setItem('user', JSON.stringify({
+      id: 1001,
+      email: 'e2e@acme.org',
+      phoneE164: '+8613800000001',
+    }));
     localStorage.setItem('channels', JSON.stringify([]));
+    localStorage.setItem('single_channels', JSON.stringify([]));
     localStorage.setItem('users', JSON.stringify({}));
   });
 }
 
-async function mockDebateApis(page) {
+async function mockDebateApis(page, hooks = {}) {
   await page.route('**/api/auth/refresh', async (route) => {
     await route.fulfill({
       status: 200,
@@ -68,6 +73,7 @@ async function mockDebateApis(page) {
     });
   });
   await page.route('**/api/debate/topics**', async (route) => {
+    hooks.onDebateTopics?.();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -75,6 +81,7 @@ async function mockDebateApis(page) {
     });
   });
   await page.route('**/api/debate/sessions**', async (route) => {
+    hooks.onDebateSessions?.();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -138,5 +145,23 @@ test.describe('Debate Lobby Phase3', () => {
     await page.goto('http://127.0.0.1:1420/debate?q=%E4%BA%91%E9%A1%B6&lane=upcoming');
     await page.getByRole('button', { name: '加入正方' }).first().click();
     await expect(page).toHaveURL(/\/debate\/sessions\/201/);
+  });
+
+  test('should request topics and sessions on debate lobby bootstrap', async ({ page }) => {
+    let topicsCalls = 0;
+    let sessionsCalls = 0;
+    await mockDebateApis(page, {
+      onDebateTopics: () => {
+        topicsCalls += 1;
+      },
+      onDebateSessions: () => {
+        sessionsCalls += 1;
+      },
+    });
+
+    await page.goto('http://127.0.0.1:1420/debate');
+    await expect(page.getByRole('heading', { name: '辩论场次总览' })).toBeVisible();
+    await expect.poll(() => topicsCalls).toBeGreaterThan(0);
+    await expect.poll(() => sessionsCalls).toBeGreaterThan(0);
   });
 });
