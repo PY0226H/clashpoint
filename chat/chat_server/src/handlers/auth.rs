@@ -2,8 +2,10 @@ use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
     },
-    models::{CreateUser, CreateUserWithPhoneInput, SigninUser},
-    redis_store::RedisStore,
+    models::{
+        CreateUser, CreateUserWithPhoneAndSessionInput, CreateUserWithPhoneInput, SigninUser,
+    },
+    redis_store::{RedisStore, SmsCodeVerifyDecision},
     AppError, AppState, ErrorOutput,
 };
 use axum::{
@@ -525,18 +527,6 @@ fn fallback_get_sms_entry(scene: SmsScene, phone_e164: &str) -> Option<SmsFallba
     None
 }
 
-fn fallback_update_sms_entry(scene: SmsScene, phone_e164: &str, entry: SmsFallbackEntry) {
-    let key = build_sms_fallback_key(scene, phone_e164);
-    let mut map = SMS_FALLBACK_STORE.lock().expect("lock sms fallback store");
-    map.insert(key, entry);
-}
-
-fn fallback_clear_sms_entry(scene: SmsScene, phone_e164: &str) {
-    let key = build_sms_fallback_key(scene, phone_e164);
-    let mut map = SMS_FALLBACK_STORE.lock().expect("lock sms fallback store");
-    map.remove(&key);
-}
-
 fn fallback_set_wechat_challenge(nonce: &str, state: &str) {
     let mut map = WECHAT_CHALLENGE_FALLBACK_STORE
         .lock()
@@ -819,7 +809,7 @@ pub(crate) async fn send_sms_code_v2_handler(
 
     let code = generate_sms_code();
     store_sms_code(&state, scene, &phone_e164, &code).await?;
-    insert_sms_audit_log(
+    insert_sms_audit_log_best_effort(
         &state,
         SmsAuditLogInput {
             phone_e164: &phone_e164,
@@ -832,7 +822,7 @@ pub(crate) async fn send_sms_code_v2_handler(
             user_id: None,
         },
     )
-    .await?;
+    .await;
 
     let debug_code = if !runtime_env_is_production() && sms_provider_name() == SMS_PROVIDER_MOCK {
         Some(code)
@@ -884,18 +874,38 @@ pub(crate) async fn signup_phone_v2_handler(
     } else {
         input.fullname.trim().to_string()
     };
+    let ctx = session_context_from_headers(&headers);
+    let sid = Uuid::now_v7().to_string();
+    let family_id = Uuid::now_v7().to_string();
+    let refresh_jti = Uuid::now_v7().to_string();
     let user = state
-        .create_user_with_phone(&CreateUserWithPhoneInput {
+        .create_user_with_phone_and_session(&CreateUserWithPhoneAndSessionInput {
             fullname,
             email: None,
             phone_e164: phone_e164.clone(),
             password: input.password.clone(),
             phone_bind_required: false,
+            sid: sid.clone(),
+            family_id: family_id.clone(),
+            refresh_jti: refresh_jti.clone(),
+            refresh_ttl_secs: REFRESH_TOKEN_TTL_SECS as i64,
+            user_agent: ctx.user_agent.clone(),
+            ip_hash: ctx.ip_hash.clone(),
         })
         .await?;
+    let token_version = load_user_token_version(&state, user.id).await?;
+    let issued = issue_auth_tokens_with_session_ids(
+        &state,
+        &user,
+        token_version,
+        sid,
+        family_id,
+        refresh_jti,
+    )?;
 
     let (status, resp_headers, body) =
-        issue_auth_success_response(&state, &headers, user, StatusCode::CREATED).await?;
+        finalize_auth_success_response(&state, user, StatusCode::CREATED, issued, token_version)
+            .await?;
     Ok((status, resp_headers, Json(body)))
 }
 
@@ -1637,6 +1647,17 @@ fn issue_auth_tokens(
     let sid = Uuid::now_v7().to_string();
     let family_id = Uuid::now_v7().to_string();
     let refresh_jti = Uuid::now_v7().to_string();
+    issue_auth_tokens_with_session_ids(state, user, token_version, sid, family_id, refresh_jti)
+}
+
+fn issue_auth_tokens_with_session_ids(
+    state: &AppState,
+    user: &User,
+    token_version: i64,
+    sid: String,
+    family_id: String,
+    refresh_jti: String,
+) -> Result<IssuedTokens, AppError> {
     let access_jti = Uuid::now_v7().to_string();
     let access_token = state.ek.sign_access_token_with_jti(
         user.id,
@@ -2167,8 +2188,17 @@ async fn issue_auth_success_response(
     let token_version = load_user_token_version(state, user.id).await?;
     let issued = issue_auth_tokens(state, &user, token_version)?;
     persist_refresh_session(state, &user, &issued, &ctx).await?;
-    sync_session_state_to_redis(state, &issued, user.id, token_version).await?;
+    finalize_auth_success_response(state, user, status, issued, token_version).await
+}
 
+async fn finalize_auth_success_response(
+    state: &AppState,
+    user: User,
+    status: StatusCode,
+    issued: IssuedTokens,
+    token_version: i64,
+) -> Result<(StatusCode, HeaderMap, AuthOutput), AppError> {
+    sync_session_state_to_redis(state, &issued, user.id, token_version).await?;
     let mut resp_headers = HeaderMap::new();
     set_refresh_cookie_header(
         &mut resp_headers,
@@ -2316,137 +2346,131 @@ async fn verify_sms_code(
     sms_code: &str,
     user_id: Option<i64>,
 ) -> Result<(), AppError> {
-    let expected = load_sms_code(state, scene, phone_e164).await?;
-    let Some(expected) = expected else {
-        insert_sms_audit_log(
-            state,
-            SmsAuditLogInput {
+    let sms_code = sms_code.trim();
+    let decision = if redis_is_disabled(state) {
+        verify_sms_code_via_fallback_store(scene, phone_e164, sms_code)
+    } else {
+        let verify_ret = state
+            .redis
+            .verify_sms_code_atomically(
+                &format!("auth:sms:code:{}", scene.as_str()),
+                &format!("auth:sms:attempt:{}", scene.as_str()),
                 phone_e164,
-                scene,
-                action: "verify",
-                result: "failed",
-                reason: Some("expired"),
-                request_ip_hash: None,
-                code_plain: None,
-                user_id,
-            },
-        )
-        .await?;
-        return Err(AppError::AuthError("auth_sms_code_expired".to_string()));
+                sms_code,
+                SMS_MAX_FAILED_ATTEMPTS,
+                SMS_CODE_TTL_SECS,
+            )
+            .await;
+        match verify_ret {
+            Ok(decision) => decision,
+            Err(err) => {
+                if auth_fail_closed_enabled(state) {
+                    tracing::warn!("sms verify failed under fail-closed: {}", err);
+                    return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
+                }
+                tracing::warn!("sms verify degraded as fallback: {}", err);
+                verify_sms_code_via_fallback_store(scene, phone_e164, sms_code)
+            }
+        }
     };
 
-    if expected != sms_code.trim() {
-        let mut exhausted = false;
-        if redis_is_disabled(state) {
-            if let Some(mut entry) = fallback_get_sms_entry(scene, phone_e164) {
-                entry.failed_attempts += 1;
-                exhausted = entry.failed_attempts >= SMS_MAX_FAILED_ATTEMPTS;
-                if exhausted {
-                    fallback_clear_sms_entry(scene, phone_e164);
-                } else {
-                    fallback_update_sms_entry(scene, phone_e164, entry);
-                }
-            }
-        } else {
-            let decision = state
-                .redis
-                .check_rate_limit(
-                    &format!("auth:sms:attempt:{}", scene.as_str()),
+    match decision {
+        SmsCodeVerifyDecision::Expired => {
+            insert_sms_audit_log_best_effort(
+                state,
+                SmsAuditLogInput {
                     phone_e164,
-                    SMS_MAX_FAILED_ATTEMPTS,
-                    SMS_CODE_TTL_SECS,
-                )
-                .await;
-            exhausted = match decision {
-                Ok(v) => !v.allowed,
-                Err(err) => {
-                    if auth_fail_closed_enabled(state) {
-                        tracing::warn!("sms attempt read failed under fail-closed: {}", err);
-                        return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
-                    }
-                    false
-                }
-            };
-            if exhausted {
-                let _ = state
-                    .redis
-                    .delete_key(&format!("auth:sms:code:{}", scene.as_str()), phone_e164)
-                    .await;
-                let _ = state
-                    .redis
-                    .delete_key(&format!("auth:sms:attempt:{}", scene.as_str()), phone_e164)
-                    .await;
-            }
-        }
-        insert_sms_audit_log(
-            state,
-            SmsAuditLogInput {
-                phone_e164,
-                scene,
-                action: "verify",
-                result: "failed",
-                reason: Some("invalid"),
-                request_ip_hash: None,
-                code_plain: Some(sms_code),
-                user_id,
-            },
-        )
-        .await?;
-        if exhausted {
-            return Err(AppError::AuthError("auth_sms_code_expired".to_string()));
-        }
-        return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
-    }
-
-    if redis_is_disabled(state) {
-        fallback_clear_sms_entry(scene, phone_e164);
-    } else {
-        let _ = state
-            .redis
-            .delete_key(&format!("auth:sms:code:{}", scene.as_str()), phone_e164)
+                    scene,
+                    action: "verify",
+                    result: "failed",
+                    reason: Some("expired"),
+                    request_ip_hash: None,
+                    code_plain: None,
+                    user_id,
+                },
+            )
             .await;
-        let _ = state
-            .redis
-            .delete_key(&format!("auth:sms:attempt:{}", scene.as_str()), phone_e164)
+            Err(AppError::AuthError("auth_sms_code_expired".to_string()))
+        }
+        SmsCodeVerifyDecision::Invalid => {
+            insert_sms_audit_log_best_effort(
+                state,
+                SmsAuditLogInput {
+                    phone_e164,
+                    scene,
+                    action: "verify",
+                    result: "failed",
+                    reason: Some("invalid"),
+                    request_ip_hash: None,
+                    code_plain: Some(sms_code),
+                    user_id,
+                },
+            )
             .await;
+            Err(AppError::AuthError("auth_sms_code_invalid".to_string()))
+        }
+        SmsCodeVerifyDecision::Exhausted => {
+            insert_sms_audit_log_best_effort(
+                state,
+                SmsAuditLogInput {
+                    phone_e164,
+                    scene,
+                    action: "verify",
+                    result: "failed",
+                    reason: Some("invalid"),
+                    request_ip_hash: None,
+                    code_plain: Some(sms_code),
+                    user_id,
+                },
+            )
+            .await;
+            Err(AppError::AuthError("auth_sms_code_expired".to_string()))
+        }
+        SmsCodeVerifyDecision::Passed => {
+            insert_sms_audit_log_best_effort(
+                state,
+                SmsAuditLogInput {
+                    phone_e164,
+                    scene,
+                    action: "verify",
+                    result: "passed",
+                    reason: None,
+                    request_ip_hash: None,
+                    code_plain: Some(sms_code),
+                    user_id,
+                },
+            )
+            .await;
+            Ok(())
+        }
     }
-    insert_sms_audit_log(
-        state,
-        SmsAuditLogInput {
-            phone_e164,
-            scene,
-            action: "verify",
-            result: "passed",
-            reason: None,
-            request_ip_hash: None,
-            code_plain: Some(sms_code),
-            user_id,
-        },
-    )
-    .await?;
-    Ok(())
 }
 
-async fn load_sms_code(
-    state: &AppState,
+fn verify_sms_code_via_fallback_store(
     scene: SmsScene,
     phone_e164: &str,
-) -> Result<Option<String>, AppError> {
-    if redis_is_disabled(state) {
-        return Ok(fallback_get_sms_entry(scene, phone_e164).map(|entry| entry.code));
+    sms_code: &str,
+) -> SmsCodeVerifyDecision {
+    let key = build_sms_fallback_key(scene, phone_e164);
+    let now = now_epoch_secs();
+    let mut map = SMS_FALLBACK_STORE.lock().expect("lock sms fallback store");
+    let Some(entry) = map.get_mut(&key) else {
+        return SmsCodeVerifyDecision::Expired;
+    };
+    if entry.expires_at_epoch_secs <= now {
+        map.remove(&key);
+        return SmsCodeVerifyDecision::Expired;
     }
-    let scope = format!("auth:sms:code:{}", scene.as_str());
-    match state.redis.get_value(&scope, phone_e164).await {
-        Ok(v) => Ok(v),
-        Err(err) => {
-            if auth_fail_closed_enabled(state) {
-                tracing::warn!("sms code read failed under fail-closed: {}", err);
-                return Err(AppError::AuthError("auth_sms_code_invalid".to_string()));
-            }
-            tracing::warn!("sms code read degraded as fallback: {}", err);
-            Ok(fallback_get_sms_entry(scene, phone_e164).map(|entry| entry.code))
+    if entry.code != sms_code {
+        entry.failed_attempts += 1;
+        if entry.failed_attempts >= SMS_MAX_FAILED_ATTEMPTS {
+            map.remove(&key);
+            return SmsCodeVerifyDecision::Exhausted;
         }
+        return SmsCodeVerifyDecision::Invalid;
     }
+    map.remove(&key);
+    SmsCodeVerifyDecision::Passed
 }
 
 async fn insert_sms_audit_log(
@@ -2474,6 +2498,15 @@ async fn insert_sms_audit_log(
     .execute(&state.pool)
     .await?;
     Ok(())
+}
+
+async fn insert_sms_audit_log_best_effort(state: &AppState, entry: SmsAuditLogInput<'_>) {
+    if let Err(err) = insert_sms_audit_log(state, entry).await {
+        tracing::warn!(
+            "sms audit log write failed and degraded as best-effort: {}",
+            err
+        );
+    }
 }
 
 fn hash_with_sha1(input: &str) -> String {
@@ -3062,6 +3095,77 @@ mod tests {
         let body = signin_response.into_body().collect().await?.to_bytes();
         let ret: AuthOutput = serde_json::from_slice(&body)?;
         assert!(ret.user.phone_e164.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn signup_phone_v2_should_not_fail_when_sms_audit_table_is_missing() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        sqlx::query("DROP TABLE auth_sms_audit_logs")
+            .execute(&state.pool)
+            .await?;
+
+        let sms_response = send_sms_code_v2_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SendSmsCodeV2Input {
+                phone: "13800138021".to_string(),
+                scene: "signup_phone".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(sms_response.status(), StatusCode::OK);
+        let sms_body = sms_response.into_body().collect().await?.to_bytes();
+        let sms_ret: SendSmsCodeV2Output = serde_json::from_slice(&sms_body)?;
+        let sms_code = sms_ret.debug_code.expect("debug code");
+
+        let signup_response = signup_phone_v2_handler(
+            State(state),
+            HeaderMap::new(),
+            Json(SignupPhoneV2Input {
+                phone: "13800138021".to_string(),
+                sms_code,
+                password: "123456".to_string(),
+                fullname: "Audit Degrade".to_string(),
+            }),
+        )
+        .await?
+        .into_response();
+        assert_eq!(signup_response.status(), StatusCode::CREATED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_user_with_phone_and_session_should_rollback_when_session_insert_fails(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let phone = format!(
+            "+86139{:08}",
+            (Uuid::now_v7().as_u128() % 100_000_000) as u64
+        );
+        let ret = state
+            .create_user_with_phone_and_session(&CreateUserWithPhoneAndSessionInput {
+                fullname: "Txn Rollback".to_string(),
+                email: None,
+                phone_e164: phone.clone(),
+                password: "123456".to_string(),
+                phone_bind_required: false,
+                sid: "x".repeat(200),
+                family_id: Uuid::now_v7().to_string(),
+                refresh_jti: Uuid::now_v7().to_string(),
+                refresh_ttl_secs: REFRESH_TOKEN_TTL_SECS as i64,
+                user_agent: None,
+                ip_hash: None,
+            })
+            .await;
+        assert!(
+            matches!(ret, Err(AppError::SqlxError(_))),
+            "session insert should fail by sid length and rollback user insert"
+        );
+
+        let user = state.find_user_by_phone(&phone).await?;
+        assert!(user.is_none(), "user insert should be rolled back together");
         Ok(())
     }
 

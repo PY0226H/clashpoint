@@ -34,6 +34,21 @@ pub struct CreateUserWithPhoneInput {
     pub phone_bind_required: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct CreateUserWithPhoneAndSessionInput {
+    pub fullname: String,
+    pub email: Option<String>,
+    pub phone_e164: String,
+    pub password: String,
+    pub phone_bind_required: bool,
+    pub sid: String,
+    pub family_id: String,
+    pub refresh_jti: String,
+    pub refresh_ttl_secs: i64,
+    pub user_agent: Option<String>,
+    pub ip_hash: Option<String>,
+}
+
 #[allow(dead_code)]
 impl AppState {
     /// Find a user by email
@@ -186,7 +201,7 @@ impl AppState {
             .map(|email| is_bot_email(email))
             .unwrap_or(false);
 
-        let user: User = sqlx::query_as(
+        let user: User = match sqlx::query_as(
             r#"
             INSERT INTO users (
                 email, phone_e164, phone_verified_at, phone_bind_required,
@@ -206,6 +221,113 @@ impl AppState {
         .bind(password_hash)
         .bind(is_bot)
         .fetch_one(&mut *tx)
+        .await
+        {
+            Ok(user) => user,
+            Err(err) => {
+                if let Some(mapped) = map_users_insert_unique_violation(
+                    &err,
+                    normalized_email.as_ref(),
+                    &input.phone_e164,
+                ) {
+                    return Err(mapped);
+                }
+                return Err(err.into());
+            }
+        };
+
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    pub async fn create_user_with_phone_and_session(
+        &self,
+        input: &CreateUserWithPhoneAndSessionInput,
+    ) -> Result<User, AppError> {
+        let mut tx = self.pool.begin().await?;
+        let normalized_email = input.email.as_deref().map(normalize_email_for_query);
+
+        if let Some(email) = normalized_email.as_ref() {
+            let existing_email: Option<(i64,)> =
+                sqlx::query_as("SELECT id FROM users WHERE lower(btrim(email)) = $1")
+                    .bind(email)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            if existing_email.is_some() {
+                return Err(AppError::EmailAlreadyExists(email.clone()));
+            }
+        }
+
+        let existing_phone: Option<(i64,)> =
+            sqlx::query_as("SELECT id FROM users WHERE phone_e164 = $1")
+                .bind(&input.phone_e164)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if existing_phone.is_some() {
+            return Err(AppError::PhoneAlreadyExists(input.phone_e164.clone()));
+        }
+
+        let password_hash = hash_password(&input.password)?;
+        let is_bot = normalized_email
+            .as_ref()
+            .map(|email| is_bot_email(email))
+            .unwrap_or(false);
+
+        let user: User = match sqlx::query_as(
+            r#"
+            INSERT INTO users (
+                email, phone_e164, phone_verified_at, phone_bind_required,
+                fullname, password_hash, is_bot
+            )
+            VALUES ($1, $2, NOW(), $3, $4, $5, $6)
+            RETURNING
+                id, fullname, COALESCE(email, '') AS email,
+                phone_e164, phone_verified_at, phone_bind_required,
+                is_bot, created_at
+            "#,
+        )
+        .bind(normalized_email.as_deref())
+        .bind(&input.phone_e164)
+        .bind(input.phone_bind_required)
+        .bind(&input.fullname)
+        .bind(password_hash)
+        .bind(is_bot)
+        .fetch_one(&mut *tx)
+        .await
+        {
+            Ok(user) => user,
+            Err(err) => {
+                if let Some(mapped) = map_users_insert_unique_violation(
+                    &err,
+                    normalized_email.as_ref(),
+                    &input.phone_e164,
+                ) {
+                    return Err(mapped);
+                }
+                return Err(err.into());
+            }
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO auth_refresh_sessions(
+                user_id, sid, family_id, current_jti, expires_at,
+                user_agent, ip_hash, created_at, updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, NOW() + ($5 || ' seconds')::interval,
+                $6, $7, NOW(), NOW()
+            )
+            "#,
+        )
+        .bind(user.id)
+        .bind(&input.sid)
+        .bind(&input.family_id)
+        .bind(&input.refresh_jti)
+        .bind(input.refresh_ttl_secs.max(1))
+        .bind(input.user_agent.as_deref())
+        .bind(input.ip_hash.as_deref())
+        .execute(&mut *tx)
         .await?;
 
         tx.commit().await?;
@@ -317,6 +439,26 @@ fn normalize_email_for_query(input: &str) -> String {
 
 fn is_bot_email(email: &str) -> bool {
     email.ends_with("@bot.org")
+}
+
+fn map_users_insert_unique_violation(
+    err: &sqlx::Error,
+    normalized_email: Option<&String>,
+    phone_e164: &str,
+) -> Option<AppError> {
+    let sqlx::Error::Database(db_err) = err else {
+        return None;
+    };
+    let constraint = db_err.constraint()?;
+    if constraint == "users_phone_e164_unique_idx" {
+        return Some(AppError::PhoneAlreadyExists(phone_e164.to_string()));
+    }
+    if constraint == "email_index" {
+        if let Some(email) = normalized_email {
+            return Some(AppError::EmailAlreadyExists(email.clone()));
+        }
+    }
+    None
 }
 
 fn verify_password(password: &str, password_hash: &str) -> Result<bool, AppError> {

@@ -29,6 +29,14 @@ pub struct RateLimitDecision {
     pub reset_at_epoch_secs: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SmsCodeVerifyDecision {
+    Expired,
+    Invalid,
+    Exhausted,
+    Passed,
+}
+
 #[derive(Clone)]
 pub(crate) enum RedisStore {
     Disabled {
@@ -350,6 +358,77 @@ impl RedisStore {
                     .await
                     .context("redis EXPIRE key failed")?;
                 Ok(())
+            }
+        }
+    }
+
+    pub async fn verify_sms_code_atomically(
+        &self,
+        code_scope: &str,
+        attempt_scope: &str,
+        raw_key: &str,
+        provided_code: &str,
+        max_failed_attempts: u64,
+        fallback_ttl_secs: u64,
+    ) -> anyhow::Result<SmsCodeVerifyDecision> {
+        match self {
+            Self::Disabled { .. } => anyhow::bail!("redis disabled"),
+            Self::Enabled(inner) => {
+                let mut conn = inner.manager.clone();
+                let code_key = self.namespaced_key(code_scope, raw_key);
+                let attempt_key = self.namespaced_key(attempt_scope, raw_key);
+                let script = r#"
+local code_key = KEYS[1]
+local attempt_key = KEYS[2]
+local provided = ARGV[1]
+local max_attempts = tonumber(ARGV[2])
+local fallback_ttl = tonumber(ARGV[3])
+
+local expected = redis.call('GET', code_key)
+if not expected then
+  return 0
+end
+
+if expected ~= provided then
+  local attempts = redis.call('INCR', attempt_key)
+  local ttl = redis.call('TTL', code_key)
+  local attempt_ttl = ttl
+  if attempt_ttl == nil or attempt_ttl <= 0 then
+    attempt_ttl = fallback_ttl
+  end
+  if attempt_ttl ~= nil and attempt_ttl > 0 then
+    redis.call('EXPIRE', attempt_key, attempt_ttl)
+  end
+  if attempts >= max_attempts then
+    redis.call('DEL', code_key)
+    redis.call('DEL', attempt_key)
+    return 2
+  end
+  return 1
+end
+
+redis.call('DEL', code_key)
+redis.call('DEL', attempt_key)
+return 3
+"#;
+                let ret: i64 = redis::cmd("EVAL")
+                    .arg(script)
+                    .arg(2)
+                    .arg(&code_key)
+                    .arg(&attempt_key)
+                    .arg(provided_code)
+                    .arg(max_failed_attempts.max(1) as i64)
+                    .arg(fallback_ttl_secs.max(1) as i64)
+                    .query_async(&mut conn)
+                    .await
+                    .context("redis EVAL verify sms code failed")?;
+                match ret {
+                    0 => Ok(SmsCodeVerifyDecision::Expired),
+                    1 => Ok(SmsCodeVerifyDecision::Invalid),
+                    2 => Ok(SmsCodeVerifyDecision::Exhausted),
+                    3 => Ok(SmsCodeVerifyDecision::Passed),
+                    other => anyhow::bail!("unexpected verify sms code result: {other}"),
+                }
             }
         }
     }
