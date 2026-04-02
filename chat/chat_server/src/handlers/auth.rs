@@ -58,6 +58,8 @@ const AUTH_REFRESH_OUTBOX_BASE_BACKOFF_MS: u64 = 500;
 const AUTH_REFRESH_OUTBOX_MAX_BACKOFF_MS: u64 = 60_000;
 const AUTH_REFRESH_OUTBOX_ERROR_MAX_LEN: usize = 512;
 const LOGOUT_ALL_IDEMPOTENCY_TTL_SECS: u64 = 3;
+const SESSION_REVOKE_RATE_LIMIT_PER_WINDOW: u64 = 1;
+const SESSION_REVOKE_RATE_LIMIT_WINDOW_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
 struct SmsFallbackEntry {
@@ -129,6 +131,8 @@ pub struct LogoutOutput {
 #[serde(rename_all = "camelCase")]
 pub struct SessionRevokeOutput {
     revoked: bool,
+    affected_count: u64,
+    result: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -228,6 +232,16 @@ pub struct GetAuthConsistencyMetricsOutput {
     pub logout_all_idempotency_hit_total: u64,
     pub logout_all_outbox_enqueue_total: u64,
     pub logout_all_outbox_queue_depth: u64,
+    pub refresh_outbox_dlq_total: u64,
+    pub session_revoke_total: u64,
+    pub session_revoke_revoked_total: u64,
+    pub session_revoke_no_effect_total: u64,
+    pub session_revoke_affected_zero_total: u64,
+    pub session_revoke_affected_one_total: u64,
+    pub session_revoke_affected_many_total: u64,
+    pub session_revoke_sid_cleanup_degraded_total: u64,
+    pub session_revoke_rate_limited_total: u64,
+    pub session_revoke_outbox_drop_total: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -244,6 +258,13 @@ pub(crate) struct AuthRefreshConsistencyOutboxRetryReport {
     pub delivered: usize,
     pub requeued: usize,
     pub dropped: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct AuthRefreshConsistencyOutboxDlqReplayReport {
+    pub attempted: usize,
+    pub replayed: usize,
 }
 
 #[derive(Debug, Clone, Copy, FromRow)]
@@ -304,8 +325,21 @@ struct ClaimedAuthRefreshConsistencyOutboxJob {
     scope: String,
     raw_key: String,
     value: String,
+    source: String,
     ttl_secs: i64,
     attempts: i32,
+}
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+struct AuthRefreshConsistencyOutboxDlqJob {
+    id: i64,
+    op_type: String,
+    scope: String,
+    raw_key: String,
+    value: String,
+    source: String,
+    ttl_secs: i64,
 }
 
 #[derive(Debug, Default)]
@@ -365,6 +399,16 @@ pub(crate) struct AuthConsistencyMetrics {
     logout_all_idempotency_hit_total: AtomicU64,
     logout_all_outbox_enqueue_total: AtomicU64,
     logout_all_outbox_queue_depth: AtomicU64,
+    refresh_outbox_dlq_total: AtomicU64,
+    session_revoke_total: AtomicU64,
+    session_revoke_revoked_total: AtomicU64,
+    session_revoke_no_effect_total: AtomicU64,
+    session_revoke_affected_zero_total: AtomicU64,
+    session_revoke_affected_one_total: AtomicU64,
+    session_revoke_affected_many_total: AtomicU64,
+    session_revoke_sid_cleanup_degraded_total: AtomicU64,
+    session_revoke_rate_limited_total: AtomicU64,
+    session_revoke_outbox_drop_total: AtomicU64,
 }
 
 impl AuthConsistencyMetrics {
@@ -508,6 +552,54 @@ impl AuthConsistencyMetrics {
     fn observe_refresh_outbox_depth(&self, queue_depth: u64) {
         self.refresh_outbox_queue_depth
             .store(queue_depth, Ordering::Relaxed);
+    }
+
+    fn observe_refresh_outbox_dlq(&self) {
+        self.refresh_outbox_dlq_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_session_revoke_start(&self) {
+        self.session_revoke_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_session_revoke_rate_limited(&self) {
+        self.session_revoke_rate_limited_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_session_revoke_result(&self, affected_count: u64, revoked: bool) {
+        if revoked {
+            self.session_revoke_revoked_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.session_revoke_no_effect_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        match affected_count {
+            0 => {
+                self.session_revoke_affected_zero_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            1 => {
+                self.session_revoke_affected_one_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                self.session_revoke_affected_many_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn observe_session_revoke_sid_cleanup_degraded(&self) {
+        self.session_revoke_sid_cleanup_degraded_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_session_revoke_outbox_drop(&self) {
+        self.session_revoke_outbox_drop_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     fn observe_logout_start(&self) {
@@ -730,6 +822,30 @@ impl AuthConsistencyMetrics {
             logout_all_outbox_queue_depth: self
                 .logout_all_outbox_queue_depth
                 .load(Ordering::Relaxed),
+            refresh_outbox_dlq_total: self.refresh_outbox_dlq_total.load(Ordering::Relaxed),
+            session_revoke_total: self.session_revoke_total.load(Ordering::Relaxed),
+            session_revoke_revoked_total: self.session_revoke_revoked_total.load(Ordering::Relaxed),
+            session_revoke_no_effect_total: self
+                .session_revoke_no_effect_total
+                .load(Ordering::Relaxed),
+            session_revoke_affected_zero_total: self
+                .session_revoke_affected_zero_total
+                .load(Ordering::Relaxed),
+            session_revoke_affected_one_total: self
+                .session_revoke_affected_one_total
+                .load(Ordering::Relaxed),
+            session_revoke_affected_many_total: self
+                .session_revoke_affected_many_total
+                .load(Ordering::Relaxed),
+            session_revoke_sid_cleanup_degraded_total: self
+                .session_revoke_sid_cleanup_degraded_total
+                .load(Ordering::Relaxed),
+            session_revoke_rate_limited_total: self
+                .session_revoke_rate_limited_total
+                .load(Ordering::Relaxed),
+            session_revoke_outbox_drop_total: self
+                .session_revoke_outbox_drop_total
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -754,6 +870,24 @@ struct AuthRefreshSessionRow {
 struct SessionContext {
     user_agent: Option<String>,
     ip_hash: Option<String>,
+}
+
+#[derive(Debug)]
+struct SessionRevokeRequestContext {
+    request_id: Option<String>,
+    ip_hash: Option<String>,
+    ua_hash: Option<String>,
+}
+
+struct SessionRevokeAuditInput<'a> {
+    operator_user_id: i64,
+    sid: &'a str,
+    family_id: Option<&'a str>,
+    affected_count: u64,
+    result: &'a str,
+    request_id: Option<&'a str>,
+    ip_hash: Option<&'a str>,
+    ua_hash: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -1851,7 +1985,14 @@ pub(crate) async fn refresh_handler(
         .await
         .map_err(|err| map_refresh_error_with_metrics(&state, err))?
     {
-        revoke_family_by_id(&state, &decoded.family_id, "replay_detected").await?;
+        revoke_family_by_id(
+            &state,
+            &decoded.family_id,
+            decoded.user_id,
+            "replay_detected",
+            "refresh_replay_detected",
+        )
+        .await?;
         tracing::warn!(
             sid = %decoded.sid,
             family_id = %decoded.family_id,
@@ -1957,10 +2098,11 @@ pub(crate) async fn refresh_handler(
             r#"
             UPDATE auth_refresh_sessions
             SET revoked_at = NOW(), revoke_reason = 'replay_detected', updated_at = NOW()
-            WHERE family_id = $1 AND revoked_at IS NULL
+            WHERE family_id = $1 AND user_id = $2 AND revoked_at IS NULL
             "#,
         )
         .bind(&session.family_id)
+        .bind(session.user_id)
         .execute(&mut *tx)
         .await?;
         enqueue_auth_refresh_consistency_set_with_ttl_tx(
@@ -2348,21 +2490,75 @@ pub(crate) async fn list_auth_sessions_handler(
     responses(
         (status = 200, description = "Revoke session", body = SessionRevokeOutput),
         (status = 401, description = "Auth error", body = ErrorOutput),
+        (status = 429, description = "Rate limited", body = ErrorOutput),
     ),
     security(("token" = []))
 )]
 pub(crate) async fn revoke_auth_session_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(sid): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    let affected = revoke_family_by_sid(&state, &sid, user.id, "manual_revoke").await?;
+) -> Result<Response, AppError> {
+    let revoke_limiter_key = format!("{}:{}", user.id, hash_with_sha1(&sid));
+    let decision = enforce_rate_limit(
+        &state,
+        "auth_revoke_session",
+        &revoke_limiter_key,
+        SESSION_REVOKE_RATE_LIMIT_PER_WINDOW,
+        SESSION_REVOKE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    let resp_headers = build_rate_limit_headers(&decision)?;
+    if !decision.allowed {
+        state
+            .auth_consistency_metrics
+            .observe_session_revoke_rate_limited();
+        return Ok(rate_limit_exceeded_response(
+            "auth_revoke_session",
+            resp_headers,
+        ));
+    }
+
+    state
+        .auth_consistency_metrics
+        .observe_session_revoke_start();
+    let req_ctx = session_revoke_request_context_from_headers(&headers);
+    let outcome = revoke_family_by_sid(&state, &sid, user.id, "manual_revoke").await?;
+    let revoked = outcome.affected_count > 0;
+    let result = if revoked { "revoked" } else { "no_effect" };
+    state
+        .auth_consistency_metrics
+        .observe_session_revoke_result(outcome.affected_count, revoked);
+    if outcome.sid_cleanup_degraded {
+        state
+            .auth_consistency_metrics
+            .observe_session_revoke_sid_cleanup_degraded();
+    }
+    insert_session_revoke_audit_log_best_effort(
+        &state,
+        SessionRevokeAuditInput {
+            operator_user_id: user.id,
+            sid: &sid,
+            family_id: outcome.family_id.as_deref(),
+            affected_count: outcome.affected_count,
+            result,
+            request_id: req_ctx.request_id.as_deref(),
+            ip_hash: req_ctx.ip_hash.as_deref(),
+            ua_hash: req_ctx.ua_hash.as_deref(),
+        },
+    )
+    .await;
     Ok((
         StatusCode::OK,
+        resp_headers,
         Json(SessionRevokeOutput {
-            revoked: affected > 0,
+            revoked,
+            affected_count: outcome.affected_count,
+            result: result.to_string(),
         }),
-    ))
+    )
+        .into_response())
 }
 
 fn issue_auth_tokens(
@@ -2598,6 +2794,7 @@ struct AuthRefreshOutboxInsert<'a> {
     scope: &'a str,
     raw_key: &'a str,
     value: &'a str,
+    source: &'a str,
     ttl_secs: u64,
 }
 
@@ -2614,15 +2811,16 @@ where
     sqlx::query(
         r#"
         INSERT INTO auth_refresh_consistency_outbox_jobs(
-            op_type, scope, raw_key, value, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
+            op_type, scope, raw_key, value, source, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 0, NOW(), NULL, NULL, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, 0, NOW(), NULL, NULL, NOW(), NOW())
         "#,
     )
     .bind(job.op.as_str())
     .bind(job.scope)
     .bind(job.raw_key)
     .bind(job.value)
+    .bind(job.source)
     .bind(ttl_secs as i64)
     .execute(executor)
     .await?;
@@ -2656,6 +2854,24 @@ async fn enqueue_auth_refresh_consistency_set_with_ttl_tx<'e, E>(
 where
     E: Executor<'e, Database = sqlx::Postgres>,
 {
+    enqueue_auth_refresh_consistency_set_with_ttl_source_tx(
+        state, executor, scope, raw_key, value, "", ttl_secs,
+    )
+    .await
+}
+
+async fn enqueue_auth_refresh_consistency_set_with_ttl_source_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    scope: &str,
+    raw_key: &str,
+    value: &str,
+    source: &str,
+    ttl_secs: u64,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
     enqueue_auth_refresh_consistency_outbox_tx(
         state,
         executor,
@@ -2664,6 +2880,7 @@ where
             scope,
             raw_key,
             value,
+            source,
             ttl_secs,
         },
         Some(OutboxMetricTarget::Refresh),
@@ -2680,6 +2897,19 @@ async fn enqueue_auth_refresh_consistency_delete_key_tx<'e, E>(
 where
     E: Executor<'e, Database = sqlx::Postgres>,
 {
+    enqueue_auth_refresh_consistency_delete_key_source_tx(state, executor, scope, raw_key, "").await
+}
+
+async fn enqueue_auth_refresh_consistency_delete_key_source_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    scope: &str,
+    raw_key: &str,
+    source: &str,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
     enqueue_auth_refresh_consistency_outbox_tx(
         state,
         executor,
@@ -2688,6 +2918,7 @@ where
             scope,
             raw_key,
             value: "",
+            source,
             ttl_secs: 1,
         },
         Some(OutboxMetricTarget::Logout),
@@ -2705,6 +2936,23 @@ async fn enqueue_auth_refresh_consistency_remove_set_member_tx<'e, E>(
 where
     E: Executor<'e, Database = sqlx::Postgres>,
 {
+    enqueue_auth_refresh_consistency_remove_set_member_source_tx(
+        state, executor, scope, raw_key, member, "",
+    )
+    .await
+}
+
+async fn enqueue_auth_refresh_consistency_remove_set_member_source_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    scope: &str,
+    raw_key: &str,
+    member: &str,
+    source: &str,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
     enqueue_auth_refresh_consistency_outbox_tx(
         state,
         executor,
@@ -2713,6 +2961,7 @@ where
             scope,
             raw_key,
             value: member,
+            source,
             ttl_secs: 1,
         },
         Some(OutboxMetricTarget::Logout),
@@ -2923,8 +3172,30 @@ impl AppState {
             };
 
             for job in claimed {
-                let op = AuthRefreshOutboxOp::parse(&job.op_type)
-                    .ok_or_else(|| anyhow::anyhow!("unknown auth refresh outbox op_type"))?;
+                let op = match AuthRefreshOutboxOp::parse(&job.op_type) {
+                    Some(op) => op,
+                    None => {
+                        let sanitized = sanitize_auth_refresh_consistency_outbox_error(
+                            "unknown auth refresh outbox op_type",
+                        );
+                        move_auth_refresh_consistency_outbox_job_to_dlq(
+                            &self.pool, &job, &sanitized,
+                        )
+                        .await?;
+                        report.dropped += 1;
+                        self.auth_consistency_metrics.observe_refresh_outbox_dlq();
+                        if job.source == "manual_revoke" {
+                            self.auth_consistency_metrics
+                                .observe_session_revoke_outbox_drop();
+                        }
+                        tracing::warn!(
+                            job_id = job.id,
+                            op_type = %job.op_type,
+                            "drop auth refresh outbox job due to unknown op_type"
+                        );
+                        continue;
+                    }
+                };
                 let apply_result = match op {
                     AuthRefreshOutboxOp::SetWithTtl => {
                         self.redis
@@ -2954,8 +3225,16 @@ impl AppState {
                         let sanitized =
                             sanitize_auth_refresh_consistency_outbox_error(&err.to_string());
                         if job.attempts >= AUTH_REFRESH_OUTBOX_MAX_ATTEMPTS {
-                            delete_auth_refresh_consistency_outbox_job(&self.pool, job.id).await?;
+                            move_auth_refresh_consistency_outbox_job_to_dlq(
+                                &self.pool, &job, &sanitized,
+                            )
+                            .await?;
                             report.dropped += 1;
+                            self.auth_consistency_metrics.observe_refresh_outbox_dlq();
+                            if job.source == "manual_revoke" {
+                                self.auth_consistency_metrics
+                                    .observe_session_revoke_outbox_drop();
+                            }
                             tracing::warn!(
                                 job_id = job.id,
                                 attempts = job.attempts,
@@ -2998,6 +3277,56 @@ impl AppState {
             }
         }
         run
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn replay_auth_refresh_consistency_outbox_dlq_once(
+        &self,
+        batch_size: usize,
+    ) -> Result<AuthRefreshConsistencyOutboxDlqReplayReport, AppError> {
+        let mut tx = self.pool.begin().await?;
+        let claimed = sqlx::query_as::<_, AuthRefreshConsistencyOutboxDlqJob>(
+            r#"
+            SELECT id, op_type, scope, raw_key, value, source, ttl_secs
+            FROM auth_refresh_consistency_outbox_dlq_jobs
+            ORDER BY dropped_at ASC, id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .bind(batch_size.max(1) as i64)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut report = AuthRefreshConsistencyOutboxDlqReplayReport {
+            attempted: claimed.len(),
+            ..Default::default()
+        };
+        for job in claimed {
+            sqlx::query(
+                r#"
+                INSERT INTO auth_refresh_consistency_outbox_jobs(
+                    op_type, scope, raw_key, value, source, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, 0, NOW(), NULL, NULL, NOW(), NOW())
+                "#,
+            )
+            .bind(job.op_type)
+            .bind(job.scope)
+            .bind(job.raw_key)
+            .bind(job.value)
+            .bind(job.source)
+            .bind(job.ttl_secs.max(1))
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM auth_refresh_consistency_outbox_dlq_jobs WHERE id = $1")
+                .bind(job.id)
+                .execute(&mut *tx)
+                .await?;
+            report.replayed += 1;
+        }
+        tx.commit().await?;
+        Ok(report)
     }
 }
 
@@ -3131,7 +3460,7 @@ async fn claim_auth_refresh_consistency_outbox_jobs(
             updated_at = NOW()
         FROM due
         WHERE q.id = due.id
-        RETURNING q.id, q.op_type, q.scope, q.raw_key, q.value, q.ttl_secs, q.attempts
+        RETURNING q.id, q.op_type, q.scope, q.raw_key, q.value, q.source, q.ttl_secs, q.attempts
         "#,
     )
     .bind(batch_size.max(1))
@@ -3173,6 +3502,39 @@ async fn reschedule_auth_refresh_consistency_outbox_job(
     .bind(last_error)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+async fn move_auth_refresh_consistency_outbox_job_to_dlq(
+    pool: &sqlx::PgPool,
+    job: &ClaimedAuthRefreshConsistencyOutboxJob,
+    last_error: &str,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        INSERT INTO auth_refresh_consistency_outbox_dlq_jobs(
+            original_job_id, op_type, scope, raw_key, value, source, ttl_secs, attempts, last_error, dropped_at, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+        "#,
+    )
+    .bind(job.id)
+    .bind(&job.op_type)
+    .bind(&job.scope)
+    .bind(&job.raw_key)
+    .bind(&job.value)
+    .bind(&job.source)
+    .bind(job.ttl_secs.max(1))
+    .bind(job.attempts)
+    .bind(last_error)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM auth_refresh_consistency_outbox_jobs WHERE id = $1")
+        .bind(job.id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -3242,30 +3604,41 @@ pub(crate) async fn ensure_access_session_active(
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct SessionRevokeApplyOutcome {
+    family_id: Option<String>,
+    affected_count: u64,
+    sid_cleanup_degraded: bool,
+}
+
 async fn revoke_family_by_id(
     state: &AppState,
     family_id: &str,
+    user_id: i64,
     reason: &str,
+    outbox_source: &str,
 ) -> Result<u64, AppError> {
     let mut tx = state.pool.begin().await?;
     let affected = sqlx::query(
         r#"
         UPDATE auth_refresh_sessions
         SET revoked_at = NOW(), revoke_reason = $2, updated_at = NOW()
-        WHERE family_id = $1 AND revoked_at IS NULL
+        WHERE family_id = $1 AND user_id = $3 AND revoked_at IS NULL
         "#,
     )
     .bind(family_id)
     .bind(reason)
+    .bind(user_id)
     .execute(&mut *tx)
     .await?
     .rows_affected() as u64;
-    enqueue_auth_refresh_consistency_set_with_ttl_tx(
+    enqueue_auth_refresh_consistency_set_with_ttl_source_tx(
         state,
         &mut *tx,
         "auth:rt:family",
         family_id,
         "revoked",
+        outbox_source,
         REFRESH_TOKEN_TTL_SECS,
     )
     .await?;
@@ -3279,26 +3652,77 @@ async fn revoke_family_by_sid(
     sid: &str,
     user_id: i64,
     reason: &str,
-) -> Result<u64, AppError> {
-    let family_id: Option<String> = sqlx::query_scalar(
+) -> Result<SessionRevokeApplyOutcome, AppError> {
+    let mut tx = state.pool.begin().await?;
+    let (family_id, affected): (Option<String>, i64) = sqlx::query_as(
         r#"
-        SELECT family_id
-        FROM auth_refresh_sessions
-        WHERE sid = $1 AND user_id = $2
+        WITH target AS (
+            SELECT family_id
+            FROM auth_refresh_sessions
+            WHERE sid = $1 AND user_id = $2
+            LIMIT 1
+        ),
+        updated AS (
+            UPDATE auth_refresh_sessions
+            SET revoked_at = NOW(), revoke_reason = $3, updated_at = NOW()
+            WHERE family_id = (SELECT family_id FROM target)
+              AND user_id = $2
+              AND revoked_at IS NULL
+            RETURNING 1
+        )
+        SELECT
+            (SELECT family_id FROM target) AS family_id,
+            (SELECT COUNT(*)::bigint FROM updated) AS affected
         "#,
     )
     .bind(sid)
     .bind(user_id)
-    .fetch_optional(&state.pool)
+    .bind(reason)
+    .fetch_one(&mut *tx)
     .await?;
 
-    let Some(family_id) = family_id else {
-        return Ok(0);
-    };
+    if let Some(fid) = family_id.as_deref() {
+        let user_id_key = user_id.to_string();
+        enqueue_auth_refresh_consistency_set_with_ttl_source_tx(
+            state,
+            &mut *tx,
+            "auth:rt:family",
+            fid,
+            "revoked",
+            "manual_revoke",
+            REFRESH_TOKEN_TTL_SECS,
+        )
+        .await?;
+        enqueue_auth_refresh_consistency_remove_set_member_source_tx(
+            state,
+            &mut *tx,
+            "auth:user:sessions",
+            &user_id_key,
+            sid,
+            "manual_revoke",
+        )
+        .await?;
+        enqueue_auth_refresh_consistency_delete_key_source_tx(
+            state,
+            &mut *tx,
+            "auth:rt:session",
+            sid,
+            "manual_revoke",
+        )
+        .await?;
+    }
+    tx.commit().await?;
 
-    let affected = revoke_family_by_id(state, &family_id, reason).await?;
-    let _ = best_effort_remove_refresh_session_index(state, user_id, sid).await;
-    Ok(affected)
+    let mut sid_cleanup_degraded = false;
+    if let Some(fid) = family_id.as_deref() {
+        best_effort_set_refresh_family_revoked(state, fid).await;
+        sid_cleanup_degraded = best_effort_remove_refresh_session_index(state, user_id, sid).await;
+    }
+    Ok(SessionRevokeApplyOutcome {
+        family_id,
+        affected_count: affected.max(0) as u64,
+        sid_cleanup_degraded,
+    })
 }
 
 struct LogoutOwnedRefreshOutcome {
@@ -3337,10 +3761,11 @@ async fn logout_apply_owned_refresh(
                 r#"
                 UPDATE auth_refresh_sessions
                 SET revoked_at = NOW(), revoke_reason = 'logout', updated_at = NOW()
-                WHERE family_id = $1 AND revoked_at IS NULL
+                WHERE family_id = $1 AND user_id = $2 AND revoked_at IS NULL
                 "#,
             )
             .bind(&resolved_family_id)
+            .bind(user_id)
             .execute(&mut *tx)
             .await?
             .rows_affected();
@@ -3378,6 +3803,7 @@ async fn logout_apply_owned_refresh(
             scope: "auth:rt:blacklist",
             raw_key: jti,
             value: "1",
+            source: "",
             ttl_secs: jti_ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS),
         },
         Some(OutboxMetricTarget::Logout),
@@ -3500,6 +3926,7 @@ async fn logout_all_apply_core(
             scope: "auth:user:token_version",
             raw_key: &user_id_key,
             value: "",
+            source: "",
             ttl_secs: 1,
         },
         Some(OutboxMetricTarget::LogoutAll),
@@ -3514,6 +3941,7 @@ async fn logout_all_apply_core(
                 scope: "auth:user:sessions",
                 raw_key: &user_id_key,
                 value: sid,
+                source: "",
                 ttl_secs: 1,
             },
             Some(OutboxMetricTarget::LogoutAll),
@@ -3527,6 +3955,7 @@ async fn logout_all_apply_core(
                 scope: "auth:rt:session",
                 raw_key: sid,
                 value: "",
+                source: "",
                 ttl_secs: 1,
             },
             Some(OutboxMetricTarget::LogoutAll),
@@ -3542,6 +3971,7 @@ async fn logout_all_apply_core(
                 scope: "auth:rt:family",
                 raw_key: family_id,
                 value: "revoked",
+                source: "",
                 ttl_secs: REFRESH_TOKEN_TTL_SECS,
             },
             Some(OutboxMetricTarget::LogoutAll),
@@ -3982,6 +4412,43 @@ async fn insert_sms_audit_log_best_effort(state: &AppState, entry: SmsAuditLogIn
     }
 }
 
+async fn insert_session_revoke_audit_log(
+    state: &AppState,
+    entry: SessionRevokeAuditInput<'_>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO auth_session_revoke_audits(
+            operator_user_id, sid, family_id, affected_count, result, request_id, ip_hash, ua_hash
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(entry.operator_user_id)
+    .bind(entry.sid)
+    .bind(entry.family_id)
+    .bind(entry.affected_count as i64)
+    .bind(entry.result)
+    .bind(entry.request_id)
+    .bind(entry.ip_hash)
+    .bind(entry.ua_hash)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn insert_session_revoke_audit_log_best_effort(
+    state: &AppState,
+    entry: SessionRevokeAuditInput<'_>,
+) {
+    if let Err(err) = insert_session_revoke_audit_log(state, entry).await {
+        tracing::warn!(
+            "session revoke audit log write failed and degraded as best-effort: {}",
+            err
+        );
+    }
+}
+
 fn hash_with_sha1(input: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(input.as_bytes());
@@ -4210,6 +4677,28 @@ fn session_context_from_headers(headers: &HeaderMap) -> SessionContext {
             .filter(|v| !v.is_empty())
             .map(|v| v.chars().take(512).collect()),
         ip_hash: extract_ip_hash(headers),
+    }
+}
+
+fn session_revoke_request_context_from_headers(headers: &HeaderMap) -> SessionRevokeRequestContext {
+    let request_id = headers
+        .get("x-request-id")
+        .or_else(|| headers.get("x-requestid"))
+        .or_else(|| headers.get("request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.chars().take(128).collect::<String>());
+    let ua_hash = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(hash_with_sha1);
+    SessionRevokeRequestContext {
+        request_id,
+        ip_hash: extract_ip_hash(headers),
+        ua_hash,
     }
 }
 
@@ -4451,6 +4940,33 @@ mod tests {
     use anyhow::Result;
     use axum::http::header::SET_COOKIE;
     use http_body_util::BodyExt;
+    use sqlx::FromRow;
+
+    #[derive(Debug, FromRow)]
+    struct SessionRevokeAuditRow {
+        operator_user_id: i64,
+        sid: String,
+        family_id: Option<String>,
+        affected_count: i64,
+        result: String,
+        request_id: Option<String>,
+        ip_hash: Option<String>,
+        ua_hash: Option<String>,
+    }
+
+    async fn signin_and_decode_session(state: &AppState) -> Result<(User, String)> {
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let decoded = state.dk.verify_access(&auth.access_token)?;
+        Ok((decoded.user, decoded.sid))
+    }
 
     #[tokio::test]
     async fn signup_handler_should_return_gone_after_v1_disabled() -> Result<()> {
@@ -4642,6 +5158,204 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert_eq!(depth_after, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn revoke_auth_session_should_return_target_state_and_enqueue_outbox_jobs() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, sid) = signin_and_decode_session(&state).await?;
+        let response = revoke_auth_session_handler(
+            Extension(user),
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(sid),
+        )
+        .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await?.to_bytes();
+        let output: SessionRevokeOutput = serde_json::from_slice(&body)?;
+        assert!(output.revoked);
+        assert!(output.affected_count >= 1);
+        assert_eq!(output.result, "revoked");
+
+        let set_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL AND op_type = 'set_with_ttl' AND source = 'manual_revoke'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let delete_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL AND op_type = 'delete_key' AND source = 'manual_revoke'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let remove_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL AND op_type = 'remove_set_member' AND source = 'manual_revoke'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert!(set_count >= 1);
+        assert!(delete_count >= 1);
+        assert!(remove_count >= 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn revoke_auth_session_should_be_idempotent() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, sid) = signin_and_decode_session(&state).await?;
+        let first = revoke_auth_session_handler(
+            Extension(user.clone()),
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(sid.clone()),
+        )
+        .await?;
+        let second =
+            revoke_auth_session_handler(Extension(user), State(state), HeaderMap::new(), Path(sid))
+                .await?;
+
+        let first_body = first.into_body().collect().await?.to_bytes();
+        let second_body = second.into_body().collect().await?.to_bytes();
+        let first_output: SessionRevokeOutput = serde_json::from_slice(&first_body)?;
+        let second_output: SessionRevokeOutput = serde_json::from_slice(&second_body)?;
+        assert!(first_output.revoked);
+        assert_eq!(first_output.result, "revoked");
+        assert!(!second_output.revoked);
+        assert_eq!(second_output.affected_count, 0);
+        assert_eq!(second_output.result, "no_effect");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn revoke_auth_session_should_write_audit_log_with_hashed_context() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, sid) = signin_and_decode_session(&state).await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("codex-test-agent"),
+        );
+        headers.insert(
+            header::HeaderName::from_static("x-request-id"),
+            HeaderValue::from_static("req-revoke-001"),
+        );
+        headers.insert(
+            header::HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("203.0.113.10"),
+        );
+        let _ = revoke_auth_session_handler(
+            Extension(user.clone()),
+            State(state.clone()),
+            headers,
+            Path(sid.clone()),
+        )
+        .await?;
+        let row: SessionRevokeAuditRow = sqlx::query_as(
+            r#"
+            SELECT operator_user_id, sid, family_id, affected_count, result, request_id, ip_hash, ua_hash
+            FROM auth_session_revoke_audits
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let expected_ip_hash = hash_with_sha1("203.0.113.10");
+        let expected_ua_hash = hash_with_sha1("codex-test-agent");
+        assert_eq!(row.operator_user_id, user.id);
+        assert_eq!(row.sid, sid);
+        assert!(row.family_id.is_some());
+        assert!(row.affected_count >= 1);
+        assert_eq!(row.result, "revoked");
+        assert_eq!(row.request_id.as_deref(), Some("req-revoke-001"));
+        assert_eq!(row.ip_hash.as_deref(), Some(expected_ip_hash.as_str()));
+        assert_eq!(row.ua_hash.as_deref(), Some(expected_ua_hash.as_str()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn revoke_auth_session_should_be_safe_under_concurrent_calls() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, sid) = signin_and_decode_session(&state).await?;
+        let f1 = revoke_auth_session_handler(
+            Extension(user.clone()),
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(sid.clone()),
+        );
+        let f2 = revoke_auth_session_handler(
+            Extension(user),
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(sid),
+        );
+        let (r1, r2) = tokio::join!(f1, f2);
+        let resp1 = r1?;
+        let resp2 = r2?;
+        assert_eq!(resp1.status(), StatusCode::OK);
+        assert_eq!(resp2.status(), StatusCode::OK);
+
+        let body1 = resp1.into_body().collect().await?.to_bytes();
+        let body2 = resp2.into_body().collect().await?.to_bytes();
+        let out1: SessionRevokeOutput = serde_json::from_slice(&body1)?;
+        let out2: SessionRevokeOutput = serde_json::from_slice(&body2)?;
+        let revoked_total = [out1.revoked, out2.revoked]
+            .into_iter()
+            .filter(|v| *v)
+            .count();
+        assert!(revoked_total >= 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_outbox_worker_should_move_terminal_failure_to_dlq_and_replay() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        sqlx::query(
+            r#"
+            INSERT INTO auth_refresh_consistency_outbox_jobs(
+                op_type, scope, raw_key, value, source, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL, NULL, NOW(), NOW())
+            "#,
+        )
+        .bind("unknown_op")
+        .bind("auth:rt:family")
+        .bind("family-for-dlq-test")
+        .bind("revoked")
+        .bind("manual_revoke")
+        .bind(REFRESH_TOKEN_TTL_SECS as i64)
+        .bind(AUTH_REFRESH_OUTBOX_MAX_ATTEMPTS)
+        .execute(&state.pool)
+        .await?;
+
+        let report = state.retry_auth_refresh_consistency_outbox_once(32).await?;
+        assert_eq!(report.dropped, 1);
+
+        let dlq_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_dlq_jobs WHERE source = 'manual_revoke'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(dlq_count, 1);
+
+        let metrics = state.get_auth_consistency_metrics();
+        assert_eq!(metrics.refresh_outbox_dlq_total, 1);
+        assert_eq!(metrics.session_revoke_outbox_drop_total, 1);
+
+        let replay_report = state
+            .replay_auth_refresh_consistency_outbox_dlq_once(32)
+            .await?;
+        assert_eq!(replay_report.attempted, 1);
+        assert_eq!(replay_report.replayed, 1);
+
+        let dlq_after: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_dlq_jobs",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(dlq_after, 0);
         Ok(())
     }
 
