@@ -71,6 +71,9 @@ pub enum AppError {
 
     #[error("{0}")]
     AuthError(String),
+
+    #[error("{0}")]
+    ServerError(String),
 }
 
 impl IntoResponse for AppError {
@@ -98,6 +101,7 @@ impl IntoResponse for AppError {
             Self::AiAgentError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::JwtError(_) => StatusCode::UNAUTHORIZED,
             Self::AuthError(_) => StatusCode::UNAUTHORIZED,
+            Self::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         json_error_response(status, self.to_string())

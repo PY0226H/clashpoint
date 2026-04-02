@@ -93,6 +93,9 @@ const AUTH_BYPASS_PATHS = new Set([
   '/signup',
   '/auth/refresh',
 ]);
+const AUTH_INTENT_HEADERS = {
+  'x-requested-with': 'XMLHttpRequest',
+};
 
 const withAuthHeader = (store, url, headers = {}) => {
   const merged = { ...headers };
@@ -115,7 +118,12 @@ const network = async (store, method, url, data = null, headers = {}, allowRefre
     return await axios(config);
   } catch (error) {
     const status = error?.response?.status;
-    if (status === 401 && allowRefreshRetry && !AUTH_BYPASS_PATHS.has(url)) {
+    if (
+      status === 401
+      && allowRefreshRetry
+      && !AUTH_BYPASS_PATHS.has(url)
+      && !store.state.logoutInProgress
+    ) {
       try {
         await store.dispatch('refreshSession');
         return await axios({
@@ -160,6 +168,7 @@ export default createStore({
     latestJudgeReportEvent: null,
     latestDrawVoteResolvedEvent: null,
     opsRbacMe: null,
+    logoutInProgress: false,
   },
   mutations: {
     setSSE(state, sse) {
@@ -188,6 +197,9 @@ export default createStore({
     },
     setOpsRbacMe(state, payload) {
       state.opsRbacMe = payload;
+    },
+    setLogoutInProgress(state, value) {
+      state.logoutInProgress = !!value;
     },
     setChannels(state, channels) {
       state.channels = channels;
@@ -431,30 +443,45 @@ export default createStore({
         smsCode,
       });
     },
-    async logout({ state, commit }, { skipRemote = false } = {}) {
-      if (!skipRemote && state.token) {
-        try {
-          await network(this, 'post', '/auth/logout', null, {}, false);
-        } catch (error) {
-          console.warn('remote logout failed:', error);
-        }
+    async logout({ state, commit }, { skipRemote = false, emitSignal = true } = {}) {
+      if (state.logoutInProgress) {
+        return;
       }
-      // Clear local storage and state
-      localStorage.removeItem('user');
-      localStorage.removeItem('channels');
-      localStorage.removeItem('messages');
-      localStorage.removeItem('activeChannelId');
+      commit('setLogoutInProgress', true);
+      try {
+        if (!skipRemote && state.token) {
+          try {
+            await network(this, 'post', '/auth/logout', null, AUTH_INTENT_HEADERS, false);
+          } catch (error) {
+            console.warn('remote logout failed:', error);
+          }
+        }
+      } finally {
+        if (emitSignal) {
+          try {
+            localStorage.setItem('echoisle_logout_signal', String(Date.now()));
+          } catch (_error) {
+            // noop
+          }
+        }
+        // Clear local storage and state
+        localStorage.removeItem('user');
+        localStorage.removeItem('channels');
+        localStorage.removeItem('messages');
+        localStorage.removeItem('activeChannelId');
 
-      commit('setUser', null);
-      commit('setToken', null);
-      commit('setAccessTickets', null);
-      commit('setChannels', []);
-      commit('setLatestJudgeReportEvent', null);
-      commit('setLatestDrawVoteResolvedEvent', null);
-      commit('setOpsRbacMe', null);
+        commit('setUser', null);
+        commit('setToken', null);
+        commit('setAccessTickets', null);
+        commit('setChannels', []);
+        commit('setLatestJudgeReportEvent', null);
+        commit('setLatestDrawVoteResolvedEvent', null);
+        commit('setOpsRbacMe', null);
 
-      // close SSE
-      await this.dispatch('closeSSE');
+        // close SSE
+        await this.dispatch('closeSSE');
+        commit('setLogoutInProgress', false);
+      }
     },
     setActiveChannel({ commit }, channel) {
       commit('setActiveChannel', channel);

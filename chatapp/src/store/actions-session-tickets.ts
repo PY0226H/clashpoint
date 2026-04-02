@@ -54,7 +54,14 @@ export async function actionRefreshSession({
   commit: CommitFn;
   dispatch: DispatchFn;
 }) {
-  const response = await network(store, 'post', '/auth/refresh', null, {}, false);
+  const response = await network(
+    store,
+    'post',
+    '/auth/refresh',
+    null,
+    { 'x-requested-with': 'XMLHttpRequest' },
+    false,
+  );
   const accessToken = responseData<{ accessToken?: string }>(response)?.accessToken;
   if (!accessToken) {
     throw new Error('missing accessToken from refresh response');

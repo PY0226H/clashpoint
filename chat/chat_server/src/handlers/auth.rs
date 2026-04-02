@@ -117,6 +117,15 @@ pub struct RefreshOutput {
 #[derive(Debug, Serialize, ToSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutOutput {
+    logout_state: String,
+    server_revocation: String,
+    degraded: bool,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRevokeOutput {
     revoked: bool,
 }
 
@@ -180,6 +189,19 @@ pub struct GetAuthConsistencyMetricsOutput {
     pub refresh_outbox_tick_total: u64,
     pub refresh_outbox_tick_error_total: u64,
     pub refresh_outbox_queue_depth: u64,
+    pub logout_total: u64,
+    pub logout_success_total: u64,
+    pub logout_partial_total: u64,
+    pub logout_failed_total: u64,
+    pub logout_revocation_revoked_total: u64,
+    pub logout_revocation_already_revoked_total: u64,
+    pub logout_revocation_not_found_total: u64,
+    pub logout_revocation_skipped_total: u64,
+    pub logout_warning_degraded_retryable_total: u64,
+    pub logout_warning_partial_success_total: u64,
+    pub logout_warning_invalid_refresh_context_total: u64,
+    pub logout_outbox_enqueue_total: u64,
+    pub logout_outbox_queue_depth: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -207,19 +229,44 @@ struct ClaimedAuthTokenVersionInvalidationJob {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthRefreshOutboxOp {
     SetWithTtl,
+    DeleteKey,
+    RemoveSetMember,
 }
 
 impl AuthRefreshOutboxOp {
     fn as_str(self) -> &'static str {
         match self {
             Self::SetWithTtl => "set_with_ttl",
+            Self::DeleteKey => "delete_key",
+            Self::RemoveSetMember => "remove_set_member",
         }
     }
 
     fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "set_with_ttl" => Some(Self::SetWithTtl),
+            "delete_key" => Some(Self::DeleteKey),
+            "remove_set_member" => Some(Self::RemoveSetMember),
             _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogoutServerRevocation {
+    Revoked,
+    AlreadyRevoked,
+    NotFound,
+    Skipped,
+}
+
+impl LogoutServerRevocation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Revoked => "revoked",
+            Self::AlreadyRevoked => "already_revoked",
+            Self::NotFound => "not_found",
+            Self::Skipped => "skipped",
         }
     }
 }
@@ -268,6 +315,19 @@ pub(crate) struct AuthConsistencyMetrics {
     refresh_outbox_tick_total: AtomicU64,
     refresh_outbox_tick_error_total: AtomicU64,
     refresh_outbox_queue_depth: AtomicU64,
+    logout_total: AtomicU64,
+    logout_success_total: AtomicU64,
+    logout_partial_total: AtomicU64,
+    logout_failed_total: AtomicU64,
+    logout_revocation_revoked_total: AtomicU64,
+    logout_revocation_already_revoked_total: AtomicU64,
+    logout_revocation_not_found_total: AtomicU64,
+    logout_revocation_skipped_total: AtomicU64,
+    logout_warning_degraded_retryable_total: AtomicU64,
+    logout_warning_partial_success_total: AtomicU64,
+    logout_warning_invalid_refresh_context_total: AtomicU64,
+    logout_outbox_enqueue_total: AtomicU64,
+    logout_outbox_queue_depth: AtomicU64,
 }
 
 impl AuthConsistencyMetrics {
@@ -413,6 +473,68 @@ impl AuthConsistencyMetrics {
             .store(queue_depth, Ordering::Relaxed);
     }
 
+    fn observe_logout_start(&self) {
+        self.logout_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_logout_success(
+        &self,
+        revocation: LogoutServerRevocation,
+        degraded: bool,
+        warnings: &[String],
+    ) {
+        self.logout_success_total.fetch_add(1, Ordering::Relaxed);
+        match revocation {
+            LogoutServerRevocation::Revoked => {
+                self.logout_revocation_revoked_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            LogoutServerRevocation::AlreadyRevoked => {
+                self.logout_revocation_already_revoked_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            LogoutServerRevocation::NotFound => {
+                self.logout_revocation_not_found_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            LogoutServerRevocation::Skipped => {
+                self.logout_revocation_skipped_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if degraded {
+            self.logout_partial_total.fetch_add(1, Ordering::Relaxed);
+        }
+        for warning in warnings {
+            match warning.as_str() {
+                "auth_logout_degraded_retryable" => {
+                    self.logout_warning_degraded_retryable_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                "auth_logout_partial_success" => {
+                    self.logout_warning_partial_success_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                "auth_logout_invalid_refresh_context" => {
+                    self.logout_warning_invalid_refresh_context_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn observe_logout_failure(&self) {
+        self.logout_failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_logout_outbox_enqueued(&self, queue_depth: u64) {
+        self.logout_outbox_enqueue_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.logout_outbox_queue_depth
+            .store(queue_depth, Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(&self) -> GetAuthConsistencyMetricsOutput {
         GetAuthConsistencyMetricsOutput {
             immediate_invalidation_success_total: self
@@ -466,6 +588,33 @@ impl AuthConsistencyMetrics {
                 .refresh_outbox_tick_error_total
                 .load(Ordering::Relaxed),
             refresh_outbox_queue_depth: self.refresh_outbox_queue_depth.load(Ordering::Relaxed),
+            logout_total: self.logout_total.load(Ordering::Relaxed),
+            logout_success_total: self.logout_success_total.load(Ordering::Relaxed),
+            logout_partial_total: self.logout_partial_total.load(Ordering::Relaxed),
+            logout_failed_total: self.logout_failed_total.load(Ordering::Relaxed),
+            logout_revocation_revoked_total: self
+                .logout_revocation_revoked_total
+                .load(Ordering::Relaxed),
+            logout_revocation_already_revoked_total: self
+                .logout_revocation_already_revoked_total
+                .load(Ordering::Relaxed),
+            logout_revocation_not_found_total: self
+                .logout_revocation_not_found_total
+                .load(Ordering::Relaxed),
+            logout_revocation_skipped_total: self
+                .logout_revocation_skipped_total
+                .load(Ordering::Relaxed),
+            logout_warning_degraded_retryable_total: self
+                .logout_warning_degraded_retryable_total
+                .load(Ordering::Relaxed),
+            logout_warning_partial_success_total: self
+                .logout_warning_partial_success_total
+                .load(Ordering::Relaxed),
+            logout_warning_invalid_refresh_context_total: self
+                .logout_warning_invalid_refresh_context_total
+                .load(Ordering::Relaxed),
+            logout_outbox_enqueue_total: self.logout_outbox_enqueue_total.load(Ordering::Relaxed),
+            logout_outbox_queue_depth: self.logout_outbox_queue_depth.load(Ordering::Relaxed),
         }
     }
 }
@@ -1827,21 +1976,85 @@ pub(crate) async fn logout_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let mut revoked = false;
+    state.auth_consistency_metrics.observe_logout_start();
+    validate_logout_intent_headers(&headers).inspect_err(|_| {
+        state.auth_consistency_metrics.observe_logout_failure();
+    })?;
+
+    let mut revocation = LogoutServerRevocation::Skipped;
+    let mut degraded = false;
+    let mut warnings: Vec<String> = Vec::new();
+
     if let Some(refresh_token) = extract_refresh_token(&headers) {
-        if let Ok(decoded) = state.dk.verify_refresh(&refresh_token) {
-            if decoded.user_id == user.id {
-                let affected =
-                    revoke_family_by_sid(&state, &decoded.sid, user.id, "logout").await?;
-                revoked = affected > 0;
-                blacklist_refresh_jti(&state, &decoded.jti, ttl_from_exp(decoded.exp)).await?;
+        match state.dk.verify_refresh(&refresh_token) {
+            Ok(decoded) if decoded.user_id == user.id => {
+                let outcome = logout_apply_owned_refresh(
+                    &state,
+                    user.id,
+                    &decoded.sid,
+                    &decoded.jti,
+                    ttl_from_exp(decoded.exp),
+                )
+                .await
+                .map_err(|err| {
+                    state.auth_consistency_metrics.observe_logout_failure();
+                    tracing::warn!(
+                        user_id = user.id,
+                        sid = %decoded.sid,
+                        "auth logout core operation failed: {}",
+                        err
+                    );
+                    AppError::ServerError("auth_logout_core_failed".to_string())
+                })?;
+                revocation = outcome.revocation;
+                if logout_apply_best_effort_writes(
+                    &state,
+                    user.id,
+                    &decoded.sid,
+                    outcome.family_id.as_deref(),
+                    &decoded.jti,
+                    ttl_from_exp(decoded.exp),
+                )
+                .await
+                {
+                    degraded = true;
+                    push_logout_warning(&mut warnings, "auth_logout_degraded_retryable");
+                    push_logout_warning(&mut warnings, "auth_logout_partial_success");
+                }
+            }
+            _ => {
+                push_logout_warning(&mut warnings, "auth_logout_invalid_refresh_context");
             }
         }
+    } else {
+        push_logout_warning(&mut warnings, "auth_logout_invalid_refresh_context");
     }
 
     let mut resp_headers = HeaderMap::new();
-    clear_refresh_cookie_header(&mut resp_headers)?;
-    Ok((StatusCode::OK, resp_headers, Json(LogoutOutput { revoked })))
+    clear_refresh_cookie_header(&mut resp_headers).inspect_err(|_| {
+        state.auth_consistency_metrics.observe_logout_failure();
+    })?;
+    state
+        .auth_consistency_metrics
+        .observe_logout_success(revocation, degraded, &warnings);
+    tracing::info!(
+        user_id = user.id,
+        decision = "logout_completed",
+        server_revocation = revocation.as_str(),
+        degraded,
+        warning_codes = ?warnings,
+        "auth logout completed"
+    );
+    Ok((
+        StatusCode::OK,
+        resp_headers,
+        Json(LogoutOutput {
+            logout_state: "logged_out".to_string(),
+            server_revocation: revocation.as_str().to_string(),
+            degraded,
+            warnings,
+        }),
+    ))
 }
 
 #[utoipa::path(
@@ -1945,7 +2158,7 @@ pub(crate) async fn list_auth_sessions_handler(
     path = "/api/auth/sessions/{sid}",
     params(("sid" = String, Path, description = "Session id")),
     responses(
-        (status = 200, description = "Revoke session", body = LogoutOutput),
+        (status = 200, description = "Revoke session", body = SessionRevokeOutput),
         (status = 401, description = "Auth error", body = ErrorOutput),
     ),
     security(("token" = []))
@@ -1958,7 +2171,7 @@ pub(crate) async fn revoke_auth_session_handler(
     let affected = revoke_family_by_sid(&state, &sid, user.id, "manual_revoke").await?;
     Ok((
         StatusCode::OK,
-        Json(LogoutOutput {
+        Json(SessionRevokeOutput {
             revoked: affected > 0,
         }),
     ))
@@ -2106,15 +2319,6 @@ async fn is_refresh_blacklisted(state: &AppState, jti: &str) -> Result<bool, App
     }
 }
 
-async fn blacklist_refresh_jti(state: &AppState, jti: &str, ttl_secs: u64) -> Result<(), AppError> {
-    let ttl_secs = ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS);
-    let ret = state
-        .redis
-        .set_value_with_ttl("auth:rt:blacklist", jti, "1", ttl_secs)
-        .await;
-    handle_auth_redis_unit_result(state, ret, "auth_refresh_invalid")
-}
-
 async fn best_effort_set_refresh_blacklist(state: &AppState, jti: &str, ttl_secs: u64) {
     let ttl_secs = ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS);
     let ret = state
@@ -2164,6 +2368,91 @@ async fn best_effort_set_refresh_family_revoked(state: &AppState, family_id: &st
     }
 }
 
+async fn best_effort_remove_refresh_session_index(
+    state: &AppState,
+    user_id: i64,
+    sid: &str,
+) -> bool {
+    let mut degraded = false;
+    if let Err(err) = state
+        .redis
+        .remove_set_member("auth:user:sessions", &user_id.to_string(), sid)
+        .await
+    {
+        tracing::warn!(
+            user_id,
+            sid = %sid,
+            "best-effort remove session index failed: {}",
+            err
+        );
+        degraded = true;
+    }
+    if let Err(err) = state.redis.delete_key("auth:rt:session", sid).await {
+        tracing::warn!(
+            sid = %sid,
+            "best-effort delete refresh session mapping failed: {}",
+            err
+        );
+        degraded = true;
+    }
+    degraded
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OutboxMetricTarget {
+    Refresh,
+    Logout,
+}
+
+struct AuthRefreshOutboxInsert<'a> {
+    op: AuthRefreshOutboxOp,
+    scope: &'a str,
+    raw_key: &'a str,
+    value: &'a str,
+    ttl_secs: u64,
+}
+
+async fn enqueue_auth_refresh_consistency_outbox_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    job: AuthRefreshOutboxInsert<'_>,
+    metric_target: Option<OutboxMetricTarget>,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
+    let ttl_secs = job.ttl_secs.max(1);
+    sqlx::query(
+        r#"
+        INSERT INTO auth_refresh_consistency_outbox_jobs(
+            op_type, scope, raw_key, value, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 0, NOW(), NULL, NULL, NOW(), NOW())
+        "#,
+    )
+    .bind(job.op.as_str())
+    .bind(job.scope)
+    .bind(job.raw_key)
+    .bind(job.value)
+    .bind(ttl_secs as i64)
+    .execute(executor)
+    .await?;
+    let depth = get_auth_refresh_consistency_outbox_queue_depth(&state.pool)
+        .await
+        .unwrap_or(0);
+    if let Some(target) = metric_target {
+        match target {
+            OutboxMetricTarget::Refresh => state
+                .auth_consistency_metrics
+                .observe_refresh_outbox_enqueued(depth),
+            OutboxMetricTarget::Logout => state
+                .auth_consistency_metrics
+                .observe_logout_outbox_enqueued(depth),
+        }
+    }
+    Ok(())
+}
+
 async fn enqueue_auth_refresh_consistency_set_with_ttl_tx<'e, E>(
     state: &AppState,
     executor: E,
@@ -2175,29 +2464,68 @@ async fn enqueue_auth_refresh_consistency_set_with_ttl_tx<'e, E>(
 where
     E: Executor<'e, Database = sqlx::Postgres>,
 {
-    let ttl_secs = ttl_secs.max(1);
-    sqlx::query(
-        r#"
-        INSERT INTO auth_refresh_consistency_outbox_jobs(
-            op_type, scope, raw_key, value, ttl_secs, attempts, next_retry_at, locked_until, last_error, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, 0, NOW(), NULL, NULL, NOW(), NOW())
-        "#,
+    enqueue_auth_refresh_consistency_outbox_tx(
+        state,
+        executor,
+        AuthRefreshOutboxInsert {
+            op: AuthRefreshOutboxOp::SetWithTtl,
+            scope,
+            raw_key,
+            value,
+            ttl_secs,
+        },
+        Some(OutboxMetricTarget::Refresh),
     )
-    .bind(AuthRefreshOutboxOp::SetWithTtl.as_str())
-    .bind(scope)
-    .bind(raw_key)
-    .bind(value)
-    .bind(ttl_secs as i64)
-    .execute(executor)
-    .await?;
-    let depth = get_auth_refresh_consistency_outbox_queue_depth(&state.pool)
-        .await
-        .unwrap_or(0);
-    state
-        .auth_consistency_metrics
-        .observe_refresh_outbox_enqueued(depth);
-    Ok(())
+    .await
+}
+
+async fn enqueue_auth_refresh_consistency_delete_key_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    scope: &str,
+    raw_key: &str,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
+    enqueue_auth_refresh_consistency_outbox_tx(
+        state,
+        executor,
+        AuthRefreshOutboxInsert {
+            op: AuthRefreshOutboxOp::DeleteKey,
+            scope,
+            raw_key,
+            value: "",
+            ttl_secs: 1,
+        },
+        Some(OutboxMetricTarget::Logout),
+    )
+    .await
+}
+
+async fn enqueue_auth_refresh_consistency_remove_set_member_tx<'e, E>(
+    state: &AppState,
+    executor: E,
+    scope: &str,
+    raw_key: &str,
+    member: &str,
+) -> Result<(), AppError>
+where
+    E: Executor<'e, Database = sqlx::Postgres>,
+{
+    enqueue_auth_refresh_consistency_outbox_tx(
+        state,
+        executor,
+        AuthRefreshOutboxInsert {
+            op: AuthRefreshOutboxOp::RemoveSetMember,
+            scope,
+            raw_key,
+            value: member,
+            ttl_secs: 1,
+        },
+        Some(OutboxMetricTarget::Logout),
+    )
+    .await
 }
 
 async fn cache_user_token_version(
@@ -2412,6 +2740,14 @@ impl AppState {
                                 &job.value,
                                 job.ttl_secs.max(1) as u64,
                             )
+                            .await
+                    }
+                    AuthRefreshOutboxOp::DeleteKey => {
+                        self.redis.delete_key(&job.scope, &job.raw_key).await
+                    }
+                    AuthRefreshOutboxOp::RemoveSetMember => {
+                        self.redis
+                            .remove_set_member(&job.scope, &job.raw_key, &job.value)
                             .await
                     }
                 };
@@ -2767,12 +3103,144 @@ async fn revoke_family_by_sid(
     };
 
     let affected = revoke_family_by_id(state, &family_id, reason).await?;
-    let _ = state
-        .redis
-        .remove_set_member("auth:user:sessions", &user_id.to_string(), sid)
-        .await;
-    let _ = state.redis.delete_key("auth:rt:session", sid).await;
+    let _ = best_effort_remove_refresh_session_index(state, user_id, sid).await;
     Ok(affected)
+}
+
+struct LogoutOwnedRefreshOutcome {
+    revocation: LogoutServerRevocation,
+    family_id: Option<String>,
+}
+
+async fn logout_apply_owned_refresh(
+    state: &AppState,
+    user_id: i64,
+    sid: &str,
+    jti: &str,
+    jti_ttl_secs: u64,
+) -> Result<LogoutOwnedRefreshOutcome, AppError> {
+    let mut tx = state.pool.begin().await?;
+    let session: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT family_id, revoked_at
+        FROM auth_refresh_sessions
+        WHERE sid = $1 AND user_id = $2
+        "#,
+    )
+    .bind(sid)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let mut revocation = LogoutServerRevocation::NotFound;
+    let mut family_id: Option<String> = None;
+    if let Some((resolved_family_id, revoked_at)) = session {
+        family_id = Some(resolved_family_id.clone());
+        if revoked_at.is_some() {
+            revocation = LogoutServerRevocation::AlreadyRevoked;
+        } else {
+            let affected = sqlx::query(
+                r#"
+                UPDATE auth_refresh_sessions
+                SET revoked_at = NOW(), revoke_reason = 'logout', updated_at = NOW()
+                WHERE family_id = $1 AND revoked_at IS NULL
+                "#,
+            )
+            .bind(&resolved_family_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            revocation = if affected > 0 {
+                LogoutServerRevocation::Revoked
+            } else {
+                LogoutServerRevocation::AlreadyRevoked
+            };
+        }
+        enqueue_auth_refresh_consistency_set_with_ttl_tx(
+            state,
+            &mut *tx,
+            "auth:rt:family",
+            &resolved_family_id,
+            "revoked",
+            REFRESH_TOKEN_TTL_SECS,
+        )
+        .await?;
+        enqueue_auth_refresh_consistency_remove_set_member_tx(
+            state,
+            &mut *tx,
+            "auth:user:sessions",
+            &user_id.to_string(),
+            sid,
+        )
+        .await?;
+        enqueue_auth_refresh_consistency_delete_key_tx(state, &mut *tx, "auth:rt:session", sid)
+            .await?;
+    }
+    enqueue_auth_refresh_consistency_outbox_tx(
+        state,
+        &mut *tx,
+        AuthRefreshOutboxInsert {
+            op: AuthRefreshOutboxOp::SetWithTtl,
+            scope: "auth:rt:blacklist",
+            raw_key: jti,
+            value: "1",
+            ttl_secs: jti_ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS),
+        },
+        Some(OutboxMetricTarget::Logout),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(LogoutOwnedRefreshOutcome {
+        revocation,
+        family_id,
+    })
+}
+
+async fn logout_apply_best_effort_writes(
+    state: &AppState,
+    user_id: i64,
+    sid: &str,
+    family_id: Option<&str>,
+    jti: &str,
+    jti_ttl_secs: u64,
+) -> bool {
+    let mut degraded = false;
+    if let Some(fid) = family_id {
+        let family_ret = state
+            .redis
+            .set_value_with_ttl("auth:rt:family", fid, "revoked", REFRESH_TOKEN_TTL_SECS)
+            .await;
+        if let Err(err) = family_ret {
+            tracing::warn!(
+                family_id = fid,
+                "best-effort set family revoked failed during logout: {}",
+                err
+            );
+            degraded = true;
+        }
+        if best_effort_remove_refresh_session_index(state, user_id, sid).await {
+            degraded = true;
+        }
+    }
+    let blacklist_ret = state
+        .redis
+        .set_value_with_ttl(
+            "auth:rt:blacklist",
+            jti,
+            "1",
+            jti_ttl_secs.max(AUTH_REFRESH_BLACKLIST_MIN_TTL_SECS),
+        )
+        .await;
+    if let Err(err) = blacklist_ret {
+        tracing::warn!(
+            jti = %jti,
+            "best-effort set refresh blacklist failed during logout: {}",
+            err
+        );
+        degraded = true;
+    }
+    degraded
 }
 
 async fn issue_auth_success_response(
@@ -3443,6 +3911,44 @@ fn validate_refresh_csrf_headers(headers: &HeaderMap) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_logout_intent_headers(headers: &HeaderMap) -> Result<(), AppError> {
+    let requested_with = headers
+        .get("x-requested-with")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| AppError::AuthError("auth_logout_invalid_request".to_string()))?;
+    if requested_with != "xmlhttprequest" && requested_with != "fetch" {
+        return Err(AppError::AuthError(
+            "auth_logout_invalid_request".to_string(),
+        ));
+    }
+
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        if !crate::is_allowed_local_origin(origin) {
+            return Err(AppError::AuthError(
+                "auth_logout_invalid_request".to_string(),
+            ));
+        }
+    }
+
+    if let Some(referer) = headers.get(header::REFERER).and_then(|v| v.to_str().ok()) {
+        if !is_allowed_local_referer(referer) {
+            return Err(AppError::AuthError(
+                "auth_logout_invalid_request".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn push_logout_warning(warnings: &mut Vec<String>, code: &str) {
+    if warnings.iter().any(|existing| existing == code) {
+        return;
+    }
+    warnings.push(code.to_string());
+}
+
 fn set_refresh_cookie_header(
     headers: &mut HeaderMap,
     refresh_token: &str,
@@ -3728,6 +4234,159 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert_eq!(depth_after, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_should_reject_when_intent_header_missing() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let user = state.dk.verify_access(&auth.access_token)?.user;
+
+        let err = match logout_handler(Extension(user), State(state), HeaderMap::new()).await {
+            Ok(_) => panic!("logout should reject when intent header missing"),
+            Err(err) => err,
+        };
+        match err {
+            AppError::AuthError(code) => assert_eq!(code, "auth_logout_invalid_request"),
+            _ => panic!("expected auth error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_should_return_logged_out_when_refresh_missing() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let user = state.dk.verify_access(&auth.access_token)?.user;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let response = logout_handler(Extension(user), State(state), headers)
+            .await?
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(SET_COOKIE).is_some());
+        let body = response.into_body().collect().await?.to_bytes();
+        let output: LogoutOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.logout_state, "logged_out");
+        assert_eq!(output.server_revocation, "skipped");
+        assert!(!output.degraded);
+        assert!(output
+            .warnings
+            .iter()
+            .any(|code| code == "auth_logout_invalid_refresh_context"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_should_enqueue_outbox_jobs_for_owned_refresh() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let set_cookie = signin
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let cookie = set_cookie.split(';').next().unwrap_or_default().to_string();
+        let signin_body = signin.into_body().collect().await?.to_bytes();
+        let auth: AuthOutput = serde_json::from_slice(&signin_body)?;
+        let user = state.dk.verify_access(&auth.access_token)?.user;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie)?);
+        headers.insert(
+            header::HeaderName::from_static("x-requested-with"),
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
+        let response = logout_handler(Extension(user), State(state.clone()), headers)
+            .await?
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await?.to_bytes();
+        let output: LogoutOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.logout_state, "logged_out");
+        assert_eq!(output.server_revocation, "revoked");
+
+        let set_with_ttl_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL AND op_type = 'set_with_ttl'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let delete_key_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL AND op_type = 'delete_key'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        let remove_member_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM auth_refresh_consistency_outbox_jobs WHERE delivered_at IS NULL AND op_type = 'remove_set_member'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert!(set_with_ttl_count >= 2);
+        assert!(delete_key_count >= 1);
+        assert!(remove_member_count >= 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn signin_should_create_distinct_family_ids_per_session() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let signin_a = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let signin_b = signin_handler(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SigninUser::new("tchen@acme.org", "123456")),
+        )
+        .await?
+        .into_response();
+        let body_a = signin_a.into_body().collect().await?.to_bytes();
+        let body_b = signin_b.into_body().collect().await?.to_bytes();
+        let auth_a: AuthOutput = serde_json::from_slice(&body_a)?;
+        let auth_b: AuthOutput = serde_json::from_slice(&body_b)?;
+        let user_a = state.dk.verify_access(&auth_a.access_token)?.user;
+        let user_b = state.dk.verify_access(&auth_b.access_token)?.user;
+        assert_eq!(user_a.id, user_b.id);
+
+        let family_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(DISTINCT family_id)::bigint FROM auth_refresh_sessions WHERE user_id = $1",
+        )
+        .bind(user_a.id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert!(family_count >= 2);
         Ok(())
     }
 
