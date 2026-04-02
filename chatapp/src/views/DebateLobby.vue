@@ -2,20 +2,54 @@
   <div class="flex h-screen echo-shell">
     <Sidebar />
     <div class="echo-main">
-      <div class="max-w-6xl mx-auto p-6 lg:p-8 space-y-4 echo-fade-in">
-        <div class="echo-panel-strong p-5 flex items-start justify-between gap-3">
-          <div>
-            <div class="text-[11px] uppercase tracking-[0.26em] text-slate-500">Debate Lobby</div>
-            <h1 class="text-2xl font-semibold text-slate-900 mt-1">辩论场次总览</h1>
-            <p class="text-sm text-slate-600 mt-1">按“进行中/待开启”分流：进行中可观战，待开启可选阵营加入。</p>
+      <div class="max-w-6xl mx-auto p-6 lg:p-8 space-y-5 echo-fade-in">
+        <div class="echo-panel-strong relative overflow-hidden p-6 lg:p-7">
+          <div class="absolute inset-0 bg-gradient-to-br from-sky-100/80 via-white to-indigo-100/70"></div>
+          <div class="absolute -right-20 -top-16 w-72 h-72 rounded-full bg-sky-200/35 blur-3xl"></div>
+          <div class="absolute -left-28 -bottom-20 w-72 h-72 rounded-full bg-indigo-200/35 blur-3xl"></div>
+          <div class="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="max-w-2xl">
+              <div class="text-[11px] uppercase tracking-[0.3em] text-slate-500">Debate Lobby</div>
+              <h1 class="text-[30px] leading-tight font-semibold text-slate-900 mt-2">辩论场次总览</h1>
+              <p class="text-sm text-slate-700 mt-2">
+                按“进行中 / 待开启 / 已结束”快速分流，直接完成观战、选边加入和赛后复盘入口跳转。
+              </p>
+              <div class="mt-4 flex flex-wrap gap-2 text-xs">
+                <span class="inline-flex items-center rounded-full bg-white/85 border border-slate-200 px-3 py-1 text-slate-700">
+                  当前可见场次 {{ filteredSessions.length }}
+                </span>
+                <span class="inline-flex items-center rounded-full bg-white/85 border border-slate-200 px-3 py-1 text-slate-700">
+                  可加入 {{ joinableSessionCount }}
+                </span>
+                <span class="inline-flex items-center rounded-full bg-white/85 border border-slate-200 px-3 py-1 text-slate-700">
+                  全部场次 {{ sessions.length }}
+                </span>
+              </div>
+            </div>
+            <div class="w-full lg:w-[300px] space-y-3">
+              <button
+                @click="refreshLobby"
+                :disabled="loading"
+                class="echo-btn-primary disabled:opacity-60 w-full"
+              >
+                {{ loading ? '刷新中...' : '刷新' }}
+              </button>
+              <div class="grid grid-cols-3 gap-2 text-center">
+                <div class="rounded-xl border border-emerald-200/80 bg-emerald-50/70 px-2 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-emerald-700">Live</div>
+                  <div class="text-lg font-semibold text-emerald-900">{{ liveSessions.length }}</div>
+                </div>
+                <div class="rounded-xl border border-sky-200/80 bg-sky-50/70 px-2 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-sky-700">Upcoming</div>
+                  <div class="text-lg font-semibold text-sky-900">{{ upcomingSessions.length }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-200/90 bg-slate-50/70 px-2 py-2">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-600">Ended</div>
+                  <div class="text-lg font-semibold text-slate-800">{{ endedSessions.length }}</div>
+                </div>
+              </div>
+            </div>
           </div>
-          <button
-            @click="refreshLobby"
-            :disabled="loading"
-            class="echo-btn-primary disabled:opacity-60"
-          >
-            {{ loading ? '刷新中...' : '刷新' }}
-          </button>
         </div>
 
         <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-sm">
@@ -25,7 +59,7 @@
           {{ guardNoticeText }}
         </div>
 
-        <div class="echo-panel p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
+        <div class="echo-panel p-4 lg:p-5 grid grid-cols-1 md:grid-cols-6 gap-3">
           <div>
             <div class="text-xs uppercase text-slate-500 mb-1">Topic</div>
             <select
@@ -91,14 +125,20 @@
             <div
               v-for="session in searchActionSessions"
               :key="`search-hit-${session.id}`"
-              class="border rounded-xl p-3 bg-white/80 border-slate-200 flex flex-wrap items-center justify-between gap-2"
+              class="border rounded-xl p-3 bg-white/85 border-slate-200 flex flex-wrap items-center justify-between gap-2"
             >
               <div>
                 <div class="text-sm font-semibold text-slate-900">
                   Session {{ session.id }} · {{ topicTitle(sessionTopicId(session)) }}
                 </div>
                 <div class="text-xs text-slate-600 mt-1">
-                  status={{ session.status }} · lane={{ getSessionLane(session) }}
+                  <span
+                    class="inline-flex items-center rounded-full px-2 py-0.5 border mr-1"
+                    :class="laneBadgeClass(getSessionLane(session))"
+                  >
+                    {{ laneLabel(getSessionLane(session)) }}
+                  </span>
+                  status={{ session.status }}
                 </div>
               </div>
               <div class="flex flex-wrap gap-2">
@@ -138,17 +178,20 @@
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div class="echo-panel p-3">
-            <div class="text-xs uppercase text-slate-500">进行中（观战）</div>
-            <div class="text-xl font-semibold text-slate-900 mt-1">{{ liveSessions.length }}</div>
+          <div class="echo-panel p-4 border-emerald-200/70">
+            <div class="text-xs uppercase tracking-[0.2em] text-emerald-700">进行中（观战）</div>
+            <div class="text-2xl font-semibold text-emerald-900 mt-1">{{ liveSessions.length }}</div>
+            <div class="text-xs text-emerald-800/80 mt-1">正在实时对抗，可即时进入房间观战。</div>
           </div>
-          <div class="echo-panel p-3">
-            <div class="text-xs uppercase text-slate-500">待开启（可加入）</div>
-            <div class="text-xl font-semibold text-slate-900 mt-1">{{ upcomingSessions.length }}</div>
+          <div class="echo-panel p-4 border-sky-200/70">
+            <div class="text-xs uppercase tracking-[0.2em] text-sky-700">待开启（可加入）</div>
+            <div class="text-2xl font-semibold text-sky-900 mt-1">{{ upcomingSessions.length }}</div>
+            <div class="text-xs text-sky-800/80 mt-1">优先加入阵营，卡位正反方发言席位。</div>
           </div>
-          <div class="echo-panel p-3">
-            <div class="text-xs uppercase text-slate-500">已结束</div>
-            <div class="text-xl font-semibold text-slate-900 mt-1">{{ endedSessions.length }}</div>
+          <div class="echo-panel p-4 border-slate-200/80">
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-600">已结束</div>
+            <div class="text-2xl font-semibold text-slate-900 mt-1">{{ endedSessions.length }}</div>
+            <div class="text-xs text-slate-600 mt-1">查看历史房间与判决结果，便于赛后复盘。</div>
           </div>
         </div>
 
@@ -166,7 +209,7 @@
               <div
                 v-for="session in liveSessions"
                 :key="`live-${session.id}`"
-                class="rounded-xl border p-4 space-y-3 bg-white/85 border-slate-200"
+                class="rounded-2xl border p-4 space-y-3 bg-white/90 border-emerald-200/70 shadow-sm"
               >
                 <div class="flex items-start justify-between gap-3">
                   <div>
@@ -175,7 +218,12 @@
                   </div>
                   <div class="text-right">
                     <div class="text-xs uppercase text-slate-500">Status</div>
-                    <div class="text-sm font-semibold text-slate-900">{{ session.status }}</div>
+                    <div
+                      class="text-xs font-semibold inline-flex items-center rounded-full px-2 py-1 border mt-1"
+                      :class="laneBadgeClass('live')"
+                    >
+                      {{ session.status }}
+                    </div>
                   </div>
                 </div>
 
@@ -211,7 +259,7 @@
               <div
                 v-for="session in upcomingSessions"
                 :key="`upcoming-${session.id}`"
-                class="rounded-xl border p-4 space-y-3 bg-white/85 border-slate-200"
+                class="rounded-2xl border p-4 space-y-3 bg-white/90 border-sky-200/70 shadow-sm"
               >
                 <div class="flex items-start justify-between gap-3">
                   <div>
@@ -220,7 +268,12 @@
                   </div>
                   <div class="text-right">
                     <div class="text-xs uppercase text-slate-500">Status</div>
-                    <div class="text-sm font-semibold text-slate-900">{{ session.status }}</div>
+                    <div
+                      class="text-xs font-semibold inline-flex items-center rounded-full px-2 py-1 border mt-1"
+                      :class="laneBadgeClass('upcoming')"
+                    >
+                      {{ session.status }}
+                    </div>
                   </div>
                 </div>
 
@@ -270,7 +323,7 @@
               <div
                 v-for="session in endedSessions"
                 :key="`ended-${session.id}`"
-                class="rounded-xl border p-4 space-y-3 bg-white/85 border-slate-200"
+                class="rounded-2xl border p-4 space-y-3 bg-white/90 border-slate-200 shadow-sm"
               >
                 <div class="flex items-start justify-between gap-3">
                   <div>
@@ -279,7 +332,12 @@
                   </div>
                   <div class="text-right">
                     <div class="text-xs uppercase text-slate-500">Status</div>
-                    <div class="text-sm font-semibold text-slate-900">{{ session.status }}</div>
+                    <div
+                      class="text-xs font-semibold inline-flex items-center rounded-full px-2 py-1 border mt-1"
+                      :class="laneBadgeClass('ended')"
+                    >
+                      {{ session.status }}
+                    </div>
                   </div>
                 </div>
                 <div class="text-xs text-slate-500">
@@ -402,6 +460,9 @@ export default {
     endedSessions() {
       return this.laneBuckets.ended;
     },
+    joinableSessionCount() {
+      return this.filteredSessions.filter((session) => session?.joinable).length;
+    },
     hasAnyVisibleSessions() {
       return this.filteredSessions.length > 0;
     },
@@ -456,6 +517,24 @@ export default {
     },
     getSessionLane(session) {
       return classifyLobbySessionLane(session);
+    },
+    laneLabel(lane) {
+      if (lane === 'live') {
+        return '进行中';
+      }
+      if (lane === 'upcoming') {
+        return '待开启';
+      }
+      return '已结束';
+    },
+    laneBadgeClass(lane) {
+      if (lane === 'live') {
+        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      }
+      if (lane === 'upcoming') {
+        return 'bg-sky-50 text-sky-700 border-sky-200';
+      }
+      return 'bg-slate-50 text-slate-600 border-slate-200';
     },
     sessionTopicId(session) {
       return normalizeSessionTopicId(session);
