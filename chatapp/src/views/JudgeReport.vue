@@ -828,14 +828,7 @@ export default {
       let lastRunErrorMessage = '';
       this.autoRefreshBusy = true;
       try {
-        const runAutoRefreshWithRetrySafe = runAutoRefreshWithRetry as unknown as (payload: Record<string, unknown>) => Promise<{
-          ok: boolean;
-          attempt: number;
-          sourceEventType: string;
-          at: number;
-          error?: unknown;
-        }>;
-        const result = await runAutoRefreshWithRetrySafe({
+        const result = await runAutoRefreshWithRetry({
           fetchOnce: () => this.fetchReportForSession(pending.sessionId, { silent: true, throwOnError: true }),
           sourceEventType: pending.sourceEventType,
           shouldRetry: shouldRetryAutoRefresh,

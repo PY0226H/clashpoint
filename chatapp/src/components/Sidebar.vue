@@ -162,11 +162,12 @@
   </aside>
 </template>
 
-<script>
+<script lang="ts">
+import { defineComponent } from 'vue';
 import { pickDefaultPeerUserId } from '../channel-utils';
 import { hasAnyOpsPermission, normalizeOpsRbacMe } from '../ops-permission-utils.ts';
 
-export default {
+export default defineComponent({
   data() {
     return {
       dropdownVisible: false,
@@ -285,8 +286,8 @@ export default {
     document.addEventListener('click', this.handleOutsideClick);
     this.ensureOpsRbacSnapshot();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     document.removeEventListener('click', this.handleOutsideClick);
   },
-};
+});
 </script>

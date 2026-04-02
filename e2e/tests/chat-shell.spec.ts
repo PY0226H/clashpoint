@@ -140,6 +140,7 @@ test('chat page should render refreshed workspace shell', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '会话工作台' })).toBeVisible();
   await expect(page.getByText('消息流', { exact: true })).toBeVisible();
   await expect(page.getByText('工作区动作')).toBeVisible();
+  await expect(page.getByText('支持上传图片后随消息发送')).toBeVisible();
   await expect(page.getByText('欢迎来到 EchoIsle 聊天室')).toBeVisible();
   await expect.poll(() => messagesCalls).toBeGreaterThan(0);
 });

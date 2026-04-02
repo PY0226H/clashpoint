@@ -37,7 +37,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import { getUrlBase } from '../utils';
 
 export default {

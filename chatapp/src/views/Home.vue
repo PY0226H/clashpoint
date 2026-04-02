@@ -204,17 +204,11 @@ export default {
     },
     searchIndex() {
       const channels = [...this.groupChannels, ...this.singleChannels];
-      const buildHomeSearchIndexSafe = buildHomeSearchIndex as unknown as (payload: {
-        channels: unknown[];
-        topics: unknown[];
-        sessions: unknown[];
-        topicTitleById: (topicId: unknown) => string;
-      }) => unknown[];
-      return buildHomeSearchIndexSafe({
+      return buildHomeSearchIndex({
         channels,
         topics: this.topics,
         sessions: this.sessions,
-        topicTitleById: (topicId: unknown) => {
+        topicTitleById: (topicId) => {
           const topic = this.topics.find((item) => item.id === topicId);
           return topic?.title || '';
         },
