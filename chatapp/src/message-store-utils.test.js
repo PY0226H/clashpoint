@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertMessage } from './message-store-utils.js';
+import { upsertMessage } from './message-store-utils';
 
 test('upsertMessage should append new message', () => {
   const ret = upsertMessage([], {
@@ -29,4 +29,3 @@ test('upsertMessage should replace duplicate message by id', () => {
   assert.equal(ret.length, 1);
   assert.equal(ret[0].content, 'new');
 });
-

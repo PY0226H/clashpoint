@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildNotificationCenterItems,
   countNotificationCenterItems,
-} from './notification-center-utils.js';
+} from './notification-center-utils';
 
 test('buildNotificationCenterItems should include judge and draw events sorted by time', () => {
   const items = buildNotificationCenterItems({

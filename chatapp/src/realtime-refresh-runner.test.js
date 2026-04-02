@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { runAutoRefreshWithRetry } from './realtime-refresh-runner.js';
+import { runAutoRefreshWithRetry } from './realtime-refresh-runner';
 
 const noSleep = async () => {};
 

@@ -128,7 +128,7 @@
 
 <script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
-import { validateSetPasswordInput } from '../auth-password-utils.js';
+import { validateSetPasswordInput } from '../auth-password-utils';
 
 export default {
   components: {

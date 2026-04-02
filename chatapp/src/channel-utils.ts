@@ -1,10 +1,21 @@
-export function pickDefaultPeerUserId(usersMap = {}, selfUserId = null) {
+type ChannelLike = {
+  id?: unknown;
+};
+
+type UserLike = {
+  id?: unknown;
+};
+
+export function pickDefaultPeerUserId(
+  usersMap: Record<string, UserLike> = {},
+  selfUserId: unknown = null,
+) {
   const selfId = Number(selfUserId);
   if (!Number.isFinite(selfId)) {
     return null;
   }
 
-  const users = Object.values(usersMap || {});
+  const users = Object.values(usersMap || {}) as UserLike[];
   const peer = users.find((user) => Number(user?.id) !== selfId);
   if (!peer) {
     return null;
@@ -13,7 +24,7 @@ export function pickDefaultPeerUserId(usersMap = {}, selfUserId = null) {
   return Number.isFinite(peerId) ? peerId : null;
 }
 
-export function pickActiveChannelId(channels = [], preferredId = null) {
+export function pickActiveChannelId(channels: ChannelLike[] = [], preferredId: unknown = null) {
   if (!Array.isArray(channels) || channels.length === 0) {
     return null;
   }
@@ -29,4 +40,3 @@ export function pickActiveChannelId(channels = [], preferredId = null) {
   const first = Number(channels[0]?.id);
   return Number.isFinite(first) ? first : null;
 }
-

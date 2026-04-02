@@ -94,6 +94,7 @@ test('register page should render refreshed auth shell', async ({ page }) => {
   await page.goto('http://127.0.0.1:1420/register');
   await expect(page.getByRole('heading', { name: '注册账号' })).toBeVisible();
   await expect(page.getByRole('button', { name: '手机号注册' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '邮箱注册(绑手机)' })).toBeVisible();
   await expect(page.getByRole('button', { name: '发码' })).toBeVisible();
 });
 
@@ -103,6 +104,7 @@ test('phone bind page should render refreshed auth shell', async ({ page }) => {
 
   await page.goto('http://127.0.0.1:1420/bind-phone');
   await expect(page.getByRole('heading', { name: '绑定手机号' })).toBeVisible();
+  await expect(page.getByText('为了继续使用功能，请先完成手机号验证码绑定')).toBeVisible();
   await expect(page.getByRole('button', { name: '发送验证码' })).toBeVisible();
   await expect(page.getByRole('button', { name: '绑定并继续' })).toBeVisible();
 });
@@ -135,6 +137,7 @@ test('ops page should render refreshed desktop shell', async ({ page }) => {
 
   await page.goto('http://127.0.0.1:1420/debate/ops');
   await expect(page.getByRole('heading', { name: '运营控制台' })).toBeVisible();
+  await expect(page.getByText('创建辩题、排期场次并管理定时窗口，保证“到点开放、过时收口”。')).toBeVisible();
   await expect(page.getByText('当前身份：')).toBeVisible();
   await expect(page.getByRole('button', { name: '刷新 Trace/Replay' })).toBeVisible();
 });

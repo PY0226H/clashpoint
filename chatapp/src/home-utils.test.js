@@ -6,7 +6,7 @@ import {
   filterHomeSearchItems,
   normalizeHomeSearchQuery,
   summarizeDebateSessionStats,
-} from './home-utils.js';
+} from './home-utils';
 
 test('normalizeHomeSearchQuery should trim and lowercase', () => {
   assert.equal(normalizeHomeSearchQuery('  Pro Duel  '), 'pro duel');

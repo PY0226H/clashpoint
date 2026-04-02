@@ -1,8 +1,48 @@
-export function normalizeHomeSearchQuery(raw) {
+type HomeChannel = {
+  id?: unknown;
+  type?: unknown;
+  name?: unknown;
+};
+
+type HomeTopic = {
+  id?: unknown;
+  title?: unknown;
+  category?: unknown;
+};
+
+type HomeSession = {
+  id?: unknown;
+  topicId?: unknown;
+  status?: unknown;
+  joinable?: unknown;
+};
+
+type HomeSearchItem = {
+  key: string;
+  kind: 'chat' | 'topic' | 'session';
+  title: string;
+  subtitle: string;
+  path: string;
+  query: Record<string, string> | null;
+  keywords: string[];
+};
+
+type BuildHomeSearchIndexInput = {
+  channels?: HomeChannel[];
+  topics?: HomeTopic[];
+  sessions?: HomeSession[];
+  topicTitleById?: (topicId: unknown) => string;
+};
+
+type FilterHomeSearchItemsOptions = {
+  limit?: number;
+};
+
+export function normalizeHomeSearchQuery(raw: unknown): string {
   return String(raw ?? '').trim().toLowerCase();
 }
 
-export function summarizeDebateSessionStats(sessions = []) {
+export function summarizeDebateSessionStats(sessions: HomeSession[] = []) {
   const stats = {
     total: 0,
     joinable: 0,
@@ -27,7 +67,7 @@ export function summarizeDebateSessionStats(sessions = []) {
   return stats;
 }
 
-function toSearchKeywords(parts = []) {
+function toSearchKeywords(parts: unknown[] = []): string[] {
   return parts
     .map((part) => normalizeHomeSearchQuery(part))
     .filter((part) => part.length > 0);
@@ -37,9 +77,9 @@ export function buildHomeSearchIndex({
   channels = [],
   topics = [],
   sessions = [],
-  topicTitleById = () => '',
-} = {}) {
-  const items = [];
+  topicTitleById = (_topicId: unknown) => '',
+}: BuildHomeSearchIndexInput = {}): HomeSearchItem[] {
+  const items: HomeSearchItem[] = [];
 
   for (const channel of channels) {
     const id = channel?.id;
@@ -100,7 +140,11 @@ export function buildHomeSearchIndex({
   return items;
 }
 
-export function filterHomeSearchItems(items = [], query = '', { limit = 12 } = {}) {
+export function filterHomeSearchItems(
+  items: HomeSearchItem[] = [],
+  query: unknown = '',
+  { limit = 12 }: FilterHomeSearchItemsOptions = {},
+): HomeSearchItem[] {
   const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 12;
   const normalizedQuery = normalizeHomeSearchQuery(query);
   if (!normalizedQuery) {

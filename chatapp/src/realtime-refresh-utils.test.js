@@ -3,7 +3,7 @@ import {
   AUTO_REFRESH_MAX_ATTEMPTS,
   calcAutoRefreshDelayMs,
   shouldRetryAutoRefresh,
-} from './realtime-refresh-utils.js';
+} from './realtime-refresh-utils';
 
 assert.equal(AUTO_REFRESH_MAX_ATTEMPTS, 3);
 assert.equal(calcAutoRefreshDelayMs(1), 0);

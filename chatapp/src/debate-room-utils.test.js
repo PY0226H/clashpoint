@@ -17,7 +17,7 @@ import {
   shouldShowManualJudgeTrigger,
   shouldPollJudgeReportStatus,
   toNonNegativeInt,
-} from './debate-room-utils.js';
+} from './debate-room-utils';
 
 const wsUrl = buildDebateRoomWsUrl({
   notifyBase: 'http://localhost:6687/events',

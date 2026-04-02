@@ -1,7 +1,13 @@
-export function formatMessageDateForStore(timestamp) {
-  const date = new Date(timestamp);
+type StoreMessage = {
+  id?: unknown;
+  createdAt?: unknown;
+  [key: string]: unknown;
+};
+
+export function formatMessageDateForStore(timestamp: unknown): string {
+  const date = timestamp instanceof Date ? timestamp : new Date((timestamp as string | number) ?? '');
   const now = new Date();
-  const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
   const timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (diffDays === 0) {
@@ -13,7 +19,9 @@ export function formatMessageDateForStore(timestamp) {
   return `${timeString}, ${date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
-export function toDisplayMessage(message) {
+export function toDisplayMessage(
+  message: StoreMessage | null | undefined,
+): StoreMessage | null | undefined {
   if (!message) {
     return message;
   }
@@ -23,8 +31,11 @@ export function toDisplayMessage(message) {
   };
 }
 
-export function upsertMessage(messages = [], rawMessage) {
-  const next = Array.isArray(messages) ? [...messages] : [];
+export function upsertMessage(
+  messages: StoreMessage[] = [],
+  rawMessage: StoreMessage | null | undefined,
+): StoreMessage[] {
+  const next: StoreMessage[] = Array.isArray(messages) ? [...messages] : [];
   const message = toDisplayMessage(rawMessage);
   if (!message) {
     return next;

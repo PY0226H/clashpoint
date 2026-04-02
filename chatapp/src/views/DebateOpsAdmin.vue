@@ -505,7 +505,7 @@
           <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
             <select v-model="roleForm.userId" class="border rounded px-3 py-2 text-sm">
               <option value="">选择用户</option>
-              <option v-for="user in platformUsers()" :key="user.id" :value="String(user.id)">
+              <option v-for="user in platformUsers()" :key="String(user.id || '')" :value="String(user.id)">
                 {{ user.fullname }} (#{{ user.id }}) · {{ userAccountIdentifier(user) }}
               </option>
             </select>
@@ -951,7 +951,7 @@
                 {{ observabilityThresholdSettingsOpen ? '收起阈值设置' : '阈值设置' }}
               </button>
               <button
-                @click="refreshJudgeObservability"
+                @click="refreshJudgeObservability()"
                 :disabled="observabilityLoading || !canJudgeReview"
                 class="echo-btn-compact disabled:opacity-50"
               >
@@ -1002,7 +1002,7 @@
             </label>
             <div class="flex items-end gap-2">
               <button
-                @click="refreshJudgeObservability"
+                @click="refreshJudgeObservability()"
                 :disabled="observabilityLoading || !canJudgeReview"
                 class="px-3 py-2 rounded bg-slate-700 text-white text-xs disabled:opacity-50"
               >
@@ -1381,7 +1381,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import Sidebar from '../components/Sidebar.vue';
 import {
   buildQuickUpdateSessionPayload,
@@ -1626,7 +1626,7 @@ export default {
       return !!this.opsRbacMe?.permissions?.roleManage;
     },
     traceReplayFailureTypeOptions() {
-      const values = new Set();
+      const values = new Set<string>();
       for (const row of this.traceReplayRows) {
         const value = String(row?.contractFailureType || row?.errorCode || '').trim();
         if (value) {
@@ -2115,8 +2115,9 @@ export default {
       return date.toISOString();
     },
     platformUsers() {
-      const usersMap = this.$store?.state?.users || {};
-      return Object.values(usersMap).sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+      const usersMap = (this.$store?.state?.users || {}) as Record<string, Record<string, unknown>>;
+      const users = Object.values(usersMap);
+      return users.sort((a, b) => Number(a?.id || 0) - Number(b?.id || 0));
     },
     roleLabel(role) {
       const value = String(role || '');

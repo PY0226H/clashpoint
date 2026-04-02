@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickActiveChannelId, pickDefaultPeerUserId } from './channel-utils.js';
+import { pickActiveChannelId, pickDefaultPeerUserId } from './channel-utils';
 
 test('pickDefaultPeerUserId should return first non-self user id', () => {
   const users = {
@@ -30,4 +30,3 @@ test('pickActiveChannelId should fallback to first channel', () => {
 test('pickActiveChannelId should return null for empty channels', () => {
   assert.equal(pickActiveChannelId([], 1), null);
 });
-

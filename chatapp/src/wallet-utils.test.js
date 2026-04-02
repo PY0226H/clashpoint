@@ -5,7 +5,7 @@ import {
   buildMockReceiptData,
   buildMockTransactionId,
   normalizeWalletLedgerLimit,
-} from './wallet-utils.js';
+} from './wallet-utils';
 
 test('normalizeWalletLedgerLimit should clamp into [1, 100]', () => {
   assert.equal(normalizeWalletLedgerLimit(undefined), 20);

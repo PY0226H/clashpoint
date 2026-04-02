@@ -6,7 +6,7 @@ import {
   isDrawVoteOpen,
   mergeJudgeReportWindow,
   normalizeSessionId,
-} from './judge-report-utils.js';
+} from './judge-report-utils';
 
 const currentPayload = {
   report: {

@@ -3,7 +3,7 @@ import {
   normalizePasswordInput,
   normalizeSmsCodeInput,
   validateSetPasswordInput,
-} from './auth-password-utils.js';
+} from './auth-password-utils';
 
 assert.equal(normalizePasswordInput('  abc123  '), 'abc123');
 assert.equal(normalizePasswordInput(null), '');
