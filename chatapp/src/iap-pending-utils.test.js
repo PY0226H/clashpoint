@@ -19,7 +19,7 @@ import {
   settlePendingIapSuccess,
   upsertPendingIap,
   writePendingIapQueue,
-} from './iap-pending-utils.js';
+} from './iap-pending-utils';
 
 function buildItem(overrides = {}) {
   return {

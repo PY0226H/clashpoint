@@ -7,7 +7,7 @@ import {
   sendUserLoginEvent,
   sendUserLogoutEvent,
   sendUserRegisterEvent,
-} from './event.js';
+} from './event';
 
 function decodeFirstEvent(calls) {
   assert.equal(calls.length, 1);

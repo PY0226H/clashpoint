@@ -6,7 +6,7 @@ import {
   getOpsSessionWindowState,
   nextQuickStatusActions,
   normalizeOpsSessionStatus,
-} from './debate-ops-utils.js';
+} from './debate-ops-utils';
 
 assert.equal(normalizeOpsSessionStatus(' running '), 'running');
 assert.equal(normalizeOpsSessionStatus('INVALID'), 'scheduled');

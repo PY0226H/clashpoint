@@ -6,7 +6,7 @@ import {
   normalizeIapNativeBridgeDiagnostics,
   normalizeIapPurchasePayload,
   parseNativeBridgeErrorMessage,
-} from './iap-bridge.js';
+} from './iap-bridge';
 
 test('isTauriRuntime should detect runtime markers', () => {
   const previousWindow = globalThis.window;

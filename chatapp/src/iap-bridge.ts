@@ -1,13 +1,51 @@
 import { invoke } from '@tauri-apps/api/core';
 
-export function isTauriRuntime() {
+type LoosePayload = Record<string, unknown>;
+
+type IapPurchasePayload = {
+  productId: string;
+  transactionId: string;
+  originalTransactionId: string | null;
+  receiptData: string;
+  source: string;
+};
+
+type NativeBridgeError = {
+  code: string;
+  message: string;
+};
+
+type IapNativeBridgeDiagnostics = {
+  runtimeEnv: unknown;
+  runtimeIsProduction: boolean;
+  purchaseMode: string;
+  allowedProductIds: string[];
+  invalidAllowedProductIds: string[];
+  allowedProductIdsConfigured: boolean;
+  nativeBridgeBin: string;
+  nativeBridgeArgs: string[];
+  nativeBridgeBinIsAbsolute: boolean;
+  nativeBridgeBinExists: boolean;
+  nativeBridgeBinExecutable: boolean;
+  hasSimulateArg: boolean;
+  jsonOverridePresent: boolean;
+  productionPolicyOk: boolean;
+  productionPolicyError: string | null;
+  readyForNativePurchase: boolean;
+};
+
+export function isTauriRuntime(): boolean {
   if (typeof window === 'undefined' || !window) {
     return false;
   }
-  return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+  const runtimeWindow = window as Window & {
+    __TAURI_INTERNALS__?: unknown;
+    __TAURI__?: unknown;
+  };
+  return Boolean(runtimeWindow.__TAURI_INTERNALS__ || runtimeWindow.__TAURI__);
 }
 
-export function normalizeIapPurchasePayload(payload) {
+export function normalizeIapPurchasePayload(payload: LoosePayload | null | undefined): IapPurchasePayload {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('invalid iap purchase payload');
   }
@@ -30,7 +68,7 @@ export function normalizeIapPurchasePayload(payload) {
   };
 }
 
-export function parseNativeBridgeErrorMessage(message) {
+export function parseNativeBridgeErrorMessage(message: unknown): NativeBridgeError | null {
   const raw = String(message || '').trim();
   const prefix = 'native_iap_bridge_error:';
   if (!raw.startsWith(prefix)) {
@@ -49,28 +87,32 @@ export function parseNativeBridgeErrorMessage(message) {
   return { code, message: errorMessage };
 }
 
-export function normalizeIapNativeBridgeDiagnostics(payload) {
+export function normalizeIapNativeBridgeDiagnostics(
+  payload: LoosePayload | null | undefined,
+): IapNativeBridgeDiagnostics {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('invalid iap native bridge diagnostics payload');
   }
+  const allowedProductIdsRaw = payload.allowedProductIds ?? payload.allowed_product_ids;
+  const invalidAllowedProductIdsRaw =
+    payload.invalidAllowedProductIds ?? payload.invalid_allowed_product_ids;
+  const nativeBridgeArgsRaw = payload.nativeBridgeArgs ?? payload.native_bridge_args;
   return {
     runtimeEnv: payload.runtimeEnv ?? payload.runtime_env ?? null,
     runtimeIsProduction: Boolean(payload.runtimeIsProduction ?? payload.runtime_is_production),
     purchaseMode: String(payload.purchaseMode ?? payload.purchase_mode ?? '').trim() || 'unknown',
-    allowedProductIds: Array.isArray(payload.allowedProductIds ?? payload.allowed_product_ids)
-      ? (payload.allowedProductIds ?? payload.allowed_product_ids).map((v) => String(v))
+    allowedProductIds: Array.isArray(allowedProductIdsRaw)
+      ? (allowedProductIdsRaw as unknown[]).map((v) => String(v))
       : [],
-    invalidAllowedProductIds: Array.isArray(
-      payload.invalidAllowedProductIds ?? payload.invalid_allowed_product_ids,
-    )
-      ? (payload.invalidAllowedProductIds ?? payload.invalid_allowed_product_ids).map((v) => String(v))
+    invalidAllowedProductIds: Array.isArray(invalidAllowedProductIdsRaw)
+      ? (invalidAllowedProductIdsRaw as unknown[]).map((v) => String(v))
       : [],
     allowedProductIdsConfigured: Boolean(
       payload.allowedProductIdsConfigured ?? payload.allowed_product_ids_configured,
     ),
     nativeBridgeBin: String(payload.nativeBridgeBin ?? payload.native_bridge_bin ?? '').trim(),
-    nativeBridgeArgs: Array.isArray(payload.nativeBridgeArgs ?? payload.native_bridge_args)
-      ? (payload.nativeBridgeArgs ?? payload.native_bridge_args).map((v) => String(v))
+    nativeBridgeArgs: Array.isArray(nativeBridgeArgsRaw)
+      ? (nativeBridgeArgsRaw as unknown[]).map((v) => String(v))
       : [],
     nativeBridgeBinIsAbsolute: Boolean(
       payload.nativeBridgeBinIsAbsolute ?? payload.native_bridge_bin_is_absolute,
@@ -91,15 +133,15 @@ export function normalizeIapNativeBridgeDiagnostics(payload) {
   };
 }
 
-export async function getIapNativeBridgeDiagnostics() {
+export async function getIapNativeBridgeDiagnostics(): Promise<IapNativeBridgeDiagnostics> {
   if (!isTauriRuntime()) {
     throw new Error('tauri runtime is unavailable');
   }
-  const payload = await invoke('iap_get_native_bridge_diagnostics');
+  const payload = await invoke('iap_get_native_bridge_diagnostics') as LoosePayload;
   return normalizeIapNativeBridgeDiagnostics(payload);
 }
 
-export async function purchaseIapViaTauri(productId) {
+export async function purchaseIapViaTauri(productId: unknown): Promise<IapPurchasePayload> {
   if (!isTauriRuntime()) {
     throw new Error('tauri runtime is unavailable');
   }
@@ -108,13 +150,15 @@ export async function purchaseIapViaTauri(productId) {
     throw new Error('productId is required');
   }
   try {
-    const payload = await invoke('iap_purchase_product', { productId: normalizedProductId });
+    const payload = await invoke('iap_purchase_product', { productId: normalizedProductId }) as LoosePayload;
     return normalizeIapPurchasePayload(payload);
   } catch (error) {
-    const message = String(error?.message || error || '').trim();
+    const message = error instanceof Error
+      ? String(error.message || '').trim()
+      : String(error || '').trim();
     const parsed = parseNativeBridgeErrorMessage(message);
     if (parsed) {
-      const wrapped = new Error(parsed.message);
+      const wrapped = new Error(parsed.message) as Error & { code?: string };
       wrapped.code = parsed.code;
       throw wrapped;
     }

@@ -1,11 +1,16 @@
-import { AnalyticsEventSchema } from "../gen/messages_pb.js";
-import { create, toBinary } from "@bufbuild/protobuf";
-import { ANALYTICS_API_BASE_URL } from "../judge-refresh-summary-utils.js";
+import { AnalyticsEventSchema } from '../gen/messages_pb.js';
+import { create, toBinary } from '@bufbuild/protobuf';
+import { ANALYTICS_API_BASE_URL } from '../judge-refresh-summary-utils';
 
 const URL = `${ANALYTICS_API_BASE_URL}/event`;
+const AnalyticsSchemaAny = AnalyticsEventSchema as any;
+
+function buildAnalyticsEvent(payload: any): any {
+    return create(AnalyticsSchemaAny, payload);
+}
 
 export async function sendAppStartEvent(context, token) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "appStart",
@@ -16,7 +21,7 @@ export async function sendAppStartEvent(context, token) {
 }
 
 export async function sendAppExitEvent(context, token, exitCode) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "appExit",
@@ -30,7 +35,7 @@ export async function sendAppExitEvent(context, token, exitCode) {
 
 export async function sendUserLoginEvent(context, token, payload) {
     const authFields = await buildUserAuthFields(payload);
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "userLogin",
@@ -42,7 +47,7 @@ export async function sendUserLoginEvent(context, token, payload) {
 
 export async function sendUserLogoutEvent(context, token, payload) {
     const authFields = await buildUserAuthFields(payload);
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "userLogout",
@@ -54,7 +59,7 @@ export async function sendUserLogoutEvent(context, token, payload) {
 
 export async function sendUserRegisterEvent(context, token, payload) {
     const authFields = await buildUserAuthFields(payload);
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "userRegister",
@@ -65,7 +70,7 @@ export async function sendUserRegisterEvent(context, token, payload) {
 }
 
 export async function sendChatCreatedEvent(context, token) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "chatCreated",
@@ -76,7 +81,7 @@ export async function sendChatCreatedEvent(context, token) {
 }
 
 export async function sendMessageSentEvent(context, token, chatId, type, size, totalFiles) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "messageSent",
@@ -92,7 +97,7 @@ export async function sendMessageSentEvent(context, token, chatId, type, size, t
 }
 
 export async function sendChatJoinedEvent(context, token, chatId) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "chatJoined",
@@ -105,7 +110,7 @@ export async function sendChatJoinedEvent(context, token, chatId) {
 }
 
 export async function sendChatLeftEvent(context, token, chatId) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "chatLeft",
@@ -118,7 +123,7 @@ export async function sendChatLeftEvent(context, token, chatId) {
 }
 
 export async function sendNavigationEvent(context, token, from, to) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "navigation",
@@ -144,7 +149,7 @@ export async function sendJudgeRealtimeRefreshEvent(
         errorMessage,
     },
 ) {
-    const event = create(AnalyticsEventSchema, {
+    const event = buildAnalyticsEvent({
         context,
         eventType: {
             case: "judgeRealtimeRefresh",
@@ -162,25 +167,25 @@ export async function sendJudgeRealtimeRefreshEvent(
     await sendEvent(event, token);
 }
 
-async function sendEvent(event, token) {
-    console.log("event:", event);
+async function sendEvent(event: unknown, token: unknown) {
+    console.log('event:', event);
     try {
-        const data = toBinary(AnalyticsEventSchema, event);
-        const headers = {
-            "Content-Type": "application/protobuf",
+        const data = toBinary(AnalyticsSchemaAny, event as any);
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/protobuf',
         };
         // Use Authorization header to avoid token leakage in URL/query logs.
         if (token) {
-            headers["Authorization"] = `Bearer ${token}`;
+            headers.Authorization = `Bearer ${String(token)}`;
         }
         await fetch(URL, {
-            method: "POST",
+            method: 'POST',
             headers,
-            body: data,
+            body: data as unknown as BodyInit,
             keepalive: true,
         });
     } catch (error) {
-        console.error("sendEvent error:", error);
+        console.error('sendEvent error:', error);
     }
 }
 

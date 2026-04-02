@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseNamedSseEventData, parseSseAppEventData } from './sse-event-utils.js';
+import { parseNamedSseEventData, parseSseAppEventData } from './sse-event-utils';
 
 const raw = JSON.stringify({
   event: 'DebateJudgeReportReady',
