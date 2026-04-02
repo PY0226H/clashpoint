@@ -141,6 +141,8 @@ test('home page should render four-entry dashboard with new shell', async ({ pag
   await page.goto('http://127.0.0.1:1420/home');
 
   await expect(page.getByRole('heading', { name: 'EchoIsle 首页工作台' })).toBeVisible();
+  await expect(page.getByText('四入口调度台')).toBeVisible();
+  await expect(page.getByText('检索工作区')).toBeVisible();
   await expect(page.getByText('入口 1')).toBeVisible();
   await expect(page.getByText('入口 2')).toBeVisible();
   await expect(page.getByText('入口 3')).toBeVisible();

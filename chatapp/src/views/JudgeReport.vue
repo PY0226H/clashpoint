@@ -2,29 +2,56 @@
   <div class="flex h-screen echo-shell">
     <Sidebar />
     <div class="echo-main">
-      <div class="max-w-5xl mx-auto p-6 lg:p-8 space-y-4 echo-fade-in">
-        <div class="echo-panel-strong p-5">
-          <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">AI Judge Report</div>
-          <h1 class="text-2xl font-semibold text-slate-900 mt-1">裁判报告中心</h1>
-          <p class="text-sm text-slate-600 mt-1">
-            输入辩论 session id，查看 AI 判决与阶段摘要。
-          </p>
+      <div class="max-w-5xl mx-auto p-6 lg:p-8 space-y-5 echo-fade-in">
+        <div class="echo-panel-strong relative overflow-hidden p-5 lg:p-6">
+          <div class="absolute inset-0 bg-gradient-to-br from-indigo-100/70 via-white to-sky-100/70"></div>
+          <div class="absolute -left-20 -top-20 w-64 h-64 rounded-full bg-indigo-200/35 blur-3xl"></div>
+          <div class="absolute -right-20 -bottom-20 w-64 h-64 rounded-full bg-sky-200/35 blur-3xl"></div>
+          <div class="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="max-w-3xl">
+              <div class="text-[11px] uppercase tracking-[0.24em] text-slate-500">AI Judge Report</div>
+              <h1 class="text-2xl font-semibold text-slate-900 mt-1">裁判报告中心</h1>
+              <p class="text-sm text-slate-700 mt-2">
+                输入辩论 session id，查看 AI 判决、阶段摘要与实时刷新质量指标。
+              </p>
+              <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-slate-700">
+                  状态 {{ reportData?.status || 'idle' }}
+                </span>
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-slate-700">
+                  阶段 {{ stageSummaries.length }}
+                </span>
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-slate-700">
+                  刷新事件 {{ realtimeStats.receivedEvents }}
+                </span>
+              </div>
+            </div>
+            <div class="w-full lg:w-[280px] echo-panel p-3 bg-white/85">
+              <div class="text-xs uppercase tracking-[0.18em] text-slate-500">判决链路观测面板</div>
+              <div class="mt-2 text-xs text-slate-700">
+                聚合展示自动刷新成功率、缓存命中、DB 延迟，便于排查判决链路波动。
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="echo-panel p-4 flex gap-3 items-center">
-          <input
-            v-model="sessionIdInput"
-            type="text"
-            class="echo-field flex-1"
-            placeholder="例如：123"
-          />
-          <button
-            @click="loadReport"
-            :disabled="loading"
-            class="echo-btn-primary disabled:opacity-50"
-          >
-            {{ loading ? '查询中...' : '查询' }}
-          </button>
+        <div class="echo-panel p-4">
+          <div class="text-xs uppercase tracking-[0.18em] text-slate-500 mb-2">查询条件</div>
+          <div class="flex gap-3 items-center">
+            <input
+              v-model="sessionIdInput"
+              type="text"
+              class="echo-field flex-1"
+              placeholder="例如：123"
+            />
+            <button
+              @click="loadReport"
+              :disabled="loading"
+              class="echo-btn-primary disabled:opacity-50"
+            >
+              {{ loading ? '查询中...' : '查询' }}
+            </button>
+          </div>
         </div>
 
         <div v-if="errorText" class="bg-red-50 text-red-700 text-sm border border-red-200 rounded p-3">
@@ -32,25 +59,25 @@
         </div>
 
         <div class="echo-panel p-4">
-          <div class="text-xs uppercase text-gray-500 mb-2">Realtime Refresh</div>
+          <div class="text-xs uppercase tracking-[0.18em] text-gray-500 mb-2">Realtime Refresh</div>
           <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-            <div>
+            <div class="rounded-xl border border-slate-200 bg-white/80 p-3">
               <div class="text-xs uppercase text-gray-500">Events</div>
               <div class="font-semibold text-gray-900">{{ realtimeStats.receivedEvents }}</div>
             </div>
-            <div>
+            <div class="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
               <div class="text-xs uppercase text-gray-500">Success</div>
               <div class="font-semibold text-green-700">{{ realtimeStats.refreshSuccess }}</div>
             </div>
-            <div>
+            <div class="rounded-xl border border-red-200 bg-red-50/70 p-3">
               <div class="text-xs uppercase text-gray-500">Failure</div>
               <div class="font-semibold text-red-700">{{ realtimeStats.refreshFailure }}</div>
             </div>
-            <div>
+            <div class="rounded-xl border border-amber-200 bg-amber-50/70 p-3">
               <div class="text-xs uppercase text-gray-500">Retry</div>
               <div class="font-semibold text-amber-700">{{ realtimeStats.retryTriggered }}</div>
             </div>
-            <div>
+            <div class="rounded-xl border border-indigo-200 bg-indigo-50/70 p-3">
               <div class="text-xs uppercase text-gray-500">Coalesced</div>
               <div class="font-semibold text-indigo-700">{{ realtimeStats.coalescedEvents }}</div>
             </div>

@@ -130,6 +130,7 @@ test.beforeEach(async ({ page }) => {
 test('judge report shell should render with refreshed desktop style', async ({ page }) => {
   await page.goto('http://127.0.0.1:1420/judge-report');
   await expect(page.getByRole('heading', { name: '裁判报告中心' })).toBeVisible();
+  await expect(page.getByText('判决链路观测面板')).toBeVisible();
   await expect(page.getByRole('button', { name: '查询' })).toBeVisible();
 });
 
