@@ -3,12 +3,16 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::{AppState, DebateReplayEvent, UserEvent};
+use crate::{
+    middlewares::{notify_error_response, NotifyWsSubprotocol},
+    AppState, DebateReplayEvent, UserEvent,
+};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
+    http::{HeaderMap, StatusCode},
     response::Response,
     Extension,
 };
@@ -19,20 +23,113 @@ use tokio::sync::broadcast;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 use tracing::{info, warn};
 
+const GLOBAL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+const GLOBAL_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(65);
+const GLOBAL_IDLE_SIGNAL_AFTER: Duration = Duration::from_secs(60);
+const GLOBAL_IDLE_SIGNAL_COOLDOWN: Duration = Duration::from_secs(45);
+const GLOBAL_DEGRADED_MODE_WINDOW: Duration = Duration::from_secs(20);
+
 const ROOM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const ROOM_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(65);
 const ROOM_SYNC_REQUIRED_COOLDOWN: Duration = Duration::from_millis(1500);
 const ROOM_SYNC_REQUIRED_SUPPRESS_LOG_EVERY: u64 = 10;
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GlobalWsQuery {
+    last_event_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum GlobalClientMessage {
+    Ping,
+    Pong,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum GlobalServerMessage {
+    Welcome {
+        user_id: u64,
+        baseline_last_event_id: u64,
+        last_event_id: u64,
+        replay_count: usize,
+        heartbeat_interval_ms: u64,
+        heartbeat_timeout_ms: u64,
+        idle_signal_after_ms: u64,
+    },
+    Event {
+        event_id: u64,
+        event_at_ms: i64,
+        event_name: String,
+        payload: Value,
+    },
+    Ping {
+        ts: i64,
+        last_event_id: u64,
+    },
+    Pong {
+        ts: Option<i64>,
+    },
+    SyncRequired {
+        reason: String,
+        skipped: u64,
+        suggested_last_event_id: u64,
+        latest_event_id: u64,
+        strategy: String,
+    },
+    StreamIdle {
+        idle_ms: u64,
+        last_event_id: u64,
+        strategy: String,
+    },
+}
+
+struct WsConnectionGuard {
+    state: AppState,
+    user_id: u64,
+}
+
+impl Drop for WsConnectionGuard {
+    fn drop(&mut self) {
+        self.state.release_ws_connection(self.user_id);
+        self.state.cleanup_user_events_if_unused(self.user_id);
+    }
+}
+
 pub(crate) async fn ws_handler(
+    Query(query): Query<GlobalWsQuery>,
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    protocol: Option<Extension<NotifyWsSubprotocol>>,
     Extension(user): Extension<User>,
     State(state): State<AppState>,
 ) -> Response {
     let user_id = user.id as u64;
+    let request_id = extract_request_id(&headers);
+    if !state.try_acquire_ws_connection(user_id) {
+        return notify_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "notify_ws_too_many_connections",
+            "too many active websocket connections for this user",
+            request_id,
+        );
+    }
     let rx = state.subscribe_user_events(user_id);
-    info!("User {} subscribed via websocket", user_id);
-    ws.on_upgrade(move |socket| websocket_loop(socket, rx, user_id, state))
+    let mut ws = ws;
+    if let Some(Extension(NotifyWsSubprotocol(selected_protocol))) = protocol {
+        ws = ws.protocols([selected_protocol]);
+    }
+    let ws_snapshot = state.ws_metrics_snapshot();
+    info!(
+        request_id,
+        user_id,
+        requested_last_event_id = query.last_event_id.unwrap_or(0),
+        ws_connected_total = ws_snapshot.connected_total,
+        "user subscribed via global websocket"
+    );
+    ws.on_upgrade(move |socket| websocket_loop(socket, rx, user_id, query.last_event_id, state))
 }
 
 pub(crate) async fn debate_room_ws_handler(
@@ -57,16 +154,121 @@ async fn websocket_loop(
     mut socket: WebSocket,
     mut rx: broadcast::Receiver<Arc<UserEvent>>,
     user_id: u64,
+    requested_last_event_id: Option<u64>,
     state: AppState,
 ) {
+    let _guard = WsConnectionGuard {
+        state: state.clone(),
+        user_id,
+    };
+    let replay_window = state.replay_sse_events_for_user(user_id, requested_last_event_id);
+    let mut baseline_last_event_id = requested_last_event_id.unwrap_or(0);
+    if baseline_last_event_id > replay_window.latest_id {
+        baseline_last_event_id = replay_window.latest_id;
+    }
+    let should_replay = !replay_window.has_gap;
+    let replay_count = if should_replay {
+        replay_window.events.len()
+    } else {
+        0
+    };
+    let mut last_sent_event_id = baseline_last_event_id;
+    let mut last_client_heartbeat = Instant::now();
+    let mut last_live_event_at = Instant::now();
+    let mut last_idle_signal_at: Option<Instant> = None;
+    let mut degraded_until: Option<Instant> = None;
+    let mut heartbeat_tick = tokio::time::interval(GLOBAL_HEARTBEAT_INTERVAL);
+    heartbeat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    heartbeat_tick.tick().await;
+    let mut idle_signal_tick = tokio::time::interval(Duration::from_secs(10));
+    idle_signal_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    idle_signal_tick.tick().await;
+
+    if !send_global_message(
+        &mut socket,
+        &GlobalServerMessage::Welcome {
+            user_id,
+            baseline_last_event_id,
+            last_event_id: replay_window.latest_id,
+            replay_count,
+            heartbeat_interval_ms: GLOBAL_HEARTBEAT_INTERVAL.as_millis() as u64,
+            heartbeat_timeout_ms: GLOBAL_HEARTBEAT_TIMEOUT.as_millis() as u64,
+            idle_signal_after_ms: GLOBAL_IDLE_SIGNAL_AFTER.as_millis() as u64,
+        },
+        &state,
+    )
+    .await
+    {
+        return;
+    }
+
+    if replay_window.has_gap {
+        state.observe_ws_sync_required();
+        let sync_msg = GlobalServerMessage::SyncRequired {
+            reason: "replay_window_miss".to_string(),
+            skipped: replay_window.skipped,
+            suggested_last_event_id: baseline_last_event_id,
+            latest_event_id: replay_window.latest_id,
+            strategy: "snapshot_then_reconnect".to_string(),
+        };
+        if !send_global_message(&mut socket, &sync_msg, &state).await {
+            return;
+        }
+    } else {
+        for evt in replay_window.events {
+            if !send_global_message(
+                &mut socket,
+                &GlobalServerMessage::Event {
+                    event_id: evt.event_id,
+                    event_at_ms: evt.event_at_ms,
+                    event_name: evt.event_name,
+                    payload: evt.payload,
+                },
+                &state,
+            )
+            .await
+            {
+                return;
+            }
+            state.observe_ws_replay_sent();
+            last_sent_event_id = last_sent_event_id.max(evt.event_id);
+            last_live_event_at = Instant::now();
+        }
+    }
+
     loop {
         tokio::select! {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(Message::Ping(v))) => {
+                        last_client_heartbeat = Instant::now();
                         if socket.send(Message::Pong(v)).await.is_err() {
+                            state.observe_ws_send_failed();
                             break;
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_client_heartbeat = Instant::now();
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<GlobalClientMessage>(&text) {
+                            Ok(GlobalClientMessage::Ping) => {
+                                last_client_heartbeat = Instant::now();
+                                if !send_global_message(
+                                    &mut socket,
+                                    &GlobalServerMessage::Pong { ts: Some(now_unix_ms()) },
+                                    &state,
+                                )
+                                .await
+                                {
+                                    break;
+                                }
+                            }
+                            Ok(GlobalClientMessage::Pong) => {
+                                last_client_heartbeat = Instant::now();
+                            }
+                            Err(_) => {}
                         }
                     }
                     Some(Ok(_)) => {}
@@ -79,27 +281,125 @@ async fn websocket_loop(
             maybe_event = rx.recv() => {
                 match maybe_event {
                     Ok(event) => {
-                        let payload = match serde_json::to_string(event.app_event.as_ref()) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                warn!("serialize event failed for user {}: {}", user_id, e);
-                                continue;
+                        if event.app_event.is_debate_event() {
+                            state.observe_ws_event_filtered();
+                            continue;
+                        }
+                        let now = Instant::now();
+                        if let Some(until) = degraded_until {
+                            if now >= until {
+                                degraded_until = None;
                             }
+                        }
+                        if degraded_until.is_some() && !event.app_event.is_sse_critical_event() {
+                            state.observe_ws_qos_drop();
+                            continue;
+                        }
+                        let Some(replay_meta) = event.sse_replay.as_ref() else {
+                            state.observe_ws_event_filtered();
+                            continue;
                         };
-                        if socket.send(Message::Text(payload)).await.is_err() {
+                        let msg = GlobalServerMessage::Event {
+                            event_id: replay_meta.event_id,
+                            event_at_ms: replay_meta.event_at_ms,
+                            event_name: replay_meta.event_name.clone(),
+                            payload: replay_meta.payload.clone(),
+                        };
+                        if !send_global_message(&mut socket, &msg, &state).await {
+                            break;
+                        }
+                        state.observe_ws_live_sent();
+                        last_live_event_at = Instant::now();
+                        last_sent_event_id = last_sent_event_id.max(replay_meta.event_id);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        state.observe_ws_lagged(skipped);
+                        state.observe_ws_sync_required();
+                        degraded_until = Some(Instant::now() + GLOBAL_DEGRADED_MODE_WINDOW);
+                        let sync_msg = GlobalServerMessage::SyncRequired {
+                            reason: "lagged_receiver".to_string(),
+                            skipped,
+                            suggested_last_event_id: last_sent_event_id,
+                            latest_event_id: last_sent_event_id.saturating_add(skipped),
+                            strategy: "snapshot_then_reconnect".to_string(),
+                        };
+                        if !send_global_message(&mut socket, &sync_msg, &state).await {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        warn!("websocket lagged for user {}, skipped {} events", user_id, skipped);
-                    }
                     Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = heartbeat_tick.tick() => {
+                let idle_for = Instant::now().saturating_duration_since(last_client_heartbeat);
+                if idle_for > GLOBAL_HEARTBEAT_TIMEOUT {
+                    warn!(
+                        "global websocket heartbeat timeout for user {}, idle={}ms",
+                        user_id,
+                        idle_for.as_millis()
+                    );
+                    break;
+                }
+                if !send_global_message(
+                    &mut socket,
+                    &GlobalServerMessage::Ping {
+                        ts: now_unix_ms(),
+                        last_event_id: last_sent_event_id,
+                    },
+                    &state,
+                )
+                .await
+                {
+                    break;
+                }
+            }
+            _ = idle_signal_tick.tick() => {
+                let idle_for = Instant::now().saturating_duration_since(last_live_event_at);
+                if idle_for >= GLOBAL_IDLE_SIGNAL_AFTER {
+                    let cooldown_ready = last_idle_signal_at
+                        .map(|v| Instant::now().saturating_duration_since(v) >= GLOBAL_IDLE_SIGNAL_COOLDOWN)
+                        .unwrap_or(true);
+                    if cooldown_ready {
+                        if !send_global_message(
+                            &mut socket,
+                            &GlobalServerMessage::StreamIdle {
+                                idle_ms: idle_for.as_millis() as u64,
+                                last_event_id: last_sent_event_id,
+                                strategy: "verify_ingress_or_refresh_snapshot".to_string(),
+                            },
+                            &state,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                        state.observe_ws_idle_signal();
+                        last_idle_signal_at = Some(Instant::now());
+                    }
                 }
             }
         }
     }
     drop(rx);
-    state.cleanup_user_events_if_unused(user_id);
+}
+
+async fn send_global_message(
+    socket: &mut WebSocket,
+    msg: &GlobalServerMessage,
+    state: &AppState,
+) -> bool {
+    let payload = match serde_json::to_string(msg) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("serialize global ws message failed: {}", e);
+            return false;
+        }
+    };
+    if socket.send(Message::Text(payload)).await.is_err() {
+        state.observe_ws_send_failed();
+        return false;
+    }
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -577,6 +877,16 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn extract_request_id(headers: &HeaderMap) -> String {
+    headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("notify-{}", now_unix_ms()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,10 +898,14 @@ mod tests {
     };
     use anyhow::Result;
     use axum::{middleware::from_fn_with_state, routing::get, Router};
-    use chat_core::EncodingKey;
+    use chat_core::{EncodingKey, Message as ChatMessage};
+    use chrono::Utc;
     use futures::{SinkExt, StreamExt};
     use tokio::{net::TcpListener, time::Duration};
-    use tokio_tungstenite::{connect_async, tungstenite::Error as WsError};
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{client::IntoClientRequest, Error as WsError},
+    };
 
     fn test_state() -> AppState {
         test_state_with_db_url("postgres://localhost:5432/chat")
@@ -610,6 +924,27 @@ mod tests {
             redis: crate::config::RedisConfig::default(),
         };
         AppState::new(config)
+    }
+
+    async fn connect_global_ws(
+        addr: std::net::SocketAddr,
+        notify_ticket: &str,
+        query: Option<&str>,
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    )> {
+        let url = if let Some(query) = query {
+            format!("ws://{addr}/ws?{query}")
+        } else {
+            format!("ws://{addr}/ws")
+        };
+        let mut req = url.into_client_request()?;
+        req.headers_mut()
+            .insert("Sec-WebSocket-Protocol", notify_ticket.parse()?);
+        let (socket, _) = connect_async(req).await?;
+        Ok((socket,))
     }
 
     #[test]
@@ -672,8 +1007,16 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
 
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/ws?token={notify_ticket}")).await?;
+        let (mut socket,) = connect_global_ws(addr, &notify_ticket, None).await?;
+
+        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome_text = welcome
+            .expect("should receive welcome")
+            .expect("welcome should be ws ok")
+            .into_text()?
+            .to_string();
+        let welcome_json: serde_json::Value = serde_json::from_str(&welcome_text)?;
+        assert_eq!(welcome_json["type"], "welcome");
 
         // Wait for ws_handler to register this user channel in state.users.
         for _ in 0..40 {
@@ -685,12 +1028,14 @@ mod tests {
         let tx = state.users.get(&1).expect("user channel should exist");
         let user_event = state.build_user_event_for_recipient(
             1,
-            Arc::new(AppEvent::DebateParticipantJoined(DebateParticipantJoined {
-                session_id: 12,
-                user_id: 1,
-                side: "pro".to_string(),
-                pro_count: 2,
-                con_count: 1,
+            Arc::new(AppEvent::NewMessage(ChatMessage {
+                id: 88,
+                chat_id: 12,
+                sender_id: 1,
+                content: "hello".to_string(),
+                modified_content: None,
+                files: vec![],
+                created_at: Utc::now(),
             })),
             None,
         );
@@ -699,9 +1044,97 @@ mod tests {
         let maybe_msg = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
         let msg = maybe_msg.expect("should receive websocket message")?;
         let text = msg.into_text()?.to_string();
-        assert!(text.contains("\"event\":\"DebateParticipantJoined\""));
-        assert!(text.contains("\"sessionId\":12"));
-        assert!(text.contains("\"side\":\"pro\""));
+        let json: serde_json::Value = serde_json::from_str(&text)?;
+        assert_eq!(json["type"], "event");
+        let event_name = json
+            .get("eventName")
+            .or_else(|| json.get("event_name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert_eq!(event_name, "NewMessage");
+        let event_id = json
+            .get("eventId")
+            .or_else(|| json.get("event_id"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert_eq!(event_id, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ws_handler_should_replay_from_last_event_id() -> Result<()> {
+        let state = test_state();
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let notify_ticket = ek.sign_notify_ticket(user, 300)?;
+
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::NewMessage(ChatMessage {
+                id: 1,
+                chat_id: 2,
+                sender_id: 1,
+                content: "m1".to_string(),
+                modified_content: None,
+                files: vec![],
+                created_at: Utc::now(),
+            })),
+            None,
+        );
+        let _ = state.build_user_event_for_recipient(
+            1,
+            Arc::new(AppEvent::NewMessage(ChatMessage {
+                id: 2,
+                chat_id: 2,
+                sender_id: 1,
+                content: "m2".to_string(),
+                modified_content: None,
+                files: vec![],
+                created_at: Utc::now(),
+            })),
+            None,
+        );
+
+        let app = Router::new()
+            .route("/ws", get(ws_handler))
+            .layer(from_fn_with_state(state.clone(), verify_notify_ticket))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket,) = connect_global_ws(addr, &notify_ticket, Some("lastEventId=1")).await?;
+        let welcome = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let welcome_text = welcome
+            .expect("should receive welcome")
+            .expect("welcome should be ws ok")
+            .into_text()?
+            .to_string();
+        let welcome_json: serde_json::Value = serde_json::from_str(&welcome_text)?;
+        assert_eq!(welcome_json["type"], "welcome");
+        let replay_count = welcome_json
+            .get("replayCount")
+            .or_else(|| welcome_json.get("replay_count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert_eq!(replay_count, 1);
+
+        let replay = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+        let replay_text = replay
+            .expect("should receive replay")
+            .expect("replay should be ws ok")
+            .into_text()?
+            .to_string();
+        let replay_json: serde_json::Value = serde_json::from_str(&replay_text)?;
+        assert_eq!(replay_json["type"], "event");
+        let replay_event_id = replay_json
+            .get("eventId")
+            .or_else(|| replay_json.get("event_id"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert_eq!(replay_event_id, 2);
         Ok(())
     }
 
@@ -1602,7 +2035,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ws_handler_should_reject_missing_query_token() -> Result<()> {
+    async fn ws_handler_should_reject_missing_subprotocol_token() -> Result<()> {
         let state = test_state();
         let app = Router::new()
             .route("/ws", get(ws_handler))

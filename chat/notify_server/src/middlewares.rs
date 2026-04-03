@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{AppState, NotifyAuthSurface};
 use axum::{
     extract::{FromRequestParts, Query, Request, State},
     http::{HeaderMap, StatusCode},
@@ -13,6 +13,9 @@ use tracing::warn;
 struct Params {
     token: String,
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct NotifyWsSubprotocol(pub String);
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,29 +49,65 @@ pub async fn verify_notify_ticket(
 ) -> Response {
     let (mut parts, body) = req.into_parts();
     let request_id = extract_request_id(&parts.headers);
-    let token = match Query::<Params>::from_request_parts(&mut parts, &state).await {
-        Ok(params) => params.token.clone(),
-        Err(_) => {
-            state.observe_sse_auth_unauthorized();
-            warn!(
-                request_id,
-                "parse notify ticket from query failed: token is missing or malformed"
-            );
-            return notify_error_response(
-                StatusCode::UNAUTHORIZED,
-                "notify_ticket_missing_or_invalid_query",
-                "missing or malformed notify ticket in query",
-                request_id,
-            );
+    let path = parts.uri.path().to_string();
+    let auth_surface = classify_auth_surface(&path);
+    let token = if matches!(auth_surface, NotifyAuthSurface::GlobalWs) {
+        match extract_notify_ticket_from_ws_protocol(&parts.headers) {
+            Some((token, protocol)) => {
+                parts.extensions.insert(NotifyWsSubprotocol(protocol));
+                token
+            }
+            None => {
+                state.observe_notify_auth_unauthorized(auth_surface);
+                let auth_snapshot = state.auth_metrics_snapshot();
+                warn!(
+                    request_id,
+                    path,
+                    ws_unauthorized_total = auth_snapshot.ws_unauthorized_total,
+                    "parse notify ticket from websocket protocol failed"
+                );
+                return notify_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "notify_ticket_missing_or_invalid_subprotocol",
+                    "missing or malformed notify ticket in Sec-WebSocket-Protocol",
+                    request_id,
+                );
+            }
+        }
+    } else {
+        match Query::<Params>::from_request_parts(&mut parts, &state).await {
+            Ok(params) => params.token.clone(),
+            Err(_) => {
+                state.observe_notify_auth_unauthorized(auth_surface);
+                let auth_snapshot = state.auth_metrics_snapshot();
+                warn!(
+                    request_id,
+                    path,
+                    sse_unauthorized_total = auth_snapshot.sse_unauthorized_total,
+                    debate_ws_unauthorized_total = auth_snapshot.debate_ws_unauthorized_total,
+                    "parse notify ticket from query failed: token is missing or malformed"
+                );
+                return notify_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "notify_ticket_missing_or_invalid_query",
+                    "missing or malformed notify ticket in query",
+                    request_id,
+                );
+            }
         }
     };
 
     let user = match state.dk.verify_notify_ticket(&token) {
         Ok(user) => user,
         Err(err) => {
-            state.observe_sse_auth_forbidden();
+            state.observe_notify_auth_forbidden(auth_surface);
+            let auth_snapshot = state.auth_metrics_snapshot();
             warn!(
                 request_id,
+                path,
+                sse_forbidden_total = auth_snapshot.sse_forbidden_total,
+                ws_forbidden_total = auth_snapshot.ws_forbidden_total,
+                debate_ws_forbidden_total = auth_snapshot.debate_ws_forbidden_total,
                 err = %err,
                 "verify notify ticket failed"
             );
@@ -84,6 +123,32 @@ pub async fn verify_notify_ticket(
     let mut req = Request::from_parts(parts, body);
     req.extensions_mut().insert(user);
     next.run(req).await
+}
+
+fn classify_auth_surface(path: &str) -> NotifyAuthSurface {
+    match path {
+        "/events" => NotifyAuthSurface::Sse,
+        "/ws" => NotifyAuthSurface::GlobalWs,
+        p if p.starts_with("/ws/debate/") => NotifyAuthSurface::DebateWs,
+        _ => NotifyAuthSurface::Unknown,
+    }
+}
+
+fn extract_notify_ticket_from_ws_protocol(headers: &HeaderMap) -> Option<(String, String)> {
+    let raw = headers
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())?;
+    for protocol in raw.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+        if let Some(ticket) = protocol.strip_prefix("notify-ticket.") {
+            if !ticket.trim().is_empty() {
+                return Some((ticket.trim().to_string(), protocol.to_string()));
+            }
+        }
+        if protocol.matches('.').count() == 2 {
+            return Some((protocol.to_string(), protocol.to_string()));
+        }
+    }
+    None
 }
 
 fn extract_request_id(headers: &HeaderMap) -> String {
@@ -125,8 +190,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_notify_ticket_middleware_should_only_accept_notify_ticket_query() -> Result<()>
-    {
+    async fn verify_notify_ticket_middleware_should_accept_query_for_events_and_subprotocol_for_ws(
+    ) -> Result<()> {
         let state = test_state()?;
         let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
         let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
@@ -134,7 +199,8 @@ mod tests {
         let notify_ticket = ek.sign_notify_ticket(user, 300)?;
 
         let app = Router::new()
-            .route("/", get(handler))
+            .route("/events", get(handler))
+            .route("/ws", get(handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 verify_notify_ticket,
@@ -142,13 +208,13 @@ mod tests {
             .with_state(state);
 
         let req = Request::builder()
-            .uri(format!("/?token={}", notify_ticket))
+            .uri(format!("/events?token={notify_ticket}"))
             .body(Body::empty())?;
         let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
 
         let req = Request::builder()
-            .uri(format!("/?token={}", user_token))
+            .uri(format!("/events?token={user_token}"))
             .body(Body::empty())?;
         let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
@@ -157,14 +223,33 @@ mod tests {
         assert_eq!(json["error"], "notify_ticket_invalid");
 
         let req = Request::builder()
-            .uri("/")
+            .uri("/events")
             .header("Authorization", format!("Bearer {}", notify_ticket))
+            .body(Body::empty())?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(res.into_body(), usize::MAX).await?;
+        let json: Value = serde_json::from_slice(&body)?;
+        assert_eq!(json["error"], "notify_ticket_missing_or_invalid_query");
+
+        let req = Request::builder()
+            .uri("/ws")
+            .header("Sec-WebSocket-Protocol", notify_ticket.as_str())
+            .body(Body::empty())?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let req = Request::builder()
+            .uri(format!("/ws?token={notify_ticket}"))
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
         let body = to_bytes(res.into_body(), usize::MAX).await?;
         let json: Value = serde_json::from_slice(&body)?;
-        assert_eq!(json["error"], "notify_ticket_missing_or_invalid_query");
+        assert_eq!(
+            json["error"],
+            "notify_ticket_missing_or_invalid_subprotocol"
+        );
 
         Ok(())
     }

@@ -45,6 +45,7 @@ const DEBATE_REPLAY_MAX_ON_CONNECT: usize = 200;
 const SSE_REPLAY_HISTORY_CAPACITY: usize = 512;
 const SSE_REPLAY_MAX_ON_CONNECT: usize = 200;
 const SSE_MAX_CONNECTIONS_PER_USER: u32 = 3;
+const WS_MAX_CONNECTIONS_PER_USER: u32 = 3;
 const SYNC_REQUIRED_WARN_EVERY: u64 = 20;
 const SSE_SYNC_REQUIRED_WARN_EVERY: u64 = 20;
 
@@ -52,6 +53,7 @@ pub type UserMap = Arc<DashMap<u64, broadcast::Sender<Arc<UserEvent>>>>;
 type DebateReplayMap = Arc<DashMap<(u64, i64), DebateReplayHistory>>;
 type SseReplayMap = Arc<DashMap<u64, SseReplayHistory>>;
 type SseConnMap = Arc<DashMap<u64, u32>>;
+type WsConnMap = Arc<DashMap<u64, u32>>;
 
 #[derive(Debug, Clone)]
 pub struct DebateReplayEvent {
@@ -258,6 +260,177 @@ impl NotifySseMetrics {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct NotifyAuthMetricsSnapshot {
+    pub sse_unauthorized_total: u64,
+    pub sse_forbidden_total: u64,
+    pub ws_unauthorized_total: u64,
+    pub ws_forbidden_total: u64,
+    pub debate_ws_unauthorized_total: u64,
+    pub debate_ws_forbidden_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NotifyAuthMetrics {
+    sse_unauthorized_total: AtomicU64,
+    sse_forbidden_total: AtomicU64,
+    ws_unauthorized_total: AtomicU64,
+    ws_forbidden_total: AtomicU64,
+    debate_ws_unauthorized_total: AtomicU64,
+    debate_ws_forbidden_total: AtomicU64,
+}
+
+impl NotifyAuthMetrics {
+    fn observe_unauthorized(&self, surface: NotifyAuthSurface) {
+        match surface {
+            NotifyAuthSurface::Sse => {
+                self.sse_unauthorized_total.fetch_add(1, Ordering::Relaxed);
+            }
+            NotifyAuthSurface::GlobalWs => {
+                self.ws_unauthorized_total.fetch_add(1, Ordering::Relaxed);
+            }
+            NotifyAuthSurface::DebateWs => {
+                self.debate_ws_unauthorized_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            NotifyAuthSurface::Unknown => {}
+        }
+    }
+
+    fn observe_forbidden(&self, surface: NotifyAuthSurface) {
+        match surface {
+            NotifyAuthSurface::Sse => {
+                self.sse_forbidden_total.fetch_add(1, Ordering::Relaxed);
+            }
+            NotifyAuthSurface::GlobalWs => {
+                self.ws_forbidden_total.fetch_add(1, Ordering::Relaxed);
+            }
+            NotifyAuthSurface::DebateWs => {
+                self.debate_ws_forbidden_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            NotifyAuthSurface::Unknown => {}
+        }
+    }
+
+    fn snapshot(&self) -> NotifyAuthMetricsSnapshot {
+        NotifyAuthMetricsSnapshot {
+            sse_unauthorized_total: self.sse_unauthorized_total.load(Ordering::Relaxed),
+            sse_forbidden_total: self.sse_forbidden_total.load(Ordering::Relaxed),
+            ws_unauthorized_total: self.ws_unauthorized_total.load(Ordering::Relaxed),
+            ws_forbidden_total: self.ws_forbidden_total.load(Ordering::Relaxed),
+            debate_ws_unauthorized_total: self.debate_ws_unauthorized_total.load(Ordering::Relaxed),
+            debate_ws_forbidden_total: self.debate_ws_forbidden_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NotifyWsMetricsSnapshot {
+    pub connected_total: u64,
+    pub disconnected_total: u64,
+    pub replay_sent_total: u64,
+    pub live_sent_total: u64,
+    pub filtered_total: u64,
+    pub lagged_total: u64,
+    pub lagged_skipped_total: u64,
+    pub sync_required_total: u64,
+    pub too_many_connections_total: u64,
+    pub send_failed_total: u64,
+    pub idle_signal_total: u64,
+    pub qos_drop_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NotifyWsMetrics {
+    connected_total: AtomicU64,
+    disconnected_total: AtomicU64,
+    replay_sent_total: AtomicU64,
+    live_sent_total: AtomicU64,
+    filtered_total: AtomicU64,
+    lagged_total: AtomicU64,
+    lagged_skipped_total: AtomicU64,
+    sync_required_total: AtomicU64,
+    too_many_connections_total: AtomicU64,
+    send_failed_total: AtomicU64,
+    idle_signal_total: AtomicU64,
+    qos_drop_total: AtomicU64,
+}
+
+impl NotifyWsMetrics {
+    fn observe_connected(&self) {
+        self.connected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_disconnected(&self) {
+        self.disconnected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_replay_sent(&self) {
+        self.replay_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_live_sent(&self) {
+        self.live_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_filtered(&self) {
+        self.filtered_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_lagged(&self, skipped: u64) {
+        self.lagged_total.fetch_add(1, Ordering::Relaxed);
+        self.lagged_skipped_total
+            .fetch_add(skipped, Ordering::Relaxed);
+    }
+
+    fn observe_sync_required(&self) -> u64 {
+        self.sync_required_total.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn observe_too_many_connections(&self) {
+        self.too_many_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_send_failed(&self) {
+        self.send_failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_idle_signal(&self) {
+        self.idle_signal_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_qos_drop(&self) {
+        self.qos_drop_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> NotifyWsMetricsSnapshot {
+        NotifyWsMetricsSnapshot {
+            connected_total: self.connected_total.load(Ordering::Relaxed),
+            disconnected_total: self.disconnected_total.load(Ordering::Relaxed),
+            replay_sent_total: self.replay_sent_total.load(Ordering::Relaxed),
+            live_sent_total: self.live_sent_total.load(Ordering::Relaxed),
+            filtered_total: self.filtered_total.load(Ordering::Relaxed),
+            lagged_total: self.lagged_total.load(Ordering::Relaxed),
+            lagged_skipped_total: self.lagged_skipped_total.load(Ordering::Relaxed),
+            sync_required_total: self.sync_required_total.load(Ordering::Relaxed),
+            too_many_connections_total: self.too_many_connections_total.load(Ordering::Relaxed),
+            send_failed_total: self.send_failed_total.load(Ordering::Relaxed),
+            idle_signal_total: self.idle_signal_total.load(Ordering::Relaxed),
+            qos_drop_total: self.qos_drop_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NotifyAuthSurface {
+    Sse,
+    GlobalWs,
+    DebateWs,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NotifyIngressMetricsSnapshot {
     pub pg_events_total: u64,
     pub kafka_events_total: u64,
@@ -295,8 +468,11 @@ pub struct AppStateInner {
     debate_replays: DebateReplayMap,
     sse_replays: SseReplayMap,
     sse_connections: SseConnMap,
+    ws_connections: WsConnMap,
     sync_required_metrics: NotifySyncRequiredMetrics,
+    auth_metrics: NotifyAuthMetrics,
     sse_metrics: NotifySseMetrics,
+    ws_metrics: NotifyWsMetrics,
     ingress_metrics: NotifyIngressMetrics,
     db: PgPool,
     dk: DecodingKey,
@@ -342,6 +518,7 @@ pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
             header::CONTENT_TYPE,
             header::ORIGIN,
             header::PRAGMA,
+            header::SEC_WEBSOCKET_PROTOCOL,
         ]);
 
     let app = Router::new()
@@ -413,6 +590,7 @@ impl AppState {
         let debate_replays = Arc::new(DashMap::new());
         let sse_replays = Arc::new(DashMap::new());
         let sse_connections = Arc::new(DashMap::new());
+        let ws_connections = Arc::new(DashMap::new());
         let db = PgPoolOptions::new()
             .max_connections(5)
             .connect_lazy(&config.server.db_url)
@@ -424,8 +602,11 @@ impl AppState {
             debate_replays,
             sse_replays,
             sse_connections,
+            ws_connections,
             sync_required_metrics: NotifySyncRequiredMetrics::default(),
+            auth_metrics: NotifyAuthMetrics::default(),
             sse_metrics: NotifySseMetrics::default(),
+            ws_metrics: NotifyWsMetrics::default(),
             ingress_metrics: NotifyIngressMetrics::default(),
             db,
         }))
@@ -485,6 +666,39 @@ impl AppState {
         }
         if should_remove {
             self.sse_connections.remove(&user_id);
+        }
+    }
+
+    pub(crate) fn try_acquire_ws_connection(&self, user_id: u64) -> bool {
+        let mut accepted = false;
+        {
+            let mut entry = self.ws_connections.entry(user_id).or_insert(0);
+            if *entry < WS_MAX_CONNECTIONS_PER_USER {
+                *entry += 1;
+                accepted = true;
+            }
+        }
+        if accepted {
+            self.ws_metrics.observe_connected();
+        } else {
+            self.ws_metrics.observe_too_many_connections();
+        }
+        accepted
+    }
+
+    pub(crate) fn release_ws_connection(&self, user_id: u64) {
+        let mut should_remove = false;
+        if let Some(mut entry) = self.ws_connections.get_mut(&user_id) {
+            if *entry > 0 {
+                *entry -= 1;
+                self.ws_metrics.observe_disconnected();
+            }
+            if *entry == 0 {
+                should_remove = true;
+            }
+        }
+        if should_remove {
+            self.ws_connections.remove(&user_id);
         }
     }
 
@@ -566,12 +780,22 @@ impl AppState {
         }
     }
 
-    pub(crate) fn observe_sse_auth_unauthorized(&self) {
-        self.sse_metrics.observe_auth_unauthorized();
+    pub(crate) fn observe_notify_auth_unauthorized(&self, surface: NotifyAuthSurface) {
+        self.auth_metrics.observe_unauthorized(surface);
+        if matches!(surface, NotifyAuthSurface::Sse) {
+            self.sse_metrics.observe_auth_unauthorized();
+        }
     }
 
-    pub(crate) fn observe_sse_auth_forbidden(&self) {
-        self.sse_metrics.observe_auth_forbidden();
+    pub(crate) fn observe_notify_auth_forbidden(&self, surface: NotifyAuthSurface) {
+        self.auth_metrics.observe_forbidden(surface);
+        if matches!(surface, NotifyAuthSurface::Sse) {
+            self.sse_metrics.observe_auth_forbidden();
+        }
+    }
+
+    pub(crate) fn auth_metrics_snapshot(&self) -> NotifyAuthMetricsSnapshot {
+        self.auth_metrics.snapshot()
     }
 
     pub(crate) fn observe_sse_event_filtered(&self) {
@@ -602,6 +826,48 @@ impl AppState {
 
     pub(crate) fn sse_metrics_snapshot(&self) -> NotifySseMetricsSnapshot {
         self.sse_metrics.snapshot()
+    }
+
+    pub(crate) fn observe_ws_replay_sent(&self) {
+        self.ws_metrics.observe_replay_sent();
+    }
+
+    pub(crate) fn observe_ws_live_sent(&self) {
+        self.ws_metrics.observe_live_sent();
+    }
+
+    pub(crate) fn observe_ws_event_filtered(&self) {
+        self.ws_metrics.observe_filtered();
+    }
+
+    pub(crate) fn observe_ws_lagged(&self, skipped: u64) {
+        self.ws_metrics.observe_lagged(skipped);
+    }
+
+    pub(crate) fn observe_ws_sync_required(&self) {
+        let total = self.ws_metrics.observe_sync_required();
+        if total.is_multiple_of(SSE_SYNC_REQUIRED_WARN_EVERY) {
+            warn!(
+                total,
+                "global ws sync-required emission reached warning threshold"
+            );
+        }
+    }
+
+    pub(crate) fn observe_ws_send_failed(&self) {
+        self.ws_metrics.observe_send_failed();
+    }
+
+    pub(crate) fn observe_ws_idle_signal(&self) {
+        self.ws_metrics.observe_idle_signal();
+    }
+
+    pub(crate) fn observe_ws_qos_drop(&self) {
+        self.ws_metrics.observe_qos_drop();
+    }
+
+    pub(crate) fn ws_metrics_snapshot(&self) -> NotifyWsMetricsSnapshot {
+        self.ws_metrics.snapshot()
     }
 
     pub(crate) fn replay_sse_events_for_user(
