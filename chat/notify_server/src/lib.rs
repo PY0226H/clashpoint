@@ -42,10 +42,13 @@ pub use notif::AppEvent;
 const CHANNEL_CAPACITY: usize = 256;
 const DEBATE_REPLAY_HISTORY_CAPACITY: usize = 400;
 const DEBATE_REPLAY_MAX_ON_CONNECT: usize = 200;
+const DEBATE_REPLAY_KEY_TTL_MS: i64 = 30 * 60 * 1000;
+const DEBATE_REPLAY_MAX_KEYS_PER_USER: usize = 64;
 const SSE_REPLAY_HISTORY_CAPACITY: usize = 512;
 const SSE_REPLAY_MAX_ON_CONNECT: usize = 200;
 const SSE_MAX_CONNECTIONS_PER_USER: u32 = 3;
 const WS_MAX_CONNECTIONS_PER_USER: u32 = 3;
+const DEBATE_WS_MAX_CONNECTIONS_PER_USER_PER_SESSION: u32 = 2;
 const SYNC_REQUIRED_WARN_EVERY: u64 = 20;
 const SSE_SYNC_REQUIRED_WARN_EVERY: u64 = 20;
 
@@ -54,6 +57,8 @@ type DebateReplayMap = Arc<DashMap<(u64, i64), DebateReplayHistory>>;
 type SseReplayMap = Arc<DashMap<u64, SseReplayHistory>>;
 type SseConnMap = Arc<DashMap<u64, u32>>;
 type WsConnMap = Arc<DashMap<u64, u32>>;
+type DebateWsConnMap = Arc<DashMap<(u64, i64), u32>>;
+type DebateMembershipMap = Arc<DashMap<(u64, i64), i64>>;
 
 #[derive(Debug, Clone)]
 pub struct DebateReplayEvent {
@@ -107,6 +112,7 @@ pub struct UserEvent {
 struct DebateReplayHistory {
     next_seq: u64,
     events: VecDeque<DebateReplayEvent>,
+    last_access_ms: i64,
 }
 
 #[derive(Debug)]
@@ -137,12 +143,20 @@ pub struct SseReplayWindow {
 pub struct NotifySyncRequiredMetricsSnapshot {
     pub persist_failed_total: u64,
     pub replay_storage_unavailable_total: u64,
+    pub replay_window_miss_total: u64,
+    pub lagged_receiver_total: u64,
+    pub replay_truncated_total: u64,
+    pub other_total: u64,
 }
 
 #[derive(Debug, Default)]
 pub struct NotifySyncRequiredMetrics {
     persist_failed_total: AtomicU64,
     replay_storage_unavailable_total: AtomicU64,
+    replay_window_miss_total: AtomicU64,
+    lagged_receiver_total: AtomicU64,
+    replay_truncated_total: AtomicU64,
+    other_total: AtomicU64,
 }
 
 impl NotifySyncRequiredMetrics {
@@ -154,7 +168,18 @@ impl NotifySyncRequiredMetrics {
                     .fetch_add(1, Ordering::Relaxed)
                     + 1,
             ),
-            _ => None,
+            "replay_window_miss" => Some(
+                self.replay_window_miss_total
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1,
+            ),
+            "lagged_receiver" => {
+                Some(self.lagged_receiver_total.fetch_add(1, Ordering::Relaxed) + 1)
+            }
+            "replay_truncated" => {
+                Some(self.replay_truncated_total.fetch_add(1, Ordering::Relaxed) + 1)
+            }
+            _ => Some(self.other_total.fetch_add(1, Ordering::Relaxed) + 1),
         }
     }
 
@@ -164,6 +189,10 @@ impl NotifySyncRequiredMetrics {
             replay_storage_unavailable_total: self
                 .replay_storage_unavailable_total
                 .load(Ordering::Relaxed),
+            replay_window_miss_total: self.replay_window_miss_total.load(Ordering::Relaxed),
+            lagged_receiver_total: self.lagged_receiver_total.load(Ordering::Relaxed),
+            replay_truncated_total: self.replay_truncated_total.load(Ordering::Relaxed),
+            other_total: self.other_total.load(Ordering::Relaxed),
         }
     }
 }
@@ -422,6 +451,90 @@ impl NotifyWsMetrics {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NotifyDebateWsMetricsSnapshot {
+    pub connected_total: u64,
+    pub disconnected_total: u64,
+    pub replay_sent_total: u64,
+    pub live_sent_total: u64,
+    pub lagged_total: u64,
+    pub lagged_skipped_total: u64,
+    pub sync_required_total: u64,
+    pub too_many_connections_total: u64,
+    pub send_failed_total: u64,
+    pub heartbeat_timeout_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NotifyDebateWsMetrics {
+    connected_total: AtomicU64,
+    disconnected_total: AtomicU64,
+    replay_sent_total: AtomicU64,
+    live_sent_total: AtomicU64,
+    lagged_total: AtomicU64,
+    lagged_skipped_total: AtomicU64,
+    sync_required_total: AtomicU64,
+    too_many_connections_total: AtomicU64,
+    send_failed_total: AtomicU64,
+    heartbeat_timeout_total: AtomicU64,
+}
+
+impl NotifyDebateWsMetrics {
+    fn observe_connected(&self) {
+        self.connected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_disconnected(&self) {
+        self.disconnected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_replay_sent(&self) {
+        self.replay_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_live_sent(&self) {
+        self.live_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_lagged(&self, skipped: u64) {
+        self.lagged_total.fetch_add(1, Ordering::Relaxed);
+        self.lagged_skipped_total
+            .fetch_add(skipped, Ordering::Relaxed);
+    }
+
+    fn observe_sync_required(&self) {
+        self.sync_required_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_too_many_connections(&self) {
+        self.too_many_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_send_failed(&self) {
+        self.send_failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_heartbeat_timeout(&self) {
+        self.heartbeat_timeout_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> NotifyDebateWsMetricsSnapshot {
+        NotifyDebateWsMetricsSnapshot {
+            connected_total: self.connected_total.load(Ordering::Relaxed),
+            disconnected_total: self.disconnected_total.load(Ordering::Relaxed),
+            replay_sent_total: self.replay_sent_total.load(Ordering::Relaxed),
+            live_sent_total: self.live_sent_total.load(Ordering::Relaxed),
+            lagged_total: self.lagged_total.load(Ordering::Relaxed),
+            lagged_skipped_total: self.lagged_skipped_total.load(Ordering::Relaxed),
+            sync_required_total: self.sync_required_total.load(Ordering::Relaxed),
+            too_many_connections_total: self.too_many_connections_total.load(Ordering::Relaxed),
+            send_failed_total: self.send_failed_total.load(Ordering::Relaxed),
+            heartbeat_timeout_total: self.heartbeat_timeout_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum NotifyAuthSurface {
     Sse,
@@ -469,10 +582,13 @@ pub struct AppStateInner {
     sse_replays: SseReplayMap,
     sse_connections: SseConnMap,
     ws_connections: WsConnMap,
+    debate_ws_connections: DebateWsConnMap,
+    debate_memberships: DebateMembershipMap,
     sync_required_metrics: NotifySyncRequiredMetrics,
     auth_metrics: NotifyAuthMetrics,
     sse_metrics: NotifySseMetrics,
     ws_metrics: NotifyWsMetrics,
+    debate_ws_metrics: NotifyDebateWsMetrics,
     ingress_metrics: NotifyIngressMetrics,
     db: PgPool,
     dk: DecodingKey,
@@ -591,6 +707,8 @@ impl AppState {
         let sse_replays = Arc::new(DashMap::new());
         let sse_connections = Arc::new(DashMap::new());
         let ws_connections = Arc::new(DashMap::new());
+        let debate_ws_connections = Arc::new(DashMap::new());
+        let debate_memberships = Arc::new(DashMap::new());
         let db = PgPoolOptions::new()
             .max_connections(5)
             .connect_lazy(&config.server.db_url)
@@ -603,10 +721,13 @@ impl AppState {
             sse_replays,
             sse_connections,
             ws_connections,
+            debate_ws_connections,
+            debate_memberships,
             sync_required_metrics: NotifySyncRequiredMetrics::default(),
             auth_metrics: NotifyAuthMetrics::default(),
             sse_metrics: NotifySseMetrics::default(),
             ws_metrics: NotifyWsMetrics::default(),
+            debate_ws_metrics: NotifyDebateWsMetrics::default(),
             ingress_metrics: NotifyIngressMetrics::default(),
             db,
         }))
@@ -702,12 +823,83 @@ impl AppState {
         }
     }
 
+    pub(crate) fn try_acquire_debate_ws_connection(&self, user_id: u64, session_id: i64) -> bool {
+        let key = (user_id, session_id);
+        let mut accepted = false;
+        {
+            let mut entry = self.debate_ws_connections.entry(key).or_insert(0);
+            if *entry < DEBATE_WS_MAX_CONNECTIONS_PER_USER_PER_SESSION {
+                *entry += 1;
+                accepted = true;
+            }
+        }
+        if accepted {
+            self.debate_ws_metrics.observe_connected();
+        } else {
+            self.debate_ws_metrics.observe_too_many_connections();
+        }
+        accepted
+    }
+
+    pub(crate) fn release_debate_ws_connection(&self, user_id: u64, session_id: i64) {
+        let key = (user_id, session_id);
+        let mut should_remove = false;
+        if let Some(mut entry) = self.debate_ws_connections.get_mut(&key) {
+            if *entry > 0 {
+                *entry -= 1;
+                self.debate_ws_metrics.observe_disconnected();
+            }
+            if *entry == 0 {
+                should_remove = true;
+            }
+        }
+        if should_remove {
+            self.debate_ws_connections.remove(&key);
+        }
+    }
+
+    pub(crate) fn mark_debate_membership(&self, user_id: u64, session_id: i64) {
+        self.debate_memberships
+            .insert((user_id, session_id), now_unix_ms());
+    }
+
+    pub(crate) async fn is_debate_session_participant(
+        &self,
+        user_id: u64,
+        session_id: i64,
+    ) -> anyhow::Result<bool> {
+        if self.debate_memberships.contains_key(&(user_id, session_id)) {
+            return Ok(true);
+        }
+        let exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM session_participants
+                WHERE session_id = $1
+                  AND user_id = $2
+            )
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id as i64)
+        .fetch_one(&self.db)
+        .await?;
+        if exists {
+            self.mark_debate_membership(user_id, session_id);
+        }
+        Ok(exists)
+    }
+
     pub(crate) fn build_user_event_for_recipient(
         &self,
         user_id: u64,
         app_event: Arc<AppEvent>,
         replay_event: Option<DebateReplayEvent>,
     ) -> UserEvent {
+        if let Some(session_id) = app_event.debate_session_id() {
+            self.mark_debate_membership(user_id, session_id);
+        }
         let sse_replay = self.append_sse_replay_event(user_id, app_event.as_ref());
         let debate_replay = match replay_event {
             Some(v) => Some(self.append_persisted_replay_event(user_id, v)),
@@ -870,6 +1062,34 @@ impl AppState {
         self.ws_metrics.snapshot()
     }
 
+    pub(crate) fn observe_debate_ws_replay_sent(&self) {
+        self.debate_ws_metrics.observe_replay_sent();
+    }
+
+    pub(crate) fn observe_debate_ws_live_sent(&self) {
+        self.debate_ws_metrics.observe_live_sent();
+    }
+
+    pub(crate) fn observe_debate_ws_lagged(&self, skipped: u64) {
+        self.debate_ws_metrics.observe_lagged(skipped);
+    }
+
+    pub(crate) fn observe_debate_ws_sync_required(&self) {
+        self.debate_ws_metrics.observe_sync_required();
+    }
+
+    pub(crate) fn observe_debate_ws_send_failed(&self) {
+        self.debate_ws_metrics.observe_send_failed();
+    }
+
+    pub(crate) fn observe_debate_ws_heartbeat_timeout(&self) {
+        self.debate_ws_metrics.observe_heartbeat_timeout();
+    }
+
+    pub(crate) fn debate_ws_metrics_snapshot(&self) -> NotifyDebateWsMetricsSnapshot {
+        self.debate_ws_metrics.snapshot()
+    }
+
     pub(crate) fn replay_sse_events_for_user(
         &self,
         user_id: u64,
@@ -925,7 +1145,8 @@ impl AppState {
         session_id: i64,
         last_ack_seq: Option<u64>,
     ) -> DebateReplayWindow {
-        match self
+        let from_seq = last_ack_seq.unwrap_or(0);
+        let window = match self
             .replay_debate_events_from_db(session_id, last_ack_seq)
             .await
         {
@@ -942,7 +1163,22 @@ impl AppState {
                     self.replay_debate_events_from_memory(user_id, session_id, last_ack_seq);
                 mark_sync_required_for_replay_storage_unavailable(window, last_ack_seq.unwrap_or(0))
             }
+        };
+        if window.sync_required_reason.is_some() {
+            return window;
         }
+        let replay_span = window.latest_seq.saturating_sub(from_seq);
+        if replay_span > DEBATE_REPLAY_MAX_ON_CONNECT as u64 {
+            return DebateReplayWindow {
+                events: vec![],
+                latest_seq: window.latest_seq,
+                has_gap: false,
+                skipped: replay_span,
+                sync_required_reason: Some("replay_truncated".to_string()),
+                sync_required_strategy: Some("snapshot_then_reconnect".to_string()),
+            };
+        }
+        window
     }
 
     async fn replay_debate_events_from_db(
@@ -1032,7 +1268,7 @@ impl AppState {
         last_ack_seq: Option<u64>,
     ) -> DebateReplayWindow {
         let from_seq = last_ack_seq.unwrap_or(0);
-        let Some(history) = self.debate_replays.get(&(user_id, session_id)) else {
+        let Some(mut history) = self.debate_replays.get_mut(&(user_id, session_id)) else {
             return DebateReplayWindow {
                 events: vec![],
                 latest_seq: 0,
@@ -1042,6 +1278,7 @@ impl AppState {
                 sync_required_strategy: None,
             };
         };
+        history.touch();
         let latest_seq = history.latest_seq();
         if history.events.is_empty() || from_seq >= latest_seq {
             return DebateReplayWindow {
@@ -1164,7 +1401,10 @@ impl AppState {
             .debate_replays
             .entry((user_id, session_id))
             .or_default();
-        Some(entry.push(raw))
+        let replay = entry.push(raw);
+        drop(entry);
+        self.prune_debate_replay_keys_for_user(user_id);
+        Some(replay)
     }
 
     fn append_sse_replay_event(
@@ -1192,11 +1432,44 @@ impl AppState {
         user_id: u64,
         replay_event: DebateReplayEvent,
     ) -> DebateReplayEvent {
+        self.mark_debate_membership(user_id, replay_event.session_id);
         let mut entry = self
             .debate_replays
             .entry((user_id, replay_event.session_id))
             .or_default();
-        entry.push_with_seq(replay_event)
+        let replay = entry.push_with_seq(replay_event);
+        drop(entry);
+        self.prune_debate_replay_keys_for_user(user_id);
+        replay
+    }
+
+    fn prune_debate_replay_keys_for_user(&self, user_id: u64) {
+        let now_ms = now_unix_ms();
+        let mut stale_keys = Vec::new();
+        let mut live_keys = Vec::new();
+        for entry in self.debate_replays.iter() {
+            if entry.key().0 != user_id {
+                continue;
+            }
+            let key = *entry.key();
+            let last_access_ms = entry.value().last_access_ms;
+            if now_ms.saturating_sub(last_access_ms) > DEBATE_REPLAY_KEY_TTL_MS {
+                stale_keys.push(key);
+            } else {
+                live_keys.push((last_access_ms, key));
+            }
+        }
+        for key in stale_keys {
+            self.debate_replays.remove(&key);
+        }
+        if live_keys.len() <= DEBATE_REPLAY_MAX_KEYS_PER_USER {
+            return;
+        }
+        live_keys.sort_by_key(|(last_access_ms, _)| *last_access_ms);
+        let remove_count = live_keys.len() - DEBATE_REPLAY_MAX_KEYS_PER_USER;
+        for (_, key) in live_keys.into_iter().take(remove_count) {
+            self.debate_replays.remove(&key);
+        }
     }
 
     async fn find_persisted_event_by_dedupe(
@@ -1241,10 +1514,15 @@ impl DebateReplayHistory {
             .unwrap_or_else(|| self.next_seq.saturating_sub(1))
     }
 
+    fn touch(&mut self) {
+        self.last_access_ms = now_unix_ms();
+    }
+
     fn push(&mut self, mut event: DebateReplayEvent) -> DebateReplayEvent {
         event.event_seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1);
         self.events.push_back(event.clone());
+        self.touch();
         while self.events.len() > DEBATE_REPLAY_HISTORY_CAPACITY {
             let _ = self.events.pop_front();
         }
@@ -1259,6 +1537,7 @@ impl DebateReplayHistory {
         }
         self.next_seq = self.next_seq.max(event.event_seq.saturating_add(1));
         self.events.push_back(event.clone());
+        self.touch();
         while self.events.len() > DEBATE_REPLAY_HISTORY_CAPACITY {
             let _ = self.events.pop_front();
         }
@@ -1294,6 +1573,7 @@ impl Default for DebateReplayHistory {
         Self {
             next_seq: 1,
             events: VecDeque::new(),
+            last_access_ms: now_unix_ms(),
         }
     }
 }
@@ -1412,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn notify_sync_required_metrics_should_count_supported_reasons_only() {
+    fn notify_sync_required_metrics_should_count_reasons_with_fallback() {
         let metrics = NotifySyncRequiredMetrics::default();
         assert_eq!(metrics.observe_reason("persist_failed"), Some(1));
         assert_eq!(metrics.observe_reason("persist_failed"), Some(2));
@@ -1420,11 +1700,18 @@ mod tests {
             metrics.observe_reason("replay_storage_unavailable"),
             Some(1)
         );
-        assert_eq!(metrics.observe_reason("lagged_receiver"), None);
+        assert_eq!(metrics.observe_reason("lagged_receiver"), Some(1));
+        assert_eq!(metrics.observe_reason("replay_window_miss"), Some(1));
+        assert_eq!(metrics.observe_reason("replay_truncated"), Some(1));
+        assert_eq!(metrics.observe_reason("unknown_reason"), Some(1));
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.persist_failed_total, 2);
         assert_eq!(snapshot.replay_storage_unavailable_total, 1);
+        assert_eq!(snapshot.lagged_receiver_total, 1);
+        assert_eq!(snapshot.replay_window_miss_total, 1);
+        assert_eq!(snapshot.replay_truncated_total, 1);
+        assert_eq!(snapshot.other_total, 1);
     }
 
     fn test_state() -> AppState {

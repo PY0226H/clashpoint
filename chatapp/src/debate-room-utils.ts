@@ -33,6 +33,8 @@ export function buildDebateRoomWsUrl({ notifyBase, sessionId, notifyTicket, last
   if (!sessionId) {
     throw new Error('sessionId is required');
   }
+  // Debate room websocket ticket is carried by Sec-WebSocket-Protocol.
+  // Keep this validation to avoid accidental anonymous connection attempts.
   if (!notifyTicket || !String(notifyTicket).trim()) {
     throw new Error('notifyTicket is required');
   }
@@ -42,7 +44,6 @@ export function buildDebateRoomWsUrl({ notifyBase, sessionId, notifyTicket, last
   const basePath = normalizeNotifyBasePath(parsed.pathname);
   parsed.pathname = `${basePath}/ws/debate/${sessionId}`;
   parsed.search = '';
-  parsed.searchParams.set('token', String(notifyTicket).trim());
   const normalizedLastAckSeq = Number(lastAckSeq);
   if (lastAckSeq != null && Number.isFinite(normalizedLastAckSeq) && normalizedLastAckSeq >= 0) {
     parsed.searchParams.set('lastAckSeq', String(Math.floor(normalizedLastAckSeq)));

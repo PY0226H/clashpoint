@@ -51,7 +51,10 @@ pub async fn verify_notify_ticket(
     let request_id = extract_request_id(&parts.headers);
     let path = parts.uri.path().to_string();
     let auth_surface = classify_auth_surface(&path);
-    let token = if matches!(auth_surface, NotifyAuthSurface::GlobalWs) {
+    let token = if matches!(
+        auth_surface,
+        NotifyAuthSurface::GlobalWs | NotifyAuthSurface::DebateWs
+    ) {
         match extract_notify_ticket_from_ws_protocol(&parts.headers) {
             Some((token, protocol)) => {
                 parts.extensions.insert(NotifyWsSubprotocol(protocol));
@@ -64,6 +67,7 @@ pub async fn verify_notify_ticket(
                     request_id,
                     path,
                     ws_unauthorized_total = auth_snapshot.ws_unauthorized_total,
+                    debate_ws_unauthorized_total = auth_snapshot.debate_ws_unauthorized_total,
                     "parse notify ticket from websocket protocol failed"
                 );
                 return notify_error_response(
@@ -201,6 +205,7 @@ mod tests {
         let app = Router::new()
             .route("/events", get(handler))
             .route("/ws", get(handler))
+            .route("/ws/debate/12", get(handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 verify_notify_ticket,
@@ -240,9 +245,28 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let req = Request::builder()
+            .uri("/ws/debate/12")
+            .header("Sec-WebSocket-Protocol", notify_ticket.as_str())
+            .body(Body::empty())?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let req = Request::builder()
             .uri(format!("/ws?token={notify_ticket}"))
             .body(Body::empty())?;
-        let res = app.oneshot(req).await?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(res.into_body(), usize::MAX).await?;
+        let json: Value = serde_json::from_slice(&body)?;
+        assert_eq!(
+            json["error"],
+            "notify_ticket_missing_or_invalid_subprotocol"
+        );
+
+        let req = Request::builder()
+            .uri(format!("/ws/debate/12?token={notify_ticket}"))
+            .body(Body::empty())?;
+        let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
         let body = to_bytes(res.into_body(), usize::MAX).await?;
         let json: Value = serde_json::from_slice(&body)?;

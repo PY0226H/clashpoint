@@ -24,7 +24,7 @@ const wsUrl = buildDebateRoomWsUrl({
   sessionId: 123,
   notifyTicket: 'abc',
 });
-assert.equal(wsUrl, 'ws://localhost:6687/ws/debate/123?token=abc');
+assert.equal(wsUrl, 'ws://localhost:6687/ws/debate/123');
 
 const wsUrlWithPrefix = buildDebateRoomWsUrl({
   notifyBase: 'https://example.com/notify/events',
@@ -32,7 +32,7 @@ const wsUrlWithPrefix = buildDebateRoomWsUrl({
   notifyTicket: 't-1',
   lastAckSeq: 10,
 });
-assert.equal(wsUrlWithPrefix, 'wss://example.com/notify/ws/debate/88?token=t-1&lastAckSeq=10');
+assert.equal(wsUrlWithPrefix, 'wss://example.com/notify/ws/debate/88?lastAckSeq=10');
 
 assert.throws(
   () => buildDebateRoomWsUrl({ notifyBase: 'http://localhost:6687/events', sessionId: 1 }),

@@ -323,6 +323,7 @@ import {
 const WS_HEARTBEAT_SEND_INTERVAL_MS = 20_000;
 const WS_HEARTBEAT_WATCHDOG_INTERVAL_MS = 5_000;
 const WS_HEARTBEAT_STALE_TIMEOUT_MS = 65_000;
+const LAST_ACK_SEQ_STORAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default {
   components: {
@@ -473,23 +474,55 @@ export default {
       if (!this.sessionId) {
         return '';
       }
-      return `debateRoom:lastAckSeq:${this.sessionId}`;
+      const userPart = this.userId != null ? String(this.userId) : 'anonymous';
+      return `debateRoom:lastAckSeq:v2:${userPart}:${this.sessionId}`;
     },
     restoreLastAckSeq() {
       const key = this.lastAckSeqStorageKey();
-      if (!key || !globalThis?.sessionStorage) {
+      if (!key || !globalThis?.localStorage) {
         this.lastAckSeq = 0;
         return;
       }
-      const raw = Number(globalThis.sessionStorage.getItem(key));
-      this.lastAckSeq = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+      try {
+        const raw = globalThis.localStorage.getItem(key);
+        if (!raw) {
+          this.lastAckSeq = 0;
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        const value = Number(parsed?.value);
+        const updatedAtMs = Number(parsed?.updatedAtMs);
+        const nowMs = Date.now();
+        if (!Number.isFinite(value) || value < 0) {
+          this.lastAckSeq = 0;
+          return;
+        }
+        if (!Number.isFinite(updatedAtMs) || nowMs - updatedAtMs > LAST_ACK_SEQ_STORAGE_TTL_MS) {
+          globalThis.localStorage.removeItem(key);
+          this.lastAckSeq = 0;
+          return;
+        }
+        this.lastAckSeq = Math.floor(value);
+      } catch (_) {
+        this.lastAckSeq = 0;
+      }
     },
     persistLastAckSeq() {
       const key = this.lastAckSeqStorageKey();
-      if (!key || !globalThis?.sessionStorage) {
+      if (!key || !globalThis?.localStorage) {
         return;
       }
-      globalThis.sessionStorage.setItem(key, String(this.lastAckSeq));
+      try {
+        globalThis.localStorage.setItem(
+          key,
+          JSON.stringify({
+            value: this.lastAckSeq,
+            updatedAtMs: Date.now(),
+          }),
+        );
+      } catch (_) {
+        // Ignore storage write failures and keep runtime ack seq.
+      }
     },
     setLastAckSeq(seq, { force = false } = {}) {
       const nextAckSeq = advanceDebateAckSeq(this.lastAckSeq, seq, { force });
@@ -829,6 +862,13 @@ export default {
         return;
       }
       this.wsSyncInFlight = true;
+      const mustSnapshot = rawMsg?.mustSnapshot ?? rawMsg?.must_snapshot ?? true;
+      const reconnectAfterMsRaw = Number(
+        rawMsg?.reconnectAfterMs ?? rawMsg?.reconnect_after_ms ?? 0,
+      );
+      const reconnectAfterMs = Number.isFinite(reconnectAfterMsRaw)
+        ? Math.max(0, Math.floor(reconnectAfterMsRaw))
+        : 0;
       const suggestedLastAckSeq = toNonNegativeInt(
         rawMsg?.suggestedLastAckSeq ?? rawMsg?.suggested_last_ack_seq,
         null,
@@ -841,12 +881,21 @@ export default {
         this.setLastAckSeq(suggestedLastAckSeq, { force: true });
       }
       try {
-        await this.recoverRoomStateAfterReconnect({ force: true });
+        if (mustSnapshot !== false) {
+          await this.recoverRoomStateAfterReconnect({ force: true });
+        }
         if (latestEventSeq != null) {
           this.setLastAckSeq(latestEventSeq, { force: true });
         }
         this.disconnectWs();
-        await this.connectRoomWs();
+        if (reconnectAfterMs > 0) {
+          this.wsReconnectTimer = setTimeout(() => {
+            this.wsReconnectTimer = null;
+            this.connectRoomWs();
+          }, reconnectAfterMs);
+        } else {
+          await this.connectRoomWs();
+        }
       } catch (_) {
         this.disconnectWs();
         this.scheduleWsReconnect();
@@ -1022,7 +1071,7 @@ export default {
           lastAckSeq: this.lastAckSeq,
         });
         this.disconnectWs();
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(wsUrl, [`notify-ticket.${String(notifyTicket).trim()}`]);
         this.ws = ws;
         ws.onopen = () => {
           if (this.ws !== ws) {
