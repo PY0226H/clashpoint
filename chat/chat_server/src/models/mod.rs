@@ -57,9 +57,10 @@ pub use ops_observability::{
     UpsertOpsServiceSplitReviewInput,
 };
 pub use payment::{
-    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderSnapshot, IapProduct,
-    IapProductsEmptyReason, ListIapProducts, ListIapProductsOutput, ListWalletLedger,
-    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
+    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
+    IapOrderSnapshot, IapProduct, IapProductsEmptyReason, ListIapProducts, ListIapProductsOutput,
+    ListWalletLedger, VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput,
+    WalletLedgerItem,
 };
 pub(crate) use rbac::OpsPermission;
 pub use rbac::{

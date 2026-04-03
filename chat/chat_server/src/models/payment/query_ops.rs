@@ -1,8 +1,8 @@
 use super::{
     helpers,
     types::{
-        GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderSnapshot,
-        IapOrderSnapshotRow, IapProduct, IapProductsEmptyReason, ListIapProducts,
+        GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
+        IapOrderSnapshot, IapOrderSnapshotRow, IapProduct, IapProductsEmptyReason, ListIapProducts,
         ListIapProductsOutput, ListWalletLedger, WalletBalanceOutput, WalletLedgerItem,
     },
 };
@@ -13,6 +13,9 @@ use std::{collections::HashMap, sync::LazyLock};
 use tokio::sync::RwLock;
 
 const IAP_PRODUCTS_CACHE_TTL_SECS: i64 = 10;
+const IAP_ORDER_PROBE_CACHE_TTL_SECS: i64 = 5;
+const IAP_ORDER_PROBE_NOT_FOUND_RETRY_AFTER_MS: u64 = 1_200;
+const IAP_ORDER_PROBE_PENDING_RETRY_AFTER_MS: u64 = 800;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct IapProductsCacheKey {
@@ -27,9 +30,37 @@ struct IapProductsCacheEntry {
     output: ListIapProductsOutput,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct IapOrderProbeCacheKey {
+    db_scope_hash: String,
+    user_id: i64,
+    transaction_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct IapOrderProbeCacheEntry {
+    expires_at_epoch_secs: i64,
+    output: GetIapOrderByTransactionOutput,
+}
+
 static IAP_PRODUCTS_LIST_CACHE: LazyLock<
     RwLock<HashMap<IapProductsCacheKey, IapProductsCacheEntry>>,
 > = LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static IAP_ORDER_PROBE_CACHE: LazyLock<
+    RwLock<HashMap<IapOrderProbeCacheKey, IapOrderProbeCacheEntry>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
+
+pub(crate) async fn invalidate_iap_order_probe_cache_for_transaction(
+    db_url: &str,
+    transaction_id: &str,
+) {
+    let db_scope_hash = hash_cache_scope(db_url);
+    let mut cache = IAP_ORDER_PROBE_CACHE.write().await;
+    cache.retain(|key, _| {
+        !(key.db_scope_hash == db_scope_hash && key.transaction_id == transaction_id)
+    });
+}
 
 #[allow(dead_code)]
 impl AppState {
@@ -108,8 +139,31 @@ impl AppState {
         user: &User,
         input: GetIapOrderByTransaction,
     ) -> Result<GetIapOrderByTransactionOutput, AppError> {
+        let (ret, _) = self
+            .get_iap_order_by_transaction_with_probe_cache(user, input)
+            .await?;
+        Ok(ret)
+    }
+
+    pub(crate) async fn get_iap_order_by_transaction_with_probe_cache(
+        &self,
+        user: &User,
+        input: GetIapOrderByTransaction,
+    ) -> Result<(GetIapOrderByTransactionOutput, bool), AppError> {
         helpers::validate_identifier(&input.transaction_id, "transaction_id", 128)?;
         let transaction_id = input.transaction_id.trim();
+        let cache_key = IapOrderProbeCacheKey {
+            db_scope_hash: hash_cache_scope(&self.config.server.db_url),
+            user_id: user.id,
+            transaction_id: transaction_id.to_string(),
+        };
+        let now_epoch = Utc::now().timestamp();
+        if let Some(entry) = IAP_ORDER_PROBE_CACHE.read().await.get(&cache_key) {
+            if entry.expires_at_epoch_secs > now_epoch {
+                return Ok((entry.output.clone(), true));
+            }
+        }
+
         let row: Option<IapOrderSnapshotRow> = sqlx::query_as(
             r#"
             SELECT
@@ -138,10 +192,20 @@ impl AppState {
         .await?;
 
         let Some(row) = row else {
-            return Ok(GetIapOrderByTransactionOutput {
+            let output = GetIapOrderByTransactionOutput {
                 found: false,
                 order: None,
-            });
+                probe_status: Some(IapOrderProbeStatus::NotFound),
+                next_retry_after_ms: Some(IAP_ORDER_PROBE_NOT_FOUND_RETRY_AFTER_MS),
+            };
+            IAP_ORDER_PROBE_CACHE.write().await.insert(
+                cache_key,
+                IapOrderProbeCacheEntry {
+                    expires_at_epoch_secs: now_epoch + IAP_ORDER_PROBE_CACHE_TTL_SECS,
+                    output: output.clone(),
+                },
+            );
+            return Ok((output, false));
         };
         if row.user_id != user.id {
             return Err(AppError::PaymentConflict(
@@ -149,7 +213,17 @@ impl AppState {
             ));
         }
 
-        Ok(GetIapOrderByTransactionOutput {
+        let probe_status = if row.credited {
+            IapOrderProbeStatus::VerifiedCredited
+        } else {
+            IapOrderProbeStatus::PendingCredit
+        };
+        let next_retry_after_ms = if row.credited || row.status.eq_ignore_ascii_case("rejected") {
+            None
+        } else {
+            Some(IAP_ORDER_PROBE_PENDING_RETRY_AFTER_MS)
+        };
+        let output = GetIapOrderByTransactionOutput {
             found: true,
             order: Some(IapOrderSnapshot {
                 order_id: row.id as u64,
@@ -160,7 +234,28 @@ impl AppState {
                 coins: row.coins,
                 credited: row.credited,
             }),
-        })
+            probe_status: Some(probe_status),
+            next_retry_after_ms,
+        };
+
+        let can_cache = !matches!(
+            output.probe_status,
+            Some(IapOrderProbeStatus::PendingCredit)
+        ) || output
+            .order
+            .as_ref()
+            .map(|order| order.status.eq_ignore_ascii_case("rejected"))
+            .unwrap_or(false);
+        if can_cache {
+            IAP_ORDER_PROBE_CACHE.write().await.insert(
+                cache_key,
+                IapOrderProbeCacheEntry {
+                    expires_at_epoch_secs: now_epoch + IAP_ORDER_PROBE_CACHE_TTL_SECS,
+                    output: output.clone(),
+                },
+            );
+        }
+        Ok((output, false))
     }
 
     pub async fn get_wallet_balance(&self, user_id: u64) -> Result<WalletBalanceOutput, AppError> {

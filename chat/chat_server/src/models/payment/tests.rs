@@ -3,8 +3,9 @@ use super::receipt_verify::{
     select_matching_record, verify_receipt, ReceiptRecord, ReceiptVerifyResult,
 };
 use super::types::{
-    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapProductsEmptyReason,
-    ListIapProducts, ListWalletLedger, VerifyIapOrderInput, VerifyIapOrderOutput, WalletLedgerItem,
+    GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
+    IapProductsEmptyReason, ListIapProducts, ListWalletLedger, VerifyIapOrderInput,
+    VerifyIapOrderOutput, WalletLedgerItem,
 };
 use crate::config::PaymentConfig;
 use crate::{AppError, AppState};
@@ -246,6 +247,8 @@ async fn assert_single_prod_request_with_payload(
 fn assert_order_query_not_found(out: &GetIapOrderByTransactionOutput) {
     assert!(!out.found);
     assert!(out.order.is_none());
+    assert_eq!(out.probe_status, Some(IapOrderProbeStatus::NotFound));
+    assert!(out.next_retry_after_ms.is_some());
 }
 
 fn assert_order_query_verified(out: &GetIapOrderByTransactionOutput, expected_product_id: &str) {
@@ -254,6 +257,11 @@ fn assert_order_query_verified(out: &GetIapOrderByTransactionOutput, expected_pr
     assert_eq!(order.status, "verified");
     assert_eq!(order.product_id, expected_product_id);
     assert!(order.credited);
+    assert_eq!(
+        out.probe_status,
+        Some(IapOrderProbeStatus::VerifiedCredited)
+    );
+    assert!(out.next_retry_after_ms.is_none());
 }
 
 fn assert_payment_conflict(err: &AppError) {
@@ -606,6 +614,13 @@ async fn verify_iap_order_should_create_rejected_order_without_credit() -> Resul
 
     let ledger = query_wallet_ledger(&state, 1).await?;
     assert!(ledger.is_empty());
+    let snapshot = query_order_snapshot(&state, &user, "tx-reject-1").await?;
+    assert!(snapshot.found);
+    assert_eq!(
+        snapshot.probe_status,
+        Some(IapOrderProbeStatus::PendingCredit)
+    );
+    assert!(snapshot.next_retry_after_ms.is_none());
     Ok(())
 }
 

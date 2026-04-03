@@ -75,11 +75,24 @@ pub struct IapOrderSnapshot {
     pub credited: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IapOrderProbeStatus {
+    NotFound,
+    PendingCredit,
+    VerifiedCredited,
+    Conflict,
+}
+
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetIapOrderByTransactionOutput {
     pub found: bool,
     pub order: Option<IapOrderSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_status: Option<IapOrderProbeStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_retry_after_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]

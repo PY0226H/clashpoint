@@ -1,5 +1,5 @@
 use super::{
-    helpers, order_flow, receipt_verify,
+    helpers, order_flow, query_ops, receipt_verify,
     types::{IapOrderRow, IapProduct, VerifyIapOrderInput, VerifyIapOrderOutput},
     MAX_RECEIPT_LEN,
 };
@@ -89,6 +89,11 @@ impl AppState {
             order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.id).await?;
             tx.commit().await?;
+            query_ops::invalidate_iap_order_probe_cache_for_transaction(
+                &self.config.server.db_url,
+                transaction_id,
+            )
+            .await;
             return Ok(order_flow::build_order_output_without_credit(
                 order,
                 wallet_balance,
@@ -152,6 +157,11 @@ impl AppState {
             order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.id).await?;
             tx.commit().await?;
+            query_ops::invalidate_iap_order_probe_cache_for_transaction(
+                &self.config.server.db_url,
+                transaction_id,
+            )
+            .await;
             return Ok(order_flow::build_order_output_without_credit(
                 order,
                 wallet_balance,
@@ -167,6 +177,11 @@ impl AppState {
         .await?;
 
         tx.commit().await?;
+        query_ops::invalidate_iap_order_probe_cache_for_transaction(
+            &self.config.server.db_url,
+            transaction_id,
+        )
+        .await;
 
         Ok(VerifyIapOrderOutput {
             order_id: inserted_order.id as u64,
