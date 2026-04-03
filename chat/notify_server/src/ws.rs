@@ -1101,8 +1101,10 @@ mod tests {
             format!("ws://{addr}/ws")
         };
         let mut req = url.into_client_request()?;
-        req.headers_mut()
-            .insert("Sec-WebSocket-Protocol", notify_ticket.parse()?);
+        req.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            format!("notify-ticket.{notify_ticket}").parse()?,
+        );
         let (socket, _) = connect_async(req).await?;
         Ok((socket,))
     }

@@ -1,4 +1,7 @@
-use crate::AppState;
+use crate::{
+    handlers::{ensure_access_session_active, load_user_token_version},
+    AppError, AppState,
+};
 use axum::{
     extract::{FromRequestParts, Query, Request, State},
     http::StatusCode,
@@ -6,6 +9,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 use tracing::warn;
 
 #[derive(Debug, Deserialize)]
@@ -28,18 +35,70 @@ pub async fn verify_file_ticket(
         }
     };
 
-    let user = match state.dk.verify_file_ticket(&token) {
-        Ok(user) => user,
+    let decoded = match state.dk.verify_file_ticket_decoded(&token) {
+        Ok(decoded) => decoded,
         Err(e) => {
             let msg = format!("verify file ticket failed: {}", e);
             warn!(msg);
             return (StatusCode::FORBIDDEN, msg).into_response();
         }
     };
+    if decoded.sid != "ticket-legacy" {
+        match verify_ticket_session_consistency(&state, decoded.user.id, &decoded.sid, decoded.ver)
+            .await
+        {
+            Ok(()) => {}
+            Err(msg) => {
+                warn!(
+                    user_id = decoded.user.id,
+                    sid_hash = hash_for_log(&decoded.sid),
+                    jti_hash = hash_for_log(&decoded.jti),
+                    "verify file ticket session consistency failed"
+                );
+                return (StatusCode::FORBIDDEN, msg).into_response();
+            }
+        }
+    }
+    tracing::info!(
+        user_id = decoded.user.id,
+        sid_hash = hash_for_log(&decoded.sid),
+        jti_hash = hash_for_log(&decoded.jti),
+        token_version = decoded.ver,
+        "verify file ticket success"
+    );
 
     let mut req = Request::from_parts(parts, body);
-    req.extensions_mut().insert(user);
+    req.extensions_mut().insert(decoded.user);
     next.run(req).await
+}
+
+async fn verify_ticket_session_consistency(
+    state: &AppState,
+    user_id: i64,
+    sid: &str,
+    ver: i64,
+) -> Result<(), &'static str> {
+    let current_ver = load_user_token_version(state, user_id)
+        .await
+        .map_err(|_| "verify file ticket failed: ticket session check failed")?;
+    if current_ver != ver {
+        return Err("verify file ticket failed: token version mismatch");
+    }
+    ensure_access_session_active(state, user_id, sid)
+        .await
+        .map_err(|err| match err {
+            AppError::AuthError(code) if code == "auth_session_revoked" => {
+                "verify file ticket failed: auth session revoked"
+            }
+            _ => "verify file ticket failed: ticket session check failed",
+        })?;
+    Ok(())
+}
+
+fn hash_for_log(input: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    input.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 #[cfg(test)]
@@ -111,6 +170,35 @@ mod tests {
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verify_file_ticket_middleware_should_enforce_session_consistency_for_scoped_ticket(
+    ) -> Result<()> {
+        let state = test_state()?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let file_ticket = state.ek.sign_file_ticket_with_session(
+            user.id,
+            "sid-scoped-ticket",
+            9,
+            "jti-scoped",
+            300,
+        )?;
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                verify_file_ticket,
+            ))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri(format!("/?token={}", file_ticket))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
         Ok(())
     }
 }

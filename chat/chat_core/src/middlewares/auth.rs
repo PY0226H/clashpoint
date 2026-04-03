@@ -172,6 +172,7 @@ mod tests {
                 .map(|decoded| AuthContext {
                     user: decoded.user,
                     sid: decoded.sid,
+                    ver: decoded.ver,
                 })
                 .map_err(|e| e.to_auth_verify_error())
         }

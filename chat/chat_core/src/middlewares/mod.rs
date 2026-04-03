@@ -41,6 +41,7 @@ impl AuthVerifyError {
 pub struct AuthContext {
     pub user: User,
     pub sid: String,
+    pub ver: i64,
 }
 
 pub trait TokenVerify {

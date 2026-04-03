@@ -321,11 +321,10 @@ impl AccessClaims {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TicketClaims {
-    pub id: i64,
-    pub fullname: String,
-    pub email: String,
-    pub is_bot: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub sub: String,
+    pub sid: String,
+    pub ver: i64,
+    pub jti: String,
     pub iss: String,
     pub aud: String,
     pub exp: usize,
@@ -334,14 +333,20 @@ struct TicketClaims {
 }
 
 impl TicketClaims {
-    fn from_user(user: User, audience: &str, ttl_secs: u64) -> Self {
+    fn from_parts(
+        user_id: i64,
+        sid: impl Into<String>,
+        ver: i64,
+        jti: impl Into<String>,
+        audience: &str,
+        ttl_secs: u64,
+    ) -> Self {
         let now = Utc::now().timestamp().max(0) as usize;
         Self {
-            id: user.id,
-            fullname: user.fullname,
-            email: user.email,
-            is_bot: user.is_bot,
-            created_at: user.created_at,
+            sub: user_id.to_string(),
+            sid: sid.into(),
+            ver: ver.max(0),
+            jti: jti.into(),
             iss: JWT_ISS.to_string(),
             aud: audience.to_string(),
             exp: now + ttl_secs as usize,
@@ -403,19 +408,38 @@ pub struct DecodedRefreshToken {
     pub exp: usize,
 }
 
-impl From<TicketClaims> for User {
-    fn from(value: TicketClaims) -> Self {
-        Self {
-            id: value.id,
-            fullname: value.fullname,
-            email: value.email,
-            phone_e164: None,
-            phone_verified_at: None,
-            phone_bind_required: false,
-            password_hash: None,
-            is_bot: value.is_bot,
-            created_at: value.created_at,
-        }
+pub struct DecodedTicket {
+    pub user: User,
+    pub sid: String,
+    pub ver: i64,
+    pub jti: String,
+    pub exp: usize,
+}
+
+impl TicketClaims {
+    fn into_decoded_ticket(self) -> Result<DecodedTicket, JwtError> {
+        let user_id = self
+            .sub
+            .parse::<i64>()
+            .map_err(|_| jsonwebtoken::errors::Error::from(JsonWebTokenErrorKind::InvalidToken))?;
+        Ok(DecodedTicket {
+            user: User {
+                id: user_id,
+                fullname: String::new(),
+                email: String::new(),
+                phone_e164: None,
+                phone_verified_at: None,
+                phone_bind_required: false,
+                password_hash: None,
+                is_bot: false,
+                created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0)
+                    .unwrap_or_else(Utc::now),
+            },
+            sid: self.sid,
+            ver: self.ver.max(0),
+            jti: self.jti,
+            exp: self.exp,
+        })
     }
 }
 
@@ -507,14 +531,38 @@ impl EncodingKey {
 
     pub fn sign_with_audience(
         &self,
-        user: impl Into<User>,
+        user_id: i64,
+        sid: impl Into<String>,
+        ver: i64,
+        jti: impl Into<String>,
         audience: &str,
         ttl_secs: u64,
     ) -> Result<String, JwtError> {
-        let user = user.into();
-        let claims = TicketClaims::from_user(user, audience, ttl_secs);
+        let claims = TicketClaims::from_parts(user_id, sid, ver, jti, audience, ttl_secs);
         let header = Header::new(Algorithm::EdDSA);
         Ok(encode(&header, &claims, &self.jsonwebtoken)?)
+    }
+
+    pub fn sign_file_ticket_with_session(
+        &self,
+        user_id: i64,
+        sid: impl Into<String>,
+        ver: i64,
+        jti: impl Into<String>,
+        ttl_secs: u64,
+    ) -> Result<String, JwtError> {
+        self.sign_with_audience(user_id, sid, ver, jti, JWT_AUD_FILE_TICKET, ttl_secs)
+    }
+
+    pub fn sign_notify_ticket_with_session(
+        &self,
+        user_id: i64,
+        sid: impl Into<String>,
+        ver: i64,
+        jti: impl Into<String>,
+        ttl_secs: u64,
+    ) -> Result<String, JwtError> {
+        self.sign_with_audience(user_id, sid, ver, jti, JWT_AUD_NOTIFY_TICKET, ttl_secs)
     }
 
     pub fn sign_file_ticket(
@@ -522,7 +570,14 @@ impl EncodingKey {
         user: impl Into<User>,
         ttl_secs: u64,
     ) -> Result<String, JwtError> {
-        self.sign_with_audience(user, JWT_AUD_FILE_TICKET, ttl_secs)
+        let user = user.into();
+        self.sign_file_ticket_with_session(
+            user.id,
+            "ticket-legacy",
+            0,
+            Uuid::now_v7().to_string(),
+            ttl_secs,
+        )
     }
 
     pub fn sign_notify_ticket(
@@ -530,7 +585,14 @@ impl EncodingKey {
         user: impl Into<User>,
         ttl_secs: u64,
     ) -> Result<String, JwtError> {
-        self.sign_with_audience(user, JWT_AUD_NOTIFY_TICKET, ttl_secs)
+        let user = user.into();
+        self.sign_notify_ticket_with_session(
+            user.id,
+            "ticket-legacy",
+            0,
+            Uuid::now_v7().to_string(),
+            ttl_secs,
+        )
     }
 
     pub fn sign_short_lived(
@@ -572,7 +634,7 @@ impl DecodingKey {
         &self,
         token: &str,
         audience: &str,
-    ) -> Result<User, JwtError> {
+    ) -> Result<DecodedTicket, JwtError> {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.set_issuer(&[JWT_ISS]);
         validation.set_audience(&[audience]);
@@ -585,10 +647,14 @@ impl DecodingKey {
         validation.validate_nbf = true;
 
         let claims = decode::<TicketClaims>(token, &self.jsonwebtoken, &validation)?;
-        Ok(claims.claims.into())
+        claims.claims.into_decoded_ticket()
     }
 
-    fn verify_ticket_with_audience(&self, token: &str, audience: &str) -> Result<User, JwtError> {
+    fn verify_ticket_with_audience(
+        &self,
+        token: &str,
+        audience: &str,
+    ) -> Result<DecodedTicket, JwtError> {
         JWT_VERIFY_METRICS.observe_attempt();
         let result = self.verify_ticket_with_jsonwebtoken(token, audience);
 
@@ -684,10 +750,18 @@ impl DecodingKey {
     }
 
     pub fn verify_file_ticket(&self, token: &str) -> Result<User, JwtError> {
+        Ok(self.verify_file_ticket_decoded(token)?.user)
+    }
+
+    pub fn verify_file_ticket_decoded(&self, token: &str) -> Result<DecodedTicket, JwtError> {
         self.verify_ticket_with_audience(token, JWT_AUD_FILE_TICKET)
     }
 
     pub fn verify_notify_ticket(&self, token: &str) -> Result<User, JwtError> {
+        Ok(self.verify_notify_ticket_decoded(token)?.user)
+    }
+
+    pub fn verify_notify_ticket_decoded(&self, token: &str) -> Result<DecodedTicket, JwtError> {
         self.verify_ticket_with_audience(token, JWT_AUD_NOTIFY_TICKET)
     }
 }

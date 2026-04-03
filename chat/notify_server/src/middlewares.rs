@@ -7,6 +7,10 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 use tracing::warn;
 
 #[derive(Debug, Deserialize)]
@@ -101,8 +105,8 @@ pub async fn verify_notify_ticket(
         }
     };
 
-    let user = match state.dk.verify_notify_ticket(&token) {
-        Ok(user) => user,
+    let decoded = match state.dk.verify_notify_ticket_decoded(&token) {
+        Ok(decoded) => decoded,
         Err(err) => {
             state.observe_notify_auth_forbidden(auth_surface);
             let auth_snapshot = state.auth_metrics_snapshot();
@@ -123,9 +127,48 @@ pub async fn verify_notify_ticket(
             );
         }
     };
+    if decoded.sid != "ticket-legacy" {
+        match state
+            .validate_ticket_session_consistency(decoded.user.id, &decoded.sid, decoded.ver)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                state.observe_notify_auth_forbidden(auth_surface);
+                let auth_snapshot = state.auth_metrics_snapshot();
+                warn!(
+                    request_id,
+                    path,
+                    user_id = decoded.user.id,
+                    sid_hash = hash_for_log(&decoded.sid),
+                    jti_hash = hash_for_log(&decoded.jti),
+                    token_version = decoded.ver,
+                    sse_forbidden_total = auth_snapshot.sse_forbidden_total,
+                    ws_forbidden_total = auth_snapshot.ws_forbidden_total,
+                    debate_ws_forbidden_total = auth_snapshot.debate_ws_forbidden_total,
+                    "verify notify ticket session consistency failed"
+                );
+                return notify_error_response(
+                    StatusCode::FORBIDDEN,
+                    "notify_ticket_invalid",
+                    "notify ticket is invalid or expired",
+                    request_id,
+                );
+            }
+        }
+    }
+    tracing::info!(
+        request_id,
+        path,
+        user_id = decoded.user.id,
+        sid_hash = hash_for_log(&decoded.sid),
+        jti_hash = hash_for_log(&decoded.jti),
+        token_version = decoded.ver,
+        "verify notify ticket success"
+    );
 
     let mut req = Request::from_parts(parts, body);
-    req.extensions_mut().insert(user);
+    req.extensions_mut().insert(decoded.user);
     next.run(req).await
 }
 
@@ -148,9 +191,6 @@ fn extract_notify_ticket_from_ws_protocol(headers: &HeaderMap) -> Option<(String
                 return Some((ticket.trim().to_string(), protocol.to_string()));
             }
         }
-        if protocol.matches('.').count() == 2 {
-            return Some((protocol.to_string(), protocol.to_string()));
-        }
     }
     None
 }
@@ -163,6 +203,12 @@ fn extract_request_id(headers: &HeaderMap) -> String {
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("notify-{}", crate::now_unix_ms()))
+}
+
+fn hash_for_log(input: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    input.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 #[cfg(test)]
@@ -239,17 +285,36 @@ mod tests {
 
         let req = Request::builder()
             .uri("/ws")
-            .header("Sec-WebSocket-Protocol", notify_ticket.as_str())
+            .header(
+                "Sec-WebSocket-Protocol",
+                format!("notify-ticket.{notify_ticket}"),
+            )
             .body(Body::empty())?;
         let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
 
         let req = Request::builder()
             .uri("/ws/debate/12")
-            .header("Sec-WebSocket-Protocol", notify_ticket.as_str())
+            .header(
+                "Sec-WebSocket-Protocol",
+                format!("notify-ticket.{notify_ticket}"),
+            )
             .body(Body::empty())?;
         let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
+
+        let req = Request::builder()
+            .uri("/ws")
+            .header("Sec-WebSocket-Protocol", notify_ticket.as_str())
+            .body(Body::empty())?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(res.into_body(), usize::MAX).await?;
+        let json: Value = serde_json::from_slice(&body)?;
+        assert_eq!(
+            json["error"],
+            "notify_ticket_missing_or_invalid_subprotocol"
+        );
 
         let req = Request::builder()
             .uri(format!("/ws?token={notify_ticket}"))
@@ -275,6 +340,39 @@ mod tests {
             "notify_ticket_missing_or_invalid_subprotocol"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verify_notify_ticket_middleware_should_enforce_session_consistency_for_scoped_ticket(
+    ) -> Result<()> {
+        let state = test_state()?;
+        let ek = EncodingKey::load(include_str!("../../chat_core/fixtures/encoding.pem"))?;
+        let user = chat_core::User::new(1, "Tyr Chen", "tchen@acme.org");
+        let scoped_notify_ticket = ek.sign_notify_ticket_with_session(
+            user.id,
+            "sid-notify-scoped",
+            9,
+            "jti-notify-scoped",
+            300,
+        )?;
+
+        let app = Router::new()
+            .route("/events", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                verify_notify_ticket,
+            ))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri(format!("/events?token={scoped_notify_ticket}"))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(res.into_body(), usize::MAX).await?;
+        let json: Value = serde_json::from_slice(&body)?;
+        assert_eq!(json["error"], "notify_ticket_invalid");
         Ok(())
     }
 }

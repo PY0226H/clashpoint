@@ -3220,6 +3220,7 @@ pub(crate) async fn list_auth_sessions_handler(
     let AuthContext {
         user,
         sid: current_sid,
+        ..
     } = auth_ctx;
     let req_ctx = list_auth_sessions_request_context_from_headers(&headers);
 
@@ -6406,6 +6407,7 @@ mod tests {
             Extension(AuthContext {
                 user: user.clone(),
                 sid: sid.clone(),
+                ver: 0,
             }),
             State(state.clone()),
             HeaderMap::new(),
@@ -6427,7 +6429,7 @@ mod tests {
         assert_eq!(first_out.items[0].status, "active");
 
         let second = list_auth_sessions_handler(
-            Extension(AuthContext { user, sid }),
+            Extension(AuthContext { user, sid, ver: 0 }),
             State(state),
             HeaderMap::new(),
             Query(ListAuthSessionsQueryInput {
@@ -6461,7 +6463,7 @@ mod tests {
         .await?;
 
         let err = list_auth_sessions_handler(
-            Extension(AuthContext { user, sid }),
+            Extension(AuthContext { user, sid, ver: 0 }),
             State(state),
             HeaderMap::new(),
             Query(ListAuthSessionsQueryInput {
@@ -6483,7 +6485,7 @@ mod tests {
         let (_tdb, state) = AppState::new_for_test().await?;
         let (user, sid) = signin_and_decode_session(&state).await?;
         let err = list_auth_sessions_handler(
-            Extension(AuthContext { user, sid }),
+            Extension(AuthContext { user, sid, ver: 0 }),
             State(state),
             HeaderMap::new(),
             Query(ListAuthSessionsQueryInput {

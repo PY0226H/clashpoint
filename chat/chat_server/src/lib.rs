@@ -397,6 +397,7 @@ impl TokenVerify for AppState {
         Ok(AuthContext {
             user: decoded.user,
             sid: decoded.sid,
+            ver: decoded.ver,
         })
     }
 }

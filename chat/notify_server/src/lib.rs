@@ -16,6 +16,7 @@ use chat_core::{
     middlewares::{AuthContext, AuthVerifyError, TokenVerify},
     DecodingKey,
 };
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use middlewares::verify_notify_ticket;
 use serde_json::Value;
@@ -679,6 +680,7 @@ impl TokenVerify for AppState {
             .map(|decoded| AuthContext {
                 user: decoded.user,
                 sid: decoded.sid,
+                ver: decoded.ver,
             })
             .map_err(|err| err.to_auth_verify_error())
     }
@@ -889,6 +891,42 @@ impl AppState {
             self.mark_debate_membership(user_id, session_id);
         }
         Ok(exists)
+    }
+
+    pub(crate) async fn validate_ticket_session_consistency(
+        &self,
+        user_id: i64,
+        sid: &str,
+        token_version: i64,
+    ) -> anyhow::Result<bool> {
+        let version_row: Option<i64> =
+            sqlx::query_scalar("SELECT token_version FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.db)
+                .await?;
+        let current_version = version_row.unwrap_or(0).max(0);
+        if current_version != token_version.max(0) {
+            return Ok(false);
+        }
+
+        let session_row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)> = sqlx::query_as(
+            r#"
+            SELECT revoked_at, expires_at
+            FROM auth_refresh_sessions
+            WHERE sid = $1 AND user_id = $2
+            "#,
+        )
+        .bind(sid)
+        .bind(user_id)
+        .fetch_optional(&self.db)
+        .await?;
+        let Some((revoked_at, expires_at)) = session_row else {
+            return Ok(false);
+        };
+        if revoked_at.is_some() || expires_at <= Utc::now() {
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     pub(crate) fn build_user_event_for_recipient(

@@ -112,6 +112,7 @@ impl TokenVerify for AppState {
             .map(|decoded| AuthContext {
                 user: decoded.user,
                 sid: decoded.sid,
+                ver: decoded.ver,
             })
             .map_err(|err| err.to_auth_verify_error())
     }
