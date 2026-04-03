@@ -498,6 +498,7 @@ impl AppState {
             )
             .await?;
         tx.commit().await?;
+        self.invalidate_wallet_balance_cache(user.id as u64).await;
 
         Ok(PinDebateMessageOutput {
             pin_id: pin.id as u64,

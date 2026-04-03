@@ -270,6 +270,9 @@ impl AppState {
             transaction_id,
         )
         .await;
+        if credited {
+            self.invalidate_wallet_balance_cache(user.id as u64).await;
+        }
 
         Ok(VerifyIapOrderOutput {
             order_id: inserted_order.id as u64,

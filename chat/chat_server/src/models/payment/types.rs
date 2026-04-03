@@ -108,6 +108,8 @@ pub struct GetIapOrderByTransactionOutput {
 pub struct WalletBalanceOutput {
     pub user_id: u64,
     pub balance: i64,
+    pub wallet_revision: String,
+    pub wallet_initialized: bool,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]

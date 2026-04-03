@@ -575,9 +575,21 @@ async fn verify_iap_order_should_credit_wallet_and_create_ledger() -> Result<()>
 
     let balance = state.get_wallet_balance(1).await?;
     assert_eq!(balance.balance, 60);
+    assert!(balance.wallet_initialized);
+    assert_ne!(balance.wallet_revision, "uninitialized");
 
     let ledger = query_wallet_ledger(&state, 1).await?;
     assert_single_credit_ledger_entry(&ledger, 60);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_wallet_balance_should_mark_uninitialized_wallet() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let balance = state.get_wallet_balance(998_001).await?;
+    assert_eq!(balance.balance, 0);
+    assert!(!balance.wallet_initialized);
+    assert_eq!(balance.wallet_revision, "uninitialized");
     Ok(())
 }
 
@@ -726,5 +738,39 @@ async fn get_iap_order_by_transaction_should_return_conflict_for_other_user() ->
         .await?;
     let err = query_order_snapshot_expect_conflict(&state, &user2, "tx-query-conflict-1").await;
     assert_payment_conflict(&err);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconcile_wallet_balance_once_should_record_mismatch_sample() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    sqlx::query(
+        r#"
+        INSERT INTO user_wallets(user_id, balance, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id) DO UPDATE
+        SET balance = EXCLUDED.balance, updated_at = NOW()
+        "#,
+    )
+    .bind(1_i64)
+    .bind(123_i64)
+    .execute(&state.pool)
+    .await?;
+
+    let (_compared_users, mismatch_users, sampled_rows) =
+        state.reconcile_wallet_balance_once(16).await?;
+    assert!(mismatch_users >= 1);
+    assert!(sampled_rows >= 1);
+
+    let audit_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM wallet_balance_reconcile_audits
+        WHERE user_id = 1
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    assert!(audit_count >= 1);
     Ok(())
 }

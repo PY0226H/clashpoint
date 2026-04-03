@@ -19,6 +19,7 @@ use chat_core::User;
 use sha1::{Digest, Sha1};
 use sqlx::FromRow;
 use std::{
+    env,
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -39,6 +40,11 @@ const IAP_PRODUCTS_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const IAP_ORDER_PROBE_USER_RATE_LIMIT_PER_WINDOW: u64 = 90;
 const IAP_ORDER_PROBE_IP_RATE_LIMIT_PER_WINDOW: u64 = 180;
 const IAP_ORDER_PROBE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const WALLET_BALANCE_USER_RATE_LIMIT_PER_WINDOW: u64 = 180;
+const WALLET_BALANCE_IP_RATE_LIMIT_PER_WINDOW: u64 = 360;
+const WALLET_BALANCE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const WALLET_BALANCE_RECONCILE_WORKER_INTERVAL_DEFAULT_SECS: u64 = 600;
+const WALLET_BALANCE_RECONCILE_WORKER_SAMPLE_LIMIT_DEFAULT: usize = 50;
 
 #[derive(Debug, Default)]
 struct IapProductsListMetrics {
@@ -225,6 +231,52 @@ impl IapVerifyMetrics {
 }
 
 static IAP_VERIFY_METRICS: LazyLock<IapVerifyMetrics> = LazyLock::new(IapVerifyMetrics::default);
+
+#[derive(Debug, Default)]
+struct WalletBalanceMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    cache_hit_total: AtomicU64,
+    cache_miss_total: AtomicU64,
+    latency_ms_total: AtomicU64,
+    latency_ms_samples_total: AtomicU64,
+}
+
+impl WalletBalanceMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, cache_hit: bool, latency_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        if cache_hit {
+            self.cache_hit_total.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.cache_miss_total.fetch_add(1, Ordering::Relaxed);
+        }
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self, latency_ms: u64) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+static WALLET_BALANCE_METRICS: LazyLock<WalletBalanceMetrics> =
+    LazyLock::new(WalletBalanceMetrics::default);
 
 /// List purchasable IAP products.
 #[utoipa::path(
@@ -749,6 +801,10 @@ pub(crate) async fn get_iap_order_by_transaction_handler(
     path = "/api/pay/wallet",
     responses(
         (status = 200, description = "Wallet balance", body = crate::WalletBalanceOutput),
+        (status = 401, description = "Auth error", body = ErrorOutput),
+        (status = 403, description = "Phone not bound", body = ErrorOutput),
+        (status = 429, description = "Rate limited", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -757,9 +813,118 @@ pub(crate) async fn get_iap_order_by_transaction_handler(
 pub(crate) async fn get_wallet_balance_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_wallet_balance(user.id as u64).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    WALLET_BALANCE_METRICS.observe_start();
+    let request_id = request_id_from_headers(&headers);
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "pay_wallet_balance_user",
+        &user.id.to_string(),
+        WALLET_BALANCE_USER_RATE_LIMIT_PER_WINDOW,
+        WALLET_BALANCE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision = maybe_override_rate_limit_decision(&headers, "wallet_user", user_decision);
+    let mut resp_headers = build_rate_limit_headers(&user_decision)?;
+    apply_wallet_cache_control_headers(&mut resp_headers);
+    if !user_decision.allowed {
+        WALLET_BALANCE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "wallet balance blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "pay_wallet_balance",
+            resp_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "pay_wallet_balance_ip",
+        &ip_limit_key,
+        WALLET_BALANCE_IP_RATE_LIMIT_PER_WINDOW,
+        WALLET_BALANCE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(&headers, "wallet_ip", ip_decision);
+    if !ip_decision.allowed {
+        WALLET_BALANCE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "wallet balance blocked by ip rate limiter"
+        );
+        let mut headers = build_rate_limit_headers(&ip_decision)?;
+        apply_wallet_cache_control_headers(&mut headers);
+        return Ok(rate_limit_exceeded_response("pay_wallet_balance", headers));
+    }
+
+    #[cfg(test)]
+    if should_force_wallet_internal_error(&headers) {
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        WALLET_BALANCE_METRICS.observe_failure(latency_ms);
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            latency_ms,
+            decision = "forced_internal_error",
+            "wallet balance forced internal error for test"
+        );
+        return Ok((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            resp_headers,
+            Json(ErrorOutput::new("pay_wallet_internal")),
+        )
+            .into_response());
+    }
+
+    match state.get_wallet_balance_with_cache(user.id as u64).await {
+        Ok((ret, cache_hit)) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            WALLET_BALANCE_METRICS.observe_success(cache_hit, latency_ms);
+            tracing::info!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                balance = ret.balance,
+                wallet_initialized = ret.wallet_initialized,
+                wallet_revision = ret.wallet_revision.as_str(),
+                cache_hit,
+                latency_ms,
+                decision = "success",
+                "wallet balance served"
+            );
+            Ok((StatusCode::OK, resp_headers, Json(ret)).into_response())
+        }
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            WALLET_BALANCE_METRICS.observe_failure(latency_ms);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                "wallet balance query failed: {}",
+                err
+            );
+            Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                resp_headers,
+                Json(ErrorOutput::new("pay_wallet_internal")),
+            )
+                .into_response())
+        }
+    }
 }
 
 /// List user wallet ledger entries.
@@ -969,6 +1134,40 @@ fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn apply_wallet_cache_control_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        HeaderName::from_static("cache-control"),
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    headers.insert(
+        HeaderName::from_static("pragma"),
+        HeaderValue::from_static("no-cache"),
+    );
+}
+
+pub(crate) fn wallet_balance_reconcile_worker_enabled() -> bool {
+    env::var("WALLET_BALANCE_RECONCILE_WORKER_ENABLED")
+        .ok()
+        .map(|raw| raw.trim().eq_ignore_ascii_case("true") || raw.trim() == "1")
+        .unwrap_or(true)
+}
+
+pub(crate) fn wallet_balance_reconcile_worker_interval_secs() -> u64 {
+    env::var("WALLET_BALANCE_RECONCILE_WORKER_INTERVAL_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(WALLET_BALANCE_RECONCILE_WORKER_INTERVAL_DEFAULT_SECS)
+}
+
+pub(crate) fn wallet_balance_reconcile_worker_sample_limit() -> usize {
+    env::var("WALLET_BALANCE_RECONCILE_WORKER_SAMPLE_LIMIT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(WALLET_BALANCE_RECONCILE_WORKER_SAMPLE_LIMIT_DEFAULT)
+}
+
 fn request_rate_limit_ip_key_from_headers(headers: &HeaderMap) -> Option<String> {
     extract_raw_ip_from_forwarded_headers(headers).map(|ip| hash_with_sha1(&ip))
 }
@@ -1021,6 +1220,16 @@ fn maybe_override_rate_limit_decision(
         decision.remaining = 0;
     }
     decision
+}
+
+#[cfg(test)]
+fn should_force_wallet_internal_error(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-test-force-wallet-error")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1435,6 +1644,175 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "iap_order_probe_conflict");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_balance_route_should_require_auth() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_balance_route_should_reject_unbound_phone_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Wallet No Phone".to_string(),
+                email: "wallet-no-phone@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "wallet-no-phone-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_balance_route_should_return_200_with_initialized_wallet() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Init User",
+            "wallet-init-user@acme.org",
+            "+8613800990112",
+            "wallet-init-sid",
+        )
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO user_wallets(user_id, balance, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET balance = EXCLUDED.balance, updated_at = NOW()
+            "#,
+        )
+        .bind(user.id)
+        .bind(88_i64)
+        .execute(&state.pool)
+        .await?;
+
+        let app = get_router(state).await?;
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store, no-cache, must-revalidate")
+        );
+        let body = res.into_body().collect().await?.to_bytes();
+        let output: crate::WalletBalanceOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.user_id, user.id as u64);
+        assert_eq!(output.balance, 88);
+        assert!(output.wallet_initialized);
+        assert_ne!(output.wallet_revision, "uninitialized");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_balance_route_should_return_200_with_uninitialized_wallet() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Empty User",
+            "wallet-empty-user@acme.org",
+            "+8613800990113",
+            "wallet-empty-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let output: crate::WalletBalanceOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.balance, 0);
+        assert!(!output.wallet_initialized);
+        assert_eq!(output.wallet_revision, "uninitialized");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_balance_route_should_return_429_when_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Rate User",
+            "wallet-rate-user@acme.org",
+            "+8613800990114",
+            "wallet-rate-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "wallet_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:pay_wallet_balance");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_balance_route_should_return_500_for_internal_failure() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Internal User",
+            "wallet-internal-user@acme.org",
+            "+8613800990115",
+            "wallet-internal-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-wallet-error", "true")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "pay_wallet_internal");
         Ok(())
     }
 

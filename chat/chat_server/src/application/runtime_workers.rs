@@ -41,7 +41,8 @@ pub(crate) fn spawn_background_workers(
 
     spawn_auth_refresh_consistency_outbox_worker(state.clone());
     spawn_auth_token_version_invalidation_retry_worker(state.clone());
-    spawn_auth_sessions_retention_cleanup_worker(state);
+    spawn_auth_sessions_retention_cleanup_worker(state.clone());
+    spawn_wallet_balance_reconcile_worker(state);
 }
 
 fn spawn_debate_session_worker(state: AppState) {
@@ -341,6 +342,41 @@ fn spawn_auth_sessions_retention_cleanup_worker(state: AppState) {
                         "auth sessions retention cleanup worker tick failed: {}",
                         err
                     );
+                }
+            }
+            sleep(Duration::from_secs(interval_secs)).await;
+        }
+    });
+}
+
+fn spawn_wallet_balance_reconcile_worker(state: AppState) {
+    if !crate::handlers::wallet_balance_reconcile_worker_enabled() {
+        return;
+    }
+    tokio::spawn(async move {
+        let interval_secs = crate::handlers::wallet_balance_reconcile_worker_interval_secs().max(1);
+        let sample_limit = crate::handlers::wallet_balance_reconcile_worker_sample_limit().max(1);
+        loop {
+            match state.reconcile_wallet_balance_once(sample_limit).await {
+                Ok((compared_users, mismatch_users, sampled_rows)) => {
+                    if mismatch_users > 0 {
+                        warn!(
+                            compared_users,
+                            mismatch_users,
+                            sampled_rows,
+                            "wallet balance reconcile worker detected mismatches"
+                        );
+                    } else {
+                        debug!(
+                            compared_users,
+                            mismatch_users,
+                            sampled_rows,
+                            "wallet balance reconcile worker tick success"
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!("wallet balance reconcile worker tick failed: {}", err);
                 }
             }
             sleep(Duration::from_secs(interval_secs)).await;

@@ -16,6 +16,8 @@ const IAP_PRODUCTS_CACHE_TTL_SECS: i64 = 10;
 const IAP_ORDER_PROBE_CACHE_TTL_SECS: i64 = 5;
 const IAP_ORDER_PROBE_NOT_FOUND_RETRY_AFTER_MS: u64 = 1_200;
 const IAP_ORDER_PROBE_PENDING_RETRY_AFTER_MS: u64 = 800;
+const WALLET_BALANCE_CACHE_TTL_MS: i64 = 200;
+const WALLET_BALANCE_UNINITIALIZED_REVISION: &str = "uninitialized";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct IapProductsCacheKey {
@@ -43,12 +45,28 @@ struct IapOrderProbeCacheEntry {
     output: GetIapOrderByTransactionOutput,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct WalletBalanceCacheKey {
+    db_scope_hash: String,
+    user_id: i64,
+}
+
+#[derive(Debug, Clone)]
+struct WalletBalanceCacheEntry {
+    expires_at_epoch_ms: i64,
+    output: WalletBalanceOutput,
+}
+
 static IAP_PRODUCTS_LIST_CACHE: LazyLock<
     RwLock<HashMap<IapProductsCacheKey, IapProductsCacheEntry>>,
 > = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 static IAP_ORDER_PROBE_CACHE: LazyLock<
     RwLock<HashMap<IapOrderProbeCacheKey, IapOrderProbeCacheEntry>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static WALLET_BALANCE_CACHE: LazyLock<
+    RwLock<HashMap<WalletBalanceCacheKey, WalletBalanceCacheEntry>>,
 > = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub(crate) async fn invalidate_iap_order_probe_cache_for_transaction(
@@ -259,9 +277,31 @@ impl AppState {
     }
 
     pub async fn get_wallet_balance(&self, user_id: u64) -> Result<WalletBalanceOutput, AppError> {
-        let row: Option<(i64,)> = sqlx::query_as(
+        let (output, _) = self.get_wallet_balance_with_cache(user_id).await?;
+        Ok(output)
+    }
+
+    pub(crate) async fn get_wallet_balance_with_cache(
+        &self,
+        user_id: u64,
+    ) -> Result<(WalletBalanceOutput, bool), AppError> {
+        let cache_enabled = !cfg!(test);
+        let cache_key = WalletBalanceCacheKey {
+            db_scope_hash: hash_cache_scope(&self.config.server.db_url),
+            user_id: user_id as i64,
+        };
+        let now_epoch_ms = Utc::now().timestamp_millis();
+        if cache_enabled {
+            if let Some(entry) = WALLET_BALANCE_CACHE.read().await.get(&cache_key) {
+                if entry.expires_at_epoch_ms > now_epoch_ms {
+                    return Ok((entry.output.clone(), true));
+                }
+            }
+        }
+
+        let row: Option<(i64, DateTime<Utc>)> = sqlx::query_as(
             r#"
-            SELECT balance
+            SELECT balance, updated_at
             FROM user_wallets
             WHERE user_id = $1
             "#,
@@ -270,10 +310,143 @@ impl AppState {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(WalletBalanceOutput {
-            user_id,
-            balance: row.map(|v| v.0).unwrap_or(0),
-        })
+        let output = if let Some((balance, updated_at)) = row {
+            WalletBalanceOutput {
+                user_id,
+                balance,
+                wallet_revision: updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                wallet_initialized: true,
+            }
+        } else {
+            WalletBalanceOutput {
+                user_id,
+                balance: 0,
+                wallet_revision: WALLET_BALANCE_UNINITIALIZED_REVISION.to_string(),
+                wallet_initialized: false,
+            }
+        };
+
+        if cache_enabled {
+            WALLET_BALANCE_CACHE.write().await.insert(
+                cache_key,
+                WalletBalanceCacheEntry {
+                    expires_at_epoch_ms: now_epoch_ms + WALLET_BALANCE_CACHE_TTL_MS,
+                    output: output.clone(),
+                },
+            );
+        }
+        Ok((output, false))
+    }
+
+    pub(crate) async fn invalidate_wallet_balance_cache(&self, user_id: u64) {
+        let cache_key = WalletBalanceCacheKey {
+            db_scope_hash: hash_cache_scope(&self.config.server.db_url),
+            user_id: user_id as i64,
+        };
+        WALLET_BALANCE_CACHE.write().await.remove(&cache_key);
+    }
+
+    pub(crate) async fn reconcile_wallet_balance_once(
+        &self,
+        sample_limit: usize,
+    ) -> Result<(u64, u64, u64), AppError> {
+        let compared_users: i64 = sqlx::query_scalar(
+            r#"
+            WITH users_union AS (
+                SELECT user_id FROM user_wallets
+                UNION
+                SELECT user_id FROM wallet_ledger
+            )
+            SELECT COUNT(1)::bigint FROM users_union
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let mismatch_users: i64 = sqlx::query_scalar(
+            r#"
+            WITH wallet AS (
+                SELECT user_id, balance
+                FROM user_wallets
+            ),
+            ledger AS (
+                SELECT user_id, COALESCE(SUM(amount_delta), 0)::bigint AS ledger_balance
+                FROM wallet_ledger
+                GROUP BY user_id
+            )
+            SELECT COUNT(1)::bigint
+            FROM (
+                SELECT
+                    COALESCE(wallet.user_id, ledger.user_id) AS user_id,
+                    COALESCE(wallet.balance, 0)::bigint AS wallet_balance,
+                    COALESCE(ledger.ledger_balance, 0)::bigint AS ledger_balance
+                FROM wallet
+                FULL OUTER JOIN ledger USING (user_id)
+            ) joined
+            WHERE joined.wallet_balance <> joined.ledger_balance
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let sampled_rows: i64 = sqlx::query_scalar(
+            r#"
+            WITH wallet AS (
+                SELECT user_id, balance, updated_at
+                FROM user_wallets
+            ),
+            ledger AS (
+                SELECT
+                    user_id,
+                    COALESCE(SUM(amount_delta), 0)::bigint AS ledger_balance,
+                    MAX(created_at) AS ledger_latest_at
+                FROM wallet_ledger
+                GROUP BY user_id
+            ),
+            mismatches AS (
+                SELECT
+                    COALESCE(wallet.user_id, ledger.user_id) AS user_id,
+                    COALESCE(wallet.balance, 0)::bigint AS wallet_balance,
+                    COALESCE(ledger.ledger_balance, 0)::bigint AS ledger_balance,
+                    wallet.updated_at AS wallet_updated_at,
+                    ledger.ledger_latest_at AS ledger_latest_at
+                FROM wallet
+                FULL OUTER JOIN ledger USING (user_id)
+                WHERE COALESCE(wallet.balance, 0)::bigint <> COALESCE(ledger.ledger_balance, 0)::bigint
+                ORDER BY COALESCE(wallet.user_id, ledger.user_id) ASC
+                LIMIT $1
+            ),
+            inserted AS (
+                INSERT INTO wallet_balance_reconcile_audits(
+                    user_id,
+                    wallet_balance,
+                    ledger_balance,
+                    wallet_updated_at,
+                    ledger_latest_at,
+                    detected_at
+                )
+                SELECT
+                    user_id,
+                    wallet_balance,
+                    ledger_balance,
+                    wallet_updated_at,
+                    ledger_latest_at,
+                    NOW()
+                FROM mismatches
+                RETURNING 1
+            )
+            SELECT COUNT(1)::bigint FROM inserted
+            "#,
+        )
+        .bind(sample_limit as i64)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((
+            compared_users.max(0) as u64,
+            mismatch_users.max(0) as u64,
+            sampled_rows.max(0) as u64,
+        ))
     }
 
     pub async fn list_wallet_ledger(
