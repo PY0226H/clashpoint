@@ -7,7 +7,7 @@ use crate::{
     },
     AppError, AppState, ErrorOutput, GetIapOrderByTransaction, GetIapOrderByTransactionOutput,
     ListIapProducts, ListIapProductsOutput, ListWalletLedger, VerifyIapErrorOutput,
-    VerifyIapOrderInput, VerifyIapOrderOutput,
+    VerifyIapOrderInput, VerifyIapOrderOutput, WalletLedgerListOutput,
 };
 use axum::{
     extract::{Query, State},
@@ -43,6 +43,9 @@ const IAP_ORDER_PROBE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const WALLET_BALANCE_USER_RATE_LIMIT_PER_WINDOW: u64 = 180;
 const WALLET_BALANCE_IP_RATE_LIMIT_PER_WINDOW: u64 = 360;
 const WALLET_BALANCE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const WALLET_LEDGER_USER_RATE_LIMIT_PER_WINDOW: u64 = 180;
+const WALLET_LEDGER_IP_RATE_LIMIT_PER_WINDOW: u64 = 360;
+const WALLET_LEDGER_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const WALLET_BALANCE_RECONCILE_WORKER_INTERVAL_DEFAULT_SECS: u64 = 600;
 const WALLET_BALANCE_RECONCILE_WORKER_SAMPLE_LIMIT_DEFAULT: usize = 50;
 
@@ -277,6 +280,59 @@ impl WalletBalanceMetrics {
 
 static WALLET_BALANCE_METRICS: LazyLock<WalletBalanceMetrics> =
     LazyLock::new(WalletBalanceMetrics::default);
+
+#[derive(Debug, Default)]
+struct WalletLedgerMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    invalid_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    cursor_used_total: AtomicU64,
+    items_total: AtomicU64,
+    items_samples_total: AtomicU64,
+    latency_ms_total: AtomicU64,
+    latency_ms_samples_total: AtomicU64,
+}
+
+impl WalletLedgerMetrics {
+    fn observe_start(&self, cursor_used: bool) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+        if cursor_used {
+            self.cursor_used_total.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn observe_success(&self, item_count: usize, latency_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        self.items_total
+            .fetch_add(item_count as u64, Ordering::Relaxed);
+        self.items_samples_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failed(&self, latency_ms: u64) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_invalid(&self) {
+        self.invalid_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+static WALLET_LEDGER_METRICS: LazyLock<WalletLedgerMetrics> =
+    LazyLock::new(WalletLedgerMetrics::default);
 
 /// List purchasable IAP products.
 #[utoipa::path(
@@ -935,7 +991,12 @@ pub(crate) async fn get_wallet_balance_handler(
         ListWalletLedger
     ),
     responses(
-        (status = 200, description = "Wallet ledger list", body = Vec<crate::WalletLedgerItem>),
+        (status = 200, description = "Wallet ledger list", body = crate::WalletLedgerListOutput),
+        (status = 400, description = "Invalid query", body = ErrorOutput),
+        (status = 401, description = "Auth error", body = ErrorOutput),
+        (status = 403, description = "Phone not bound", body = ErrorOutput),
+        (status = 429, description = "Rate limited", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -944,10 +1005,161 @@ pub(crate) async fn get_wallet_balance_handler(
 pub(crate) async fn list_wallet_ledger_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<ListWalletLedger>,
-) -> Result<impl IntoResponse, AppError> {
-    let rows = state.list_wallet_ledger(user.id as u64, input).await?;
-    Ok((StatusCode::OK, Json(rows)))
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    WALLET_LEDGER_METRICS.observe_start(input.last_id.is_some());
+    let request_id = request_id_from_headers(&headers);
+    let request_last_id = input.last_id;
+    let request_limit = input.limit;
+    let mut resp_headers: HeaderMap;
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "pay_wallet_ledger_user",
+        &user.id.to_string(),
+        WALLET_LEDGER_USER_RATE_LIMIT_PER_WINDOW,
+        WALLET_LEDGER_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision =
+        maybe_override_rate_limit_decision(&headers, "wallet_ledger_user", user_decision);
+    resp_headers = build_rate_limit_headers(&user_decision)?;
+    apply_wallet_cache_control_headers(&mut resp_headers);
+    if !user_decision.allowed {
+        WALLET_LEDGER_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "wallet ledger blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "pay_wallet_ledger",
+            resp_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "pay_wallet_ledger_ip",
+        &ip_limit_key,
+        WALLET_LEDGER_IP_RATE_LIMIT_PER_WINDOW,
+        WALLET_LEDGER_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(&headers, "wallet_ledger_ip", ip_decision);
+    if !ip_decision.allowed {
+        WALLET_LEDGER_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "wallet ledger blocked by ip rate limiter"
+        );
+        let mut headers = build_rate_limit_headers(&ip_decision)?;
+        apply_wallet_cache_control_headers(&mut headers);
+        return Ok(rate_limit_exceeded_response("pay_wallet_ledger", headers));
+    }
+
+    if let Some(last_id) = input.last_id {
+        if last_id > i64::MAX as u64 {
+            WALLET_LEDGER_METRICS.observe_invalid();
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                last_id,
+                decision = "invalid_last_id",
+                "wallet ledger rejected due to invalid last_id"
+            );
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                resp_headers,
+                Json(ErrorOutput::new("pay_wallet_ledger_invalid_last_id")),
+            )
+                .into_response());
+        }
+    }
+
+    #[cfg(test)]
+    if should_force_wallet_ledger_internal_error(&headers) {
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        WALLET_LEDGER_METRICS.observe_failed(latency_ms);
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            latency_ms,
+            decision = "forced_internal_error",
+            "wallet ledger forced internal error for test"
+        );
+        return Ok((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            resp_headers,
+            Json(ErrorOutput::new("pay_wallet_ledger_internal")),
+        )
+            .into_response());
+    }
+
+    let output: WalletLedgerListOutput = match state.list_wallet_ledger(user.id as u64, input).await
+    {
+        Ok(rows) => rows,
+        Err(AppError::PaymentError(message)) if message.contains("last_id exceeds i64::MAX") => {
+            WALLET_LEDGER_METRICS.observe_invalid();
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                decision = "invalid_last_id_from_model",
+                "wallet ledger rejected by model validation: {}",
+                message
+            );
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                resp_headers,
+                Json(ErrorOutput::new("pay_wallet_ledger_invalid_last_id")),
+            )
+                .into_response());
+        }
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            WALLET_LEDGER_METRICS.observe_failed(latency_ms);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                "wallet ledger query failed: {}",
+                err
+            );
+            return Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                resp_headers,
+                Json(ErrorOutput::new("pay_wallet_ledger_internal")),
+            )
+                .into_response());
+        }
+    };
+
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    WALLET_LEDGER_METRICS.observe_success(output.items.len(), latency_ms);
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        last_id = request_last_id,
+        limit = request_limit,
+        item_count = output.items.len(),
+        has_more = output.has_more,
+        next_last_id = output.next_last_id,
+        latency_ms,
+        decision = "success",
+        "wallet ledger served"
+    );
+
+    Ok((StatusCode::OK, resp_headers, Json(output)).into_response())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1226,6 +1438,16 @@ fn maybe_override_rate_limit_decision(
 fn should_force_wallet_internal_error(headers: &HeaderMap) -> bool {
     headers
         .get("x-test-force-wallet-error")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn should_force_wallet_ledger_internal_error(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-test-force-wallet-ledger-error")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
@@ -1813,6 +2035,215 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "pay_wallet_internal");
+        Ok(())
+    }
+
+    async fn seed_wallet_ledger_entries(state: &AppState, user_id: i64) -> Result<Vec<i64>> {
+        let mut ids = Vec::new();
+        for idx in 0..3_i64 {
+            let id: (i64,) = sqlx::query_as(
+                r#"
+                INSERT INTO wallet_ledger(
+                    user_id, entry_type, amount_delta, balance_after, idempotency_key, metadata
+                )
+                VALUES ($1, 'adjustment', 10, $2, $3, $4::jsonb)
+                RETURNING id
+                "#,
+            )
+            .bind(user_id)
+            .bind(100_i64 + idx)
+            .bind(format!("wallet-ledger-seed-{user_id}-{idx}"))
+            .bind(serde_json::json!({
+                "kind": "wallet-ledger-test",
+                "idx": idx
+            }))
+            .fetch_one(&state.pool)
+            .await?;
+            ids.push(id.0);
+        }
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        Ok(ids)
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_route_should_require_auth() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet/ledger")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_route_should_reject_unbound_phone_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Wallet Ledger No Phone".to_string(),
+                email: "wallet-ledger-no-phone@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "wallet-ledger-no-phone-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet/ledger")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_route_should_return_200_with_pagination_envelope() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Ledger User",
+            "wallet-ledger-user@acme.org",
+            "+8613800990116",
+            "wallet-ledger-user-sid",
+        )
+        .await?;
+        let seeded_ids = seed_wallet_ledger_entries(&state, user.id).await?;
+        let app = get_router(state).await?;
+
+        let first_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet/ledger?limit=2")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let first_res = app.clone().oneshot(first_req).await?;
+        assert_eq!(first_res.status(), StatusCode::OK);
+        assert_eq!(
+            first_res
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store, no-cache, must-revalidate")
+        );
+        let first_body = first_res.into_body().collect().await?.to_bytes();
+        let first_out: crate::WalletLedgerListOutput = serde_json::from_slice(&first_body)?;
+        assert_eq!(first_out.items.len(), 2);
+        assert!(first_out.has_more);
+        assert_eq!(
+            first_out.items[0]
+                .metadata
+                .get("kind")
+                .and_then(serde_json::Value::as_str),
+            Some("wallet-ledger-test")
+        );
+        assert_eq!(first_out.items[0].id, seeded_ids[0]);
+        assert_eq!(first_out.items[1].id, seeded_ids[1]);
+        let next_last_id = first_out.next_last_id.expect("next_last_id should exist");
+        assert_eq!(next_last_id, seeded_ids[1] as u64);
+
+        let second_req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/pay/wallet/ledger?limit=2&lastId={next_last_id}"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let second_res = app.oneshot(second_req).await?;
+        assert_eq!(second_res.status(), StatusCode::OK);
+        let second_body = second_res.into_body().collect().await?.to_bytes();
+        let second_out: crate::WalletLedgerListOutput = serde_json::from_slice(&second_body)?;
+        assert_eq!(second_out.items.len(), 1);
+        assert!(!second_out.has_more);
+        assert!(second_out.next_last_id.is_none());
+        assert_eq!(second_out.items[0].id, seeded_ids[2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_route_should_return_400_for_invalid_last_id() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Ledger Invalid LastId User",
+            "wallet-ledger-invalid-lastid-user@acme.org",
+            "+8613800990117",
+            "wallet-ledger-invalid-lastid-user-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet/ledger?lastId=9223372036854775808")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "pay_wallet_ledger_invalid_last_id");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_route_should_return_429_when_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Ledger Rate User",
+            "wallet-ledger-rate-user@acme.org",
+            "+8613800990118",
+            "wallet-ledger-rate-user-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet/ledger")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "wallet_ledger_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:pay_wallet_ledger");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_route_should_return_500_for_internal_failure() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Wallet Ledger Internal User",
+            "wallet-ledger-internal-user@acme.org",
+            "+8613800990119",
+            "wallet-ledger-internal-user-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/pay/wallet/ledger")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-wallet-ledger-error", "true")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "pay_wallet_ledger_internal");
         Ok(())
     }
 

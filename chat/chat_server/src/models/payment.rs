@@ -11,7 +11,7 @@ pub use types::{
     GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
     IapOrderSnapshot, IapProduct, IapProductsEmptyReason, ListIapProducts, ListIapProductsOutput,
     ListWalletLedger, VerifyIapErrorOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
-    WalletBalanceOutput, WalletLedgerItem,
+    WalletBalanceOutput, WalletLedgerItem, WalletLedgerListOutput,
 };
 
 #[cfg(test)]

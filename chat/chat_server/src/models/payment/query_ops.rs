@@ -4,6 +4,7 @@ use super::{
         GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
         IapOrderSnapshot, IapOrderSnapshotRow, IapProduct, IapProductsEmptyReason, ListIapProducts,
         ListIapProductsOutput, ListWalletLedger, WalletBalanceOutput, WalletLedgerItem,
+        WalletLedgerListOutput,
     },
 };
 use crate::{AppError, AppState};
@@ -453,8 +454,17 @@ impl AppState {
         &self,
         user_id: u64,
         input: ListWalletLedger,
-    ) -> Result<Vec<WalletLedgerItem>, AppError> {
-        let rows = sqlx::query_as(
+    ) -> Result<WalletLedgerListOutput, AppError> {
+        let limit = helpers::normalize_limit(input.limit);
+        let query_limit = limit.saturating_add(1);
+        let last_id = match input.last_id {
+            Some(v) => Some(
+                i64::try_from(v)
+                    .map_err(|_| AppError::PaymentError("last_id exceeds i64::MAX".to_string()))?,
+            ),
+            None => None,
+        };
+        let mut items: Vec<WalletLedgerItem> = sqlx::query_as(
             r#"
             SELECT
                 id,
@@ -463,7 +473,7 @@ impl AppState {
                 amount_delta,
                 balance_after,
                 idempotency_key,
-                metadata::text AS metadata,
+                metadata,
                 created_at
             FROM wallet_ledger
             WHERE user_id = $1
@@ -473,12 +483,24 @@ impl AppState {
             "#,
         )
         .bind(user_id as i64)
-        .bind(input.last_id.map(|v| v as i64))
-        .bind(helpers::normalize_limit(input.limit))
+        .bind(last_id)
+        .bind(query_limit)
         .fetch_all(&self.pool)
         .await?;
-
-        Ok(rows)
+        let has_more = items.len() > limit as usize;
+        if has_more {
+            items.truncate(limit as usize);
+        }
+        let next_last_id = if has_more {
+            items.last().and_then(|item| u64::try_from(item.id).ok())
+        } else {
+            None
+        };
+        Ok(WalletLedgerListOutput {
+            items,
+            next_last_id,
+            has_more,
+        })
     }
 }
 

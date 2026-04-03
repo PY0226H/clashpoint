@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::FromRow;
 use utoipa::{IntoParams, ToSchema};
 
@@ -119,6 +120,14 @@ pub struct ListWalletLedger {
     pub limit: Option<u64>,
 }
 
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletLedgerListOutput {
+    pub items: Vec<WalletLedgerItem>,
+    pub next_last_id: Option<u64>,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletLedgerItem {
@@ -128,7 +137,7 @@ pub struct WalletLedgerItem {
     pub amount_delta: i64,
     pub balance_after: i64,
     pub idempotency_key: String,
-    pub metadata: String,
+    pub metadata: Value,
     pub created_at: DateTime<Utc>,
 }
 

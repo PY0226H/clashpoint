@@ -60,7 +60,7 @@ pub use payment::{
     GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
     IapOrderSnapshot, IapProduct, IapProductsEmptyReason, ListIapProducts, ListIapProductsOutput,
     ListWalletLedger, VerifyIapErrorOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
-    WalletBalanceOutput, WalletLedgerItem,
+    WalletBalanceOutput, WalletLedgerItem, WalletLedgerListOutput,
 };
 pub(crate) use rbac::OpsPermission;
 pub use rbac::{

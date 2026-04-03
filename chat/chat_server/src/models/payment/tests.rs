@@ -108,7 +108,7 @@ async fn load_two_users(state: &AppState, user1_id: i64, user2_id: i64) -> Resul
 }
 
 async fn query_wallet_ledger(state: &AppState, user_id: u64) -> Result<Vec<WalletLedgerItem>> {
-    state
+    let output = state
         .list_wallet_ledger(
             user_id,
             ListWalletLedger {
@@ -117,7 +117,8 @@ async fn query_wallet_ledger(state: &AppState, user_id: u64) -> Result<Vec<Walle
             },
         )
         .await
-        .map_err(Into::into)
+        .map_err(anyhow::Error::from)?;
+    Ok(output.items)
 }
 
 async fn query_order_snapshot(
