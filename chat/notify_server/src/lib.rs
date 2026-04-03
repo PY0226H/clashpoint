@@ -42,10 +42,16 @@ pub use notif::AppEvent;
 const CHANNEL_CAPACITY: usize = 256;
 const DEBATE_REPLAY_HISTORY_CAPACITY: usize = 400;
 const DEBATE_REPLAY_MAX_ON_CONNECT: usize = 200;
+const SSE_REPLAY_HISTORY_CAPACITY: usize = 512;
+const SSE_REPLAY_MAX_ON_CONNECT: usize = 200;
+const SSE_MAX_CONNECTIONS_PER_USER: u32 = 3;
 const SYNC_REQUIRED_WARN_EVERY: u64 = 20;
+const SSE_SYNC_REQUIRED_WARN_EVERY: u64 = 20;
 
 pub type UserMap = Arc<DashMap<u64, broadcast::Sender<Arc<UserEvent>>>>;
 type DebateReplayMap = Arc<DashMap<(u64, i64), DebateReplayHistory>>;
+type SseReplayMap = Arc<DashMap<u64, SseReplayHistory>>;
+type SseConnMap = Arc<DashMap<u64, u32>>;
 
 #[derive(Debug, Clone)]
 pub struct DebateReplayEvent {
@@ -69,8 +75,28 @@ pub struct DebateSyncRequiredSignal {
 }
 
 #[derive(Debug, Clone)]
+pub struct SseReplayEvent {
+    pub event_id: u64,
+    pub event_name: String,
+    pub payload: Value,
+    pub event_at_ms: i64,
+    pub critical: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SseSyncRequiredSignal {
+    pub reason: String,
+    pub skipped: u64,
+    pub suggested_last_event_id: u64,
+    pub latest_event_id: u64,
+    pub strategy: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct UserEvent {
     pub app_event: Arc<AppEvent>,
+    pub sse_replay: Option<SseReplayEvent>,
+    pub sse_sync_required: Option<SseSyncRequiredSignal>,
     pub debate_replay: Option<DebateReplayEvent>,
     pub debate_sync_required: Option<DebateSyncRequiredSignal>,
 }
@@ -81,6 +107,12 @@ struct DebateReplayHistory {
     events: VecDeque<DebateReplayEvent>,
 }
 
+#[derive(Debug)]
+struct SseReplayHistory {
+    next_id: u64,
+    events: VecDeque<SseReplayEvent>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DebateReplayWindow {
     pub events: Vec<DebateReplayEvent>,
@@ -89,6 +121,14 @@ pub struct DebateReplayWindow {
     pub skipped: u64,
     pub sync_required_reason: Option<String>,
     pub sync_required_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SseReplayWindow {
+    pub events: Vec<SseReplayEvent>,
+    pub latest_id: u64,
+    pub has_gap: bool,
+    pub skipped: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -126,6 +166,126 @@ impl NotifySyncRequiredMetrics {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NotifySseMetricsSnapshot {
+    pub connected_total: u64,
+    pub disconnected_total: u64,
+    pub auth_unauthorized_total: u64,
+    pub auth_forbidden_total: u64,
+    pub replay_sent_total: u64,
+    pub live_sent_total: u64,
+    pub filtered_total: u64,
+    pub lagged_total: u64,
+    pub lagged_skipped_total: u64,
+    pub sync_required_total: u64,
+    pub too_many_connections_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NotifySseMetrics {
+    connected_total: AtomicU64,
+    disconnected_total: AtomicU64,
+    auth_unauthorized_total: AtomicU64,
+    auth_forbidden_total: AtomicU64,
+    replay_sent_total: AtomicU64,
+    live_sent_total: AtomicU64,
+    filtered_total: AtomicU64,
+    lagged_total: AtomicU64,
+    lagged_skipped_total: AtomicU64,
+    sync_required_total: AtomicU64,
+    too_many_connections_total: AtomicU64,
+}
+
+impl NotifySseMetrics {
+    fn observe_connected(&self) {
+        self.connected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_disconnected(&self) {
+        self.disconnected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_auth_unauthorized(&self) {
+        self.auth_unauthorized_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_auth_forbidden(&self) {
+        self.auth_forbidden_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_replay_sent(&self) {
+        self.replay_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_live_sent(&self) {
+        self.live_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_filtered(&self) {
+        self.filtered_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_lagged(&self, skipped: u64) {
+        self.lagged_total.fetch_add(1, Ordering::Relaxed);
+        self.lagged_skipped_total
+            .fetch_add(skipped, Ordering::Relaxed);
+    }
+
+    fn observe_sync_required(&self) -> u64 {
+        self.sync_required_total.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn observe_too_many_connections(&self) {
+        self.too_many_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> NotifySseMetricsSnapshot {
+        NotifySseMetricsSnapshot {
+            connected_total: self.connected_total.load(Ordering::Relaxed),
+            disconnected_total: self.disconnected_total.load(Ordering::Relaxed),
+            auth_unauthorized_total: self.auth_unauthorized_total.load(Ordering::Relaxed),
+            auth_forbidden_total: self.auth_forbidden_total.load(Ordering::Relaxed),
+            replay_sent_total: self.replay_sent_total.load(Ordering::Relaxed),
+            live_sent_total: self.live_sent_total.load(Ordering::Relaxed),
+            filtered_total: self.filtered_total.load(Ordering::Relaxed),
+            lagged_total: self.lagged_total.load(Ordering::Relaxed),
+            lagged_skipped_total: self.lagged_skipped_total.load(Ordering::Relaxed),
+            sync_required_total: self.sync_required_total.load(Ordering::Relaxed),
+            too_many_connections_total: self.too_many_connections_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NotifyIngressMetricsSnapshot {
+    pub pg_events_total: u64,
+    pub kafka_events_total: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NotifyIngressMetrics {
+    pg_events_total: AtomicU64,
+    kafka_events_total: AtomicU64,
+}
+
+impl NotifyIngressMetrics {
+    fn observe_pg(&self) -> u64 {
+        self.pg_events_total.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn observe_kafka(&self) -> u64 {
+        self.kafka_events_total.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn snapshot(&self) -> NotifyIngressMetricsSnapshot {
+        NotifyIngressMetricsSnapshot {
+            pg_events_total: self.pg_events_total.load(Ordering::Relaxed),
+            kafka_events_total: self.kafka_events_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState(Arc<AppStateInner>);
 
@@ -133,7 +293,11 @@ pub struct AppStateInner {
     pub config: AppConfig,
     users: UserMap,
     debate_replays: DebateReplayMap,
+    sse_replays: SseReplayMap,
+    sse_connections: SseConnMap,
     sync_required_metrics: NotifySyncRequiredMetrics,
+    sse_metrics: NotifySseMetrics,
+    ingress_metrics: NotifyIngressMetrics,
     db: PgPool,
     dk: DecodingKey,
 }
@@ -142,10 +306,18 @@ const INDEX_HTML: &str = include_str!("../index.html");
 
 pub async fn get_router(config: AppConfig) -> anyhow::Result<Router> {
     let state = AppState::new(config);
-    let kafka_only = state.config.kafka.enabled && state.config.kafka.disable_pg_listener;
-    if kafka_only {
-        info!("notify ingress mode: kafka-only (pg listener disabled by config)");
+    let ingress_mode = if state.config.kafka.enabled {
+        if !state.config.kafka.disable_pg_listener {
+            anyhow::bail!(
+                "invalid notify ingress config: kafka.enabled=true requires disable_pg_listener=true (single-primary ingress only)"
+            );
+        }
+        "kafka-only"
     } else {
+        "pg-only"
+    };
+    info!(ingress_mode, "notify ingress mode selected");
+    if ingress_mode == "pg-only" {
         notif::setup_pg_listener(state.clone()).await?;
     }
     notif::setup_kafka_consumer(state.clone()).await?;
@@ -239,6 +411,8 @@ impl AppState {
         );
         let users = Arc::new(DashMap::new());
         let debate_replays = Arc::new(DashMap::new());
+        let sse_replays = Arc::new(DashMap::new());
+        let sse_connections = Arc::new(DashMap::new());
         let db = PgPoolOptions::new()
             .max_connections(5)
             .connect_lazy(&config.server.db_url)
@@ -248,7 +422,11 @@ impl AppState {
             dk,
             users,
             debate_replays,
+            sse_replays,
+            sse_connections,
             sync_required_metrics: NotifySyncRequiredMetrics::default(),
+            sse_metrics: NotifySseMetrics::default(),
+            ingress_metrics: NotifyIngressMetrics::default(),
             db,
         }))
     }
@@ -277,18 +455,54 @@ impl AppState {
         }
     }
 
+    pub(crate) fn try_acquire_sse_connection(&self, user_id: u64) -> bool {
+        let mut accepted = false;
+        {
+            let mut entry = self.sse_connections.entry(user_id).or_insert(0);
+            if *entry < SSE_MAX_CONNECTIONS_PER_USER {
+                *entry += 1;
+                accepted = true;
+            }
+        }
+        if accepted {
+            self.sse_metrics.observe_connected();
+        } else {
+            self.sse_metrics.observe_too_many_connections();
+        }
+        accepted
+    }
+
+    pub(crate) fn release_sse_connection(&self, user_id: u64) {
+        let mut should_remove = false;
+        if let Some(mut entry) = self.sse_connections.get_mut(&user_id) {
+            if *entry > 0 {
+                *entry -= 1;
+                self.sse_metrics.observe_disconnected();
+            }
+            if *entry == 0 {
+                should_remove = true;
+            }
+        }
+        if should_remove {
+            self.sse_connections.remove(&user_id);
+        }
+    }
+
     pub(crate) fn build_user_event_for_recipient(
         &self,
         user_id: u64,
         app_event: Arc<AppEvent>,
         replay_event: Option<DebateReplayEvent>,
     ) -> UserEvent {
+        let sse_replay = self.append_sse_replay_event(user_id, app_event.as_ref());
         let debate_replay = match replay_event {
             Some(v) => Some(self.append_persisted_replay_event(user_id, v)),
             None => self.append_debate_replay_event(user_id, app_event.as_ref()),
         };
         UserEvent {
             app_event,
+            sse_replay,
+            sse_sync_required: None,
             debate_replay,
             debate_sync_required: None,
         }
@@ -302,6 +516,8 @@ impl AppState {
         let session_id = app_event.debate_session_id()?;
         Some(UserEvent {
             app_event,
+            sse_replay: None,
+            sse_sync_required: None,
             debate_replay: None,
             debate_sync_required: Some(DebateSyncRequiredSignal {
                 session_id,
@@ -331,6 +547,110 @@ impl AppState {
 
     pub(crate) fn sync_required_metrics_snapshot(&self) -> NotifySyncRequiredMetricsSnapshot {
         self.sync_required_metrics.snapshot()
+    }
+
+    pub(crate) fn observe_notify_ingress_source(&self, source: &str) {
+        let total = match source {
+            "pg" => self.ingress_metrics.observe_pg(),
+            "kafka" => self.ingress_metrics.observe_kafka(),
+            _ => return,
+        };
+        if total % 200 == 0 {
+            let snapshot = self.ingress_metrics.snapshot();
+            info!(
+                source,
+                pg_events_total = snapshot.pg_events_total,
+                kafka_events_total = snapshot.kafka_events_total,
+                "notify ingress events reached observation checkpoint"
+            );
+        }
+    }
+
+    pub(crate) fn observe_sse_auth_unauthorized(&self) {
+        self.sse_metrics.observe_auth_unauthorized();
+    }
+
+    pub(crate) fn observe_sse_auth_forbidden(&self) {
+        self.sse_metrics.observe_auth_forbidden();
+    }
+
+    pub(crate) fn observe_sse_event_filtered(&self) {
+        self.sse_metrics.observe_filtered();
+    }
+
+    pub(crate) fn observe_sse_replay_sent(&self) {
+        self.sse_metrics.observe_replay_sent();
+    }
+
+    pub(crate) fn observe_sse_live_sent(&self) {
+        self.sse_metrics.observe_live_sent();
+    }
+
+    pub(crate) fn observe_sse_lagged(&self, skipped: u64) {
+        self.sse_metrics.observe_lagged(skipped);
+    }
+
+    pub(crate) fn observe_sse_sync_required(&self) {
+        let total = self.sse_metrics.observe_sync_required();
+        if total.is_multiple_of(SSE_SYNC_REQUIRED_WARN_EVERY) {
+            warn!(
+                total,
+                "sse sync-required emission reached warning threshold"
+            );
+        }
+    }
+
+    pub(crate) fn sse_metrics_snapshot(&self) -> NotifySseMetricsSnapshot {
+        self.sse_metrics.snapshot()
+    }
+
+    pub(crate) fn replay_sse_events_for_user(
+        &self,
+        user_id: u64,
+        last_event_id: Option<u64>,
+    ) -> SseReplayWindow {
+        let from_id = last_event_id.unwrap_or(0);
+        let Some(history) = self.sse_replays.get(&user_id) else {
+            return SseReplayWindow {
+                events: vec![],
+                latest_id: 0,
+                has_gap: false,
+                skipped: 0,
+            };
+        };
+        let latest_id = history.latest_id();
+        if history.events.is_empty() || from_id >= latest_id {
+            return SseReplayWindow {
+                events: vec![],
+                latest_id,
+                has_gap: false,
+                skipped: 0,
+            };
+        }
+        let first_id = history
+            .events
+            .front()
+            .map(|evt| evt.event_id)
+            .unwrap_or(latest_id + 1);
+        let has_gap = from_id.saturating_add(1) < first_id;
+        let skipped = if has_gap {
+            first_id.saturating_sub(from_id.saturating_add(1))
+        } else {
+            0
+        };
+        let events = history
+            .events
+            .iter()
+            .filter(|evt| evt.event_id > from_id)
+            .take(SSE_REPLAY_MAX_ON_CONNECT)
+            .cloned()
+            .collect::<Vec<_>>();
+        SseReplayWindow {
+            events,
+            latest_id,
+            has_gap,
+            skipped,
+        }
     }
 
     pub(crate) async fn replay_debate_events_for_user(
@@ -581,6 +901,26 @@ impl AppState {
         Some(entry.push(raw))
     }
 
+    fn append_sse_replay_event(
+        &self,
+        user_id: u64,
+        app_event: &AppEvent,
+    ) -> Option<SseReplayEvent> {
+        if app_event.is_debate_event() {
+            return None;
+        }
+        let payload = serde_json::to_value(app_event).ok()?;
+        let raw = SseReplayEvent {
+            event_id: 0,
+            event_name: app_event.event_name().to_string(),
+            payload,
+            event_at_ms: now_unix_ms(),
+            critical: app_event.is_sse_critical_event(),
+        };
+        let mut entry = self.sse_replays.entry(user_id).or_default();
+        Some(entry.push(raw))
+    }
+
     fn append_persisted_replay_event(
         &self,
         user_id: u64,
@@ -660,6 +1000,29 @@ impl DebateReplayHistory {
     }
 }
 
+impl SseReplayHistory {
+    fn latest_id(&self) -> u64 {
+        self.events
+            .back()
+            .map(|v| v.event_id)
+            .unwrap_or_else(|| self.next_id.saturating_sub(1))
+    }
+
+    fn push(&mut self, mut event: SseReplayEvent) -> SseReplayEvent {
+        event.event_id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        while self.events.len() >= SSE_REPLAY_HISTORY_CAPACITY {
+            if let Some(idx) = self.events.iter().position(|item| !item.critical) {
+                let _ = self.events.remove(idx);
+            } else {
+                let _ = self.events.pop_front();
+            }
+        }
+        self.events.push_back(event.clone());
+        event
+    }
+}
+
 impl Default for DebateReplayHistory {
     fn default() -> Self {
         Self {
@@ -669,7 +1032,20 @@ impl Default for DebateReplayHistory {
     }
 }
 
+impl Default for SseReplayHistory {
+    fn default() -> Self {
+        Self {
+            next_id: 1,
+            events: VecDeque::new(),
+        }
+    }
+}
+
 impl UserEvent {
+    pub fn sse_event_id(&self) -> Option<u64> {
+        self.sse_replay.as_ref().map(|v| v.event_id)
+    }
+
     pub fn debate_session_id(&self) -> Option<i64> {
         self.debate_replay
             .as_ref()
@@ -678,7 +1054,7 @@ impl UserEvent {
     }
 }
 
-fn now_unix_ms() -> i64 {
+pub(crate) fn now_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|v| v.as_millis() as i64)
@@ -699,6 +1075,9 @@ fn mark_sync_required_for_replay_storage_unavailable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AuthConfig, KafkaConfig, RedisConfig, ServerConfig};
+    use chat_core::Message;
+    use chrono::Utc;
 
     #[tokio::test]
     async fn health_handler_should_return_ok() {
@@ -780,5 +1159,156 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.persist_failed_total, 2);
         assert_eq!(snapshot.replay_storage_unavailable_total, 1);
+    }
+
+    fn test_state() -> AppState {
+        let config = AppConfig {
+            server: ServerConfig {
+                port: 0,
+                db_url: "postgres://localhost:5432/chat".to_string(),
+            },
+            auth: AuthConfig {
+                pk: include_str!("../../chat_core/fixtures/decoding.pem").to_string(),
+            },
+            kafka: KafkaConfig::default(),
+            redis: RedisConfig::default(),
+        };
+        AppState::new(config)
+    }
+
+    #[tokio::test]
+    async fn sse_connection_limit_should_reject_when_exceeding_cap() {
+        let state = test_state();
+        assert!(state.try_acquire_sse_connection(7));
+        assert!(state.try_acquire_sse_connection(7));
+        assert!(state.try_acquire_sse_connection(7));
+        assert!(!state.try_acquire_sse_connection(7));
+        state.release_sse_connection(7);
+        assert!(state.try_acquire_sse_connection(7));
+    }
+
+    #[test]
+    fn sse_replay_history_should_evict_non_critical_first() {
+        let mut history = SseReplayHistory::default();
+        history.push(SseReplayEvent {
+            event_id: 0,
+            event_name: "OpsObservabilityAlert".to_string(),
+            payload: serde_json::json!({"event":"OpsObservabilityAlert"}),
+            event_at_ms: 1,
+            critical: true,
+        });
+        for idx in 0..SSE_REPLAY_HISTORY_CAPACITY {
+            history.push(SseReplayEvent {
+                event_id: 0,
+                event_name: "NewMessage".to_string(),
+                payload: serde_json::json!({"event":"NewMessage","idx":idx}),
+                event_at_ms: idx as i64,
+                critical: false,
+            });
+        }
+        assert_eq!(history.events.len(), SSE_REPLAY_HISTORY_CAPACITY);
+        assert!(history.events.iter().any(|item| item.critical));
+    }
+
+    #[tokio::test]
+    async fn replay_sse_events_for_user_should_report_gap() {
+        let state = test_state();
+        state.sse_replays.insert(
+            42,
+            SseReplayHistory {
+                next_id: 8,
+                events: VecDeque::from(vec![
+                    SseReplayEvent {
+                        event_id: 5,
+                        event_name: "NewMessage".to_string(),
+                        payload: serde_json::json!({"event":"NewMessage","i":5}),
+                        event_at_ms: 5,
+                        critical: false,
+                    },
+                    SseReplayEvent {
+                        event_id: 6,
+                        event_name: "NewMessage".to_string(),
+                        payload: serde_json::json!({"event":"NewMessage","i":6}),
+                        event_at_ms: 6,
+                        critical: false,
+                    },
+                    SseReplayEvent {
+                        event_id: 7,
+                        event_name: "NewMessage".to_string(),
+                        payload: serde_json::json!({"event":"NewMessage","i":7}),
+                        event_at_ms: 7,
+                        critical: false,
+                    },
+                ]),
+            },
+        );
+        let window = state.replay_sse_events_for_user(42, Some(1));
+        assert!(window.has_gap);
+        assert_eq!(window.skipped, 3);
+        assert_eq!(window.latest_id, 7);
+    }
+
+    #[tokio::test]
+    async fn get_router_should_reject_dual_ingress_mode() {
+        let kafka = KafkaConfig {
+            enabled: true,
+            disable_pg_listener: false,
+            ..KafkaConfig::default()
+        };
+        let config = AppConfig {
+            server: ServerConfig {
+                port: 0,
+                db_url: "postgres://localhost:5432/chat".to_string(),
+            },
+            auth: AuthConfig {
+                pk: include_str!("../../chat_core/fixtures/decoding.pem").to_string(),
+            },
+            kafka,
+            redis: RedisConfig::default(),
+        };
+        let err = get_router(config)
+            .await
+            .expect_err("expected invalid config");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("single-primary ingress"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_sse_replay_event_should_skip_debate_event() {
+        let state = test_state();
+        let event = AppEvent::DebateMessageCreated(crate::notif::DebateMessageCreated {
+            message_id: 1,
+            session_id: 2,
+            user_id: 3,
+            side: "pro".to_string(),
+            content: "hello".to_string(),
+            created_at: Utc::now(),
+        });
+        assert!(state.append_sse_replay_event(9, &event).is_none());
+    }
+
+    #[tokio::test]
+    async fn append_sse_replay_event_should_assign_monotonic_event_id() {
+        let state = test_state();
+        let evt = AppEvent::NewMessage(Message {
+            id: 1,
+            chat_id: 2,
+            sender_id: 3,
+            content: "hi".to_string(),
+            modified_content: None,
+            files: vec![],
+            created_at: Utc::now(),
+        });
+        let first = state
+            .append_sse_replay_event(11, &evt)
+            .expect("first replay event");
+        let second = state
+            .append_sse_replay_event(11, &evt)
+            .expect("second replay event");
+        assert_eq!(first.event_id, 1);
+        assert_eq!(second.event_id, 2);
     }
 }

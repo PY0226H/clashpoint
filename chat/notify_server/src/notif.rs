@@ -690,11 +690,13 @@ async fn dispatch_notification(
     state: &AppState,
     notif: &sqlx::postgres::PgNotification,
 ) -> anyhow::Result<()> {
+    state.observe_notify_ingress_source("pg");
     let notification = Notification::load(notif.channel(), notif.payload())?;
     dispatch_loaded_notification(state, notification).await
 }
 
 async fn handle_kafka_payload(state: &AppState, payload: &str) -> anyhow::Result<()> {
+    state.observe_notify_ingress_source("kafka");
     let envelope = match serde_json::from_str::<KafkaEventEnvelope>(payload) {
         Ok(v) => v,
         Err(err) => {
@@ -1042,6 +1044,16 @@ impl AppEvent {
                 | AppEvent::DebateMessagePinned(_)
                 | AppEvent::DebateJudgeReportReady(_)
                 | AppEvent::DebateDrawVoteResolved(_)
+        )
+    }
+
+    pub fn is_sse_critical_event(&self) -> bool {
+        matches!(
+            self,
+            AppEvent::NewChat(_)
+                | AppEvent::AddToChat(_)
+                | AppEvent::RemoveFromChat(_)
+                | AppEvent::OpsObservabilityAlert(_)
         )
     }
 }
