@@ -38,8 +38,9 @@ use crate::{
     SubmitDrawVoteOutput, SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput,
     SubmitJudgePhaseReportInput, SubmitJudgePhaseReportOutput, UpdateChat, UpdateChatMembers,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
-    VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput, WalletLedgerItem,
-    WechatBindPhoneV2Input, WechatChallengeV2Output, WechatSigninV2Input, WechatSigninV2Output,
+    VerifyIapErrorOutput, VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput,
+    WalletLedgerItem, WechatBindPhoneV2Input, WechatChallengeV2Output, WechatSigninV2Input,
+    WechatSigninV2Output,
 };
 use axum::Router;
 use chat_core::{AgentType, Chat, ChatAgent, ChatType, ChatUser, Message, User};
@@ -189,7 +190,7 @@ pub(crate) trait OpenApiRouter {
                 IapProduct, ListIapProducts, ListIapProductsOutput, IapProductsEmptyReason,
                 GetIapOrderByTransaction, IapOrderProbeStatus, IapOrderSnapshot,
                 GetIapOrderByTransactionOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
-                WalletBalanceOutput, ListWalletLedger, WalletLedgerItem,
+                VerifyIapErrorOutput, WalletBalanceOutput, ListWalletLedger, WalletLedgerItem,
                 SigninUser, CreateUser, CreateChat, UpdateChat, UpdateChatMembers,
                 SendSmsCodeV2Input, SendSmsCodeV2Output, SmsDeliveryCallbackV2Input, SmsDeliveryCallbackV2Output,
                 SignupPhoneV2Input, SignupEmailV2Input,

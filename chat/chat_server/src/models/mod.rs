@@ -59,8 +59,8 @@ pub use ops_observability::{
 pub use payment::{
     GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,
     IapOrderSnapshot, IapProduct, IapProductsEmptyReason, ListIapProducts, ListIapProductsOutput,
-    ListWalletLedger, VerifyIapOrderInput, VerifyIapOrderOutput, WalletBalanceOutput,
-    WalletLedgerItem,
+    ListWalletLedger, VerifyIapErrorOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
+    WalletBalanceOutput, WalletLedgerItem,
 };
 pub(crate) use rbac::OpsPermission;
 pub use rbac::{

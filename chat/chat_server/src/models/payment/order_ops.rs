@@ -6,7 +6,8 @@ use super::{
 use crate::{AppError, AppState};
 use chat_core::User;
 use chrono::Utc;
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
+use std::time::Instant;
 
 pub(super) async fn wallet_balance_in_tx(
     tx: &mut Transaction<'_, Postgres>,
@@ -21,6 +22,20 @@ pub(super) async fn wallet_balance_in_tx(
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|v| v.0).unwrap_or(0))
+}
+
+pub(super) async fn wallet_balance(pool: &PgPool, user_id: i64) -> Result<i64, AppError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT balance
+        FROM user_wallets
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
     .await?;
     Ok(row.map(|v| v.0).unwrap_or(0))
 }
@@ -72,8 +87,7 @@ impl AppState {
             )));
         }
 
-        let mut tx = self.pool.begin().await?;
-
+        // Fast-path: existing order reuse without opening a long transaction or calling Apple verify.
         let existing_order: Option<IapOrderRow> = sqlx::query_as(
             r#"
             SELECT id, user_id, product_id, status, verify_mode, verify_reason, coins
@@ -82,13 +96,12 @@ impl AppState {
             "#,
         )
         .bind(transaction_id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?;
 
         if let Some(order) = existing_order {
             order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
-            let wallet_balance = wallet_balance_in_tx(&mut tx, user.id).await?;
-            tx.commit().await?;
+            let wallet_balance = wallet_balance(&self.pool, user.id).await?;
             query_ops::invalidate_iap_order_probe_cache_for_transaction(
                 &self.config.server.db_url,
                 transaction_id,
@@ -100,6 +113,7 @@ impl AppState {
             ));
         }
 
+        let verify_started_at = Instant::now();
         let verify_result = receipt_verify::verify_receipt(
             &self.config.payment,
             &product.product_id,
@@ -108,6 +122,10 @@ impl AppState {
             receipt,
         )
         .await?;
+        let apple_verify_latency_ms = verify_started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
         let status = verify_result.status;
         let verify_reason = verify_result.verify_reason;
         let verified_at = if status == "verified" {
@@ -117,6 +135,48 @@ impl AppState {
         };
         let verify_mode = verify_result.verify_mode;
         let raw_payload = verify_result.raw_payload;
+
+        let db_tx_started_at = Instant::now();
+        let mut tx = self.pool.begin().await?;
+
+        let existing_order_in_tx: Option<IapOrderRow> = sqlx::query_as(
+            r#"
+            SELECT id, user_id, product_id, status, verify_mode, verify_reason, coins
+            FROM iap_orders
+            WHERE platform = 'apple_iap' AND transaction_id = $1
+            "#,
+        )
+        .bind(transaction_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some(order) = existing_order_in_tx {
+            order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
+            let wallet_balance = wallet_balance_in_tx(&mut tx, user.id).await?;
+            tx.commit().await?;
+            let db_tx_latency_ms = db_tx_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64;
+            tracing::info!(
+                user_id = user.id,
+                transaction_id_hash = super::helpers::hash_receipt(transaction_id),
+                verify_mode = "reuse",
+                apple_verify_latency_ms,
+                db_tx_latency_ms,
+                decision = "reuse_existing_order_in_tx",
+                "iap verify completed"
+            );
+            query_ops::invalidate_iap_order_probe_cache_for_transaction(
+                &self.config.server.db_url,
+                transaction_id,
+            )
+            .await;
+            return Ok(order_flow::build_order_output_without_credit(
+                order,
+                wallet_balance,
+            ));
+        }
 
         let inserted_order: Option<IapOrderRow> = sqlx::query_as(
             r#"
@@ -157,6 +217,19 @@ impl AppState {
             order_flow::validate_order_reuse_constraints(&order, user, &product.product_id)?;
             let wallet_balance = wallet_balance_in_tx(&mut tx, user.id).await?;
             tx.commit().await?;
+            let db_tx_latency_ms = db_tx_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64;
+            tracing::info!(
+                user_id = user.id,
+                transaction_id_hash = super::helpers::hash_receipt(transaction_id),
+                verify_mode = "reuse_after_conflict",
+                apple_verify_latency_ms,
+                db_tx_latency_ms,
+                decision = "reuse_existing_order_after_insert_conflict",
+                "iap verify completed"
+            );
             query_ops::invalidate_iap_order_probe_cache_for_transaction(
                 &self.config.server.db_url,
                 transaction_id,
@@ -177,6 +250,21 @@ impl AppState {
         .await?;
 
         tx.commit().await?;
+        let db_tx_latency_ms = db_tx_started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        tracing::info!(
+            user_id = user.id,
+            transaction_id_hash = super::helpers::hash_receipt(transaction_id),
+            verify_mode = verify_mode.as_str(),
+            apple_verify_latency_ms,
+            db_tx_latency_ms,
+            order_status = inserted_order.status.as_str(),
+            credited,
+            decision = "verified",
+            "iap verify completed"
+        );
         query_ops::invalidate_iap_order_probe_cache_for_transaction(
             &self.config.server.db_url,
             transaction_id,

@@ -57,6 +57,14 @@ pub struct VerifyIapOrderOutput {
     pub wallet_balance: i64,
 }
 
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyIapErrorOutput {
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetIapOrderByTransaction {

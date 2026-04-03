@@ -1,5 +1,5 @@
 use crate::AppError;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 
 const DEFAULT_LIMIT: u64 = 20;
 const MAX_LIMIT: u64 = 100;
@@ -26,7 +26,7 @@ pub(super) fn validate_identifier(
 }
 
 pub(super) fn hash_receipt(receipt: &str) -> String {
-    let mut hasher = Sha1::new();
+    let mut hasher = Sha256::new();
     hasher.update(receipt.as_bytes());
     hex::encode(hasher.finalize())
 }
