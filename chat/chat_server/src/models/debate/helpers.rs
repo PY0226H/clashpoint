@@ -3,6 +3,7 @@ use super::{
     DEBATE_PIN_DEFAULT_LIMIT, DEBATE_PIN_MAX_LIMIT, DEFAULT_LIMIT, MAX_LIMIT,
     PIN_BILLING_UNIT_SECONDS, PIN_COST_PER_UNIT_COINS, PIN_MAX_SECONDS, PIN_MIN_SECONDS,
 };
+use chrono::{DateTime, Duration, Utc};
 
 pub(super) fn normalize_limit(limit: Option<u64>) -> i64 {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -97,6 +98,48 @@ pub(super) fn normalize_ops_manage_session_status(
     Err(AppError::DebateError(
         "status must be one of `scheduled|open|running|judging|closed|canceled`".to_string(),
     ))
+}
+
+pub(super) fn normalize_list_session_status(
+    status: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    let status = status.trim().to_lowercase();
+    if status.is_empty() {
+        return Ok(None);
+    }
+    if matches!(
+        status.as_str(),
+        "scheduled" | "open" | "running" | "judging" | "closed" | "canceled"
+    ) {
+        return Ok(Some(status));
+    }
+    Err(AppError::ValidationError(
+        "debate_sessions_invalid_status".to_string(),
+    ))
+}
+
+pub(super) fn validate_list_debate_sessions_time_range(
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    max_window_days: i64,
+) -> Result<(), AppError> {
+    let (Some(from), Some(to)) = (from, to) else {
+        return Ok(());
+    };
+    if from > to {
+        return Err(AppError::ValidationError(
+            "debate_sessions_invalid_time_range".to_string(),
+        ));
+    }
+    if to.signed_duration_since(from) > Duration::days(max_window_days.max(1)) {
+        return Err(AppError::ValidationError(
+            "debate_sessions_time_window_too_large".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn normalize_message_content(content: &str) -> Result<String, AppError> {

@@ -111,11 +111,13 @@ async fn list_debate_sessions_should_return_joinable_flag() -> Result<()> {
             topic_id: None,
             from: None,
             to: None,
+            cursor: None,
             limit: Some(20),
         })
         .await?;
 
     let row = rows
+        .items
         .into_iter()
         .find(|v| v.id == session_id)
         .expect("seeded session should exist");
@@ -149,13 +151,179 @@ async fn list_debate_sessions_should_not_mark_future_open_as_joinable() -> Resul
             topic_id: None,
             from: None,
             to: None,
+            cursor: None,
             limit: Some(50),
         })
         .await?;
     let row = rows
+        .items
         .into_iter()
         .find(|v| v.id == future_session_id.0)
         .expect("future open session should exist");
+    assert!(!row.joinable);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_sessions_should_reject_invalid_status() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let err = state
+        .list_debate_sessions(ListDebateSessions {
+            status: Some("not-a-status".to_string()),
+            topic_id: None,
+            from: None,
+            to: None,
+            cursor: None,
+            limit: Some(20),
+        })
+        .await
+        .expect_err("invalid status should be rejected");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_sessions_invalid_status"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_sessions_should_reject_invalid_time_range() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let err = state
+        .list_debate_sessions(ListDebateSessions {
+            status: None,
+            topic_id: None,
+            from: Some(Utc::now()),
+            to: Some(Utc::now() - Duration::hours(1)),
+            cursor: None,
+            limit: Some(20),
+        })
+        .await
+        .expect_err("invalid time range should be rejected");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_sessions_invalid_time_range"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_sessions_should_reject_invalid_cursor() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let err = state
+        .list_debate_sessions(ListDebateSessions {
+            status: None,
+            topic_id: None,
+            from: None,
+            to: None,
+            cursor: Some("bad-cursor".to_string()),
+            limit: Some(20),
+        })
+        .await
+        .expect_err("invalid cursor should be rejected");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_sessions_cursor_invalid"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_sessions_should_support_cursor_pagination_with_stable_order() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let topic_id: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO debate_topics(title, description, category, stance_pro, stance_con, is_active, created_by)
+        VALUES ('session-cursor-topic', 'desc', 'game', 'pro', 'con', true, 1)
+        RETURNING id
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    let fixed = Utc::now() - Duration::minutes(30);
+    sqlx::query(
+        r#"
+        INSERT INTO debate_sessions(
+            topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+        )
+        VALUES
+            ($1, 'open', $2, NULL, $3, 10),
+            ($1, 'open', $2, NULL, $3, 10),
+            ($1, 'open', $2, NULL, $3, 10)
+        "#,
+    )
+    .bind(topic_id.0)
+    .bind(fixed)
+    .bind(fixed + Duration::minutes(20))
+    .execute(&state.pool)
+    .await?;
+
+    let first = state
+        .list_debate_sessions(ListDebateSessions {
+            status: Some("open".to_string()),
+            topic_id: Some(topic_id.0 as u64),
+            from: None,
+            to: None,
+            cursor: None,
+            limit: Some(2),
+        })
+        .await?;
+    assert_eq!(first.items.len(), 2);
+    assert!(first.has_more);
+    assert!(first.next_cursor.is_some());
+    assert!(first.items[0].id > first.items[1].id);
+
+    let second = state
+        .list_debate_sessions(ListDebateSessions {
+            status: Some("open".to_string()),
+            topic_id: Some(topic_id.0 as u64),
+            from: None,
+            to: None,
+            cursor: first.next_cursor.clone(),
+            limit: Some(2),
+        })
+        .await?;
+    assert!(!second.items.is_empty());
+    let first_ids: std::collections::HashSet<i64> =
+        first.items.iter().map(|item| item.id).collect();
+    assert!(second
+        .items
+        .iter()
+        .all(|item| !first_ids.contains(&item.id)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_sessions_should_not_mark_full_session_as_joinable() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 1).await?;
+    sqlx::query(
+        r#"
+        UPDATE debate_sessions
+        SET pro_count = max_participants_per_side,
+            con_count = max_participants_per_side
+        WHERE id = $1
+        "#,
+    )
+    .bind(session_id)
+    .execute(&state.pool)
+    .await?;
+
+    let out = state
+        .list_debate_sessions(ListDebateSessions {
+            status: Some("open".to_string()),
+            topic_id: None,
+            from: None,
+            to: None,
+            cursor: None,
+            limit: Some(20),
+        })
+        .await?;
+
+    let row = out
+        .items
+        .into_iter()
+        .find(|v| v.id == session_id)
+        .expect("seeded session should exist");
     assert!(!row.joinable);
     Ok(())
 }

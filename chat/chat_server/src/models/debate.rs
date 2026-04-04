@@ -6,7 +6,7 @@ use chat_core::User;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{FromRow, Postgres, QueryBuilder, Transaction};
 use tracing::warn;
 use utoipa::{IntoParams, ToSchema};
 
@@ -16,10 +16,11 @@ mod ops;
 use helpers::{
     build_phase_trigger_idempotency_key, build_phase_trigger_trace_id, can_join_status,
     can_spectate_status, evaluate_phase_trigger_checkpoint, normalize_debate_message_limit,
-    normalize_debate_pin_limit, normalize_limit, normalize_message_content,
-    normalize_ops_manage_session_status, normalize_ops_session_status, normalize_ops_topic_field,
-    normalize_pin_seconds, normalize_topic_category, normalize_topic_category_filter,
-    pin_cost_coins, valid_join_side,
+    normalize_debate_pin_limit, normalize_limit, normalize_list_session_status,
+    normalize_message_content, normalize_ops_manage_session_status, normalize_ops_session_status,
+    normalize_ops_topic_field, normalize_pin_seconds, normalize_topic_category,
+    normalize_topic_category_filter, pin_cost_coins, valid_join_side,
+    validate_list_debate_sessions_time_range,
 };
 
 const DEFAULT_LIMIT: u64 = 20;
@@ -41,6 +42,8 @@ const JUDGE_PHASE_WINDOW_SIZE: i64 = 100;
 const JUDGE_PHASE_RUBRIC_VERSION: &str = "v3";
 const JUDGE_PHASE_POLICY_VERSION: &str = "v3-default";
 const DEBATE_TOPICS_EMPTY_REVISION: &str = "empty";
+const DEBATE_SESSIONS_EMPTY_REVISION: &str = "empty";
+const DEBATE_SESSIONS_MAX_WINDOW_DAYS: i64 = 90;
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,7 +105,17 @@ pub struct ListDebateSessions {
     pub topic_id: Option<u64>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    pub cursor: Option<String>,
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDebateSessionsOutput {
+    pub items: Vec<DebateSessionSummary>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -290,6 +303,12 @@ struct ListDebateTopicsCursor {
     id: i64,
 }
 
+#[derive(Debug, Clone)]
+struct ListDebateSessionsCursor {
+    scheduled_start_at: DateTime<Utc>,
+    id: i64,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -322,6 +341,43 @@ fn decode_list_debate_topics_cursor(raw: &str) -> Result<ListDebateTopicsCursor,
         ));
     }
     Ok(ListDebateTopicsCursor { created_at, id })
+}
+
+fn format_sessions_cursor_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+fn encode_list_debate_sessions_cursor(scheduled_start_at: DateTime<Utc>, id: i64) -> String {
+    format!(
+        "{}|{}",
+        format_sessions_cursor_timestamp(scheduled_start_at),
+        id
+    )
+}
+
+fn decode_list_debate_sessions_cursor(raw: &str) -> Result<ListDebateSessionsCursor, AppError> {
+    let trimmed = raw.trim();
+    let Some((scheduled_start_raw, id_raw)) = trimmed.split_once('|') else {
+        return Err(AppError::ValidationError(
+            "debate_sessions_cursor_invalid".to_string(),
+        ));
+    };
+    let scheduled_start_at = DateTime::parse_from_rfc3339(scheduled_start_raw.trim())
+        .map(|ts| ts.with_timezone(&Utc))
+        .map_err(|_| AppError::ValidationError("debate_sessions_cursor_invalid".to_string()))?;
+    let id = id_raw
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| AppError::ValidationError("debate_sessions_cursor_invalid".to_string()))?;
+    if id <= 0 {
+        return Err(AppError::ValidationError(
+            "debate_sessions_cursor_invalid".to_string(),
+        ));
+    }
+    Ok(ListDebateSessionsCursor {
+        scheduled_start_at,
+        id,
+    })
 }
 
 const JUDGING_CLOSE_GRACE_SECONDS: i64 = 30;
@@ -411,9 +467,22 @@ impl AppState {
     pub async fn list_debate_sessions(
         &self,
         input: ListDebateSessions,
-    ) -> Result<Vec<DebateSessionSummary>, AppError> {
+    ) -> Result<ListDebateSessionsOutput, AppError> {
         let limit = normalize_limit(input.limit);
-        let rows = sqlx::query_as(
+        let limit_plus_one = limit + 1;
+        let status = normalize_list_session_status(input.status)?;
+        validate_list_debate_sessions_time_range(
+            input.from,
+            input.to,
+            DEBATE_SESSIONS_MAX_WINDOW_DAYS,
+        )?;
+        let topic_id = input.topic_id.map(|v| v as i64);
+        let cursor = match input.cursor.as_deref().map(str::trim) {
+            Some(raw) if !raw.is_empty() => Some(decode_list_debate_sessions_cursor(raw)?),
+            _ => None,
+        };
+
+        let mut query = QueryBuilder::<Postgres>::new(
             r#"
             SELECT
                 id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
@@ -422,25 +491,66 @@ impl AppState {
                     (status IN ('open', 'running'))
                     AND scheduled_start_at <= NOW()
                     AND end_at > NOW()
+                    AND (
+                        pro_count < max_participants_per_side
+                        OR con_count < max_participants_per_side
+                    )
                 ) AS joinable
             FROM debate_sessions
-            WHERE ($1::text IS NULL OR status = $1)
-              AND ($2::bigint IS NULL OR topic_id = $2)
-              AND ($3::timestamptz IS NULL OR scheduled_start_at >= $3)
-              AND ($4::timestamptz IS NULL OR scheduled_start_at <= $4)
-            ORDER BY scheduled_start_at DESC
-            LIMIT $5
+            WHERE 1 = 1
             "#,
-        )
-        .bind(input.status)
-        .bind(input.topic_id.map(|v| v as i64))
-        .bind(input.from)
-        .bind(input.to)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        if let Some(status) = status {
+            query.push(" AND status = ");
+            query.push_bind(status);
+        }
+        if let Some(topic_id) = topic_id {
+            query.push(" AND topic_id = ");
+            query.push_bind(topic_id);
+        }
+        if let Some(from) = input.from {
+            query.push(" AND scheduled_start_at >= ");
+            query.push_bind(from);
+        }
+        if let Some(to) = input.to {
+            query.push(" AND scheduled_start_at <= ");
+            query.push_bind(to);
+        }
+        if let Some(cursor) = cursor.as_ref() {
+            query.push(" AND (scheduled_start_at, id) < (");
+            query.push_bind(cursor.scheduled_start_at);
+            query.push(", ");
+            query.push_bind(cursor.id);
+            query.push(")");
+        }
+        query.push(" ORDER BY scheduled_start_at DESC, id DESC");
+        query.push(" LIMIT ");
+        query.push_bind(limit_plus_one);
 
-        Ok(rows)
+        let mut rows: Vec<DebateSessionSummary> =
+            query.build_query_as().fetch_all(&self.pool).await?;
+        let has_more = (rows.len() as i64) > limit;
+        if has_more {
+            rows.truncate(limit as usize);
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|last| encode_list_debate_sessions_cursor(last.scheduled_start_at, last.id))
+        } else {
+            None
+        };
+        let revision: Option<DateTime<Utc>> =
+            sqlx::query_scalar("SELECT MAX(updated_at) FROM debate_sessions")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(ListDebateSessionsOutput {
+            items: rows,
+            has_more,
+            next_cursor,
+            revision: revision
+                .map(format_sessions_cursor_timestamp)
+                .unwrap_or_else(|| DEBATE_SESSIONS_EMPTY_REVISION.to_string()),
+        })
     }
 
     pub async fn join_debate_session(
