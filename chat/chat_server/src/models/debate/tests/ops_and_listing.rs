@@ -16,13 +16,87 @@ async fn list_debate_topics_should_filter_by_category() -> Result<()> {
 
     let rows = state
         .list_debate_topics(ListDebateTopics {
-            category: Some("game".to_string()),
+            category: Some(" GAME ".to_string()),
             active_only: true,
+            cursor: None,
             limit: Some(50),
         })
         .await?;
-    assert!(rows.iter().all(|v| v.category == "game"));
-    assert!(!rows.is_empty());
+    assert!(rows.items.iter().all(|v| v.category == "game"));
+    assert!(!rows.items.is_empty());
+    assert!(!rows.revision.trim().is_empty());
+    assert!(!rows.has_more);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_topics_should_support_cursor_pagination_with_stable_order() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let fixed = Utc::now() - Duration::minutes(10);
+    sqlx::query(
+        r#"
+        INSERT INTO debate_topics(
+            title, description, category, stance_pro, stance_con, context_seed,
+            is_active, created_by, created_at, updated_at
+        )
+        VALUES
+            ('topic-1', 'desc', 'game', 'pro', 'con', NULL, true, 1, $1, $1),
+            ('topic-2', 'desc', 'game', 'pro', 'con', NULL, true, 1, $1, $1),
+            ('topic-3', 'desc', 'game', 'pro', 'con', NULL, true, 1, $1, $1)
+        "#,
+    )
+    .bind(fixed)
+    .execute(&state.pool)
+    .await?;
+
+    let first = state
+        .list_debate_topics(ListDebateTopics {
+            category: Some("game".to_string()),
+            active_only: true,
+            cursor: None,
+            limit: Some(2),
+        })
+        .await?;
+    assert_eq!(first.items.len(), 2);
+    assert!(first.has_more);
+    assert!(first.next_cursor.is_some());
+    assert!(first.items[0].id > first.items[1].id);
+
+    let second = state
+        .list_debate_topics(ListDebateTopics {
+            category: Some("game".to_string()),
+            active_only: true,
+            cursor: first.next_cursor.clone(),
+            limit: Some(2),
+        })
+        .await?;
+    assert_eq!(second.items.len(), 1);
+    assert!(!second.has_more);
+    let first_ids: std::collections::HashSet<i64> =
+        first.items.iter().map(|item| item.id).collect();
+    assert!(second
+        .items
+        .iter()
+        .all(|item| !first_ids.contains(&item.id)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_topics_should_reject_invalid_cursor() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let err = state
+        .list_debate_topics(ListDebateTopics {
+            category: None,
+            active_only: true,
+            cursor: Some("bad-cursor".to_string()),
+            limit: Some(20),
+        })
+        .await
+        .expect_err("invalid cursor should be rejected");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_topics_cursor_invalid"
+    ));
     Ok(())
 }
 
@@ -131,6 +205,47 @@ async fn create_debate_topic_by_owner_should_work_and_reject_non_owner() -> Resu
         .await
         .expect_err("non owner should be rejected");
     assert!(matches!(err, AppError::DebateConflict(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_debate_topic_by_owner_should_normalize_category() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let created = state
+        .create_debate_topic_by_owner(
+            &owner,
+            OpsCreateDebateTopicInput {
+                title: "topic".to_string(),
+                description: "desc".to_string(),
+                category: "  Game  ".to_string(),
+                stance_pro: "pro".to_string(),
+                stance_con: "con".to_string(),
+                context_seed: None,
+                is_active: true,
+            },
+        )
+        .await?;
+    assert_eq!(created.category, "game");
+
+    let updated = state
+        .update_debate_topic_by_owner(
+            &owner,
+            created.id as u64,
+            OpsUpdateDebateTopicInput {
+                title: "topic".to_string(),
+                description: "desc".to_string(),
+                category: " SPORTS ".to_string(),
+                stance_pro: "pro".to_string(),
+                stance_con: "con".to_string(),
+                context_seed: None,
+                is_active: true,
+            },
+        )
+        .await?;
+    assert_eq!(updated.category, "sports");
     Ok(())
 }
 

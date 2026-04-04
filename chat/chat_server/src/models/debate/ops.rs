@@ -13,8 +13,7 @@ impl AppState {
 
         let title = normalize_ops_topic_field(&input.title, "title", DEBATE_TOPIC_TITLE_MAX_LEN)?;
         let description = normalize_ops_topic_field(&input.description, "description", 4000)?;
-        let category =
-            normalize_ops_topic_field(&input.category, "category", DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
+        let category = normalize_topic_category(&input.category, DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
         let stance_pro =
             normalize_ops_topic_field(&input.stance_pro, "stance_pro", DEBATE_STANCE_MAX_LEN)?;
         let stance_con =
@@ -140,8 +139,7 @@ impl AppState {
 
         let title = normalize_ops_topic_field(&input.title, "title", DEBATE_TOPIC_TITLE_MAX_LEN)?;
         let description = normalize_ops_topic_field(&input.description, "description", 4000)?;
-        let category =
-            normalize_ops_topic_field(&input.category, "category", DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
+        let category = normalize_topic_category(&input.category, DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
         let stance_pro =
             normalize_ops_topic_field(&input.stance_pro, "stance_pro", DEBATE_STANCE_MAX_LEN)?;
         let stance_con =

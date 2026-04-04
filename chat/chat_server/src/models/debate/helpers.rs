@@ -52,6 +52,22 @@ pub(super) fn normalize_ops_topic_field(
     Ok(text.to_string())
 }
 
+pub(super) fn normalize_topic_category(value: &str, max_len: usize) -> Result<String, AppError> {
+    let text = normalize_ops_topic_field(value, "category", max_len)?;
+    Ok(text.to_lowercase())
+}
+
+pub(super) fn normalize_topic_category_filter(raw: Option<String>) -> Option<String> {
+    raw.and_then(|value| {
+        let normalized = value.trim().to_lowercase();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    })
+}
+
 pub(super) fn normalize_ops_session_status(status: Option<String>) -> Result<String, AppError> {
     let status = status
         .unwrap_or_else(|| "scheduled".to_string())

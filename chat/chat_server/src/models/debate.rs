@@ -18,7 +18,8 @@ use helpers::{
     can_spectate_status, evaluate_phase_trigger_checkpoint, normalize_debate_message_limit,
     normalize_debate_pin_limit, normalize_limit, normalize_message_content,
     normalize_ops_manage_session_status, normalize_ops_session_status, normalize_ops_topic_field,
-    normalize_pin_seconds, pin_cost_coins, valid_join_side,
+    normalize_pin_seconds, normalize_topic_category, normalize_topic_category_filter,
+    pin_cost_coins, valid_join_side,
 };
 
 const DEFAULT_LIMIT: u64 = 20;
@@ -39,6 +40,7 @@ const PIN_COST_PER_UNIT_COINS: i64 = 10;
 const JUDGE_PHASE_WINDOW_SIZE: i64 = 100;
 const JUDGE_PHASE_RUBRIC_VERSION: &str = "v3";
 const JUDGE_PHASE_POLICY_VERSION: &str = "v3-default";
+const DEBATE_TOPICS_EMPTY_REVISION: &str = "empty";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,7 +82,17 @@ pub struct ListDebateTopics {
     pub category: Option<String>,
     #[serde(default = "default_true")]
     pub active_only: bool,
+    pub cursor: Option<String>,
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDebateTopicsOutput {
+    pub items: Vec<DebateTopic>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
@@ -272,8 +284,44 @@ struct PinRecord {
     cost_coins: i64,
 }
 
+#[derive(Debug, Clone)]
+struct ListDebateTopicsCursor {
+    created_at: DateTime<Utc>,
+    id: i64,
+}
+
 fn default_true() -> bool {
     true
+}
+
+fn format_topics_cursor_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+fn encode_list_debate_topics_cursor(value: DateTime<Utc>, id: i64) -> String {
+    format!("{}|{}", format_topics_cursor_timestamp(value), id)
+}
+
+fn decode_list_debate_topics_cursor(raw: &str) -> Result<ListDebateTopicsCursor, AppError> {
+    let trimmed = raw.trim();
+    let Some((created_at_raw, id_raw)) = trimmed.split_once('|') else {
+        return Err(AppError::ValidationError(
+            "debate_topics_cursor_invalid".to_string(),
+        ));
+    };
+    let created_at = DateTime::parse_from_rfc3339(created_at_raw.trim())
+        .map(|ts| ts.with_timezone(&Utc))
+        .map_err(|_| AppError::ValidationError("debate_topics_cursor_invalid".to_string()))?;
+    let id = id_raw
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| AppError::ValidationError("debate_topics_cursor_invalid".to_string()))?;
+    if id <= 0 {
+        return Err(AppError::ValidationError(
+            "debate_topics_cursor_invalid".to_string(),
+        ));
+    }
+    Ok(ListDebateTopicsCursor { created_at, id })
 }
 
 const JUDGING_CLOSE_GRACE_SECONDS: i64 = 30;
@@ -292,25 +340,72 @@ impl AppState {
     pub async fn list_debate_topics(
         &self,
         input: ListDebateTopics,
-    ) -> Result<Vec<DebateTopic>, AppError> {
+    ) -> Result<ListDebateTopicsOutput, AppError> {
         let limit = normalize_limit(input.limit);
-        let topics = sqlx::query_as(
-            r#"
-            SELECT id, title, description, category, stance_pro, stance_con, context_seed, is_active, created_by, created_at, updated_at
-            FROM debate_topics
-            WHERE ($1::text IS NULL OR category = $1)
-              AND (NOT $2::boolean OR is_active = TRUE)
-            ORDER BY created_at DESC
-            LIMIT $3
-            "#,
-        )
-        .bind(input.category)
-        .bind(input.active_only)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(topics)
+        let limit_plus_one = limit + 1;
+        let category = normalize_topic_category_filter(input.category);
+        let cursor = match input.cursor.as_deref().map(str::trim) {
+            Some(raw) if !raw.is_empty() => Some(decode_list_debate_topics_cursor(raw)?),
+            _ => None,
+        };
+        let mut rows: Vec<DebateTopic> = if let Some(cursor) = cursor.as_ref() {
+            sqlx::query_as(
+                r#"
+                SELECT id, title, description, category, stance_pro, stance_con, context_seed, is_active, created_by, created_at, updated_at
+                FROM debate_topics
+                WHERE ($1::text IS NULL OR category = $1)
+                  AND (NOT $2::boolean OR is_active = TRUE)
+                  AND (created_at, id) < ($3, $4)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $5
+                "#,
+            )
+            .bind(&category)
+            .bind(input.active_only)
+            .bind(cursor.created_at)
+            .bind(cursor.id)
+            .bind(limit_plus_one)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"
+                SELECT id, title, description, category, stance_pro, stance_con, context_seed, is_active, created_by, created_at, updated_at
+                FROM debate_topics
+                WHERE ($1::text IS NULL OR category = $1)
+                  AND (NOT $2::boolean OR is_active = TRUE)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $3
+                "#,
+            )
+            .bind(&category)
+            .bind(input.active_only)
+            .bind(limit_plus_one)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        let has_more = (rows.len() as i64) > limit;
+        if has_more {
+            rows.truncate(limit as usize);
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|last| encode_list_debate_topics_cursor(last.created_at, last.id))
+        } else {
+            None
+        };
+        let revision: Option<DateTime<Utc>> =
+            sqlx::query_scalar("SELECT MAX(updated_at) FROM debate_topics")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(ListDebateTopicsOutput {
+            items: rows,
+            has_more,
+            next_cursor,
+            revision: revision
+                .map(format_topics_cursor_timestamp)
+                .unwrap_or_else(|| DEBATE_TOPICS_EMPTY_REVISION.to_string()),
+        })
     }
 
     pub async fn list_debate_sessions(
