@@ -4,11 +4,15 @@ import { useAuthStore } from "@echoisle/auth-sdk";
 import { getRuntimeConfig } from "@echoisle/config";
 import {
   createDebateMessage,
+  getDebateDrawVoteStatus,
+  getDebateJudgeReport,
   getOldestDebateMessageId,
   getWalletBalance,
   listDebateMessages,
   listDebatePinnedMessages,
   mergeDebateMessages,
+  requestDebateJudgeJob,
+  submitDebateDrawVote,
   toDebateDomainError,
   type DebateMessage
 } from "@echoisle/debate-domain";
@@ -89,6 +93,18 @@ export function DebateRoomPage() {
     queryFn: () => getWalletBalance()
   });
 
+  const judgeReportQuery = useQuery({
+    queryKey: ["debate-room-judge-report", sessionIdNum],
+    queryFn: () => getDebateJudgeReport(sessionIdNum),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+  });
+
+  const drawVoteQuery = useQuery({
+    queryKey: ["debate-room-draw-vote", sessionIdNum],
+    queryFn: () => getDebateDrawVoteStatus(sessionIdNum),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+  });
+
   const sendMutation = useMutation({
     mutationFn: async (content: string) => createDebateMessage(sessionIdNum, content),
     onSuccess: (created) => {
@@ -96,6 +112,38 @@ export function DebateRoomPage() {
       setPageHint("Message sent.");
       setMessages((current) => mergeDebateMessages(current, [created]));
       void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    }
+  });
+
+  const requestJudgeMutation = useMutation({
+    mutationFn: async () => requestDebateJudgeJob(sessionIdNum, { allowRejudge: false }),
+    onSuccess: (result) => {
+      setPageHint(
+        `Judge request accepted (${result.status}), phaseJobs=${result.queuedPhaseJobs}, finalJob=${String(result.queuedFinalJob)}`
+      );
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    }
+  });
+
+  const drawVoteMutation = useMutation({
+    mutationFn: async (agreeDraw: boolean) => submitDebateDrawVote(sessionIdNum, agreeDraw),
+    onSuccess: (result, agreeDraw) => {
+      setPageHint(
+        agreeDraw
+          ? `Draw vote submitted: agree (${result.vote.agreeVotes}/${result.vote.requiredVoters})`
+          : `Draw vote submitted: disagree (${result.vote.disagreeVotes}/${result.vote.requiredVoters})`
+      );
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
@@ -136,6 +184,8 @@ export function DebateRoomPage() {
       void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
       void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
       void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
       connectWsRef.current();
     }, delay);
   }, [queryClient, sessionIdNum]);
@@ -164,6 +214,17 @@ export function DebateRoomPage() {
       if (event === "DebateMessagePinned") {
         void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
         void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+        return;
+      }
+      if (
+        event.includes("Judge") ||
+        event.includes("DrawVote") ||
+        event.includes("Rematch") ||
+        event.includes("DebateSession")
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+        void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+        void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
       }
     },
     [queryClient, sessionIdNum]
@@ -206,6 +267,8 @@ export function DebateRoomPage() {
           void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
           void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
           void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+          void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+          void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
           ws.close();
           return;
         }
@@ -221,6 +284,8 @@ export function DebateRoomPage() {
             setPageHint("Realtime gap detected, recovering snapshot...");
             void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
             void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+            void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+            void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
           } else {
             handleRoomPayload(msg.payload);
           }
@@ -298,6 +363,9 @@ export function DebateRoomPage() {
     }
   }, [wsStatus]);
 
+  const finalReport = judgeReportQuery.data?.finalReport ?? null;
+  const drawVote = drawVoteQuery.data?.vote ?? null;
+
   if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
     return (
       <section className="echo-room-page">
@@ -335,6 +403,10 @@ export function DebateRoomPage() {
           <strong>{walletQuery.data?.balance ?? 0}</strong>
           <span>Wallet Coins</span>
         </article>
+        <article>
+          <strong>{(judgeReportQuery.data?.status || "unknown").toUpperCase()}</strong>
+          <span>Judge Status</span>
+        </article>
       </section>
 
       <section className="echo-lobby-panel">
@@ -354,6 +426,88 @@ export function DebateRoomPage() {
           {!pinsQuery.isLoading && (pinsQuery.data?.items.length || 0) === 0 ? (
             <InlineHint>No active pinned messages.</InlineHint>
           ) : null}
+        </div>
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Judge & Draw</h3>
+        <div className="echo-lobby-actions">
+          <Button disabled={requestJudgeMutation.isPending} onClick={() => requestJudgeMutation.mutate()} type="button">
+            {requestJudgeMutation.isPending ? "Requesting..." : "Request AI Judge"}
+          </Button>
+          <Button
+            disabled={drawVoteMutation.isPending || drawVote?.status !== "open"}
+            onClick={() => drawVoteMutation.mutate(true)}
+            type="button"
+          >
+            {drawVoteMutation.isPending ? "Submitting..." : "Vote Draw"}
+          </Button>
+          <Button
+            disabled={drawVoteMutation.isPending || drawVote?.status !== "open"}
+            onClick={() => drawVoteMutation.mutate(false)}
+            type="button"
+          >
+            {drawVoteMutation.isPending ? "Submitting..." : "Keep Winner"}
+          </Button>
+          {drawVote?.rematchSessionId ? (
+            <Button onClick={() => navigate(`/debate/sessions/${drawVote.rematchSessionId}`)} type="button">
+              Go To Rematch #{drawVote.rematchSessionId}
+            </Button>
+          ) : null}
+        </div>
+        {judgeReportQuery.isLoading ? <InlineHint>Loading judge report...</InlineHint> : null}
+        {drawVoteQuery.isLoading ? <InlineHint>Loading draw vote...</InlineHint> : null}
+        {judgeReportQuery.isError ? <p className="echo-error">{toDebateDomainError(judgeReportQuery.error)}</p> : null}
+        {drawVoteQuery.isError ? <p className="echo-error">{toDebateDomainError(drawVoteQuery.error)}</p> : null}
+        <div className="echo-room-judge-grid">
+          <article className="echo-topic-item">
+            <h4>Final Report</h4>
+            <InlineHint>Status: {judgeReportQuery.data?.status || "unknown"}</InlineHint>
+            {finalReport ? (
+              <>
+                <p>
+                  Winner: <strong>{String(finalReport.winner || "unknown").toUpperCase()}</strong>
+                </p>
+                <InlineHint>
+                  Score: PRO {finalReport.proScore} vs CON {finalReport.conScore}
+                </InlineHint>
+                <InlineHint>
+                  Needs Draw Vote: {finalReport.needsDrawVote ? "yes" : "no"} | Degrade:{" "}
+                  {String(finalReport.degradationLevel ?? "-")}
+                </InlineHint>
+                <p>{finalReport.finalRationale || "No rationale yet."}</p>
+              </>
+            ) : (
+              <InlineHint>No final report yet.</InlineHint>
+            )}
+          </article>
+
+          <article className="echo-topic-item">
+            <h4>Draw Vote Status</h4>
+            <InlineHint>Status: {drawVoteQuery.data?.status || "absent"}</InlineHint>
+            {drawVote ? (
+              <>
+                <InlineHint>
+                  Participation: {drawVote.participatedVoters}/{drawVote.requiredVoters} (eligible {drawVote.eligibleVoters})
+                </InlineHint>
+                <InlineHint>
+                  Votes: agree {drawVote.agreeVotes} | disagree {drawVote.disagreeVotes}
+                </InlineHint>
+                <InlineHint>Resolution: {drawVote.resolution}</InlineHint>
+                <InlineHint>
+                  My Vote:{" "}
+                  {drawVote.myVote == null ? "not submitted" : drawVote.myVote ? "agree draw" : "keep winner"}
+                </InlineHint>
+                <InlineHint>Voting Ends: {formatUtc(drawVote.votingEndsAt)}</InlineHint>
+                {drawVote.decidedAt ? <InlineHint>Decided At: {formatUtc(drawVote.decidedAt)}</InlineHint> : null}
+                {drawVote.rematchSessionId ? (
+                  <InlineHint>Rematch Opened: session #{drawVote.rematchSessionId}</InlineHint>
+                ) : null}
+              </>
+            ) : (
+              <InlineHint>Draw vote not opened for this session.</InlineHint>
+            )}
+          </article>
         </div>
       </section>
 

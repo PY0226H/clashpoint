@@ -146,7 +146,7 @@
 
 .echo-lobby-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
 }
 
@@ -193,6 +193,12 @@
 }
 
 .echo-room-pins {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-room-judge-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -478,7 +484,8 @@
   .echo-lobby-summary,
   .echo-topic-grid,
   .echo-session-grid,
-  .echo-room-pins {
+  .echo-room-pins,
+  .echo-room-judge-grid {
     grid-template-columns: 1fr;
   }
 

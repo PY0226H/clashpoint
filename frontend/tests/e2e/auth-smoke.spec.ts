@@ -11,6 +11,51 @@ function json(route: Route, status: number, payload: unknown) {
 }
 
 async function installAuthMocks(page: Page) {
+  const judgeReadySessions = new Set<number>();
+  const drawVoteStateBySession = new Map<
+    number,
+    {
+      status: "open" | "decided" | "expired";
+      resolution: "pending" | "keep_winner" | "open_rematch";
+      myVote: boolean | null;
+      participatedVoters: number;
+      agreeVotes: number;
+      disagreeVotes: number;
+      rematchSessionId: number | null;
+      votingEndsAt: string;
+      decidedAt: string | null;
+    }
+  >();
+
+  function matchSessionPath(pathname: string, suffix: string): number | null {
+    const matched = pathname.match(new RegExp(`^/api/debate/sessions/(\\d+)/${suffix}$`));
+    if (!matched?.[1]) {
+      return null;
+    }
+    const id = Number(matched[1]);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  function getOrCreateDrawVoteState(sessionId: number) {
+    const existing = drawVoteStateBySession.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const created = {
+      status: "open" as const,
+      resolution: "pending" as const,
+      myVote: null,
+      participatedVoters: 0,
+      agreeVotes: 0,
+      disagreeVotes: 0,
+      rematchSessionId: null,
+      votingEndsAt: "2026-01-01T01:40:00Z",
+      decidedAt: null
+    };
+    drawVoteStateBySession.set(sessionId, created);
+    return created;
+  }
+
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
@@ -168,12 +213,13 @@ async function installAuthMocks(page: Page) {
       });
     }
 
-    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/messages$/) && request.method() === "GET") {
+    const messageListSessionId = matchSessionPath(pathname, "messages");
+    if (messageListSessionId && request.method() === "GET") {
       return json(route, 200, {
         items: [
           {
             id: 2001,
-            sessionId: 901,
+            sessionId: messageListSessionId,
             userId: 10,
             side: "pro",
             content: "Opening statement from PRO.",
@@ -186,12 +232,13 @@ async function installAuthMocks(page: Page) {
       });
     }
 
-    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/pins$/) && request.method() === "GET") {
+    const pinListSessionId = matchSessionPath(pathname, "pins");
+    if (pinListSessionId && request.method() === "GET") {
       return json(route, 200, {
         items: [
           {
             id: 3001,
-            sessionId: 901,
+            sessionId: pinListSessionId,
             messageId: 2001,
             userId: 10,
             side: "pro",
@@ -209,14 +256,145 @@ async function installAuthMocks(page: Page) {
       });
     }
 
-    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/messages$/) && request.method() === "POST") {
+    const messageCreateSessionId = matchSessionPath(pathname, "messages");
+    if (messageCreateSessionId && request.method() === "POST") {
       return json(route, 201, {
         id: 2002,
-        sessionId: 901,
+        sessionId: messageCreateSessionId,
         userId: 10,
         side: "pro",
         content: body?.content || "new message",
         createdAt: "2026-01-01T01:06:00Z"
+      });
+    }
+
+    const judgeReportSessionId = matchSessionPath(pathname, "judge-report");
+    if (judgeReportSessionId && request.method() === "GET") {
+      if (!judgeReadySessions.has(judgeReportSessionId)) {
+        return json(route, 200, {
+          sessionId: judgeReportSessionId,
+          status: "judging",
+          finalDispatchDiagnostics: null,
+          finalDispatchFailureStats: null,
+          finalReport: null
+        });
+      }
+      return json(route, 200, {
+        sessionId: judgeReportSessionId,
+        status: "closed",
+        finalDispatchDiagnostics: null,
+        finalDispatchFailureStats: null,
+        finalReport: {
+          finalReportId: 5001,
+          finalJobId: 6001,
+          winner: "draw",
+          proScore: 8.2,
+          conScore: 8.2,
+          finalRationale: "双方关键观点质量接近，建议进入平票流程。",
+          winnerFirst: null,
+          winnerSecond: null,
+          rejudgeTriggered: false,
+          needsDrawVote: true,
+          dimensionScores: {
+            logic: { pro: 8, con: 8 },
+            evidence: { pro: 8, con: 8 }
+          },
+          verdictEvidenceRefs: [],
+          phaseRollupSummary: [],
+          retrievalSnapshotRollup: [],
+          judgeTrace: {},
+          auditAlerts: [],
+          errorCodes: [],
+          degradationLevel: 0,
+          createdAt: "2026-01-01T01:20:00Z"
+        }
+      });
+    }
+
+    const judgeRequestSessionId = matchSessionPath(pathname, "judge/jobs");
+    if (judgeRequestSessionId && request.method() === "POST") {
+      judgeReadySessions.add(judgeRequestSessionId);
+      getOrCreateDrawVoteState(judgeRequestSessionId);
+      return json(route, 202, {
+        accepted: true,
+        sessionId: judgeRequestSessionId,
+        status: "queued",
+        reason: null,
+        queuedPhaseJobs: 3,
+        queuedFinalJob: true,
+        triggerMode: "manual"
+      });
+    }
+
+    const drawVoteSessionId = matchSessionPath(pathname, "draw-vote");
+    if (drawVoteSessionId && request.method() === "GET") {
+      if (!judgeReadySessions.has(drawVoteSessionId)) {
+        return json(route, 200, {
+          sessionId: drawVoteSessionId,
+          status: "absent",
+          vote: null
+        });
+      }
+      const state = getOrCreateDrawVoteState(drawVoteSessionId);
+      return json(route, 200, {
+        sessionId: drawVoteSessionId,
+        status: state.status,
+        vote: {
+          voteId: drawVoteSessionId * 10,
+          finalReportId: 5001,
+          status: state.status,
+          resolution: state.resolution,
+          decisionSource: state.status === "open" ? "awaiting_threshold" : "majority",
+          thresholdPercent: 60,
+          eligibleVoters: 2,
+          requiredVoters: 2,
+          participatedVoters: state.participatedVoters,
+          agreeVotes: state.agreeVotes,
+          disagreeVotes: state.disagreeVotes,
+          votingEndsAt: state.votingEndsAt,
+          decidedAt: state.decidedAt,
+          myVote: state.myVote,
+          rematchSessionId: state.rematchSessionId
+        }
+      });
+    }
+
+    const drawVoteSubmitSessionId = matchSessionPath(pathname, "draw-vote/ballots");
+    if (drawVoteSubmitSessionId && request.method() === "POST") {
+      if (!judgeReadySessions.has(drawVoteSubmitSessionId)) {
+        return json(route, 409, { error: "draw_vote_absent" });
+      }
+      const agree = body?.agreeDraw === true;
+      const state = getOrCreateDrawVoteState(drawVoteSubmitSessionId);
+      state.status = "decided";
+      state.myVote = agree;
+      state.participatedVoters = 2;
+      state.agreeVotes = agree ? 2 : 0;
+      state.disagreeVotes = agree ? 0 : 2;
+      state.resolution = agree ? "open_rematch" : "keep_winner";
+      state.decidedAt = "2026-01-01T01:25:00Z";
+      state.rematchSessionId = agree ? drawVoteSubmitSessionId + 1 : null;
+      return json(route, 200, {
+        sessionId: drawVoteSubmitSessionId,
+        status: state.status,
+        vote: {
+          voteId: drawVoteSubmitSessionId * 10,
+          finalReportId: 5001,
+          status: state.status,
+          resolution: state.resolution,
+          decisionSource: "majority",
+          thresholdPercent: 60,
+          eligibleVoters: 2,
+          requiredVoters: 2,
+          participatedVoters: state.participatedVoters,
+          agreeVotes: state.agreeVotes,
+          disagreeVotes: state.disagreeVotes,
+          votingEndsAt: state.votingEndsAt,
+          decidedAt: state.decidedAt,
+          myVote: state.myVote,
+          rematchSessionId: state.rematchSessionId
+        },
+        newlySubmitted: true
       });
     }
 
@@ -298,6 +476,27 @@ test("@smoke lobby should render sessions and support join", async ({ page }) =>
   await page.getByPlaceholder("Share your argument...").fill("My realtime argument");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("My realtime argument")).toBeVisible();
+});
+
+test("@smoke room judge-draw flow should support rematch jump", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Lobby" }).click();
+  await page.getByRole("button", { name: "Join Pro" }).click();
+
+  await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
+  await page.getByRole("button", { name: "Request AI Judge" }).click();
+  await expect(page.getByText("Judge request accepted")).toBeVisible();
+  await expect(page.getByText("Winner: DRAW")).toBeVisible();
+  await expect(page.getByText("Resolution: pending")).toBeVisible();
+
+  await page.getByRole("button", { name: "Vote Draw" }).click();
+  await expect(page.getByText("Resolution: open_rematch")).toBeVisible();
+  await page.getByRole("button", { name: "Go To Rematch #902" }).click();
+  await expect(page).toHaveURL(/\/debate\/sessions\/902$/);
+  await expect(page.getByRole("heading", { name: "Debate Room #902" })).toBeVisible();
 });
 
 test("@auth-error password invalid credentials should stay on login", async ({ page }) => {

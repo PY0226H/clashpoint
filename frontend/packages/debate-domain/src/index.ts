@@ -99,6 +99,111 @@ export type WalletBalanceOutput = {
   walletInitialized: boolean;
 };
 
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: JsonValue }
+  | JsonValue[];
+
+export type RequestDebateJudgeJobOutput = {
+  accepted: boolean;
+  sessionId: number;
+  status: string;
+  reason?: string | null;
+  queuedPhaseJobs: number;
+  queuedFinalJob: boolean;
+  triggerMode: string;
+};
+
+export type JudgeFinalReportDetail = {
+  finalReportId: number;
+  finalJobId: number;
+  winner: string;
+  proScore: number;
+  conScore: number;
+  finalRationale: string;
+  winnerFirst?: string | null;
+  winnerSecond?: string | null;
+  rejudgeTriggered: boolean;
+  needsDrawVote: boolean;
+  dimensionScores?: JsonValue;
+  verdictEvidenceRefs?: JsonValue[];
+  phaseRollupSummary?: JsonValue[];
+  retrievalSnapshotRollup?: JsonValue[];
+  judgeTrace?: JsonValue;
+  auditAlerts?: JsonValue[];
+  errorCodes?: string[];
+  degradationLevel?: number;
+  createdAt: string;
+};
+
+export type JudgeFinalDispatchDiagnostics = {
+  finalJobId: number;
+  status: string;
+  phaseStartNo: number;
+  phaseEndNo: number;
+  dispatchAttempts: number;
+  lastDispatchAt?: string | null;
+  errorMessage?: string | null;
+  errorCode?: string | null;
+  contractFailureType?: string | null;
+  contractFailureHint?: string | null;
+  contractFailureAction?: string | null;
+  contractViolationBlocked: boolean;
+};
+
+export type JudgeFinalDispatchFailureTypeCount = {
+  failureType: string;
+  count: number;
+};
+
+export type JudgeFinalDispatchFailureStats = {
+  totalFailedJobs: number;
+  unknownFailedJobs: number;
+  byType: JudgeFinalDispatchFailureTypeCount[];
+};
+
+export type GetDebateJudgeReportOutput = {
+  sessionId: number;
+  status: string;
+  finalDispatchDiagnostics?: JudgeFinalDispatchDiagnostics | null;
+  finalDispatchFailureStats?: JudgeFinalDispatchFailureStats | null;
+  finalReport?: JudgeFinalReportDetail | null;
+};
+
+export type DrawVoteDetail = {
+  voteId: number;
+  finalReportId: number;
+  status: string;
+  resolution: string;
+  decisionSource: string;
+  thresholdPercent: number;
+  eligibleVoters: number;
+  requiredVoters: number;
+  participatedVoters: number;
+  agreeVotes: number;
+  disagreeVotes: number;
+  votingEndsAt: string;
+  decidedAt?: string | null;
+  myVote?: boolean | null;
+  rematchSessionId?: number | null;
+};
+
+export type GetDebateDrawVoteOutput = {
+  sessionId: number;
+  status: string;
+  vote?: DrawVoteDetail | null;
+};
+
+export type SubmitDebateDrawVoteOutput = {
+  sessionId: number;
+  status: string;
+  vote: DrawVoteDetail;
+  newlySubmitted: boolean;
+};
+
 export function normalizeDebateStatusFilter(value: string | null | undefined): DebateStatusFilter {
   switch ((value || "").trim().toLowerCase()) {
     case "scheduled":
@@ -206,6 +311,44 @@ export async function createDebateMessage(
 
 export async function getWalletBalance(): Promise<WalletBalanceOutput> {
   const response = await http.get<WalletBalanceOutput>("/pay/wallet");
+  return response.data;
+}
+
+export async function requestDebateJudgeJob(
+  sessionId: number,
+  input?: { allowRejudge?: boolean }
+): Promise<RequestDebateJudgeJobOutput> {
+  const response = await http.post<RequestDebateJudgeJobOutput>(`/debate/sessions/${sessionId}/judge/jobs`, {
+    allowRejudge: Boolean(input?.allowRejudge)
+  });
+  return response.data;
+}
+
+export async function getDebateJudgeReport(
+  sessionId: number,
+  input?: { maxStageCount?: number; stageOffset?: number }
+): Promise<GetDebateJudgeReportOutput> {
+  const response = await http.get<GetDebateJudgeReportOutput>(`/debate/sessions/${sessionId}/judge-report`, {
+    params: {
+      maxStageCount: input?.maxStageCount,
+      stageOffset: input?.stageOffset
+    }
+  });
+  return response.data;
+}
+
+export async function getDebateDrawVoteStatus(sessionId: number): Promise<GetDebateDrawVoteOutput> {
+  const response = await http.get<GetDebateDrawVoteOutput>(`/debate/sessions/${sessionId}/draw-vote`);
+  return response.data;
+}
+
+export async function submitDebateDrawVote(
+  sessionId: number,
+  agreeDraw: boolean
+): Promise<SubmitDebateDrawVoteOutput> {
+  const response = await http.post<SubmitDebateDrawVoteOutput>(`/debate/sessions/${sessionId}/draw-vote/ballots`, {
+    agreeDraw: Boolean(agreeDraw)
+  });
   return response.data;
 }
 
