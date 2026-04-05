@@ -1,8 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  getOpsMetricsDictionary,
+  getOpsObservabilityConfig,
   getOpsRbacMe,
+  getOpsServiceSplitReadiness,
+  getOpsSloSnapshot,
   listOpsRoleAssignments,
+  listOpsAlertNotifications,
   revokeOpsRoleAssignment,
   toOpsDomainError,
   upsertOpsRoleAssignment,
@@ -20,6 +25,14 @@ function formatUtc(iso: string): string {
   return date.toLocaleString();
 }
 
+function formatDecimal(value: number, digits = 2): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return "--";
+  }
+  return num.toFixed(digits);
+}
+
 export function OpsConsolePage() {
   const queryClient = useQueryClient();
   const [targetUserId, setTargetUserId] = useState("");
@@ -35,6 +48,31 @@ export function OpsConsolePage() {
     queryKey: ["ops-role-assignments"],
     queryFn: () => listOpsRoleAssignments(),
     enabled: Boolean(rbacMeQuery.data?.permissions.roleManage)
+  });
+  const observabilityConfigQuery = useQuery({
+    queryKey: ["ops-observability-config"],
+    queryFn: () => getOpsObservabilityConfig(),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+  });
+  const sloSnapshotQuery = useQuery({
+    queryKey: ["ops-observability-slo"],
+    queryFn: () => getOpsSloSnapshot(),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+  });
+  const metricsDictionaryQuery = useQuery({
+    queryKey: ["ops-observability-metrics-dictionary"],
+    queryFn: () => getOpsMetricsDictionary(),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+  });
+  const splitReadinessQuery = useQuery({
+    queryKey: ["ops-observability-split-readiness"],
+    queryFn: () => getOpsServiceSplitReadiness(),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+  });
+  const alertsQuery = useQuery({
+    queryKey: ["ops-observability-alerts", 5, 0],
+    queryFn: () => listOpsAlertNotifications({ limit: 5, offset: 0 }),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
   });
 
   const upsertRoleMutation = useMutation({
@@ -67,6 +105,7 @@ export function OpsConsolePage() {
   });
 
   const canManageRoles = Boolean(rbacMeQuery.data?.permissions.roleManage);
+  const canReviewJudge = Boolean(rbacMeQuery.data?.permissions.judgeReview);
   const permissions = rbacMeQuery.data?.permissions;
   const permissionRows = useMemo(
     () => [
@@ -77,6 +116,14 @@ export function OpsConsolePage() {
     ],
     [permissions]
   );
+  const activeRuleCount = sloSnapshotQuery.data?.rules.filter((rule) => rule.isActive).length ?? 0;
+  const suppressedRuleCount = sloSnapshotQuery.data?.rules.filter((rule) => rule.suppressed).length ?? 0;
+  const topDictionaryItems = metricsDictionaryQuery.data?.items.slice(0, 4) || [];
+  const topRules = sloSnapshotQuery.data?.rules.slice(0, 4) || [];
+  const topAlerts = alertsQuery.data?.items.slice(0, 3) || [];
+  const thresholdRows = observabilityConfigQuery.data
+    ? Object.entries(observabilityConfigQuery.data.thresholds)
+    : [];
 
   return (
     <section className="echo-ops-page">
@@ -188,6 +235,103 @@ export function OpsConsolePage() {
           </>
         ) : (
           <InlineHint>Role management requires `role_manage` permission from platform owner scope.</InlineHint>
+        )}
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Observability Snapshot</h3>
+        {canReviewJudge ? (
+          <>
+            {observabilityConfigQuery.isLoading ||
+            sloSnapshotQuery.isLoading ||
+            metricsDictionaryQuery.isLoading ||
+            splitReadinessQuery.isLoading ||
+            alertsQuery.isLoading ? (
+              <InlineHint>Loading observability snapshots...</InlineHint>
+            ) : null}
+            {observabilityConfigQuery.isError ? (
+              <p className="echo-error">{toOpsDomainError(observabilityConfigQuery.error)}</p>
+            ) : null}
+            {sloSnapshotQuery.isError ? <p className="echo-error">{toOpsDomainError(sloSnapshotQuery.error)}</p> : null}
+            {metricsDictionaryQuery.isError ? (
+              <p className="echo-error">{toOpsDomainError(metricsDictionaryQuery.error)}</p>
+            ) : null}
+            {splitReadinessQuery.isError ? (
+              <p className="echo-error">{toOpsDomainError(splitReadinessQuery.error)}</p>
+            ) : null}
+            {alertsQuery.isError ? <p className="echo-error">{toOpsDomainError(alertsQuery.error)}</p> : null}
+
+            <div className="echo-lobby-summary">
+              <article>
+                <strong>{formatDecimal(sloSnapshotQuery.data?.signal.successRatePct ?? NaN, 2)}%</strong>
+                <span>SLO Success Rate</span>
+              </article>
+              <article>
+                <strong>{formatDecimal(sloSnapshotQuery.data?.signal.p95LatencyMs ?? NaN, 0)} ms</strong>
+                <span>Dispatch P95</span>
+              </article>
+              <article>
+                <strong>{activeRuleCount}</strong>
+                <span>Active Rules</span>
+              </article>
+              <article>
+                <strong>{splitReadinessQuery.data?.overallStatus || "unknown"}</strong>
+                <span>Split Readiness</span>
+              </article>
+            </div>
+
+            <div className="echo-ops-observability-grid">
+              <article className="echo-topic-item">
+                <h4>SLO Rules</h4>
+                {topRules.map((rule) => (
+                  <InlineHint key={rule.alertKey}>
+                    {rule.alertKey} | {rule.status} | {rule.suppressed ? "suppressed" : "live"}
+                  </InlineHint>
+                ))}
+                {topRules.length === 0 ? <InlineHint>No rules.</InlineHint> : null}
+                <InlineHint>suppressed count: {suppressedRuleCount}</InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Thresholds</h4>
+                {thresholdRows.map(([key, value]) => (
+                  <InlineHint key={key}>
+                    {key}: {String(value)}
+                  </InlineHint>
+                ))}
+                {thresholdRows.length === 0 ? <InlineHint>No threshold snapshot.</InlineHint> : null}
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Metrics Dictionary</h4>
+                {topDictionaryItems.map((item) => (
+                  <InlineHint key={item.key}>
+                    {item.key} ({item.unit}, {item.aggregation})
+                  </InlineHint>
+                ))}
+                <InlineHint>version: {metricsDictionaryQuery.data?.version || "--"}</InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Recent Alerts</h4>
+                {topAlerts.map((item) => (
+                  <InlineHint key={item.id}>
+                    #{item.id} | {item.alertKey} | {item.alertStatus}
+                  </InlineHint>
+                ))}
+                {topAlerts.length === 0 ? <InlineHint>No recent alerts.</InlineHint> : null}
+                <InlineHint>total: {alertsQuery.data?.total ?? 0}</InlineHint>
+              </article>
+            </div>
+
+            {splitReadinessQuery.data ? (
+              <InlineHint>
+                next step: {splitReadinessQuery.data.nextStep} (thresholds: {splitReadinessQuery.data.thresholds.length})
+              </InlineHint>
+            ) : null}
+          </>
+        ) : (
+          <InlineHint>Observability panels require `judge_review` permission.</InlineHint>
         )}
       </section>
 

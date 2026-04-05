@@ -91,6 +91,24 @@ async function installAuthMocks(page: Page) {
       updatedAt: "2026-01-01T00:12:00Z"
     }
   ];
+  const opsObservabilityConfig = {
+    thresholds: {
+      lowSuccessRateThreshold: 95,
+      highRetryThreshold: 1.8,
+      highCoalescedThreshold: 2.5,
+      highDbLatencyThresholdMs: 250,
+      lowCacheHitRateThreshold: 70,
+      minRequestForCacheHitCheck: 30
+    },
+    anomalyState: {
+      "judge.success_rate.low": {
+        acknowledgedAtMs: 1767229200000,
+        suppressUntilMs: 1767231000000
+      }
+    },
+    updatedBy: 10,
+    updatedAt: "2026-01-01T01:10:00Z"
+  };
   const drawVoteStateBySession = new Map<
     number,
     {
@@ -299,6 +317,143 @@ async function installAuthMocks(page: Page) {
     if (pathname === "/api/debate/ops/rbac/roles" && request.method() === "GET") {
       return json(route, 200, {
         items: opsRoleAssignments
+      });
+    }
+
+    if (pathname === "/api/debate/ops/observability/config" && request.method() === "GET") {
+      return json(route, 200, opsObservabilityConfig);
+    }
+
+    if (pathname === "/api/debate/ops/observability/metrics-dictionary" && request.method() === "GET") {
+      return json(route, 200, {
+        version: "v1",
+        generatedAtMs: 1767229800000,
+        items: [
+          {
+            key: "judge.dispatch.failed_total",
+            category: "judge_dispatch",
+            source: "chat_server.internal_ai.judge.dispatch.metrics",
+            unit: "count",
+            aggregation: "sum",
+            description: "Judge dispatch failed delivery total.",
+            target: null
+          },
+          {
+            key: "judge.dispatch.callback_latency_p95_ms",
+            category: "judge_dispatch",
+            source: "ai_judge_service.trace_store",
+            unit: "ms",
+            aggregation: "p95",
+            description: "Dispatch accepted to callback completed latency p95.",
+            target: "<300000"
+          }
+        ]
+      });
+    }
+
+    if (pathname === "/api/debate/ops/observability/slo-snapshot" && request.method() === "GET") {
+      return json(route, 200, {
+        windowMinutes: 30,
+        generatedAtMs: 1767229800000,
+        thresholds: opsObservabilityConfig.thresholds,
+        signal: {
+          successCount: 27,
+          failedCount: 2,
+          completedCount: 29,
+          successRatePct: 93.1,
+          avgDispatchAttempts: 1.5,
+          p95LatencyMs: 218,
+          pendingDlqCount: 1
+        },
+        rules: [
+          {
+            alertKey: "judge.success_rate.low",
+            ruleType: "threshold",
+            title: "Judge success rate low",
+            severity: "high",
+            isActive: true,
+            status: "suppressed",
+            suppressed: true,
+            lastEmittedStatus: "raised",
+            message: "success rate below threshold",
+            metrics: { successRatePct: 93.1, threshold: 95 }
+          },
+          {
+            alertKey: "judge.dispatch.retry.high",
+            ruleType: "threshold",
+            title: "Retry ratio high",
+            severity: "medium",
+            isActive: false,
+            status: "cleared",
+            suppressed: false,
+            lastEmittedStatus: "cleared",
+            message: "retry ratio healthy",
+            metrics: { retryRatio: 1.2, threshold: 1.8 }
+          }
+        ]
+      });
+    }
+
+    if (pathname === "/api/debate/ops/observability/split-readiness" && request.method() === "GET") {
+      return json(route, 200, {
+        generatedAtMs: 1767229800000,
+        overallStatus: "watch",
+        nextStep: "stabilize dispatch error budget before split",
+        thresholds: [
+          {
+            key: "dispatch_error_budget",
+            title: "Dispatch error budget",
+            status: "watch",
+            triggered: true,
+            recommendation: "reduce retries and DLQ pending count",
+            evidence: {
+              failedCount: 2,
+              pendingDlqCount: 1
+            }
+          }
+        ]
+      });
+    }
+
+    if (pathname === "/api/debate/ops/observability/alerts" && request.method() === "GET") {
+      return json(route, 200, {
+        total: 2,
+        limit: 5,
+        offset: 0,
+        items: [
+          {
+            id: 501,
+            alertKey: "judge.success_rate.low",
+            ruleType: "threshold",
+            severity: "high",
+            alertStatus: "suppressed",
+            title: "Judge success rate low",
+            message: "success rate below threshold",
+            metrics: { successRatePct: 93.1, threshold: 95 },
+            recipients: [10],
+            deliveryStatus: "sent",
+            errorMessage: null,
+            deliveredAt: "2026-01-01T01:09:00Z",
+            createdAt: "2026-01-01T01:08:00Z",
+            updatedAt: "2026-01-01T01:09:00Z"
+          },
+          {
+            id: 500,
+            alertKey: "judge.dispatch.retry.high",
+            ruleType: "threshold",
+            severity: "medium",
+            alertStatus: "cleared",
+            title: "Retry ratio high",
+            message: "retry ratio recovered",
+            metrics: { retryRatio: 1.2, threshold: 1.8 },
+            recipients: [10],
+            deliveryStatus: "sent",
+            errorMessage: null,
+            deliveredAt: "2026-01-01T01:02:00Z",
+            createdAt: "2026-01-01T01:01:00Z",
+            updatedAt: "2026-01-01T01:02:00Z"
+          }
+        ]
       });
     }
 
@@ -834,6 +989,9 @@ test("@smoke ops console should show rbac and support role upsert/revoke", async
   await expect(page.getByText("#42 | ops_admin")).toBeVisible();
   await page.getByRole("button", { name: "Revoke #42" }).click();
   await expect(page.getByText("#42 | ops_admin")).toHaveCount(0);
+  await expect(page.getByText("SLO Success Rate")).toBeVisible();
+  await expect(page.getByText("judge.dispatch.failed_total")).toBeVisible();
+  await expect(page.getByText("next step: stabilize dispatch error budget before split")).toBeVisible();
 });
 
 test("@auth-error pin should show insufficient wallet balance error", async ({ page }) => {
@@ -851,6 +1009,30 @@ test("@auth-error pin should show insufficient wallet balance error", async ({ p
   await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
   await page.getByRole("button", { name: "Pin 60s" }).first().click();
   await expect(page.getByText("wallet_balance_insufficient")).toBeVisible();
+});
+
+test("@auth-error ops console should degrade when judge review permission missing", async ({ page }) => {
+  await page.route("**/api/debate/ops/rbac/me", async (route) => {
+    await json(route, 200, {
+      userId: 10,
+      isOwner: false,
+      role: "ops_viewer",
+      permissions: {
+        debateManage: false,
+        judgeReview: false,
+        judgeRejudge: false,
+        roleManage: false
+      }
+    });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+  await expect(page.getByText("Role management requires `role_manage` permission from platform owner scope.")).toBeVisible();
+  await expect(page.getByText("Observability panels require `judge_review` permission.")).toBeVisible();
 });
 
 test("@auth-error password invalid credentials should stay on login", async ({ page }) => {

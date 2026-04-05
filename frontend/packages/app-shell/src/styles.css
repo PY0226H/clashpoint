@@ -302,6 +302,12 @@
   margin-top: 10px;
 }
 
+.echo-ops-observability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .echo-wallet-probe-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -558,6 +564,7 @@
   .echo-room-pins,
   .echo-room-judge-grid,
   .echo-ops-permission-grid,
+  .echo-ops-observability-grid,
   .echo-wallet-products {
     grid-template-columns: 1fr;
   }
