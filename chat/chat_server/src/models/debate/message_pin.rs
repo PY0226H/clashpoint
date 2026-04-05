@@ -556,20 +556,26 @@ impl AppState {
         user: &User,
         input: PinDebateMessageInput,
     ) -> Result<PinDebateMessageOutput, AppError> {
+        let message_id_i64 = safe_u64_to_i64(message_id, DEBATE_PIN_INVALID_MESSAGE_ID)?;
         let pin_seconds = normalize_pin_seconds(input.pin_seconds)?;
         let idempotency_key = input.idempotency_key.trim().to_string();
         if idempotency_key.is_empty() {
-            return Err(AppError::PaymentError(
-                "idempotency_key cannot be empty".to_string(),
+            return Err(AppError::ValidationError(
+                DEBATE_PIN_IDEMPOTENCY_KEY_EMPTY.to_string(),
             ));
         }
         if idempotency_key.len() > 160 {
-            return Err(AppError::PaymentError(
-                "idempotency_key too long, max 160".to_string(),
+            return Err(AppError::ValidationError(
+                DEBATE_PIN_IDEMPOTENCY_KEY_TOO_LONG.to_string(),
             ));
         }
 
         let mut tx = self.pool.begin().await?;
+        let idempotency_lock_key = format!("debate_pin:idempotency:{idempotency_key}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(&idempotency_lock_key)
+            .execute(&mut *tx)
+            .await?;
         let existing_pin = self
             .load_existing_pin_by_idempotency(&mut tx, user, &idempotency_key)
             .await?;
@@ -583,28 +589,27 @@ impl AppState {
             SELECT id, session_id, user_id
             FROM session_messages
             WHERE id = $1
+            FOR UPDATE
             "#,
         )
-        .bind(message_id as i64)
+        .bind(message_id_i64)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("debate message id {message_id}")))?;
         if msg.user_id != user.id {
-            return Err(AppError::DebateConflict(format!(
-                "only message sender can pin message {}",
-                message_id
-            )));
+            return Err(AppError::DebateConflict(
+                DEBATE_PIN_CONFLICT_NOT_OWNER.to_string(),
+            ));
         }
 
         let session = self
             .load_session_for_action(&mut tx, msg.session_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("debate session id {}", msg.session_id)))?;
-        if !can_join_status(&session.status) || session.end_at <= Utc::now() {
-            return Err(AppError::DebateConflict(format!(
-                "session {} is not accepting pin now",
-                msg.session_id
-            )));
+        if !can_join_status(&session.status) || session.end_at <= session.db_now {
+            return Err(AppError::DebateConflict(
+                DEBATE_PIN_CONFLICT_SESSION_NOT_ACCEPTING.to_string(),
+            ));
         }
 
         let active_pin: Option<(i64,)> = sqlx::query_as(
@@ -621,10 +626,9 @@ impl AppState {
         .fetch_optional(&mut *tx)
         .await?;
         if active_pin.is_some() {
-            return Err(AppError::DebateConflict(format!(
-                "message {} already has an active pin",
-                msg.id
-            )));
+            return Err(AppError::DebateConflict(
+                DEBATE_PIN_CONFLICT_ALREADY_ACTIVE.to_string(),
+            ));
         }
 
         let cost_coins = pin_cost_coins(pin_seconds);
@@ -654,10 +658,9 @@ impl AppState {
         .fetch_one(&mut *tx)
         .await?;
         if current_balance.0 < cost_coins {
-            return Err(AppError::PaymentConflict(format!(
-                "insufficient balance, need {}, current {}",
-                cost_coins, current_balance.0
-            )));
+            return Err(AppError::PaymentConflict(
+                DEBATE_PIN_CONFLICT_INSUFFICIENT_BALANCE.to_string(),
+            ));
         }
         let next_balance = current_balance.0 - cost_coins;
 
@@ -678,7 +681,7 @@ impl AppState {
             "messageId": msg.id,
             "pinSeconds": pin_seconds,
         });
-        let ledger_id: (i64,) = sqlx::query_as(
+        let ledger_id: (i64,) = match sqlx::query_as(
             r#"
             INSERT INTO wallet_ledger(
                 user_id, entry_type, amount_delta, balance_after, idempotency_key, metadata
@@ -693,7 +696,23 @@ impl AppState {
         .bind(&idempotency_key)
         .bind(metadata)
         .fetch_one(&mut *tx)
-        .await?;
+        .await
+        {
+            Ok(row) => row,
+            Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+                let replayed = self
+                    .load_existing_pin_by_idempotency(&mut tx, user, &idempotency_key)
+                    .await?;
+                if let Some(pin) = replayed {
+                    tx.commit().await?;
+                    return Ok(pin);
+                }
+                return Err(AppError::PaymentConflict(
+                    DEBATE_PIN_CONFLICT_IDEMPOTENCY_LEDGER_MISMATCH.to_string(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        };
 
         let pin: PinRecord = sqlx::query_as(
             r#"
@@ -767,7 +786,7 @@ impl AppState {
     ) -> Result<Option<DebateSessionForAction>, AppError> {
         let row = sqlx::query_as(
             r#"
-            SELECT status, end_at
+            SELECT status, end_at, NOW() AS db_now
             FROM debate_sessions
             WHERE id = $1
             "#,
@@ -830,7 +849,7 @@ impl AppState {
         };
         if row.user_id != user.id {
             return Err(AppError::PaymentConflict(
-                "idempotency_key already used by another user".to_string(),
+                DEBATE_PIN_CONFLICT_IDEMPOTENCY_OWNED_BY_OTHER.to_string(),
             ));
         }
 
@@ -846,7 +865,7 @@ impl AppState {
         .await?;
         let Some(pin) = pin else {
             return Err(AppError::PaymentConflict(
-                "idempotency_key already used for non-pin ledger entry".to_string(),
+                DEBATE_PIN_CONFLICT_IDEMPOTENCY_LEDGER_MISMATCH.to_string(),
             ));
         };
 

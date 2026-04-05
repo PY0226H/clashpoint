@@ -161,3 +161,49 @@ test("@smoke wechat bind flow reaches home", async ({ page }) => {
   await expect(page).toHaveURL(/\/home$/);
   await expect(page.getByRole("heading", { name: "Mac/Web Migration Workbench" })).toBeVisible();
 });
+
+test("@auth-error password invalid credentials should stay on login", async ({ page }) => {
+  await page.route("**/api/auth/v2/signin/password", async (route) => {
+    await json(route, 401, { error: "invalid_credentials" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByText("invalid_credentials")).toBeVisible();
+});
+
+test("@auth-error otp send cooldown should show rate limit error", async ({ page }) => {
+  await page.route("**/api/auth/v2/sms/send", async (route) => {
+    await json(route, 429, { error: "sms_send_cooldown" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "SMS OTP" }).click();
+  await page.getByLabel("Phone").fill("+8613900011111");
+  await page.getByRole("button", { name: "Send Code" }).click();
+
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByText("sms_send_cooldown")).toBeVisible();
+});
+
+test("@auth-error wechat bind should show invalid ticket error", async ({ page }) => {
+  await page.route("**/api/auth/v2/wechat/bind-phone", async (route) => {
+    await json(route, 400, { error: "invalid_wechat_ticket" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "WeChat" }).click();
+  await page.getByRole("button", { name: "Get Challenge" }).click();
+  await page.getByLabel("WeChat Auth Code").fill("wx-code-smoke");
+  await page.getByRole("button", { name: "Sign In with WeChat" }).click();
+
+  await expect(page).toHaveURL(/\/bind-phone$/);
+  await page.getByRole("button", { name: "Send Code" }).click();
+  await page.getByLabel("SMS Code").fill("445566");
+  await page.getByRole("button", { name: "Bind Phone" }).click();
+
+  await expect(page).toHaveURL(/\/bind-phone$/);
+  await expect(page.getByText("invalid_wechat_ticket")).toBeVisible();
+});

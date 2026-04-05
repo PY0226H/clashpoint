@@ -45,6 +45,9 @@ const DEBATE_SESSION_JOIN_IDEMPOTENCY_TTL_SECS: u64 = 15;
 const DEBATE_PINS_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 180;
 const DEBATE_PINS_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 540;
 const DEBATE_PINS_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const DEBATE_MESSAGE_PIN_USER_RATE_LIMIT_PER_WINDOW: u64 = 40;
+const DEBATE_MESSAGE_PIN_IP_RATE_LIMIT_PER_WINDOW: u64 = 120;
+const DEBATE_MESSAGE_PIN_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
 #[derive(Default)]
 struct DebateSessionsListMetrics {
@@ -255,6 +258,56 @@ impl DebatePinsListMetrics {
 
 static DEBATE_PINS_LIST_METRICS: LazyLock<DebatePinsListMetrics> =
     LazyLock::new(DebatePinsListMetrics::default);
+
+#[derive(Default)]
+struct DebateMessagePinMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    conflict_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    idempotency_replayed_total: AtomicU64,
+}
+
+impl DebateMessagePinMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, replayed: bool) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        if replayed {
+            self.idempotency_replayed_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn observe_failure(&self) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_conflict(&self) {
+        self.conflict_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.conflict_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+            self.idempotency_replayed_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+static DEBATE_MESSAGE_PIN_METRICS: LazyLock<DebateMessagePinMetrics> =
+    LazyLock::new(DebateMessagePinMetrics::default);
 
 #[derive(Default)]
 struct DebateMessageCreateMetrics {
@@ -1040,8 +1093,12 @@ pub(crate) async fn list_debate_messages_handler(
     responses(
         (status = 200, description = "Pin result", body = crate::PinDebateMessageOutput),
         (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Debate message not found", body = crate::ErrorOutput),
         (status = 409, description = "Pin conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1050,11 +1107,138 @@ pub(crate) async fn list_debate_messages_handler(
 pub(crate) async fn pin_debate_message_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
     Json(input): Json<PinDebateMessageInput>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state.pin_debate_message(id, &user, input).await?;
-    Ok((StatusCode::OK, Json(ret)))
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    DEBATE_MESSAGE_PIN_METRICS.observe_start();
+    let request_id = request_id_from_headers(&headers);
+
+    let user_limit_key = format!("{}:{}", user.id, id);
+    let user_decision = enforce_rate_limit(
+        &state,
+        "debate_message_pin_user",
+        &user_limit_key,
+        DEBATE_MESSAGE_PIN_USER_RATE_LIMIT_PER_WINDOW,
+        DEBATE_MESSAGE_PIN_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision = maybe_override_rate_limit_decision(&headers, "pin_user", user_decision);
+    let response_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        DEBATE_MESSAGE_PIN_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            message_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "pin debate message blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_message_pin",
+            response_headers,
+        ));
+    }
+
+    let ip_limit_key = request_rate_limit_ip_key_from_headers(&headers)
+        .map(|value| format!("{value}:{id}"))
+        .unwrap_or_else(|| format!("unknown:{id}"));
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "debate_message_pin_ip",
+        &ip_limit_key,
+        DEBATE_MESSAGE_PIN_IP_RATE_LIMIT_PER_WINDOW,
+        DEBATE_MESSAGE_PIN_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(&headers, "pin_ip", ip_decision);
+    if !ip_decision.allowed {
+        DEBATE_MESSAGE_PIN_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            message_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "pin debate message blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_message_pin",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let ret = state.pin_debate_message(id, &user, input).await;
+    match ret {
+        Ok(output) => {
+            DEBATE_MESSAGE_PIN_METRICS.observe_success(!output.newly_pinned);
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let (
+                request_total,
+                success_total,
+                failed_total,
+                conflict_total,
+                rate_limited_total,
+                idempotency_replayed_total,
+            ) = DEBATE_MESSAGE_PIN_METRICS.snapshot();
+            tracing::info!(
+                user_id = user.id,
+                message_id = id,
+                session_id = output.session_id,
+                pin_id = output.pin_id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                newly_pinned = output.newly_pinned,
+                idempotency_replayed = !output.newly_pinned,
+                latency_ms,
+                debate_message_pin_request_total = request_total,
+                debate_message_pin_success_total = success_total,
+                debate_message_pin_failed_total = failed_total,
+                debate_message_pin_conflict_total = conflict_total,
+                debate_message_pin_rate_limited_total = rate_limited_total,
+                debate_message_pin_idempotency_replayed_total = idempotency_replayed_total,
+                decision = "success",
+                "pin debate message served"
+            );
+            Ok((StatusCode::OK, response_headers, Json(output)).into_response())
+        }
+        Err(err) => {
+            if matches!(
+                err,
+                AppError::DebateConflict(_) | AppError::PaymentConflict(_)
+            ) {
+                DEBATE_MESSAGE_PIN_METRICS.observe_conflict();
+            } else {
+                DEBATE_MESSAGE_PIN_METRICS.observe_failure();
+            }
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                message_id = id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                conflict = matches!(
+                    err,
+                    AppError::DebateConflict(_) | AppError::PaymentConflict(_)
+                ),
+                latency_ms,
+                decision = "failed",
+                "pin debate message failed: {}",
+                err
+            );
+            if let AppError::DebateConflict(reason) = &err {
+                return Ok(
+                    (StatusCode::CONFLICT, Json(ErrorOutput::new(reason.clone()))).into_response(),
+                );
+            }
+            if let AppError::PaymentConflict(reason) = &err {
+                return Ok(
+                    (StatusCode::CONFLICT, Json(ErrorOutput::new(reason.clone()))).into_response(),
+                );
+            }
+            Err(err)
+        }
+    }
 }
 
 /// List pinned messages in a debate session.
@@ -1329,6 +1513,16 @@ fn maybe_override_rate_limit_decision(
         decision.remaining = 0;
         return decision;
     }
+    if target == "pin_user" && forced.eq_ignore_ascii_case("pin_user") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "pin_ip" && forced.eq_ignore_ascii_case("pin_ip") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
     decision
 }
 
@@ -1544,7 +1738,7 @@ mod tests {
             .header("x-forwarded-for", "127.0.0.1")
             .header("x-test-force-rate-limit", "user")
             .body(Body::empty())?;
-        let res = app.oneshot(req).await?;
+        let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(res.headers().contains_key("x-ratelimit-limit"));
         assert!(res.headers().contains_key("x-ratelimit-remaining"));
@@ -1584,7 +1778,7 @@ mod tests {
             .header("x-test-force-rate-limit", "join_user")
             .header("content-type", "application/json")
             .body(Body::from(r#"{"side":"pro"}"#))?;
-        let res = app.oneshot(req).await?;
+        let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
@@ -1696,7 +1890,7 @@ mod tests {
             .header("x-forwarded-for", "127.0.0.1")
             .header("content-type", "application/json")
             .body(Body::from(r#"{"side":"pro"}"#))?;
-        let res = app.oneshot(req).await?;
+        let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::CONFLICT);
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
@@ -2336,6 +2530,269 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(err.error, "debate_pins_read_forbidden");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pin_debate_message_route_should_require_auth() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/messages/1/pin")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-auth-required"}"#,
+            ))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pin_debate_message_route_should_require_phone_binding() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_unbound_user_and_token(
+            &state,
+            "Debate Pin Unbound",
+            "debate-pin-unbound@acme.org",
+            "debate-pin-unbound-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/messages/1/pin")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-phone-bound"}"#,
+            ))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pin_debate_message_route_should_return_429_when_user_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Pin RateLimit",
+            "debate-pin-ratelimit@acme.org",
+            "+8613810010010",
+            "debate-pin-ratelimit-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        set_wallet_balance(&state, user.id, 200).await?;
+        let message = state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: "pin-rate-limit-msg".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/messages/{}/pin", message.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("x-test-force-rate-limit", "pin_user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-rate-limit-route"}"#,
+            ))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "rate_limit_exceeded:debate_message_pin");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pin_debate_message_route_should_replay_with_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Pin Replay",
+            "debate-pin-replay@acme.org",
+            "+8613810010011",
+            "debate-pin-replay-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        set_wallet_balance(&state, user.id, 200).await?;
+        let message = state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: "pin-idem-replay-msg".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req1 = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/messages/{}/pin", message.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-idem-replay-route"}"#,
+            ))?;
+        let res1 = app.clone().oneshot(req1).await?;
+        assert_eq!(res1.status(), StatusCode::OK);
+        let body1 = res1.into_body().collect().await?.to_bytes();
+        let output1: crate::PinDebateMessageOutput = serde_json::from_slice(&body1)?;
+        assert!(output1.newly_pinned);
+
+        let req2 = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/messages/{}/pin", message.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-idem-replay-route"}"#,
+            ))?;
+        let res2 = app.oneshot(req2).await?;
+        assert_eq!(res2.status(), StatusCode::OK);
+        let body2 = res2.into_body().collect().await?.to_bytes();
+        let output2: crate::PinDebateMessageOutput = serde_json::from_slice(&body2)?;
+        assert!(!output2.newly_pinned);
+        assert_eq!(output1.pin_id, output2.pin_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pin_debate_message_route_should_return_stable_conflict_code_for_non_owner(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user1, token1) = create_bound_user_and_token(
+            &state,
+            "Debate Pin Owner",
+            "debate-pin-owner@acme.org",
+            "+8613810010012",
+            "debate-pin-owner-sid",
+        )
+        .await?;
+        let (user2, token2) = create_bound_user_and_token(
+            &state,
+            "Debate Pin NonOwner",
+            "debate-pin-non-owner@acme.org",
+            "+8613810010013",
+            "debate-pin-non-owner-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user1,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user2,
+                JoinDebateSessionInput {
+                    side: "con".to_string(),
+                },
+            )
+            .await?;
+        set_wallet_balance(&state, user1.id, 200).await?;
+        set_wallet_balance(&state, user2.id, 200).await?;
+        let message = state
+            .create_debate_message(
+                session_id as u64,
+                &user1,
+                CreateDebateMessageInput {
+                    content: "pin-non-owner-msg".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/messages/{}/pin", message.id))
+            .header("Authorization", format!("Bearer {}", token2))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-non-owner-route"}"#,
+            ))?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "debate_pin_not_owner");
+
+        // owner path should still work and return 200
+        let req_owner = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/messages/{}/pin", message.id))
+            .header("Authorization", format!("Bearer {}", token1))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"pinSeconds":60,"idempotencyKey":"pin-owner-route"}"#,
+            ))?;
+        let res_owner = app.oneshot(req_owner).await?;
+        assert_eq!(res_owner.status(), StatusCode::OK);
         Ok(())
     }
 }

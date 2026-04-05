@@ -56,6 +56,17 @@ const DEBATE_MESSAGE_CONTENT_EMPTY: &str = "debate_message_content_empty";
 const DEBATE_MESSAGE_CONTENT_TOO_LONG: &str = "debate_message_content_too_long";
 const DEBATE_MESSAGE_OUTBOX_ENQUEUE_FAILED: &str = "debate_message_outbox_enqueue_failed";
 const DEBATE_PINS_CONFLICT_READ_FORBIDDEN: &str = "debate_pins_read_forbidden";
+const DEBATE_PIN_INVALID_MESSAGE_ID: &str = "debate_pin_invalid_message_id";
+const DEBATE_PIN_IDEMPOTENCY_KEY_EMPTY: &str = "debate_pin_idempotency_key_empty";
+const DEBATE_PIN_IDEMPOTENCY_KEY_TOO_LONG: &str = "debate_pin_idempotency_key_too_long";
+const DEBATE_PIN_CONFLICT_NOT_OWNER: &str = "debate_pin_not_owner";
+const DEBATE_PIN_CONFLICT_SESSION_NOT_ACCEPTING: &str = "debate_pin_session_not_accepting";
+const DEBATE_PIN_CONFLICT_ALREADY_ACTIVE: &str = "debate_pin_already_active";
+const DEBATE_PIN_CONFLICT_IDEMPOTENCY_OWNED_BY_OTHER: &str =
+    "debate_pin_idempotency_owned_by_other";
+const DEBATE_PIN_CONFLICT_IDEMPOTENCY_LEDGER_MISMATCH: &str =
+    "debate_pin_idempotency_ledger_mismatch";
+const DEBATE_PIN_CONFLICT_INSUFFICIENT_BALANCE: &str = "debate_pin_insufficient_balance";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,6 +304,7 @@ struct DebateSessionForJoin {
 struct DebateSessionForAction {
     status: String,
     end_at: DateTime<Utc>,
+    db_now: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow)]
