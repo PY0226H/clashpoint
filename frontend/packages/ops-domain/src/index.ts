@@ -151,8 +151,57 @@ export type ListOpsAlertNotificationsOutput = {
   items: OpsAlertNotificationItem[];
 };
 
+export type ApplyOpsObservabilityAnomalyActionInput = {
+  alertKey: string;
+  action: "acknowledge" | "suppress" | "clear";
+  suppressMinutes?: number;
+};
+
+export type OpsAlertEvalReport = {
+  scopesScanned: number;
+  alertsRaised: number;
+  alertsCleared: number;
+  alertsSuppressed: number;
+};
+
+export type OpsDomainErrorInfo = {
+  status: number | null;
+  code: string | null;
+  message: string;
+};
+
+type ApiErrorPayloadLike = {
+  error?: string;
+  code?: string;
+  message?: string;
+};
+
+type ApiErrorLike = {
+  response?: {
+    status?: number;
+    data?: ApiErrorPayloadLike | null;
+  };
+  message?: string;
+};
+
+export function getOpsDomainErrorInfo(error: unknown): OpsDomainErrorInfo {
+  const known = error as ApiErrorLike;
+  const status = typeof known.response?.status === "number" ? known.response.status : null;
+  const code =
+    known.response?.data?.error ||
+    known.response?.data?.code ||
+    known.response?.data?.message ||
+    null;
+  const message = code || known.message || "request failed";
+  return {
+    status,
+    code,
+    message
+  };
+}
+
 export function toOpsDomainError(error: unknown): string {
-  return toApiError(error);
+  return getOpsDomainErrorInfo(error).message || toApiError(error);
 }
 
 export async function getOpsRbacMe(): Promise<GetOpsRbacMeOutput> {
@@ -188,6 +237,13 @@ export async function getOpsObservabilityConfig(): Promise<GetOpsObservabilityCo
   return response.data;
 }
 
+export async function upsertOpsObservabilityThresholds(
+  input: OpsObservabilityThresholds
+): Promise<GetOpsObservabilityConfigOutput> {
+  const response = await http.put<GetOpsObservabilityConfigOutput>("/debate/ops/observability/thresholds", input);
+  return response.data;
+}
+
 export async function getOpsMetricsDictionary(): Promise<GetOpsMetricsDictionaryOutput> {
   const response = await http.get<GetOpsMetricsDictionaryOutput>("/debate/ops/observability/metrics-dictionary");
   return response.data;
@@ -213,6 +269,31 @@ export async function listOpsAlertNotifications(input?: {
       status: input?.status,
       limit: input?.limit ?? 10,
       offset: input?.offset ?? 0
+    }
+  });
+  return response.data;
+}
+
+export async function applyOpsObservabilityAnomalyAction(
+  input: ApplyOpsObservabilityAnomalyActionInput
+): Promise<GetOpsObservabilityConfigOutput> {
+  const response = await http.post<GetOpsObservabilityConfigOutput>(
+    "/debate/ops/observability/anomaly-state/actions",
+    {
+      alertKey: input.alertKey,
+      action: input.action,
+      suppressMinutes: input.suppressMinutes
+    }
+  );
+  return response.data;
+}
+
+export async function runOpsObservabilityEvaluationOnce(input?: {
+  dryRun?: boolean;
+}): Promise<OpsAlertEvalReport> {
+  const response = await http.post<OpsAlertEvalReport>("/debate/ops/observability/evaluate-once", undefined, {
+    params: {
+      dryRun: input?.dryRun ?? false
     }
   });
   return response.data;

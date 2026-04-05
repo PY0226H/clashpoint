@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  applyOpsObservabilityAnomalyAction,
+  getOpsDomainErrorInfo,
   getOpsMetricsDictionary,
   getOpsObservabilityConfig,
   getOpsRbacMe,
@@ -9,8 +11,11 @@ import {
   listOpsRoleAssignments,
   listOpsAlertNotifications,
   revokeOpsRoleAssignment,
+  runOpsObservabilityEvaluationOnce,
   toOpsDomainError,
+  upsertOpsObservabilityThresholds,
   upsertOpsRoleAssignment,
+  type OpsObservabilityThresholds,
   type OpsRole
 } from "@echoisle/ops-domain";
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
@@ -18,7 +23,28 @@ import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 const ROLE_OPTIONS: OpsRole[] = ["ops_admin", "ops_reviewer", "ops_viewer"];
 const ALERT_STATUS_OPTIONS = ["all", "raised", "suppressed", "cleared"] as const;
 const ALERT_PAGE_SIZE_OPTIONS = [1, 3, 5, 10] as const;
+const OBSERVABILITY_ERROR_MAX_VISIBLE = 4;
+const OBSERVABILITY_ERROR_MAX_CHARS = 120;
 type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
+type ThresholdFieldKey = keyof OpsObservabilityThresholds;
+
+const THRESHOLD_FIELD_ORDER: ThresholdFieldKey[] = [
+  "lowSuccessRateThreshold",
+  "highRetryThreshold",
+  "highCoalescedThreshold",
+  "highDbLatencyThresholdMs",
+  "lowCacheHitRateThreshold",
+  "minRequestForCacheHitCheck"
+];
+
+const THRESHOLD_FIELD_LABELS: Record<ThresholdFieldKey, string> = {
+  lowSuccessRateThreshold: "Low Success Rate Threshold (%)",
+  highRetryThreshold: "High Retry Threshold",
+  highCoalescedThreshold: "High Coalesced Threshold",
+  highDbLatencyThresholdMs: "High DB Latency Threshold (ms)",
+  lowCacheHitRateThreshold: "Low Cache Hit Rate Threshold (%)",
+  minRequestForCacheHitCheck: "Min Requests For Cache Hit Check"
+};
 
 function formatUtc(iso: string): string {
   const date = new Date(iso);
@@ -36,6 +62,65 @@ function formatDecimal(value: number, digits = 2): string {
   return num.toFixed(digits);
 }
 
+function toObservabilityErrorPreview(message: string): string {
+  if (message.length <= OBSERVABILITY_ERROR_MAX_CHARS) {
+    return message;
+  }
+  return `${message.slice(0, OBSERVABILITY_ERROR_MAX_CHARS - 3)}...`;
+}
+
+function toThresholdDraft(input: OpsObservabilityThresholds): Record<ThresholdFieldKey, string> {
+  return {
+    lowSuccessRateThreshold: String(input.lowSuccessRateThreshold),
+    highRetryThreshold: String(input.highRetryThreshold),
+    highCoalescedThreshold: String(input.highCoalescedThreshold),
+    highDbLatencyThresholdMs: String(input.highDbLatencyThresholdMs),
+    lowCacheHitRateThreshold: String(input.lowCacheHitRateThreshold),
+    minRequestForCacheHitCheck: String(input.minRequestForCacheHitCheck)
+  };
+}
+
+function parseThresholdDraft(draft: Record<ThresholdFieldKey, string>): OpsObservabilityThresholds | null {
+  const lowSuccessRateThreshold = Number(draft.lowSuccessRateThreshold);
+  const highRetryThreshold = Number(draft.highRetryThreshold);
+  const highCoalescedThreshold = Number(draft.highCoalescedThreshold);
+  const highDbLatencyThresholdMs = Number(draft.highDbLatencyThresholdMs);
+  const lowCacheHitRateThreshold = Number(draft.lowCacheHitRateThreshold);
+  const minRequestForCacheHitCheck = Number(draft.minRequestForCacheHitCheck);
+
+  if (
+    !Number.isFinite(lowSuccessRateThreshold) ||
+    !Number.isFinite(highRetryThreshold) ||
+    !Number.isFinite(highCoalescedThreshold) ||
+    !Number.isFinite(highDbLatencyThresholdMs) ||
+    !Number.isFinite(lowCacheHitRateThreshold) ||
+    !Number.isFinite(minRequestForCacheHitCheck)
+  ) {
+    return null;
+  }
+
+  return {
+    lowSuccessRateThreshold,
+    highRetryThreshold,
+    highCoalescedThreshold,
+    highDbLatencyThresholdMs: Math.floor(highDbLatencyThresholdMs),
+    lowCacheHitRateThreshold,
+    minRequestForCacheHitCheck: Math.floor(minRequestForCacheHitCheck)
+  };
+}
+
+function toEvaluateActionErrorMessage(error: unknown, dryRun: boolean): string {
+  const info = getOpsDomainErrorInfo(error);
+  const mode = dryRun ? "dry-run" : "run";
+  if (info.status === 429) {
+    return `Evaluate ${mode} rejected [rate_limit]: ${info.message}.`;
+  }
+  if (info.status === 400) {
+    return `Evaluate ${mode} rejected [bad_request]: ${info.message}.`;
+  }
+  return `Evaluate ${mode} rejected [backend]: ${info.message}.`;
+}
+
 export function OpsConsolePage() {
   const queryClient = useQueryClient();
   const [targetUserId, setTargetUserId] = useState("");
@@ -43,6 +128,9 @@ export function OpsConsolePage() {
   const [alertStatusFilter, setAlertStatusFilter] = useState<AlertStatusFilter>("all");
   const [alertPageSize, setAlertPageSize] = useState<number>(3);
   const [alertPageIndex, setAlertPageIndex] = useState(0);
+  const [thresholdDraft, setThresholdDraft] = useState<Record<ThresholdFieldKey, string> | null>(null);
+  const [thresholdDirty, setThresholdDirty] = useState(false);
+  const [suppressMinutesInput, setSuppressMinutesInput] = useState("10");
   const [pageHint, setPageHint] = useState<string | null>(null);
 
   const rbacMeQuery = useQuery({
@@ -125,6 +213,50 @@ export function OpsConsolePage() {
       setPageHint(toOpsDomainError(error));
     }
   });
+  const applyAnomalyActionMutation = useMutation({
+    mutationFn: async (payload: {
+      alertKey: string;
+      action: "acknowledge" | "suppress" | "clear";
+      suppressMinutes?: number;
+    }) => {
+      const ret = await applyOpsObservabilityAnomalyAction(payload);
+      return { payload, ret };
+    },
+    onSuccess: ({ payload }) => {
+      setPageHint(`Anomaly action applied: ${payload.action} ${payload.alertKey}.`);
+      void invalidateObservabilityQueries();
+    },
+    onError: (error) => {
+      setPageHint(toOpsDomainError(error));
+    }
+  });
+  const evaluateObservabilityMutation = useMutation({
+    mutationFn: async (dryRun: boolean) => {
+      const report = await runOpsObservabilityEvaluationOnce({ dryRun });
+      return { dryRun, report };
+    },
+    onSuccess: ({ dryRun, report }) => {
+      setPageHint(
+        `Ops evaluation ${dryRun ? "dry-run" : "run"}: raised=${report.alertsRaised}, cleared=${report.alertsCleared}, suppressed=${report.alertsSuppressed}.`
+      );
+      void invalidateObservabilityQueries();
+    },
+    onError: (error, dryRun) => {
+      setPageHint(toEvaluateActionErrorMessage(error, dryRun));
+    }
+  });
+  const upsertThresholdMutation = useMutation({
+    mutationFn: async (payload: OpsObservabilityThresholds) => upsertOpsObservabilityThresholds(payload),
+    onSuccess: (ret) => {
+      setThresholdDraft(toThresholdDraft(ret.thresholds));
+      setThresholdDirty(false);
+      setPageHint("Observability thresholds updated.");
+      void invalidateObservabilityQueries();
+    },
+    onError: (error) => {
+      setPageHint(toOpsDomainError(error));
+    }
+  });
 
   const canManageRoles = Boolean(rbacMeQuery.data?.permissions.roleManage);
   const canReviewJudge = Boolean(rbacMeQuery.data?.permissions.judgeReview);
@@ -143,33 +275,54 @@ export function OpsConsolePage() {
   const topDictionaryItems = metricsDictionaryQuery.data?.items.slice(0, 4) || [];
   const topRules = sloSnapshotQuery.data?.rules.slice(0, 4) || [];
   const topAlerts = alertsQuery.data?.items || [];
-  const thresholdRows = observabilityConfigQuery.data
-    ? Object.entries(observabilityConfigQuery.data.thresholds)
-    : [];
   const totalAlerts = alertsQuery.data?.total ?? 0;
   const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
   const canGoPrevPage = alertPageIndex > 0;
   const canGoNextPage = alertPageIndex + 1 < alertPageCount;
-  const observabilityErrors = useMemo(
-    () =>
-      [
+  const observabilityErrors = useMemo(() => {
+    const seen = new Set<string>();
+    const items = [
         observabilityConfigQuery.error ? toOpsDomainError(observabilityConfigQuery.error) : null,
         sloSnapshotQuery.error ? toOpsDomainError(sloSnapshotQuery.error) : null,
         metricsDictionaryQuery.error ? toOpsDomainError(metricsDictionaryQuery.error) : null,
         splitReadinessQuery.error ? toOpsDomainError(splitReadinessQuery.error) : null,
         alertsQuery.error ? toOpsDomainError(alertsQuery.error) : null
-      ].filter((item): item is string => Boolean(item)),
-    [
+      ]
+      .filter((item): item is string => Boolean(item))
+      .map((message) => message.trim())
+      .filter((message) => message.length > 0)
+      .filter((message) => {
+        if (seen.has(message)) {
+          return false;
+        }
+        seen.add(message);
+        return true;
+      })
+      .map((fullMessage) => ({
+        fullMessage,
+        previewMessage: toObservabilityErrorPreview(fullMessage)
+      }));
+    return items;
+  }, [
       alertsQuery.error,
       metricsDictionaryQuery.error,
       observabilityConfigQuery.error,
       sloSnapshotQuery.error,
       splitReadinessQuery.error
-    ]
-  );
+    ]);
+  const visibleObservabilityErrors = observabilityErrors.slice(0, OBSERVABILITY_ERROR_MAX_VISIBLE);
+  const hiddenObservabilityErrorCount = Math.max(0, observabilityErrors.length - visibleObservabilityErrors.length);
+  const normalizedSuppressMinutes = Math.max(1, Math.min(1440, Math.floor(Number(suppressMinutesInput) || 10)));
 
-  async function refreshObservability() {
-    setPageHint(null);
+  useEffect(() => {
+    if (!observabilityConfigQuery.data?.thresholds) {
+      return;
+    }
+    setThresholdDraft(toThresholdDraft(observabilityConfigQuery.data.thresholds));
+    setThresholdDirty(false);
+  }, [observabilityConfigQuery.data]);
+
+  async function invalidateObservabilityQueries() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["ops-observability-config"] }),
       queryClient.invalidateQueries({ queryKey: ["ops-observability-slo"] }),
@@ -177,7 +330,52 @@ export function OpsConsolePage() {
       queryClient.invalidateQueries({ queryKey: ["ops-observability-split-readiness"] }),
       queryClient.invalidateQueries({ queryKey: ["ops-observability-alerts"] })
     ]);
+  }
+
+  async function refreshObservability() {
+    setPageHint(null);
+    await invalidateObservabilityQueries();
     setPageHint("Observability snapshot refreshed.");
+  }
+
+  function onThresholdFieldChange(key: ThresholdFieldKey, value: string) {
+    setThresholdDraft((prev) => {
+      const base = prev || {
+        lowSuccessRateThreshold: "",
+        highRetryThreshold: "",
+        highCoalescedThreshold: "",
+        highDbLatencyThresholdMs: "",
+        lowCacheHitRateThreshold: "",
+        minRequestForCacheHitCheck: ""
+      };
+      return {
+        ...base,
+        [key]: value
+      };
+    });
+    setThresholdDirty(true);
+  }
+
+  function submitThresholds() {
+    if (!thresholdDraft) {
+      setPageHint("Threshold snapshot unavailable, please refresh first.");
+      return;
+    }
+    const parsed = parseThresholdDraft(thresholdDraft);
+    if (!parsed) {
+      setPageHint("Threshold values must be valid numbers.");
+      return;
+    }
+    upsertThresholdMutation.mutate(parsed);
+  }
+
+  function resetThresholdDraft() {
+    if (!observabilityConfigQuery.data?.thresholds) {
+      return;
+    }
+    setThresholdDraft(toThresholdDraft(observabilityConfigQuery.data.thresholds));
+    setThresholdDirty(false);
+    setPageHint("Threshold edits reverted.");
   }
 
   return (
@@ -346,6 +544,32 @@ export function OpsConsolePage() {
                 Refresh Snapshot
               </Button>
             </div>
+            <div className="echo-ops-action-toolbar">
+              <label className="echo-ops-role-label">
+                <span>Suppress Minutes</span>
+                <TextField
+                  aria-label="Suppress Minutes"
+                  inputMode="numeric"
+                  onChange={(event) => setSuppressMinutesInput(event.target.value)}
+                  placeholder="10"
+                  value={suppressMinutesInput}
+                />
+              </label>
+              <Button
+                disabled={evaluateObservabilityMutation.isPending}
+                onClick={() => evaluateObservabilityMutation.mutate(false)}
+                type="button"
+              >
+                Evaluate Once
+              </Button>
+              <Button
+                disabled={evaluateObservabilityMutation.isPending}
+                onClick={() => evaluateObservabilityMutation.mutate(true)}
+                type="button"
+              >
+                Evaluate Dry Run
+              </Button>
+            </div>
             {observabilityConfigQuery.isLoading ||
             sloSnapshotQuery.isLoading ||
             metricsDictionaryQuery.isLoading ||
@@ -358,9 +582,16 @@ export function OpsConsolePage() {
                 <p className="echo-error">
                   Observability snapshot partially unavailable ({observabilityErrors.length} errors).
                 </p>
-                {observabilityErrors.map((message, index) => (
-                  <InlineHint key={`${index}-${message}`}>{message}</InlineHint>
+                {visibleObservabilityErrors.map((item) => (
+                  <InlineHint key={item.fullMessage}>
+                    <span className="echo-ops-observability-error-item" title={item.fullMessage}>
+                      {item.previewMessage}
+                    </span>
+                  </InlineHint>
                 ))}
+                {hiddenObservabilityErrorCount > 0 ? (
+                  <InlineHint>{hiddenObservabilityErrorCount} more errors hidden.</InlineHint>
+                ) : null}
               </div>
             ) : null}
 
@@ -387,9 +618,53 @@ export function OpsConsolePage() {
               <article className="echo-topic-item">
                 <h4>SLO Rules</h4>
                 {topRules.map((rule) => (
-                  <InlineHint key={rule.alertKey}>
-                    {rule.alertKey} | {rule.status} | {rule.suppressed ? "suppressed" : "live"}
-                  </InlineHint>
+                  <div className="echo-ops-rule-item" key={rule.alertKey}>
+                    <InlineHint>
+                      {rule.alertKey} | {rule.status} | {rule.suppressed ? "suppressed" : "live"}
+                    </InlineHint>
+                    <div className="echo-ops-rule-actions">
+                      <Button
+                        aria-label={`Acknowledge ${rule.alertKey}`}
+                        disabled={applyAnomalyActionMutation.isPending}
+                        onClick={() =>
+                          applyAnomalyActionMutation.mutate({
+                            alertKey: rule.alertKey,
+                            action: "acknowledge"
+                          })
+                        }
+                        type="button"
+                      >
+                        Ack {rule.alertKey}
+                      </Button>
+                      <Button
+                        aria-label={`Suppress ${rule.alertKey}`}
+                        disabled={applyAnomalyActionMutation.isPending}
+                        onClick={() =>
+                          applyAnomalyActionMutation.mutate({
+                            alertKey: rule.alertKey,
+                            action: "suppress",
+                            suppressMinutes: normalizedSuppressMinutes
+                          })
+                        }
+                        type="button"
+                      >
+                        Suppress {rule.alertKey}
+                      </Button>
+                      <Button
+                        aria-label={`Clear ${rule.alertKey}`}
+                        disabled={applyAnomalyActionMutation.isPending}
+                        onClick={() =>
+                          applyAnomalyActionMutation.mutate({
+                            alertKey: rule.alertKey,
+                            action: "clear"
+                          })
+                        }
+                        type="button"
+                      >
+                        Clear {rule.alertKey}
+                      </Button>
+                    </div>
+                  </div>
                 ))}
                 {topRules.length === 0 ? <InlineHint>No rules.</InlineHint> : null}
                 <InlineHint>suppressed count: {suppressedRuleCount}</InlineHint>
@@ -397,12 +672,48 @@ export function OpsConsolePage() {
 
               <article className="echo-topic-item">
                 <h4>Thresholds</h4>
-                {thresholdRows.map(([key, value]) => (
-                  <InlineHint key={key}>
-                    {key}: {String(value)}
-                  </InlineHint>
-                ))}
-                {thresholdRows.length === 0 ? <InlineHint>No threshold snapshot.</InlineHint> : null}
+                {thresholdDraft ? (
+                  <>
+                    <div className="echo-ops-threshold-list">
+                      {THRESHOLD_FIELD_ORDER.map((key) => (
+                        <label className="echo-ops-threshold-row" key={key}>
+                          <span>{THRESHOLD_FIELD_LABELS[key]}</span>
+                          <TextField
+                            aria-label={`Threshold ${key}`}
+                            inputMode="decimal"
+                            onChange={(event) => onThresholdFieldChange(key, event.target.value)}
+                            type="number"
+                            value={thresholdDraft[key]}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="echo-ops-threshold-actions">
+                      <Button
+                        disabled={upsertThresholdMutation.isPending || !thresholdDirty}
+                        onClick={submitThresholds}
+                        type="button"
+                      >
+                        {upsertThresholdMutation.isPending ? "Saving..." : "Save Thresholds"}
+                      </Button>
+                      <Button
+                        disabled={!thresholdDirty || upsertThresholdMutation.isPending}
+                        onClick={resetThresholdDraft}
+                        type="button"
+                      >
+                        Reset Edits
+                      </Button>
+                    </div>
+                    <InlineHint>
+                      updatedBy: {String(observabilityConfigQuery.data?.updatedBy ?? "--")} | updatedAt:{" "}
+                      {observabilityConfigQuery.data?.updatedAt
+                        ? formatUtc(observabilityConfigQuery.data.updatedAt)
+                        : "--"}
+                    </InlineHint>
+                  </>
+                ) : (
+                  <InlineHint>No threshold snapshot.</InlineHint>
+                )}
               </article>
 
               <article className="echo-topic-item">

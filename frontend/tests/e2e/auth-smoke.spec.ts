@@ -158,7 +158,7 @@ async function installAuthMocks(page: Page) {
       createdAt: "2026-01-01T00:57:00Z",
       updatedAt: "2026-01-01T00:58:00Z"
     }
-  ] as const;
+  ];
   const drawVoteStateBySession = new Map<
     number,
     {
@@ -372,6 +372,90 @@ async function installAuthMocks(page: Page) {
 
     if (pathname === "/api/debate/ops/observability/config" && request.method() === "GET") {
       return json(route, 200, opsObservabilityConfig);
+    }
+
+    if (pathname === "/api/debate/ops/observability/thresholds" && request.method() === "PUT") {
+      const lowSuccessRateThreshold = Number(body?.lowSuccessRateThreshold);
+      const highRetryThreshold = Number(body?.highRetryThreshold);
+      const highCoalescedThreshold = Number(body?.highCoalescedThreshold);
+      const highDbLatencyThresholdMs = Number(body?.highDbLatencyThresholdMs);
+      const lowCacheHitRateThreshold = Number(body?.lowCacheHitRateThreshold);
+      const minRequestForCacheHitCheck = Number(body?.minRequestForCacheHitCheck);
+
+      if (
+        !Number.isFinite(lowSuccessRateThreshold) ||
+        !Number.isFinite(highRetryThreshold) ||
+        !Number.isFinite(highCoalescedThreshold) ||
+        !Number.isFinite(highDbLatencyThresholdMs) ||
+        !Number.isFinite(lowCacheHitRateThreshold) ||
+        !Number.isFinite(minRequestForCacheHitCheck)
+      ) {
+        return json(route, 400, { error: "invalid_observability_threshold_payload" });
+      }
+
+      opsObservabilityConfig.thresholds = {
+        lowSuccessRateThreshold,
+        highRetryThreshold,
+        highCoalescedThreshold,
+        highDbLatencyThresholdMs: Math.floor(highDbLatencyThresholdMs),
+        lowCacheHitRateThreshold,
+        minRequestForCacheHitCheck: Math.floor(minRequestForCacheHitCheck)
+      };
+      opsObservabilityConfig.updatedBy = 10;
+      opsObservabilityConfig.updatedAt = "2026-01-01T01:31:00Z";
+      return json(route, 200, opsObservabilityConfig);
+    }
+
+    if (pathname === "/api/debate/ops/observability/anomaly-state/actions" && request.method() === "POST") {
+      const alertKey = String(body?.alertKey || "").trim();
+      const action = String(body?.action || "")
+        .trim()
+        .toLowerCase();
+      if (!alertKey) {
+        return json(route, 400, { error: "invalid alert key for anomaly action" });
+      }
+      const nowMs = 1767229900000;
+      const nowIso = "2026-01-01T01:25:00Z";
+      const current = opsObservabilityConfig.anomalyState[alertKey] || {
+        acknowledgedAtMs: 0,
+        suppressUntilMs: 0
+      };
+
+      if (action === "ack" || action === "acknowledge") {
+        opsObservabilityConfig.anomalyState[alertKey] = {
+          ...current,
+          acknowledgedAtMs: nowMs
+        };
+      } else if (action === "suppress" || action === "mute") {
+        const suppressMinutesRaw = Number(body?.suppressMinutes || 10);
+        const suppressMinutes = Number.isFinite(suppressMinutesRaw)
+          ? Math.max(1, Math.min(1440, Math.floor(suppressMinutesRaw)))
+          : 10;
+        opsObservabilityConfig.anomalyState[alertKey] = {
+          acknowledgedAtMs: Math.max(nowMs, current.acknowledgedAtMs),
+          suppressUntilMs: nowMs + suppressMinutes * 60 * 1000
+        };
+      } else if (action === "clear" || action === "remove" || action === "unsuppress") {
+        delete opsObservabilityConfig.anomalyState[alertKey];
+      } else {
+        return json(route, 400, {
+          error: "invalid anomaly action, expect acknowledge/suppress/clear"
+        });
+      }
+
+      opsObservabilityConfig.updatedBy = 10;
+      opsObservabilityConfig.updatedAt = nowIso;
+      return json(route, 200, opsObservabilityConfig);
+    }
+
+    if (pathname === "/api/debate/ops/observability/evaluate-once" && request.method() === "POST") {
+      const dryRun = (requestUrl.searchParams.get("dryRun") || "").trim().toLowerCase() === "true";
+      return json(route, 200, {
+        scopesScanned: 3,
+        alertsRaised: dryRun ? 0 : 1,
+        alertsCleared: 0,
+        alertsSuppressed: 1
+      });
     }
 
     if (pathname === "/api/debate/ops/observability/metrics-dictionary" && request.method() === "GET") {
@@ -1026,6 +1110,17 @@ test("@smoke ops console should show rbac and support role upsert/revoke", async
   await expect(page.getByText("#499 | judge.dispatch.latency.high | raised")).toBeVisible();
   await page.getByRole("button", { name: "Refresh Snapshot" }).click();
   await expect(page.getByText("Observability snapshot refreshed.")).toBeVisible();
+  await page.getByLabel("Threshold lowSuccessRateThreshold").fill("92");
+  await page.getByRole("button", { name: "Save Thresholds" }).click();
+  await expect(page.getByText("Observability thresholds updated.")).toBeVisible();
+  await expect(page.getByLabel("Threshold lowSuccessRateThreshold")).toHaveValue("92");
+  await page.getByLabel("Suppress Minutes").fill("7");
+  await page.getByRole("button", { name: "Suppress judge.dispatch.retry.high" }).click();
+  await expect(page.getByText("Anomaly action applied: suppress judge.dispatch.retry.high.")).toBeVisible();
+  await page.getByRole("button", { name: "Evaluate Dry Run" }).click();
+  await expect(page.getByText("Ops evaluation dry-run: raised=0, cleared=0, suppressed=1.")).toBeVisible();
+  await page.getByRole("button", { name: "Evaluate Once" }).click();
+  await expect(page.getByText("Ops evaluation run: raised=1, cleared=0, suppressed=1.")).toBeVisible();
 });
 
 test("@auth-error pin should show insufficient wallet balance error", async ({ page }) => {
@@ -1082,6 +1177,52 @@ test("@auth-error ops console should show alerts permission error when backend r
   await expect(page.getByText("ops_permission_denied:judge_review:backend_policy_mismatch")).toBeVisible();
 });
 
+test("@auth-error ops anomaly action should show permission error when backend rejects", async ({ page }) => {
+  await page.route("**/api/debate/ops/observability/anomaly-state/actions**", async (route) => {
+    await json(route, 409, { error: "ops_permission_denied:judge_review:anomaly_action" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+  await page.getByRole("button", { name: "Acknowledge judge.success_rate.low" }).click();
+  await expect(page.getByText("ops_permission_denied:judge_review:anomaly_action")).toBeVisible();
+});
+
+test("@auth-error ops evaluate-once should show rate-limit grade when backend returns 429", async ({ page }) => {
+  await page.route("**/api/debate/ops/observability/evaluate-once**", async (route) => {
+    await json(route, 429, { error: "ops_observability_evaluate_once_rate_limited" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+  await page.getByRole("button", { name: "Evaluate Once" }).click();
+  await expect(
+    page.getByText("Evaluate run rejected [rate_limit]: ops_observability_evaluate_once_rate_limited.")
+  ).toBeVisible();
+});
+
+test("@auth-error ops evaluate-once should show bad-request grade when backend returns 400", async ({ page }) => {
+  await page.route("**/api/debate/ops/observability/evaluate-once**", async (route) => {
+    await json(route, 400, { error: "invalid_observability_evaluate_once_query" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+  await page.getByRole("button", { name: "Evaluate Dry Run" }).click();
+  await expect(
+    page.getByText("Evaluate dry-run rejected [bad_request]: invalid_observability_evaluate_once_query.")
+  ).toBeVisible();
+});
+
 test("@auth-error ops console should aggregate observability multi-endpoint failures", async ({ page }) => {
   await page.route("**/api/debate/ops/observability/slo**", async (route) => {
     await json(route, 409, { error: "ops_permission_denied:judge_review:slo" });
@@ -1103,6 +1244,41 @@ test("@auth-error ops console should aggregate observability multi-endpoint fail
   await expect(page.getByText("ops_permission_denied:judge_review:slo")).toBeVisible();
   await expect(page.getByText("metrics_dictionary_unavailable")).toBeVisible();
   await expect(page.getByText("split_readiness_unavailable")).toBeVisible();
+});
+
+test("@auth-error ops console should cap and truncate observability error details", async ({ page }) => {
+  const longConfigError = `obs_config_error_long_prefix_${"x".repeat(220)}`;
+
+  await page.route("**/api/debate/ops/observability/config", async (route) => {
+    await json(route, 500, { error: longConfigError });
+  });
+  await page.route("**/api/debate/ops/observability/slo**", async (route) => {
+    await json(route, 409, { error: "ops_permission_denied:judge_review:slo" });
+  });
+  await page.route("**/api/debate/ops/observability/metrics-dictionary**", async (route) => {
+    await json(route, 500, { error: "metrics_dictionary_unavailable" });
+  });
+  await page.route("**/api/debate/ops/observability/split-readiness**", async (route) => {
+    await json(route, 503, { error: "split_readiness_unavailable" });
+  });
+  await page.route("**/api/debate/ops/observability/alerts**", async (route) => {
+    await json(route, 500, { error: "alerts_feed_unavailable_due_to_backend_timeout" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+
+  await expect(page.getByText("Observability snapshot partially unavailable (5 errors).")).toBeVisible();
+  await expect(page.getByText("ops_permission_denied:judge_review:slo")).toBeVisible();
+  await expect(page.getByText("metrics_dictionary_unavailable")).toBeVisible();
+  await expect(page.getByText("split_readiness_unavailable")).toBeVisible();
+  await expect(page.getByText("1 more errors hidden.")).toBeVisible();
+  await expect(page.getByText(longConfigError)).toHaveCount(0);
+  await expect(page.getByText(/obs_config_error_long_prefix_x+/)).toBeVisible();
+  await expect(page.getByText("alerts_feed_unavailable_due_to_backend_timeout")).toHaveCount(0);
 });
 
 test("@auth-error password invalid credentials should stay on login", async ({ page }) => {

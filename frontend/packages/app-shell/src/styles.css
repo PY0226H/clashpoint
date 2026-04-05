@@ -320,6 +320,13 @@
   gap: 8px;
 }
 
+.echo-ops-action-toolbar {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .echo-ops-observability-errors {
   display: flex;
   flex-direction: column;
@@ -328,6 +335,46 @@
   border-radius: var(--echo-radius-md);
   border: 1px solid color-mix(in srgb, var(--echo-danger) 35%, transparent 65%);
   background: color-mix(in srgb, var(--echo-danger) 8%, white 92%);
+}
+
+.echo-ops-observability-error-item {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.echo-ops-rule-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.echo-ops-rule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.echo-ops-threshold-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.echo-ops-threshold-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);
+  align-items: center;
+  gap: 10px;
+  color: var(--echo-muted);
+  font-size: 0.88rem;
+}
+
+.echo-ops-threshold-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .echo-wallet-probe-row {
@@ -615,8 +662,16 @@
     grid-template-columns: 1fr;
   }
 
+  .echo-ops-action-toolbar {
+    grid-template-columns: 1fr;
+  }
+
   .echo-ops-alert-pager {
     flex-wrap: wrap;
+  }
+
+  .echo-ops-threshold-row {
+    grid-template-columns: 1fr;
   }
 
   .echo-login-stage {
