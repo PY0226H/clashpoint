@@ -30,6 +30,7 @@ const OBSERVABILITY_ERROR_MAX_CHARS = 120;
 type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
 type SplitReviewSelection = "unset" | "required" | "not_required";
+type SplitReviewAuditComplianceFilter = "all" | SplitReviewSelection;
 
 const THRESHOLD_FIELD_ORDER: ThresholdFieldKey[] = [
   "lowSuccessRateThreshold",
@@ -124,6 +125,17 @@ function toEvaluateActionErrorMessage(error: unknown, dryRun: boolean): string {
   return `Evaluate ${mode} rejected [backend]: ${info.message}.`;
 }
 
+function toSplitReviewSaveErrorMessage(error: unknown): string {
+  const info = getOpsDomainErrorInfo(error);
+  if (info.status === 409) {
+    return `Split review save rejected [permission_conflict]: ${info.message}.`;
+  }
+  if (info.status === 400) {
+    return `Split review save rejected [bad_request]: ${info.message}.`;
+  }
+  return `Split review save rejected [backend]: ${info.message}.`;
+}
+
 function mapSplitReviewSelectionToPayload(selection: SplitReviewSelection): boolean | null {
   if (selection === "required") {
     return true;
@@ -142,6 +154,10 @@ function mapSplitReviewPayloadToSelection(value: unknown): SplitReviewSelection 
     return "not_required";
   }
   return "unset";
+}
+
+function toSplitReviewSelectionLabel(value: unknown): SplitReviewSelection {
+  return mapSplitReviewPayloadToSelection(value);
 }
 
 function extractSplitReviewFromReadiness(input: ReturnType<typeof getOpsServiceSplitReadiness> extends Promise<infer T> ? T : never): {
@@ -172,6 +188,11 @@ export function OpsConsolePage() {
   const [splitReviewNote, setSplitReviewNote] = useState("");
   const [splitReviewAuditPageSize, setSplitReviewAuditPageSize] = useState(3);
   const [splitReviewAuditPageIndex, setSplitReviewAuditPageIndex] = useState(0);
+  const [splitReviewAuditComplianceFilter, setSplitReviewAuditComplianceFilter] =
+    useState<SplitReviewAuditComplianceFilter>("all");
+  const [splitReviewAuditKeywordFilter, setSplitReviewAuditKeywordFilter] = useState("");
+  const [splitReviewAuditCreatedAfterIso, setSplitReviewAuditCreatedAfterIso] = useState("");
+  const [splitReviewAuditCreatedBeforeIso, setSplitReviewAuditCreatedBeforeIso] = useState("");
   const [thresholdDraft, setThresholdDraft] = useState<Record<ThresholdFieldKey, string> | null>(null);
   const [thresholdDirty, setThresholdDirty] = useState(false);
   const [suppressMinutesInput, setSuppressMinutesInput] = useState("10");
@@ -328,7 +349,7 @@ export function OpsConsolePage() {
       ]);
     },
     onError: (error) => {
-      setPageHint(toOpsDomainError(error));
+      setPageHint(toSplitReviewSaveErrorMessage(error));
     }
   });
 
@@ -357,6 +378,51 @@ export function OpsConsolePage() {
   const splitReviewAuditPageCount = Math.max(1, Math.ceil(totalSplitReviewAudits / splitReviewAuditPageSize));
   const canGoPrevSplitReviewAuditPage = splitReviewAuditPageIndex > 0;
   const canGoNextSplitReviewAuditPage = splitReviewAuditPageIndex + 1 < splitReviewAuditPageCount;
+  const splitReviewAuditItems = splitReviewAuditsQuery.data?.items;
+  const splitReviewAuditPageItemCount = splitReviewAuditItems?.length ?? 0;
+  const filteredSplitReviewAuditItems = useMemo(() => {
+    const normalizedKeyword = splitReviewAuditKeywordFilter.trim().toLowerCase();
+    const createdAfterRaw = splitReviewAuditCreatedAfterIso.trim();
+    const createdBeforeRaw = splitReviewAuditCreatedBeforeIso.trim();
+    const createdAfterMs = createdAfterRaw ? Date.parse(createdAfterRaw) : NaN;
+    const createdBeforeMs = createdBeforeRaw ? Date.parse(createdBeforeRaw) : NaN;
+    const hasCreatedAfter = Number.isFinite(createdAfterMs);
+    const hasCreatedBefore = Number.isFinite(createdBeforeMs);
+    const sourceItems = splitReviewAuditItems ?? [];
+
+    return sourceItems.filter((item) => {
+      const selection = toSplitReviewSelectionLabel(item.paymentComplianceRequired);
+      if (splitReviewAuditComplianceFilter !== "all" && selection !== splitReviewAuditComplianceFilter) {
+        return false;
+      }
+      if (normalizedKeyword) {
+        const haystacks = [String(item.id), item.reviewNote, String(item.updatedBy)];
+        const matched = haystacks.some((text) => text.toLowerCase().includes(normalizedKeyword));
+        if (!matched) {
+          return false;
+        }
+      }
+      if (hasCreatedAfter || hasCreatedBefore) {
+        const createdAtMs = Date.parse(item.createdAt);
+        if (!Number.isFinite(createdAtMs)) {
+          return false;
+        }
+        if (hasCreatedAfter && createdAtMs < createdAfterMs) {
+          return false;
+        }
+        if (hasCreatedBefore && createdAtMs > createdBeforeMs) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [
+    splitReviewAuditComplianceFilter,
+    splitReviewAuditCreatedAfterIso,
+    splitReviewAuditCreatedBeforeIso,
+    splitReviewAuditItems,
+    splitReviewAuditKeywordFilter
+  ]);
   const observabilityErrors = useMemo(() => {
     const seen = new Set<string>();
     const items = [
@@ -462,6 +528,14 @@ export function OpsConsolePage() {
     setThresholdDraft(toThresholdDraft(observabilityConfigQuery.data.thresholds));
     setThresholdDirty(false);
     setPageHint("Threshold edits reverted.");
+  }
+
+  function clearSplitReviewAuditFilters() {
+    setSplitReviewAuditComplianceFilter("all");
+    setSplitReviewAuditKeywordFilter("");
+    setSplitReviewAuditCreatedAfterIso("");
+    setSplitReviewAuditCreatedBeforeIso("");
+    setPageHint("Split review audit filters cleared.");
   }
 
   return (
@@ -852,6 +926,58 @@ export function OpsConsolePage() {
                 <InlineHint>
                   audits: total {totalSplitReviewAudits} | page {splitReviewAuditPageIndex + 1}/{splitReviewAuditPageCount}
                 </InlineHint>
+                <InlineHint>
+                  page matches: {filteredSplitReviewAuditItems.length}/{splitReviewAuditPageItemCount}
+                </InlineHint>
+                <div className="echo-ops-split-review-filters">
+                  <label className="echo-ops-role-label">
+                    <span>Compliance Filter</span>
+                    <select
+                      aria-label="Split Review Compliance Filter"
+                      onChange={(event) =>
+                        setSplitReviewAuditComplianceFilter(event.target.value as SplitReviewAuditComplianceFilter)
+                      }
+                      value={splitReviewAuditComplianceFilter}
+                    >
+                      <option value="all">all</option>
+                      <option value="required">required</option>
+                      <option value="not_required">not_required</option>
+                      <option value="unset">unset</option>
+                    </select>
+                  </label>
+                  <label className="echo-ops-role-label">
+                    <span>Note Keyword</span>
+                    <TextField
+                      aria-label="Split Review Keyword Filter"
+                      onChange={(event) => setSplitReviewAuditKeywordFilter(event.target.value)}
+                      placeholder="filter by id/note/user"
+                      value={splitReviewAuditKeywordFilter}
+                    />
+                  </label>
+                  <label className="echo-ops-role-label">
+                    <span>Created After (ISO)</span>
+                    <TextField
+                      aria-label="Split Review Created After ISO"
+                      onChange={(event) => setSplitReviewAuditCreatedAfterIso(event.target.value)}
+                      placeholder="2026-01-01T01:30:00Z"
+                      value={splitReviewAuditCreatedAfterIso}
+                    />
+                  </label>
+                  <label className="echo-ops-role-label">
+                    <span>Created Before (ISO)</span>
+                    <TextField
+                      aria-label="Split Review Created Before ISO"
+                      onChange={(event) => setSplitReviewAuditCreatedBeforeIso(event.target.value)}
+                      placeholder="2026-01-01T01:40:00Z"
+                      value={splitReviewAuditCreatedBeforeIso}
+                    />
+                  </label>
+                  <div className="echo-ops-threshold-actions">
+                    <Button onClick={clearSplitReviewAuditFilters} type="button">
+                      Clear Audit Filters
+                    </Button>
+                  </div>
+                </div>
                 <div className="echo-ops-alert-toolbar">
                   <label className="echo-ops-role-label">
                     <span>Audit Page Size</span>
@@ -885,15 +1011,20 @@ export function OpsConsolePage() {
                   </div>
                 </div>
                 <div className="echo-ops-review-audit-list">
-                  {(splitReviewAuditsQuery.data?.items || []).map((item) => (
+                  {filteredSplitReviewAuditItems.map((item) => (
                     <InlineHint key={item.id}>
                       #{item.id} | compliance:{" "}
-                      {item.paymentComplianceRequired == null ? "unset" : item.paymentComplianceRequired ? "required" : "not_required"}{" "}
-                      | by #{item.updatedBy} | note: {item.reviewNote || "--"}
+                      {toSplitReviewSelectionLabel(item.paymentComplianceRequired)} | by #{item.updatedBy} | at{" "}
+                      {formatUtc(item.createdAt)} | note: {item.reviewNote || "--"}
                     </InlineHint>
                   ))}
-                  {!splitReviewAuditsQuery.isLoading && (splitReviewAuditsQuery.data?.items.length || 0) === 0 ? (
+                  {!splitReviewAuditsQuery.isLoading && splitReviewAuditPageItemCount === 0 ? (
                     <InlineHint>No split review audits.</InlineHint>
+                  ) : null}
+                  {!splitReviewAuditsQuery.isLoading &&
+                  splitReviewAuditPageItemCount > 0 &&
+                  filteredSplitReviewAuditItems.length === 0 ? (
+                    <InlineHint>No audits matched filters on this page.</InlineHint>
                   ) : null}
                 </div>
               </article>

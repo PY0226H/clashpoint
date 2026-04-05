@@ -1239,8 +1239,16 @@ test("@smoke ops console should show rbac and support role upsert/revoke", async
   await page.getByLabel("Split Review Note").fill("manual compliance review passed");
   await page.getByRole("button", { name: "Save Split Review" }).click();
   await expect(page.getByText("Split readiness review updated.")).toBeVisible();
-  await expect(page.getByText("#9003 | compliance: required | by #10 | note: manual compliance review passed")).toBeVisible();
+  await expect(page.getByText(/#9003 \| compliance: required \| by #10 \| at .+ \| note: manual compliance review passed/)).toBeVisible();
   await expect(page.getByText(/note: manual compliance review passed/)).toBeVisible();
+  await page.getByLabel("Split Review Compliance Filter").selectOption("required");
+  await page.getByLabel("Split Review Keyword Filter").fill("manual compliance");
+  await page.getByLabel("Split Review Created After ISO").fill("2026-01-01T01:32:00Z");
+  await page.getByLabel("Split Review Created Before ISO").fill("2026-01-01T01:34:00Z");
+  await expect(page.getByText(/#9003 \| compliance: required \| by #10 \| at .+ \| note: manual compliance review passed/)).toBeVisible();
+  await expect(page.getByText("#9002 | compliance: required")).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear Audit Filters" }).click();
+  await expect(page.getByText("#9002 | compliance: required")).toBeVisible();
 });
 
 test("@auth-error pin should show insufficient wallet balance error", async ({ page }) => {
@@ -1356,7 +1364,27 @@ test("@auth-error ops split review save should show permission error when backen
   await page.getByLabel("Split Review Payment Compliance").selectOption("required");
   await page.getByLabel("Split Review Note").fill("attempt update with denied permission");
   await page.getByRole("button", { name: "Save Split Review" }).click();
-  await expect(page.getByText("ops_permission_denied:judge_review:split_review_update").first()).toBeVisible();
+  await expect(
+    page.getByText(
+      "Split review save rejected [permission_conflict]: ops_permission_denied:judge_review:split_review_update."
+    )
+  ).toBeVisible();
+});
+
+test("@auth-error ops split review save should show bad-request grade when backend returns 400", async ({ page }) => {
+  await page.route("**/api/debate/ops/observability/split-readiness/review", async (route) => {
+    await json(route, 400, { error: "split_review_note_too_long" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+  await page.getByLabel("Split Review Payment Compliance").selectOption("required");
+  await page.getByLabel("Split Review Note").fill("attempt update with too long note");
+  await page.getByRole("button", { name: "Save Split Review" }).click();
+  await expect(page.getByText("Split review save rejected [bad_request]: split_review_note_too_long.")).toBeVisible();
 });
 
 test("@auth-error ops console should aggregate observability multi-endpoint failures", async ({ page }) => {

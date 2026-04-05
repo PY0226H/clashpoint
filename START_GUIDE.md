@@ -17,7 +17,7 @@
 - **Node.js**: v18 或更高版本
 - **Rust**: 最新稳定版本
 - **PostgreSQL**: 14 或更高版本
-- **Yarn**: 包管理器
+- **pnpm**: 包管理器
 - **Cargo**: Rust 构建工具（随 Rust 一起安装）
 - **sqlx-cli**: 数据库迁移工具（推荐安装，`start.sh` 默认会执行迁移回放）
 
@@ -27,7 +27,7 @@
 # macOS (使用 Homebrew)
 brew install postgresql@14
 brew install node
-brew install yarn
+brew install pnpm
 brew install rust
 
 # 启动 PostgreSQL
@@ -90,8 +90,8 @@ server:
 #### 2.1 安装前端依赖
 
 ```bash
-cd chatapp
-yarn install
+cd frontend
+pnpm install --no-frozen-lockfile
 cd ..
 ```
 
@@ -164,8 +164,8 @@ INFO notify_server: Listening on: 0.0.0.0:6687
 打开第三个终端窗口：
 
 ```bash
-cd chatapp
-yarn dev
+cd frontend
+pnpm --filter @echoisle/web dev -- --host 127.0.0.1 --port 1420
 ```
 
 你应该看到：
@@ -197,16 +197,16 @@ nohup cargo run > /tmp/notify_server.log 2>&1 &
 echo $! > /tmp/notify_server.pid
 
 # 启动前端
-cd ../../chatapp
-nohup yarn dev > /tmp/chatapp.log 2>&1 &
-echo $! > /tmp/chatapp.pid
+cd ../../frontend
+nohup pnpm --filter @echoisle/web dev -- --host 127.0.0.1 --port 1420 > /tmp/frontend-web.log 2>&1 &
+echo $! > /tmp/frontend-web.pid
 ```
 
 查看日志：
 ```bash
 tail -f /tmp/chat_server.log
 tail -f /tmp/notify_server.log
-tail -f /tmp/chatapp.log
+tail -f /tmp/frontend-web.log
 ```
 
 ### 方式三：使用 Docker（如果配置了）
@@ -229,7 +229,7 @@ make run-docker
 
 1. 在每个运行服务的终端窗口中按 `Ctrl + C`
 2. 按顺序关闭：
-   - 前端应用（chatapp）
+   - 前端应用（frontend web）
    - Notify Server
    - Chat Server
 
@@ -251,9 +251,9 @@ if [ -f /tmp/notify_server.pid ]; then
 fi
 
 # 关闭前端
-if [ -f /tmp/chatapp.pid ]; then
-    kill $(cat /tmp/chatapp.pid)
-    rm /tmp/chatapp.pid
+if [ -f /tmp/frontend-web.pid ]; then
+    kill $(cat /tmp/frontend-web.pid)
+    rm /tmp/frontend-web.pid
 fi
 ```
 
@@ -276,7 +276,7 @@ lsof -ti:1420 | xargs kill -9
 # 关闭所有相关进程
 pkill -f chat-server
 pkill -f notify-server
-pkill -f "vite.*chatapp"
+pkill -f "pnpm --filter @echoisle/web dev"
 ```
 
 ### 方式三：关闭 Docker 容器
@@ -312,7 +312,7 @@ lsof -ti:1420 | xargs kill -9 2>/dev/null && echo "  ✓ 前端应用已关闭" 
 # 方法2: 使用进程名关闭（备用）
 pkill -f chat-server 2>/dev/null
 pkill -f notify-server 2>/dev/null
-pkill -f "vite.*chatapp" 2>/dev/null
+pkill -f "pnpm --filter @echoisle/web dev" 2>/dev/null
 
 echo "所有服务已关闭！"
 ```
@@ -364,10 +364,10 @@ cargo build
 
 **解决方案**:
 ```bash
-cd chatapp
+cd frontend
 rm -rf node_modules
-rm yarn.lock
-yarn install
+rm pnpm-lock.yaml
+pnpm install --no-frozen-lockfile
 ```
 
 ### 5. 数据库迁移冲突
@@ -410,7 +410,7 @@ curl http://localhost:6687/health
 |------|------|------|
 | **chat_server** | 6688 | 聊天服务器，处理消息发送、接收等核心功能 |
 | **notify_server** | 6687 | 通知服务器，处理实时通知和 WebSocket 连接 |
-| **chatapp (Frontend)** | 1420 | Web 前端应用，用户界面 |
+| **frontend web (Vite)** | 1420 | Web 前端应用，用户界面 |
 | **PostgreSQL** | 5432 | 数据库服务（默认端口） |
 
 ---
@@ -422,7 +422,7 @@ curl http://localhost:6687/health
 - [ ] PostgreSQL 正在运行
 - [ ] 数据库 `chat` 已创建
 - [ ] 所有配置文件中的数据库连接信息已更新
-- [ ] chatapp 的依赖已安装（node_modules 存在）
+- [ ] frontend 的依赖已安装（node_modules 存在）
 - [ ] 端口 6688、6687、1420 未被占用
 
 ---

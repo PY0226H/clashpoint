@@ -4,7 +4,7 @@
 
 当前仓库包含：
 1. Rust 后端（聊天/辩论/支付/通知/分析）
-2. Vue + Tauri 前端
+2. React + TypeScript 前端（Web + Mac）
 3. Python AI 裁判服务（FastAPI，多 Agent + RAG）
 
 ## 目录结构
@@ -12,7 +12,7 @@
 ```text
 echoisle/
 ├── chat/                    # Rust 多服务后端
-├── chatapp/                 # Vue + Tauri 前端
+├── frontend/                # React + TypeScript 前端工作区（Web + Mac）
 ├── ai_judge_service/        # Python AI 裁判服务
 ├── docs/                    # 产品计划、讲解、压测结果
 ├── start.sh                 # 一键启动（本地开发）
@@ -26,7 +26,7 @@ echoisle/
 1. Node.js >= 18
 2. Rust stable
 3. PostgreSQL >= 14
-4. Yarn
+4. pnpm
 5. macOS 下建议安装 Homebrew（`start.sh` 使用 `brew services`）
 
 ## 2) 数据库配置
@@ -49,7 +49,7 @@ DATABASE_URL=postgres://<username>:<password>@localhost:5432/chat
 1. 检查并启动 PostgreSQL（macOS）
 2. 检查 `chat` 数据库
 3. 执行标准迁移回放（`cargo sqlx migrate run`）
-4. 启动 `chat_server`、`notify_server`、`chatapp`
+4. 启动 `chat_server`、`notify_server`、`frontend web`
 
 启动后访问：
 - `http://localhost:1420`
@@ -89,5 +89,5 @@ cd ai_judge_service
 |---|---:|---|
 | chat_server | 6688 | 主业务 API |
 | notify_server | 6687 | SSE / WebSocket 推送 |
-| chatapp (vite) | 1420 | Web 前端 |
+| frontend web (vite) | 1420 | Web 前端 |
 | ai_judge_service | 8787 | AI 裁判内部服务（可选） |

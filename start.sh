@@ -117,10 +117,16 @@ echo -e "${GREEN}✓${NC} 所有端口可用 (6688, 6687, 1420)"
 # 检查前端依赖
 echo ""
 echo "4. 检查前端依赖..."
-if [ ! -d "chatapp/node_modules" ]; then
+if ! command -v pnpm >/dev/null 2>&1; then
+    echo -e "${RED}✗${NC} 未检测到 pnpm"
+    echo "   安装命令: npm install -g pnpm"
+    exit 1
+fi
+
+if [ ! -d "frontend/node_modules" ]; then
     echo -e "${YELLOW}!${NC} node_modules 不存在，正在安装..."
-    cd chatapp
-    yarn install
+    cd frontend
+    pnpm install --no-frozen-lockfile
     cd ..
     echo -e "${GREEN}✓${NC} 依赖安装完成"
 else
@@ -151,10 +157,10 @@ cd ../..
 
 # 启动前端
 echo "   启动前端应用 (端口 1420)..."
-cd chatapp
-nohup yarn dev > /tmp/echoisle_logs/chatapp.log 2>&1 &
+cd frontend
+nohup pnpm --filter @echoisle/web dev -- --host 127.0.0.1 --port 1420 > /tmp/echoisle_logs/frontend-web.log 2>&1 &
 APP_PID=$!
-echo $APP_PID > /tmp/echoisle_logs/chatapp.pid
+echo $APP_PID > /tmp/echoisle_logs/frontend-web.pid
 cd ..
 
 echo ""
@@ -183,7 +189,7 @@ fi
 if wait_for_port 1420 30; then
     echo -e "${GREEN}✓${NC} 前端应用运行中 (PID: $APP_PID, 端口: 1420)"
 else
-    echo -e "${RED}✗${NC} 前端应用启动失败，查看日志: tail -f /tmp/echoisle_logs/chatapp.log"
+    echo -e "${RED}✗${NC} 前端应用启动失败，查看日志: tail -f /tmp/echoisle_logs/frontend-web.log"
 fi
 
 echo ""
@@ -196,7 +202,7 @@ echo ""
 echo "日志文件位置:"
 echo "  - Chat Server:   /tmp/echoisle_logs/chat_server.log"
 echo "  - Notify Server: /tmp/echoisle_logs/notify_server.log"
-echo "  - Frontend:      /tmp/echoisle_logs/chatapp.log"
+echo "  - Frontend:      /tmp/echoisle_logs/frontend-web.log"
 echo ""
 echo "查看日志: tail -f /tmp/echoisle_logs/chat_server.log"
 echo "关闭服务: ./stop.sh"

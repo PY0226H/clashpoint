@@ -51,14 +51,15 @@ stop_service() {
 # 关闭各个服务
 stop_service "chat_server" "6688" "/tmp/echoisle_logs/chat_server.pid"
 stop_service "notify_server" "6687" "/tmp/echoisle_logs/notify_server.pid"
-stop_service "前端应用" "1420" "/tmp/echoisle_logs/chatapp.pid"
+stop_service "前端应用" "1420" "/tmp/echoisle_logs/frontend-web.pid"
 
 # 额外清理：使用进程名关闭（备用）
 echo ""
 echo "执行额外清理..."
 pkill -f chat-server 2>/dev/null && echo -e "${GREEN}✓${NC} 清理 chat-server 进程" || true
 pkill -f notify-server 2>/dev/null && echo -e "${GREEN}✓${NC} 清理 notify-server 进程" || true
-pkill -f "vite.*chatapp" 2>/dev/null && echo -e "${GREEN}✓${NC} 清理 vite 进程" || true
+pkill -f "pnpm --filter @echoisle/web dev" 2>/dev/null && echo -e "${GREEN}✓${NC} 清理 pnpm web dev 进程" || true
+pkill -f "vite --port 1420" 2>/dev/null && echo -e "${GREEN}✓${NC} 清理 vite 进程" || true
 
 # 验证所有服务已关闭
 echo ""
