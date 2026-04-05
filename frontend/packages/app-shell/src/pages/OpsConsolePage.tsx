@@ -10,9 +10,11 @@ import {
   getOpsSloSnapshot,
   listOpsRoleAssignments,
   listOpsAlertNotifications,
+  listOpsServiceSplitReviewAudits,
   revokeOpsRoleAssignment,
   runOpsObservabilityEvaluationOnce,
   toOpsDomainError,
+  upsertOpsServiceSplitReview,
   upsertOpsObservabilityThresholds,
   upsertOpsRoleAssignment,
   type OpsObservabilityThresholds,
@@ -27,6 +29,7 @@ const OBSERVABILITY_ERROR_MAX_VISIBLE = 4;
 const OBSERVABILITY_ERROR_MAX_CHARS = 120;
 type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
+type SplitReviewSelection = "unset" | "required" | "not_required";
 
 const THRESHOLD_FIELD_ORDER: ThresholdFieldKey[] = [
   "lowSuccessRateThreshold",
@@ -121,6 +124,43 @@ function toEvaluateActionErrorMessage(error: unknown, dryRun: boolean): string {
   return `Evaluate ${mode} rejected [backend]: ${info.message}.`;
 }
 
+function mapSplitReviewSelectionToPayload(selection: SplitReviewSelection): boolean | null {
+  if (selection === "required") {
+    return true;
+  }
+  if (selection === "not_required") {
+    return false;
+  }
+  return null;
+}
+
+function mapSplitReviewPayloadToSelection(value: unknown): SplitReviewSelection {
+  if (value === true) {
+    return "required";
+  }
+  if (value === false) {
+    return "not_required";
+  }
+  return "unset";
+}
+
+function extractSplitReviewFromReadiness(input: ReturnType<typeof getOpsServiceSplitReadiness> extends Promise<infer T> ? T : never): {
+  selection: SplitReviewSelection;
+  note: string;
+} {
+  const item = input.thresholds.find((threshold) => threshold.key === "payment_compliance_review");
+  const evidence = item?.evidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return { selection: "unset", note: "" };
+  }
+  const paymentValue = (evidence as Record<string, unknown>).paymentComplianceRequired;
+  const noteRaw = (evidence as Record<string, unknown>).reviewNote;
+  return {
+    selection: mapSplitReviewPayloadToSelection(paymentValue),
+    note: typeof noteRaw === "string" ? noteRaw : ""
+  };
+}
+
 export function OpsConsolePage() {
   const queryClient = useQueryClient();
   const [targetUserId, setTargetUserId] = useState("");
@@ -128,6 +168,10 @@ export function OpsConsolePage() {
   const [alertStatusFilter, setAlertStatusFilter] = useState<AlertStatusFilter>("all");
   const [alertPageSize, setAlertPageSize] = useState<number>(3);
   const [alertPageIndex, setAlertPageIndex] = useState(0);
+  const [splitReviewSelection, setSplitReviewSelection] = useState<SplitReviewSelection>("unset");
+  const [splitReviewNote, setSplitReviewNote] = useState("");
+  const [splitReviewAuditPageSize, setSplitReviewAuditPageSize] = useState(3);
+  const [splitReviewAuditPageIndex, setSplitReviewAuditPageIndex] = useState(0);
   const [thresholdDraft, setThresholdDraft] = useState<Record<ThresholdFieldKey, string> | null>(null);
   const [thresholdDirty, setThresholdDirty] = useState(false);
   const [suppressMinutesInput, setSuppressMinutesInput] = useState("10");
@@ -169,6 +213,16 @@ export function OpsConsolePage() {
     enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
     retry: false
   });
+  const splitReviewAuditsQuery = useQuery({
+    queryKey: ["ops-observability-split-review-audits", splitReviewAuditPageSize, splitReviewAuditPageIndex],
+    queryFn: () =>
+      listOpsServiceSplitReviewAudits({
+        limit: splitReviewAuditPageSize,
+        offset: splitReviewAuditPageIndex * splitReviewAuditPageSize
+      }),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
+  });
   const alertsQuery = useQuery({
     queryKey: ["ops-observability-alerts", alertStatusFilter, alertPageSize, alertPageIndex],
     queryFn: () =>
@@ -184,6 +238,9 @@ export function OpsConsolePage() {
   useEffect(() => {
     setAlertPageIndex(0);
   }, [alertPageSize, alertStatusFilter]);
+  useEffect(() => {
+    setSplitReviewAuditPageIndex(0);
+  }, [splitReviewAuditPageSize]);
 
   const upsertRoleMutation = useMutation({
     mutationFn: async (payload: { userId: number; role: OpsRole }) =>
@@ -257,6 +314,23 @@ export function OpsConsolePage() {
       setPageHint(toOpsDomainError(error));
     }
   });
+  const upsertSplitReviewMutation = useMutation({
+    mutationFn: async () =>
+      upsertOpsServiceSplitReview({
+        paymentComplianceRequired: mapSplitReviewSelectionToPayload(splitReviewSelection),
+        reviewNote: splitReviewNote.trim() || null
+      }),
+    onSuccess: async () => {
+      setPageHint("Split readiness review updated.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ops-observability-split-readiness"] }),
+        queryClient.invalidateQueries({ queryKey: ["ops-observability-split-review-audits"] })
+      ]);
+    },
+    onError: (error) => {
+      setPageHint(toOpsDomainError(error));
+    }
+  });
 
   const canManageRoles = Boolean(rbacMeQuery.data?.permissions.roleManage);
   const canReviewJudge = Boolean(rbacMeQuery.data?.permissions.judgeReview);
@@ -279,6 +353,10 @@ export function OpsConsolePage() {
   const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
   const canGoPrevPage = alertPageIndex > 0;
   const canGoNextPage = alertPageIndex + 1 < alertPageCount;
+  const totalSplitReviewAudits = splitReviewAuditsQuery.data?.total ?? 0;
+  const splitReviewAuditPageCount = Math.max(1, Math.ceil(totalSplitReviewAudits / splitReviewAuditPageSize));
+  const canGoPrevSplitReviewAuditPage = splitReviewAuditPageIndex > 0;
+  const canGoNextSplitReviewAuditPage = splitReviewAuditPageIndex + 1 < splitReviewAuditPageCount;
   const observabilityErrors = useMemo(() => {
     const seen = new Set<string>();
     const items = [
@@ -321,6 +399,14 @@ export function OpsConsolePage() {
     setThresholdDraft(toThresholdDraft(observabilityConfigQuery.data.thresholds));
     setThresholdDirty(false);
   }, [observabilityConfigQuery.data]);
+  useEffect(() => {
+    if (!splitReadinessQuery.data) {
+      return;
+    }
+    const extracted = extractSplitReviewFromReadiness(splitReadinessQuery.data);
+    setSplitReviewSelection(extracted.selection);
+    setSplitReviewNote(extracted.note);
+  }, [splitReadinessQuery.data]);
 
   async function invalidateObservabilityQueries() {
     await Promise.all([
@@ -724,6 +810,92 @@ export function OpsConsolePage() {
                   </InlineHint>
                 ))}
                 <InlineHint>version: {metricsDictionaryQuery.data?.version || "--"}</InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Split Review</h4>
+                <label className="echo-ops-role-label">
+                  <span>Payment Compliance</span>
+                  <select
+                    aria-label="Split Review Payment Compliance"
+                    onChange={(event) => setSplitReviewSelection(event.target.value as SplitReviewSelection)}
+                    value={splitReviewSelection}
+                  >
+                    <option value="unset">unset</option>
+                    <option value="required">required</option>
+                    <option value="not_required">not_required</option>
+                  </select>
+                </label>
+                <label className="echo-ops-role-label">
+                  <span>Review Note</span>
+                  <textarea
+                    aria-label="Split Review Note"
+                    className="echo-room-input"
+                    onChange={(event) => setSplitReviewNote(event.target.value)}
+                    placeholder="Add split readiness review note"
+                    rows={3}
+                    value={splitReviewNote}
+                  />
+                </label>
+                <div className="echo-ops-threshold-actions">
+                  <Button
+                    disabled={upsertSplitReviewMutation.isPending}
+                    onClick={() => upsertSplitReviewMutation.mutate()}
+                    type="button"
+                  >
+                    {upsertSplitReviewMutation.isPending ? "Saving Review..." : "Save Split Review"}
+                  </Button>
+                </div>
+                {splitReviewAuditsQuery.isError ? (
+                  <p className="echo-error">{toOpsDomainError(splitReviewAuditsQuery.error)}</p>
+                ) : null}
+                <InlineHint>
+                  audits: total {totalSplitReviewAudits} | page {splitReviewAuditPageIndex + 1}/{splitReviewAuditPageCount}
+                </InlineHint>
+                <div className="echo-ops-alert-toolbar">
+                  <label className="echo-ops-role-label">
+                    <span>Audit Page Size</span>
+                    <select
+                      aria-label="Split Review Audit Page Size"
+                      onChange={(event) => setSplitReviewAuditPageSize(Math.max(1, Number(event.target.value) || 3))}
+                      value={String(splitReviewAuditPageSize)}
+                    >
+                      {ALERT_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={String(size)}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="echo-ops-alert-pager">
+                    <Button
+                      disabled={splitReviewAuditsQuery.isLoading || !canGoPrevSplitReviewAuditPage}
+                      onClick={() => setSplitReviewAuditPageIndex((current) => Math.max(0, current - 1))}
+                      type="button"
+                    >
+                      Prev Audits
+                    </Button>
+                    <Button
+                      disabled={splitReviewAuditsQuery.isLoading || !canGoNextSplitReviewAuditPage}
+                      onClick={() => setSplitReviewAuditPageIndex((current) => current + 1)}
+                      type="button"
+                    >
+                      Next Audits
+                    </Button>
+                  </div>
+                </div>
+                <div className="echo-ops-review-audit-list">
+                  {(splitReviewAuditsQuery.data?.items || []).map((item) => (
+                    <InlineHint key={item.id}>
+                      #{item.id} | compliance:{" "}
+                      {item.paymentComplianceRequired == null ? "unset" : item.paymentComplianceRequired ? "required" : "not_required"}{" "}
+                      | by #{item.updatedBy} | note: {item.reviewNote || "--"}
+                    </InlineHint>
+                  ))}
+                  {!splitReviewAuditsQuery.isLoading && (splitReviewAuditsQuery.data?.items.length || 0) === 0 ? (
+                    <InlineHint>No split review audits.</InlineHint>
+                  ) : null}
+                </div>
               </article>
 
               <article className="echo-topic-item">

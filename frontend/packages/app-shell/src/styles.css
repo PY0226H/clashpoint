@@ -377,6 +377,12 @@
   gap: 8px;
 }
 
+.echo-ops-review-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .echo-wallet-probe-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

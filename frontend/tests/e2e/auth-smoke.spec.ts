@@ -109,6 +109,40 @@ async function installAuthMocks(page: Page) {
     updatedBy: 10,
     updatedAt: "2026-01-01T01:10:00Z"
   };
+  const splitReviewState: {
+    paymentComplianceRequired: boolean | null;
+    reviewNote: string;
+    updatedBy: number;
+    updatedAt: string;
+  } = {
+    paymentComplianceRequired: null,
+    reviewNote: "",
+    updatedBy: 10,
+    updatedAt: "2026-01-01T01:12:00Z"
+  };
+  let nextSplitReviewAuditId = 9003;
+  const splitReviewAudits: Array<{
+    id: number;
+    paymentComplianceRequired: boolean | null;
+    reviewNote: string;
+    updatedBy: number;
+    createdAt: string;
+  }> = [
+    {
+      id: 9002,
+      paymentComplianceRequired: true,
+      reviewNote: "payment compliance must be checked before split",
+      updatedBy: 10,
+      createdAt: "2026-01-01T01:07:00Z"
+    },
+    {
+      id: 9001,
+      paymentComplianceRequired: null,
+      reviewNote: "",
+      updatedBy: 10,
+      createdAt: "2026-01-01T00:57:00Z"
+    }
+  ];
   const opsAlertItems = [
     {
       id: 501,
@@ -544,8 +578,88 @@ async function installAuthMocks(page: Page) {
               failedCount: 2,
               pendingDlqCount: 1
             }
+          },
+          {
+            key: "payment_compliance_review",
+            title: "Payment compliance review",
+            status: splitReviewState.paymentComplianceRequired ? "ready" : "watch",
+            triggered: splitReviewState.paymentComplianceRequired !== true,
+            recommendation: "confirm payment compliance gate before service split",
+            evidence: {
+              paymentComplianceRequired: splitReviewState.paymentComplianceRequired,
+              reviewNote: splitReviewState.reviewNote,
+              updatedBy: splitReviewState.updatedBy,
+              updatedAt: splitReviewState.updatedAt
+            }
           }
         ]
+      });
+    }
+
+    if (pathname === "/api/debate/ops/observability/split-readiness/review" && request.method() === "PUT") {
+      const paymentRaw = body?.paymentComplianceRequired;
+      const noteRaw = body?.reviewNote;
+      const paymentComplianceRequired =
+        paymentRaw === null || paymentRaw === undefined ? null : Boolean(paymentRaw);
+      const reviewNote = typeof noteRaw === "string" ? noteRaw.trim() : "";
+      if (reviewNote.length > 1000) {
+        return json(route, 400, { error: "split_review_note_too_long" });
+      }
+      splitReviewState.paymentComplianceRequired = paymentComplianceRequired;
+      splitReviewState.reviewNote = reviewNote;
+      splitReviewState.updatedBy = 10;
+      splitReviewState.updatedAt = "2026-01-01T01:33:00Z";
+      splitReviewAudits.unshift({
+        id: nextSplitReviewAuditId++,
+        paymentComplianceRequired,
+        reviewNote,
+        updatedBy: 10,
+        createdAt: "2026-01-01T01:33:00Z"
+      });
+      return json(route, 200, {
+        generatedAtMs: 1767229980000,
+        overallStatus: "watch",
+        nextStep: "stabilize dispatch error budget before split",
+        thresholds: [
+          {
+            key: "dispatch_error_budget",
+            title: "Dispatch error budget",
+            status: "watch",
+            triggered: true,
+            recommendation: "reduce retries and DLQ pending count",
+            evidence: {
+              failedCount: 2,
+              pendingDlqCount: 1
+            }
+          },
+          {
+            key: "payment_compliance_review",
+            title: "Payment compliance review",
+            status: paymentComplianceRequired ? "ready" : "watch",
+            triggered: paymentComplianceRequired !== true,
+            recommendation: "confirm payment compliance gate before service split",
+            evidence: {
+              paymentComplianceRequired,
+              reviewNote,
+              updatedBy: splitReviewState.updatedBy,
+              updatedAt: splitReviewState.updatedAt
+            }
+          }
+        ]
+      });
+    }
+
+    if (pathname === "/api/debate/ops/observability/split-readiness/reviews" && request.method() === "GET") {
+      const limitRaw = Number(requestUrl.searchParams.get("limit") || 3);
+      const offsetRaw = Number(requestUrl.searchParams.get("offset") || 0);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.floor(limitRaw)) : 3;
+      const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+      const sliced = splitReviewAudits.slice(offset, offset + limit);
+      return json(route, 200, {
+        total: splitReviewAudits.length,
+        limit,
+        offset,
+        items: sliced
       });
     }
 
@@ -1121,6 +1235,12 @@ test("@smoke ops console should show rbac and support role upsert/revoke", async
   await expect(page.getByText("Ops evaluation dry-run: raised=0, cleared=0, suppressed=1.")).toBeVisible();
   await page.getByRole("button", { name: "Evaluate Once" }).click();
   await expect(page.getByText("Ops evaluation run: raised=1, cleared=0, suppressed=1.")).toBeVisible();
+  await page.getByLabel("Split Review Payment Compliance").selectOption("required");
+  await page.getByLabel("Split Review Note").fill("manual compliance review passed");
+  await page.getByRole("button", { name: "Save Split Review" }).click();
+  await expect(page.getByText("Split readiness review updated.")).toBeVisible();
+  await expect(page.getByText("#9003 | compliance: required | by #10 | note: manual compliance review passed")).toBeVisible();
+  await expect(page.getByText(/note: manual compliance review passed/)).toBeVisible();
 });
 
 test("@auth-error pin should show insufficient wallet balance error", async ({ page }) => {
@@ -1223,6 +1343,22 @@ test("@auth-error ops evaluate-once should show bad-request grade when backend r
   ).toBeVisible();
 });
 
+test("@auth-error ops split review save should show permission error when backend rejects", async ({ page }) => {
+  await page.route("**/api/debate/ops/observability/split-readiness/review", async (route) => {
+    await json(route, 409, { error: "ops_permission_denied:judge_review:split_review_update" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+  await expect(page).toHaveURL(/\/ops$/);
+  await page.getByLabel("Split Review Payment Compliance").selectOption("required");
+  await page.getByLabel("Split Review Note").fill("attempt update with denied permission");
+  await page.getByRole("button", { name: "Save Split Review" }).click();
+  await expect(page.getByText("ops_permission_denied:judge_review:split_review_update").first()).toBeVisible();
+});
+
 test("@auth-error ops console should aggregate observability multi-endpoint failures", async ({ page }) => {
   await page.route("**/api/debate/ops/observability/slo**", async (route) => {
     await json(route, 409, { error: "ops_permission_denied:judge_review:slo" });
@@ -1230,7 +1366,7 @@ test("@auth-error ops console should aggregate observability multi-endpoint fail
   await page.route("**/api/debate/ops/observability/metrics-dictionary**", async (route) => {
     await json(route, 500, { error: "metrics_dictionary_unavailable" });
   });
-  await page.route("**/api/debate/ops/observability/split-readiness**", async (route) => {
+  await page.route("**/api/debate/ops/observability/split-readiness", async (route) => {
     await json(route, 503, { error: "split_readiness_unavailable" });
   });
 
@@ -1243,7 +1379,7 @@ test("@auth-error ops console should aggregate observability multi-endpoint fail
   await expect(page.getByText("Observability snapshot partially unavailable (3 errors).")).toBeVisible();
   await expect(page.getByText("ops_permission_denied:judge_review:slo")).toBeVisible();
   await expect(page.getByText("metrics_dictionary_unavailable")).toBeVisible();
-  await expect(page.getByText("split_readiness_unavailable")).toBeVisible();
+  await expect(page.getByText("split_readiness_unavailable").first()).toBeVisible();
 });
 
 test("@auth-error ops console should cap and truncate observability error details", async ({ page }) => {
@@ -1258,7 +1394,7 @@ test("@auth-error ops console should cap and truncate observability error detail
   await page.route("**/api/debate/ops/observability/metrics-dictionary**", async (route) => {
     await json(route, 500, { error: "metrics_dictionary_unavailable" });
   });
-  await page.route("**/api/debate/ops/observability/split-readiness**", async (route) => {
+  await page.route("**/api/debate/ops/observability/split-readiness", async (route) => {
     await json(route, 503, { error: "split_readiness_unavailable" });
   });
   await page.route("**/api/debate/ops/observability/alerts**", async (route) => {
@@ -1274,7 +1410,7 @@ test("@auth-error ops console should cap and truncate observability error detail
   await expect(page.getByText("Observability snapshot partially unavailable (5 errors).")).toBeVisible();
   await expect(page.getByText("ops_permission_denied:judge_review:slo")).toBeVisible();
   await expect(page.getByText("metrics_dictionary_unavailable")).toBeVisible();
-  await expect(page.getByText("split_readiness_unavailable")).toBeVisible();
+  await expect(page.getByText("split_readiness_unavailable").first()).toBeVisible();
   await expect(page.getByText("1 more errors hidden.")).toBeVisible();
   await expect(page.getByText(longConfigError)).toHaveCount(0);
   await expect(page.getByText(/obs_config_error_long_prefix_x+/)).toBeVisible();

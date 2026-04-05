@@ -127,6 +127,26 @@ export type GetOpsServiceSplitReadinessOutput = {
   thresholds: OpsServiceSplitThresholdItem[];
 };
 
+export type UpsertOpsServiceSplitReviewInput = {
+  paymentComplianceRequired?: boolean | null;
+  reviewNote?: string | null;
+};
+
+export type OpsServiceSplitReviewAuditItem = {
+  id: number;
+  paymentComplianceRequired?: boolean | null;
+  reviewNote: string;
+  updatedBy: number;
+  createdAt: string;
+};
+
+export type ListOpsServiceSplitReviewAuditsOutput = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: OpsServiceSplitReviewAuditItem[];
+};
+
 export type OpsAlertNotificationItem = {
   id: number;
   alertKey: string;
@@ -256,6 +276,35 @@ export async function getOpsSloSnapshot(): Promise<GetOpsSloSnapshotOutput> {
 
 export async function getOpsServiceSplitReadiness(): Promise<GetOpsServiceSplitReadinessOutput> {
   const response = await http.get<GetOpsServiceSplitReadinessOutput>("/debate/ops/observability/split-readiness");
+  return response.data;
+}
+
+export async function upsertOpsServiceSplitReview(
+  input: UpsertOpsServiceSplitReviewInput
+): Promise<GetOpsServiceSplitReadinessOutput> {
+  const response = await http.put<GetOpsServiceSplitReadinessOutput>(
+    "/debate/ops/observability/split-readiness/review",
+    {
+      paymentComplianceRequired: input.paymentComplianceRequired ?? null,
+      reviewNote: input.reviewNote ?? null
+    }
+  );
+  return response.data;
+}
+
+export async function listOpsServiceSplitReviewAudits(input?: {
+  limit?: number;
+  offset?: number;
+}): Promise<ListOpsServiceSplitReviewAuditsOutput> {
+  const response = await http.get<ListOpsServiceSplitReviewAuditsOutput>(
+    "/debate/ops/observability/split-readiness/reviews",
+    {
+      params: {
+        limit: input?.limit ?? 3,
+        offset: input?.offset ?? 0
+      }
+    }
+  );
   return response.data;
 }
 
