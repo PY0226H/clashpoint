@@ -55,7 +55,33 @@ async fn join_debate_session_should_reject_invalid_side() -> Result<()> {
         )
         .await
         .expect_err("invalid side should fail");
-    assert!(matches!(err, AppError::DebateError(_)));
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_join_invalid_side"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_debate_session_should_normalize_side_input() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+
+    let output = state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: " PRO ".to_string(),
+            },
+        )
+        .await?;
+    assert_eq!(output.side, "pro");
+    assert!(output.newly_joined);
     Ok(())
 }
 
@@ -88,7 +114,10 @@ async fn join_debate_session_should_reject_side_switch() -> Result<()> {
         )
         .await
         .expect_err("side switch should fail");
-    assert!(matches!(err, AppError::DebateConflict(_)));
+    assert!(matches!(
+        err,
+        AppError::DebateConflict(ref code) if code == "debate_join_side_conflict"
+    ));
     Ok(())
 }
 
@@ -126,7 +155,10 @@ async fn join_debate_session_should_reject_future_open_session() -> Result<()> {
         )
         .await
         .expect_err("future open session should not be joinable");
-    assert!(matches!(err, AppError::DebateConflict(_)));
+    assert!(matches!(
+        err,
+        AppError::DebateConflict(ref code) if code == "debate_join_not_open_yet"
+    ));
     Ok(())
 }
 

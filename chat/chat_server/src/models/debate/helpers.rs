@@ -28,6 +28,16 @@ pub(super) fn valid_join_side(side: &str) -> bool {
     matches!(side, "pro" | "con")
 }
 
+pub(super) fn normalize_join_side(raw: &str) -> Result<String, AppError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if valid_join_side(&normalized) {
+        return Ok(normalized);
+    }
+    Err(AppError::ValidationError(
+        "debate_join_invalid_side".to_string(),
+    ))
+}
+
 pub(super) fn can_join_status(status: &str) -> bool {
     matches!(status, "open" | "running")
 }

@@ -16,10 +16,10 @@ mod ops;
 use helpers::{
     build_phase_trigger_idempotency_key, build_phase_trigger_trace_id, can_join_status,
     can_spectate_status, evaluate_phase_trigger_checkpoint, normalize_debate_message_limit,
-    normalize_debate_pin_limit, normalize_limit, normalize_list_session_status,
-    normalize_message_content, normalize_ops_manage_session_status, normalize_ops_session_status,
-    normalize_ops_topic_field, normalize_pin_seconds, normalize_topic_category,
-    normalize_topic_category_filter, pin_cost_coins, valid_join_side,
+    normalize_debate_pin_limit, normalize_join_side, normalize_limit,
+    normalize_list_session_status, normalize_message_content, normalize_ops_manage_session_status,
+    normalize_ops_session_status, normalize_ops_topic_field, normalize_pin_seconds,
+    normalize_topic_category, normalize_topic_category_filter, pin_cost_coins,
     validate_list_debate_sessions_time_range,
 };
 
@@ -44,6 +44,12 @@ const JUDGE_PHASE_POLICY_VERSION: &str = "v3-default";
 const DEBATE_TOPICS_EMPTY_REVISION: &str = "empty";
 const DEBATE_SESSIONS_EMPTY_REVISION: &str = "empty";
 const DEBATE_SESSIONS_MAX_WINDOW_DAYS: i64 = 90;
+const DEBATE_JOIN_LOCK_TIMEOUT_MS: i64 = 250;
+const DEBATE_JOIN_CONFLICT_NOT_OPEN_YET: &str = "debate_join_not_open_yet";
+const DEBATE_JOIN_CONFLICT_SESSION_CLOSED: &str = "debate_join_session_closed";
+const DEBATE_JOIN_CONFLICT_SIDE_FULL: &str = "debate_join_side_full";
+const DEBATE_JOIN_CONFLICT_SIDE_CONFLICT: &str = "debate_join_side_conflict";
+const DEBATE_JOIN_CONFLICT_LOCK_TIMEOUT: &str = "debate_join_lock_timeout";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,6 +261,7 @@ struct DebateSessionForJoin {
     max_participants_per_side: i32,
     pro_count: i32,
     con_count: i32,
+    db_now: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow)]
@@ -378,6 +385,21 @@ fn decode_list_debate_sessions_cursor(raw: &str) -> Result<ListDebateSessionsCur
         scheduled_start_at,
         id,
     })
+}
+
+fn map_join_lock_sqlx_error(err: sqlx::Error, session_id: u64) -> AppError {
+    if let sqlx::Error::Database(db_err) = &err {
+        let code = db_err.code().map(|v| v.to_string()).unwrap_or_default();
+        if matches!(code.as_str(), "55P03" | "57014") {
+            warn!(
+                session_id,
+                sql_state = code.as_str(),
+                "join debate session failed due to lock timeout/lock unavailable"
+            );
+            return AppError::DebateConflict(DEBATE_JOIN_CONFLICT_LOCK_TIMEOUT.to_string());
+        }
+    }
+    err.into()
 }
 
 const JUDGING_CLOSE_GRACE_SECONDS: i64 = 30;
@@ -559,41 +581,42 @@ impl AppState {
         user: &User,
         input: JoinDebateSessionInput,
     ) -> Result<JoinDebateSessionOutput, AppError> {
-        if !valid_join_side(&input.side) {
-            return Err(AppError::DebateError(format!(
-                "invalid side: {}, expect `pro` or `con`",
-                input.side
-            )));
-        }
+        let normalized_side = normalize_join_side(&input.side)?;
 
         let mut tx = self.pool.begin().await?;
+        let lock_timeout = format!("{}ms", DEBATE_JOIN_LOCK_TIMEOUT_MS);
+        sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+            .bind(&lock_timeout)
+            .execute(&mut *tx)
+            .await?;
 
         let Some(session) = sqlx::query_as::<_, DebateSessionForJoin>(
             r#"
-            SELECT status, scheduled_start_at, end_at, max_participants_per_side, pro_count, con_count
+            SELECT status, scheduled_start_at, end_at, max_participants_per_side, pro_count, con_count, NOW() AS db_now
             FROM debate_sessions
             WHERE id = $1
-            FOR UPDATE
+            FOR UPDATE NOWAIT
             "#,
         )
         .bind(session_id as i64)
         .fetch_optional(&mut *tx)
-        .await?
+        .await
+        .map_err(|err| map_join_lock_sqlx_error(err, session_id))?
         else {
             return Err(AppError::NotFound(format!(
                 "debate session id {session_id}"
             )));
         };
 
-        let now = Utc::now();
-        if !can_join_status(&session.status)
-            || session.scheduled_start_at > now
-            || session.end_at <= now
-        {
-            return Err(AppError::DebateConflict(format!(
-                "session {} is not joinable now",
-                session_id
-            )));
+        if session.scheduled_start_at > session.db_now || session.status == "scheduled" {
+            return Err(AppError::DebateConflict(
+                DEBATE_JOIN_CONFLICT_NOT_OPEN_YET.to_string(),
+            ));
+        }
+        if !can_join_status(&session.status) || session.end_at <= session.db_now {
+            return Err(AppError::DebateConflict(
+                DEBATE_JOIN_CONFLICT_SESSION_CLOSED.to_string(),
+            ));
         }
 
         let existing: Option<(String,)> = sqlx::query_as(
@@ -609,32 +632,29 @@ impl AppState {
         .await?;
 
         if let Some((side,)) = existing {
-            if side == input.side {
+            if side.eq_ignore_ascii_case(&normalized_side) {
                 return Ok(JoinDebateSessionOutput {
                     session_id,
-                    side,
+                    side: normalized_side,
                     newly_joined: false,
                     pro_count: session.pro_count,
                     con_count: session.con_count,
                 });
             }
-            return Err(AppError::DebateConflict(format!(
-                "already joined side {}, cannot switch side in session {}",
-                side, session_id
-            )));
+            return Err(AppError::DebateConflict(
+                DEBATE_JOIN_CONFLICT_SIDE_CONFLICT.to_string(),
+            ));
         }
 
-        if input.side == "pro" && session.pro_count >= session.max_participants_per_side {
-            return Err(AppError::DebateConflict(format!(
-                "pro side is full in session {}",
-                session_id
-            )));
+        if normalized_side == "pro" && session.pro_count >= session.max_participants_per_side {
+            return Err(AppError::DebateConflict(
+                DEBATE_JOIN_CONFLICT_SIDE_FULL.to_string(),
+            ));
         }
-        if input.side == "con" && session.con_count >= session.max_participants_per_side {
-            return Err(AppError::DebateConflict(format!(
-                "con side is full in session {}",
-                session_id
-            )));
+        if normalized_side == "con" && session.con_count >= session.max_participants_per_side {
+            return Err(AppError::DebateConflict(
+                DEBATE_JOIN_CONFLICT_SIDE_FULL.to_string(),
+            ));
         }
 
         sqlx::query(
@@ -645,11 +665,11 @@ impl AppState {
         )
         .bind(session_id as i64)
         .bind(user.id)
-        .bind(&input.side)
+        .bind(&normalized_side)
         .execute(&mut *tx)
         .await?;
 
-        let (pro_count, con_count): (i32, i32) = if input.side == "pro" {
+        let (pro_count, con_count): (i32, i32) = if normalized_side == "pro" {
             sqlx::query_as(
                 r#"
                 UPDATE debate_sessions
@@ -681,17 +701,27 @@ impl AppState {
                 DomainEvent::DebateParticipantJoined(DebateParticipantJoinedEvent {
                     session_id,
                     user_id: user.id as u64,
-                    side: input.side.clone(),
+                    side: normalized_side.clone(),
                     pro_count,
                     con_count,
                 }),
             )
-            .await?;
+            .await
+            .map_err(|err| {
+                warn!(
+                    session_id,
+                    user_id = user.id,
+                    side = normalized_side.as_str(),
+                    "debate join outbox enqueue failed: {}",
+                    err
+                );
+                AppError::ServerError("debate_join_outbox_enqueue_failed".to_string())
+            })?;
         tx.commit().await?;
 
         Ok(JoinDebateSessionOutput {
             session_id,
-            side: input.side,
+            side: normalized_side,
             newly_joined: true,
             pro_count,
             con_count,
