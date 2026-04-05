@@ -19,7 +19,7 @@ use helpers::{
     normalize_debate_pin_limit, normalize_join_side, normalize_limit,
     normalize_list_session_status, normalize_message_content, normalize_ops_manage_session_status,
     normalize_ops_session_status, normalize_ops_topic_field, normalize_pin_seconds,
-    normalize_topic_category, normalize_topic_category_filter, pin_cost_coins,
+    normalize_topic_category, normalize_topic_category_filter, pin_cost_coins, safe_u64_to_i64,
     validate_list_debate_sessions_time_range,
 };
 
@@ -50,6 +50,11 @@ const DEBATE_JOIN_CONFLICT_SESSION_CLOSED: &str = "debate_join_session_closed";
 const DEBATE_JOIN_CONFLICT_SIDE_FULL: &str = "debate_join_side_full";
 const DEBATE_JOIN_CONFLICT_SIDE_CONFLICT: &str = "debate_join_side_conflict";
 const DEBATE_JOIN_CONFLICT_LOCK_TIMEOUT: &str = "debate_join_lock_timeout";
+const DEBATE_MESSAGE_CONFLICT_SESSION_NOT_ACCEPTING: &str = "debate_message_session_not_accepting";
+const DEBATE_MESSAGE_CONFLICT_NOT_JOINED: &str = "debate_message_not_joined";
+const DEBATE_MESSAGE_CONTENT_EMPTY: &str = "debate_message_content_empty";
+const DEBATE_MESSAGE_CONTENT_TOO_LONG: &str = "debate_message_content_too_long";
+const DEBATE_MESSAGE_OUTBOX_ENQUEUE_FAILED: &str = "debate_message_outbox_enqueue_failed";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -206,6 +211,15 @@ pub struct CreateDebateMessageInput {
 pub struct ListDebateMessages {
     pub last_id: Option<u64>,
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDebateMessagesOutput {
+    pub items: Vec<DebateMessage>,
+    pub has_more: bool,
+    pub next_cursor: Option<u64>,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]

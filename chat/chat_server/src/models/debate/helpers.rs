@@ -1,5 +1,6 @@
 use super::{
-    AppError, DEBATE_MESSAGE_DEFAULT_LIMIT, DEBATE_MESSAGE_MAX_LEN, DEBATE_MESSAGE_MAX_LIMIT,
+    AppError, DEBATE_MESSAGE_CONTENT_EMPTY, DEBATE_MESSAGE_CONTENT_TOO_LONG,
+    DEBATE_MESSAGE_DEFAULT_LIMIT, DEBATE_MESSAGE_MAX_LEN, DEBATE_MESSAGE_MAX_LIMIT,
     DEBATE_PIN_DEFAULT_LIMIT, DEBATE_PIN_MAX_LIMIT, DEFAULT_LIMIT, MAX_LIMIT,
     PIN_BILLING_UNIT_SECONDS, PIN_COST_PER_UNIT_COINS, PIN_MAX_SECONDS, PIN_MIN_SECONDS,
 };
@@ -8,6 +9,10 @@ use chrono::{DateTime, Duration, Utc};
 pub(super) fn normalize_limit(limit: Option<u64>) -> i64 {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     limit as i64
+}
+
+pub(super) fn safe_u64_to_i64(raw: u64, code: &str) -> Result<i64, AppError> {
+    i64::try_from(raw).map_err(|_| AppError::ValidationError(code.to_string()))
 }
 
 pub(super) fn normalize_debate_message_limit(limit: Option<u64>) -> i64 {
@@ -155,15 +160,15 @@ pub(super) fn validate_list_debate_sessions_time_range(
 pub(super) fn normalize_message_content(content: &str) -> Result<String, AppError> {
     let content = content.trim();
     if content.is_empty() {
-        return Err(AppError::DebateError(
-            "message content cannot be empty".to_string(),
+        return Err(AppError::ValidationError(
+            DEBATE_MESSAGE_CONTENT_EMPTY.to_string(),
         ));
     }
-    if content.len() > DEBATE_MESSAGE_MAX_LEN {
-        return Err(AppError::DebateError(format!(
-            "message content too long, max {} chars",
-            DEBATE_MESSAGE_MAX_LEN
-        )));
+    // Use Unicode scalar count to match product-facing "character length" expectation.
+    if content.chars().count() > DEBATE_MESSAGE_MAX_LEN {
+        return Err(AppError::ValidationError(
+            DEBATE_MESSAGE_CONTENT_TOO_LONG.to_string(),
+        ));
     }
     Ok(content.to_string())
 }

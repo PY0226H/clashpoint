@@ -16,10 +16,10 @@ pub use chat::{CreateChat, UpdateChat, UpdateChatMembers};
 pub use debate::{
     CreateDebateMessageInput, DebateMessage, DebatePinnedMessage, DebateSessionSummary,
     DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateMessages,
-    ListDebatePinnedMessages, ListDebateSessions, ListDebateSessionsOutput, ListDebateTopics,
-    ListDebateTopicsOutput, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, PinDebateMessageInput,
-    PinDebateMessageOutput,
+    ListDebateMessagesOutput, ListDebatePinnedMessages, ListDebateSessions,
+    ListDebateSessionsOutput, ListDebateTopics, ListDebateTopicsOutput,
+    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsUpdateDebateSessionInput,
+    OpsUpdateDebateTopicInput, PinDebateMessageInput, PinDebateMessageOutput,
 };
 pub use judge::{
     DrawVoteDetail, ExecuteJudgeReplayOpsInput, ExecuteJudgeReplayOpsOutput, GetDrawVoteOutput,

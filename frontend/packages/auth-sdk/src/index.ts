@@ -1,0 +1,239 @@
+import {
+  bindPhone as bindPhoneApi,
+  createAccessTickets,
+  refreshSession as refreshSessionApi,
+  sendSmsCode,
+  signinOtp,
+  signinPassword,
+  type AccessTicketsResponse,
+  type AccountType,
+  type AuthUser,
+  type AuthResponse,
+  type SendSmsCodeResponse,
+  setAccessToken,
+  toApiError
+} from "@echoisle/api-client";
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+let lastBootstrapToken: string | null = null;
+
+export type AccessTickets = AccessTicketsResponse & {
+  expireAt: number;
+};
+
+type AuthState = {
+  token: string | null;
+  user: AuthUser | null;
+  accessTickets: AccessTickets | null;
+  loading: boolean;
+  error: string | null;
+  clearError: () => void;
+  signInPassword: (payload: { account: string; accountType: AccountType; password: string }) => Promise<void>;
+  signInOtp: (payload: { phone: string; smsCode: string }) => Promise<void>;
+  sendSigninOtpCode: (phone: string) => Promise<SendSmsCodeResponse>;
+  sendBindSmsCode: (phone: string) => Promise<SendSmsCodeResponse>;
+  bindPhone: (payload: { phone: string; smsCode: string }) => Promise<void>;
+  refreshSession: () => Promise<string>;
+  refreshAccessTickets: (force?: boolean) => Promise<AccessTickets | null>;
+  bootstrapSession: () => Promise<void>;
+  logout: () => void;
+};
+
+function resolvePhoneBindRequired(user: AuthUser | null): boolean {
+  if (!user) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(user, "phoneBindRequired")) {
+    return Boolean(user.phoneBindRequired);
+  }
+  return !String(user.phoneE164 || "").trim();
+}
+
+export function normalizeAuthUserForPhoneGate(user: AuthUser): AuthUser {
+  return {
+    ...user,
+    phoneBindRequired: resolvePhoneBindRequired(user)
+  };
+}
+
+export function isPhoneBindRequired(user: AuthUser | null): boolean {
+  return resolvePhoneBindRequired(user);
+}
+
+function toAccessTicketsState(data: AccessTicketsResponse): AccessTickets {
+  return {
+    ...data,
+    expireAt: Date.now() + data.expiresInSecs * 1000
+  };
+}
+
+async function toSignedInState(data: AuthResponse): Promise<{ token: string; user: AuthUser; accessTickets: AccessTickets | null }> {
+  setAccessToken(data.accessToken);
+  let accessTickets: AccessTickets | null = null;
+  try {
+    accessTickets = toAccessTicketsState(await createAccessTickets());
+  } catch {
+    // Login succeeds even if ticket refresh is temporarily unavailable.
+  }
+  return {
+    token: data.accessToken,
+    user: normalizeAuthUserForPhoneGate(data.user),
+    accessTickets
+  };
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      token: null,
+      user: null,
+      accessTickets: null,
+      loading: false,
+      error: null,
+      clearError: () => set({ error: null }),
+      signInPassword: async ({ account, accountType, password }) => {
+        set({ loading: true, error: null });
+        try {
+          const data = await signinPassword({ account, accountType, password });
+          const session = await toSignedInState(data);
+          set({
+            token: session.token,
+            user: session.user,
+            accessTickets: session.accessTickets,
+            loading: false,
+            error: null
+          });
+        } catch (error) {
+          set({ loading: false, error: toApiError(error) });
+          throw error;
+        }
+      },
+      signInOtp: async ({ phone, smsCode }) => {
+        set({ loading: true, error: null });
+        try {
+          const data = await signinOtp({ phone, smsCode });
+          const session = await toSignedInState(data);
+          set({
+            token: session.token,
+            user: session.user,
+            accessTickets: session.accessTickets,
+            loading: false,
+            error: null
+          });
+        } catch (error) {
+          set({ loading: false, error: toApiError(error) });
+          throw error;
+        }
+      },
+      sendSigninOtpCode: async (phone) => {
+        set({ error: null });
+        try {
+          return await sendSmsCode({
+            phone,
+            scene: "signin_phone_otp"
+          });
+        } catch (error) {
+          set({ error: toApiError(error) });
+          throw error;
+        }
+      },
+      sendBindSmsCode: async (phone) => {
+        set({ error: null });
+        try {
+          return await sendSmsCode({
+            phone,
+            scene: "bind_phone"
+          });
+        } catch (error) {
+          set({ error: toApiError(error) });
+          throw error;
+        }
+      },
+      bindPhone: async ({ phone, smsCode }) => {
+        set({ loading: true, error: null });
+        try {
+          const result = await bindPhoneApi({ phone, smsCode });
+          const normalized = normalizeAuthUserForPhoneGate({
+            ...result.user,
+            phoneBindRequired: false
+          });
+          set({ user: normalized, loading: false, error: null });
+        } catch (error) {
+          set({ loading: false, error: toApiError(error) });
+          throw error;
+        }
+      },
+      refreshSession: async () => {
+        const token = get().token;
+        if (!token) {
+          throw new Error("missing access token for refresh");
+        }
+        try {
+          const refreshed = await refreshSessionApi();
+          setAccessToken(refreshed.accessToken);
+          set({ token: refreshed.accessToken, error: null });
+          await get().refreshAccessTickets(true);
+          return refreshed.accessToken;
+        } catch (error) {
+          set({ error: toApiError(error) });
+          throw error;
+        }
+      },
+      refreshAccessTickets: async (force = false) => {
+        const token = get().token;
+        if (!token) {
+          set({ accessTickets: null });
+          return null;
+        }
+        const current = get().accessTickets;
+        if (!force && current && current.expireAt > Date.now() + 30_000) {
+          return current;
+        }
+        try {
+          const next = toAccessTicketsState(await createAccessTickets());
+          set({ accessTickets: next, error: null });
+          return next;
+        } catch (error) {
+          set({ error: toApiError(error) });
+          throw error;
+        }
+      },
+      bootstrapSession: async () => {
+        const token = get().token;
+        if (!token || token === lastBootstrapToken) {
+          return;
+        }
+        lastBootstrapToken = token;
+        set({ loading: true, error: null });
+        try {
+          await get().refreshSession();
+        } catch {
+          get().logout();
+        } finally {
+          set({ loading: false });
+        }
+      },
+      logout: () => {
+        lastBootstrapToken = null;
+        setAccessToken(null);
+        set({ token: null, user: null, accessTickets: null, error: null, loading: false });
+      }
+    }),
+    {
+      name: "echoisle-react-auth",
+      partialize: (state) => ({
+        token: state.token,
+        user: state.user,
+        accessTickets: state.accessTickets
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state?.token) {
+          setAccessToken(state.token);
+          return;
+        }
+        setAccessToken(null);
+      }
+    }
+  )
+);

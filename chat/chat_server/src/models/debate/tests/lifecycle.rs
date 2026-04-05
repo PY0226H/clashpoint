@@ -236,3 +236,14 @@ fn normalize_debate_pin_limit_should_clamp_range() {
         DEBATE_PIN_MAX_LIMIT as i64
     );
 }
+
+#[test]
+fn safe_u64_to_i64_should_reject_out_of_range_values() {
+    assert_eq!(safe_u64_to_i64(42, "demo").expect("convert"), 42);
+    let err = safe_u64_to_i64(u64::MAX, "debate_messages_invalid_last_id")
+        .expect_err("overflow must fail");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_messages_invalid_last_id"
+    ));
+}

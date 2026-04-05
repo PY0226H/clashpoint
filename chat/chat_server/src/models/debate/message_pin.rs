@@ -9,18 +9,47 @@ impl AppState {
         user: &User,
         input: CreateDebateMessageInput,
     ) -> Result<DebateMessage, AppError> {
+        let (msg, _, _) = self
+            .create_debate_message_with_meta(session_id, user, input, None)
+            .await?;
+        Ok(msg)
+    }
+
+    pub async fn create_debate_message_with_meta(
+        &self,
+        session_id: u64,
+        user: &User,
+        input: CreateDebateMessageInput,
+        idempotency_key: Option<&str>,
+    ) -> Result<(DebateMessage, bool, bool), AppError> {
         let content = normalize_message_content(&input.content)?;
+        let session_id_i64 = safe_u64_to_i64(session_id, "debate_message_invalid_session_id")?;
         let mut tx = self.pool.begin().await?;
 
+        if let Some(key) = idempotency_key {
+            let lock_key = format!("debate_message:{}:{}:{}", session_id_i64, user.id, key);
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&lock_key)
+                .execute(&mut *tx)
+                .await?;
+            if let Some(existing_id) = self
+                .load_debate_message_idempotency_row(&mut tx, session_id_i64, user.id, key)
+                .await?
+            {
+                let existing = self.load_debate_message_by_id(&mut tx, existing_id).await?;
+                tx.commit().await?;
+                return Ok((existing, true, false));
+            }
+        }
+
         let session = self
-            .load_session_for_action(&mut tx, session_id as i64)
+            .load_session_for_action(&mut tx, session_id_i64)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
         if !can_join_status(&session.status) || session.end_at <= Utc::now() {
-            return Err(AppError::DebateConflict(format!(
-                "session {} is not accepting messages now",
-                session_id
-            )));
+            return Err(AppError::DebateConflict(
+                DEBATE_MESSAGE_CONFLICT_SESSION_NOT_ACCEPTING.to_string(),
+            ));
         }
 
         let participant_side: Option<(String,)> = sqlx::query_as(
@@ -30,15 +59,14 @@ impl AppState {
             WHERE session_id = $1 AND user_id = $2
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .bind(user.id)
         .fetch_optional(&mut *tx)
         .await?;
         let Some((side,)) = participant_side else {
-            return Err(AppError::DebateConflict(format!(
-                "user {} has not joined session {}",
-                user.id, session_id
-            )));
+            return Err(AppError::DebateConflict(
+                DEBATE_MESSAGE_CONFLICT_NOT_JOINED.to_string(),
+            ));
         };
 
         let msg: DebateMessage = sqlx::query_as(
@@ -48,23 +76,55 @@ impl AppState {
             RETURNING id, session_id, user_id, side, content, created_at
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .bind(user.id)
         .bind(side)
         .bind(content)
         .fetch_one(&mut *tx)
         .await?;
 
-        sqlx::query(
+        let message_count_after: i64 = sqlx::query_scalar(
             r#"
             UPDATE debate_sessions
-            SET hot_score = hot_score + 1, updated_at = NOW()
+            SET message_count = message_count + 1, updated_at = NOW()
             WHERE id = $1
+            RETURNING message_count::bigint
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO debate_session_hot_score_deltas(session_id, delta, updated_at)
+            VALUES ($1, 1, NOW())
+            ON CONFLICT (session_id)
+            DO UPDATE SET
+              delta = debate_session_hot_score_deltas.delta + 1,
+              updated_at = NOW()
+            "#,
+        )
+        .bind(session_id_i64)
         .execute(&mut *tx)
         .await?;
+
+        if let Some(key) = idempotency_key {
+            sqlx::query(
+                r#"
+                INSERT INTO debate_message_idempotency_keys(
+                    session_id, user_id, idempotency_key, message_id, created_at
+                )
+                VALUES ($1, $2, $3, $4, NOW())
+                "#,
+            )
+            .bind(session_id_i64)
+            .bind(user.id)
+            .bind(key)
+            .bind(msg.id)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         self.event_bus
             .enqueue_in_tx(
@@ -78,11 +138,21 @@ impl AppState {
                     created_at: msg.created_at,
                 }),
             )
-            .await?;
+            .await
+            .map_err(|err| {
+                tracing::warn!(
+                    session_id = msg.session_id,
+                    message_id = msg.id,
+                    user_id = user.id,
+                    "debate message outbox enqueue failed: {}",
+                    err
+                );
+                AppError::ServerError(DEBATE_MESSAGE_OUTBOX_ENQUEUE_FAILED.to_string())
+            })?;
 
         tx.commit().await?;
-        if let Err(err) = self
-            .maybe_log_phase_trigger_checkpoint(msg.session_id, msg.id)
+        let phase_checkpoint_hit = if let Err(err) = self
+            .maybe_log_phase_trigger_checkpoint(msg.session_id, msg.id, message_count_after)
             .await
         {
             tracing::warn!(
@@ -91,26 +161,20 @@ impl AppState {
                 "evaluate phase trigger checkpoint failed: {}",
                 err
             );
-        }
-        Ok(msg)
+            false
+        } else {
+            evaluate_phase_trigger_checkpoint(message_count_after, JUDGE_PHASE_WINDOW_SIZE)
+                .is_some()
+        };
+        Ok((msg, false, phase_checkpoint_hit))
     }
 
     async fn maybe_log_phase_trigger_checkpoint(
         &self,
         session_id: i64,
         latest_message_id: i64,
+        message_count: i64,
     ) -> Result<(), AppError> {
-        let message_count: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(1)
-            FROM session_messages
-            WHERE session_id = $1
-            "#,
-        )
-        .bind(session_id)
-        .fetch_one(&self.pool)
-        .await?;
-
         let Some(checkpoint) =
             evaluate_phase_trigger_checkpoint(message_count, JUDGE_PHASE_WINDOW_SIZE)
         else {
@@ -145,6 +209,96 @@ impl AppState {
         )
         .await?;
         Ok(())
+    }
+
+    async fn load_debate_message_idempotency_row(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: i64,
+        user_id: i64,
+        idempotency_key: &str,
+    ) -> Result<Option<i64>, AppError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT message_id
+            FROM debate_message_idempotency_keys
+            WHERE session_id = $1
+              AND user_id = $2
+              AND idempotency_key = $3
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.map(|v| v.0))
+    }
+
+    async fn load_debate_message_by_id(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        message_id: i64,
+    ) -> Result<DebateMessage, AppError> {
+        let row: DebateMessage = sqlx::query_as(
+            r#"
+            SELECT id, session_id, user_id, side, content, created_at
+            FROM session_messages
+            WHERE id = $1
+            "#,
+        )
+        .bind(message_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row)
+    }
+
+    pub(crate) async fn flush_debate_session_hot_score_deltas_once(
+        &self,
+        batch_size: i64,
+    ) -> Result<u64, AppError> {
+        let batch_size = batch_size.max(1);
+        let mut tx = self.pool.begin().await?;
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            r#"
+            SELECT session_id, delta
+            FROM debate_session_hot_score_deltas
+            ORDER BY updated_at ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .bind(batch_size)
+        .fetch_all(&mut *tx)
+        .await?;
+        if rows.is_empty() {
+            tx.commit().await?;
+            return Ok(0);
+        }
+        for (session_id, delta) in rows.iter() {
+            let delta_i32 = i32::try_from(*delta).map_err(|_| {
+                AppError::DebateError(format!("invalid hot score delta overflow: {}", delta))
+            })?;
+            sqlx::query(
+                r#"
+                UPDATE debate_sessions
+                SET hot_score = hot_score + $2::int,
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(*session_id)
+            .bind(delta_i32)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let ids: Vec<i64> = rows.iter().map(|(session_id, _)| *session_id).collect();
+        sqlx::query("DELETE FROM debate_session_hot_score_deltas WHERE session_id = ANY($1)")
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(rows.len() as u64)
     }
 
     async fn enqueue_judge_phase_job(
@@ -227,13 +381,24 @@ impl AppState {
         session_id: u64,
         user: &User,
         input: ListDebateMessages,
-    ) -> Result<Vec<DebateMessage>, AppError> {
+    ) -> Result<ListDebateMessagesOutput, AppError> {
+        let session_id_i64 = safe_u64_to_i64(session_id, "debate_messages_invalid_session_id")?;
+        let last_id_i64 = input
+            .last_id
+            .map(|raw| safe_u64_to_i64(raw, "debate_messages_invalid_last_id"))
+            .transpose()?;
+        let normalized_limit = normalize_debate_message_limit(input.limit);
+        let effective_limit = normalized_limit as usize;
+
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
         let session = self
-            .load_session_for_action(&mut tx, session_id as i64)
+            .load_session_for_action(&mut tx, session_id_i64)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
-        self.ensure_debate_session_readable(&mut tx, session_id as i64, user, &session.status)
+        self.ensure_debate_session_readable(&mut tx, session_id_i64, user, &session.status)
             .await?;
 
         let mut rows: Vec<DebateMessage> = sqlx::query_as(
@@ -246,15 +411,40 @@ impl AppState {
             LIMIT $3
             "#,
         )
-        .bind(session_id as i64)
-        .bind(input.last_id.map(|v| v as i64))
-        .bind(normalize_debate_message_limit(input.limit))
+        .bind(session_id_i64)
+        .bind(last_id_i64)
+        .bind(normalized_limit + 1)
         .fetch_all(&mut *tx)
+        .await?;
+
+        let has_more = rows.len() > effective_limit;
+        if has_more {
+            rows.truncate(effective_limit);
+        }
+        let next_cursor = if has_more {
+            rows.last().and_then(|msg| u64::try_from(msg.id).ok())
+        } else {
+            None
+        };
+        let latest_message_id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(id), 0)
+            FROM session_messages
+            WHERE session_id = $1
+            "#,
+        )
+        .bind(session_id_i64)
+        .fetch_one(&mut *tx)
         .await?;
 
         tx.commit().await?;
         rows.reverse();
-        Ok(rows)
+        Ok(ListDebateMessagesOutput {
+            items: rows,
+            has_more,
+            next_cursor,
+            revision: latest_message_id.to_string(),
+        })
     }
 
     pub async fn list_debate_pinned_messages(
@@ -538,6 +728,10 @@ impl AppState {
         user: &User,
         session_status: &str,
     ) -> Result<(), AppError> {
+        if can_spectate_status(session_status) {
+            return Ok(());
+        }
+
         let participant: Option<(i64,)> = sqlx::query_as(
             r#"
             SELECT user_id
@@ -552,14 +746,10 @@ impl AppState {
         if participant.is_some() {
             return Ok(());
         }
-        if can_spectate_status(session_status) {
-            return Ok(());
-        }
 
-        Err(AppError::DebateConflict(format!(
-            "user {} has not joined session {}",
-            user.id, session_id
-        )))
+        Err(AppError::DebateConflict(
+            "debate_messages_read_forbidden".to_string(),
+        ))
     }
 
     async fn load_existing_pin_by_idempotency(

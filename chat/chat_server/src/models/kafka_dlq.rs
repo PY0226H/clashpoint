@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
+use std::collections::BTreeSet;
 use utoipa::{IntoParams, ToSchema};
 
 const DLQ_STATUS_PENDING: &str = "pending";
@@ -102,6 +103,9 @@ pub struct KafkaConsumerRuntimeMetricsSnapshotOutput {
 pub struct GetKafkaTransportReadinessOutput {
     pub ready_to_switch: bool,
     pub kafka_enabled: bool,
+    pub chat_ingress_mode: String,
+    pub notify_ingress_modes: Vec<String>,
+    pub notify_ingress_mode_mismatch: bool,
     pub outbox_relay_worker_enabled: bool,
     pub consumer_worker_enabled: bool,
     pub consumer_business_logic_ready: bool,
@@ -303,6 +307,16 @@ impl AppState {
         let now = Utc::now();
         let (notify_consume_chain_ready, notify_chain_blockers) =
             evaluate_notify_consume_chain_runtime(&notify_runtime_signals, now);
+        let chat_ingress_mode = if kafka_enabled {
+            "kafka-only".to_string()
+        } else {
+            "pg-only".to_string()
+        };
+        let notify_ingress_modes = collect_notify_ingress_modes(&notify_runtime_signals);
+        let notify_ingress_mode_mismatch = evaluate_notify_ingress_mode_mismatch(
+            chat_ingress_mode.as_str(),
+            &notify_ingress_modes,
+        );
         let pending_dlq_count = dlq_runtime.pending_dlq_count.max(0) as u64;
         let recent_dlq_replay_action_count =
             dlq_runtime.recent_dlq_replay_action_count.max(0) as u64;
@@ -359,6 +373,13 @@ impl AppState {
         if !consumer_business_logic_ready {
             blockers.push("consumer business logic handler is empty".to_string());
         }
+        if notify_ingress_mode_mismatch {
+            blockers.push(format!(
+                "ingress mode mismatch: chat={}, notify={}",
+                chat_ingress_mode,
+                notify_ingress_modes.join(",")
+            ));
+        }
         if consumer_metrics.commit_error_total > 0 {
             blockers.push(format!(
                 "consumer commit errors detected: {}",
@@ -398,6 +419,9 @@ impl AppState {
         Ok(GetKafkaTransportReadinessOutput {
             ready_to_switch: blockers.is_empty(),
             kafka_enabled,
+            chat_ingress_mode,
+            notify_ingress_modes,
+            notify_ingress_mode_mismatch,
             outbox_relay_worker_enabled,
             consumer_worker_enabled,
             consumer_business_logic_ready,
@@ -598,6 +622,38 @@ impl AppState {
             return Err(AppError::NotFound(format!("kafka dlq event id {}", id)));
         };
         Ok(map_dlq_action_row(row))
+    }
+}
+
+fn collect_notify_ingress_modes(signals: &[NotifyRuntimeSignalRow]) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for signal in signals {
+        let mode = if signal.kafka_enabled && signal.disable_pg_listener {
+            "kafka-only"
+        } else if signal.kafka_enabled {
+            "mixed"
+        } else {
+            "pg-only"
+        };
+        set.insert(mode.to_string());
+    }
+    set.into_iter().collect()
+}
+
+fn evaluate_notify_ingress_mode_mismatch(chat_mode: &str, notify_modes: &[String]) -> bool {
+    if notify_modes.is_empty() {
+        return false;
+    }
+    if notify_modes.len() > 1 {
+        return true;
+    }
+    let Some(notify_mode) = notify_modes.first().map(String::as_str) else {
+        return false;
+    };
+    match chat_mode {
+        "kafka" => notify_mode == "pg-only",
+        "postgres" => notify_mode != "pg-only",
+        _ => notify_mode != chat_mode,
     }
 }
 
@@ -1136,6 +1192,37 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item.starts_with("notify kafka consumer commit heartbeat is stale")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_kafka_transport_readiness_should_block_on_ingress_mode_mismatch() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let now = Utc::now();
+        if state.config.kafka.enabled {
+            upsert_notify_runtime_signal_for_test(&state, false, false, None, None, None, now)
+                .await?;
+        } else {
+            upsert_notify_runtime_signal_for_test(
+                &state,
+                true,
+                true,
+                Some(now - Duration::seconds(2)),
+                Some(now - Duration::seconds(1)),
+                Some(now - Duration::seconds(1)),
+                now,
+            )
+            .await?;
+        }
+
+        let output = state.get_kafka_transport_readiness(&owner).await?;
+        assert!(output.notify_ingress_mode_mismatch);
+        assert!(!output.ready_to_switch);
+        assert!(output
+            .blockers
+            .iter()
+            .any(|item| item.starts_with("ingress mode mismatch:")));
         Ok(())
     }
 

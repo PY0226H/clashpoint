@@ -1,0 +1,33 @@
+{
+  "name": "@echoisle/app-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "echo 'app-shell: no build step'",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@echoisle/auth-sdk": "workspace:*",
+    "@echoisle/tokens": "workspace:*",
+    "@echoisle/ui": "workspace:*",
+    "@tanstack/react-query": "^5.66.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "eslint": "^9.23.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.8"
+  }
+}

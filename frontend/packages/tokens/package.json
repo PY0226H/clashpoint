@@ -1,0 +1,18 @@
+{
+  "name": "@echoisle/tokens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tokens.css": "./src/tokens.css"
+  },
+  "scripts": {
+    "build": "echo 'tokens: no build step'",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'tokens: no lint step'",
+    "test": "echo 'tokens: no tests'"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

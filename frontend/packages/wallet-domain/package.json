@@ -1,0 +1,20 @@
+{
+  "name": "@echoisle/wallet-domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "echo 'wallet-domain: no build step'",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.8"
+  }
+}

@@ -28,6 +28,7 @@ target/
 # node / frontend artifacts
 node_modules/
 **/node_modules/
+.pnpm-store/
 dist/
 **/dist/
 .cache/

@@ -1,0 +1,37 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+:root {
+  --echo-bg: #f6f4ef;
+  --echo-surface: #fffdf8;
+  --echo-surface-2: #efeae0;
+  --echo-ink: #1d222b;
+  --echo-muted: #5f6673;
+  --echo-accent: #0a7b83;
+  --echo-accent-ink: #f4fffe;
+  --echo-danger: #ad343e;
+  --echo-ok: #1f7a53;
+  --echo-border: #d9d2c3;
+  --echo-shadow: 0 24px 40px rgba(20, 35, 45, 0.08);
+  --echo-radius-sm: 10px;
+  --echo-radius-md: 16px;
+  --echo-radius-lg: 24px;
+  --echo-space-1: 6px;
+  --echo-space-2: 10px;
+  --echo-space-3: 16px;
+  --echo-space-4: 24px;
+  --echo-space-5: 36px;
+  --echo-space-6: 56px;
+  --echo-font-title: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  --echo-font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--echo-font-body);
+  color: var(--echo-ink);
+  background: radial-gradient(circle at 0 0, #fefdf7 0%, #f4f0e6 45%, #ebe6dc 100%);
+}

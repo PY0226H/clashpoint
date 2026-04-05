@@ -63,6 +63,19 @@ fn spawn_debate_session_worker(state: AppState) {
             } else {
                 debug!("debate session worker tick success");
             }
+            match state
+                .flush_debate_session_hot_score_deltas_once(batch_size)
+                .await
+            {
+                Ok(flushed) => {
+                    if flushed > 0 {
+                        debug!(flushed, "debate hot score delta flush tick success");
+                    }
+                }
+                Err(err) => {
+                    warn!("debate hot score delta flush tick failed: {}", err);
+                }
+            }
             sleep(Duration::from_secs(interval_secs)).await;
         }
     });

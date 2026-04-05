@@ -6,8 +6,8 @@ use crate::{
         release_idempotency_best_effort, try_acquire_idempotency_or_fail_open,
     },
     AppError, AppState, CreateDebateMessageInput, ErrorOutput, JoinDebateSessionInput,
-    ListDebateMessages, ListDebatePinnedMessages, ListDebateSessions, ListDebateSessionsOutput,
-    PinDebateMessageInput,
+    ListDebateMessages, ListDebateMessagesOutput, ListDebatePinnedMessages, ListDebateSessions,
+    ListDebateSessionsOutput, PinDebateMessageInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -28,6 +28,12 @@ use std::{
 
 const DEBATE_MESSAGE_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const DEBATE_MESSAGE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const DEBATE_MESSAGE_CREATE_IP_RATE_LIMIT_PER_WINDOW: u64 = 360;
+const DEBATE_MESSAGE_CREATE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const DEBATE_MESSAGE_CREATE_IDEMPOTENCY_TTL_SECS: u64 = 20;
+const DEBATE_MESSAGES_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 240;
+const DEBATE_MESSAGES_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 720;
+const DEBATE_MESSAGES_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const DEBATE_SESSIONS_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const DEBATE_SESSIONS_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 360;
 const DEBATE_SESSIONS_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
@@ -157,6 +163,125 @@ impl DebateSessionJoinMetrics {
 
 static DEBATE_SESSION_JOIN_METRICS: LazyLock<DebateSessionJoinMetrics> =
     LazyLock::new(DebateSessionJoinMetrics::default);
+
+#[derive(Default)]
+struct DebateMessagesListMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    conflict_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+}
+
+impl DebateMessagesListMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_conflict(&self) {
+        self.conflict_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.conflict_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+static DEBATE_MESSAGES_LIST_METRICS: LazyLock<DebateMessagesListMetrics> =
+    LazyLock::new(DebateMessagesListMetrics::default);
+
+#[derive(Default)]
+struct DebateMessageCreateMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    conflict_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    idempotency_conflict_total: AtomicU64,
+    idempotency_replayed_total: AtomicU64,
+    phase_checkpoint_hit_total: AtomicU64,
+    phase_checkpoint_miss_total: AtomicU64,
+    outbox_enqueue_failed_total: AtomicU64,
+}
+
+impl DebateMessageCreateMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, replayed: bool, phase_hit: bool) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        if replayed {
+            self.idempotency_replayed_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if phase_hit {
+            self.phase_checkpoint_hit_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.phase_checkpoint_miss_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn observe_failed(&self) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_conflict(&self) {
+        self.conflict_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_idempotency_conflict(&self) {
+        self.idempotency_conflict_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_outbox_enqueue_failed(&self) {
+        self.outbox_enqueue_failed_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.conflict_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+            self.idempotency_conflict_total.load(Ordering::Relaxed),
+            self.idempotency_replayed_total.load(Ordering::Relaxed),
+            self.phase_checkpoint_hit_total.load(Ordering::Relaxed),
+            self.phase_checkpoint_miss_total.load(Ordering::Relaxed),
+            self.outbox_enqueue_failed_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+static DEBATE_MESSAGE_CREATE_METRICS: LazyLock<DebateMessageCreateMetrics> =
+    LazyLock::new(DebateMessageCreateMetrics::default);
 
 /// List debate sessions in the platform scope.
 #[utoipa::path(
@@ -367,7 +492,11 @@ pub(crate) async fn join_debate_session_handler(
         ));
     }
 
-    let request_idempotency_key = request_idempotency_key_from_headers(&headers)?;
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &headers,
+        "debate_join_idempotency_key_invalid",
+        "debate_join_idempotency_key_too_long",
+    )?;
     let idempotency_lock_key = request_idempotency_key
         .as_deref()
         .map(|key| format!("u{}:s{}:{key}", user.id, id));
@@ -510,8 +639,12 @@ pub(crate) async fn join_debate_session_handler(
     responses(
         (status = 201, description = "Created message", body = crate::DebateMessage),
         (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
         (status = 409, description = "Session conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -520,9 +653,19 @@ pub(crate) async fn join_debate_session_handler(
 pub(crate) async fn create_debate_message_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    request_headers: HeaderMap,
     Path(id): Path<u64>,
     Json(input): Json<CreateDebateMessageInput>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    DEBATE_MESSAGE_CREATE_METRICS.observe_start();
+    let request_id = request_id_from_headers(&request_headers);
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &request_headers,
+        "debate_message_idempotency_key_invalid",
+        "debate_message_idempotency_key_too_long",
+    )?;
+
     let limiter_key = format!("ws:{}:user:{}:session:{}", 1_i64, user.id, id);
     let decision = enforce_rate_limit(
         &state,
@@ -532,16 +675,162 @@ pub(crate) async fn create_debate_message_handler(
         DEBATE_MESSAGE_RATE_LIMIT_WINDOW_SECS,
     )
     .await;
-    let headers = build_rate_limit_headers(&decision)?;
+    #[cfg(test)]
+    let decision = maybe_override_rate_limit_decision(&request_headers, "create_user", decision);
+    let response_headers = build_rate_limit_headers(&decision)?;
     if !decision.allowed {
+        DEBATE_MESSAGE_CREATE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            session_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "create debate message blocked by user limiter"
+        );
         return Ok(rate_limit_exceeded_response(
             "debate_message_create",
-            headers,
+            response_headers,
         ));
     }
 
-    let msg = state.create_debate_message(id, &user, input).await?;
-    Ok((StatusCode::CREATED, headers, Json(msg)).into_response())
+    let ip_limit_key = request_rate_limit_ip_key_from_headers(&request_headers)
+        .map(|v| format!("{v}:{id}"))
+        .unwrap_or_else(|| format!("unknown:{id}"));
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "debate_message_create_ip",
+        &ip_limit_key,
+        DEBATE_MESSAGE_CREATE_IP_RATE_LIMIT_PER_WINDOW,
+        DEBATE_MESSAGE_CREATE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision =
+        maybe_override_rate_limit_decision(&request_headers, "create_ip", ip_decision);
+    if !ip_decision.allowed {
+        DEBATE_MESSAGE_CREATE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            session_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "create debate message blocked by ip limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_message_create",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let idempotency_lock_key = request_idempotency_key
+        .as_ref()
+        .map(|key| format!("user:{}:session:{}:{}", user.id, id, key));
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        let acquired = try_acquire_idempotency_or_fail_open(
+            &state,
+            "debate_message_create",
+            lock_key,
+            DEBATE_MESSAGE_CREATE_IDEMPOTENCY_TTL_SECS,
+        )
+        .await;
+        if !acquired {
+            DEBATE_MESSAGE_CREATE_METRICS.observe_conflict();
+            DEBATE_MESSAGE_CREATE_METRICS.observe_idempotency_conflict();
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                decision = "idempotency_conflict",
+                "create debate message rejected by in-flight idempotency lock"
+            );
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(ErrorOutput::new(
+                    "idempotency_conflict:debate_message_create".to_string(),
+                )),
+            )
+                .into_response());
+        }
+    }
+
+    let ret = state
+        .create_debate_message_with_meta(id, &user, input, request_idempotency_key.as_deref())
+        .await;
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        release_idempotency_best_effort(&state, "debate_message_create", lock_key).await;
+    }
+    match ret {
+        Ok((msg, replayed, phase_hit)) => {
+            DEBATE_MESSAGE_CREATE_METRICS.observe_success(replayed, phase_hit);
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let (
+                request_total,
+                success_total,
+                failed_total,
+                conflict_total,
+                rate_limited_total,
+                idempotency_conflict_total,
+                idempotency_replayed_total,
+                phase_checkpoint_hit_total,
+                phase_checkpoint_miss_total,
+                outbox_enqueue_failed_total,
+            ) = DEBATE_MESSAGE_CREATE_METRICS.snapshot();
+            tracing::info!(
+                user_id = user.id,
+                session_id = id,
+                message_id = msg.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                idempotency_key_present = request_idempotency_key.is_some(),
+                idempotency_replayed = replayed,
+                phase_checkpoint_hit = phase_hit,
+                latency_ms,
+                debate_message_create_request_total = request_total,
+                debate_message_create_success_total = success_total,
+                debate_message_create_failed_total = failed_total,
+                debate_message_create_conflict_total = conflict_total,
+                debate_message_create_rate_limited_total = rate_limited_total,
+                debate_message_create_idempotency_conflict_total = idempotency_conflict_total,
+                debate_message_create_idempotency_replayed_total = idempotency_replayed_total,
+                debate_message_create_phase_checkpoint_hit_total = phase_checkpoint_hit_total,
+                debate_message_create_phase_checkpoint_miss_total = phase_checkpoint_miss_total,
+                debate_message_create_outbox_enqueue_failed_total = outbox_enqueue_failed_total,
+                decision = "success",
+                "create debate message served"
+            );
+            Ok((StatusCode::CREATED, response_headers, Json(msg)).into_response())
+        }
+        Err(err) => {
+            if matches!(err, AppError::DebateConflict(_)) {
+                DEBATE_MESSAGE_CREATE_METRICS.observe_conflict();
+            } else {
+                DEBATE_MESSAGE_CREATE_METRICS.observe_failed();
+            }
+            if matches!(
+                &err,
+                AppError::ServerError(code) if code == "debate_message_outbox_enqueue_failed"
+            ) {
+                DEBATE_MESSAGE_CREATE_METRICS.observe_outbox_enqueue_failed();
+            }
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                idempotency_key_present = request_idempotency_key.is_some(),
+                conflict = matches!(err, AppError::DebateConflict(_)),
+                latency_ms,
+                decision = "failed",
+                "create debate message failed: {}",
+                err
+            );
+            if let AppError::DebateConflict(reason) = &err {
+                return Ok(
+                    (StatusCode::CONFLICT, Json(ErrorOutput::new(reason.clone()))).into_response(),
+                );
+            }
+            Err(err)
+        }
+    }
 }
 
 /// List messages in a debate session.
@@ -553,9 +842,14 @@ pub(crate) async fn create_debate_message_handler(
         ListDebateMessages
     ),
     responses(
-        (status = 200, description = "Debate messages", body = Vec<crate::DebateMessage>),
+        (status = 200, description = "Debate messages", body = crate::ListDebateMessagesOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
         (status = 409, description = "User cannot read in current session status", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -564,11 +858,127 @@ pub(crate) async fn create_debate_message_handler(
 pub(crate) async fn list_debate_messages_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
     Query(input): Query<ListDebateMessages>,
-) -> Result<impl IntoResponse, AppError> {
-    let messages = state.list_debate_messages(id, &user, input).await?;
-    Ok((StatusCode::OK, Json(messages)))
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    DEBATE_MESSAGES_LIST_METRICS.observe_start();
+    let request_id = request_id_from_headers(&headers);
+
+    let user_limit_key = format!("{}:{}", user.id, id);
+    let user_decision = enforce_rate_limit(
+        &state,
+        "debate_messages_list_user",
+        &user_limit_key,
+        DEBATE_MESSAGES_LIST_USER_RATE_LIMIT_PER_WINDOW,
+        DEBATE_MESSAGES_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision =
+        maybe_override_rate_limit_decision(&headers, "messages_user", user_decision);
+    let response_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        DEBATE_MESSAGES_LIST_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            session_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "list debate messages blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_messages_list",
+            response_headers,
+        ));
+    }
+
+    let ip_limit_key = request_rate_limit_ip_key_from_headers(&headers)
+        .map(|v| format!("{v}:{id}"))
+        .unwrap_or_else(|| format!("unknown:{id}"));
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "debate_messages_list_ip",
+        &ip_limit_key,
+        DEBATE_MESSAGES_LIST_IP_RATE_LIMIT_PER_WINDOW,
+        DEBATE_MESSAGES_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(&headers, "messages_ip", ip_decision);
+    if !ip_decision.allowed {
+        DEBATE_MESSAGES_LIST_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            session_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "list debate messages blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_messages_list",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let output: ListDebateMessagesOutput = match state.list_debate_messages(id, &user, input).await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            if matches!(err, AppError::DebateConflict(_)) {
+                DEBATE_MESSAGES_LIST_METRICS.observe_conflict();
+            } else {
+                DEBATE_MESSAGES_LIST_METRICS.observe_failure();
+            }
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let (request_total, success_total, failed_total, conflict_total, rate_limited_total) =
+                DEBATE_MESSAGES_LIST_METRICS.snapshot();
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                conflict = matches!(err, AppError::DebateConflict(_)),
+                debate_messages_list_request_total = request_total,
+                debate_messages_list_success_total = success_total,
+                debate_messages_list_failed_total = failed_total,
+                debate_messages_list_conflict_total = conflict_total,
+                debate_messages_list_rate_limited_total = rate_limited_total,
+                decision = "failed",
+                "list debate messages failed: {}",
+                err
+            );
+            if let AppError::DebateConflict(reason) = &err {
+                return Ok(
+                    (StatusCode::CONFLICT, Json(ErrorOutput::new(reason.clone()))).into_response(),
+                );
+            }
+            return Err(err);
+        }
+    };
+
+    DEBATE_MESSAGES_LIST_METRICS.observe_success();
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let (request_total, success_total, failed_total, conflict_total, rate_limited_total) =
+        DEBATE_MESSAGES_LIST_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        has_more = output.has_more,
+        result_count = output.items.len(),
+        next_cursor = output.next_cursor.unwrap_or_default(),
+        latency_ms,
+        debate_messages_list_request_total = request_total,
+        debate_messages_list_success_total = success_total,
+        debate_messages_list_failed_total = failed_total,
+        debate_messages_list_conflict_total = conflict_total,
+        debate_messages_list_rate_limited_total = rate_limited_total,
+        decision = "success",
+        "list debate messages served"
+    );
+    Ok((StatusCode::OK, response_headers, Json(output)).into_response())
 }
 
 /// Pin an existing debate message with wallet consume.
@@ -637,7 +1047,11 @@ fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(|v| v.chars().take(128).collect::<String>())
 }
 
-fn request_idempotency_key_from_headers(headers: &HeaderMap) -> Result<Option<String>, AppError> {
+fn request_idempotency_key_from_headers(
+    headers: &HeaderMap,
+    invalid_code: &str,
+    too_long_code: &str,
+) -> Result<Option<String>, AppError> {
     let Some(raw) = headers
         .get("idempotency-key")
         .or_else(|| headers.get("x-idempotency-key"))
@@ -647,14 +1061,10 @@ fn request_idempotency_key_from_headers(headers: &HeaderMap) -> Result<Option<St
     };
     let key = raw.trim();
     if key.is_empty() {
-        return Err(AppError::ValidationError(
-            "debate_join_idempotency_key_invalid".to_string(),
-        ));
+        return Err(AppError::ValidationError(invalid_code.to_string()));
     }
     if key.len() > 160 {
-        return Err(AppError::ValidationError(
-            "debate_join_idempotency_key_too_long".to_string(),
-        ));
+        return Err(AppError::ValidationError(too_long_code.to_string()));
     }
     Ok(Some(key.to_string()))
 }
@@ -714,6 +1124,26 @@ fn maybe_override_rate_limit_decision(
         return decision;
     }
     if target == "join_ip" && forced.eq_ignore_ascii_case("ip") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "messages_user" && forced.eq_ignore_ascii_case("messages_user") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "messages_ip" && forced.eq_ignore_ascii_case("messages_ip") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "create_user" && forced.eq_ignore_ascii_case("create_user") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "create_ip" && forced.eq_ignore_ascii_case("create_ip") {
         decision.allowed = false;
         decision.remaining = 0;
         return decision;
@@ -784,6 +1214,23 @@ mod tests {
         Ok((user, token))
     }
 
+    async fn create_unbound_user_and_token(
+        state: &AppState,
+        fullname: &str,
+        email: &str,
+        sid: &str,
+    ) -> Result<(chat_core::User, String)> {
+        let user = state
+            .create_user(&CreateUser {
+                fullname: fullname.to_string(),
+                email: email.to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(state, user.id, sid).await?;
+        Ok((user, token))
+    }
+
     async fn seed_session_with_window(
         state: &AppState,
         status: &str,
@@ -845,7 +1292,7 @@ mod tests {
             .header("Authorization", format!("Bearer {}", token))
             .header("x-forwarded-for", "127.0.0.1")
             .body(Body::empty())?;
-        let res = app.oneshot(req).await?;
+        let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
@@ -872,7 +1319,7 @@ mod tests {
             .header("Authorization", format!("Bearer {}", token))
             .header("x-forwarded-for", "127.0.0.1")
             .body(Body::empty())?;
-        let res = app.oneshot(req).await?;
+        let res = app.clone().oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
@@ -1057,6 +1504,462 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(err.error, "debate_join_not_open_yet");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_message_route_should_reject_too_long_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Message Idempotency",
+            "debate-message-idem@acme.org",
+            "+8613810011010",
+            "debate-message-idem-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "open",
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+        let long_key = "k".repeat(161);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .header("idempotency-key", long_key)
+            .body(Body::from(r#"{"content":"hello"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "debate_message_idempotency_key_too_long");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_message_route_should_return_conflict_when_not_joined() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Message Not Joined",
+            "debate-message-not-joined@acme.org",
+            "+8613810011011",
+            "debate-message-not-joined-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "open",
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"content":"hello"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "debate_message_not_joined");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_message_route_should_replay_with_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Message Replay",
+            "debate-message-replay@acme.org",
+            "+8613810011012",
+            "debate-message-replay-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "open",
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state.clone()).await?;
+
+        let req1 = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .header("idempotency-key", "replay-key-1")
+            .body(Body::from(r#"{"content":"hello idem"}"#))?;
+        let res1 = app.clone().oneshot(req1).await?;
+        assert_eq!(res1.status(), StatusCode::CREATED);
+        let body1 = res1.into_body().collect().await?.to_bytes();
+        let out1: crate::DebateMessage = serde_json::from_slice(&body1)?;
+
+        let req2 = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .header("idempotency-key", "replay-key-1")
+            .body(Body::from(r#"{"content":"hello idem"}"#))?;
+        let res2 = app.oneshot(req2).await?;
+        assert_eq!(res2.status(), StatusCode::CREATED);
+        let body2 = res2.into_body().collect().await?.to_bytes();
+        let out2: crate::DebateMessage = serde_json::from_slice(&body2)?;
+        assert_eq!(out1.id, out2.id);
+
+        let message_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_messages WHERE session_id = $1")
+                .bind(session_id)
+                .fetch_one(&state.pool)
+                .await?;
+        assert_eq!(message_count.0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_message_route_should_return_429_when_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Message Ratelimit",
+            "debate-message-ratelimit@acme.org",
+            "+8613810011013",
+            "debate-message-ratelimit-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "open",
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("x-test-force-rate-limit", "create_user")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"content":"hello"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "rate_limit_exceeded:debate_message_create");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_messages_route_should_require_auth() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_messages_route_should_require_phone_binding() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_unbound_user_and_token(
+            &state,
+            "Debate Messages Unbound",
+            "debate-messages-unbound@acme.org",
+            "debate-messages-unbound-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_messages_route_should_return_429_when_user_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Messages RateLimit",
+            "debate-messages-ratelimit@acme.org",
+            "+8613810010001",
+            "debate-messages-ratelimit-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("x-test-force-rate-limit", "messages_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "rate_limit_exceeded:debate_messages_list");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_messages_route_should_return_envelope_payload() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Messages Envelope",
+            "debate-messages-envelope@acme.org",
+            "+8613810010002",
+            "debate-messages-envelope-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: "msg-route-1".to_string(),
+                },
+            )
+            .await?;
+        state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: "msg-route-2".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/sessions/{session_id}/messages?limit=1"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let output: crate::ListDebateMessagesOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.items.len(), 1);
+        assert!(output.has_more);
+        assert!(output.next_cursor.is_some());
+        assert!(!output.revision.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_messages_route_should_return_forbidden_conflict_code() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (joined_user, joined_token) = create_bound_user_and_token(
+            &state,
+            "Debate Messages Joined",
+            "debate-messages-joined@acme.org",
+            "+8613810010003",
+            "debate-messages-joined-sid",
+        )
+        .await?;
+        let (_spectator, spectator_token) = create_bound_user_and_token(
+            &state,
+            "Debate Messages Spectator",
+            "debate-messages-spectator@acme.org",
+            "+8613810010004",
+            "debate-messages-spectator-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "open",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &joined_user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        state
+            .create_debate_message(
+                session_id as u64,
+                &joined_user,
+                CreateDebateMessageInput {
+                    content: "not-spectatable-yet".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", spectator_token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let res = app.clone().oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "debate_messages_read_forbidden");
+
+        let req_ok = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/messages"))
+            .header("Authorization", format!("Bearer {}", joined_token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let ok_res = app.oneshot(req_ok).await?;
+        assert_eq!(ok_res.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_messages_route_should_reject_out_of_range_last_id() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Messages LastId",
+            "debate-messages-lastid@acme.org",
+            "+8613810010005",
+            "debate-messages-lastid-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/sessions/{session_id}/messages?lastId=18446744073709551615"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "debate_messages_invalid_last_id");
         Ok(())
     }
 }

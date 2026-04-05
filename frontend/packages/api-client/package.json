@@ -1,0 +1,24 @@
+{
+  "name": "@echoisle/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "echo 'api-client: no build step'",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@echoisle/config": "workspace:*",
+    "axios": "^1.8.4"
+  },
+  "devDependencies": {
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.8"
+  }
+}

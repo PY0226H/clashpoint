@@ -1,0 +1,28 @@
+{
+  "name": "@echoisle/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --port 5173",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@echoisle/app-shell": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.8"
+  }
+}

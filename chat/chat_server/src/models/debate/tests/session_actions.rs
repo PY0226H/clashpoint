@@ -181,7 +181,10 @@ async fn create_debate_message_should_require_join_and_write_side() -> Result<()
         )
         .await
         .expect_err("not joined should fail");
-    assert!(matches!(err, AppError::DebateConflict(_)));
+    assert!(matches!(
+        err,
+        AppError::DebateConflict(ref code) if code == "debate_message_not_joined"
+    ));
 
     state
         .join_debate_session(
@@ -205,6 +208,115 @@ async fn create_debate_message_should_require_join_and_write_side() -> Result<()
     assert_eq!(msg.session_id, session_id);
     assert_eq!(msg.side, "pro");
     assert_eq!(msg.user_id, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_debate_message_should_reject_invalid_content_with_stable_codes() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+
+    let empty_err = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "   ".to_string(),
+            },
+        )
+        .await
+        .expect_err("empty message should fail");
+    assert!(matches!(
+        empty_err,
+        AppError::ValidationError(ref code) if code == "debate_message_content_empty"
+    ));
+
+    let long_err = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "中".repeat(1001),
+            },
+        )
+        .await
+        .expect_err("too long message should fail");
+    assert!(matches!(
+        long_err,
+        AppError::ValidationError(ref code) if code == "debate_message_content_too_long"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_debate_message_should_support_idempotent_replay() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+
+    let (first, first_replayed, _) = state
+        .create_debate_message_with_meta(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "idem message".to_string(),
+            },
+            Some("idem-key-1"),
+        )
+        .await?;
+    assert!(!first_replayed);
+
+    let (second, second_replayed, _) = state
+        .create_debate_message_with_meta(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "idem message".to_string(),
+            },
+            Some("idem-key-1"),
+        )
+        .await?;
+    assert!(second_replayed);
+    assert_eq!(first.id, second.id);
+
+    let row: (i64, i32) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::bigint, COALESCE(MAX(message_count), 0)
+        FROM session_messages m
+        JOIN debate_sessions s ON s.id = m.session_id
+        WHERE m.session_id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, 1);
+    assert_eq!(row.1, 1);
     Ok(())
 }
 
@@ -343,8 +455,10 @@ async fn list_debate_messages_should_allow_spectator_when_running() -> Result<()
             },
         )
         .await?;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].content, "spectator readable message");
+    assert_eq!(rows.items.len(), 1);
+    assert_eq!(rows.items[0].content, "spectator readable message");
+    assert!(!rows.has_more);
+    assert!(rows.next_cursor.is_none());
     Ok(())
 }
 
@@ -391,7 +505,135 @@ async fn list_debate_messages_should_reject_spectator_when_not_running() -> Resu
         )
         .await
         .expect_err("open session should reject spectator message read");
-    assert!(matches!(err, AppError::DebateConflict(_)));
+    assert!(matches!(
+        err,
+        AppError::DebateConflict(ref code) if code == "debate_messages_read_forbidden"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_messages_should_return_envelope_with_cursor() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+
+    let first = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "msg-1".to_string(),
+            },
+        )
+        .await?;
+    let second = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "msg-2".to_string(),
+            },
+        )
+        .await?;
+    let third = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "msg-3".to_string(),
+            },
+        )
+        .await?;
+
+    let page1 = state
+        .list_debate_messages(
+            session_id as u64,
+            &user,
+            ListDebateMessages {
+                last_id: None,
+                limit: Some(2),
+            },
+        )
+        .await?;
+    assert!(page1.has_more);
+    assert_eq!(page1.items.len(), 2);
+    assert_eq!(page1.items[0].id, second.id);
+    assert_eq!(page1.items[1].id, third.id);
+    assert_eq!(page1.next_cursor, Some(second.id as u64));
+    assert_eq!(page1.revision, third.id.to_string());
+
+    let page2 = state
+        .list_debate_messages(
+            session_id as u64,
+            &user,
+            ListDebateMessages {
+                last_id: page1.next_cursor,
+                limit: Some(2),
+            },
+        )
+        .await?;
+    assert!(!page2.has_more);
+    assert_eq!(page2.items.len(), 1);
+    assert_eq!(page2.items[0].id, first.id);
+    assert!(page2.next_cursor.is_none());
+    assert_eq!(page2.revision, third.id.to_string());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_messages_should_reject_out_of_range_inputs() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+
+    let err = state
+        .list_debate_messages(
+            u64::MAX,
+            &user,
+            ListDebateMessages {
+                last_id: None,
+                limit: Some(20),
+            },
+        )
+        .await
+        .expect_err("out-of-range session id should fail");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_messages_invalid_session_id"
+    ));
+
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
+    let err = state
+        .list_debate_messages(
+            session_id as u64,
+            &user,
+            ListDebateMessages {
+                last_id: Some(u64::MAX),
+                limit: Some(20),
+            },
+        )
+        .await
+        .expect_err("out-of-range last id should fail");
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_messages_invalid_last_id"
+    ));
     Ok(())
 }
 
