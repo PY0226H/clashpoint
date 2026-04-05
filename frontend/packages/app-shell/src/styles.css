@@ -308,6 +308,28 @@
   gap: 12px;
 }
 
+.echo-ops-alert-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(140px, 180px) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.echo-ops-alert-pager {
+  display: flex;
+  gap: 8px;
+}
+
+.echo-ops-observability-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--echo-radius-md);
+  border: 1px solid color-mix(in srgb, var(--echo-danger) 35%, transparent 65%);
+  background: color-mix(in srgb, var(--echo-danger) 8%, white 92%);
+}
+
 .echo-wallet-probe-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -587,6 +609,14 @@
 
   .echo-ops-grant-row {
     grid-template-columns: 1fr;
+  }
+
+  .echo-ops-alert-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .echo-ops-alert-pager {
+    flex-wrap: wrap;
   }
 
   .echo-login-stage {

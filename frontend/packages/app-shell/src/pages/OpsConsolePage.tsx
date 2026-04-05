@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getOpsMetricsDictionary,
@@ -16,6 +16,9 @@ import {
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 
 const ROLE_OPTIONS: OpsRole[] = ["ops_admin", "ops_reviewer", "ops_viewer"];
+const ALERT_STATUS_OPTIONS = ["all", "raised", "suppressed", "cleared"] as const;
+const ALERT_PAGE_SIZE_OPTIONS = [1, 3, 5, 10] as const;
+type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
 
 function formatUtc(iso: string): string {
   const date = new Date(iso);
@@ -37,43 +40,62 @@ export function OpsConsolePage() {
   const queryClient = useQueryClient();
   const [targetUserId, setTargetUserId] = useState("");
   const [targetRole, setTargetRole] = useState<OpsRole>("ops_viewer");
+  const [alertStatusFilter, setAlertStatusFilter] = useState<AlertStatusFilter>("all");
+  const [alertPageSize, setAlertPageSize] = useState<number>(3);
+  const [alertPageIndex, setAlertPageIndex] = useState(0);
   const [pageHint, setPageHint] = useState<string | null>(null);
 
   const rbacMeQuery = useQuery({
     queryKey: ["ops-rbac-me"],
-    queryFn: () => getOpsRbacMe()
+    queryFn: () => getOpsRbacMe(),
+    retry: false
   });
 
   const roleAssignmentsQuery = useQuery({
     queryKey: ["ops-role-assignments"],
     queryFn: () => listOpsRoleAssignments(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.roleManage)
+    enabled: Boolean(rbacMeQuery.data?.permissions.roleManage),
+    retry: false
   });
   const observabilityConfigQuery = useQuery({
     queryKey: ["ops-observability-config"],
     queryFn: () => getOpsObservabilityConfig(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
   });
   const sloSnapshotQuery = useQuery({
     queryKey: ["ops-observability-slo"],
     queryFn: () => getOpsSloSnapshot(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
   });
   const metricsDictionaryQuery = useQuery({
     queryKey: ["ops-observability-metrics-dictionary"],
     queryFn: () => getOpsMetricsDictionary(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
   });
   const splitReadinessQuery = useQuery({
     queryKey: ["ops-observability-split-readiness"],
     queryFn: () => getOpsServiceSplitReadiness(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
   });
   const alertsQuery = useQuery({
-    queryKey: ["ops-observability-alerts", 5, 0],
-    queryFn: () => listOpsAlertNotifications({ limit: 5, offset: 0 }),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview)
+    queryKey: ["ops-observability-alerts", alertStatusFilter, alertPageSize, alertPageIndex],
+    queryFn: () =>
+      listOpsAlertNotifications({
+        status: alertStatusFilter === "all" ? undefined : alertStatusFilter,
+        limit: alertPageSize,
+        offset: alertPageIndex * alertPageSize
+      }),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
   });
+
+  useEffect(() => {
+    setAlertPageIndex(0);
+  }, [alertPageSize, alertStatusFilter]);
 
   const upsertRoleMutation = useMutation({
     mutationFn: async (payload: { userId: number; role: OpsRole }) =>
@@ -120,10 +142,43 @@ export function OpsConsolePage() {
   const suppressedRuleCount = sloSnapshotQuery.data?.rules.filter((rule) => rule.suppressed).length ?? 0;
   const topDictionaryItems = metricsDictionaryQuery.data?.items.slice(0, 4) || [];
   const topRules = sloSnapshotQuery.data?.rules.slice(0, 4) || [];
-  const topAlerts = alertsQuery.data?.items.slice(0, 3) || [];
+  const topAlerts = alertsQuery.data?.items || [];
   const thresholdRows = observabilityConfigQuery.data
     ? Object.entries(observabilityConfigQuery.data.thresholds)
     : [];
+  const totalAlerts = alertsQuery.data?.total ?? 0;
+  const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
+  const canGoPrevPage = alertPageIndex > 0;
+  const canGoNextPage = alertPageIndex + 1 < alertPageCount;
+  const observabilityErrors = useMemo(
+    () =>
+      [
+        observabilityConfigQuery.error ? toOpsDomainError(observabilityConfigQuery.error) : null,
+        sloSnapshotQuery.error ? toOpsDomainError(sloSnapshotQuery.error) : null,
+        metricsDictionaryQuery.error ? toOpsDomainError(metricsDictionaryQuery.error) : null,
+        splitReadinessQuery.error ? toOpsDomainError(splitReadinessQuery.error) : null,
+        alertsQuery.error ? toOpsDomainError(alertsQuery.error) : null
+      ].filter((item): item is string => Boolean(item)),
+    [
+      alertsQuery.error,
+      metricsDictionaryQuery.error,
+      observabilityConfigQuery.error,
+      sloSnapshotQuery.error,
+      splitReadinessQuery.error
+    ]
+  );
+
+  async function refreshObservability() {
+    setPageHint(null);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["ops-observability-config"] }),
+      queryClient.invalidateQueries({ queryKey: ["ops-observability-slo"] }),
+      queryClient.invalidateQueries({ queryKey: ["ops-observability-metrics-dictionary"] }),
+      queryClient.invalidateQueries({ queryKey: ["ops-observability-split-readiness"] }),
+      queryClient.invalidateQueries({ queryKey: ["ops-observability-alerts"] })
+    ]);
+    setPageHint("Observability snapshot refreshed.");
+  }
 
   return (
     <section className="echo-ops-page">
@@ -242,6 +297,55 @@ export function OpsConsolePage() {
         <h3>Observability Snapshot</h3>
         {canReviewJudge ? (
           <>
+            <div className="echo-ops-alert-toolbar">
+              <label className="echo-ops-role-label">
+                <span>Alert Status</span>
+                <select
+                  aria-label="Alert Status"
+                  onChange={(event) => setAlertStatusFilter(event.target.value as AlertStatusFilter)}
+                  value={alertStatusFilter}
+                >
+                  {ALERT_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="echo-ops-role-label">
+                <span>Alert Page Size</span>
+                <select
+                  aria-label="Alert Page Size"
+                  onChange={(event) => setAlertPageSize(Math.max(1, Number(event.target.value) || 3))}
+                  value={String(alertPageSize)}
+                >
+                  {ALERT_PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={String(size)}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="echo-ops-alert-pager">
+                <Button
+                  disabled={alertsQuery.isLoading || !canGoPrevPage}
+                  onClick={() => setAlertPageIndex((current) => Math.max(0, current - 1))}
+                  type="button"
+                >
+                  Prev Alerts
+                </Button>
+                <Button
+                  disabled={alertsQuery.isLoading || !canGoNextPage}
+                  onClick={() => setAlertPageIndex((current) => current + 1)}
+                  type="button"
+                >
+                  Next Alerts
+                </Button>
+              </div>
+              <Button disabled={alertsQuery.isLoading} onClick={() => void refreshObservability()} type="button">
+                Refresh Snapshot
+              </Button>
+            </div>
             {observabilityConfigQuery.isLoading ||
             sloSnapshotQuery.isLoading ||
             metricsDictionaryQuery.isLoading ||
@@ -249,17 +353,16 @@ export function OpsConsolePage() {
             alertsQuery.isLoading ? (
               <InlineHint>Loading observability snapshots...</InlineHint>
             ) : null}
-            {observabilityConfigQuery.isError ? (
-              <p className="echo-error">{toOpsDomainError(observabilityConfigQuery.error)}</p>
+            {observabilityErrors.length > 0 ? (
+              <div aria-live="polite" className="echo-ops-observability-errors" role="alert">
+                <p className="echo-error">
+                  Observability snapshot partially unavailable ({observabilityErrors.length} errors).
+                </p>
+                {observabilityErrors.map((message, index) => (
+                  <InlineHint key={`${index}-${message}`}>{message}</InlineHint>
+                ))}
+              </div>
             ) : null}
-            {sloSnapshotQuery.isError ? <p className="echo-error">{toOpsDomainError(sloSnapshotQuery.error)}</p> : null}
-            {metricsDictionaryQuery.isError ? (
-              <p className="echo-error">{toOpsDomainError(metricsDictionaryQuery.error)}</p>
-            ) : null}
-            {splitReadinessQuery.isError ? (
-              <p className="echo-error">{toOpsDomainError(splitReadinessQuery.error)}</p>
-            ) : null}
-            {alertsQuery.isError ? <p className="echo-error">{toOpsDomainError(alertsQuery.error)}</p> : null}
 
             <div className="echo-lobby-summary">
               <article>
@@ -320,7 +423,9 @@ export function OpsConsolePage() {
                   </InlineHint>
                 ))}
                 {topAlerts.length === 0 ? <InlineHint>No recent alerts.</InlineHint> : null}
-                <InlineHint>total: {alertsQuery.data?.total ?? 0}</InlineHint>
+                <InlineHint>
+                  total: {alertsQuery.data?.total ?? 0} | page {alertPageIndex + 1}/{alertPageCount}
+                </InlineHint>
               </article>
             </div>
 
