@@ -13,18 +13,27 @@ export function LoginPage() {
   const signInPassword = useAuthStore((state) => state.signInPassword);
   const signInOtp = useAuthStore((state) => state.signInOtp);
   const sendSigninOtpCode = useAuthStore((state) => state.sendSigninOtpCode);
+  const wechatChallenge = useAuthStore((state) => state.wechatChallenge);
+  const wechatBindTicket = useAuthStore((state) => state.wechatBindTicket);
+  const requestWechatChallenge = useAuthStore((state) => state.requestWechatChallenge);
+  const signInWechat = useAuthStore((state) => state.signInWechat);
   const clearError = useAuthStore((state) => state.clearError);
 
-  const [authMode, setAuthMode] = useState<"password" | "otp">("password");
+  const [authMode, setAuthMode] = useState<"password" | "otp" | "wechat">("password");
   const [accountType, setAccountType] = useState<"email" | "phone">("email");
   const [account, setAccount] = useState("super@none.org");
   const [password, setPassword] = useState("EchoSuper@123456");
   const [phone, setPhone] = useState("+86139000000000");
   const [smsCode, setSmsCode] = useState("");
   const [smsCooldown, setSmsCooldown] = useState(0);
+  const [wechatCode, setWechatCode] = useState("");
+  const [wechatHint, setWechatHint] = useState<string | null>(null);
   const [debugCode, setDebugCode] = useState<string | null>(null);
 
   const heroHint = useMemo(() => {
+    if (authMode === "wechat") {
+      return "Use WeChat challenge + code for local placeholder sign-in.";
+    }
     if (authMode === "otp") {
       return "Use phone + SMS OTP for local sign-in.";
     }
@@ -51,7 +60,17 @@ export function LoginPage() {
   useEffect(() => {
     clearError();
     setDebugCode(null);
+    setWechatHint(null);
   }, [authMode, clearError]);
+
+  async function onRequestWechatChallenge() {
+    try {
+      const challenge = await requestWechatChallenge();
+      setWechatHint(`Challenge ready, appId=${challenge.appId}`);
+    } catch {
+      // error state is handled by auth store.
+    }
+  }
 
   async function onSendOtpCode() {
     try {
@@ -68,6 +87,14 @@ export function LoginPage() {
     try {
       if (authMode === "otp") {
         await signInOtp({ phone: phone.trim(), smsCode: smsCode.trim() });
+      } else if (authMode === "wechat") {
+        const outcome = await signInWechat({
+          code: wechatCode.trim()
+        });
+        if (outcome.bindRequired) {
+          setWechatHint("WeChat account requires phone bind flow. Ticket is ready for the next bind page integration.");
+          return;
+        }
       } else {
         await signInPassword({ account, accountType, password });
       }
@@ -81,7 +108,9 @@ export function LoginPage() {
   const canSubmit =
     authMode === "otp"
       ? !loading && Boolean(phone.trim()) && Boolean(smsCode.trim())
-      : !loading && Boolean(account.trim()) && Boolean(password);
+      : authMode === "wechat"
+        ? !loading && Boolean(wechatChallenge?.state) && Boolean(wechatCode.trim())
+        : !loading && Boolean(account.trim()) && Boolean(password);
 
   return (
     <div className="echo-login-stage">
@@ -107,6 +136,13 @@ export function LoginPage() {
             </button>
             <button className={authMode === "otp" ? "is-selected" : ""} onClick={() => setAuthMode("otp")} type="button">
               SMS OTP
+            </button>
+            <button
+              className={authMode === "wechat" ? "is-selected" : ""}
+              onClick={() => setAuthMode("wechat")}
+              type="button"
+            >
+              WeChat
             </button>
           </div>
         </label>
@@ -152,7 +188,7 @@ export function LoginPage() {
               />
             </label>
           </>
-        ) : (
+        ) : authMode === "otp" ? (
           <>
             <label>
               Phone
@@ -184,12 +220,37 @@ export function LoginPage() {
             </label>
             {debugCode ? <InlineHint>Debug OTP: {debugCode}</InlineHint> : null}
           </>
+        ) : (
+          <>
+            <label>
+              WeChat Challenge
+              <div className="echo-inline-row">
+                <TextField
+                  readOnly
+                  value={wechatChallenge?.state || "No challenge yet"}
+                />
+                <Button className="echo-inline-btn" disabled={loading} onClick={onRequestWechatChallenge} type="button">
+                  {wechatChallenge ? "Refresh" : "Get Challenge"}
+                </Button>
+              </div>
+            </label>
+            <label>
+              WeChat Auth Code
+              <TextField
+                onChange={(event) => setWechatCode(event.target.value)}
+                placeholder="Paste WeChat code"
+                value={wechatCode}
+              />
+            </label>
+            {wechatHint ? <InlineHint>{wechatHint}</InlineHint> : null}
+            {wechatBindTicket ? <InlineHint>Bind Ticket: {wechatBindTicket}</InlineHint> : null}
+          </>
         )}
 
         <InlineHint>{heroHint}</InlineHint>
         {error ? <p className="echo-error">{error}</p> : null}
         <Button disabled={!canSubmit} type="submit">
-          {loading ? "Signing in..." : authMode === "otp" ? "Sign In with OTP" : "Sign In"}
+          {loading ? "Signing in..." : authMode === "otp" ? "Sign In with OTP" : authMode === "wechat" ? "Sign In with WeChat" : "Sign In"}
         </Button>
       </form>
     </div>

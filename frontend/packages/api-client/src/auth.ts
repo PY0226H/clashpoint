@@ -38,6 +38,36 @@ export async function signinOtp(payload: SigninOtpRequest): Promise<AuthResponse
   return response.data;
 }
 
+export type WechatChallengeResponse = {
+  state: string;
+  expiresInSecs: number;
+  appId: string;
+};
+
+export type WechatSigninRequest = {
+  state: string;
+  code: string;
+};
+
+export type WechatSigninResponse = {
+  bindRequired: boolean;
+  wechatTicket?: string;
+  accessToken?: string;
+  tokenType?: string;
+  expiresInSecs?: number;
+  user?: AuthUser;
+};
+
+export async function requestWechatChallenge(): Promise<WechatChallengeResponse> {
+  const response = await http.post<WechatChallengeResponse>("/auth/v2/wechat/challenge");
+  return response.data;
+}
+
+export async function signinWechat(payload: WechatSigninRequest): Promise<WechatSigninResponse> {
+  const response = await http.post<WechatSigninResponse>("/auth/v2/wechat/signin", payload);
+  return response.data;
+}
+
 export type RefreshResponse = {
   accessToken: string;
   tokenType: string;

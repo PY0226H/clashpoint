@@ -1,15 +1,19 @@
 import {
   bindPhone as bindPhoneApi,
   createAccessTickets,
+  requestWechatChallenge as requestWechatChallengeApi,
   refreshSession as refreshSessionApi,
   sendSmsCode,
   signinOtp,
   signinPassword,
+  signinWechat as signinWechatApi,
   type AccessTicketsResponse,
   type AccountType,
   type AuthUser,
   type AuthResponse,
   type SendSmsCodeResponse,
+  type WechatChallengeResponse,
+  type WechatSigninResponse,
   setAccessToken,
   toApiError
 } from "@echoisle/api-client";
@@ -26,11 +30,15 @@ type AuthState = {
   token: string | null;
   user: AuthUser | null;
   accessTickets: AccessTickets | null;
+  wechatChallenge: WechatChallengeResponse | null;
+  wechatBindTicket: string | null;
   loading: boolean;
   error: string | null;
   clearError: () => void;
   signInPassword: (payload: { account: string; accountType: AccountType; password: string }) => Promise<void>;
   signInOtp: (payload: { phone: string; smsCode: string }) => Promise<void>;
+  requestWechatChallenge: () => Promise<WechatChallengeResponse>;
+  signInWechat: (payload: { code: string; state?: string }) => Promise<{ bindRequired: boolean; wechatTicket?: string }>;
   sendSigninOtpCode: (phone: string) => Promise<SendSmsCodeResponse>;
   sendBindSmsCode: (phone: string) => Promise<SendSmsCodeResponse>;
   bindPhone: (payload: { phone: string; smsCode: string }) => Promise<void>;
@@ -83,12 +91,45 @@ async function toSignedInState(data: AuthResponse): Promise<{ token: string; use
   };
 }
 
+export type WechatSigninOutcome =
+  | {
+      bindRequired: true;
+      wechatTicket: string | null;
+    }
+  | {
+      bindRequired: false;
+      auth: AuthResponse;
+    };
+
+export function resolveWechatSigninOutcome(data: WechatSigninResponse): WechatSigninOutcome {
+  if (data.bindRequired) {
+    return {
+      bindRequired: true,
+      wechatTicket: data.wechatTicket || null
+    };
+  }
+  if (!data.accessToken || !data.user) {
+    throw new Error("auth_wechat_response_invalid");
+  }
+  return {
+    bindRequired: false,
+    auth: {
+      accessToken: data.accessToken,
+      tokenType: data.tokenType,
+      expiresInSecs: data.expiresInSecs,
+      user: data.user
+    }
+  };
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       token: null,
       user: null,
       accessTickets: null,
+      wechatChallenge: null,
+      wechatBindTicket: null,
       loading: false,
       error: null,
       clearError: () => set({ error: null }),
@@ -121,6 +162,55 @@ export const useAuthStore = create<AuthState>()(
             loading: false,
             error: null
           });
+        } catch (error) {
+          set({ loading: false, error: toApiError(error) });
+          throw error;
+        }
+      },
+      requestWechatChallenge: async () => {
+        set({ loading: true, error: null });
+        try {
+          const challenge = await requestWechatChallengeApi();
+          set({ wechatChallenge: challenge, loading: false, error: null });
+          return challenge;
+        } catch (error) {
+          set({ loading: false, error: toApiError(error) });
+          throw error;
+        }
+      },
+      signInWechat: async ({ code, state }) => {
+        set({ loading: true, error: null });
+        try {
+          const challengeState = state?.trim() || get().wechatChallenge?.state;
+          if (!challengeState) {
+            throw new Error("auth_wechat_challenge_missing");
+          }
+          const response = await signinWechatApi({
+            state: challengeState,
+            code: code.trim()
+          });
+          const outcome = resolveWechatSigninOutcome(response);
+          if (outcome.bindRequired) {
+            set({
+              loading: false,
+              error: null,
+              wechatBindTicket: outcome.wechatTicket
+            });
+            return {
+              bindRequired: true,
+              wechatTicket: outcome.wechatTicket || undefined
+            };
+          }
+          const session = await toSignedInState(outcome.auth);
+          set({
+            token: session.token,
+            user: session.user,
+            accessTickets: session.accessTickets,
+            loading: false,
+            error: null,
+            wechatBindTicket: null
+          });
+          return { bindRequired: false };
         } catch (error) {
           set({ loading: false, error: toApiError(error) });
           throw error;
@@ -217,7 +307,15 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         lastBootstrapToken = null;
         setAccessToken(null);
-        set({ token: null, user: null, accessTickets: null, error: null, loading: false });
+        set({
+          token: null,
+          user: null,
+          accessTickets: null,
+          wechatChallenge: null,
+          wechatBindTicket: null,
+          error: null,
+          loading: false
+        });
       }
     }),
     {
