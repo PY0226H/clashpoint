@@ -14,7 +14,9 @@
     "e2e:smoke:web": "TARGET_APP=web playwright test --config ./playwright.config.ts --grep @smoke",
     "e2e:smoke:desktop": "TARGET_APP=desktop playwright test --config ./playwright.config.ts --grep @smoke",
     "e2e:auth-error:web": "TARGET_APP=web playwright test --config ./playwright.config.ts --grep @auth-error",
-    "e2e:auth-error:desktop": "TARGET_APP=desktop playwright test --config ./playwright.config.ts --grep @auth-error"
+    "e2e:auth-error:desktop": "TARGET_APP=desktop playwright test --config ./playwright.config.ts --grep @auth-error",
+    "e2e:auth:web": "pnpm e2e:smoke:web && pnpm e2e:auth-error:web",
+    "e2e:auth:desktop": "pnpm e2e:smoke:desktop && pnpm e2e:auth-error:desktop"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

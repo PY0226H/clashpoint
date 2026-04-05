@@ -7,3 +7,4 @@ async fn seed_topic_and_session(state: &AppState, status: &str) -> Result<i64> {
 }
 
 mod phase_final_report_submit;
+mod request_judge_job;

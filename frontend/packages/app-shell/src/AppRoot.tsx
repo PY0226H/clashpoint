@@ -10,6 +10,8 @@ import { HomePage } from "./pages/HomePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PhoneBindPage } from "./pages/PhoneBindPage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { DebateLobbyPage } from "./pages/DebateLobbyPage";
+import { DebateRoomPage } from "./pages/DebateRoomPage";
 import { resolveLandingPath } from "./navigation";
 import "./styles.css";
 
@@ -60,7 +62,8 @@ export function AppRoot() {
           <Route element={<PhoneBindPage />} path="/bind-phone" />
           <Route element={<ProtectedLayout />}>
             <Route element={<HomePage />} path="/home" />
-            <Route element={<PlaceholderPage title="Debate Lobby" />} path="/debate" />
+            <Route element={<DebateLobbyPage />} path="/debate" />
+            <Route element={<DebateRoomPage />} path="/debate/sessions/:sessionId" />
             <Route element={<PlaceholderPage title="Wallet" />} path="/wallet" />
             <Route element={<PlaceholderPage title="Ops Console" />} path="/ops" />
           </Route>

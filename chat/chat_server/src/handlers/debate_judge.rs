@@ -1,9 +1,11 @@
 use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
-        release_idempotency_best_effort, try_acquire_idempotency_or_fail_open,
+        release_idempotency_best_effort, request_idempotency_key_from_headers,
+        request_rate_limit_ip_key_from_headers, try_acquire_idempotency_or_fail_open,
     },
-    AppError, AppState, GetJudgeReportQuery, RequestJudgeJobInput, SubmitDrawVoteInput,
+    AppError, AppState, GetJudgeReportQuery, RateLimitDecision, RequestJudgeJobInput,
+    SubmitDrawVoteInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -14,8 +16,16 @@ use axum::{
 use chat_core::User;
 
 const JUDGE_REQUEST_RATE_LIMIT_PER_WINDOW: u64 = 10;
+const JUDGE_REQUEST_IP_RATE_LIMIT_PER_WINDOW: u64 = 20;
 const JUDGE_REQUEST_RATE_LIMIT_WINDOW_SECS: u64 = 300;
 const JUDGE_REQUEST_IDEMPOTENCY_TTL_SECS: u64 = 30;
+const JUDGE_REQUEST_IDEMPOTENCY_KEY_MAX_LEN: usize = 160;
+const JUDGE_REQUEST_LIMITER_SCOPE: &str = "judge_job_request";
+const JUDGE_REQUEST_LIMITER_KEY_PREFIX: &str = "judge_request";
+
+const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_INVALID: &str = "judge_request_idempotency_key_invalid";
+const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_TOO_LONG: &str = "judge_request_idempotency_key_too_long";
+const JUDGE_REQUEST_CODE_IDEMPOTENCY_CONFLICT: &str = "judge_request_idempotency_conflict";
 
 /// Request an AI judge job for a debate session.
 /// Note: `styleMode` in request body is kept for compatibility and no longer controls behavior.
@@ -30,8 +40,12 @@ const JUDGE_REQUEST_IDEMPOTENCY_TTL_SECS: u64 = 30;
     responses(
         (status = 202, description = "Judge job accepted", body = crate::RequestJudgeJobOutput),
         (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
         (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -44,57 +58,322 @@ pub(crate) async fn request_judge_job_handler(
     headers: HeaderMap,
     Json(input): Json<RequestJudgeJobInput>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limiter_key = format!("ws:{}:user:{}:session:{}", 1_i64, user.id, id);
-    let decision = enforce_rate_limit(
+    let user_limiter_key = format!(
+        "{JUDGE_REQUEST_LIMITER_KEY_PREFIX}:user:{}:session:{}",
+        user.id, id
+    );
+    let user_decision = enforce_rate_limit(
         &state,
-        "judge_job_request",
-        &limiter_key,
+        JUDGE_REQUEST_LIMITER_SCOPE,
+        &user_limiter_key,
         JUDGE_REQUEST_RATE_LIMIT_PER_WINDOW,
         JUDGE_REQUEST_RATE_LIMIT_WINDOW_SECS,
     )
     .await;
-    let rate_headers = build_rate_limit_headers(&decision)?;
-    if !decision.allowed {
+    if !user_decision.allowed {
         return Ok(rate_limit_exceeded_response(
-            "judge_job_request",
-            rate_headers,
+            JUDGE_REQUEST_LIMITER_SCOPE,
+            build_rate_limit_headers(&user_decision)?,
         ));
     }
 
-    let request_idempotency_key = headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| limiter_key.clone());
+    let mut effective_decision = user_decision;
+    if let Some(ip_hash) = request_rate_limit_ip_key_from_headers(&headers) {
+        let ip_limiter_key =
+            format!("{JUDGE_REQUEST_LIMITER_KEY_PREFIX}:ip:{ip_hash}:session:{id}");
+        let ip_decision = enforce_rate_limit(
+            &state,
+            JUDGE_REQUEST_LIMITER_SCOPE,
+            &ip_limiter_key,
+            JUDGE_REQUEST_IP_RATE_LIMIT_PER_WINDOW,
+            JUDGE_REQUEST_RATE_LIMIT_WINDOW_SECS,
+        )
+        .await;
+        if !ip_decision.allowed {
+            return Ok(rate_limit_exceeded_response(
+                JUDGE_REQUEST_LIMITER_SCOPE,
+                build_rate_limit_headers(&ip_decision)?,
+            ));
+        }
+        effective_decision = merge_rate_limit_decision(&effective_decision, &ip_decision);
+    }
+    let rate_headers = build_rate_limit_headers(&effective_decision)?;
+
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &headers,
+        JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_INVALID,
+        JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_TOO_LONG,
+        JUDGE_REQUEST_IDEMPOTENCY_KEY_MAX_LEN,
+    )?
+    .unwrap_or_else(|| user_limiter_key.clone());
+
     let acquired = try_acquire_idempotency_or_fail_open(
         &state,
-        "judge_job_request",
+        JUDGE_REQUEST_LIMITER_SCOPE,
         &request_idempotency_key,
         JUDGE_REQUEST_IDEMPOTENCY_TTL_SECS,
     )
     .await;
     if !acquired {
+        if let Some(replayed) = state
+            .load_judge_job_request_idempotency_replay(id, user.id as u64, &request_idempotency_key)
+            .await?
+        {
+            return Ok((StatusCode::ACCEPTED, rate_headers, Json(replayed)).into_response());
+        }
         return Ok((
             StatusCode::CONFLICT,
             rate_headers,
             Json(crate::ErrorOutput::new(
-                "idempotency_conflict:judge_job_request",
+                JUDGE_REQUEST_CODE_IDEMPOTENCY_CONFLICT,
             )),
         )
             .into_response());
     }
 
-    let ret = match state.request_judge_job(id, &user, input).await {
+    let ret = match state
+        .request_judge_job(id, &user, input, Some(&request_idempotency_key))
+        .await
+    {
         Ok(v) => v,
         Err(err) => {
-            release_idempotency_best_effort(&state, "judge_job_request", &request_idempotency_key)
-                .await;
+            release_idempotency_best_effort(
+                &state,
+                JUDGE_REQUEST_LIMITER_SCOPE,
+                &request_idempotency_key,
+            )
+            .await;
             return Err(err);
         }
     };
+    release_idempotency_best_effort(
+        &state,
+        JUDGE_REQUEST_LIMITER_SCOPE,
+        &request_idempotency_key,
+    )
+    .await;
     Ok((StatusCode::ACCEPTED, rate_headers, Json(ret)).into_response())
+}
+
+fn merge_rate_limit_decision(
+    user: &RateLimitDecision,
+    ip: &RateLimitDecision,
+) -> RateLimitDecision {
+    RateLimitDecision {
+        allowed: user.allowed && ip.allowed,
+        limit: user.limit.min(ip.limit),
+        remaining: user.remaining.min(ip.remaining),
+        reset_at_epoch_secs: user.reset_at_epoch_secs.max(ip.reset_at_epoch_secs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        get_router, models::CreateUser, test_fixtures::seed_judge_topic_and_session, ErrorOutput,
+    };
+    use anyhow::Result;
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    async fn issue_token_for_user(state: &AppState, user_id: i64, sid: &str) -> Result<String> {
+        let family_id = format!("{sid}-family");
+        let refresh_jti = format!("{sid}-refresh-jti");
+        let access_jti = format!("{sid}-access-jti");
+
+        sqlx::query(
+            r#"
+            INSERT INTO auth_refresh_sessions (
+                user_id, sid, family_id, current_jti, expires_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, NOW() + interval '1 day', NOW(), NOW())
+            ON CONFLICT (sid) DO UPDATE
+            SET current_jti = EXCLUDED.current_jti,
+                family_id = EXCLUDED.family_id,
+                revoked_at = NULL,
+                revoke_reason = NULL,
+                expires_at = EXCLUDED.expires_at,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .bind(sid)
+        .bind(&family_id)
+        .bind(&refresh_jti)
+        .execute(&state.pool)
+        .await?;
+
+        Ok(state
+            .ek
+            .sign_access_token_with_jti(user_id, sid, 0, access_jti, 900)?)
+    }
+
+    async fn create_bound_user_and_token(
+        state: &AppState,
+        fullname: &str,
+        email: &str,
+        phone: &str,
+        sid: &str,
+    ) -> Result<(chat_core::User, String)> {
+        let user = state
+            .create_user(&CreateUser {
+                fullname: fullname.to_string(),
+                email: email.to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let _ = state.bind_phone_for_user(user.id, phone).await?;
+        let token = issue_token_for_user(state, user.id, sid).await?;
+        Ok((user, token))
+    }
+
+    async fn create_unbound_user_and_token(
+        state: &AppState,
+        fullname: &str,
+        email: &str,
+        sid: &str,
+    ) -> Result<(chat_core::User, String)> {
+        let user = state
+            .create_user(&CreateUser {
+                fullname: fullname.to_string(),
+                email: email.to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(state, user.id, sid).await?;
+        Ok((user, token))
+    }
+
+    async fn add_participant(
+        state: &AppState,
+        session_id: i64,
+        user_id: i64,
+        side: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO session_participants(session_id, user_id, side)
+            VALUES ($1, $2, $3)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .bind(side)
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_judge_job_route_should_require_auth() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-route-auth").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/judge/jobs"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"allowRejudge":false}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_judge_job_route_should_require_phone_bind() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-route-phone").await?;
+        let (_user, token) = create_unbound_user_and_token(
+            &state,
+            "judge route unbound",
+            "judge-route-unbound@acme.org",
+            "judge-route-unbound-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/judge/jobs"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"allowRejudge":false}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_judge_job_route_should_reject_too_long_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-route-idem").await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "judge route bound",
+            "judge-route-bound@acme.org",
+            "+8613800771001",
+            "judge-route-bound-sid",
+        )
+        .await?;
+        add_participant(&state, session_id, user.id, "pro").await?;
+        let app = get_router(state).await?;
+        let long_key = "k".repeat(161);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/judge/jobs"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("idempotency-key", long_key)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"allowRejudge":false}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_TOO_LONG);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_judge_job_route_should_accept_x_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-route-x-idem").await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "judge route x-idem",
+            "judge-route-x-idem@acme.org",
+            "+8613800771002",
+            "judge-route-x-idem-sid",
+        )
+        .await?;
+        add_participant(&state, session_id, user.id, "pro").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/debate/sessions/{session_id}/judge/jobs"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("x-idempotency-key", "judge-route-x-idem-1")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"allowRejudge":false}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        Ok(())
+    }
 }
 
 /// Get latest AI judge report for a debate session.

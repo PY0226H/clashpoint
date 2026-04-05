@@ -4,8 +4,10 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use sha1::{Digest, Sha1};
 use std::{
     collections::HashMap,
+    net::IpAddr,
     sync::{LazyLock, Mutex},
 };
 use tracing::warn;
@@ -148,4 +150,53 @@ pub(crate) async fn release_idempotency_best_effort(state: &AppState, scope: &st
             scope, key, err
         );
     }
+}
+
+pub(crate) fn request_idempotency_key_from_headers(
+    headers: &HeaderMap,
+    invalid_code: &str,
+    too_long_code: &str,
+    max_len: usize,
+) -> Result<Option<String>, AppError> {
+    let Some(raw) = headers
+        .get("idempotency-key")
+        .or_else(|| headers.get("x-idempotency-key"))
+        .and_then(|v| v.to_str().ok())
+    else {
+        return Ok(None);
+    };
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err(AppError::ValidationError(invalid_code.to_string()));
+    }
+    if key.len() > max_len {
+        return Err(AppError::ValidationError(too_long_code.to_string()));
+    }
+    Ok(Some(key.to_string()))
+}
+
+pub(crate) fn request_rate_limit_ip_key_from_headers(headers: &HeaderMap) -> Option<String> {
+    extract_raw_ip_from_forwarded_headers(headers).map(|ip| hash_with_sha1(&ip))
+}
+
+fn extract_raw_ip_from_forwarded_headers(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        for candidate in value.split(',').map(str::trim) {
+            if candidate.parse::<IpAddr>().is_ok() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| v.parse::<IpAddr>().is_ok())
+        .map(ToOwned::to_owned)
+}
+
+fn hash_with_sha1(input: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(input.as_bytes());
+    hex::encode(hasher.finalize())
 }

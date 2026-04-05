@@ -19,6 +19,27 @@ async fn seed_session_messages(state: &AppState, session_id: i64, count: i64) ->
     Ok(())
 }
 
+async fn add_participant(
+    state: &AppState,
+    session_id: i64,
+    user_id: i64,
+    side: &str,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO session_participants(session_id, user_id, side)
+        VALUES ($1, $2, $3)
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(side)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn advance_debate_sessions_should_open_due_scheduled_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -77,6 +98,7 @@ async fn advance_debate_sessions_should_move_running_to_judging_then_closed() ->
 async fn advance_debate_sessions_should_auto_request_judge_job_when_enter_judging() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
+    add_participant(&state, session_id, 1, "pro").await?;
     seed_session_messages(&state, session_id, 100).await?;
     sqlx::query("UPDATE debate_sessions SET end_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
         .bind(session_id)
@@ -160,6 +182,7 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_existing_judging
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "judging", 10).await?;
+    add_participant(&state, session_id, 1, "pro").await?;
     seed_session_messages(&state, session_id, 100).await?;
 
     let first = state.advance_debate_sessions(100).await?;
@@ -189,6 +212,7 @@ async fn advance_debate_sessions_should_backfill_auto_judge_for_closed_session_w
 ) -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "closed", 10).await?;
+    add_participant(&state, session_id, 1, "pro").await?;
     seed_session_messages(&state, session_id, 1).await?;
 
     let report = state.advance_debate_sessions(100).await?;

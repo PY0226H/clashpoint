@@ -13,6 +13,13 @@ pub(super) struct AutoJudgeRequesterRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub(super) struct JudgeJobRequestIdempotencyRow {
+    pub request_hash: String,
+    pub status: String,
+    pub response_snapshot: Option<Value>,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub(super) struct JudgePhaseJobForUpdate {
     pub id: i64,
     pub session_id: i64,

@@ -110,6 +110,125 @@ async function installAuthMocks(page: Page) {
       });
     }
 
+    if (pathname === "/api/debate/topics" && request.method() === "GET") {
+      return json(route, 200, {
+        items: [
+          {
+            id: 101,
+            title: "AI should regulate itself",
+            description: "Debate AI governance boundaries.",
+            category: "governance",
+            stancePro: "strict self-regulation",
+            stanceCon: "external regulation first",
+            contextSeed: null,
+            isActive: true,
+            createdBy: 1,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z"
+          }
+        ],
+        hasMore: false,
+        nextCursor: null,
+        revision: "topic_rev_1"
+      });
+    }
+
+    if (pathname === "/api/debate/sessions" && request.method() === "GET") {
+      return json(route, 200, {
+        items: [
+          {
+            id: 901,
+            topicId: 101,
+            status: "open",
+            scheduledStartAt: "2026-01-01T01:00:00Z",
+            actualStartAt: null,
+            endAt: "2026-01-01T02:00:00Z",
+            maxParticipantsPerSide: 2,
+            proCount: 1,
+            conCount: 1,
+            hotScore: 8,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            joinable: true
+          }
+        ],
+        hasMore: false,
+        nextCursor: null,
+        revision: "session_rev_1"
+      });
+    }
+
+    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/join$/) && request.method() === "POST") {
+      return json(route, 200, {
+        sessionId: 901,
+        side: body?.side === "con" ? "con" : "pro",
+        newlyJoined: true,
+        proCount: body?.side === "con" ? 1 : 2,
+        conCount: body?.side === "con" ? 2 : 1
+      });
+    }
+
+    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/messages$/) && request.method() === "GET") {
+      return json(route, 200, {
+        items: [
+          {
+            id: 2001,
+            sessionId: 901,
+            userId: 10,
+            side: "pro",
+            content: "Opening statement from PRO.",
+            createdAt: "2026-01-01T01:03:00Z"
+          }
+        ],
+        hasMore: false,
+        nextCursor: null,
+        revision: "2001"
+      });
+    }
+
+    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/pins$/) && request.method() === "GET") {
+      return json(route, 200, {
+        items: [
+          {
+            id: 3001,
+            sessionId: 901,
+            messageId: 2001,
+            userId: 10,
+            side: "pro",
+            content: "Pinned argument",
+            costCoins: 20,
+            pinSeconds: 60,
+            pinnedAt: "2026-01-01T01:04:00Z",
+            expiresAt: "2026-01-01T01:05:00Z",
+            status: "active"
+          }
+        ],
+        hasMore: false,
+        nextCursor: null,
+        revision: "3001"
+      });
+    }
+
+    if (pathname.match(/^\/api\/debate\/sessions\/\d+\/messages$/) && request.method() === "POST") {
+      return json(route, 201, {
+        id: 2002,
+        sessionId: 901,
+        userId: 10,
+        side: "pro",
+        content: body?.content || "new message",
+        createdAt: "2026-01-01T01:06:00Z"
+      });
+    }
+
+    if (pathname === "/api/pay/wallet" && request.method() === "GET") {
+      return json(route, 200, {
+        userId: 10,
+        balance: 180,
+        walletRevision: "wallet_rev_1",
+        walletInitialized: true
+      });
+    }
+
     return json(route, 404, { error: `unmocked endpoint: ${pathname}` });
   });
 }
@@ -160,6 +279,25 @@ test("@smoke wechat bind flow reaches home", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/home$/);
   await expect(page.getByRole("heading", { name: "Mac/Web Migration Workbench" })).toBeVisible();
+});
+
+test("@smoke lobby should render sessions and support join", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Lobby" }).click();
+
+  await expect(page).toHaveURL(/\/debate$/);
+  await expect(page.getByRole("heading", { name: "Debate Lobby" })).toBeVisible();
+  await expect(page.getByText("AI should regulate itself")).toBeVisible();
+  await page.getByRole("button", { name: "Join Pro" }).click();
+  await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
+  await expect(page.getByRole("heading", { name: "Debate Room #901" })).toBeVisible();
+  await expect(page.getByText("Opening statement from PRO.")).toBeVisible();
+  await page.getByPlaceholder("Share your argument...").fill("My realtime argument");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("My realtime argument")).toBeVisible();
 });
 
 test("@auth-error password invalid credentials should stay on login", async ({ page }) => {

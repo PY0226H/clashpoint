@@ -143,6 +143,15 @@ importers:
       '@echoisle/auth-sdk':
         specifier: workspace:*
         version: link:../auth-sdk
+      '@echoisle/config':
+        specifier: workspace:*
+        version: link:../config
+      '@echoisle/debate-domain':
+        specifier: workspace:*
+        version: link:../debate-domain
+      '@echoisle/realtime-sdk':
+        specifier: workspace:*
+        version: link:../realtime-sdk
       '@echoisle/tokens':
         specifier: workspace:*
         version: link:../tokens
@@ -216,6 +225,10 @@ importers:
         version: 3.2.4(jsdom@26.1.0)
 
   packages/debate-domain:
+    dependencies:
+      '@echoisle/api-client':
+        specifier: workspace:*
+        version: link:../api-client
     devDependencies:
       eslint:
         specifier: ^9.23.0

@@ -1,0 +1,408 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuthStore } from "@echoisle/auth-sdk";
+import { getRuntimeConfig } from "@echoisle/config";
+import {
+  createDebateMessage,
+  getOldestDebateMessageId,
+  getWalletBalance,
+  listDebateMessages,
+  listDebatePinnedMessages,
+  mergeDebateMessages,
+  toDebateDomainError,
+  type DebateMessage
+} from "@echoisle/debate-domain";
+import {
+  buildDebateRoomAckMessage,
+  buildDebateRoomClientMessage,
+  buildDebateRoomWsUrl,
+  buildNotifyTicketProtocol,
+  computeWsReconnectDelayMs,
+  parseDebateRoomServerMessage
+} from "@echoisle/realtime-sdk";
+import { Button, InlineHint, SectionTitle } from "@echoisle/ui";
+import { useNavigate, useParams } from "react-router-dom";
+
+const runtime = getRuntimeConfig();
+const HISTORY_LIMIT = 80;
+const PINS_LIMIT = 20;
+
+function formatUtc(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  return date.toLocaleString();
+}
+
+function toRoomMessage(payload: Record<string, unknown>): DebateMessage | null {
+  const id = Number(payload.messageId ?? payload.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    return null;
+  }
+  return {
+    id,
+    sessionId: Number(payload.sessionId || 0),
+    userId: Number(payload.userId || 0),
+    side: String(payload.side || "unknown"),
+    content: String(payload.content || ""),
+    createdAt: String(payload.createdAt || new Date().toISOString())
+  };
+}
+
+export function DebateRoomPage() {
+  const navigate = useNavigate();
+  const { sessionId } = useParams();
+  const sessionIdNum = Number(sessionId);
+  const queryClient = useQueryClient();
+  const notifyTicket = useAuthStore((state) => state.accessTickets?.notifyToken || null);
+  const refreshAccessTickets = useAuthStore((state) => state.refreshAccessTickets);
+  const [messages, setMessages] = useState<DebateMessage[]>([]);
+  const [hasMoreHistory, setHasMoreHistory] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [messageInput, setMessageInput] = useState("");
+  const [pageHint, setPageHint] = useState<string | null>(null);
+  const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">(
+    "disconnected"
+  );
+  const wsRef = useRef<WebSocket | null>(null);
+  const connectWsRef = useRef<() => void>(() => undefined);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const lastAckSeqRef = useRef(0);
+  const closedRef = useRef(false);
+
+  const messagesQuery = useQuery({
+    queryKey: ["debate-room-messages", sessionIdNum],
+    queryFn: () => listDebateMessages(sessionIdNum, { limit: HISTORY_LIMIT }),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+  });
+
+  const pinsQuery = useQuery({
+    queryKey: ["debate-room-pins", sessionIdNum],
+    queryFn: () => listDebatePinnedMessages(sessionIdNum, { activeOnly: true, limit: PINS_LIMIT }),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+  });
+
+  const walletQuery = useQuery({
+    queryKey: ["wallet-balance"],
+    queryFn: () => getWalletBalance()
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: async (content: string) => createDebateMessage(sessionIdNum, content),
+    onSuccess: (created) => {
+      setMessageInput("");
+      setPageHint("Message sent.");
+      setMessages((current) => mergeDebateMessages(current, [created]));
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    }
+  });
+
+  useEffect(() => {
+    if (!messagesQuery.data) {
+      return;
+    }
+    setMessages((current) => mergeDebateMessages(current, messagesQuery.data.items));
+    setHasMoreHistory(Boolean(messagesQuery.data.hasMore));
+  }, [messagesQuery.data]);
+
+  useEffect(() => {
+    setMessages([]);
+    setHasMoreHistory(true);
+    setPageHint(null);
+    lastAckSeqRef.current = 0;
+  }, [sessionIdNum]);
+
+  useEffect(() => {
+    if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
+      return;
+    }
+    void refreshAccessTickets().catch(() => undefined);
+  }, [refreshAccessTickets, sessionIdNum]);
+
+  const scheduleReconnect = useCallback(() => {
+    if (closedRef.current || reconnectTimerRef.current) {
+      return;
+    }
+    reconnectAttemptRef.current += 1;
+    setWsStatus("reconnecting");
+    const delay = computeWsReconnectDelayMs(reconnectAttemptRef.current);
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+      connectWsRef.current();
+    }, delay);
+  }, [queryClient, sessionIdNum]);
+
+  const cleanupWs = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  }, []);
+
+  const handleRoomPayload = useCallback(
+    (payload: Record<string, unknown>) => {
+      const event = String(payload.event || "");
+      if (event === "DebateMessageCreated") {
+        const roomMessage = toRoomMessage(payload);
+        if (roomMessage) {
+          setMessages((current) => mergeDebateMessages(current, [roomMessage]));
+        }
+        return;
+      }
+      if (event === "DebateMessagePinned") {
+        void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+        void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+      }
+    },
+    [queryClient, sessionIdNum]
+  );
+
+  const connectWs = useCallback(() => {
+    if (closedRef.current || !notifyTicket || !Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
+      return;
+    }
+    setWsStatus("connecting");
+    try {
+      const url = buildDebateRoomWsUrl({
+        notifyBase: runtime.server.notification,
+        sessionId: sessionIdNum,
+        lastAckSeq: lastAckSeqRef.current
+      });
+      const protocol = buildNotifyTicketProtocol(notifyTicket);
+      const ws = new WebSocket(url, [protocol]);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        reconnectAttemptRef.current = 0;
+        setWsStatus("connected");
+      };
+      ws.onmessage = (event) => {
+        const msg = parseDebateRoomServerMessage(String(event.data || ""));
+        if (!msg) {
+          return;
+        }
+        if (msg.type === "ping") {
+          ws.send(buildDebateRoomClientMessage({ type: "pong" }));
+          return;
+        }
+        if (msg.type === "welcome") {
+          lastAckSeqRef.current = Math.max(lastAckSeqRef.current, msg.baselineAckSeq);
+          return;
+        }
+        if (msg.type === "syncRequired") {
+          setPageHint(`Realtime sync required: ${msg.reason}`);
+          lastAckSeqRef.current = Math.max(lastAckSeqRef.current, msg.suggestedLastAckSeq);
+          void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+          void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+          void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+          ws.close();
+          return;
+        }
+        if (msg.type === "roomEvent") {
+          const ack = buildDebateRoomAckMessage(msg.eventSeq);
+          if (msg.eventSeq > 0 && msg.eventSeq <= lastAckSeqRef.current) {
+            if (ack) {
+              ws.send(ack);
+            }
+            return;
+          }
+          if (msg.eventSeq > lastAckSeqRef.current + 1) {
+            setPageHint("Realtime gap detected, recovering snapshot...");
+            void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+            void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+          } else {
+            handleRoomPayload(msg.payload);
+          }
+          lastAckSeqRef.current = Math.max(lastAckSeqRef.current, msg.eventSeq);
+          if (ack) {
+            ws.send(ack);
+          }
+        }
+      };
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (!closedRef.current) {
+          scheduleReconnect();
+        } else {
+          setWsStatus("disconnected");
+        }
+      };
+      ws.onerror = () => {
+        ws.close();
+      };
+    } catch (error) {
+      setPageHint(toDebateDomainError(error));
+      scheduleReconnect();
+    }
+  }, [handleRoomPayload, notifyTicket, queryClient, scheduleReconnect, sessionIdNum]);
+
+  useEffect(() => {
+    connectWsRef.current = connectWs;
+  }, [connectWs]);
+
+  useEffect(() => {
+    closedRef.current = false;
+    connectWs();
+    return () => {
+      closedRef.current = true;
+      cleanupWs();
+      setWsStatus("disconnected");
+    };
+  }, [cleanupWs, connectWs]);
+
+  const loadOlder = useCallback(async () => {
+    if (historyLoading || !hasMoreHistory) {
+      return;
+    }
+    const oldestId = getOldestDebateMessageId(messages);
+    if (!oldestId) {
+      setHasMoreHistory(false);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const result = await listDebateMessages(sessionIdNum, {
+        lastId: oldestId,
+        limit: HISTORY_LIMIT
+      });
+      setMessages((current) => mergeDebateMessages(current, result.items));
+      setHasMoreHistory(Boolean(result.hasMore));
+    } catch (error) {
+      setPageHint(toDebateDomainError(error));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [hasMoreHistory, historyLoading, messages, sessionIdNum]);
+
+  const wsStatusLabel = useMemo(() => {
+    switch (wsStatus) {
+      case "connected":
+        return "Connected";
+      case "connecting":
+        return "Connecting";
+      case "reconnecting":
+        return "Reconnecting";
+      default:
+        return "Disconnected";
+    }
+  }, [wsStatus]);
+
+  if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
+    return (
+      <section className="echo-room-page">
+        <SectionTitle>Debate Room</SectionTitle>
+        <p className="echo-error">Invalid session id.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="echo-room-page">
+      <header className="echo-room-header">
+        <div>
+          <SectionTitle>Debate Room #{sessionIdNum}</SectionTitle>
+          <p>Phase 4 baseline: history paging + realtime stream + send message + pinned section.</p>
+        </div>
+        <div className="echo-room-top-actions">
+          <InlineHint>Realtime: {wsStatusLabel}</InlineHint>
+          <Button onClick={() => navigate("/debate")} type="button">
+            Back To Lobby
+          </Button>
+        </div>
+      </header>
+
+      <section className="echo-lobby-summary">
+        <article>
+          <strong>{messages.length}</strong>
+          <span>Messages</span>
+        </article>
+        <article>
+          <strong>{pinsQuery.data?.items.length ?? 0}</strong>
+          <span>Pinned</span>
+        </article>
+        <article>
+          <strong>{walletQuery.data?.balance ?? 0}</strong>
+          <span>Wallet Coins</span>
+        </article>
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Pinned Messages</h3>
+        {pinsQuery.isLoading ? <InlineHint>Loading pins...</InlineHint> : null}
+        {pinsQuery.isError ? <p className="echo-error">{toDebateDomainError(pinsQuery.error)}</p> : null}
+        <div className="echo-room-pins">
+          {(pinsQuery.data?.items || []).map((pin) => (
+            <article className="echo-topic-item" key={pin.id}>
+              <h4>
+                {pin.side} | {pin.costCoins} coins | {pin.pinSeconds}s
+              </h4>
+              <p>{pin.content}</p>
+              <InlineHint>Expires: {formatUtc(pin.expiresAt)}</InlineHint>
+            </article>
+          ))}
+          {!pinsQuery.isLoading && (pinsQuery.data?.items.length || 0) === 0 ? (
+            <InlineHint>No active pinned messages.</InlineHint>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Message Stream</h3>
+        <div className="echo-room-history-actions">
+          <Button disabled={!hasMoreHistory || historyLoading} onClick={() => void loadOlder()} type="button">
+            {historyLoading ? "Loading..." : hasMoreHistory ? "Load Older Messages" : "No Older Messages"}
+          </Button>
+        </div>
+        {messagesQuery.isLoading ? <InlineHint>Loading messages...</InlineHint> : null}
+        {messagesQuery.isError ? <p className="echo-error">{toDebateDomainError(messagesQuery.error)}</p> : null}
+        <div className="echo-room-message-list">
+          {messages.map((message) => (
+            <article className="echo-room-message" key={message.id}>
+              <header>
+                <strong>
+                  #{message.id} | {message.side} | user {message.userId}
+                </strong>
+                <span>{formatUtc(message.createdAt)}</span>
+              </header>
+              <p>{message.content}</p>
+            </article>
+          ))}
+          {!messagesQuery.isLoading && messages.length === 0 ? <InlineHint>No messages yet.</InlineHint> : null}
+        </div>
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Send Message</h3>
+        <div className="echo-room-composer">
+          <textarea
+            className="echo-room-input"
+            onChange={(event) => setMessageInput(event.target.value)}
+            placeholder="Share your argument..."
+            rows={3}
+            value={messageInput}
+          />
+          <Button
+            disabled={sendMutation.isPending || !messageInput.trim()}
+            onClick={() => sendMutation.mutate(messageInput)}
+            type="button"
+          >
+            {sendMutation.isPending ? "Sending..." : "Send"}
+          </Button>
+        </div>
+      </section>
+
+      {pageHint ? <InlineHint>{pageHint}</InlineHint> : null}
+    </section>
+  );
+}

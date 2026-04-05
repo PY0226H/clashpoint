@@ -79,7 +79,9 @@
 
 .echo-home,
 .echo-bind-page,
-.echo-placeholder-page {
+.echo-placeholder-page,
+.echo-lobby-page,
+.echo-room-page {
   max-width: 920px;
   display: flex;
   flex-direction: column;
@@ -116,6 +118,186 @@
 .echo-phase-item p {
   margin: 0;
   color: var(--echo-muted);
+}
+
+.echo-lobby-header p {
+  margin: 0;
+  color: var(--echo-muted);
+}
+
+.echo-room-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.echo-room-header p {
+  margin: 0;
+  color: var(--echo-muted);
+}
+
+.echo-room-top-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.echo-lobby-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-lobby-summary article {
+  padding: var(--echo-space-3);
+  border-radius: var(--echo-radius-md);
+  background: color-mix(in srgb, var(--echo-surface) 88%, white 12%);
+  box-shadow: var(--echo-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.echo-lobby-summary strong {
+  font-size: 1.3rem;
+  font-family: var(--echo-font-title);
+}
+
+.echo-lobby-summary span {
+  color: var(--echo-muted);
+  font-size: 0.85rem;
+}
+
+.echo-lobby-panel {
+  padding: var(--echo-space-3);
+  border-radius: var(--echo-radius-md);
+  background: color-mix(in srgb, var(--echo-surface) 90%, white 10%);
+  box-shadow: var(--echo-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.echo-lobby-panel h3 {
+  margin: 0;
+  font-family: var(--echo-font-title);
+}
+
+.echo-topic-grid,
+.echo-session-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-room-pins {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-room-history-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.echo-room-message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 460px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.echo-room-message {
+  padding: 12px;
+  border-radius: var(--echo-radius-md);
+  border: 1px solid color-mix(in srgb, var(--echo-border) 85%, transparent 15%);
+  background: color-mix(in srgb, white 92%, var(--echo-surface-2) 8%);
+}
+
+.echo-room-message header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.echo-room-message p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.echo-room-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.echo-room-input {
+  border-radius: var(--echo-radius-md);
+  border: 1px solid var(--echo-border);
+  background: color-mix(in srgb, white 92%, var(--echo-surface-2) 8%);
+  padding: 12px;
+  font: inherit;
+  color: var(--echo-ink);
+  resize: vertical;
+}
+
+.echo-topic-item,
+.echo-session-item {
+  padding: 14px;
+  border-radius: var(--echo-radius-md);
+  border: 1px solid color-mix(in srgb, var(--echo-border) 85%, transparent 15%);
+  background: color-mix(in srgb, white 92%, var(--echo-surface-2) 8%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.echo-topic-item h4,
+.echo-session-item h4,
+.echo-session-item p {
+  margin: 0;
+}
+
+.echo-session-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.echo-session-status {
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.echo-session-status.is-open {
+  color: #157347;
+}
+
+.echo-session-status.is-running {
+  color: #0f5fd3;
+}
+
+.echo-session-status.is-judging {
+  color: #7b5cff;
+}
+
+.echo-session-status.is-closed {
+  color: #6c757d;
+}
+
+.echo-lobby-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .echo-roadmap-strip {
@@ -290,6 +472,25 @@
   }
 
   .echo-phase-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .echo-lobby-summary,
+  .echo-topic-grid,
+  .echo-session-grid,
+  .echo-room-pins {
+    grid-template-columns: 1fr;
+  }
+
+  .echo-room-header {
+    flex-direction: column;
+  }
+
+  .echo-room-top-actions {
+    align-items: flex-start;
+  }
+
+  .echo-room-composer {
     grid-template-columns: 1fr;
   }
 
