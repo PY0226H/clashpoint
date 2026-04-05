@@ -6,8 +6,9 @@ use crate::{
         release_idempotency_best_effort, try_acquire_idempotency_or_fail_open,
     },
     AppError, AppState, CreateDebateMessageInput, ErrorOutput, JoinDebateSessionInput,
-    ListDebateMessages, ListDebateMessagesOutput, ListDebatePinnedMessages, ListDebateSessions,
-    ListDebateSessionsOutput, PinDebateMessageInput,
+    ListDebateMessages, ListDebateMessagesOutput, ListDebatePinnedMessages,
+    ListDebatePinnedMessagesOutput, ListDebateSessions, ListDebateSessionsOutput,
+    PinDebateMessageInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -41,6 +42,9 @@ const DEBATE_SESSION_JOIN_USER_RATE_LIMIT_PER_WINDOW: u64 = 20;
 const DEBATE_SESSION_JOIN_IP_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const DEBATE_SESSION_JOIN_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const DEBATE_SESSION_JOIN_IDEMPOTENCY_TTL_SECS: u64 = 15;
+const DEBATE_PINS_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 180;
+const DEBATE_PINS_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 540;
+const DEBATE_PINS_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
 #[derive(Default)]
 struct DebateSessionsListMetrics {
@@ -207,6 +211,50 @@ impl DebateMessagesListMetrics {
 
 static DEBATE_MESSAGES_LIST_METRICS: LazyLock<DebateMessagesListMetrics> =
     LazyLock::new(DebateMessagesListMetrics::default);
+
+#[derive(Default)]
+struct DebatePinsListMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    conflict_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+}
+
+impl DebatePinsListMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_conflict(&self) {
+        self.conflict_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.conflict_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+static DEBATE_PINS_LIST_METRICS: LazyLock<DebatePinsListMetrics> =
+    LazyLock::new(DebatePinsListMetrics::default);
 
 #[derive(Default)]
 struct DebateMessageCreateMetrics {
@@ -1018,9 +1066,14 @@ pub(crate) async fn pin_debate_message_handler(
         ListDebatePinnedMessages
     ),
     responses(
-        (status = 200, description = "Pinned debate messages", body = Vec<crate::DebatePinnedMessage>),
+        (status = 200, description = "Pinned debate messages", body = crate::ListDebatePinnedMessagesOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
         (status = 409, description = "User cannot read in current session status", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1029,11 +1082,129 @@ pub(crate) async fn pin_debate_message_handler(
 pub(crate) async fn list_debate_pinned_messages_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
     Query(input): Query<ListDebatePinnedMessages>,
-) -> Result<impl IntoResponse, AppError> {
-    let pins = state.list_debate_pinned_messages(id, &user, input).await?;
-    Ok((StatusCode::OK, Json(pins)))
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    DEBATE_PINS_LIST_METRICS.observe_start();
+    let request_id = request_id_from_headers(&headers);
+
+    let user_limit_key = format!("{}:{}", user.id, id);
+    let user_decision = enforce_rate_limit(
+        &state,
+        "debate_pins_list_user",
+        &user_limit_key,
+        DEBATE_PINS_LIST_USER_RATE_LIMIT_PER_WINDOW,
+        DEBATE_PINS_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision = maybe_override_rate_limit_decision(&headers, "pins_user", user_decision);
+    let response_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        DEBATE_PINS_LIST_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            session_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_user",
+            "list debate pinned messages blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_pins_list",
+            response_headers,
+        ));
+    }
+
+    let ip_limit_key = request_rate_limit_ip_key_from_headers(&headers)
+        .map(|v| format!("{v}:{id}"))
+        .unwrap_or_else(|| format!("unknown:{id}"));
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "debate_pins_list_ip",
+        &ip_limit_key,
+        DEBATE_PINS_LIST_IP_RATE_LIMIT_PER_WINDOW,
+        DEBATE_PINS_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(&headers, "pins_ip", ip_decision);
+    if !ip_decision.allowed {
+        DEBATE_PINS_LIST_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            session_id = id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            decision = "rate_limited_ip",
+            "list debate pinned messages blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "debate_pins_list",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let output: ListDebatePinnedMessagesOutput = match state
+        .list_debate_pinned_messages(id, &user, input)
+        .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            if matches!(err, AppError::DebateConflict(_)) {
+                DEBATE_PINS_LIST_METRICS.observe_conflict();
+            } else {
+                DEBATE_PINS_LIST_METRICS.observe_failure();
+            }
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let (request_total, success_total, failed_total, conflict_total, rate_limited_total) =
+                DEBATE_PINS_LIST_METRICS.snapshot();
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                conflict = matches!(err, AppError::DebateConflict(_)),
+                debate_pins_list_request_total = request_total,
+                debate_pins_list_success_total = success_total,
+                debate_pins_list_failed_total = failed_total,
+                debate_pins_list_conflict_total = conflict_total,
+                debate_pins_list_rate_limited_total = rate_limited_total,
+                decision = "failed",
+                "list debate pinned messages failed: {}",
+                err
+            );
+            if let AppError::DebateConflict(reason) = &err {
+                return Ok(
+                    (StatusCode::CONFLICT, Json(ErrorOutput::new(reason.clone()))).into_response(),
+                );
+            }
+            return Err(err);
+        }
+    };
+
+    DEBATE_PINS_LIST_METRICS.observe_success();
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let (request_total, success_total, failed_total, conflict_total, rate_limited_total) =
+        DEBATE_PINS_LIST_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        result_count = output.items.len(),
+        has_more = output.has_more,
+        next_cursor = output.next_cursor.as_deref().unwrap_or_default(),
+        latency_ms,
+        debate_pins_list_request_total = request_total,
+        debate_pins_list_success_total = success_total,
+        debate_pins_list_failed_total = failed_total,
+        debate_pins_list_conflict_total = conflict_total,
+        debate_pins_list_rate_limited_total = rate_limited_total,
+        decision = "success",
+        "list debate pinned messages served"
+    );
+
+    Ok((StatusCode::OK, response_headers, Json(output)).into_response())
 }
 
 fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -1144,6 +1315,16 @@ fn maybe_override_rate_limit_decision(
         return decision;
     }
     if target == "create_ip" && forced.eq_ignore_ascii_case("create_ip") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "pins_user" && forced.eq_ignore_ascii_case("pins_user") {
+        decision.allowed = false;
+        decision.remaining = 0;
+        return decision;
+    }
+    if target == "pins_ip" && forced.eq_ignore_ascii_case("pins_ip") {
         decision.allowed = false;
         decision.remaining = 0;
         return decision;
@@ -1271,6 +1452,22 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         Ok(session_id.0)
+    }
+
+    async fn set_wallet_balance(state: &AppState, user_id: i64, balance: i64) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO user_wallets(user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET balance = EXCLUDED.balance, updated_at = NOW()
+            "#,
+        )
+        .bind(user_id)
+        .bind(balance)
+        .execute(&state.pool)
+        .await?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1960,6 +2157,185 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(err.error, "debate_messages_invalid_last_id");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_pins_route_should_return_429_when_user_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Pins RateLimit",
+            "debate-pins-ratelimit@acme.org",
+            "+8613810010006",
+            "debate-pins-ratelimit-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/pins"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("x-test-force-rate-limit", "pins_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "rate_limit_exceeded:debate_pins_list");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_pins_route_should_return_envelope_payload() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Debate Pins Envelope",
+            "debate-pins-envelope@acme.org",
+            "+8613810010007",
+            "debate-pins-envelope-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "running",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        set_wallet_balance(&state, user.id, 500).await?;
+
+        let msg1 = state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: "pin-route-msg-1".to_string(),
+                },
+            )
+            .await?;
+        let msg2 = state
+            .create_debate_message(
+                session_id as u64,
+                &user,
+                CreateDebateMessageInput {
+                    content: "pin-route-msg-2".to_string(),
+                },
+            )
+            .await?;
+        state
+            .pin_debate_message(
+                msg1.id as u64,
+                &user,
+                PinDebateMessageInput {
+                    pin_seconds: 60,
+                    idempotency_key: "pins-route-key-1".to_string(),
+                },
+            )
+            .await?;
+        state
+            .pin_debate_message(
+                msg2.id as u64,
+                &user,
+                PinDebateMessageInput {
+                    pin_seconds: 60,
+                    idempotency_key: "pins-route-key-2".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/pins?limit=1"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let output: crate::ListDebatePinnedMessagesOutput = serde_json::from_slice(&body)?;
+        assert_eq!(output.items.len(), 1);
+        assert!(output.has_more);
+        assert!(output.next_cursor.is_some());
+        assert!(!output.revision.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debate_pins_route_should_return_forbidden_conflict_code() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (joined_user, _joined_token) = create_bound_user_and_token(
+            &state,
+            "Debate Pins Joined",
+            "debate-pins-joined@acme.org",
+            "+8613810010008",
+            "debate-pins-joined-sid",
+        )
+        .await?;
+        let (_spectator, spectator_token) = create_bound_user_and_token(
+            &state,
+            "Debate Pins Spectator",
+            "debate-pins-spectator@acme.org",
+            "+8613810010009",
+            "debate-pins-spectator-sid",
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let session_id = seed_session_with_window(
+            &state,
+            "open",
+            now - chrono::Duration::minutes(5),
+            now + chrono::Duration::minutes(20),
+        )
+        .await?;
+        state
+            .join_debate_session(
+                session_id as u64,
+                &joined_user,
+                JoinDebateSessionInput {
+                    side: "pro".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/debate/sessions/{session_id}/pins"))
+            .header("Authorization", format!("Bearer {}", spectator_token))
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "debate_pins_read_forbidden");
         Ok(())
     }
 }

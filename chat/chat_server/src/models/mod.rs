@@ -16,8 +16,8 @@ pub use chat::{CreateChat, UpdateChat, UpdateChatMembers};
 pub use debate::{
     CreateDebateMessageInput, DebateMessage, DebatePinnedMessage, DebateSessionSummary,
     DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateMessages,
-    ListDebateMessagesOutput, ListDebatePinnedMessages, ListDebateSessions,
-    ListDebateSessionsOutput, ListDebateTopics, ListDebateTopicsOutput,
+    ListDebateMessagesOutput, ListDebatePinnedMessages, ListDebatePinnedMessagesOutput,
+    ListDebateSessions, ListDebateSessionsOutput, ListDebateTopics, ListDebateTopicsOutput,
     OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsUpdateDebateSessionInput,
     OpsUpdateDebateTopicInput, PinDebateMessageInput, PinDebateMessageOutput,
 };

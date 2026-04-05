@@ -55,6 +55,7 @@ const DEBATE_MESSAGE_CONFLICT_NOT_JOINED: &str = "debate_message_not_joined";
 const DEBATE_MESSAGE_CONTENT_EMPTY: &str = "debate_message_content_empty";
 const DEBATE_MESSAGE_CONTENT_TOO_LONG: &str = "debate_message_content_too_long";
 const DEBATE_MESSAGE_OUTBOX_ENQUEUE_FAILED: &str = "debate_message_outbox_enqueue_failed";
+const DEBATE_PINS_CONFLICT_READ_FORBIDDEN: &str = "debate_pins_read_forbidden";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,7 +228,17 @@ pub struct ListDebateMessagesOutput {
 pub struct ListDebatePinnedMessages {
     #[serde(default = "default_true")]
     pub active_only: bool,
+    pub cursor: Option<String>,
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDebatePinnedMessagesOutput {
+    pub items: Vec<DebatePinnedMessage>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
@@ -330,6 +341,12 @@ struct ListDebateSessionsCursor {
     id: i64,
 }
 
+#[derive(Debug, Clone)]
+struct ListDebatePinnedMessagesCursor {
+    pinned_at: DateTime<Utc>,
+    id: i64,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -399,6 +416,38 @@ fn decode_list_debate_sessions_cursor(raw: &str) -> Result<ListDebateSessionsCur
         scheduled_start_at,
         id,
     })
+}
+
+fn format_pins_cursor_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+fn encode_list_debate_pinned_messages_cursor(value: DateTime<Utc>, id: i64) -> String {
+    format!("{}|{}", format_pins_cursor_timestamp(value), id)
+}
+
+fn decode_list_debate_pinned_messages_cursor(
+    raw: &str,
+) -> Result<ListDebatePinnedMessagesCursor, AppError> {
+    let trimmed = raw.trim();
+    let Some((pinned_at_raw, id_raw)) = trimmed.split_once('|') else {
+        return Err(AppError::ValidationError(
+            "debate_pins_cursor_invalid".to_string(),
+        ));
+    };
+    let pinned_at = DateTime::parse_from_rfc3339(pinned_at_raw.trim())
+        .map(|ts| ts.with_timezone(&Utc))
+        .map_err(|_| AppError::ValidationError("debate_pins_cursor_invalid".to_string()))?;
+    let id = id_raw
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| AppError::ValidationError("debate_pins_cursor_invalid".to_string()))?;
+    if id <= 0 {
+        return Err(AppError::ValidationError(
+            "debate_pins_cursor_invalid".to_string(),
+        ));
+    }
+    Ok(ListDebatePinnedMessagesCursor { pinned_at, id })
 }
 
 fn map_join_lock_sqlx_error(err: sqlx::Error, session_id: u64) -> AppError {

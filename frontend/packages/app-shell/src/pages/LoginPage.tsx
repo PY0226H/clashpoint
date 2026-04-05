@@ -41,11 +41,11 @@ export function LoginPage() {
   }, [accountType, authMode]);
 
   useEffect(() => {
-    const target = resolveLandingPath({ token, user });
+    const target = resolveLandingPath({ token, user, wechatBindTicket });
     if (target !== "/login") {
       navigate(target, { replace: true });
     }
-  }, [token, user, navigate]);
+  }, [token, user, wechatBindTicket, navigate]);
 
   useEffect(() => {
     if (smsCooldown <= 0) {

@@ -398,8 +398,14 @@ impl AppState {
             .load_session_for_action(&mut tx, session_id_i64)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
-        self.ensure_debate_session_readable(&mut tx, session_id_i64, user, &session.status)
-            .await?;
+        self.ensure_debate_session_readable(
+            &mut tx,
+            session_id_i64,
+            user,
+            &session.status,
+            "debate_messages_read_forbidden",
+        )
+        .await?;
 
         let mut rows: Vec<DebateMessage> = sqlx::query_as(
             r#"
@@ -452,45 +458,96 @@ impl AppState {
         session_id: u64,
         user: &User,
         input: ListDebatePinnedMessages,
-    ) -> Result<Vec<DebatePinnedMessage>, AppError> {
+    ) -> Result<ListDebatePinnedMessagesOutput, AppError> {
+        let session_id_i64 = safe_u64_to_i64(session_id, "debate_pins_invalid_session_id")?;
+        let cursor = input
+            .cursor
+            .as_deref()
+            .map(decode_list_debate_pinned_messages_cursor)
+            .transpose()?;
+        let normalized_limit = normalize_debate_pin_limit(input.limit);
+        let effective_limit = normalized_limit as usize;
+
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
         let session = self
-            .load_session_for_action(&mut tx, session_id as i64)
+            .load_session_for_action(&mut tx, session_id_i64)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
-        self.ensure_debate_session_readable(&mut tx, session_id as i64, user, &session.status)
-            .await?;
+        self.ensure_debate_session_readable(
+            &mut tx,
+            session_id_i64,
+            user,
+            &session.status,
+            DEBATE_PINS_CONFLICT_READ_FORBIDDEN,
+        )
+        .await?;
 
-        let rows: Vec<DebatePinnedMessage> = sqlx::query_as(
+        let mut rows: Vec<DebatePinnedMessage> = sqlx::query_as(
             r#"
             SELECT
                 p.id,
                 p.session_id,
                 p.message_id,
                 p.user_id,
-                m.side,
-                m.content,
+                COALESCE(m.side, 'unknown') AS side,
+                COALESCE(m.content, '[message unavailable]') AS content,
                 p.cost_coins,
                 p.pin_seconds,
                 p.pinned_at,
                 p.expires_at,
                 p.status
             FROM session_pinned_messages p
-            INNER JOIN session_messages m ON m.id = p.message_id
+            LEFT JOIN session_messages m ON m.id = p.message_id
             WHERE p.session_id = $1
               AND (NOT $2::boolean OR (p.status = 'active' AND p.expires_at > NOW()))
-            ORDER BY p.pinned_at DESC
-            LIMIT $3
+              AND (
+                $3::timestamptz IS NULL
+                OR p.pinned_at < $3
+                OR (p.pinned_at = $3 AND p.id < $4)
+              )
+            ORDER BY p.pinned_at DESC, p.id DESC
+            LIMIT $5
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .bind(input.active_only)
-        .bind(normalize_debate_pin_limit(input.limit))
+        .bind(cursor.as_ref().map(|value| value.pinned_at))
+        .bind(cursor.as_ref().map(|value| value.id))
+        .bind(normalized_limit + 1)
         .fetch_all(&mut *tx)
         .await?;
 
+        let has_more = rows.len() > effective_limit;
+        if has_more {
+            rows.truncate(effective_limit);
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|item| encode_list_debate_pinned_messages_cursor(item.pinned_at, item.id))
+        } else {
+            None
+        };
+        let latest_pin_id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(id), 0)
+            FROM session_pinned_messages
+            WHERE session_id = $1
+            "#,
+        )
+        .bind(session_id_i64)
+        .fetch_one(&mut *tx)
+        .await?;
+
         tx.commit().await?;
-        Ok(rows)
+        Ok(ListDebatePinnedMessagesOutput {
+            items: rows,
+            has_more,
+            next_cursor,
+            revision: latest_pin_id.to_string(),
+        })
     }
 
     pub async fn pin_debate_message(
@@ -727,6 +784,7 @@ impl AppState {
         session_id: i64,
         user: &User,
         session_status: &str,
+        forbidden_code: &str,
     ) -> Result<(), AppError> {
         if can_spectate_status(session_status) {
             return Ok(());
@@ -747,9 +805,7 @@ impl AppState {
             return Ok(());
         }
 
-        Err(AppError::DebateConflict(
-            "debate_messages_read_forbidden".to_string(),
-        ))
+        Err(AppError::DebateConflict(forbidden_code.to_string()))
     }
 
     async fn load_existing_pin_by_idempotency(

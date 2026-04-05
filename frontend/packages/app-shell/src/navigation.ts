@@ -1,8 +1,11 @@
 import { isPhoneBindRequired, type useAuthStore } from "@echoisle/auth-sdk";
 
-type AuthSnapshot = Pick<ReturnType<typeof useAuthStore.getState>, "token" | "user">;
+type AuthSnapshot = Pick<ReturnType<typeof useAuthStore.getState>, "token" | "user" | "wechatBindTicket">;
 
-export function resolveLandingPath({ token, user }: AuthSnapshot): string {
+export function resolveLandingPath({ token, user, wechatBindTicket }: AuthSnapshot): string {
+  if (!token && wechatBindTicket) {
+    return "/bind-phone";
+  }
   if (!token) {
     return "/login";
   }

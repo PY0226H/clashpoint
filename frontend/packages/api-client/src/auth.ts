@@ -58,6 +58,14 @@ export type WechatSigninResponse = {
   user?: AuthUser;
 };
 
+export type WechatBindPhoneRequest = {
+  wechatTicket: string;
+  phone: string;
+  smsCode: string;
+  password?: string;
+  fullname?: string;
+};
+
 export async function requestWechatChallenge(): Promise<WechatChallengeResponse> {
   const response = await http.post<WechatChallengeResponse>("/auth/v2/wechat/challenge");
   return response.data;
@@ -65,6 +73,11 @@ export async function requestWechatChallenge(): Promise<WechatChallengeResponse>
 
 export async function signinWechat(payload: WechatSigninRequest): Promise<WechatSigninResponse> {
   const response = await http.post<WechatSigninResponse>("/auth/v2/wechat/signin", payload);
+  return response.data;
+}
+
+export async function bindWechatPhone(payload: WechatBindPhoneRequest): Promise<WechatSigninResponse> {
+  const response = await http.post<WechatSigninResponse>("/auth/v2/wechat/bind-phone", payload);
   return response.data;
 }
 

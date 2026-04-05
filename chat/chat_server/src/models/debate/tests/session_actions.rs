@@ -756,12 +756,153 @@ async fn list_debate_pinned_messages_should_allow_spectator_when_running() -> Re
             &spectator,
             ListDebatePinnedMessages {
                 active_only: true,
+                cursor: None,
                 limit: Some(20),
             },
         )
         .await?;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].message_id, msg.id);
+    assert_eq!(rows.items.len(), 1);
+    assert_eq!(rows.items[0].message_id, msg.id);
+    assert!(!rows.has_more);
+    assert!(rows.next_cursor.is_none());
+    assert!(!rows.revision.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_pinned_messages_should_return_forbidden_code_when_unreadable() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let joined = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+    let spectator = state
+        .find_user_by_id(3)
+        .await?
+        .expect("user id 3 should exist");
+
+    state
+        .join_debate_session(
+            session_id as u64,
+            &joined,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+
+    let err = state
+        .list_debate_pinned_messages(
+            session_id as u64,
+            &spectator,
+            ListDebatePinnedMessages {
+                active_only: true,
+                cursor: None,
+                limit: Some(20),
+            },
+        )
+        .await
+        .expect_err("unreadable session should return conflict");
+    match err {
+        AppError::DebateConflict(code) => assert_eq!(code, "debate_pins_read_forbidden"),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_debate_pinned_messages_should_support_cursor_pagination() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "running", 10).await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("user id 1 should exist");
+
+    state
+        .join_debate_session(
+            session_id as u64,
+            &user,
+            JoinDebateSessionInput {
+                side: "pro".to_string(),
+            },
+        )
+        .await?;
+    set_wallet_balance(&state, user.id, 500).await?;
+
+    let msg1 = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "pin-cursor-1".to_string(),
+            },
+        )
+        .await?;
+    let msg2 = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "pin-cursor-2".to_string(),
+            },
+        )
+        .await?;
+    state
+        .pin_debate_message(
+            msg1.id as u64,
+            &user,
+            PinDebateMessageInput {
+                pin_seconds: 60,
+                idempotency_key: "pin-cursor-key-1".to_string(),
+            },
+        )
+        .await?;
+    state
+        .pin_debate_message(
+            msg2.id as u64,
+            &user,
+            PinDebateMessageInput {
+                pin_seconds: 60,
+                idempotency_key: "pin-cursor-key-2".to_string(),
+            },
+        )
+        .await?;
+
+    let page1 = state
+        .list_debate_pinned_messages(
+            session_id as u64,
+            &user,
+            ListDebatePinnedMessages {
+                active_only: true,
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .await?;
+    assert_eq!(page1.items.len(), 1);
+    assert!(page1.has_more);
+    let cursor = page1
+        .next_cursor
+        .clone()
+        .expect("first page should have next cursor");
+
+    let page2 = state
+        .list_debate_pinned_messages(
+            session_id as u64,
+            &user,
+            ListDebatePinnedMessages {
+                active_only: true,
+                cursor: Some(cursor),
+                limit: Some(1),
+            },
+        )
+        .await?;
+    assert_eq!(page2.items.len(), 1);
+    assert!(!page2.has_more);
+    assert_ne!(page1.items[0].id, page2.items[0].id);
+    assert!(!page2.revision.is_empty());
     Ok(())
 }
 

@@ -30,7 +30,8 @@ function ProtectedLayout() {
 function RootRedirect() {
   const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
-  return <Navigate replace to={resolveLandingPath({ token, user })} />;
+  const wechatBindTicket = useAuthStore((state) => state.wechatBindTicket);
+  return <Navigate replace to={resolveLandingPath({ token, user, wechatBindTicket })} />;
 }
 
 export function AppRoot() {

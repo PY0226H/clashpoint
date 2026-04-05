@@ -5,12 +5,15 @@ import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 
 export function PhoneBindPage() {
   const navigate = useNavigate();
+  const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
+  const wechatBindTicket = useAuthStore((state) => state.wechatBindTicket);
   const loading = useAuthStore((state) => state.loading);
   const error = useAuthStore((state) => state.error);
   const clearError = useAuthStore((state) => state.clearError);
   const sendBindSmsCode = useAuthStore((state) => state.sendBindSmsCode);
   const bindPhone = useAuthStore((state) => state.bindPhone);
+  const bindPhoneWithWechatTicket = useAuthStore((state) => state.bindPhoneWithWechatTicket);
   const logout = useAuthStore((state) => state.logout);
   const [phone, setPhone] = useState(user?.phoneE164 || "+8613900000000");
   const [smsCode, setSmsCode] = useState("");
@@ -23,6 +26,13 @@ export function PhoneBindPage() {
     () => !loading && !!phone.trim() && !!smsCode.trim(),
     [loading, phone, smsCode]
   );
+  const isWechatBindFlow = useMemo(() => !token && !!wechatBindTicket, [token, wechatBindTicket]);
+
+  useEffect(() => {
+    if (!token && !wechatBindTicket) {
+      navigate("/login", { replace: true });
+    }
+  }, [token, wechatBindTicket, navigate]);
 
   useEffect(() => {
     if (cooldownLeft <= 0) {
@@ -51,10 +61,17 @@ export function PhoneBindPage() {
     event.preventDefault();
     clearError();
     try {
-      await bindPhone({
-        phone: phone.trim(),
-        smsCode: smsCode.trim()
-      });
+      if (isWechatBindFlow) {
+        await bindPhoneWithWechatTicket({
+          phone: phone.trim(),
+          smsCode: smsCode.trim()
+        });
+      } else {
+        await bindPhone({
+          phone: phone.trim(),
+          smsCode: smsCode.trim()
+        });
+      }
       navigate("/home", { replace: true });
     } catch {
       // Error state is maintained in auth store.
@@ -63,9 +80,11 @@ export function PhoneBindPage() {
 
   return (
     <section className="echo-bind-page">
-      <SectionTitle>Phone Binding Required</SectionTitle>
+      <SectionTitle>{isWechatBindFlow ? "WeChat Phone Binding" : "Phone Binding Required"}</SectionTitle>
       <p>
-        Your account is signed in. Complete phone binding to unlock Lobby, Room, Wallet, and Ops paths.
+        {isWechatBindFlow
+          ? "Your WeChat sign-in requires a verified phone. Bind once to finish sign-in and unlock all paths."
+          : "Your account is signed in. Complete phone binding to unlock Lobby, Room, Wallet, and Ops paths."}
       </p>
       <form className="echo-bind-form" onSubmit={onSubmit}>
         <label>
@@ -107,12 +126,15 @@ export function PhoneBindPage() {
         </div>
         {sentHint ? <InlineHint>{sentHint}</InlineHint> : null}
         {debugCode ? <InlineHint>Debug code: {debugCode}</InlineHint> : null}
+        {isWechatBindFlow ? <InlineHint>WeChat bind ticket: {wechatBindTicket}</InlineHint> : null}
         {error ? <p className="echo-error">{error}</p> : null}
       </form>
       <div className="echo-bind-tips">
-        <InlineHint>
-          Current account: {user?.email || user?.fullname || "super@none.org"}.
-        </InlineHint>
+        {isWechatBindFlow ? null : (
+          <InlineHint>
+            Current account: {user?.email || user?.fullname || "super@none.org"}.
+          </InlineHint>
+        )}
         <InlineHint>
           Binding scene uses backend contract `scene=bind_phone`.
         </InlineHint>
