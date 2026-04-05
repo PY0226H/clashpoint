@@ -20,6 +20,21 @@ const MAX_OPS_REPLAY_ACTIONS_OFFSET: u32 = 10_000;
 const MAX_REPLAY_REASON_LEN: usize = 500;
 const MAX_OPS_REPLAY_ACTIONS_KEYWORD_LEN: usize = 100;
 const MAX_OPS_REPLAY_ACTIONS_STATUS_LEN: usize = 32;
+const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
+
+const JUDGE_REPORT_STATUS_READY: &str = "ready";
+const JUDGE_REPORT_STATUS_PENDING: &str = "pending";
+const JUDGE_REPORT_STATUS_BLOCKED: &str = "blocked";
+const JUDGE_REPORT_STATUS_DEGRADED: &str = "degraded";
+const JUDGE_REPORT_STATUS_ABSENT: &str = "absent";
+
+const JUDGE_REPORT_REASON_FINAL_REPORT_READY: &str = "final_report_ready";
+const JUDGE_REPORT_REASON_FINAL_JOB_IN_PROGRESS: &str = "final_job_in_progress";
+const JUDGE_REPORT_REASON_FINAL_DISPATCH_FAILED: &str = "final_dispatch_failed";
+const JUDGE_REPORT_REASON_FINAL_REPORT_MISSING: &str = "final_report_missing_after_dispatch";
+const JUDGE_REPORT_REASON_PHASE_FAILED_WAITING_REPLAY: &str = "phase_failed_waiting_replay";
+const JUDGE_REPORT_REASON_PHASE_IN_PROGRESS: &str = "phase_jobs_in_progress";
+const JUDGE_REPORT_REASON_NO_JUDGE_JOBS: &str = "no_judge_jobs";
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
@@ -323,14 +338,17 @@ fn resolve_contract_failure_hint_and_action(
 fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDispatchDiagnostics {
     let status = row.status;
     let error_message = row.error_message;
-    let error_code = error_message
-        .as_deref()
-        .and_then(extract_dispatch_error_code);
+    let error_code = row.error_code.or_else(|| {
+        error_message
+            .as_deref()
+            .and_then(extract_dispatch_error_code)
+    });
     let contract_failure_type = resolve_contract_failure_type(
         status.as_str(),
         error_code.as_deref(),
         error_message.as_deref(),
-    );
+    )
+    .or(row.contract_failure_type);
     let (contract_failure_hint, contract_failure_action) =
         resolve_contract_failure_hint_and_action(contract_failure_type.as_deref());
     let contract_violation_blocked = error_message
@@ -399,6 +417,88 @@ fn build_final_dispatch_failure_stats(
         unknown_failed_jobs,
         by_type,
     })
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct JudgePhaseProgressCountsRow {
+    total_phase_jobs: i64,
+    queued_phase_jobs: i64,
+    dispatched_phase_jobs: i64,
+    succeeded_phase_jobs: i64,
+    failed_phase_jobs: i64,
+}
+
+fn to_u32_count(v: i64) -> u32 {
+    if v <= 0 {
+        0
+    } else {
+        u32::try_from(v).unwrap_or(u32::MAX)
+    }
+}
+
+fn map_final_report_summary(v: &JudgeFinalReportDetail) -> JudgeFinalReportSummary {
+    JudgeFinalReportSummary {
+        final_report_id: v.final_report_id,
+        winner: v.winner.clone(),
+        pro_score: v.pro_score,
+        con_score: v.con_score,
+        rejudge_triggered: v.rejudge_triggered,
+        needs_draw_vote: v.needs_draw_vote,
+        degradation_level: v.degradation_level,
+        created_at: v.created_at,
+    }
+}
+
+fn resolve_judge_report_status(
+    latest_final_job: Option<&JudgeFinalJobSnapshotRow>,
+    progress: &JudgeReportProgress,
+) -> (String, String) {
+    if progress.has_final_report {
+        return (
+            JUDGE_REPORT_STATUS_READY.to_string(),
+            JUDGE_REPORT_REASON_FINAL_REPORT_READY.to_string(),
+        );
+    }
+
+    if let Some(final_job) = latest_final_job {
+        return match final_job.status.as_str() {
+            "failed" => (
+                JUDGE_REPORT_STATUS_DEGRADED.to_string(),
+                JUDGE_REPORT_REASON_FINAL_DISPATCH_FAILED.to_string(),
+            ),
+            "queued" | "dispatched" => (
+                JUDGE_REPORT_STATUS_PENDING.to_string(),
+                JUDGE_REPORT_REASON_FINAL_JOB_IN_PROGRESS.to_string(),
+            ),
+            "succeeded" => (
+                JUDGE_REPORT_STATUS_BLOCKED.to_string(),
+                JUDGE_REPORT_REASON_FINAL_REPORT_MISSING.to_string(),
+            ),
+            _ => (
+                JUDGE_REPORT_STATUS_PENDING.to_string(),
+                JUDGE_REPORT_REASON_FINAL_JOB_IN_PROGRESS.to_string(),
+            ),
+        };
+    }
+
+    if progress.failed_phase_jobs > 0 {
+        return (
+            JUDGE_REPORT_STATUS_BLOCKED.to_string(),
+            JUDGE_REPORT_REASON_PHASE_FAILED_WAITING_REPLAY.to_string(),
+        );
+    }
+
+    if progress.total_phase_jobs > 0 {
+        return (
+            JUDGE_REPORT_STATUS_PENDING.to_string(),
+            JUDGE_REPORT_REASON_PHASE_IN_PROGRESS.to_string(),
+        );
+    }
+
+    (
+        JUDGE_REPORT_STATUS_ABSENT.to_string(),
+        JUDGE_REPORT_REASON_NO_JUDGE_JOBS.to_string(),
+    )
 }
 
 fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceReplayOpsItem {
@@ -1294,6 +1394,8 @@ impl AppState {
                 last_dispatch_at = NULL,
                 dispatch_locked_until = NULL,
                 error_message = NULL,
+                error_code = NULL,
+                contract_failure_type = NULL,
                 updated_at = NOW()
             WHERE id = $1
             "#,
@@ -1506,12 +1608,50 @@ impl AppState {
         })
     }
 
+    async fn ensure_judge_report_read_access(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: i64,
+        user: &User,
+    ) -> Result<(), AppError> {
+        let participant_exists: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM session_participants
+            WHERE session_id = $1
+              AND user_id = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .bind(user.id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if participant_exists.is_some() {
+            return Ok(());
+        }
+
+        let rbac = self.get_ops_rbac_me(user).await?;
+        if rbac.is_owner || rbac.permissions.judge_review {
+            return Ok(());
+        }
+
+        Err(AppError::DebateConflict(
+            JUDGE_REPORT_READ_FORBIDDEN.to_string(),
+        ))
+    }
+
     pub async fn get_latest_judge_report(
         &self,
         session_id: u64,
-        _user: &User,
-        _query: GetJudgeReportQuery,
+        user: &User,
     ) -> Result<GetJudgeReportOutput, AppError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+
+        let session_id_i64 = session_id as i64;
         let session_exists = sqlx::query_scalar::<_, i32>(
             r#"
             SELECT 1
@@ -1520,14 +1660,16 @@ impl AppState {
             LIMIT 1
             "#,
         )
-        .bind(session_id as i64)
-        .fetch_optional(&self.pool)
+        .bind(session_id_i64)
+        .fetch_optional(&mut *tx)
         .await?;
         if session_exists.is_none() {
             return Err(AppError::NotFound(format!(
                 "debate session id {session_id}"
             )));
         }
+        self.ensure_judge_report_read_access(&mut tx, session_id_i64, user)
+            .await?;
 
         let latest_phase_job: Option<JudgePhaseJobSnapshotRow> = sqlx::query_as(
             r#"
@@ -1545,9 +1687,10 @@ impl AppState {
             LIMIT 1
             "#,
         )
-        .bind(session_id as i64)
-        .fetch_optional(&self.pool)
+        .bind(session_id_i64)
+        .fetch_optional(&mut *tx)
         .await?;
+
         let latest_final_job: Option<JudgeFinalJobSnapshotRow> = sqlx::query_as(
             r#"
             SELECT
@@ -1557,30 +1700,35 @@ impl AppState {
                 phase_end_no,
                 dispatch_attempts,
                 last_dispatch_at,
-                error_message
+                error_message,
+                error_code,
+                contract_failure_type
             FROM judge_final_jobs
             WHERE session_id = $1
-            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
-        .bind(session_id as i64)
-        .fetch_optional(&self.pool)
-        .await?;
-        let failed_final_dispatch_rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            r#"
-            SELECT status, error_message
-            FROM judge_final_jobs
-            WHERE session_id = $1
-              AND status = 'failed'
-            ORDER BY created_at DESC
-            "#,
-        )
-        .bind(session_id as i64)
-        .fetch_all(&self.pool)
+        .bind(session_id_i64)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        let final_report: Option<JudgeFinalReportRow> = sqlx::query_as(
+        let phase_progress_row: JudgePhaseProgressCountsRow = sqlx::query_as(
+            r#"
+            SELECT
+                COUNT(*)::bigint AS total_phase_jobs,
+                COUNT(*) FILTER (WHERE status = 'queued')::bigint AS queued_phase_jobs,
+                COUNT(*) FILTER (WHERE status = 'dispatched')::bigint AS dispatched_phase_jobs,
+                COUNT(*) FILTER (WHERE status = 'succeeded')::bigint AS succeeded_phase_jobs,
+                COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed_phase_jobs
+            FROM judge_phase_jobs
+            WHERE session_id = $1
+            "#,
+        )
+        .bind(session_id_i64)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let final_report_row: Option<JudgeFinalReportRow> = sqlx::query_as(
             r#"
             SELECT
                 id,
@@ -1604,38 +1752,52 @@ impl AppState {
                 created_at
             FROM judge_final_reports
             WHERE session_id = $1
-            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
-        .bind(session_id as i64)
-        .fetch_optional(&self.pool)
+        .bind(session_id_i64)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        let final_report = final_report.map(map_final_report_detail);
+        tx.commit().await?;
+
+        let final_report = final_report_row.map(map_final_report_detail);
+        let progress = JudgeReportProgress {
+            total_phase_jobs: to_u32_count(phase_progress_row.total_phase_jobs),
+            queued_phase_jobs: to_u32_count(phase_progress_row.queued_phase_jobs),
+            dispatched_phase_jobs: to_u32_count(phase_progress_row.dispatched_phase_jobs),
+            succeeded_phase_jobs: to_u32_count(phase_progress_row.succeeded_phase_jobs),
+            failed_phase_jobs: to_u32_count(phase_progress_row.failed_phase_jobs),
+            has_final_job: latest_final_job.is_some(),
+            has_final_report: final_report.is_some(),
+        };
+
         let final_dispatch_diagnostics = latest_final_job
             .as_ref()
             .map(|job| map_final_dispatch_diagnostics(job.clone()));
-        let final_dispatch_failure_stats =
-            build_final_dispatch_failure_stats(failed_final_dispatch_rows);
-
-        let status = if final_report.is_some() {
-            "ready".to_string()
-        } else if final_dispatch_diagnostics
+        let final_dispatch_failure_stats = final_dispatch_diagnostics
             .as_ref()
-            .map(|item| item.status.as_str() == "failed")
-            .unwrap_or(false)
-        {
-            "failed".to_string()
-        } else if latest_phase_job.is_some() || final_dispatch_diagnostics.is_some() {
-            "pending".to_string()
-        } else {
-            "absent".to_string()
-        };
+            .filter(|item| item.status == "failed")
+            .map(|item| JudgeFinalDispatchFailureStats {
+                total_failed_jobs: 1,
+                unknown_failed_jobs: u32::from(
+                    item.contract_failure_type.as_deref() == Some(CONTRACT_FAILURE_UNKNOWN),
+                ),
+                by_type: vec![JudgeFinalDispatchFailureTypeCount {
+                    failure_type: item
+                        .contract_failure_type
+                        .clone()
+                        .unwrap_or_else(|| CONTRACT_FAILURE_UNKNOWN.to_string()),
+                    count: 1,
+                }],
+            });
+        let (status, status_reason) =
+            resolve_judge_report_status(latest_final_job.as_ref(), &progress);
 
         Ok(GetJudgeReportOutput {
             session_id,
             status,
+            status_reason,
             latest_phase_job: latest_phase_job.map(|job| JudgePhaseJobSnapshot {
                 phase_job_id: job.id as u64,
                 phase_no: job.phase_no,
@@ -1653,10 +1815,81 @@ impl AppState {
                 dispatch_attempts: job.dispatch_attempts,
                 last_dispatch_at: job.last_dispatch_at,
                 error_message: job.error_message,
+                error_code: job.error_code,
+                contract_failure_type: job.contract_failure_type,
             }),
             final_dispatch_diagnostics,
             final_dispatch_failure_stats,
-            final_report,
+            progress,
+            final_report_summary: final_report.as_ref().map(map_final_report_summary),
+        })
+    }
+
+    pub async fn get_latest_judge_final_report(
+        &self,
+        session_id: u64,
+        user: &User,
+    ) -> Result<GetJudgeReportFinalOutput, AppError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+
+        let session_id_i64 = session_id as i64;
+        let session_exists = sqlx::query_scalar::<_, i32>(
+            r#"
+            SELECT 1
+            FROM debate_sessions
+            WHERE id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id_i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if session_exists.is_none() {
+            return Err(AppError::NotFound(format!(
+                "debate session id {session_id}"
+            )));
+        }
+        self.ensure_judge_report_read_access(&mut tx, session_id_i64, user)
+            .await?;
+
+        let final_report_row: Option<JudgeFinalReportRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                final_job_id,
+                winner,
+                pro_score,
+                con_score,
+                dimension_scores,
+                final_rationale,
+                verdict_evidence_refs,
+                phase_rollup_summary,
+                retrieval_snapshot_rollup,
+                winner_first,
+                winner_second,
+                rejudge_triggered,
+                needs_draw_vote,
+                judge_trace,
+                audit_alerts,
+                error_codes,
+                degradation_level,
+                created_at
+            FROM judge_final_reports
+            WHERE session_id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id_i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(GetJudgeReportFinalOutput {
+            session_id,
+            final_report: final_report_row.map(map_final_report_detail),
         })
     }
 }

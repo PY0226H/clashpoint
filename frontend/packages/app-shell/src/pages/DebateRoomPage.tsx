@@ -11,6 +11,7 @@ import {
   listDebateMessages,
   listDebatePinnedMessages,
   mergeDebateMessages,
+  pinDebateMessage,
   requestDebateJudgeJob,
   submitDebateDrawVote,
   toDebateDomainError,
@@ -24,7 +25,7 @@ import {
   computeWsReconnectDelayMs,
   parseDebateRoomServerMessage
 } from "@echoisle/realtime-sdk";
-import { Button, InlineHint, SectionTitle } from "@echoisle/ui";
+import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 import { useNavigate, useParams } from "react-router-dom";
 
 const runtime = getRuntimeConfig();
@@ -65,6 +66,7 @@ export function DebateRoomPage() {
   const [hasMoreHistory, setHasMoreHistory] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [messageInput, setMessageInput] = useState("");
+  const [pinSecondsInput, setPinSecondsInput] = useState("60");
   const [pageHint, setPageHint] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">(
     "disconnected"
@@ -144,6 +146,22 @@ export function DebateRoomPage() {
       void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
       void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
       void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    }
+  });
+
+  const pinMutation = useMutation({
+    mutationFn: async (payload: { messageId: number; pinSeconds: number }) =>
+      pinDebateMessage(payload.messageId, payload.pinSeconds),
+    onSuccess: (result) => {
+      setPageHint(
+        `Pinned message #${result.messageId}: -${result.debitedCoins} coins, balance=${result.walletBalance}, expires=${formatUtc(result.expiresAt)}`
+      );
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+      void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
+      void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
@@ -365,6 +383,7 @@ export function DebateRoomPage() {
 
   const finalReport = judgeReportQuery.data?.finalReport ?? null;
   const drawVote = drawVoteQuery.data?.vote ?? null;
+  const normalizedPinSeconds = Math.max(1, Math.floor(Number(pinSecondsInput) || 60));
 
   if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
     return (
@@ -530,6 +549,15 @@ export function DebateRoomPage() {
                 <span>{formatUtc(message.createdAt)}</span>
               </header>
               <p>{message.content}</p>
+              <div className="echo-lobby-actions">
+                <Button
+                  disabled={pinMutation.isPending}
+                  onClick={() => pinMutation.mutate({ messageId: message.id, pinSeconds: normalizedPinSeconds })}
+                  type="button"
+                >
+                  {pinMutation.isPending ? "Pinning..." : `Pin ${normalizedPinSeconds}s`}
+                </Button>
+              </div>
             </article>
           ))}
           {!messagesQuery.isLoading && messages.length === 0 ? <InlineHint>No messages yet.</InlineHint> : null}
@@ -538,6 +566,16 @@ export function DebateRoomPage() {
 
       <section className="echo-lobby-panel">
         <h3>Send Message</h3>
+        <div className="echo-wallet-probe-row">
+          <TextField
+            aria-label="Pin Seconds"
+            inputMode="numeric"
+            onChange={(event) => setPinSecondsInput(event.target.value)}
+            placeholder="pin seconds"
+            value={pinSecondsInput}
+          />
+          <InlineHint>Pin duration applies to the message-level pin action.</InlineHint>
+        </div>
         <div className="echo-room-composer">
           <textarea
             className="echo-room-input"

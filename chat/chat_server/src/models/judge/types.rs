@@ -44,6 +44,8 @@ pub struct JudgeFinalJobSnapshot {
     pub dispatch_attempts: i32,
     pub last_dispatch_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,
+    pub error_code: Option<String>,
+    pub contract_failure_type: Option<String>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -178,18 +180,45 @@ pub struct JudgeVerdictEvidenceItem {
 pub struct GetJudgeReportOutput {
     pub session_id: u64,
     pub status: String,
+    pub status_reason: String,
     pub latest_phase_job: Option<JudgePhaseJobSnapshot>,
     pub latest_final_job: Option<JudgeFinalJobSnapshot>,
     pub final_dispatch_diagnostics: Option<JudgeFinalDispatchDiagnostics>,
     pub final_dispatch_failure_stats: Option<JudgeFinalDispatchFailureStats>,
-    pub final_report: Option<JudgeFinalReportDetail>,
+    pub progress: JudgeReportProgress,
+    pub final_report_summary: Option<JudgeFinalReportSummary>,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GetJudgeReportQuery {
-    pub max_stage_count: Option<u32>,
-    pub stage_offset: Option<u32>,
+pub struct GetJudgeReportFinalOutput {
+    pub session_id: u64,
+    pub final_report: Option<JudgeFinalReportDetail>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeReportProgress {
+    pub total_phase_jobs: u32,
+    pub queued_phase_jobs: u32,
+    pub dispatched_phase_jobs: u32,
+    pub succeeded_phase_jobs: u32,
+    pub failed_phase_jobs: u32,
+    pub has_final_job: bool,
+    pub has_final_report: bool,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeFinalReportSummary {
+    pub final_report_id: u64,
+    pub winner: String,
+    pub pro_score: f64,
+    pub con_score: f64,
+    pub rejudge_triggered: bool,
+    pub needs_draw_vote: bool,
+    pub degradation_level: i32,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]

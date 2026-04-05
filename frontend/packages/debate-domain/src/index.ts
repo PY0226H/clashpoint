@@ -56,6 +56,18 @@ export type DebatePinnedMessage = {
   status: string;
 };
 
+export type PinDebateMessageOutput = {
+  pinId: number;
+  sessionId: number;
+  messageId: number;
+  ledgerId: number;
+  debitedCoins: number;
+  walletBalance: number;
+  pinSeconds: number;
+  expiresAt: string;
+  newlyPinned: boolean;
+};
+
 export type ListDebateTopicsOutput = {
   items: DebateTopic[];
   hasMore: boolean;
@@ -305,6 +317,26 @@ export async function createDebateMessage(
 ): Promise<DebateMessage> {
   const response = await http.post<DebateMessage>(`/debate/sessions/${sessionId}/messages`, {
     content: String(content || "").trim()
+  });
+  return response.data;
+}
+
+function buildPinIdempotencyKey(): string {
+  if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
+    return `pin_${globalThis.crypto.randomUUID()}`;
+  }
+  return `pin_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+export async function pinDebateMessage(
+  messageId: number,
+  pinSeconds: number,
+  input?: { idempotencyKey?: string }
+): Promise<PinDebateMessageOutput> {
+  const normalizedPinSeconds = Math.max(1, Math.floor(Number(pinSeconds) || 60));
+  const response = await http.post<PinDebateMessageOutput>(`/debate/messages/${messageId}/pin`, {
+    pinSeconds: normalizedPinSeconds,
+    idempotencyKey: String(input?.idempotencyKey || "").trim() || buildPinIdempotencyKey()
   });
   return response.data;
 }

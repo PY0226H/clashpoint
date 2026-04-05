@@ -424,6 +424,8 @@ impl AppState {
             UPDATE judge_final_jobs
             SET status = 'succeeded',
                 error_message = NULL,
+                error_code = NULL,
+                contract_failure_type = NULL,
                 dispatch_locked_until = NULL,
                 updated_at = NOW()
             WHERE id = $1

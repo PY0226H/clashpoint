@@ -81,7 +81,9 @@
 .echo-bind-page,
 .echo-placeholder-page,
 .echo-lobby-page,
-.echo-room-page {
+.echo-room-page,
+.echo-wallet-page,
+.echo-ops-page {
   max-width: 920px;
   display: flex;
   flex-direction: column;
@@ -241,6 +243,75 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
+  gap: 10px;
+}
+
+.echo-wallet-header p {
+  margin: 0;
+  color: var(--echo-muted);
+}
+
+.echo-ops-header p {
+  margin: 0;
+  color: var(--echo-muted);
+}
+
+.echo-wallet-products {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-ops-permission-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-ops-grant-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.echo-ops-role-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--echo-muted);
+}
+
+.echo-ops-role-label select {
+  border-radius: var(--echo-radius-md);
+  border: 1px solid var(--echo-border);
+  background: color-mix(in srgb, white 92%, var(--echo-surface-2) 8%);
+  color: var(--echo-ink);
+  padding: 11px 12px;
+  font: inherit;
+}
+
+.echo-ops-role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.echo-ops-role-actions {
+  margin-top: 10px;
+}
+
+.echo-wallet-probe-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.echo-wallet-ledger-list {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
@@ -485,7 +556,9 @@
   .echo-topic-grid,
   .echo-session-grid,
   .echo-room-pins,
-  .echo-room-judge-grid {
+  .echo-room-judge-grid,
+  .echo-ops-permission-grid,
+  .echo-wallet-products {
     grid-template-columns: 1fr;
   }
 
@@ -498,6 +571,14 @@
   }
 
   .echo-room-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .echo-wallet-probe-row {
+    grid-template-columns: 1fr;
+  }
+
+  .echo-ops-grant-row {
     grid-template-columns: 1fr;
   }
 

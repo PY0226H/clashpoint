@@ -12,6 +12,9 @@
     "lint": "eslint --config ../../eslint.config.mjs src --max-warnings=0",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@echoisle/api-client": "workspace:*"
+  },
   "devDependencies": {
     "eslint": "^9.23.0",
     "typescript": "^5.8.3",

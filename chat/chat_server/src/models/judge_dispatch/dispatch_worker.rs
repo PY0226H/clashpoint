@@ -170,7 +170,12 @@ impl AppState {
                         &err.to_string(),
                     );
                     if self
-                        .mark_final_dispatch_failure(job.id, job.dispatch_attempts, &coded_msg)
+                        .mark_final_dispatch_failure(
+                            job.id,
+                            job.dispatch_attempts,
+                            &coded_msg,
+                            DispatchFailureCode::PayloadBuildFailed,
+                        )
                         .await?
                     {
                         report.marked_failed += 1;
@@ -188,13 +193,18 @@ impl AppState {
                     if err.terminal {
                         report.terminal_failed += 1;
                         if self
-                            .mark_final_dispatch_terminal_failure(job.id, &err.message)
+                            .mark_final_dispatch_terminal_failure(job.id, &err.message, err.code)
                             .await?
                         {
                             report.marked_failed += 1;
                         }
                     } else if self
-                        .mark_final_dispatch_failure(job.id, job.dispatch_attempts, &err.message)
+                        .mark_final_dispatch_failure(
+                            job.id,
+                            job.dispatch_attempts,
+                            &err.message,
+                            err.code,
+                        )
                         .await?
                     {
                         report.retryable_failed += 1;
@@ -744,6 +754,8 @@ impl AppState {
             UPDATE judge_final_jobs
             SET status = 'dispatched',
                 error_message = NULL,
+                error_code = NULL,
+                contract_failure_type = NULL,
                 dispatch_locked_until = NULL,
                 updated_at = NOW()
             WHERE id = $1 AND status = 'queued'
@@ -760,8 +772,11 @@ impl AppState {
         final_job_id: i64,
         dispatch_attempts: i32,
         err_msg: &str,
+        code: DispatchFailureCode,
     ) -> Result<bool, AppError> {
         let err_msg = sanitize_error_message(err_msg);
+        let error_code = Some(code.as_str().to_string());
+        let contract_failure_type = contract_failure_type_from_dispatch_code(code);
         let max_attempts = self.config.ai_judge.dispatch_max_attempts.max(1);
         if dispatch_attempts >= max_attempts {
             sqlx::query(
@@ -769,6 +784,8 @@ impl AppState {
                 UPDATE judge_final_jobs
                 SET status = 'failed',
                     error_message = $2,
+                    error_code = $3,
+                    contract_failure_type = $4,
                     dispatch_locked_until = NULL,
                     updated_at = NOW()
                 WHERE id = $1
@@ -777,6 +794,8 @@ impl AppState {
             )
             .bind(final_job_id)
             .bind(&err_msg)
+            .bind(error_code.as_deref())
+            .bind(contract_failure_type)
             .execute(&self.pool)
             .await?;
             warn!(
@@ -796,7 +815,9 @@ impl AppState {
                 r#"
                 UPDATE judge_final_jobs
                 SET error_message = $2,
-                    dispatch_locked_until = NOW() + ($3::bigint * INTERVAL '1 second'),
+                    error_code = $3,
+                    contract_failure_type = $4,
+                    dispatch_locked_until = NOW() + ($5::bigint * INTERVAL '1 second'),
                     updated_at = NOW()
                 WHERE id = $1
                   AND status = 'queued'
@@ -804,6 +825,8 @@ impl AppState {
             )
             .bind(final_job_id)
             .bind(&err_msg)
+            .bind(error_code.as_deref())
+            .bind(contract_failure_type)
             .bind(retry_lock_secs)
             .execute(&self.pool)
             .await?;
@@ -819,13 +842,18 @@ impl AppState {
         &self,
         final_job_id: i64,
         err_msg: &str,
+        code: DispatchFailureCode,
     ) -> Result<bool, AppError> {
         let err_msg = sanitize_error_message(err_msg);
+        let error_code = Some(code.as_str().to_string());
+        let contract_failure_type = contract_failure_type_from_dispatch_code(code);
         let rows_affected = sqlx::query(
             r#"
             UPDATE judge_final_jobs
             SET status = 'failed',
                 error_message = $2,
+                error_code = $3,
+                contract_failure_type = $4,
                 dispatch_locked_until = NULL,
                 updated_at = NOW()
             WHERE id = $1
@@ -834,6 +862,8 @@ impl AppState {
         )
         .bind(final_job_id)
         .bind(&err_msg)
+        .bind(error_code.as_deref())
+        .bind(contract_failure_type)
         .execute(&self.pool)
         .await?
         .rows_affected();
@@ -846,5 +876,13 @@ impl AppState {
         } else {
             Ok(false)
         }
+    }
+}
+
+fn contract_failure_type_from_dispatch_code(code: DispatchFailureCode) -> Option<&'static str> {
+    match code {
+        DispatchFailureCode::ResponseAcceptedFalse => Some("response_accepted_false"),
+        DispatchFailureCode::ResponseJobIdMismatch => Some("response_job_id_mismatch"),
+        _ => None,
     }
 }

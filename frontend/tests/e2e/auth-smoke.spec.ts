@@ -11,7 +11,86 @@ function json(route: Route, status: number, payload: unknown) {
 }
 
 async function installAuthMocks(page: Page) {
+  let walletBalance = 180;
+  let nextLedgerId = 7100;
   const judgeReadySessions = new Set<number>();
+  const sessionPins = new Map<
+    number,
+    Array<{
+      id: number;
+      sessionId: number;
+      messageId: number;
+      userId: number;
+      side: string;
+      content: string;
+      costCoins: number;
+      pinSeconds: number;
+      pinnedAt: string;
+      expiresAt: string;
+      status: string;
+    }>
+  >();
+  const messageSessionById = new Map<number, number>();
+  const walletLedger: Array<{
+    id: number;
+    orderId: number | null;
+    entryType: string;
+    amountDelta: number;
+    balanceAfter: number;
+    idempotencyKey: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }> = [
+    {
+      id: 7003,
+      orderId: 9003,
+      entryType: "iap_credit",
+      amountDelta: 120,
+      balanceAfter: 180,
+      idempotencyKey: "iap_seed_9003",
+      metadata: { source: "seed" },
+      createdAt: "2026-01-01T01:02:00Z"
+    },
+    {
+      id: 7002,
+      orderId: 9002,
+      entryType: "pin_debit",
+      amountDelta: -20,
+      balanceAfter: 60,
+      idempotencyKey: "pin_seed_7002",
+      metadata: { source: "seed" },
+      createdAt: "2026-01-01T01:01:00Z"
+    },
+    {
+      id: 7001,
+      orderId: 9001,
+      entryType: "iap_credit",
+      amountDelta: 80,
+      balanceAfter: 80,
+      idempotencyKey: "iap_seed_9001",
+      metadata: { source: "seed" },
+      createdAt: "2026-01-01T00:58:00Z"
+    }
+  ];
+  const opsRoleAssignments: Array<{
+    userId: number;
+    userEmail: string;
+    userFullname: string;
+    role: "ops_admin" | "ops_reviewer" | "ops_viewer";
+    grantedBy: number;
+    createdAt: string;
+    updatedAt: string;
+  }> = [
+    {
+      userId: 11,
+      userEmail: "reviewer@echoisle.dev",
+      userFullname: "Ops Reviewer",
+      role: "ops_reviewer",
+      grantedBy: 10,
+      createdAt: "2026-01-01T00:10:00Z",
+      updatedAt: "2026-01-01T00:12:00Z"
+    }
+  ];
   const drawVoteStateBySession = new Map<
     number,
     {
@@ -56,10 +135,35 @@ async function installAuthMocks(page: Page) {
     return created;
   }
 
+  function getOrCreatePins(sessionId: number) {
+    const existing = sessionPins.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const initial = [
+      {
+        id: 3001,
+        sessionId,
+        messageId: 2001,
+        userId: 10,
+        side: "pro",
+        content: "Pinned argument",
+        costCoins: 20,
+        pinSeconds: 60,
+        pinnedAt: "2026-01-01T01:04:00Z",
+        expiresAt: "2026-01-01T01:05:00Z",
+        status: "active"
+      }
+    ];
+    sessionPins.set(sessionId, initial);
+    return initial;
+  }
+
   await page.route("**/api/**", async (route) => {
     const request = route.request();
-    const pathname = new URL(request.url()).pathname;
-    let body: Record<string, string> | undefined;
+    const requestUrl = new URL(request.url());
+    const pathname = requestUrl.pathname;
+    let body: Record<string, any> | undefined;
     try {
       body = request.postDataJSON() as Record<string, string> | undefined;
     } catch {
@@ -178,6 +282,67 @@ async function installAuthMocks(page: Page) {
       });
     }
 
+    if (pathname === "/api/debate/ops/rbac/me" && request.method() === "GET") {
+      return json(route, 200, {
+        userId: 10,
+        isOwner: true,
+        role: null,
+        permissions: {
+          debateManage: true,
+          judgeReview: true,
+          judgeRejudge: true,
+          roleManage: true
+        }
+      });
+    }
+
+    if (pathname === "/api/debate/ops/rbac/roles" && request.method() === "GET") {
+      return json(route, 200, {
+        items: opsRoleAssignments
+      });
+    }
+
+    const upsertRoleMatch = pathname.match(/^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/);
+    if (upsertRoleMatch?.[1] && request.method() === "PUT") {
+      const targetUserId = Number(upsertRoleMatch[1]);
+      const role = String(body?.role || "").trim().toLowerCase();
+      if (!["ops_admin", "ops_reviewer", "ops_viewer"].includes(role)) {
+        return json(route, 400, { error: "invalid_role" });
+      }
+      const nowIso = "2026-01-01T01:15:00Z";
+      const existing = opsRoleAssignments.find((item) => item.userId === targetUserId);
+      if (existing) {
+        existing.role = role as "ops_admin" | "ops_reviewer" | "ops_viewer";
+        existing.updatedAt = nowIso;
+        return json(route, 200, existing);
+      }
+      const created = {
+        userId: targetUserId,
+        userEmail: `user${targetUserId}@echoisle.dev`,
+        userFullname: `User ${targetUserId}`,
+        role: role as "ops_admin" | "ops_reviewer" | "ops_viewer",
+        grantedBy: 10,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+      opsRoleAssignments.unshift(created);
+      return json(route, 200, created);
+    }
+
+    const revokeRoleMatch = pathname.match(/^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/);
+    if (revokeRoleMatch?.[1] && request.method() === "DELETE") {
+      const targetUserId = Number(revokeRoleMatch[1]);
+      const index = opsRoleAssignments.findIndex((item) => item.userId === targetUserId);
+      const removed = index >= 0;
+      if (removed) {
+        opsRoleAssignments.splice(index, 1);
+      }
+      return json(route, 200, {
+        userId: targetUserId,
+        removed
+      });
+    }
+
     if (pathname === "/api/debate/sessions" && request.method() === "GET") {
       return json(route, 200, {
         items: [
@@ -215,6 +380,7 @@ async function installAuthMocks(page: Page) {
 
     const messageListSessionId = matchSessionPath(pathname, "messages");
     if (messageListSessionId && request.method() === "GET") {
+      messageSessionById.set(2001, messageListSessionId);
       return json(route, 200, {
         items: [
           {
@@ -234,30 +400,18 @@ async function installAuthMocks(page: Page) {
 
     const pinListSessionId = matchSessionPath(pathname, "pins");
     if (pinListSessionId && request.method() === "GET") {
+      const pins = getOrCreatePins(pinListSessionId);
       return json(route, 200, {
-        items: [
-          {
-            id: 3001,
-            sessionId: pinListSessionId,
-            messageId: 2001,
-            userId: 10,
-            side: "pro",
-            content: "Pinned argument",
-            costCoins: 20,
-            pinSeconds: 60,
-            pinnedAt: "2026-01-01T01:04:00Z",
-            expiresAt: "2026-01-01T01:05:00Z",
-            status: "active"
-          }
-        ],
+        items: pins,
         hasMore: false,
         nextCursor: null,
-        revision: "3001"
+        revision: String(pins[0]?.id || "0")
       });
     }
 
     const messageCreateSessionId = matchSessionPath(pathname, "messages");
     if (messageCreateSessionId && request.method() === "POST") {
+      messageSessionById.set(2002, messageCreateSessionId);
       return json(route, 201, {
         id: 2002,
         sessionId: messageCreateSessionId,
@@ -265,6 +419,54 @@ async function installAuthMocks(page: Page) {
         side: "pro",
         content: body?.content || "new message",
         createdAt: "2026-01-01T01:06:00Z"
+      });
+    }
+
+    const pinMessageMatch = pathname.match(/^\/api\/debate\/messages\/(\d+)\/pin$/);
+    if (pinMessageMatch?.[1] && request.method() === "POST") {
+      const messageId = Number(pinMessageMatch[1]);
+      const pinSeconds = Math.max(1, Number(body?.pinSeconds || 60));
+      const sessionId = messageSessionById.get(messageId) || 901;
+      const pins = getOrCreatePins(sessionId);
+      const pinId = 3000 + pins.length + 1;
+      const debitedCoins = 20;
+      walletBalance = Math.max(0, walletBalance - debitedCoins);
+      pins.unshift({
+        id: pinId,
+        sessionId,
+        messageId,
+        userId: 10,
+        side: "pro",
+        content: `Pinned #${messageId}`,
+        costCoins: debitedCoins,
+        pinSeconds,
+        pinnedAt: "2026-01-01T01:08:00Z",
+        expiresAt: "2026-01-01T01:09:00Z",
+        status: "active"
+      });
+      walletLedger.unshift({
+        id: nextLedgerId++,
+        orderId: null,
+        entryType: "pin_debit",
+        amountDelta: -debitedCoins,
+        balanceAfter: walletBalance,
+        idempotencyKey: String(body?.idempotencyKey || `pin_${messageId}`),
+        metadata: {
+          messageId,
+          pinSeconds
+        },
+        createdAt: "2026-01-01T01:08:00Z"
+      });
+      return json(route, 200, {
+        pinId,
+        sessionId,
+        messageId,
+        ledgerId: nextLedgerId - 1,
+        debitedCoins,
+        walletBalance,
+        pinSeconds,
+        expiresAt: "2026-01-01T01:09:00Z",
+        newlyPinned: true
       });
     }
 
@@ -398,10 +600,79 @@ async function installAuthMocks(page: Page) {
       });
     }
 
+    if (pathname === "/api/pay/iap/products" && request.method() === "GET") {
+      return json(route, 200, {
+        items: [
+          { productId: "coins_60", coins: 60, isActive: true },
+          { productId: "coins_180", coins: 180, isActive: true }
+        ],
+        revision: "iap_rev_1",
+        emptyReason: null
+      });
+    }
+
+    if (pathname === "/api/pay/iap/orders/by-transaction" && request.method() === "GET") {
+      const transactionId = requestUrl.searchParams.get("transactionId") || "";
+      if (transactionId === "tx-verified-001") {
+        return json(route, 200, {
+          found: true,
+          order: {
+            orderId: 9101,
+            status: "verified",
+            verifyMode: "mock",
+            verifyReason: null,
+            productId: "coins_180",
+            coins: 180,
+            credited: true
+          },
+          probeStatus: "verified_credited",
+          nextRetryAfterMs: null
+        });
+      }
+      if (transactionId === "tx-pending-001") {
+        return json(route, 200, {
+          found: true,
+          order: {
+            orderId: 9102,
+            status: "pending",
+            verifyMode: "apple",
+            verifyReason: "apple_pending",
+            productId: "coins_60",
+            coins: 60,
+            credited: false
+          },
+          probeStatus: "pending_credit",
+          nextRetryAfterMs: 1200
+        });
+      }
+      return json(route, 200, {
+        found: false,
+        order: null,
+        probeStatus: "not_found",
+        nextRetryAfterMs: null
+      });
+    }
+
+    if (pathname === "/api/pay/wallet/ledger" && request.method() === "GET") {
+      const lastIdRaw = requestUrl.searchParams.get("lastId");
+      const lastId = lastIdRaw ? Number(lastIdRaw) : null;
+      const items =
+        lastId == null
+          ? walletLedger.slice(0, 2)
+          : walletLedger.filter((item) => item.id < lastId).slice(0, 2);
+      const tail = items[items.length - 1]?.id ?? null;
+      const hasMore = tail != null ? walletLedger.some((item) => item.id < tail) : false;
+      return json(route, 200, {
+        items,
+        nextLastId: tail,
+        hasMore
+      });
+    }
+
     if (pathname === "/api/pay/wallet" && request.method() === "GET") {
       return json(route, 200, {
         userId: 10,
-        balance: 180,
+        balance: walletBalance,
         walletRevision: "wallet_rev_1",
         walletInitialized: true
       });
@@ -497,6 +768,89 @@ test("@smoke room judge-draw flow should support rematch jump", async ({ page })
   await page.getByRole("button", { name: "Go To Rematch #902" }).click();
   await expect(page).toHaveURL(/\/debate\/sessions\/902$/);
   await expect(page.getByRole("heading", { name: "Debate Room #902" })).toBeVisible();
+});
+
+test("@smoke room should pin message and consume wallet", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Lobby" }).click();
+  await page.getByRole("button", { name: "Join Pro" }).click();
+
+  await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
+  await page.getByRole("button", { name: "Pin 60s" }).first().click();
+  await expect(page.getByText("Pinned message #2001")).toBeVisible();
+  await expect(page.getByText("balance=160")).toBeVisible();
+});
+
+test("@smoke wallet page should render products ledger and probe", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Wallet" }).click();
+
+  await expect(page).toHaveURL(/\/wallet$/);
+  await expect(page.getByRole("heading", { name: "Wallet & Top-Up" })).toBeVisible();
+  await expect(page.getByText("coins_180")).toBeVisible();
+  await page.getByLabel("Transaction ID").fill("tx-verified-001");
+  await page.getByRole("button", { name: "Probe Order" }).click();
+  await expect(page.getByText("Order #9101")).toBeVisible();
+  await page.getByRole("button", { name: "Load Older Entries" }).click();
+  await expect(page.getByText("#7001 | iap_credit")).toBeVisible();
+});
+
+test("@smoke wallet probe pending order should show retry hint", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Wallet" }).click();
+
+  await expect(page).toHaveURL(/\/wallet$/);
+  await page.getByLabel("Transaction ID").fill("tx-pending-001");
+  await page.getByRole("button", { name: "Probe Order" }).click();
+  await expect(page.getByText("Probe Status: pending_credit")).toBeVisible();
+  await expect(page.getByText("Next Retry: 1200 ms")).toBeVisible();
+});
+
+test("@smoke ops console should show rbac and support role upsert/revoke", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Ops" }).click();
+
+  await expect(page).toHaveURL(/\/ops$/);
+  await expect(page.getByRole("heading", { name: "Ops Console" })).toBeVisible();
+  await expect(page.getByText("role_manage")).toBeVisible();
+  await expect(page.getByText("#11 | ops_reviewer")).toBeVisible();
+
+  await page.getByLabel("Target User ID").fill("42");
+  await page.getByLabel("Target Role").selectOption("ops_admin");
+  await page.getByRole("button", { name: "Grant Role" }).click();
+
+  await expect(page.getByText("#42 | ops_admin")).toBeVisible();
+  await page.getByRole("button", { name: "Revoke #42" }).click();
+  await expect(page.getByText("#42 | ops_admin")).toHaveCount(0);
+});
+
+test("@auth-error pin should show insufficient wallet balance error", async ({ page }) => {
+  await page.route("**/api/debate/messages/*/pin", async (route) => {
+    await json(route, 409, { error: "wallet_balance_insufficient" });
+  });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign In" }).click();
+
+  await expect(page).toHaveURL(/\/home$/);
+  await page.getByRole("link", { name: "Lobby" }).click();
+  await page.getByRole("button", { name: "Join Pro" }).click();
+
+  await expect(page).toHaveURL(/\/debate\/sessions\/901$/);
+  await page.getByRole("button", { name: "Pin 60s" }).first().click();
+  await expect(page.getByText("wallet_balance_insufficient")).toBeVisible();
 });
 
 test("@auth-error password invalid credentials should stay on login", async ({ page }) => {

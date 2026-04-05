@@ -69,6 +69,8 @@ pub(super) struct JudgeFinalJobSnapshotRow {
     pub dispatch_attempts: i32,
     pub last_dispatch_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,
+    pub error_code: Option<String>,
+    pub contract_failure_type: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
