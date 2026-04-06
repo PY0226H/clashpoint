@@ -35,7 +35,7 @@ expect_pass() {
 FAKE_ROOT="$TMP_DIR/root"
 mkdir -p \
   "$FAKE_ROOT/chat" \
-  "$FAKE_ROOT/chatapp/src-tauri" \
+  "$FAKE_ROOT/frontend/apps/desktop/src-tauri" \
   "$FAKE_ROOT/swiftide-pgvector" \
   "$FAKE_ROOT/ai_judge_service" \
   "$FAKE_ROOT/scripts/release/security_allowlists"
@@ -45,7 +45,7 @@ cat >"$FAKE_ROOT/chat/deny.toml" <<'EOF_DENY_CHAT'
 ignore = []
 EOF_DENY_CHAT
 
-cat >"$FAKE_ROOT/chatapp/src-tauri/deny.toml" <<'EOF_DENY_CHATAPP'
+cat >"$FAKE_ROOT/frontend/apps/desktop/src-tauri/deny.toml" <<'EOF_DENY_CHATAPP'
 [advisories]
 ignore = []
 EOF_DENY_CHATAPP

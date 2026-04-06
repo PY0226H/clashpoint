@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-const APP_DIR: &str = ".chatapp";
+const APP_DIR: &str = ".echoisle-desktop";
 const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";
 const DB_DIR: &str = "db";

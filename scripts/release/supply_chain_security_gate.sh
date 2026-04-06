@@ -23,7 +23,7 @@ Options:
   --pip-audit-allowlist <path>    CSV allowlist for pip-audit ignore vuln IDs
                                   default: scripts/release/security_allowlists/pip_audit_vulns_allowlist.csv
   --rust-targets <csv>            Rust workspace dirs to scan
-                                  default: chat,chatapp/src-tauri,swiftide-pgvector
+                                  default: chat,frontend/apps/desktop/src-tauri,swiftide-pgvector
   --skip-rust                     Skip Rust supply-chain checks
   --skip-python                   Skip Python supply-chain checks
   -h, --help                      Show this help
@@ -362,7 +362,7 @@ CARGO_ADVISORY_ALLOWLIST=""
 PYTHON_BIN=""
 PYTHON_REQUIREMENTS=""
 PIP_AUDIT_ALLOWLIST=""
-RUST_TARGETS_CSV="chat,chatapp/src-tauri,swiftide-pgvector"
+RUST_TARGETS_CSV="chat,frontend/apps/desktop/src-tauri,swiftide-pgvector"
 SKIP_RUST="false"
 SKIP_PYTHON="false"
 

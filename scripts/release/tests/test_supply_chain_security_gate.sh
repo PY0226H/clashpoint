@@ -35,7 +35,7 @@ expect_pass() {
 FAKE_ROOT="$TMP_DIR/root"
 mkdir -p \
   "$FAKE_ROOT/chat" \
-  "$FAKE_ROOT/chatapp/src-tauri" \
+  "$FAKE_ROOT/frontend/apps/desktop/src-tauri" \
   "$FAKE_ROOT/swiftide-pgvector" \
   "$FAKE_ROOT/ai_judge_service"
 
@@ -48,7 +48,7 @@ cat >"$FAKE_ROOT/chat/deny.toml" <<'EOF_DENY_CHAT'
 ignore = []
 EOF_DENY_CHAT
 
-cat >"$FAKE_ROOT/chatapp/src-tauri/deny.toml" <<'EOF_DENY_CHATAPP'
+cat >"$FAKE_ROOT/frontend/apps/desktop/src-tauri/deny.toml" <<'EOF_DENY_CHATAPP'
 [advisories]
 ignore = ["RUSTSEC-2024-0001"]
 EOF_DENY_CHATAPP
@@ -66,7 +66,7 @@ PIP_ALLOWLIST_EXPIRED="$TMP_DIR/pip_allowlist.expired.csv"
 
 cat >"$CARGO_ALLOWLIST_OK" <<'EOF_CARGO_OK'
 # advisory_id,target,expires_on,owner,reason
-RUSTSEC-2024-0001,chatapp/src-tauri,2099-12-31,security-team,temporary waiver for test
+RUSTSEC-2024-0001,frontend/apps/desktop/src-tauri,2099-12-31,security-team,temporary waiver for test
 EOF_CARGO_OK
 
 cat >"$CARGO_ALLOWLIST_EMPTY" <<'EOF_CARGO_EMPTY'
@@ -75,7 +75,7 @@ EOF_CARGO_EMPTY
 
 cat >"$CARGO_ALLOWLIST_EXPIRED" <<'EOF_CARGO_EXPIRED'
 # advisory_id,target,expires_on,owner,reason
-RUSTSEC-2024-0001,chatapp/src-tauri,2020-01-01,security-team,expired waiver for test
+RUSTSEC-2024-0001,frontend/apps/desktop/src-tauri,2020-01-01,security-team,expired waiver for test
 EOF_CARGO_EXPIRED
 
 cat >"$PIP_ALLOWLIST_EMPTY" <<'EOF_PIP_EMPTY'
@@ -155,7 +155,7 @@ fi
 
 expect_fail "cargo-audit fail should fail gate" \
   env \
-    FAIL_AUDIT_TARGET="chatapp/src-tauri" \
+    FAIL_AUDIT_TARGET="frontend/apps/desktop/src-tauri" \
     FAIL_DENY_TARGET="" \
     FAIL_PIP_AUDIT="0" \
     MISSING_PIP_AUDIT="0" \

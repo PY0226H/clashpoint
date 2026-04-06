@@ -68,8 +68,8 @@ is_prod_file() {
     return 0
   fi
 
-  # Frontend production files
-  if [[ "$f" == chatapp/src/* && ( "$f" == *.js || "$f" == *.ts || "$f" == *.vue ) ]]; then
+  # Frontend production files (React/TS workspace)
+  if [[ "$f" == frontend/* && ( "$f" == *.js || "$f" == *.jsx || "$f" == *.ts || "$f" == *.tsx ) ]]; then
     return 0
   fi
 

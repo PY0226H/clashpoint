@@ -23,7 +23,7 @@ Options:
                                      default: ai_judge_service/.venv/bin/python
   --python-requirements <path>       Python requirements file (default: ai_judge_service/requirements.txt)
   --rust-targets <csv>               Rust workspace dirs to snapshot
-                                     default: chat,chatapp/src-tauri,swiftide-pgvector
+                                     default: chat,frontend/apps/desktop/src-tauri,swiftide-pgvector
   --allow-missing-tools              Downgrade missing tool checks to warning
   -h, --help                         Show this help
 USAGE
@@ -142,7 +142,7 @@ EVIDENCE_OUT=""
 CARGO_DENY_BIN="cargo-deny"
 PYTHON_BIN=""
 PYTHON_REQUIREMENTS=""
-RUST_TARGETS_CSV="chat,chatapp/src-tauri,swiftide-pgvector"
+RUST_TARGETS_CSV="chat,frontend/apps/desktop/src-tauri,swiftide-pgvector"
 ALLOW_MISSING_TOOLS="false"
 
 while [[ $# -gt 0 ]]; do

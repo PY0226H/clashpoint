@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHAT_DIR="${ROOT_DIR}/chat"
-CHATAPP_DIR="${ROOT_DIR}/chatapp"
+FRONTEND_DIR="${ROOT_DIR}/frontend"
 
 OUTPUT_DIR=""
 RUN_TEST_GATE=0
@@ -20,7 +20,7 @@ Options:
 
 This script validates Phase6 ACK drift readiness baseline:
 1) notify-server websocket ACK drift and gap recovery regression tests
-2) chatapp debate room ack utility regression test
+2) frontend realtime-sdk ack utility regression test
 3) optional full quality gate
 USAGE
 }
@@ -74,8 +74,13 @@ echo "" >> "${SUMMARY_FILE}"
 NOTIFY_CLAMP_LOG="${OUTPUT_DIR}/notify_server_ack_clamp_test.log"
 NOTIFY_GAP_LOG="${OUTPUT_DIR}/notify_server_gap_recovery_test.log"
 NOTIFY_ACK_LOG="${OUTPUT_DIR}/notify_server_ack_frame_test.log"
-FRONTEND_LOG="${OUTPUT_DIR}/chatapp_ack_utils_test.log"
+FRONTEND_LOG="${OUTPUT_DIR}/frontend_realtime_ack_utils_test.log"
 TEST_GATE_LOG="${OUTPUT_DIR}/full_test_gate.log"
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pnpm is required for frontend realtime-sdk test" >&2
+  exit 1
+fi
 
 run_cmd \
   "cargo test -p notify-server clamp future lastAckSeq" \
@@ -96,9 +101,9 @@ run_cmd \
   debate_room_ws_handler_should_accept_ack_frame
 
 run_cmd \
-  "node chatapp/src/debate-room-utils.test.js" \
+  "pnpm --dir frontend --filter @echoisle/realtime-sdk test" \
   "${FRONTEND_LOG}" \
-  node "${CHATAPP_DIR}/src/debate-room-utils.test.js"
+  pnpm --dir "${FRONTEND_DIR}" --filter @echoisle/realtime-sdk test
 
 if (( RUN_TEST_GATE == 1 )); then
   run_cmd \
@@ -112,7 +117,7 @@ echo "" >> "${SUMMARY_FILE}"
 echo "- notify ack clamp test: PASS (log: ${NOTIFY_CLAMP_LOG})" >> "${SUMMARY_FILE}"
 echo "- notify gap recovery test: PASS (log: ${NOTIFY_GAP_LOG})" >> "${SUMMARY_FILE}"
 echo "- notify ack frame test: PASS (log: ${NOTIFY_ACK_LOG})" >> "${SUMMARY_FILE}"
-echo "- chatapp ack utils test: PASS (log: ${FRONTEND_LOG})" >> "${SUMMARY_FILE}"
+echo "- frontend realtime-sdk ack utils test: PASS (log: ${FRONTEND_LOG})" >> "${SUMMARY_FILE}"
 if (( RUN_TEST_GATE == 1 )); then
   echo "- full test gate: PASS (log: ${TEST_GATE_LOG})" >> "${SUMMARY_FILE}"
 else

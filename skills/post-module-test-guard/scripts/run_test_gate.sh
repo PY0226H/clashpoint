@@ -50,7 +50,7 @@ if [[ -z "$ROOT" ]]; then
   fi
 fi
 
-SUBDIRS=("chat" "swiftide-pgvector" "chatapp/src-tauri")
+SUBDIRS=("chat" "swiftide-pgvector" "frontend/apps/desktop/src-tauri")
 
 if [[ -x "$ROOT/scripts/quality/workspace_residual_guard.sh" ]]; then
   echo "[root] workspace residual guard"

@@ -64,17 +64,18 @@ for f in "${files[@]}"; do
     continue
   fi
 
-  if [[ "$f" == chatapp/src/* && "$f" == *.vue ]]; then
-    comp="$(basename "$f" .vue | tr '[:upper:]' '[:lower:]')"
-    echo "- 前端组件: $f"
-    echo "  - 建议补充 E2E: e2e/tests/${comp}.spec.ts"
+  if [[ "$f" == frontend/packages/*/src/* && ( "$f" == *.ts || "$f" == *.tsx || "$f" == *.js || "$f" == *.jsx ) ]]; then
+    pkg="$(echo "$f" | cut -d/ -f3)"
+    mod="$(basename "$f" | sed 's/\.[^.]*$//' | tr '[:upper:]' '[:lower:]')"
+    echo "- 前端包逻辑: $f"
+    echo "  - 建议补充单测: frontend/packages/${pkg}/src/${mod}.test.ts"
+    echo "  - 建议补充 E2E: frontend/tests/e2e/auth-smoke.spec.ts"
     continue
   fi
 
-  if [[ "$f" == chatapp/src/* && ( "$f" == *.js || "$f" == *.ts ) ]]; then
-    mod="$(basename "$f" | sed 's/\.[^.]*$//' | tr '[:upper:]' '[:lower:]')"
-    echo "- 前端逻辑: $f"
-    echo "  - 建议补充 E2E: e2e/tests/${mod}.spec.ts"
+  if [[ "$f" == frontend/apps/*/src/* && ( "$f" == *.ts || "$f" == *.tsx || "$f" == *.js || "$f" == *.jsx ) ]]; then
+    echo "- 前端应用入口: $f"
+    echo "  - 建议补充 E2E: frontend/tests/e2e/auth-smoke.spec.ts"
     continue
   fi
 done

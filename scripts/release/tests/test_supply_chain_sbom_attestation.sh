@@ -35,7 +35,7 @@ expect_pass() {
 FAKE_ROOT="$TMP_DIR/root"
 mkdir -p \
   "$FAKE_ROOT/chat" \
-  "$FAKE_ROOT/chatapp/src-tauri" \
+  "$FAKE_ROOT/frontend/apps/desktop/src-tauri" \
   "$FAKE_ROOT/swiftide-pgvector" \
   "$FAKE_ROOT/ai_judge_service"
 
@@ -46,9 +46,9 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 EOF_LOCK_CHAT
 
-cat >"$FAKE_ROOT/chatapp/src-tauri/Cargo.lock" <<'EOF_LOCK_TAURI'
+cat >"$FAKE_ROOT/frontend/apps/desktop/src-tauri/Cargo.lock" <<'EOF_LOCK_TAURI'
 [[package]]
-name = "chatapp-tauri"
+name = "echoisle-desktop"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 EOF_LOCK_TAURI
@@ -65,7 +65,7 @@ cat >"$FAKE_ROOT/chat/deny.toml" <<'EOF_DENY_CHAT'
 ignore = []
 EOF_DENY_CHAT
 
-cat >"$FAKE_ROOT/chatapp/src-tauri/deny.toml" <<'EOF_DENY_TAURI'
+cat >"$FAKE_ROOT/frontend/apps/desktop/src-tauri/deny.toml" <<'EOF_DENY_TAURI'
 [advisories]
 ignore = []
 EOF_DENY_TAURI

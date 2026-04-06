@@ -5,7 +5,7 @@
 - `.github/workflows/build.yml`
 
 ## Rust 门禁（本 Skill 默认执行）
-适用目录：`chat`, `swiftide-pgvector`, `chatapp/src-tauri`
+适用目录：`chat`, `swiftide-pgvector`, `frontend/apps/desktop/src-tauri`
 
 1. 格式检查
 - `cargo fmt --all -- --check`
