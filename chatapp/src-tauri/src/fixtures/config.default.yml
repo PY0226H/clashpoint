@@ -1,9 +1,0 @@
-server:
-  chat: "http://localhost:6688/api"
-  notification: "http://localhost:6687/events"
-iap:
-  purchase_mode: "mock"
-  allowed_product_ids: []
-  native_bridge:
-    bin: ""
-    args: []

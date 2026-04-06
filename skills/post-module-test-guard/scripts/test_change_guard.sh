@@ -7,6 +7,8 @@ set -euo pipefail
 
 ROOT=""
 CHANGES=""
+RAW_STATUS=""
+DELETED_FILES=""
 
 usage() {
   cat <<'USAGE'
@@ -46,7 +48,9 @@ if [[ -z "$ROOT" ]]; then
 fi
 
 if [[ -z "$CHANGES" ]]; then
-  CHANGES="$(git -C "$ROOT" status --short 2>/dev/null | awk '{print $2}' | paste -sd ';' - || true)"
+  RAW_STATUS="$(git -C "$ROOT" status --porcelain 2>/dev/null || true)"
+  CHANGES="$(printf '%s\n' "$RAW_STATUS" | awk '{print $2}' | paste -sd ';' - || true)"
+  DELETED_FILES="$(printf '%s\n' "$RAW_STATUS" | awk '($1 ~ /D/){print $2}' || true)"
 fi
 
 if [[ -z "$CHANGES" ]]; then
@@ -108,6 +112,12 @@ for f in "${files[@]}"; do
   f="${f## }"
   f="${f%% }"
   [[ -z "$f" ]] && continue
+
+  # 纯删除 legacy 文件不应触发“必须补测试”的阻塞。
+  if [[ -n "$DELETED_FILES" ]] && printf '%s\n' "$DELETED_FILES" | grep -Fxq "$f"; then
+    continue
+  fi
+
   if is_prod_file "$f"; then
     prod_count=$((prod_count + 1))
   fi

@@ -4,7 +4,7 @@ Command-line native bridge for Tauri `purchase_mode=native`.
 
 ## Purpose
 
-`chatapp/src-tauri` calls an external command and expects JSON payload:
+`frontend/apps/desktop/src-tauri` calls an external command and expects JSON payload:
 
 ```json
 {
@@ -73,7 +73,7 @@ iap:
     args: []
 ```
 
-Production constraints (`chatapp/src-tauri`):
+Production constraints (`frontend/apps/desktop/src-tauri`):
 
 - `ECHOISLE_IAP_NATIVE_BRIDGE_RESPONSE_JSON` is forbidden in production runtime.
 - `iap.native_bridge.args` cannot include `--simulate` in production runtime.
@@ -98,4 +98,4 @@ Typical `code` values:
 - `purchase_unverified`
 - `receipt_missing`
 
-`chatapp/src-tauri` converts this to a typed command error and `chatapp/src/iap-bridge.js` maps it to frontend-friendly messages for true-device debugging.
+`frontend/apps/desktop/src-tauri` converts this to typed command errors, and the React app consumes these errors for true-device debugging.
