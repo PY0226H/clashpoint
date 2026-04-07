@@ -20,6 +20,9 @@
 logs/
 *.pid
 *.pid.lock
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
 # rust build artifacts
 target/
@@ -33,6 +36,7 @@ dist/
 **/dist/
 .cache/
 **/.cache/
+*.tsbuildinfo
 
 # python artifacts
 __pycache__/
@@ -40,6 +44,11 @@ __pycache__/
 *.pyc
 .venv/
 **/.venv/
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+.coverage
+.coverage.*
 
 # test reports / coverage artifacts
 coverage/
@@ -53,3 +62,19 @@ test-results/
 
 # docs
 docs/
+!docs/
+docs/**
+!docs/harness/
+!docs/harness/**
+!docs/dev_plan/
+!docs/dev_plan/**
+!docs/PRD/
+!docs/PRD/**
+!docs/architecture/
+!docs/architecture/**
+!docs/benchmark/
+!docs/benchmark/**
+!docs/consistency_reports/
+!docs/consistency_reports/**
+!docs/loadtest/
+!docs/loadtest/**
