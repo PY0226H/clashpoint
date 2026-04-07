@@ -1,5 +1,27 @@
 # AGENTS.md
 
+## Purpose
+
+This file is the agent-facing table of contents for EchoIsle.
+
+Use it to find:
+
+1. which skills exist
+2. which rules are currently enforced
+3. where the detailed harness docs live
+
+Current status:
+
+1. `P1-1 AGENTS TOC 收敛` 已完成
+2. `P1-2 docs/harness 规则主目录` 已完成
+3. `P2-1 module-turn-harness skill` 已完成
+4. `P2-2 module_turn_harness.sh` 已完成
+5. `P2-3 结构化执行日志` 已完成
+6. `P2-4 PRD guard 摘要优先` 已完成
+7. `P2-5 knowledge pack 异步化` 已完成
+
+---
+
 ## Skills
 
 A skill is a set of local instructions stored in a `SKILL.md` file.
@@ -10,117 +32,80 @@ A skill is a set of local instructions stored in a `SKILL.md` file.
 - `skill-creator`: Guide for creating effective skills. Use when users want to create or update a skill that extends Codex capabilities. (file: `/Users/panyihang/.codex/skills/.system/skill-creator/SKILL.md`)
 - `skill-installer`: Install Codex skills into `$CODEX_HOME/skills` from a curated list or a GitHub repo path. (file: `/Users/panyihang/.codex/skills/.system/skill-installer/SKILL.md`)
 - `post-module-test-guard`: Generate or update tests for changed module behavior and run repository quality gates after implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/SKILL.md`)
+- `module-turn-harness`: Single entry skill for module-level development turns. It classifies the task, runs the current pre/post hook chain, and exposes `--dry-run` / `--strict` orchestration semantics. (file: `/Users/panyihang/Documents/EchoIsle/skills/module-turn-harness/SKILL.md`)
 - `post-module-interview-journal`: Generate interview-ready development records after each module implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-interview-journal/SKILL.md`)
 - `post-module-explanation-journal`: Generate deep Chinese explanation documents for newly added or modified module code under `docs/explanation`. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-explanation-journal/SKILL.md`)
 - `post-module-commit-message`: After each development round, generate a Conventional Commits compliant commit title that best matches the current Git changes. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-commit-message/SKILL.md`)
 - `post-module-plan-sync`: After each code development turn that adds or changes module behavior, sync the currently active development plan document with module status, next-step suggestions, and completion history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-plan-sync/SKILL.md`)
 - `python-venv-guard`: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. (file: `/Users/panyihang/Documents/EchoIsle/skills/python-venv-guard/SKILL.md`)
-- `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, fully read the PRD and align implementation decisions with the product target end-state. (file: `/Users/panyihang/Documents/EchoIsle/skills/pre-module-prd-goal-guard/SKILL.md`)
+- `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, default to `product-goals` summary and automatically fall back to the full PRD for high-risk work. (file: `/Users/panyihang/Documents/EchoIsle/skills/pre-module-prd-goal-guard/SKILL.md`)
 - `post-optimization-plan-sync`: After each module-level refactor or optimization turn, sync optimization matrix and next-step recommendation, then append optimization history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-optimization-plan-sync/SKILL.md`)
 
 ### Skill usage rules
 
-- Discovery: The list above is the only session skill source of truth.
-- Trigger: If the user names a skill (with `$SkillName` or plain text), or the task clearly matches a skill description, that skill must be used in the turn.
-- Multiples: If multiple skills match, use the minimal set that covers the task and state execution order.
-- Turn scope: Do not carry skills across turns unless re-mentioned.
-- Missing/blocked: If a named skill is unavailable or unreadable, say so briefly and continue with the best fallback.
+1. The list above is the only skill source of truth for this repository.
+2. If the user names a skill, or the task clearly matches a skill description, that skill must be used.
+3. Use the minimal set of skills needed for the turn.
+4. Do not carry skills across turns unless the user re-mentions them.
+5. If a skill is unavailable or unreadable, say so briefly and continue with the best fallback.
 
-### Skill execution workflow (progressive disclosure)
+---
 
-1. Open the target `SKILL.md` and read only what is needed.
-2. Resolve relative paths relative to the skill directory first.
-3. Load only required reference files; do not bulk-load folders.
-4. Prefer existing `scripts/` and `assets/` over recreating content manually.
-5. Announce selected skills and reason in one short line.
+## Quick Rules
 
-### Context hygiene
+These are the rules that remain directly visible in `AGENTS.md`.
+Detailed explanations now live under `docs/harness/`.
 
-- Keep context small; summarize long content instead of pasting.
-- Avoid deep reference chasing unless blocked.
+### Mandatory Python rule
 
-## Mandatory Python environment rule
+1. For any turn that runs Python commands in this repository, run `python-venv-guard` first.
+2. Never use global interpreters: `python`, `python3`, `pip`, `pip3`.
+3. Always use `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python`.
 
-- For any turn that runs Python commands in this repository, run `python-venv-guard` first.
-- Never use global interpreters (`python`, `python3`, `pip`, `pip3`) for project tasks.
-- Always use `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python`.
+### Mandatory PRD rule
 
-## Mandatory pre-development PRD hook
+1. For any development or refactor/optimization turn that changes project code, architecture, or module behavior, run `pre-module-prd-goal-guard` before coding.
+2. The authority PRD remains `/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
+3. The default fast path is now `/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md`; high-risk modules must fall back to the authority PRD.
 
-- For any development turn that changes project code, architecture, or module behavior, run `pre-module-prd-goal-guard` before coding.
-- `pre-module-prd-goal-guard` is mandatory for every development task. There is no opt-out for feature development, bug fixes, refactors, or optimizations.
-- Must fully read `/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
-- The purpose is to align with the product's target end-state and avoid wrong directional decisions.
-- If task scope conflicts with PRD target shape, clarify adjustment strategy before coding.
+### Current hook rule
 
-## Task classification rules
+1. The default entry for module-level turns is now `module-turn-harness`.
+2. The underlying hook matrix is still defined in `docs/harness/10-task-classification.md` and executed according to `docs/harness/20-orchestration.md`.
+3. `module-turn-harness` now supports `--knowledge-pack auto|skip|force`; explanation/interview no longer block ordinary small turns by default.
+4. `module-turn-harness` is the current wrapper over existing skills/scripts; later phases may expand it further, but the current implementation is already active.
 
-- `Code development`: Adds features, fixes behavior, changes business logic, introduces endpoints, alters schemas, or otherwise changes externally observable module behavior.
-- `Refactor/optimization`: Improves structure, readability, maintainability, or performance without adding a new product capability as the primary goal.
-- `Non-development work`: Pure documentation updates, prompt drafting, analysis, reviews without code changes, or other tasks that do not modify project code paths.
-- `Module-level`: A task is module-level when it modifies production code, shared runtime configuration, data flow, interfaces between components, or any code path that should be tracked in project planning docs.
-- If a task includes both development and refactor/optimization work, classify it by the primary delivery goal. New behavior or changed behavior takes precedence over refactor labeling.
+---
 
-## Mandatory post-module hook
+## Harness Docs
 
-For any module-level code development or module-level refactor/optimization turn, run hooks in this order:
+Use these files as the detailed source of truth:
 
-1. `post-module-test-guard`
-2. `post-module-interview-journal`
-3. `post-module-explanation-journal`
-4. `post-module-commit-message`
+1. [docs/harness/00-overview.md](/Users/panyihang/Documents/EchoIsle/docs/harness/00-overview.md): what the harness docs cover, current phase status, and where to look first
+2. [docs/harness/10-task-classification.md](/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md): task types, module-level definition, and the current hook matrix
+3. [docs/harness/20-orchestration.md](/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md): how module turns are currently orchestrated through `module-turn-harness`
+4. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
+5. [docs/harness/30-runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md): current verification model and the gap before unified runtime verify lands
+6. [docs/harness/40-doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
+7. [docs/harness/50-quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md): current quality gates, guards, and CI responsibilities
 
-The three hooks above are mandatory for:
+Related planning document:
 
-- code development
-- feature implementation
-- bug fixes
-- refactors
-- optimizations
+1. [docs/dev_plan/EchoIsle-Harness-Engineering-落地方案与开发计划-v2.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/EchoIsle-Harness-Engineering-落地方案与开发计划-v2.md)
 
-Only for code development turns run additionally:
+---
 
-5. `post-module-plan-sync`
+## Project Map
 
-`Code development` includes functional additions and behavior-changing fixes.
-`post-module-plan-sync` must run when the task is feature development, code implementation, or behavior-changing bug fixing.
-`post-module-plan-sync` must NOT run in refactor/optimization turns.
+Use this file when you need a lightweight codebase map before opening implementation files:
 
-### Post-module hook requirements
+1. [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md): current code map for backend, AI service, frontend, harness, and "where to look first"
 
-- Testing hook must:
-  - check whether test changes are missing for production/module code changes
-  - generate or update tests when needed
-  - run project test gates and pass only when required checks succeed
-- Interview journal hook must update:
-  - `docs/interview/01-development-log.md`
-  - `docs/interview/02-troubleshooting-log.md`
-  - `docs/interview/03-interview-qa-log.md`
-- Explanation journal hook must:
-  - follow `docs/explanation/00-讲解规范.md`
-  - create a new markdown file under `docs/explanation/`
-  - explain only new/modified code paths with architecture, execution flow, tradeoffs, and testing evidence
-- Plan sync hook must:
-  - sync the currently active development plan document (dynamic resolution; do not hardcode a single path)
-  - update module status matrix and next-step suggestions
-  - append module completion sync history
-- Commit message hook must:
-  - generate at least 1 recommended commit title for current round changes
-  - ensure the title follows Conventional Commits format
-  - ensure title semantics align with actual diff intent (`feat/fix/refactor/docs/style/test/chore/...`)
+---
 
-## Mandatory post-optimization hook
+## Working Guidance
 
-- For any turn whose primary goal is module-level refactor or optimization, run `post-optimization-plan-sync` before the final response.
-- `post-optimization-plan-sync` is mandatory for refactor and optimization work, and it replaces `post-module-plan-sync` in those turns.
-- Do not run both `post-module-plan-sync` and `post-optimization-plan-sync` in the same turn.
-- Optimization hook must:
-  - resolve and read the currently active optimization/restructure plan document (dynamic resolution)
-  - overwrite-sync “优化执行矩阵” and “下一步优化建议” (default rewrite sections `8,9`)
-  - append optimization completion sync history and clearly state the next optimization phase
-
-## Hook matrix
-
-- `Non-development work`: no mandatory pre/post module hooks unless a named skill is explicitly requested.
-- `Code development`: run `pre-module-prd-goal-guard` before coding, then run `post-module-test-guard`, `post-module-interview-journal`, `post-module-explanation-journal`, `post-module-commit-message`, and `post-module-plan-sync`.
-- `Refactor/optimization`: run `pre-module-prd-goal-guard` before coding, then run `post-module-test-guard`, `post-module-interview-journal`, `post-module-explanation-journal`, `post-module-commit-message`, and `post-optimization-plan-sync`.
+1. Read only the harness doc section needed for the current task.
+2. Prefer concise summaries over loading long documents wholesale.
+3. Treat `docs/harness/` as the detailed rules layer, and `AGENTS.md` as the navigation layer.
+4. Do not assume future-phase behavior is already active unless a harness doc explicitly marks it as current.

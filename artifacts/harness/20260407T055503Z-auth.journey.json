@@ -1,0 +1,35 @@
+{
+  "run_id": "20260407T055503Z-auth",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "profile": "auth",
+  "phase_owner": "P3-2",
+  "goal": "认证链路统一运行态验证",
+  "status": "evidence_missing",
+  "started_at": "2026-04-07T05:55:03Z",
+  "finished_at": "2026-04-07T05:55:03Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260407T055503Z-auth.journey.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260407T055503Z-auth.journey.md"
+  },
+  "collect_requests": {
+    "logs": true,
+    "metrics": false,
+    "trace": false
+  },
+  "counts": {
+    "checks_total": 3,
+    "collectors_total": 3,
+    "evidence_missing_total": 3,
+    "fail_total": 0
+  },
+  "collectors": [
+    {"collector_id":"logs","requested":true,"status":"evidence_missing","note":"P3-1 仅建立统一入口，日志采集器将在后续 profile 落地时补齐。","evidence_paths":[]}
+    ,{"collector_id":"metrics","requested":false,"status":"skipped","note":"未请求指标采集。","evidence_paths":[]}
+    ,{"collector_id":"trace","requested":false,"status":"skipped","note":"未请求 trace 采集。","evidence_paths":[]}
+  ],
+  "checks": [
+    {"check_id":"profile-dispatch","title":"profile 分发与统一摘要","status":"pass","note":"已进入 auth profile，并按统一 JSON/Markdown 格式产出结果。","source_refs":["/Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh;/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md"],"command_hint":"","evidence_paths":[]}
+    ,{"check_id":"auth-web-journey","title":"认证 smoke（web）","status":"evidence_missing","note":"auth profile 已注册，但具体认证旅程将在 P3-2 中固化。当前先暴露可复用脚本与证据缺口。","source_refs":["/Users/panyihang/Documents/EchoIsle/frontend/package.json;/Users/panyihang/Documents/EchoIsle/frontend/tests/e2e/auth-smoke.spec.ts;/Users/panyihang/Documents/EchoIsle/docs/learning/Restful_Api/008_post_api_auth_v2_sms_send.md;/Users/panyihang/Documents/EchoIsle/docs/learning/Restful_Api/009_post_api_auth_v2_signup_phone.md"],"command_hint":"cd /Users/panyihang/Documents/EchoIsle/frontend && pnpm e2e:auth:web","evidence_paths":[]}
+    ,{"check_id":"auth-desktop-journey","title":"认证 smoke（desktop）","status":"evidence_missing","note":"desktop 认证链路将在 P3-2 中与 web 版本一起固化，当前仅给出统一入口与推荐命令。","source_refs":["/Users/panyihang/Documents/EchoIsle/frontend/package.json;/Users/panyihang/Documents/EchoIsle/frontend/tests/e2e/auth-smoke.spec.ts"],"command_hint":"cd /Users/panyihang/Documents/EchoIsle/frontend && pnpm e2e:auth:desktop","evidence_paths":[]}
+  ]
+}

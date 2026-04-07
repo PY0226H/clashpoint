@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=""
 PLAN=""
+SLOT=""
 MODULE=""
 SUMMARY=""
 PRIORITY="P1"
@@ -26,6 +27,7 @@ usage() {
     [--note <matrix-note>] \
     [--next-steps "建议1;建议2;建议3"] \
     [--plan <plan-doc-path>] \
+    [--slot <slot-name>] \
     [--history-date <YYYY-MM-DD>] \
     [--matrix-heading "### 已完成/未完成矩阵"] \
     [--next-heading "### 下一开发模块建议"] \
@@ -34,13 +36,16 @@ usage() {
     [--dry-run]
 
 说明:
-  - 不写死计划文档路径，默认自动识别当前正在使用的开发计划文档。
+  - 不写死计划文档路径，默认优先按活动计划入口与命名 slot 解析。
   - 自动识别顺序:
     1) --plan
-    2) POST_MODULE_ACTIVE_PLAN / ACTIVE_PLAN_DOC / PLAN_DOC
-    3) git status 中匹配 *开发计划*.md 的改动文件
-    4) docs/dev_plan/*开发计划*.md 最近修改文件
-    5) docs/**/*开发计划*.md 最近修改文件
+    2) --slot
+    3) POST_MODULE_ACTIVE_PLAN / ACTIVE_PLAN_DOC / PLAN_DOC
+    4) POST_MODULE_PLAN_SLOT / ACTIVE_PLAN_SLOT / PLAN_SLOT
+    5) .codex/plan-slots/*.txt
+    6) legacy fallback: git status 中匹配 *开发计划*.md 的改动文件
+    7) legacy fallback: docs/dev_plan/*开发计划*.md 最近修改文件
+    8) legacy fallback: docs/**/*开发计划*.md 最近修改文件
 USAGE
 }
 
@@ -68,6 +73,96 @@ resolve_path() {
   else
     printf '%s/%s' "$root" "$path"
   fi
+}
+
+normalize_slot() {
+  local slot="$1"
+  slot="$(trim "$slot")"
+  if [[ -z "$slot" ]]; then
+    echo ""
+    return
+  fi
+  if [[ ! "$slot" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "非法 slot 名称: $slot" >&2
+    exit 1
+  fi
+  printf '%s' "$slot"
+}
+
+slot_pointer_path() {
+  local root="$1"
+  local slot="$2"
+  printf '%s/.codex/plan-slots/%s.txt' "$root" "$slot"
+}
+
+read_pointer_target() {
+  local root="$1"
+  local pointer="$2"
+  local raw=""
+  [[ -f "$pointer" ]] || return 1
+  raw="$(awk 'NF {print; exit}' "$pointer" 2>/dev/null || true)"
+  [[ -n "$raw" ]] || return 1
+  resolve_path "$root" "$raw"
+}
+
+resolve_plan_from_slot() {
+  local slot="$1"
+  local pointer target
+  slot="$(normalize_slot "$slot")"
+  pointer="$(slot_pointer_path "$ROOT" "$slot")"
+  if [[ ! -f "$pointer" ]]; then
+    echo "未找到 slot 指针文件: $pointer" >&2
+    exit 1
+  fi
+  target="$(read_pointer_target "$ROOT" "$pointer" || true)"
+  if [[ -z "$target" ]]; then
+    echo "slot 指针为空或无效: $pointer" >&2
+    exit 1
+  fi
+  if [[ ! -f "$target" ]]; then
+    echo "slot 指向的计划文档不存在: $target" >&2
+    exit 1
+  fi
+  printf '%s' "$target"
+}
+
+collect_active_slots() {
+  local pointer slot target
+  for pointer in "$ROOT"/.codex/plan-slots/*.txt; do
+    [[ -f "$pointer" ]] || continue
+    slot="$(basename "$pointer" .txt)"
+    target="$(read_pointer_target "$ROOT" "$pointer" || true)"
+    [[ -n "$target" && -f "$target" ]] || continue
+    printf '%s\t%s\n' "$slot" "$target"
+  done
+}
+
+resolve_plan_from_slots() {
+  local active default_target count only_target
+  active="$(collect_active_slots)"
+  count="$(printf '%s\n' "$active" | awk 'NF' | wc -l | tr -d ' ')"
+
+  if [[ "$count" -gt 1 ]]; then
+    echo "检测到多个活动计划 slot，请显式传入 --slot 或 --plan。" >&2
+    printf '%s\n' "$active" | awk -F '\t' 'NF >= 2 { printf "  - %s => %s\n", $1, $2 }' >&2
+    exit 1
+  fi
+
+  default_target="$(read_pointer_target "$ROOT" "$(slot_pointer_path "$ROOT" "default")" || true)"
+  if [[ -n "$default_target" && -f "$default_target" && "$count" -le 1 ]]; then
+    printf '%s' "$default_target"
+    return 0
+  fi
+
+  if [[ "$count" -eq 1 ]]; then
+    only_target="$(printf '%s\n' "$active" | awk -F '\t' 'NF >= 2 { print $2; exit }')"
+    if [[ -n "$only_target" && -f "$only_target" ]]; then
+      printf '%s' "$only_target"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 pick_latest_existing_file() {
@@ -284,6 +379,10 @@ while [[ $# -gt 0 ]]; do
       PLAN="$2"
       shift 2
       ;;
+    --slot)
+      SLOT="$2"
+      shift 2
+      ;;
     --module)
       MODULE="$2"
       shift 2
@@ -370,44 +469,71 @@ if [[ -n "$PLAN" ]]; then
   fi
 else
   candidates=""
+  slot_from_env=""
 
-  for env_name in POST_MODULE_ACTIVE_PLAN ACTIVE_PLAN_DOC PLAN_DOC; do
-    eval "env_value=\${$env_name:-}"
-    if [[ -n "${env_value:-}" ]]; then
-      candidates+="$(resolve_path "$ROOT" "$env_value")"$'\n'
-    fi
-  done
-
-  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    while IFS= read -r rel; do
-      rel="$(trim "$rel")"
-      [[ -z "$rel" ]] && continue
-      if [[ "$rel" == *.md && "$rel" == *开发计划* ]]; then
-        candidates+="$(resolve_path "$ROOT" "$rel")"$'\n'
+  if [[ -z "$SLOT" ]]; then
+    for env_name in POST_MODULE_PLAN_SLOT ACTIVE_PLAN_SLOT PLAN_SLOT; do
+      eval "env_value=\${$env_name:-}"
+      if [[ -n "${env_value:-}" ]]; then
+        slot_from_env="$env_value"
+        break
       fi
-    done < <(git -C "$ROOT" status --porcelain 2>/dev/null | awk '{print $NF}')
+    done
   fi
 
-  while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
-    candidates+="$f"$'\n'
-  done < <(find "$ROOT/docs/dev_plan" -type f -name "*开发计划*.md" 2>/dev/null || true)
+  if [[ -n "$SLOT" || -n "$slot_from_env" ]]; then
+    PLAN="$(resolve_plan_from_slot "${SLOT:-$slot_from_env}")"
+  else
+    for env_name in POST_MODULE_ACTIVE_PLAN ACTIVE_PLAN_DOC PLAN_DOC; do
+      eval "env_value=\${$env_name:-}"
+      if [[ -n "${env_value:-}" ]]; then
+        candidates+="$(resolve_path "$ROOT" "$env_value")"$'\n'
+      fi
+    done
 
-  while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
-    candidates+="$f"$'\n'
-  done < <(find "$ROOT/docs" -type f -name "*开发计划*.md" 2>/dev/null || true)
-
-  PLAN="$(pick_latest_existing_file "$candidates")"
+    PLAN="$(pick_latest_existing_file "$candidates")"
+    if [[ -z "$PLAN" ]]; then
+      PLAN="$(resolve_plan_from_slots || true)"
+    fi
+  fi
 
   if [[ -z "$PLAN" ]]; then
-    echo "无法自动识别当前开发计划文档，请通过 --plan 显式指定。" >&2
-    exit 1
+    candidates=""
+
+    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      while IFS= read -r rel; do
+        rel="$(trim "$rel")"
+        [[ -z "$rel" ]] && continue
+        if [[ "$rel" == *.md && "$rel" == *开发计划* ]]; then
+          candidates+="$(resolve_path "$ROOT" "$rel")"$'\n'
+        fi
+      done < <(git -C "$ROOT" status --porcelain 2>/dev/null | awk '{print $NF}')
+    fi
+
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      candidates+="$f"$'\n'
+    done < <(find "$ROOT/docs/dev_plan" -type f -name "*开发计划*.md" 2>/dev/null || true)
+
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      candidates+="$f"$'\n'
+    done < <(find "$ROOT/docs" -type f -name "*开发计划*.md" 2>/dev/null || true)
+
+    PLAN="$(pick_latest_existing_file "$candidates")"
+
+    if [[ -z "$PLAN" ]]; then
+      echo "无法自动识别当前开发计划文档，请通过 --plan 或 --slot 显式指定。" >&2
+      exit 1
+    fi
   fi
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf 'dry-run: 目标计划文档 = %s\n' "$PLAN"
+  if [[ -n "$SLOT" ]]; then
+    printf 'dry-run: slot = %s\n' "$SLOT"
+  fi
   printf 'dry-run: 模块 = %s\n' "$MODULE"
   printf 'dry-run: 状态 = %s\n' "$STATUS"
   exit 0

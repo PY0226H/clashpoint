@@ -582,7 +582,7 @@ if [[ "$ENFORCE_V2D_STAGE_ACCEPTANCE" == "true" ]]; then
     V2D_LOAD_SUMMARY="$ROOT/docs/loadtest/evidence/v2d_preprod_summary.env"
   fi
   if [[ -z "$V2D_REPORT_OUT" ]]; then
-    V2D_REPORT_OUT="$ROOT/docs/dev_plan/V2-D阶段验收报告-$(date +%F)-from-preflight.md"
+    V2D_REPORT_OUT="$ROOT/docs/loadtest/evidence/V2-D阶段验收报告-$(date +%F)-from-preflight.md"
   fi
 fi
 
@@ -597,13 +597,13 @@ if [[ "$ENFORCE_AI_JUDGE_M7_ACCEPTANCE" == "true" ]]; then
     AI_JUDGE_M7_FAULT_MATRIX="$ROOT/docs/loadtest/evidence/ai_judge_m7_fault_matrix.env"
   fi
   if [[ -z "$AI_JUDGE_M7_REPORT_OUT" ]]; then
-    AI_JUDGE_M7_REPORT_OUT="$ROOT/docs/dev_plan/AI裁判M7阶段验收报告-$(date +%F)-from-preflight.md"
+    AI_JUDGE_M7_REPORT_OUT="$ROOT/docs/loadtest/evidence/AI裁判M7阶段验收报告-$(date +%F)-from-preflight.md"
   fi
 fi
 
 if [[ "$ENFORCE_SUPPLY_CHAIN_SECURITY" == "true" ]]; then
   if [[ -z "$SUPPLY_CHAIN_REPORT_OUT" ]]; then
-    SUPPLY_CHAIN_REPORT_OUT="$ROOT/docs/dev_plan/供应链安全门禁报告-$(date +%F)-from-preflight.md"
+    SUPPLY_CHAIN_REPORT_OUT="$ROOT/docs/loadtest/evidence/供应链安全门禁报告-$(date +%F)-from-preflight.md"
   fi
   if [[ -z "$SUPPLY_CHAIN_GATE_SCRIPT" ]]; then
     SUPPLY_CHAIN_GATE_SCRIPT="$ROOT/scripts/release/supply_chain_security_gate.sh"

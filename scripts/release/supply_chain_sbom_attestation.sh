@@ -9,7 +9,7 @@ Usage:
 Options:
   --root <path>                      Repo root path (default: git top-level or cwd)
   --report-out <path>                Markdown report output path
-                                     default: docs/dev_plan/供应链SBOM与许可证证明报告-<YYYY-MM-DD>.md
+                                     default: docs/loadtest/evidence/供应链SBOM与许可证证明报告-<YYYY-MM-DD>.md
   --rust-sbom-out <path>             Rust SBOM JSON output path
                                      default: docs/loadtest/evidence/supply_chain_rust_sbom.json
   --python-sbom-out <path>           Python SBOM JSON output path
@@ -212,7 +212,7 @@ if [[ -z "$ROOT" ]]; then
 fi
 
 if [[ -z "$REPORT_OUT" ]]; then
-  REPORT_OUT="$ROOT/docs/dev_plan/供应链SBOM与许可证证明报告-$(date +%F).md"
+  REPORT_OUT="$ROOT/docs/loadtest/evidence/供应链SBOM与许可证证明报告-$(date +%F).md"
 fi
 if [[ -z "$RUST_SBOM_OUT" ]]; then
   RUST_SBOM_OUT="$ROOT/docs/loadtest/evidence/supply_chain_rust_sbom.json"

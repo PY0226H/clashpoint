@@ -14,7 +14,7 @@ Options:
   --fault-matrix <path>         AI Judge fault injection matrix env file
                                 default: docs/loadtest/evidence/ai_judge_m7_fault_matrix.env
   --report-out <path>           Markdown report output path
-                                default: docs/dev_plan/AI裁判M7阶段验收报告-<YYYY-MM-DD>.md
+                                default: docs/loadtest/evidence/AI裁判M7阶段验收报告-<YYYY-MM-DD>.md
   --root <path>                 Repo root path (default: git top-level or cwd)
   --allow-missing-scenarios     Do not fail when SOAK/SPIKE scenario key is missing
   -h, --help                    Show this help
@@ -191,7 +191,7 @@ if [[ -z "$FAULT_MATRIX" ]]; then
   FAULT_MATRIX="$ROOT/docs/loadtest/evidence/ai_judge_m7_fault_matrix.env"
 fi
 if [[ -z "$REPORT_OUT" ]]; then
-  REPORT_OUT="$ROOT/docs/dev_plan/AI裁判M7阶段验收报告-$(date +%F).md"
+  REPORT_OUT="$ROOT/docs/loadtest/evidence/AI裁判M7阶段验收报告-$(date +%F).md"
 fi
 
 mkdir -p "$(dirname "$REPORT_OUT")"

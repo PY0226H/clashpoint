@@ -9,7 +9,7 @@ Usage:
 Options:
   --root <path>                   Repo root path (default: git top-level or cwd)
   --report-out <path>             Markdown report output path
-                                  default: docs/dev_plan/供应链预发故障注入演练报告-<YYYY-MM-DD>.md
+                                  default: docs/loadtest/evidence/供应链预发故障注入演练报告-<YYYY-MM-DD>.md
   --evidence-out <path>           Chaos drill evidence env output path
                                   default: docs/loadtest/evidence/supply_chain_preprod_chaos.env
   --supply-chain-gate-script <path>
@@ -119,7 +119,7 @@ if [[ -z "$SUPPLY_CHAIN_GATE_SCRIPT" ]]; then
   SUPPLY_CHAIN_GATE_SCRIPT="$ROOT/scripts/release/supply_chain_security_gate.sh"
 fi
 if [[ -z "$REPORT_OUT" ]]; then
-  REPORT_OUT="$ROOT/docs/dev_plan/供应链预发故障注入演练报告-$(date +%F).md"
+  REPORT_OUT="$ROOT/docs/loadtest/evidence/供应链预发故障注入演练报告-$(date +%F).md"
 fi
 if [[ -z "$EVIDENCE_OUT" ]]; then
   EVIDENCE_OUT="$ROOT/docs/loadtest/evidence/supply_chain_preprod_chaos.env"

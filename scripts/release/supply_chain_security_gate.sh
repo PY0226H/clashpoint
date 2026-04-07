@@ -9,7 +9,7 @@ Usage:
 Options:
   --root <path>                   Repo root path (default: git top-level or cwd)
   --report-out <path>             Markdown report output path
-                                  default: docs/dev_plan/供应链安全门禁报告-<YYYY-MM-DD>.md
+                                  default: docs/loadtest/evidence/供应链安全门禁报告-<YYYY-MM-DD>.md
   --allow-missing-tools           Downgrade missing tool checks to warning
   --cargo-audit-bin <path|name>   cargo-audit binary (default: cargo-audit)
   --cargo-deny-bin <path|name>    cargo-deny binary (default: cargo-deny)
@@ -437,7 +437,7 @@ if [[ -z "$ROOT" ]]; then
 fi
 
 if [[ -z "$REPORT_OUT" ]]; then
-  REPORT_OUT="$ROOT/docs/dev_plan/供应链安全门禁报告-$(date +%F).md"
+  REPORT_OUT="$ROOT/docs/loadtest/evidence/供应链安全门禁报告-$(date +%F).md"
 fi
 if [[ -z "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$ROOT/ai_judge_service/.venv/bin/python"

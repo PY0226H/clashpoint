@@ -13,11 +13,13 @@ description: "在每次代码结构优化模块完成后，强制重读后端优
 
 计划文档解析为动态策略（不写死路径），优先级：
 1. `--plan` 显式指定。
-2. 环境变量 `OPTIMIZATION_PLAN_FILE` / `CURRENT_PLAN_FILE`。
-3. 指针文件（如 `.codex/current-plan.txt`）。
-4. `git` 当前改动中的 `docs/dev_plan/*.md`。
-5. 自动探测最近且结构匹配的计划文档（含“优化执行矩阵/下一步优化建议”）。
-6. 兼容回退旧路径（若存在）。
+2. `--slot` 显式指定。
+3. 环境变量 `OPTIMIZATION_PLAN_FILE` / `CURRENT_PLAN_FILE`。
+4. 环境变量 `OPTIMIZATION_PLAN_SLOT` / `CURRENT_PLAN_SLOT` / `PLAN_SLOT`。
+5. `.codex/plan-slots/*.txt`。
+6. `git` 当前改动中的 `docs/dev_plan/*.md`。
+7. 自动探测最近且结构匹配的计划文档（含“优化执行矩阵/下一步优化建议”）。
+8. 兼容回退旧路径（若存在）。
 
 ## 输出语言
 - 中文。
@@ -39,6 +41,7 @@ bash skills/post-optimization-plan-sync/scripts/post_optimization_plan_sync.sh \
   --module "<optimization-module-name>" \
   --summary "<本次优化内容>" \
   --status "done" \
+  [--slot "<slot-name>"] \
   [--plan "<当前聚焦计划文档路径>"] \
   --rewrite-whitelist "8,9"
 ```
@@ -58,7 +61,8 @@ bash skills/post-optimization-plan-sync/scripts/post_optimization_plan_sync.sh \
 ## 完成标准
 1. 优化计划文档已被重新读取并完成覆盖更新（第 8/9 节，受白名单控制）。
 2. 回写记录已追加（已有章节复用或自动创建）。
-3. 最终回复明确下一步优化阶段与建议动作。
+3. 并行计划场景下不会误写到其他 slot 对应文档。
+4. 最终回复明确下一步优化阶段与建议动作。
 
 ## 资源
 - `scripts/post_optimization_plan_sync.sh`: 优化模块完成后的计划同步脚本。

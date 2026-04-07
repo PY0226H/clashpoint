@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=""
 PLAN=""
+SLOT=""
 STAGE=""
 MODULE=""
 SUMMARY=""
@@ -19,21 +20,21 @@ usage() {
     --summary <summary> \
     [--status <done|in-progress|blocked|todo>] \
     [--plan <plan-file>] \
+    [--slot <slot-name>] \
     [--reason <reason>] \
     [--rewrite-whitelist "8,9"]
 
 说明:
   - 计划文档动态解析优先级:
     1) --plan 显式传入
-    2) 环境变量 OPTIMIZATION_PLAN_FILE / CURRENT_PLAN_FILE
-    3) 指针文件:
-       .codex/current-plan.txt
-       .codex/current-plan.md
-       docs/dev_plan/.current-plan
-    4) git 当前变更中的 docs/dev_plan/*.md
-    5) docs/dev_plan 下含“优化执行矩阵 + 下一步优化建议”的最近文档
-    6) docs/dev_plan 下最近修改的“计划/重构/优化”文档
-    7) 兼容回退: docs/后端代码结构优化计划.md
+    2) --slot 显式传入
+    3) 环境变量 OPTIMIZATION_PLAN_FILE / CURRENT_PLAN_FILE
+    4) 环境变量 OPTIMIZATION_PLAN_SLOT / CURRENT_PLAN_SLOT / PLAN_SLOT
+    5) .codex/plan-slots/*.txt
+    6) git 当前变更中的 docs/dev_plan/*.md
+    7) docs/dev_plan 下含“优化执行矩阵 + 下一步优化建议”的最近文档
+    8) docs/dev_plan 下最近修改的“计划/重构/优化”文档
+    9) 兼容回退: docs/后端代码结构优化计划.md
   - 覆盖更新:
     第 8 节（优化执行矩阵）、第 9 节（下一步优化建议）
   - 追加更新:
@@ -52,6 +53,90 @@ resolve_absolute_path() {
   else
     echo "$ROOT/$path"
   fi
+}
+
+normalize_slot() {
+  local slot="$1"
+  slot="$(echo "$slot" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  [[ -n "$slot" ]] || { echo ""; return; }
+  if [[ ! "$slot" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "非法 slot 名称: $slot" >&2
+    exit 1
+  fi
+  echo "$slot"
+}
+
+slot_pointer_path() {
+  local root="$1"
+  local slot="$2"
+  echo "$root/.codex/plan-slots/$slot.txt"
+}
+
+read_slot_target() {
+  local pointer="$1"
+  local candidate
+  [[ -f "$pointer" ]] || return 1
+  candidate="$(awk 'NF {print; exit}' "$pointer" 2>/dev/null || true)"
+  [[ -n "$candidate" ]] || return 1
+  candidate="$(resolve_absolute_path "$candidate")"
+  [[ -f "$candidate" ]] || return 1
+  echo "$candidate"
+}
+
+resolve_plan_from_slot() {
+  local slot="$1"
+  local pointer candidate
+  slot="$(normalize_slot "$slot")"
+  pointer="$(slot_pointer_path "$ROOT" "$slot")"
+  if [[ ! -f "$pointer" ]]; then
+    echo "未找到 slot 指针文件: $pointer" >&2
+    exit 1
+  fi
+  candidate="$(read_slot_target "$pointer" || true)"
+  if [[ -z "$candidate" ]]; then
+    echo "slot 指针为空、无效或目标文档不存在: $pointer" >&2
+    exit 1
+  fi
+  echo "$candidate"
+}
+
+collect_active_slots() {
+  local pointer slot candidate
+  for pointer in "$ROOT"/.codex/plan-slots/*.txt; do
+    [[ -f "$pointer" ]] || continue
+    slot="$(basename "$pointer" .txt)"
+    candidate="$(read_slot_target "$pointer" || true)"
+    [[ -n "$candidate" ]] || continue
+    printf '%s\t%s\n' "$slot" "$candidate"
+  done
+}
+
+resolve_plan_from_slots() {
+  local active count default_target only_target
+  active="$(collect_active_slots)"
+  count="$(printf '%s\n' "$active" | awk 'NF' | wc -l | tr -d ' ')"
+
+  if [[ "$count" -gt 1 ]]; then
+    echo "检测到多个活动计划 slot，请显式传入 --slot 或 --plan。" >&2
+    printf '%s\n' "$active" | awk -F '\t' 'NF >= 2 { printf "  - %s => %s\n", $1, $2 }' >&2
+    exit 1
+  fi
+
+  default_target="$(read_slot_target "$(slot_pointer_path "$ROOT" "default")" || true)"
+  if [[ -n "$default_target" && -f "$default_target" && "$count" -le 1 ]]; then
+    echo "$default_target"
+    return 0
+  fi
+
+  if [[ "$count" -eq 1 ]]; then
+    only_target="$(printf '%s\n' "$active" | awk -F '\t' 'NF >= 2 { print $2; exit }')"
+    if [[ -n "$only_target" && -f "$only_target" ]]; then
+      echo "$only_target"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 file_mtime() {
@@ -84,24 +169,6 @@ resolve_plan_from_env() {
   local key candidate
   for key in OPTIMIZATION_PLAN_FILE CURRENT_PLAN_FILE; do
     candidate="${!key:-}"
-    [[ -n "$candidate" ]] || continue
-    candidate="$(resolve_absolute_path "$candidate")"
-    if [[ -f "$candidate" ]]; then
-      echo "$candidate"
-      return
-    fi
-  done
-  echo ""
-}
-
-resolve_plan_from_pointer() {
-  local pointer candidate
-  for pointer in \
-    "$ROOT/.codex/current-plan.txt" \
-    "$ROOT/.codex/current-plan.md" \
-    "$ROOT/docs/dev_plan/.current-plan"; do
-    [[ -f "$pointer" ]] || continue
-    candidate="$(awk 'NF {print; exit}' "$pointer" 2>/dev/null || true)"
     [[ -n "$candidate" ]] || continue
     candidate="$(resolve_absolute_path "$candidate")"
     if [[ -f "$candidate" ]]; then
@@ -180,13 +247,25 @@ resolve_plan() {
     return
   fi
 
+  if [[ -n "$SLOT" ]]; then
+    PLAN="$(resolve_plan_from_slot "$SLOT")"
+    return
+  fi
+
   candidate="$(resolve_plan_from_env)"
   if [[ -n "$candidate" ]]; then
     PLAN="$candidate"
     return
   fi
 
-  candidate="$(resolve_plan_from_pointer)"
+  for key in OPTIMIZATION_PLAN_SLOT CURRENT_PLAN_SLOT PLAN_SLOT; do
+    candidate="${!key:-}"
+    [[ -n "$candidate" ]] || continue
+    PLAN="$(resolve_plan_from_slot "$candidate")"
+    return
+  done
+
+  candidate="$(resolve_plan_from_slots || true)"
   if [[ -n "$candidate" ]]; then
     PLAN="$candidate"
     return
@@ -231,6 +310,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --plan)
       PLAN="$2"
+      shift 2
+      ;;
+    --slot)
+      SLOT="$2"
       shift 2
       ;;
     --stage)

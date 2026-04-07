@@ -22,12 +22,18 @@ description: "在每次模块开发完成后，自动同步当前正在使用的
 
 ## 计划文档识别规则（按优先级）
 1. 显式参数 `--plan <path>`。
-2. 环境变量：`POST_MODULE_ACTIVE_PLAN` / `ACTIVE_PLAN_DOC` / `PLAN_DOC`。
-3. 当前工作区已改动文件中，名称匹配 `*开发计划*.md` 的文档。
-4. `docs/dev_plan/` 下名称匹配 `*开发计划*.md` 的最新文件。
-5. `docs/` 下名称匹配 `*开发计划*.md` 的最新文件。
+2. 显式参数 `--slot <slot-name>`。
+3. 环境变量：`POST_MODULE_ACTIVE_PLAN` / `ACTIVE_PLAN_DOC` / `PLAN_DOC`。
+4. 环境变量：`POST_MODULE_PLAN_SLOT` / `ACTIVE_PLAN_SLOT` / `PLAN_SLOT`。
+5. `.codex/plan-slots/*.txt`。
+6. legacy fallback：当前工作区已改动文件中，名称匹配 `*开发计划*.md` 的文档。
+7. legacy fallback：`docs/dev_plan/` 下名称匹配 `*开发计划*.md` 的最新文件。
+8. legacy fallback：`docs/` 下名称匹配 `*开发计划*.md` 的最新文件。
 
-> 建议：若本回合明确了目标文档，优先传 `--plan`，避免误判。
+> 建议：
+> 1. 单计划时期使用 `default` slot。
+> 2. 并行计划时期优先传 `--slot`。
+> 3. 目标文档完全明确时，优先传 `--plan`。
 
 ## Step 1: 执行同步脚本
 ```bash
@@ -37,11 +43,13 @@ bash skills/post-module-plan-sync/scripts/post_module_plan_sync.sh \
   --priority "P0" \
   --status "进行中（phase1 已完成）" \
   --note "<矩阵说明>" \
-  --next-steps "<建议1;建议2;建议3>"
+  --next-steps "<建议1;建议2;建议3>" \
+  --slot "<slot-name>"
 ```
 
 可选参数：
 - `--plan <path>`: 显式指定计划文档。
+- `--slot <slot-name>`: 显式指定活动计划槽位。
 - `--history-date <YYYY-MM-DD>`: 指定历史记录日期。
 - `--matrix-heading/--next-heading/--history-heading`: 自定义章节标题（适配不同模板）。
 - `--dry-run`: 只输出目标文档与解析结果，不写文件。
@@ -61,7 +69,8 @@ bash skills/post-module-plan-sync/scripts/post_module_plan_sync.sh \
 1. 已回写到“当前正在使用”的计划文档（或显式指定文档）。
 2. 已完成矩阵状态同步。
 3. 已追加模块完成历史。
-4. 最终回复明确下一开发模块建议。
+4. 并行计划场景下不会误写到其他 slot 对应文档。
+5. 最终回复明确下一开发模块建议。
 
 ## 资源
 - `scripts/post_module_plan_sync.sh`: 模块完成后的计划同步脚本（自动识别当前计划文档）。

@@ -9,7 +9,7 @@ Usage:
 Options:
   --root <path>                   Repo root path (default: git top-level or cwd)
   --report-out <path>             Markdown report output path
-                                  default: docs/dev_plan/供应链allowlist到期巡检报告-<YYYY-MM-DD>.md
+                                  default: docs/loadtest/evidence/供应链allowlist到期巡检报告-<YYYY-MM-DD>.md
   --warning-days <days>           Warn when expires within N days (default: 7)
   --fail-on-warning               Treat warning items as failure
   --cargo-advisory-allowlist <path>
@@ -262,7 +262,7 @@ if [[ -z "$ROOT" ]]; then
 fi
 
 if [[ -z "$REPORT_OUT" ]]; then
-  REPORT_OUT="$ROOT/docs/dev_plan/供应链allowlist到期巡检报告-$(date +%F).md"
+  REPORT_OUT="$ROOT/docs/loadtest/evidence/供应链allowlist到期巡检报告-$(date +%F).md"
 fi
 if [[ -z "$CARGO_ADVISORY_ALLOWLIST" ]]; then
   CARGO_ADVISORY_ALLOWLIST="$ROOT/scripts/release/security_allowlists/cargo_deny_advisories_allowlist.csv"

@@ -220,7 +220,7 @@ M7 预验收门禁（phase2，回归 + 负载阈值 + 报告）：
 ```bash
 cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 ../scripts/py scripts/m7_acceptance_gate.py \
-  --report-out ../docs/dev_plan/AI裁判M7验收报告-$(date +%F).md
+  --report-out ../docs/loadtest/evidence/AI裁判M7验收报告-$(date +%F).md
 ```
 
 M7 预发阶段验收门禁（phase3，回归证据 + Soak/Spike + 故障注入矩阵）：
@@ -231,7 +231,7 @@ bash scripts/release/ai_judge_m7_stage_acceptance_gate.sh \
   --regression-evidence docs/loadtest/evidence/ai_judge_m7_regression.env \
   --preprod-summary docs/loadtest/evidence/ai_judge_m7_preprod_summary.env \
   --fault-matrix docs/loadtest/evidence/ai_judge_m7_fault_matrix.env \
-  --report-out docs/dev_plan/AI裁判M7阶段验收报告-$(date +%F).md
+  --report-out docs/loadtest/evidence/AI裁判M7阶段验收报告-$(date +%F).md
 ```
 
 ## RAG 评测基线（M4 phase2）

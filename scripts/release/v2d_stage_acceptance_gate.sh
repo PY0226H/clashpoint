@@ -12,7 +12,7 @@ Options:
   --load-summary <path>         Pre-prod load summary env file
                                 default: docs/loadtest/evidence/v2d_preprod_summary.env
   --report-out <path>           Markdown report output path
-                                default: docs/dev_plan/V2-D阶段验收报告-<YYYY-MM-DD>.md
+                                default: docs/loadtest/evidence/V2-D阶段验收报告-<YYYY-MM-DD>.md
   --root <path>                 Repo root path (default: git top-level or cwd)
   --allow-missing-scenarios     Do not fail when L1/L2/L3/L4/SOAK/SPIKE are incomplete
   -h, --help                    Show this help
@@ -186,7 +186,7 @@ if [[ -z "$LOAD_SUMMARY" ]]; then
   LOAD_SUMMARY="$ROOT/docs/loadtest/evidence/v2d_preprod_summary.env"
 fi
 if [[ -z "$REPORT_OUT" ]]; then
-  REPORT_OUT="$ROOT/docs/dev_plan/V2-D阶段验收报告-$(date +%F).md"
+  REPORT_OUT="$ROOT/docs/loadtest/evidence/V2-D阶段验收报告-$(date +%F).md"
 fi
 
 mkdir -p "$(dirname "$REPORT_OUT")"
