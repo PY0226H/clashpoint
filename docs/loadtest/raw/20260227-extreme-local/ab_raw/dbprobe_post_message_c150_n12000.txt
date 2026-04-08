@@ -1,0 +1,57 @@
+This is ApacheBench, Version 2.3 <$Revision: 1913912 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient)
+Completed 1200 requests
+Completed 2400 requests
+Completed 3600 requests
+Completed 4800 requests
+Completed 6000 requests
+Completed 7200 requests
+Completed 8400 requests
+Completed 9600 requests
+Completed 10800 requests
+Completed 12000 requests
+Finished 12000 requests
+
+
+Server Software:        
+Server Hostname:        127.0.0.1
+Server Port:            6688
+
+Document Path:          /api/chats/13
+Document Length:        Variable
+
+Concurrency Level:      150
+Time taken for tests:   4.247 seconds
+Complete requests:      12000
+Failed requests:        0
+Keep-Alive requests:    12000
+Total transferred:      5939961 bytes
+Total body sent:        8556000
+HTML transferred:       1787961 bytes
+Requests per second:    2825.57 [#/sec] (mean)
+Time per request:       53.087 [ms] (mean)
+Time per request:       0.354 [ms] (mean, across all concurrent requests)
+Transfer rate:          1365.87 [Kbytes/sec] received
+                        1967.41 kb/s sent
+                        3333.28 kb/s total
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   1.1      0      12
+Processing:    23   52   6.8     50      95
+Waiting:       23   52   6.8     50      95
+Total:         23   52   7.3     50     106
+
+Percentage of the requests served within a certain time (ms)
+  50%     50
+  66%     52
+  75%     53
+  80%     55
+  90%     59
+  95%     63
+  98%     81
+  99%     85
+ 100%    106 (longest request)

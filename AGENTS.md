@@ -75,6 +75,17 @@ Detailed explanations now live under `docs/harness/`.
 3. `module-turn-harness` now supports `--knowledge-pack auto|skip|force`; explanation/interview no longer block ordinary small turns by default.
 4. `module-turn-harness` is the current wrapper over existing skills/scripts; later phases may expand it further, but the current implementation is already active.
 
+### Pre-release compatibility rule
+
+1. EchoIsle is still in local development and has not been released to production users.
+2. By default, do not preserve compatibility layers, gray rollout paths, legacy fallbacks, dual-write logic, adapter shims, or parallel old/new code paths for not-yet-released behavior.
+3. Default to hard cutover and direct cleanup when implementing new functionality, refactors, or optimizations.
+4. Only keep a temporary compatibility layer when at least one of the following is true:
+   - the user explicitly asks to preserve compatibility
+   - multiple active in-repo callers cannot be updated in the same turn
+   - a migration, test baseline, or script cutover truly requires a short transition window
+5. Any temporary compatibility layer must state its removal condition in code comments or plan notes; do not leave indefinite fallback paths in place.
+
 ---
 
 ## Harness Docs

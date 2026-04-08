@@ -1,0 +1,21 @@
+{
+  "runId": "LT-1772187396687",
+  "startedAt": "2026-02-27T10:16:36.687Z",
+  "wsClients": 20,
+  "sendCount": 200,
+  "firstDeliveryReceived": 200,
+  "firstDeliverySuccessRate": 1,
+  "wsFanoutEventsReceived": 4000,
+  "wsFanoutExpected": 4000,
+  "wsFanoutDeliveryRatio": 1,
+  "firstDeliveryLatencyMs": {
+    "p50": 3.772666000000015,
+    "p95": 10.544374999999945,
+    "p99": 15.395083,
+    "max": 32.62337499999998,
+    "min": 2.435707999999977,
+    "avg": 4.8521250250000065
+  },
+  "parseErrors": 0,
+  "durationSec": 1.195
+}

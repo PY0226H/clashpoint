@@ -6,6 +6,22 @@ use super::{
 };
 use chrono::{DateTime, Duration, Utc};
 
+const OPS_TOPIC_CATEGORY_WHITELIST: &[&str] = &[
+    "technology",
+    "society",
+    "game",
+    "sports",
+    "economy",
+    "education",
+    "culture",
+    "politics",
+    "science",
+    "health",
+    "environment",
+    "lifestyle",
+    "entertainment",
+];
+
 pub(super) fn normalize_limit(limit: Option<u64>) -> i64 {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     limit as i64
@@ -51,26 +67,52 @@ pub(super) fn can_spectate_status(status: &str) -> bool {
     matches!(status, "running" | "judging" | "closed")
 }
 
-pub(super) fn normalize_ops_topic_field(
+pub(super) fn normalize_ops_topic_field_with_codes(
     value: &str,
-    field: &str,
+    empty_code: &str,
+    too_long_code: &str,
     max_len: usize,
 ) -> Result<String, AppError> {
     let text = value.trim();
     if text.is_empty() {
-        return Err(AppError::DebateError(format!("{field} cannot be empty")));
+        return Err(AppError::ValidationError(empty_code.to_string()));
     }
     if text.len() > max_len {
-        return Err(AppError::DebateError(format!(
-            "{field} is too long, max {max_len}"
-        )));
+        return Err(AppError::ValidationError(too_long_code.to_string()));
     }
     Ok(text.to_string())
 }
 
-pub(super) fn normalize_topic_category(value: &str, max_len: usize) -> Result<String, AppError> {
-    let text = normalize_ops_topic_field(value, "category", max_len)?;
-    Ok(text.to_lowercase())
+pub(super) fn normalize_topic_category_with_codes(
+    value: &str,
+    empty_code: &str,
+    too_long_code: &str,
+    max_len: usize,
+) -> Result<String, AppError> {
+    let text = normalize_ops_topic_field_with_codes(value, empty_code, too_long_code, max_len)?;
+    let normalized = text.to_lowercase();
+    if !OPS_TOPIC_CATEGORY_WHITELIST.contains(&normalized.as_str()) {
+        return Err(AppError::ValidationError(
+            "debate_topic_category_invalid".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+pub(super) fn normalize_optional_ops_topic_field_with_codes(
+    value: Option<String>,
+    too_long_code: &str,
+    max_len: usize,
+) -> Result<Option<String>, AppError> {
+    let normalized = value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if let Some(text) = normalized.as_deref() {
+        if text.len() > max_len {
+            return Err(AppError::ValidationError(too_long_code.to_string()));
+        }
+    }
+    Ok(normalized)
 }
 
 pub(super) fn normalize_topic_category_filter(raw: Option<String>) -> Option<String> {

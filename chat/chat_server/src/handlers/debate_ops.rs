@@ -1,6 +1,8 @@
 use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
+        release_idempotency_best_effort, request_idempotency_key_from_headers,
+        request_rate_limit_ip_key_from_headers, try_acquire_idempotency_or_fail_open,
     },
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
@@ -12,12 +14,17 @@ use crate::{
 };
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use chat_core::User;
 
+const OPS_DEBATE_TOPIC_CREATE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
+const OPS_DEBATE_TOPIC_CREATE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
+const OPS_DEBATE_TOPIC_CREATE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_DEBATE_TOPIC_CREATE_IDEMPOTENCY_TTL_SECS: u64 = 30;
+const OPS_DEBATE_TOPIC_CREATE_IDEMPOTENCY_MAX_LEN: usize = 160;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
@@ -29,8 +36,12 @@ const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
     responses(
         (status = 201, description = "Created debate topic", body = crate::DebateTopic),
         (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Resource not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -39,10 +50,74 @@ const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 pub(crate) async fn create_debate_topic_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<OpsCreateDebateTopicInput>,
-) -> Result<impl IntoResponse, AppError> {
-    let topic = state.create_debate_topic_by_owner(&user, input).await?;
-    Ok((StatusCode::CREATED, Json(topic)))
+) -> Result<Response, AppError> {
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_debate_topic_create_user",
+        &user.id.to_string(),
+        OPS_DEBATE_TOPIC_CREATE_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_DEBATE_TOPIC_CREATE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        return Ok(rate_limit_exceeded_response(
+            "ops_debate_topic_create",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_debate_topic_create_ip",
+        &ip_limit_key,
+        OPS_DEBATE_TOPIC_CREATE_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_DEBATE_TOPIC_CREATE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    if !ip_decision.allowed {
+        return Ok(rate_limit_exceeded_response(
+            "ops_debate_topic_create",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &headers,
+        "ops_debate_topic_create_idempotency_key_invalid",
+        "ops_debate_topic_create_idempotency_key_too_long",
+        OPS_DEBATE_TOPIC_CREATE_IDEMPOTENCY_MAX_LEN,
+    )?;
+    let idempotency_lock_key = request_idempotency_key
+        .as_deref()
+        .map(|key| format!("u{}:{key}", user.id));
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        let acquired = try_acquire_idempotency_or_fail_open(
+            &state,
+            "ops_debate_topic_create",
+            lock_key,
+            OPS_DEBATE_TOPIC_CREATE_IDEMPOTENCY_TTL_SECS,
+        )
+        .await;
+        if !acquired {
+            return Err(AppError::DebateConflict(
+                "idempotency_conflict:ops_debate_topic_create".to_string(),
+            ));
+        }
+    }
+
+    let ret = state
+        .create_debate_topic_by_owner_with_meta(&user, input, request_idempotency_key.as_deref())
+        .await;
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        release_idempotency_best_effort(&state, "ops_debate_topic_create", lock_key).await;
+    }
+    let (topic, _) = ret?;
+    Ok((StatusCode::CREATED, user_rate_headers, Json(topic)).into_response())
 }
 
 /// Update debate topic by authorized ops role.

@@ -1,0 +1,11 @@
+run,concurrency,result,complete,failed,rps,p95,p99,max,error
+1,300,reset,0,0,0,0,0,0,"apr_socket_recv: Connection reset by peer (54)"
+2,300,ok,6000,0,6757.43,61,93,109,""
+3,300,ok,6000,0,7239.45,45,62,73,""
+4,300,ok,6000,0,6872.84,47,59,70,""
+5,300,ok,6000,0,6834.82,48,59,73,""
+1,400,reset,0,0,0,0,0,0,"apr_socket_recv: Connection reset by peer (54)"
+2,400,ok,6000,0,6288.58,76,97,108,""
+3,400,reset,0,0,0,0,0,0,"apr_socket_recv: Connection reset by peer (54)"
+4,400,reset,0,0,0,0,0,0,"apr_socket_recv: Connection reset by peer (54)"
+5,400,reset,0,0,0,0,0,0,"apr_socket_recv: Connection reset by peer (54)"

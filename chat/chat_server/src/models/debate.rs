@@ -18,9 +18,10 @@ use helpers::{
     can_spectate_status, evaluate_phase_trigger_checkpoint, normalize_debate_message_limit,
     normalize_debate_pin_limit, normalize_join_side, normalize_limit,
     normalize_list_session_status, normalize_message_content, normalize_ops_manage_session_status,
-    normalize_ops_session_status, normalize_ops_topic_field, normalize_pin_seconds,
-    normalize_topic_category, normalize_topic_category_filter, pin_cost_coins, safe_u64_to_i64,
-    validate_list_debate_sessions_time_range,
+    normalize_ops_session_status, normalize_ops_topic_field_with_codes,
+    normalize_optional_ops_topic_field_with_codes, normalize_pin_seconds,
+    normalize_topic_category_filter, normalize_topic_category_with_codes, pin_cost_coins,
+    safe_u64_to_i64, validate_list_debate_sessions_time_range,
 };
 
 const DEFAULT_LIMIT: u64 = 20;
@@ -33,6 +34,7 @@ const DEBATE_MESSAGE_MAX_LEN: usize = 1000;
 const DEBATE_TOPIC_TITLE_MAX_LEN: usize = 120;
 const DEBATE_TOPIC_CATEGORY_MAX_LEN: usize = 32;
 const DEBATE_STANCE_MAX_LEN: usize = 64;
+const DEBATE_TOPIC_CONTEXT_SEED_MAX_LEN: usize = 8000;
 const DEBATE_SESSION_STATUS_MAX_LEN: usize = 20;
 const PIN_MIN_SECONDS: i32 = 30;
 const PIN_MAX_SECONDS: i32 = 600;

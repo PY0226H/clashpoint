@@ -26,6 +26,8 @@ HARNESS_JSONL=""
 HARNESS_SUMMARY_JSON=""
 HARNESS_SUMMARY_MD=""
 STEP_RECORDS_FILE=""
+COMMIT_RECOMMENDATION_BLOCK=""
+COMMIT_RECOMMENDATION_TITLE=""
 
 usage() {
   cat <<'USAGE'
@@ -538,6 +540,11 @@ EOF_BODY
 }
 
 emit_commit_message_recommendation() {
+  if [[ -n "$COMMIT_RECOMMENDATION_BLOCK" ]]; then
+    printf '%s' "$COMMIT_RECOMMENDATION_BLOCK"
+    return 0
+  fi
+
   local type scope subject
   case "$TASK_KIND" in
     dev) type="feat" ;;
@@ -555,10 +562,24 @@ emit_commit_message_recommendation() {
     subject="advance ${scope} orchestration"
   fi
 
-  printf '%s(%s): %s\n' "$type" "$scope" "$subject"
-  printf '\nAlternatives:\n'
-  printf '1. %s: update %s workflow\n' "$type" "$scope"
-  printf '2. chore(%s): sync harness docs\n' "$scope"
+  COMMIT_RECOMMENDATION_TITLE="$(printf '%s(%s): %s' "$type" "$scope" "$subject")"
+  COMMIT_RECOMMENDATION_BLOCK="$(cat <<EOF_RECOMMEND
+$COMMIT_RECOMMENDATION_TITLE
+
+Alternatives:
+1. $type: update $scope workflow
+2. chore($scope): sync harness docs
+EOF_RECOMMEND
+)"
+
+  printf '%s' "$COMMIT_RECOMMENDATION_BLOCK"
+}
+
+announce_commit_message_preview() {
+  emit_commit_message_recommendation >/dev/null
+  printf '\ncommit_message_preview:\n'
+  printf 'recommended_commit_title: %s\n' "$COMMIT_RECOMMENDATION_TITLE"
+  printf 'Recommended:\n%s\n' "$COMMIT_RECOMMENDATION_BLOCK"
 }
 
 run_interview_journal() {
@@ -869,6 +890,7 @@ printf 'mode: %s%s\n' "$([[ "$DRY_RUN" -eq 1 ]] && echo dry-run || echo execute)
 printf 'artifact_jsonl: %s\n' "$HARNESS_JSONL"
 printf 'artifact_summary_json: %s\n' "$HARNESS_SUMMARY_JSON"
 printf 'artifact_summary_md: %s\n' "$HARNESS_SUMMARY_MD"
+announce_commit_message_preview
 
 if [[ "$TASK_KIND" == "non-dev" ]]; then
   run_non_dev_mode

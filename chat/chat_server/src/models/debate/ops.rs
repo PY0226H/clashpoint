@@ -1,6 +1,12 @@
 use super::*;
 use crate::models::OpsPermission;
 
+const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE: &str = "create";
+const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE_REPLAY: &str = "create_replay";
+const DEBATE_TOPIC_DESCRIPTION_MAX_LEN: usize = 4000;
+const DEBATE_TOPIC_CONFLICT_DUPLICATE_TITLE_IN_CATEGORY: &str =
+    "debate_topic_duplicate_title_in_category";
+
 #[allow(dead_code)]
 impl AppState {
     pub async fn create_debate_topic_by_owner(
@@ -8,22 +14,105 @@ impl AppState {
         user: &User,
         input: OpsCreateDebateTopicInput,
     ) -> Result<DebateTopic, AppError> {
+        let (topic, _) = self
+            .create_debate_topic_by_owner_with_meta(user, input, None)
+            .await?;
+        Ok(topic)
+    }
+
+    pub async fn create_debate_topic_by_owner_with_meta(
+        &self,
+        user: &User,
+        input: OpsCreateDebateTopicInput,
+        idempotency_key: Option<&str>,
+    ) -> Result<(DebateTopic, bool), AppError> {
         self.ensure_ops_permission(user, OpsPermission::DebateManage)
             .await?;
 
-        let title = normalize_ops_topic_field(&input.title, "title", DEBATE_TOPIC_TITLE_MAX_LEN)?;
-        let description = normalize_ops_topic_field(&input.description, "description", 4000)?;
-        let category = normalize_topic_category(&input.category, DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
-        let stance_pro =
-            normalize_ops_topic_field(&input.stance_pro, "stance_pro", DEBATE_STANCE_MAX_LEN)?;
-        let stance_con =
-            normalize_ops_topic_field(&input.stance_con, "stance_con", DEBATE_STANCE_MAX_LEN)?;
-        let context_seed = input
-            .context_seed
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
+        let title = normalize_ops_topic_field_with_codes(
+            &input.title,
+            "debate_topic_title_empty",
+            "debate_topic_title_too_long",
+            DEBATE_TOPIC_TITLE_MAX_LEN,
+        )?;
+        let description = normalize_ops_topic_field_with_codes(
+            &input.description,
+            "debate_topic_description_empty",
+            "debate_topic_description_too_long",
+            DEBATE_TOPIC_DESCRIPTION_MAX_LEN,
+        )?;
+        let category = normalize_topic_category_with_codes(
+            &input.category,
+            "debate_topic_category_empty",
+            "debate_topic_category_too_long",
+            DEBATE_TOPIC_CATEGORY_MAX_LEN,
+        )?;
+        let stance_pro = normalize_ops_topic_field_with_codes(
+            &input.stance_pro,
+            "debate_topic_stance_pro_empty",
+            "debate_topic_stance_pro_too_long",
+            DEBATE_STANCE_MAX_LEN,
+        )?;
+        let stance_con = normalize_ops_topic_field_with_codes(
+            &input.stance_con,
+            "debate_topic_stance_con_empty",
+            "debate_topic_stance_con_too_long",
+            DEBATE_STANCE_MAX_LEN,
+        )?;
+        let context_seed = normalize_optional_ops_topic_field_with_codes(
+            input.context_seed,
+            "debate_topic_context_seed_too_long",
+            DEBATE_TOPIC_CONTEXT_SEED_MAX_LEN,
+        )?;
 
-        let row = sqlx::query_as(
+        let mut tx = self.pool.begin().await?;
+        if let Some(key) = idempotency_key {
+            let lock_key = format!("ops_debate_topic_create:{}:{}", user.id, key);
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&lock_key)
+                .execute(&mut *tx)
+                .await?;
+            if let Some(existing_topic_id) = self
+                .load_ops_debate_topic_idempotency_row(&mut tx, user.id, key)
+                .await?
+            {
+                let existing = self
+                    .load_debate_topic_by_id_for_ops(&mut tx, existing_topic_id)
+                    .await?;
+                self.insert_ops_debate_topic_audit(
+                    &mut tx,
+                    existing.id,
+                    user.id,
+                    OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE_REPLAY,
+                    Some(key),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok((existing, true));
+            }
+        }
+        // Serialize writes for the same normalized topic key so concurrent creates
+        // don't bypass the read-before-write duplicate guard.
+        let dedupe_lock_key = format!(
+            "ops_debate_topic_dedupe:{}:{}",
+            category,
+            title.to_lowercase()
+        );
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(&dedupe_lock_key)
+            .execute(&mut *tx)
+            .await?;
+        if self
+            .find_existing_topic_id_by_title_and_category(&mut tx, &title, &category)
+            .await?
+            .is_some()
+        {
+            return Err(AppError::DebateConflict(
+                DEBATE_TOPIC_CONFLICT_DUPLICATE_TITLE_IN_CATEGORY.to_string(),
+            ));
+        }
+
+        let row: DebateTopic = sqlx::query_as(
             r#"
             INSERT INTO debate_topics(
                 title, description, category, stance_pro, stance_con,
@@ -43,10 +132,35 @@ impl AppState {
         .bind(context_seed)
         .bind(input.is_active)
         .bind(user.id)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-        Ok(row)
+        if let Some(key) = idempotency_key {
+            sqlx::query(
+                r#"
+                INSERT INTO ops_debate_topic_idempotency_keys(
+                    user_id, idempotency_key, topic_id, created_at
+                )
+                VALUES ($1, $2, $3, NOW())
+                "#,
+            )
+            .bind(user.id)
+            .bind(key)
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        self.insert_ops_debate_topic_audit(
+            &mut tx,
+            row.id,
+            user.id,
+            OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE,
+            idempotency_key,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok((row, false))
     }
 
     pub async fn create_debate_session_by_owner(
@@ -137,17 +251,41 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::DebateManage)
             .await?;
 
-        let title = normalize_ops_topic_field(&input.title, "title", DEBATE_TOPIC_TITLE_MAX_LEN)?;
-        let description = normalize_ops_topic_field(&input.description, "description", 4000)?;
-        let category = normalize_topic_category(&input.category, DEBATE_TOPIC_CATEGORY_MAX_LEN)?;
-        let stance_pro =
-            normalize_ops_topic_field(&input.stance_pro, "stance_pro", DEBATE_STANCE_MAX_LEN)?;
-        let stance_con =
-            normalize_ops_topic_field(&input.stance_con, "stance_con", DEBATE_STANCE_MAX_LEN)?;
-        let context_seed = input
-            .context_seed
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
+        let title = normalize_ops_topic_field_with_codes(
+            &input.title,
+            "debate_topic_title_empty",
+            "debate_topic_title_too_long",
+            DEBATE_TOPIC_TITLE_MAX_LEN,
+        )?;
+        let description = normalize_ops_topic_field_with_codes(
+            &input.description,
+            "debate_topic_description_empty",
+            "debate_topic_description_too_long",
+            DEBATE_TOPIC_DESCRIPTION_MAX_LEN,
+        )?;
+        let category = normalize_topic_category_with_codes(
+            &input.category,
+            "debate_topic_category_empty",
+            "debate_topic_category_too_long",
+            DEBATE_TOPIC_CATEGORY_MAX_LEN,
+        )?;
+        let stance_pro = normalize_ops_topic_field_with_codes(
+            &input.stance_pro,
+            "debate_topic_stance_pro_empty",
+            "debate_topic_stance_pro_too_long",
+            DEBATE_STANCE_MAX_LEN,
+        )?;
+        let stance_con = normalize_ops_topic_field_with_codes(
+            &input.stance_con,
+            "debate_topic_stance_con_empty",
+            "debate_topic_stance_con_too_long",
+            DEBATE_STANCE_MAX_LEN,
+        )?;
+        let context_seed = normalize_optional_ops_topic_field_with_codes(
+            input.context_seed,
+            "debate_topic_context_seed_too_long",
+            DEBATE_TOPIC_CONTEXT_SEED_MAX_LEN,
+        )?;
 
         let row = sqlx::query_as(
             r#"
@@ -179,6 +317,95 @@ impl AppState {
         .await?;
 
         row.ok_or_else(|| AppError::NotFound(format!("debate topic id {topic_id}")))
+    }
+
+    async fn load_ops_debate_topic_idempotency_row(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: i64,
+        idempotency_key: &str,
+    ) -> Result<Option<i64>, AppError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT topic_id
+            FROM ops_debate_topic_idempotency_keys
+            WHERE user_id = $1
+              AND idempotency_key = $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.map(|v| v.0))
+    }
+
+    async fn load_debate_topic_by_id_for_ops(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        topic_id: i64,
+    ) -> Result<DebateTopic, AppError> {
+        let row: DebateTopic = sqlx::query_as(
+            r#"
+            SELECT
+                id, title, description, category, stance_pro, stance_con,
+                context_seed, is_active, created_by, created_at, updated_at
+            FROM debate_topics
+            WHERE id = $1
+            "#,
+        )
+        .bind(topic_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row)
+    }
+
+    async fn insert_ops_debate_topic_audit(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        topic_id: i64,
+        operator_user_id: i64,
+        action: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO ops_debate_topic_audits(
+                topic_id, operator_user_id, action, idempotency_key, created_at
+            )
+            VALUES ($1, $2, $3, $4, NOW())
+            "#,
+        )
+        .bind(topic_id)
+        .bind(operator_user_id)
+        .bind(action)
+        .bind(idempotency_key)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    async fn find_existing_topic_id_by_title_and_category(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        title: &str,
+        category: &str,
+    ) -> Result<Option<i64>, AppError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT id
+            FROM debate_topics
+            WHERE LOWER(BTRIM(title)) = LOWER(BTRIM($1))
+              AND category = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(title)
+        .bind(category)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.map(|v| v.0))
     }
 
     pub async fn update_debate_session_by_owner(

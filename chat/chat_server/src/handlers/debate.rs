@@ -349,7 +349,7 @@ fn maybe_override_rate_limit_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{get_router, models::CreateUser, ErrorOutput, UpsertOpsRoleInput};
+    use crate::{get_router, models::CreateUser, DebateTopic, ErrorOutput, UpsertOpsRoleInput};
     use anyhow::Result;
     use axum::{
         body::Body,
@@ -542,6 +542,284 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "rate_limit_exceeded:debate_topics_list");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_topic_ops_route_should_replay_with_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Topic Replay",
+            "ops-topic-replay@acme.org",
+            "+8613800995555",
+            "ops-topic-replay-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state.clone()).await?;
+
+        let payload = r#"{
+            "title":"ops-topic-idempotency",
+            "description":"topic-create-idempotency",
+            "category":"Technology",
+            "stancePro":"pro",
+            "stanceCon":"con",
+            "contextSeed":"seed",
+            "isActive":true
+        }"#;
+
+        let req1 = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-topic-route-key-1")
+            .body(Body::from(payload.to_string()))?;
+        let res1 = app.clone().oneshot(req1).await?;
+        assert_eq!(res1.status(), StatusCode::CREATED);
+        let body1 = res1.into_body().collect().await?.to_bytes();
+        let first: DebateTopic = serde_json::from_slice(&body1)?;
+
+        let req2 = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-topic-route-key-1")
+            .body(Body::from(payload.to_string()))?;
+        let res2 = app.oneshot(req2).await?;
+        assert_eq!(res2.status(), StatusCode::CREATED);
+        let body2 = res2.into_body().collect().await?.to_bytes();
+        let second: DebateTopic = serde_json::from_slice(&body2)?;
+        assert_eq!(first.id, second.id);
+
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1)::bigint FROM ops_debate_topic_audits WHERE topic_id = $1",
+        )
+        .bind(first.id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_topic_ops_route_should_reject_too_long_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Topic Idem Too Long",
+            "ops-topic-idem-too-long@acme.org",
+            "+8613800996666",
+            "ops-topic-idem-too-long-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let long_key = "k".repeat(161);
+        let payload = r#"{
+            "title":"ops-topic",
+            "description":"desc",
+            "category":"Technology",
+            "stancePro":"pro",
+            "stanceCon":"con",
+            "isActive":true
+        }"#;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", long_key)
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "ops_debate_topic_create_idempotency_key_too_long"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_topic_ops_route_should_reject_too_long_context_seed() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Topic Context",
+            "ops-topic-context@acme.org",
+            "+8613800997777",
+            "ops-topic-context-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let too_long_context_seed = "a".repeat(8001);
+        let payload = serde_json::json!({
+            "title": "ops-topic-context-seed",
+            "description": "desc",
+            "category": "Technology",
+            "stancePro": "pro",
+            "stanceCon": "con",
+            "contextSeed": too_long_context_seed,
+            "isActive": true
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "debate_topic_context_seed_too_long");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_topic_ops_route_should_reject_invalid_category() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Topic Invalid Category",
+            "ops-topic-invalid-category@acme.org",
+            "+8613800998888",
+            "ops-topic-invalid-category-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = r#"{
+            "title":"ops-topic-invalid-category",
+            "description":"desc",
+            "category":"unknown",
+            "stancePro":"pro",
+            "stanceCon":"con",
+            "isActive":true
+        }"#;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "debate_topic_category_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_topic_ops_route_should_reject_normalized_duplicate_title_in_same_category(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Topic Duplicate",
+            "ops-topic-duplicate@acme.org",
+            "+8613800999999",
+            "ops-topic-duplicate-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = r#"{
+            "title":"AI 是否取代人类工作",
+            "description":"desc",
+            "category":"Technology",
+            "stancePro":"pro",
+            "stanceCon":"con",
+            "isActive":true
+        }"#;
+
+        let req1 = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload.to_string()))?;
+        let res1 = app.clone().oneshot(req1).await?;
+        assert_eq!(res1.status(), StatusCode::CREATED);
+
+        let payload2 = r#"{
+            "title":"  ai 是否取代人类工作  ",
+            "description":"desc-2",
+            "category":" technology ",
+            "stancePro":"pro",
+            "stanceCon":"con",
+            "isActive":true
+        }"#;
+
+        let req2 = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/topics")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload2.to_string()))?;
+        let res2 = app.oneshot(req2).await?;
+        assert_eq!(res2.status(), StatusCode::CONFLICT);
+        let body = res2.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "debate conflict: debate_topic_duplicate_title_in_category"
+        );
         Ok(())
     }
 }

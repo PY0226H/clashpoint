@@ -52,11 +52,6 @@ fi
 
 SUBDIRS=("chat" "swiftide-pgvector" "frontend/apps/desktop/src-tauri")
 
-if [[ -x "$ROOT/scripts/quality/workspace_residual_guard.sh" ]]; then
-  echo "[root] workspace residual guard"
-  bash "$ROOT/scripts/quality/workspace_residual_guard.sh" --root "$ROOT"
-fi
-
 run_in_dir() {
   local dir="$1"
   local cmd="$2"

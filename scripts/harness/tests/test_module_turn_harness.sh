@@ -35,6 +35,7 @@ bash "$SCRIPT" \
   --dry-run >"$DEV_OUT"
 
 expect_contains "dev dry-run announces mode" "mode: dry-run" "$DEV_OUT"
+expect_contains "dev dry-run prints commit preview title" "recommended_commit_title:" "$DEV_OUT"
 expect_contains "dev dry-run announces slot" "slot: backend-signin" "$DEV_OUT"
 expect_contains "dev dry-run announces prd mode" "prd-mode: auto" "$DEV_OUT"
 expect_contains "dev dry-run announces knowledge pack mode" "knowledge-pack: auto" "$DEV_OUT"
