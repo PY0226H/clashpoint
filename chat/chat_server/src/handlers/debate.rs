@@ -351,7 +351,7 @@ mod tests {
     use super::*;
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
-        UpsertOpsRoleInput,
+        GetOpsRbacMeOutput, UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -586,6 +586,81 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "rate_limit_exceeded:debate_topics_list");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_rbac_me_route_should_return_200_for_bound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Me User",
+            "ops-rbac-me-user@acme.org",
+            "+8613810000001",
+            "ops-rbac-me-user-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/me")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsRbacMeOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.user_id, user.id as u64);
+        assert!(!out.is_owner);
+        assert_eq!(out.role, None);
+        assert!(!out.permissions.debate_manage);
+        assert!(!out.permissions.judge_review);
+        assert!(!out.permissions.judge_rejudge);
+        assert!(!out.permissions.role_manage);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_rbac_me_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/me")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_rbac_me_route_should_return_403_for_unbound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Me Unbound".to_string(),
+                email: "ops-rbac-me-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-rbac-me-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/me")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
         Ok(())
     }
 

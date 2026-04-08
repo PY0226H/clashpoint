@@ -361,3 +361,14 @@
 | debate-ops-sessions-route-matrix-expansion | 本轮已补关键 route 回归，但 `201/400/401/403/422/404/409/429/500` 全矩阵仍未完全封板。 | 新增 create-session route 专项全矩阵测试，覆盖鉴权、门禁、提取器、幂等、限流与冲突路径。 | 执行 route 测试集并归档结果，确保中间件/注解变更可被门禁拦截。 |
 | debate-ops-sessions-topic-active-policy | 是否只允许 `is_active=true` topic 创建新场次尚未冻结，产品策略待确认。 | 明确 active 策略并固化到接口校验与错误码（允许历史题复开或 strict active-only）。 | 产品评审记录 + 接口回归（active/inactive topic）通过并归档。 |
 | debate-ops-sessions-duplicate-schedule-governance | 当前缺“同 topic + 时间窗口”重复创建治理，重试/并发下仍可能产生重复排期。 | 完成业务去重规则（应用层查重 + DB 约束预案），并给出存量数据处理策略。 | 迁移预演（含回滚）+ 并发压测，归档重复创建前后行为对比报告。 |
+
+## AG. debate-ops-sessions-update-hardening 后续待办（来源：当前开发计划）
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| debate-ops-sessions-update-state-transition-policy | `PUT /api/debate/ops/sessions/{id}` 已完成治理增强，但状态机方向约束仍未冻结，运营可任意跳转。 | 明确并落地状态转移矩阵（必要时提供受控 override 入口），避免非法逆向流转。 | 状态机边界回归（含逆向流转）通过，产出策略评审与测试证据。 |
+| debate-ops-sessions-update-actual-start-at-governance | 手工更新到 `open/running` 时 `actual_start_at` 语义治理尚未完成。 | 冻结 `actual_start_at` 规则（自动回填/保留策略）并补齐回归。 | 更新状态后字段一致性回归通过，报表口径校验记录归档。 |
+| debate-ops-sessions-update-scheduled-future-policy | `scheduled` 的未来时态策略尚未统一，当前仅 `open/running` 强制 `endAt > now`。 | 明确并落地 create/update 一致的时间语义策略，避免过期计划态残留。 | 时间边界回归通过，策略文档与接口行为一致。 |
+| debate-ops-sessions-update-route-matrix-expansion | 本轮已补关键 route 用例，但 `401/403/422/500` 等边界矩阵仍可继续扩展。 | 完成 update 路由全矩阵测试封板，覆盖中间件、提取器与异常路径。 | 执行 route 专项测试并归档结果，确保后续中间件改动可被门禁拦截。 |
+| debate-ops-sessions-update-error-model-standardization | 当前 400/409 仍部分依赖文案串，机读稳定性不够强。 | 推进结构化错误模型（`code/message/details?`），客户端仅依赖 `code` 分支。 | 回归错误场景并验证客户端仅靠 `code` 完成分支，归档响应样例。 |
+| debate-ops-sessions-update-schedule-change-realtime-event | 非状态字段（时间/人数）变更暂无实时事件，客户端可能读取旧计划。 | 为计划字段变更补齐实时事件（或等效 outbox 通知）并完成消费侧联调。 | 计划更新联调通过，前后端可观测字段与事件快照归档。 |

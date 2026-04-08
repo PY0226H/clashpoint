@@ -129,9 +129,18 @@ fn map_assignment_row(row: OpsRoleAssignmentRow) -> OpsRoleAssignment {
 }
 
 impl AppState {
-    async fn get_platform_admin_user_id(&self) -> Result<i64, AppError> {
-        let _ = self;
-        Ok(1)
+    pub(crate) async fn get_platform_admin_user_id(&self) -> Result<i64, AppError> {
+        let owner_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT owner_user_id
+            FROM platform_admin_owners
+            WHERE singleton_key = TRUE
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        owner_id.ok_or_else(|| AppError::ServerError("platform_owner_not_configured".to_string()))
     }
 
     async fn find_ops_role_for_user(&self, user_id: i64) -> Result<Option<String>, AppError> {
@@ -335,13 +344,26 @@ impl AppState {
             return Err(AppError::NotFound(format!("user id {}", user_id)));
         }
 
-        // Prefer the conventional bootstrap granter (user id=1) when it exists.
-        // In local/dev databases that only have user id=0, fallback to self-grant.
-        let granted_by = sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE id = 1")
-            .fetch_optional(&self.pool)
-            .await?
-            .unwrap_or(user_id as i64);
+        // Prefer current platform owner as grant source.
+        // If missing, fallback to conventional user id=1, and then self-grant in local edge cases.
+        let granted_by = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT owner_user_id
+            FROM platform_admin_owners
+            WHERE singleton_key = TRUE
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .or(
+            sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+        .unwrap_or(user_id as i64);
 
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO platform_user_roles(user_id, role, granted_by, created_at, updated_at)
@@ -356,8 +378,26 @@ impl AppState {
         .bind(user_id as i64)
         .bind(ROLE_OPS_ADMIN)
         .bind(granted_by)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO platform_admin_owners(
+                singleton_key, owner_user_id, updated_by, created_at, updated_at
+            )
+            VALUES (TRUE, $1, $2, NOW(), NOW())
+            ON CONFLICT (singleton_key)
+            DO UPDATE
+            SET owner_user_id = EXCLUDED.owner_user_id,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(user_id as i64)
+        .bind(granted_by)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 }
@@ -471,6 +511,30 @@ mod tests {
         assert!(viewer_snapshot.permissions.judge_review);
         assert!(!viewer_snapshot.permissions.judge_rejudge);
         assert!(!viewer_snapshot.permissions.role_manage);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn grant_platform_admin_should_update_owner_source() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let next_owner = state
+            .find_user_by_id(2)
+            .await?
+            .expect("next owner should exist");
+        state.grant_platform_admin(owner.id as u64).await?;
+
+        state.grant_platform_admin(next_owner.id as u64).await?;
+        let owner_id = state.get_platform_admin_user_id().await?;
+        assert_eq!(owner_id, next_owner.id);
+
+        let next_snapshot = state.get_ops_rbac_me(&next_owner).await?;
+        assert!(next_snapshot.is_owner);
+        assert!(next_snapshot.permissions.role_manage);
+
+        let old_owner_snapshot = state.get_ops_rbac_me(&owner).await?;
+        assert!(!old_owner_snapshot.is_owner);
+        assert!(!old_owner_snapshot.permissions.role_manage);
         Ok(())
     }
 

@@ -6,6 +6,14 @@ INSERT INTO users(email, fullname, password_hash, phone_e164, phone_verified_at,
 ('charlie@acme.org', 'Charlie Chen', '$argon2id$v=19$m=19456,t=2,p=1$MxGhY+ib/kplwBPLa7u2ug$c5h9u7Sc8Px8J5+qgNdOjSY7ZJO2QN4rugKpapGW4XU', '+8613800138004', NOW(), false),
 ('daisy@acme.org', 'Daisy Chen', '$argon2id$v=19$m=19456,t=2,p=1$MxGhY+ib/kplwBPLa7u2ug$c5h9u7Sc8Px8J5+qgNdOjSY7ZJO2QN4rugKpapGW4XU', '+8613800138005', NOW(), false);
 
+INSERT INTO platform_admin_owners(singleton_key, owner_user_id, updated_by, created_at, updated_at)
+  VALUES (TRUE, 1, 1, NOW(), NOW())
+ON CONFLICT (singleton_key)
+DO UPDATE
+SET owner_user_id = EXCLUDED.owner_user_id,
+    updated_by = EXCLUDED.updated_by,
+    updated_at = NOW();
+
 -- insert 4 chats
 -- insert public/private channel
 INSERT INTO chats(name, type, members)

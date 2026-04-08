@@ -1886,9 +1886,9 @@ impl AppState {
     async fn list_alert_recipients(&self) -> Result<Vec<u64>, AppError> {
         let owners: Vec<i64> = sqlx::query_scalar(
             r#"
-            SELECT id
-            FROM users
-            WHERE id = 1
+            SELECT owner_user_id
+            FROM platform_admin_owners
+            WHERE singleton_key = TRUE
             "#,
         )
         .fetch_all(&self.pool)

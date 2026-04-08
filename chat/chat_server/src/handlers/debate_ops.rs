@@ -369,6 +369,9 @@ pub(crate) async fn list_ops_role_assignments_handler(
     path = "/api/debate/ops/rbac/me",
     responses(
         (status = 200, description = "Current ops RBAC capabilities", body = crate::GetOpsRbacMeOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
