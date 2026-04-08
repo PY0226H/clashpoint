@@ -389,5 +389,5 @@
 |---|---|---|---|
 | debate-ops-rbac-roles-observability-dashboard-baseline | `ops.rbac.*` 指标与字典已落地，但 dashboard/告警阈值仍未接入。 | 建立 `ops.rbac.roles_list.*`、`ops.rbac.me.*`、`ops.rbac.roles_write.*` 看板与告警阈值，完成一次值班演练与复盘。 | 运维看板配置导出 + 告警演练记录 + 复盘文档归档。 |
 | debate-ops-rbac-roles-rate-limit-tuning-baseline | RBAC 三接口限流已接入，但阈值仍是工程初值，缺真实样本回标。 | 形成阈值调优基线报告：命中率、误杀率、`p95/p99`、建议参数区间。 | 执行 RBAC 管理面接口专项压测并归档命令、时间戳、结果报告到 `docs/loadtest/evidence/`。 |
-| debate-ops-rbac-audit-storage-trigger-decision | 审计已形成“两阶段策略”草案，但落库触发条件尚未评审冻结。 | 完成“日志即审计 vs 审计落库”评审并产出正式结论（含触发条件、留存策略、回滚路径）。 | 评审纪要 + 结论文档归档，并补充对应验收清单。 |
+| debate-ops-rbac-audit-query-surface-and-retention-policy | 审计落库与脚本级查询/留存已落地，但“脚本级 vs 受控 API”与归档层策略尚未评审冻结。 | 完成 RBAC 审计查询面形态决策（脚本或 API）与留存/归档策略定稿，形成正式结论与回滚路径。 | 评审纪要 + 结论文档归档，并补充受控查询演练与留存执行验收清单。 |
 | debate-ops-rbac-roles-revision-pii-policy | 角色列表仍缺 `revision` 与 PII 最小化策略定稿。 | 冻结 `revision` 字段方案与 PII 最小化边界，并更新 OpenAPI/前端消费契约。 | 回归“角色变更前后 revision + UI 刷新行为”，并归档 PII 策略评审记录。 |

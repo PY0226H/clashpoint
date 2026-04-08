@@ -53,6 +53,10 @@ const OPS_RBAC_ROLES_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
 const OPS_RBAC_ROLES_WRITE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
 const OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ: &str = "roles_list_read";
+const OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ: &str = "rbac_me_read";
+const OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT: &str = "role_upsert";
+const OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE: &str = "role_revoke";
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
@@ -120,6 +124,18 @@ struct OpsRbacRolesWriteMetrics {
     revoke_total: AtomicU64,
     latency_ms_total: AtomicU64,
     latency_ms_samples_total: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OpsRbacAuditLogInput<'a> {
+    event_type: &'a str,
+    operator_user_id: i64,
+    target_user_id: Option<i64>,
+    decision: &'a str,
+    request_id: Option<&'a str>,
+    result_count: Option<i64>,
+    role: Option<&'a str>,
+    removed: Option<bool>,
 }
 
 impl OpsRbacRolesWriteMetrics {
@@ -578,6 +594,20 @@ pub(crate) async fn list_ops_role_assignments_handler(
             decision = "rate_limited_user",
             "list ops rbac role assignments blocked by user rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ,
+                operator_user_id: user.id,
+                target_user_id: None,
+                decision: "rate_limited_user",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: None,
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_roles_list",
             user_rate_headers,
@@ -606,6 +636,20 @@ pub(crate) async fn list_ops_role_assignments_handler(
             decision = "rate_limited_ip",
             "list ops rbac role assignments blocked by ip rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ,
+                operator_user_id: user.id,
+                target_user_id: None,
+                decision: "rate_limited_ip",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: None,
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_roles_list",
             build_rate_limit_headers(&ip_decision)?,
@@ -633,6 +677,20 @@ pub(crate) async fn list_ops_role_assignments_handler(
                 "list ops rbac role assignments failed: {}",
                 err
             );
+            insert_ops_rbac_audit_log_best_effort(
+                &state,
+                OpsRbacAuditLogInput {
+                    event_type: OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ,
+                    operator_user_id: user.id,
+                    target_user_id: None,
+                    decision: "failed",
+                    request_id: request_id.as_deref(),
+                    result_count: None,
+                    role: None,
+                    removed: None,
+                },
+            )
+            .await;
             return Err(err);
         }
     };
@@ -655,6 +713,20 @@ pub(crate) async fn list_ops_role_assignments_handler(
         ops_rbac_roles_list_rate_limited_total = rate_limited_total,
         "list ops rbac role assignments served"
     );
+    insert_ops_rbac_audit_log_best_effort(
+        &state,
+        OpsRbacAuditLogInput {
+            event_type: OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ,
+            operator_user_id: user.id,
+            target_user_id: None,
+            decision: "success",
+            request_id: request_id.as_deref(),
+            result_count: i64::try_from(ret.items.len()).ok(),
+            role: None,
+            removed: None,
+        },
+    )
+    .await;
     Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
@@ -703,6 +775,20 @@ pub(crate) async fn get_ops_rbac_me_handler(
             decision = "rate_limited_user",
             "get ops rbac me blocked by user rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ,
+                operator_user_id: user.id,
+                target_user_id: None,
+                decision: "rate_limited_user",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: None,
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_me",
             user_rate_headers,
@@ -730,6 +816,20 @@ pub(crate) async fn get_ops_rbac_me_handler(
             decision = "rate_limited_ip",
             "get ops rbac me blocked by ip rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ,
+                operator_user_id: user.id,
+                target_user_id: None,
+                decision: "rate_limited_ip",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: None,
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_me",
             build_rate_limit_headers(&ip_decision)?,
@@ -750,6 +850,20 @@ pub(crate) async fn get_ops_rbac_me_handler(
                 "get ops rbac me failed: {}",
                 err
             );
+            insert_ops_rbac_audit_log_best_effort(
+                &state,
+                OpsRbacAuditLogInput {
+                    event_type: OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ,
+                    operator_user_id: user.id,
+                    target_user_id: None,
+                    decision: "failed",
+                    request_id: request_id.as_deref(),
+                    result_count: None,
+                    role: None,
+                    removed: None,
+                },
+            )
+            .await;
             return Err(err);
         }
     };
@@ -779,6 +893,20 @@ pub(crate) async fn get_ops_rbac_me_handler(
         ops_rbac_me_non_owner_total = non_owner_total,
         "get ops rbac me served"
     );
+    insert_ops_rbac_audit_log_best_effort(
+        &state,
+        OpsRbacAuditLogInput {
+            event_type: OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ,
+            operator_user_id: user.id,
+            target_user_id: None,
+            decision: "success",
+            request_id: request_id.as_deref(),
+            result_count: None,
+            role: ret.role.as_deref(),
+            removed: None,
+        },
+    )
+    .await;
     Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
@@ -1180,6 +1308,8 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
 ) -> Result<Response, AppError> {
     let started_at = Instant::now();
     let request_id = request_id_from_headers(&headers);
+    let target_user_id = i64::try_from(user_id).ok();
+    let requested_role = input.role.clone();
     OPS_RBAC_ROLES_WRITE_METRICS.observe_start_upsert();
 
     let user_decision = enforce_rate_limit(
@@ -1204,6 +1334,20 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
             decision = "rate_limited_user",
             "upsert ops role assignment blocked by user rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                operator_user_id: user.id,
+                target_user_id,
+                decision: "rate_limited_user",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: Some(requested_role.as_str()),
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_roles_write",
             user_rate_headers,
@@ -1233,6 +1377,20 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
             decision = "rate_limited_ip",
             "upsert ops role assignment blocked by ip rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                operator_user_id: user.id,
+                target_user_id,
+                decision: "rate_limited_ip",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: Some(requested_role.as_str()),
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_roles_write",
             build_rate_limit_headers(&ip_decision)?,
@@ -1257,6 +1415,20 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
                 "upsert ops role assignment failed: {}",
                 err
             );
+            insert_ops_rbac_audit_log_best_effort(
+                &state,
+                OpsRbacAuditLogInput {
+                    event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                    operator_user_id: user.id,
+                    target_user_id,
+                    decision: "failed",
+                    request_id: request_id.as_deref(),
+                    result_count: None,
+                    role: Some(requested_role.as_str()),
+                    removed: None,
+                },
+            )
+            .await;
             return Err(err);
         }
     };
@@ -1286,6 +1458,20 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         ops_rbac_roles_write_revoke_total = revoke_total,
         "upsert ops role assignment served"
     );
+    insert_ops_rbac_audit_log_best_effort(
+        &state,
+        OpsRbacAuditLogInput {
+            event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+            operator_user_id: user.id,
+            target_user_id,
+            decision: "success",
+            request_id: request_id.as_deref(),
+            result_count: None,
+            role: Some(ret.role.as_str()),
+            removed: None,
+        },
+    )
+    .await;
     Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
@@ -1316,6 +1502,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
 ) -> Result<Response, AppError> {
     let started_at = Instant::now();
     let request_id = request_id_from_headers(&headers);
+    let target_user_id = i64::try_from(user_id).ok();
     OPS_RBAC_ROLES_WRITE_METRICS.observe_start_revoke();
 
     let user_decision = enforce_rate_limit(
@@ -1340,6 +1527,20 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
             decision = "rate_limited_user",
             "revoke ops role assignment blocked by user rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE,
+                operator_user_id: user.id,
+                target_user_id,
+                decision: "rate_limited_user",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: None,
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_roles_write",
             user_rate_headers,
@@ -1369,6 +1570,20 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
             decision = "rate_limited_ip",
             "revoke ops role assignment blocked by ip rate limiter"
         );
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE,
+                operator_user_id: user.id,
+                target_user_id,
+                decision: "rate_limited_ip",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: None,
+                removed: None,
+            },
+        )
+        .await;
         return Ok(rate_limit_exceeded_response(
             "ops_rbac_roles_write",
             build_rate_limit_headers(&ip_decision)?,
@@ -1393,6 +1608,20 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                 "revoke ops role assignment failed: {}",
                 err
             );
+            insert_ops_rbac_audit_log_best_effort(
+                &state,
+                OpsRbacAuditLogInput {
+                    event_type: OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE,
+                    operator_user_id: user.id,
+                    target_user_id,
+                    decision: "failed",
+                    request_id: request_id.as_deref(),
+                    result_count: None,
+                    role: None,
+                    removed: None,
+                },
+            )
+            .await;
             return Err(err);
         }
     };
@@ -1422,6 +1651,20 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         ops_rbac_roles_write_revoke_total = revoke_total,
         "revoke ops role assignment served"
     );
+    insert_ops_rbac_audit_log_best_effort(
+        &state,
+        OpsRbacAuditLogInput {
+            event_type: OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE,
+            operator_user_id: user.id,
+            target_user_id,
+            decision: "success",
+            request_id: request_id.as_deref(),
+            result_count: None,
+            role: None,
+            removed: Some(ret.removed),
+        },
+    )
+    .await;
     Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
@@ -1598,6 +1841,54 @@ pub(crate) async fn request_judge_rejudge_ops_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let ret = state.request_judge_rejudge_by_owner(id, &user).await?;
     Ok((StatusCode::ACCEPTED, Json(ret)))
+}
+
+async fn insert_ops_rbac_audit_log(
+    state: &AppState,
+    input: OpsRbacAuditLogInput<'_>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO ops_rbac_audits(
+            event_type,
+            operator_user_id,
+            target_user_id,
+            decision,
+            request_id,
+            result_count,
+            role,
+            removed,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        "#,
+    )
+    .bind(input.event_type)
+    .bind(input.operator_user_id)
+    .bind(input.target_user_id)
+    .bind(input.decision)
+    .bind(input.request_id)
+    .bind(input.result_count)
+    .bind(input.role)
+    .bind(input.removed)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn insert_ops_rbac_audit_log_best_effort(state: &AppState, input: OpsRbacAuditLogInput<'_>) {
+    if let Err(err) = insert_ops_rbac_audit_log(state, input).await {
+        tracing::warn!(
+            audit_event = "ops_rbac_audit_write_failed",
+            event_type = input.event_type,
+            operator_user_id = input.operator_user_id,
+            target_user_id = input.target_user_id.unwrap_or_default(),
+            decision = input.decision,
+            request_id = input.request_id.unwrap_or_default(),
+            "persist ops rbac audit log failed: {}",
+            err
+        );
+    }
 }
 
 fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {

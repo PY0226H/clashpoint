@@ -475,7 +475,7 @@ mod tests {
         )
         .execute(&state.pool)
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -522,7 +522,7 @@ mod tests {
         )
         .execute(&state.pool)
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -548,7 +548,7 @@ mod tests {
             "debate-query-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -574,7 +574,7 @@ mod tests {
             "debate-rate-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -601,12 +601,14 @@ mod tests {
             "ops-rbac-me-user-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-me-read-success";
 
         let req = Request::builder()
             .method(Method::GET)
             .uri("/api/debate/ops/rbac/me")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
@@ -619,13 +621,28 @@ mod tests {
         assert!(!out.permissions.judge_review);
         assert!(!out.permissions.judge_rejudge);
         assert!(!out.permissions.role_manage);
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'rbac_me_read'
+              AND operator_user_id = $1
+              AND decision = 'success'
+              AND request_id = $2
+            "#,
+        )
+        .bind(user.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 
     #[tokio::test]
     async fn get_ops_rbac_me_route_should_return_401_without_token() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -642,7 +659,7 @@ mod tests {
     #[tokio::test]
     async fn get_ops_rbac_me_route_should_return_429_when_rate_limited() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
-        let (_user, token) = create_bound_user_and_token(
+        let (user, token) = create_bound_user_and_token(
             &state,
             "Ops Rbac Me Rate Limited",
             "ops-rbac-me-rate-limited@acme.org",
@@ -650,12 +667,14 @@ mod tests {
             "ops-rbac-me-rate-limited-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-me-rate-limited";
 
         let req = Request::builder()
             .method(Method::GET)
             .uri("/api/debate/ops/rbac/me")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .header("x-test-force-rate-limit", "ops_rbac_me_user")
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
@@ -663,6 +682,21 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_me");
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'rbac_me_read'
+              AND operator_user_id = $1
+              AND decision = 'rate_limited_user'
+              AND request_id = $2
+            "#,
+        )
+        .bind(user.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 
@@ -677,7 +711,7 @@ mod tests {
             })
             .await?;
         let token = issue_token_for_user(&state, user.id, "ops-rbac-me-unbound-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -706,7 +740,7 @@ mod tests {
         sqlx::query("DELETE FROM platform_admin_owners WHERE singleton_key = TRUE")
             .execute(&state.pool)
             .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -735,12 +769,14 @@ mod tests {
             )
             .await?;
         let token = issue_token_for_user(&state, owner.id, "ops-rbac-roles-owner-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-roles-list-success";
 
         let req = Request::builder()
             .method(Method::GET)
             .uri("/api/debate/ops/rbac/roles")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
@@ -750,13 +786,31 @@ mod tests {
             .items
             .iter()
             .any(|item| item.user_id == 2 && item.role == "ops_reviewer"));
+        let result_count_i64 = i64::try_from(out.items.len()).expect("result_count should fit i64");
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'roles_list_read'
+              AND operator_user_id = $1
+              AND decision = 'success'
+              AND request_id = $2
+              AND result_count = $3
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .bind(result_count_i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 
     #[tokio::test]
     async fn get_ops_rbac_roles_route_should_return_401_without_token() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -773,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn get_ops_rbac_roles_route_should_return_429_when_rate_limited() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
-        let (_user, token) = create_bound_user_and_token(
+        let (user, token) = create_bound_user_and_token(
             &state,
             "Ops Rbac Roles Rate Limited",
             "ops-rbac-roles-rate-limited@acme.org",
@@ -781,12 +835,14 @@ mod tests {
             "ops-rbac-roles-rate-limited-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-roles-list-rate-limited";
 
         let req = Request::builder()
             .method(Method::GET)
             .uri("/api/debate/ops/rbac/roles")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .header("x-test-force-rate-limit", "ops_rbac_roles_list_user")
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
@@ -794,6 +850,21 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_list");
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'roles_list_read'
+              AND operator_user_id = $1
+              AND decision = 'rate_limited_user'
+              AND request_id = $2
+            "#,
+        )
+        .bind(user.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 
@@ -808,7 +879,7 @@ mod tests {
             })
             .await?;
         let token = issue_token_for_user(&state, user.id, "ops-rbac-roles-unbound-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -834,7 +905,7 @@ mod tests {
             "ops-rbac-roles-non-owner-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -863,7 +934,7 @@ mod tests {
         sqlx::query("DELETE FROM platform_admin_owners WHERE singleton_key = TRUE")
             .execute(&state.pool)
             .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -883,12 +954,14 @@ mod tests {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let token = issue_token_for_user(&state, owner.id, "ops-rbac-upsert-owner-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-success";
 
         let req = Request::builder()
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res = app.oneshot(req).await?;
@@ -897,6 +970,25 @@ mod tests {
         let out: OpsRoleAssignment = serde_json::from_slice(&body)?;
         assert_eq!(out.user_id, 2);
         assert_eq!(out.role, "ops_reviewer");
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND role = $3
+              AND decision = 'success'
+              AND request_id = $4
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .bind("ops_reviewer")
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 
@@ -906,7 +998,7 @@ mod tests {
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let token =
             issue_token_for_user(&state, owner.id, "ops-rbac-upsert-invalid-role-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         let req = Request::builder()
             .method(Method::PUT)
@@ -1053,12 +1145,14 @@ mod tests {
             )
             .await?;
         let token = issue_token_for_user(&state, owner.id, "ops-rbac-revoke-owner-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-revoke-success";
 
         let req = Request::builder()
             .method(Method::DELETE)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
@@ -1066,6 +1160,24 @@ mod tests {
         let out: RevokeOpsRoleOutput = serde_json::from_slice(&body)?;
         assert_eq!(out.user_id, 2);
         assert!(out.removed);
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND decision = 'success'
+              AND removed = TRUE
+              AND request_id = $3
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 
