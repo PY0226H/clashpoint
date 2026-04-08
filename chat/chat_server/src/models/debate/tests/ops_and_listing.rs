@@ -905,6 +905,7 @@ async fn update_debate_session_by_owner_should_validate_and_update() -> Result<(
                 scheduled_start_at: Some(now - Duration::minutes(2)),
                 end_at: Some(now + Duration::minutes(30)),
                 max_participants_per_side: Some(10),
+                expected_updated_at: None,
             },
         )
         .await?;
@@ -921,6 +922,7 @@ async fn update_debate_session_by_owner_should_validate_and_update() -> Result<(
                 scheduled_start_at: None,
                 end_at: None,
                 max_participants_per_side: Some(1),
+                expected_updated_at: None,
             },
         )
         .await
@@ -936,11 +938,28 @@ async fn update_debate_session_by_owner_should_validate_and_update() -> Result<(
                 scheduled_start_at: None,
                 end_at: None,
                 max_participants_per_side: None,
+                expected_updated_at: None,
             },
         )
         .await
         .expect_err("invalid status should fail");
     assert!(matches!(invalid_status_err, AppError::DebateError(_)));
+
+    let revision_conflict_err = state
+        .update_debate_session_by_owner(
+            &owner,
+            session_id as u64,
+            OpsUpdateDebateSessionInput {
+                status: Some("open".to_string()),
+                scheduled_start_at: Some(now + Duration::minutes(10)),
+                end_at: Some(now + Duration::minutes(40)),
+                max_participants_per_side: Some(10),
+                expected_updated_at: Some(now),
+            },
+        )
+        .await
+        .expect_err("revision mismatch should fail");
+    assert!(matches!(revision_conflict_err, AppError::DebateConflict(_)));
 
     let open_future = state
         .update_debate_session_by_owner(
@@ -951,10 +970,26 @@ async fn update_debate_session_by_owner_should_validate_and_update() -> Result<(
                 scheduled_start_at: Some(now + Duration::minutes(10)),
                 end_at: Some(now + Duration::minutes(40)),
                 max_participants_per_side: Some(10),
+                expected_updated_at: Some(updated.updated_at),
             },
         )
         .await?;
     assert_eq!(open_future.status, "open");
     assert!(!open_future.joinable);
+
+    let update_audit_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM ops_debate_session_audits
+        WHERE session_id = $1
+          AND operator_user_id = $2
+          AND action = 'update'
+        "#,
+    )
+    .bind(session_id)
+    .bind(owner.id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(update_audit_count, 2);
     Ok(())
 }

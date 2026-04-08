@@ -33,6 +33,9 @@ const OPS_DEBATE_SESSION_CREATE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
 const OPS_DEBATE_SESSION_CREATE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_DEBATE_SESSION_CREATE_IDEMPOTENCY_TTL_SECS: u64 = 30;
 const OPS_DEBATE_SESSION_CREATE_IDEMPOTENCY_MAX_LEN: usize = 160;
+const OPS_DEBATE_SESSION_UPDATE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
+const OPS_DEBATE_SESSION_UPDATE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
+const OPS_DEBATE_SESSION_UPDATE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
@@ -273,8 +276,13 @@ pub(crate) async fn create_debate_session_ops_handler(
     responses(
         (status = 200, description = "Updated debate session", body = crate::DebateSessionSummary),
         (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Session not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -284,12 +292,55 @@ pub(crate) async fn update_debate_session_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
     Path(id): Path<u64>,
+    headers: HeaderMap,
     Json(input): Json<OpsUpdateDebateSessionInput>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_debate_session_update_user",
+        &user.id.to_string(),
+        OPS_DEBATE_SESSION_UPDATE_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_DEBATE_SESSION_UPDATE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision = maybe_override_rate_limit_decision(
+        &headers,
+        "ops_debate_session_update_user",
+        user_decision,
+    );
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        return Ok(rate_limit_exceeded_response(
+            "ops_debate_session_update",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_debate_session_update_ip",
+        &ip_limit_key,
+        OPS_DEBATE_SESSION_UPDATE_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_DEBATE_SESSION_UPDATE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_debate_session_update_ip", ip_decision);
+    if !ip_decision.allowed {
+        return Ok(rate_limit_exceeded_response(
+            "ops_debate_session_update",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
     let session = state
         .update_debate_session_by_owner(&user, id, input)
         .await?;
-    Ok((StatusCode::OK, Json(session)))
+    Ok((StatusCode::OK, user_rate_headers, Json(session)).into_response())
 }
 
 /// List platform ops role assignments (platform admin only).
@@ -941,6 +992,8 @@ fn maybe_override_rate_limit_decision(
     if forced.eq_ignore_ascii_case(target)
         || (target == "ops_debate_session_create_user" && forced.eq_ignore_ascii_case("user"))
         || (target == "ops_debate_session_create_ip" && forced.eq_ignore_ascii_case("ip"))
+        || (target == "ops_debate_session_update_user" && forced.eq_ignore_ascii_case("user"))
+        || (target == "ops_debate_session_update_ip" && forced.eq_ignore_ascii_case("ip"))
     {
         decision.allowed = false;
         decision.remaining = 0;

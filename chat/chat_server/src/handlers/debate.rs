@@ -433,6 +433,26 @@ mod tests {
         Ok(row.0)
     }
 
+    async fn seed_topic_and_session(state: &AppState) -> Result<(i64, i64)> {
+        let topic_id = seed_topic(state).await?;
+        let now = Utc::now();
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO debate_sessions(
+                topic_id, status, scheduled_start_at, end_at, max_participants_per_side
+            )
+            VALUES ($1, 'scheduled', $2, $3, 120)
+            RETURNING id
+            "#,
+        )
+        .bind(topic_id)
+        .bind(now + Duration::minutes(10))
+        .bind(now + Duration::minutes(70))
+        .fetch_one(&state.pool)
+        .await?;
+        Ok((topic_id, row.0))
+    }
+
     #[tokio::test]
     async fn debate_topics_route_should_force_active_only_true_for_non_ops_user() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -1015,6 +1035,158 @@ mod tests {
             error.error,
             "debate error: session endAt must be in the future"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_debate_session_ops_route_should_update_successfully() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Session Update",
+            "ops-session-update@acme.org",
+            "+8613810004444",
+            "ops-session-update-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let (_topic_id, session_id) = seed_topic_and_session(&state).await?;
+        let current_updated_at: chrono::DateTime<Utc> =
+            sqlx::query_scalar("SELECT updated_at FROM debate_sessions WHERE id = $1")
+                .bind(session_id)
+                .fetch_one(&state.pool)
+                .await?;
+        let app = get_router(state).await?;
+        let now = Utc::now();
+        let payload = serde_json::json!({
+            "status": "open",
+            "scheduledStartAt": (now - Duration::minutes(2)).to_rfc3339(),
+            "endAt": (now + Duration::minutes(30)).to_rfc3339(),
+            "maxParticipantsPerSide": 140,
+            "expectedUpdatedAt": current_updated_at.to_rfc3339()
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/sessions/{}", session_id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let updated: DebateSessionSummary = serde_json::from_slice(&body)?;
+        assert_eq!(updated.id, session_id);
+        assert_eq!(updated.status, "open");
+        assert_eq!(updated.max_participants_per_side, 140);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_debate_session_ops_route_should_reject_revision_conflict() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Session Revision",
+            "ops-session-revision@acme.org",
+            "+8613810005555",
+            "ops-session-revision-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let (_topic_id, session_id) = seed_topic_and_session(&state).await?;
+        let app = get_router(state).await?;
+        let now = Utc::now();
+        let payload = serde_json::json!({
+            "status": "open",
+            "scheduledStartAt": (now - Duration::minutes(2)).to_rfc3339(),
+            "endAt": (now + Duration::minutes(40)).to_rfc3339(),
+            "maxParticipantsPerSide": 140,
+            "expectedUpdatedAt": (now - Duration::days(1)).to_rfc3339()
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/sessions/{}", session_id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "debate conflict: debate_session_revision_conflict"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_debate_session_ops_route_should_return_429_when_user_rate_limited() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Session Ratelimit",
+            "ops-session-ratelimit@acme.org",
+            "+8613810006666",
+            "ops-session-ratelimit-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let (_topic_id, session_id) = seed_topic_and_session(&state).await?;
+        let app = get_router(state).await?;
+        let now = Utc::now();
+        let payload = serde_json::json!({
+            "status": "open",
+            "scheduledStartAt": (now - Duration::minutes(2)).to_rfc3339(),
+            "endAt": (now + Duration::minutes(40)).to_rfc3339(),
+            "maxParticipantsPerSide": 140
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/sessions/{}", session_id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("x-test-force-rate-limit", "user")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_debate_session_update");
         Ok(())
     }
 }

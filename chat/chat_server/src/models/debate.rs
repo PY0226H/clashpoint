@@ -186,6 +186,7 @@ pub struct OpsUpdateDebateSessionInput {
     pub scheduled_start_at: Option<DateTime<Utc>>,
     pub end_at: Option<DateTime<Utc>>,
     pub max_participants_per_side: Option<i32>,
+    pub expected_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -318,6 +319,8 @@ struct DebateSessionForOpsUpdate {
     max_participants_per_side: i32,
     pro_count: i32,
     con_count: i32,
+    updated_at: DateTime<Utc>,
+    db_now: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow)]

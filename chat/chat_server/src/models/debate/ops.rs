@@ -6,11 +6,33 @@ const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE_REPLAY: &str = "create_replay";
 const OPS_DEBATE_TOPIC_AUDIT_ACTION_UPDATE: &str = "update";
 const OPS_DEBATE_SESSION_AUDIT_ACTION_CREATE: &str = "create";
 const OPS_DEBATE_SESSION_AUDIT_ACTION_CREATE_REPLAY: &str = "create_replay";
+const OPS_DEBATE_SESSION_AUDIT_ACTION_UPDATE: &str = "update";
 const DEBATE_TOPIC_DESCRIPTION_MAX_LEN: usize = 4000;
 const DEBATE_TOPIC_CONFLICT_DUPLICATE_TITLE_IN_CATEGORY: &str =
     "debate_topic_duplicate_title_in_category";
 const DEBATE_TOPIC_CONFLICT_REVISION: &str = "debate_topic_revision_conflict";
+const DEBATE_SESSION_CONFLICT_REVISION: &str = "debate_session_revision_conflict";
+const DEBATE_SESSION_CONFLICT_UPDATE_LOCK_TIMEOUT: &str = "debate_session_update_lock_timeout";
 const DEBATE_SESSION_INVALID_TOPIC_ID: &str = "debate_session_topic_id_invalid";
+const DEBATE_SESSION_INVALID_ID: &str = "debate_session_id_invalid";
+const DEBATE_SESSION_UPDATE_LOCK_TIMEOUT_MS: i64 = 750;
+
+fn map_update_session_lock_sqlx_error(err: sqlx::Error, session_id: u64) -> AppError {
+    if let sqlx::Error::Database(db_err) = &err {
+        let code = db_err.code().map(|v| v.to_string()).unwrap_or_default();
+        if matches!(code.as_str(), "55P03" | "57014") {
+            warn!(
+                session_id,
+                sql_state = code.as_str(),
+                "update debate session failed due to lock timeout/lock unavailable"
+            );
+            return AppError::DebateConflict(
+                DEBATE_SESSION_CONFLICT_UPDATE_LOCK_TIMEOUT.to_string(),
+            );
+        }
+    }
+    err.into()
+}
 
 #[allow(dead_code)]
 impl AppState {
@@ -632,21 +654,37 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::DebateManage)
             .await?;
 
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_SESSION_INVALID_ID)?;
         let status_input = normalize_ops_manage_session_status(input.status)?;
         let mut tx = self.pool.begin().await?;
+        let lock_timeout = format!("{}ms", DEBATE_SESSION_UPDATE_LOCK_TIMEOUT_MS);
+        sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+            .bind(&lock_timeout)
+            .execute(&mut *tx)
+            .await?;
 
         let current = sqlx::query_as::<_, DebateSessionForOpsUpdate>(
             r#"
-            SELECT status, scheduled_start_at, end_at, max_participants_per_side, pro_count, con_count
+            SELECT
+              status, scheduled_start_at, end_at, max_participants_per_side,
+              pro_count, con_count, updated_at, NOW() AS db_now
             FROM debate_sessions
             WHERE id = $1
             FOR UPDATE
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .fetch_optional(&mut *tx)
-        .await?
+        .await
+        .map_err(|err| map_update_session_lock_sqlx_error(err, session_id))?
         .ok_or_else(|| AppError::NotFound(format!("debate session id {session_id}")))?;
+        if let Some(expected_updated_at) = input.expected_updated_at {
+            if current.updated_at != expected_updated_at {
+                return Err(AppError::DebateConflict(
+                    DEBATE_SESSION_CONFLICT_REVISION.to_string(),
+                ));
+            }
+        }
 
         let next_status = status_input.unwrap_or(current.status);
         if next_status.len() > DEBATE_SESSION_STATUS_MAX_LEN {
@@ -665,8 +703,7 @@ impl AppState {
                 "scheduledStartAt must be before endAt".to_string(),
             ));
         }
-        let now = Utc::now();
-        if matches!(next_status.as_str(), "open" | "running") && next_end_at <= now {
+        if matches!(next_status.as_str(), "open" | "running") && next_end_at <= current.db_now {
             return Err(AppError::DebateError(
                 "open/running session must end in the future".to_string(),
             ));
@@ -687,7 +724,7 @@ impl AppState {
             )));
         }
 
-        let row = sqlx::query_as(
+        let row: DebateSessionSummary = sqlx::query_as(
             r#"
             UPDATE debate_sessions
             SET
@@ -704,15 +741,28 @@ impl AppState {
                     (status IN ('open', 'running'))
                     AND scheduled_start_at <= NOW()
                     AND end_at > NOW()
+                    AND (
+                        pro_count < max_participants_per_side
+                        OR con_count < max_participants_per_side
+                    )
                 ) AS joinable
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .bind(next_status)
         .bind(next_scheduled_start)
         .bind(next_end_at)
         .bind(next_max_per_side)
         .fetch_one(&mut *tx)
+        .await?;
+
+        self.insert_ops_debate_session_audit(
+            &mut tx,
+            row.id,
+            user.id,
+            OPS_DEBATE_SESSION_AUDIT_ACTION_UPDATE,
+            None,
+        )
         .await?;
 
         tx.commit().await?;

@@ -351,3 +351,13 @@
 | debate-ops-topics-update-route-matrix | 更新接口已补模型层关键回归，但路由层 `200/400/401/403/404/409/422/500` 全矩阵仍未封板。 | 新增 update route 专项测试矩阵，覆盖鉴权、门禁、提取器失败、业务冲突和成功路径。 | 执行路由回归并归档测试结果，确保后续中间件/注解调整可被门禁拦截。 |
 | debate-ops-topics-length-semantics-decision | 当前长度口径为字节数，中文字符场景可能与产品“字符数”预期有偏差。 | 明确并冻结长度语义（字节或字符），若切换需补迁移说明与回归矩阵。 | 评审结论文档 + 边界回归测试（中英文/emoji）通过并归档。 |
 | debate-ops-topics-owner-configurability | Owner 历史语义仍存在硬编码实现痕迹，平台化弹性不足。 | 迁移为角色/配置驱动，不依赖固定 user_id。 | 回归 owner/ops_admin/ops_reviewer 权限矩阵并归档结果。 |
+
+## AF. debate-ops-sessions-create-hardening 后续待办（来源：当前开发计划）
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| debate-ops-sessions-error-model-standardization | `POST /api/debate/ops/sessions` 关键路径已稳定，但 400 类错误仍部分依赖文案串，机读语义不够硬。 | 收敛为稳定结构化错误模型（`code/message/details?`），客户端仅依赖 `code` 分支。 | 回归参数错误/冲突错误场景，验证客户端仅凭 `code` 可完成提示与动作分支；归档响应样例。 |
+| debate-ops-sessions-joinable-semantics-unification | create 与 list 的 `joinable` 计算口径未完全统一（容量条件存在漂移风险）。 | 抽取统一 `joinable` 公式（公共 SQL 片段/视图），并在 create/list/update 共用。 | 创建后立即列表读取的对照回归通过，边界容量场景无语义漂移。 |
+| debate-ops-sessions-route-matrix-expansion | 本轮已补关键 route 回归，但 `201/400/401/403/422/404/409/429/500` 全矩阵仍未完全封板。 | 新增 create-session route 专项全矩阵测试，覆盖鉴权、门禁、提取器、幂等、限流与冲突路径。 | 执行 route 测试集并归档结果，确保中间件/注解变更可被门禁拦截。 |
+| debate-ops-sessions-topic-active-policy | 是否只允许 `is_active=true` topic 创建新场次尚未冻结，产品策略待确认。 | 明确 active 策略并固化到接口校验与错误码（允许历史题复开或 strict active-only）。 | 产品评审记录 + 接口回归（active/inactive topic）通过并归档。 |
+| debate-ops-sessions-duplicate-schedule-governance | 当前缺“同 topic + 时间窗口”重复创建治理，重试/并发下仍可能产生重复排期。 | 完成业务去重规则（应用层查重 + DB 约束预案），并给出存量数据处理策略。 | 迁移预演（含回滚）+ 并发压测，归档重复创建前后行为对比报告。 |
