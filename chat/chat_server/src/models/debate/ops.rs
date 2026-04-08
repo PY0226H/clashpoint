@@ -3,9 +3,11 @@ use crate::models::OpsPermission;
 
 const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE: &str = "create";
 const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE_REPLAY: &str = "create_replay";
+const OPS_DEBATE_TOPIC_AUDIT_ACTION_UPDATE: &str = "update";
 const DEBATE_TOPIC_DESCRIPTION_MAX_LEN: usize = 4000;
 const DEBATE_TOPIC_CONFLICT_DUPLICATE_TITLE_IN_CATEGORY: &str =
     "debate_topic_duplicate_title_in_category";
+const DEBATE_TOPIC_CONFLICT_REVISION: &str = "debate_topic_revision_conflict";
 
 #[allow(dead_code)]
 impl AppState {
@@ -103,7 +105,7 @@ impl AppState {
             .execute(&mut *tx)
             .await?;
         if self
-            .find_existing_topic_id_by_title_and_category(&mut tx, &title, &category)
+            .find_existing_topic_id_by_title_and_category(&mut tx, &title, &category, None)
             .await?
             .is_some()
         {
@@ -251,43 +253,105 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::DebateManage)
             .await?;
 
+        let topic_id = safe_u64_to_i64(topic_id, "debate_topic_id_invalid")?;
+        let OpsUpdateDebateTopicInput {
+            title: raw_title,
+            description: raw_description,
+            category: raw_category,
+            stance_pro: raw_stance_pro,
+            stance_con: raw_stance_con,
+            context_seed: raw_context_seed,
+            is_active,
+            expected_updated_at,
+        } = input;
+
         let title = normalize_ops_topic_field_with_codes(
-            &input.title,
+            &raw_title,
             "debate_topic_title_empty",
             "debate_topic_title_too_long",
             DEBATE_TOPIC_TITLE_MAX_LEN,
         )?;
         let description = normalize_ops_topic_field_with_codes(
-            &input.description,
+            &raw_description,
             "debate_topic_description_empty",
             "debate_topic_description_too_long",
             DEBATE_TOPIC_DESCRIPTION_MAX_LEN,
         )?;
         let category = normalize_topic_category_with_codes(
-            &input.category,
+            &raw_category,
             "debate_topic_category_empty",
             "debate_topic_category_too_long",
             DEBATE_TOPIC_CATEGORY_MAX_LEN,
         )?;
         let stance_pro = normalize_ops_topic_field_with_codes(
-            &input.stance_pro,
+            &raw_stance_pro,
             "debate_topic_stance_pro_empty",
             "debate_topic_stance_pro_too_long",
             DEBATE_STANCE_MAX_LEN,
         )?;
         let stance_con = normalize_ops_topic_field_with_codes(
-            &input.stance_con,
+            &raw_stance_con,
             "debate_topic_stance_con_empty",
             "debate_topic_stance_con_too_long",
             DEBATE_STANCE_MAX_LEN,
         )?;
         let context_seed = normalize_optional_ops_topic_field_with_codes(
-            input.context_seed,
+            raw_context_seed,
             "debate_topic_context_seed_too_long",
             DEBATE_TOPIC_CONTEXT_SEED_MAX_LEN,
         )?;
 
-        let row = sqlx::query_as(
+        let mut tx = self.pool.begin().await?;
+
+        let current: Option<(DateTime<Utc>,)> = sqlx::query_as(
+            r#"
+            SELECT updated_at
+            FROM debate_topics
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(topic_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let current_updated_at = current
+            .map(|v| v.0)
+            .ok_or_else(|| AppError::NotFound(format!("debate topic id {topic_id}")))?;
+        if let Some(expected_updated_at) = expected_updated_at {
+            if current_updated_at != expected_updated_at {
+                return Err(AppError::DebateConflict(
+                    DEBATE_TOPIC_CONFLICT_REVISION.to_string(),
+                ));
+            }
+        }
+
+        // Serialize writes for the same normalized topic key to keep duplicate
+        // checks deterministic across create/update paths.
+        let dedupe_lock_key = format!(
+            "ops_debate_topic_dedupe:{}:{}",
+            category,
+            title.to_lowercase()
+        );
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(&dedupe_lock_key)
+            .execute(&mut *tx)
+            .await?;
+        if self
+            .find_existing_topic_id_by_title_and_category(
+                &mut tx,
+                &title,
+                &category,
+                Some(topic_id),
+            )
+            .await?
+            .is_some()
+        {
+            return Err(AppError::DebateConflict(
+                DEBATE_TOPIC_CONFLICT_DUPLICATE_TITLE_IN_CATEGORY.to_string(),
+            ));
+        }
+
+        let row: DebateTopic = sqlx::query_as(
             r#"
             UPDATE debate_topics
             SET
@@ -305,18 +369,26 @@ impl AppState {
                 context_seed, is_active, created_by, created_at, updated_at
             "#,
         )
-        .bind(topic_id as i64)
+        .bind(topic_id)
         .bind(title)
         .bind(description)
         .bind(category)
         .bind(stance_pro)
         .bind(stance_con)
         .bind(context_seed)
-        .bind(input.is_active)
-        .fetch_optional(&self.pool)
+        .bind(is_active)
+        .fetch_one(&mut *tx)
         .await?;
-
-        row.ok_or_else(|| AppError::NotFound(format!("debate topic id {topic_id}")))
+        self.insert_ops_debate_topic_audit(
+            &mut tx,
+            row.id,
+            user.id,
+            OPS_DEBATE_TOPIC_AUDIT_ACTION_UPDATE,
+            None,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(row)
     }
 
     async fn load_ops_debate_topic_idempotency_row(
@@ -390,6 +462,7 @@ impl AppState {
         tx: &mut Transaction<'_, Postgres>,
         title: &str,
         category: &str,
+        exclude_topic_id: Option<i64>,
     ) -> Result<Option<i64>, AppError> {
         let row: Option<(i64,)> = sqlx::query_as(
             r#"
@@ -397,12 +470,14 @@ impl AppState {
             FROM debate_topics
             WHERE LOWER(BTRIM(title)) = LOWER(BTRIM($1))
               AND category = $2
+              AND ($3::bigint IS NULL OR id <> $3)
             ORDER BY id DESC
             LIMIT 1
             "#,
         )
         .bind(title)
         .bind(category)
+        .bind(exclude_topic_id)
         .fetch_optional(&mut **tx)
         .await?;
         Ok(row.map(|v| v.0))

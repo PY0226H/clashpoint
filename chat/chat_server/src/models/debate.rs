@@ -176,6 +176,7 @@ pub struct OpsUpdateDebateTopicInput {
     pub stance_con: String,
     pub context_seed: Option<String>,
     pub is_active: bool,
+    pub expected_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]

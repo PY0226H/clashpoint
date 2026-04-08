@@ -410,6 +410,7 @@ async fn create_debate_topic_by_owner_should_normalize_category() -> Result<()> 
                 stance_con: "con".to_string(),
                 context_seed: None,
                 is_active: true,
+                expected_updated_at: None,
             },
         )
         .await?;
@@ -569,6 +570,7 @@ async fn update_debate_topic_by_owner_should_update_and_reject_non_owner() -> Re
                 stance_con: "否定".to_string(),
                 context_seed: Some("ctx".to_string()),
                 is_active: false,
+                expected_updated_at: None,
             },
         )
         .await?;
@@ -589,11 +591,174 @@ async fn update_debate_topic_by_owner_should_update_and_reject_non_owner() -> Re
                 stance_con: "c".to_string(),
                 context_seed: None,
                 is_active: true,
+                expected_updated_at: None,
             },
         )
         .await
         .expect_err("non owner should be rejected");
     assert!(matches!(err, AppError::DebateConflict(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_debate_topic_by_owner_should_reject_duplicate_title_in_category() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let topic_a = state
+        .create_debate_topic_by_owner(
+            &owner,
+            OpsCreateDebateTopicInput {
+                title: "AI 是否应该全民基本收入".to_string(),
+                description: "topic a".to_string(),
+                category: "society".to_string(),
+                stance_pro: "支持".to_string(),
+                stance_con: "反对".to_string(),
+                context_seed: None,
+                is_active: true,
+            },
+        )
+        .await?;
+    let topic_b = state
+        .create_debate_topic_by_owner(
+            &owner,
+            OpsCreateDebateTopicInput {
+                title: "第二个主题".to_string(),
+                description: "topic b".to_string(),
+                category: "society".to_string(),
+                stance_pro: "支持".to_string(),
+                stance_con: "反对".to_string(),
+                context_seed: None,
+                is_active: true,
+            },
+        )
+        .await?;
+    assert_ne!(topic_a.id, topic_b.id);
+
+    let err = state
+        .update_debate_topic_by_owner(
+            &owner,
+            topic_b.id as u64,
+            OpsUpdateDebateTopicInput {
+                title: "  ai 是否应该全民基本收入  ".to_string(),
+                description: "topic b updated".to_string(),
+                category: " SOCIETY ".to_string(),
+                stance_pro: "赞成".to_string(),
+                stance_con: "否定".to_string(),
+                context_seed: None,
+                is_active: true,
+                expected_updated_at: None,
+            },
+        )
+        .await
+        .expect_err("normalized duplicate should be rejected");
+    match err {
+        AppError::DebateConflict(msg) => {
+            assert!(msg.contains("debate_topic_duplicate_title_in_category"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_debate_topic_by_owner_should_reject_stale_revision() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let created = state
+        .create_debate_topic_by_owner(
+            &owner,
+            OpsCreateDebateTopicInput {
+                title: "revision-topic".to_string(),
+                description: "desc".to_string(),
+                category: "technology".to_string(),
+                stance_pro: "pro".to_string(),
+                stance_con: "con".to_string(),
+                context_seed: None,
+                is_active: true,
+            },
+        )
+        .await?;
+    let stale = created.updated_at - Duration::seconds(1);
+    let err = state
+        .update_debate_topic_by_owner(
+            &owner,
+            created.id as u64,
+            OpsUpdateDebateTopicInput {
+                title: "revision-topic-updated".to_string(),
+                description: "desc-updated".to_string(),
+                category: "technology".to_string(),
+                stance_pro: "pro-updated".to_string(),
+                stance_con: "con-updated".to_string(),
+                context_seed: None,
+                is_active: true,
+                expected_updated_at: Some(stale),
+            },
+        )
+        .await
+        .expect_err("stale revision should be rejected");
+    match err {
+        AppError::DebateConflict(msg) => assert!(msg.contains("debate_topic_revision_conflict")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_debate_topic_by_owner_should_write_update_audit() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+    let created = state
+        .create_debate_topic_by_owner(
+            &owner,
+            OpsCreateDebateTopicInput {
+                title: "audit-topic".to_string(),
+                description: "desc".to_string(),
+                category: "science".to_string(),
+                stance_pro: "pro".to_string(),
+                stance_con: "con".to_string(),
+                context_seed: None,
+                is_active: true,
+            },
+        )
+        .await?;
+
+    let _updated = state
+        .update_debate_topic_by_owner(
+            &owner,
+            created.id as u64,
+            OpsUpdateDebateTopicInput {
+                title: "audit-topic-v2".to_string(),
+                description: "desc-v2".to_string(),
+                category: "science".to_string(),
+                stance_pro: "pro-v2".to_string(),
+                stance_con: "con-v2".to_string(),
+                context_seed: Some("ctx".to_string()),
+                is_active: false,
+                expected_updated_at: None,
+            },
+        )
+        .await?;
+
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM ops_debate_topic_audits
+        WHERE topic_id = $1
+          AND operator_user_id = $2
+          AND action = 'update'
+        "#,
+    )
+    .bind(created.id)
+    .bind(owner.id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(count, 1);
     Ok(())
 }
 

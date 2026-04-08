@@ -131,8 +131,12 @@ pub(crate) async fn create_debate_topic_ops_handler(
     responses(
         (status = 200, description = "Updated debate topic", body = crate::DebateTopic),
         (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
+        (status = 422, description = "Body parse error", body = crate::ErrorOutput),
         (status = 404, description = "Topic not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
