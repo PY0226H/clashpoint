@@ -761,6 +761,10 @@ mod tests {
     async fn get_ops_rbac_roles_route_should_return_200_for_owner() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let target_user = state
+            .find_user_by_id(2)
+            .await?
+            .expect("target user should exist");
         state
             .upsert_ops_role_assignment_by_owner(
                 &owner,
@@ -786,10 +790,15 @@ mod tests {
         let out: ListOpsRoleAssignmentsOutput = serde_json::from_slice(&body)?;
         assert!(!out.rbac_revision.is_empty());
         assert_ne!(out.rbac_revision, "empty");
-        assert!(out
+        let target_assignment = out
             .items
             .iter()
-            .any(|item| item.user_id == 2 && item.role == "ops_reviewer"));
+            .find(|item| item.user_id == 2 && item.role == "ops_reviewer")
+            .expect("target assignment should exist");
+        assert_ne!(target_assignment.user_email, target_user.email);
+        assert_ne!(target_assignment.user_fullname, target_user.fullname);
+        assert!(target_assignment.user_email.contains("***"));
+        assert!(target_assignment.user_fullname.contains("***"));
         let result_count_i64 = i64::try_from(out.items.len()).expect("result_count should fit i64");
         let audit_count: i64 = sqlx::query_scalar(
             r#"
@@ -808,6 +817,46 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert_eq!(audit_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_rbac_roles_route_should_return_full_pii_when_requested() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let target_user = state
+            .find_user_by_id(2)
+            .await?
+            .expect("target user should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-roles-owner-full-pii-sid").await?;
+        let app = get_router(state.clone()).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/roles?piiLevel=full")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: ListOpsRoleAssignmentsOutput = serde_json::from_slice(&body)?;
+        let target_assignment = out
+            .items
+            .iter()
+            .find(|item| item.user_id == 2 && item.role == "ops_reviewer")
+            .expect("target assignment should exist");
+        assert_eq!(target_assignment.user_email, target_user.email);
+        assert_eq!(target_assignment.user_fullname, target_user.fullname);
         Ok(())
     }
 

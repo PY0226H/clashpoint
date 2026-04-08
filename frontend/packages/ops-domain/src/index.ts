@@ -40,6 +40,10 @@ export type ListOpsRoleAssignmentsOutput = {
   rbacRevision: string;
 };
 
+export type ListOpsRoleAssignmentsInput = {
+  piiLevel?: "minimal" | "full";
+};
+
 export type RevokeOpsRoleOutput = {
   userId: number;
   removed: boolean;
@@ -279,8 +283,19 @@ export async function getOpsRbacMe(): Promise<GetOpsRbacMeOutput> {
   return response.data;
 }
 
-export async function listOpsRoleAssignments(): Promise<ListOpsRoleAssignmentsOutput> {
-  const response = await http.get<ListOpsRoleAssignmentsOutput>("/debate/ops/rbac/roles");
+export async function listOpsRoleAssignments(
+  input?: ListOpsRoleAssignmentsInput
+): Promise<ListOpsRoleAssignmentsOutput> {
+  const response = await http.get<ListOpsRoleAssignmentsOutput>(
+    "/debate/ops/rbac/roles",
+    input?.piiLevel
+      ? {
+          params: {
+            piiLevel: input.piiLevel
+          }
+        }
+      : undefined
+  );
   return response.data;
 }
 

@@ -65,8 +65,9 @@ pub use payment::{
     WalletBalanceOutput, WalletLedgerItem, WalletLedgerListOutput,
 };
 pub use rbac::{
-    GetOpsRbacMeOutput, ListOpsRoleAssignmentsOutput, OpsPermissionFlags, OpsRoleAssignment,
-    RevokeOpsRoleOutput, UpsertOpsRoleInput,
+    GetOpsRbacMeOutput, ListOpsRoleAssignmentsOutput, ListOpsRoleAssignmentsQuery,
+    OpsPermissionFlags, OpsRbacPiiLevel, OpsRoleAssignment, RevokeOpsRoleOutput,
+    UpsertOpsRoleInput,
 };
 pub(crate) use rbac::{OpsPermission, OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE};
 use serde::{Deserialize, Serialize};

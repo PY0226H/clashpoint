@@ -3,7 +3,7 @@ use chat_core::User;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 const ROLE_OPS_ADMIN: &str = "ops_admin";
 const ROLE_OPS_REVIEWER: &str = "ops_reviewer";
@@ -57,6 +57,21 @@ pub struct OpsRoleAssignment {
     pub granted_by: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpsRbacPiiLevel {
+    #[default]
+    Minimal,
+    Full,
+}
+
+#[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListOpsRoleAssignmentsQuery {
+    #[serde(default)]
+    pub pii_level: OpsRbacPiiLevel,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -132,10 +147,52 @@ fn checked_i64_to_u64(value: i64, code: &'static str) -> Result<u64, AppError> {
 }
 
 fn map_assignment_row(row: OpsRoleAssignmentRow) -> Result<OpsRoleAssignment, AppError> {
+    map_assignment_row_with_pii_level(row, OpsRbacPiiLevel::Full)
+}
+
+fn mask_user_email(email: &str) -> String {
+    let normalized = email.trim();
+    let Some((local_part, domain_part)) = normalized.split_once('@') else {
+        return "***".to_string();
+    };
+    if local_part.is_empty() || domain_part.is_empty() {
+        return "***".to_string();
+    }
+    let mut local_chars = local_part.chars();
+    let local_first = local_chars.next().unwrap_or('*');
+    let local_second = local_chars.next();
+    let local_prefix = match local_second {
+        Some(second) => format!("{local_first}{second}"),
+        None => local_first.to_string(),
+    };
+    let domain_first = domain_part.chars().next().unwrap_or('*');
+    format!("{local_prefix}***@{domain_first}***")
+}
+
+fn mask_user_fullname(fullname: &str) -> String {
+    let normalized = fullname.trim();
+    if normalized.is_empty() {
+        return "***".to_string();
+    }
+    let first = normalized.chars().next().unwrap_or('*');
+    format!("{first}***")
+}
+
+fn map_assignment_row_with_pii_level(
+    row: OpsRoleAssignmentRow,
+    pii_level: OpsRbacPiiLevel,
+) -> Result<OpsRoleAssignment, AppError> {
+    let (user_email, user_fullname) = match pii_level {
+        OpsRbacPiiLevel::Full => (row.user_email, row.user_fullname),
+        OpsRbacPiiLevel::Minimal => (
+            mask_user_email(&row.user_email),
+            mask_user_fullname(&row.user_fullname),
+        ),
+    };
     Ok(OpsRoleAssignment {
         user_id: checked_i64_to_u64(row.user_id, OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE)?,
-        user_email: row.user_email,
-        user_fullname: row.user_fullname,
+        user_email,
+        user_fullname,
         role: row.role,
         granted_by: checked_i64_to_u64(
             row.granted_by,
@@ -280,6 +337,7 @@ impl AppState {
     pub async fn list_ops_role_assignments_by_owner(
         &self,
         user: &User,
+        pii_level: OpsRbacPiiLevel,
     ) -> Result<ListOpsRoleAssignmentsOutput, AppError> {
         self.ensure_platform_admin_for_ops_rbac(user).await?;
         let rows: Vec<OpsRoleAssignmentRow> = sqlx::query_as(
@@ -302,7 +360,7 @@ impl AppState {
         Ok(ListOpsRoleAssignmentsOutput {
             items: rows
                 .into_iter()
-                .map(map_assignment_row)
+                .map(|row| map_assignment_row_with_pii_level(row, pii_level))
                 .collect::<Result<Vec<_>, _>>()?,
             rbac_revision: self.get_ops_rbac_revision().await?,
         })
@@ -613,7 +671,9 @@ mod tests {
         assert_eq!(created.user_id, 2);
         assert_eq!(created.role, "ops_reviewer");
 
-        let list = state.list_ops_role_assignments_by_owner(&owner).await?;
+        let list = state
+            .list_ops_role_assignments_by_owner(&owner, OpsRbacPiiLevel::Full)
+            .await?;
         assert!(!list.items.is_empty());
         assert_ne!(list.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         assert!(list
@@ -624,9 +684,54 @@ mod tests {
         let revoked = state.revoke_ops_role_assignment_by_owner(&owner, 2).await?;
         assert!(revoked.removed);
 
-        let list_after = state.list_ops_role_assignments_by_owner(&owner).await?;
+        let list_after = state
+            .list_ops_role_assignments_by_owner(&owner, OpsRbacPiiLevel::Full)
+            .await?;
         assert!(list_after.items.iter().all(|item| item.user_id != 2));
         assert_ne!(list_after.rbac_revision, OPS_RBAC_EMPTY_REVISION);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_role_assignments_by_owner_should_mask_pii_in_minimal_mode() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let user = state.find_user_by_id(2).await?.expect("user should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                user.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+
+        let masked = state
+            .list_ops_role_assignments_by_owner(&owner, OpsRbacPiiLevel::Minimal)
+            .await?;
+        let full = state
+            .list_ops_role_assignments_by_owner(&owner, OpsRbacPiiLevel::Full)
+            .await?;
+
+        let masked_item = masked
+            .items
+            .iter()
+            .find(|item| item.user_id == user.id as u64)
+            .expect("masked role assignment should exist");
+        let full_item = full
+            .items
+            .iter()
+            .find(|item| item.user_id == user.id as u64)
+            .expect("full role assignment should exist");
+
+        assert_eq!(full_item.user_email, user.email);
+        assert_eq!(full_item.user_fullname, user.fullname);
+        assert_ne!(masked_item.user_email, user.email);
+        assert_ne!(masked_item.user_fullname, user.fullname);
+        assert!(masked_item.user_email.contains("***"));
+        assert!(masked_item.user_fullname.contains("***"));
         Ok(())
     }
 }

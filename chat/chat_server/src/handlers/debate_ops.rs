@@ -8,10 +8,11 @@ use crate::{
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
     ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
-    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsQuery,
-    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsObservabilityThresholds,
-    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
+    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsRoleAssignmentsQuery,
+    ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
+    OpsObservabilityThresholds, OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput,
+    RunOpsObservabilityEvaluationQuery, UpdateOpsObservabilityAnomalyStateInput,
+    UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -552,6 +553,9 @@ pub(crate) async fn update_debate_session_ops_handler(
 #[utoipa::path(
     get,
     path = "/api/debate/ops/rbac/roles",
+    params(
+        ListOpsRoleAssignmentsQuery
+    ),
     responses(
         (status = 200, description = "Ops role assignments", body = crate::ListOpsRoleAssignmentsOutput),
         (status = 401, description = "Auth error", body = crate::ErrorOutput),
@@ -568,6 +572,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ListOpsRoleAssignmentsQuery>,
 ) -> Result<Response, AppError> {
     let started_at = Instant::now();
     let request_id = request_id_from_headers(&headers);
@@ -592,6 +597,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
             request_id = request_id.as_deref().unwrap_or_default(),
             audit_event = "ops_rbac_roles_list_read_rate_limited",
             decision = "rate_limited_user",
+            pii_level = ?query.pii_level,
             "list ops rbac role assignments blocked by user rate limiter"
         );
         insert_ops_rbac_audit_log_best_effort(
@@ -634,6 +640,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
             request_id = request_id.as_deref().unwrap_or_default(),
             audit_event = "ops_rbac_roles_list_read_rate_limited",
             decision = "rate_limited_ip",
+            pii_level = ?query.pii_level,
             "list ops rbac role assignments blocked by ip rate limiter"
         );
         insert_ops_rbac_audit_log_best_effort(
@@ -656,7 +663,10 @@ pub(crate) async fn list_ops_role_assignments_handler(
         ));
     }
 
-    let ret = match state.list_ops_role_assignments_by_owner(&user).await {
+    let ret = match state
+        .list_ops_role_assignments_by_owner(&user, query.pii_level)
+        .await
+    {
         Ok(v) => v,
         Err(err) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
@@ -674,6 +684,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
                 audit_event = "ops_rbac_roles_list_read_failed",
                 decision = "failed",
                 latency_ms,
+                pii_level = ?query.pii_level,
                 "list ops rbac role assignments failed: {}",
                 err
             );
@@ -706,6 +717,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
         decision = "success",
         result_count = ret.items.len(),
         latency_ms,
+        pii_level = ?query.pii_level,
         ops_rbac_roles_list_request_total = request_total,
         ops_rbac_roles_list_success_total = success_total,
         ops_rbac_roles_list_failed_total = failed_total,

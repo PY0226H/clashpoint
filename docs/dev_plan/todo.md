@@ -379,7 +379,7 @@
 |---|---|---|---|
 | debate-ops-rbac-me-error-model-standardization | `GET /api/debate/ops/rbac/me` 已完成 owner 真源与测试治理，但错误语义仍偏字符串。 | 收敛为结构化错误模型（`code/message/details?`），客户端仅依赖 `code` 分支。 | 回归 `401/403/500` 场景并验证客户端只依赖 `code` 即可稳定分支；归档响应样例。 |
 | debate-ops-rbac-me-observability-dashboard-baseline | 控制平面读接口已稳定，但缺少 RBAC 专项看板与告警阈值。 | 建立 `ops_rbac_me_*` 指标看板与告警阈值，完成一次值班演练与复盘记录。 | 运维看板配置导出 + 告警演练记录 + 一次值班复盘归档。 |
-| debate-ops-rbac-me-revision-cache-strategy | 当前权限快照无 `rbacRevision/policyVersion`，客户端缓存失效策略不显式。 | 增加快照版本字段并与客户端缓存策略联动，避免短时权限漂移。 | 角色变更后快照一致性联调通过，归档“变更前后版本号与 UI 行为”证据。 |
+| debate-ops-rbac-me-revision-cache-strategy | `rbacRevision` 已落地，但跨模块 `policyVersion`/缓存失效策略仍未统一。 | 冻结 RBAC 快照版本策略（`rbacRevision` 与可选 `policyVersion` 的职责边界）并统一客户端缓存失效规则。 | 角色变更后快照一致性联调通过，归档“变更前后版本号与 UI 行为”证据。 |
 | debate-ops-rbac-policy-unification | 同一 RBAC 快照被多模块消费，策略定义仍分散。 | 抽象统一 policy 层，沉淀可复用权限判定契约，降低多入口语义漂移。 | 选取 topics/iap/report 三条链路回归，验证策略统一后行为一致并归档。 |
 | debate-ops-rbac-me-phone-gate-policy-decision | `rbac/me` 仍受 `require_phone_bound` 门禁，运维应急场景策略待产品冻结。 | 明确并固化“是否保留手机门禁”的产品决策，接口行为、错误码与文档三者一致。 | 产出策略评审记录 + 对应路由回归（保留/放开）并归档。 |
 
@@ -390,4 +390,4 @@
 | debate-ops-rbac-roles-observability-dashboard-baseline | `ops.rbac.*` 指标与字典已落地，但 dashboard/告警阈值仍未接入。 | 建立 `ops.rbac.roles_list.*`、`ops.rbac.me.*`、`ops.rbac.roles_write.*` 看板与告警阈值，完成一次值班演练与复盘。 | 运维看板配置导出 + 告警演练记录 + 复盘文档归档。 |
 | debate-ops-rbac-roles-rate-limit-tuning-baseline | RBAC 三接口限流已接入，但阈值仍是工程初值，缺真实样本回标。 | 形成阈值调优基线报告：命中率、误杀率、`p95/p99`、建议参数区间。 | 执行 RBAC 管理面接口专项压测并归档命令、时间戳、结果报告到 `docs/loadtest/evidence/`。 |
 | debate-ops-rbac-audit-query-surface-and-retention-policy | 审计落库与脚本级查询/留存已落地，但“脚本级 vs 受控 API”与归档层策略尚未评审冻结。 | 完成 RBAC 审计查询面形态决策（脚本或 API）与留存/归档策略定稿，形成正式结论与回滚路径。 | 评审纪要 + 结论文档归档，并补充受控查询演练与留存执行验收清单。 |
-| debate-ops-rbac-roles-pagination-pii-policy | `rbacRevision` 已落地，但分页触发阈值与 PII 最小化策略仍未定稿。 | 冻结分页触发阈值与 PII 最小化边界，并更新 OpenAPI/前端消费契约。 | 回归分页边界与 PII 策略场景，并归档“revision + UI 刷新行为 + 策略评审记录”。 |
+| debate-ops-rbac-roles-pagination-pii-policy | `rbacRevision` 已落地，PII 已收口为“默认 minimal + 显式 full”；分页触发阈值与扩展分页契约仍未定稿。 | 冻结分页触发阈值与分页预案（cursor/limit 或等效），并固化 full PII 触发条件与审计要求。 | 回归分页边界与 PII 策略场景，并归档“revision + UI 刷新行为 + 策略评审记录”。 |

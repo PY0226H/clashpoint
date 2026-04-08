@@ -18,16 +18,19 @@ import {
   upsertOpsObservabilityThresholds,
   upsertOpsRoleAssignment,
   type OpsObservabilityThresholds,
-  type OpsRole
+  type OpsRole,
+  type ListOpsRoleAssignmentsInput
 } from "@echoisle/ops-domain";
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 
 const ROLE_OPTIONS: OpsRole[] = ["ops_admin", "ops_reviewer", "ops_viewer"];
+const ROLE_LIST_PII_OPTIONS = ["minimal", "full"] as const;
 const ALERT_STATUS_OPTIONS = ["all", "raised", "suppressed", "cleared"] as const;
 const ALERT_PAGE_SIZE_OPTIONS = [1, 3, 5, 10] as const;
 const OBSERVABILITY_ERROR_MAX_VISIBLE = 4;
 const OBSERVABILITY_ERROR_MAX_CHARS = 120;
 type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
+type RoleListPiiLevel = NonNullable<ListOpsRoleAssignmentsInput["piiLevel"]>;
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
 type SplitReviewSelection = "unset" | "required" | "not_required";
 type SplitReviewAuditComplianceFilter = "all" | SplitReviewSelection;
@@ -181,6 +184,7 @@ export function OpsConsolePage() {
   const queryClient = useQueryClient();
   const [targetUserId, setTargetUserId] = useState("");
   const [targetRole, setTargetRole] = useState<OpsRole>("ops_viewer");
+  const [roleListPiiLevel, setRoleListPiiLevel] = useState<RoleListPiiLevel>("minimal");
   const [alertStatusFilter, setAlertStatusFilter] = useState<AlertStatusFilter>("all");
   const [alertPageSize, setAlertPageSize] = useState<number>(3);
   const [alertPageIndex, setAlertPageIndex] = useState(0);
@@ -205,8 +209,8 @@ export function OpsConsolePage() {
   });
 
   const roleAssignmentsQuery = useQuery({
-    queryKey: ["ops-role-assignments"],
-    queryFn: () => listOpsRoleAssignments(),
+    queryKey: ["ops-role-assignments", roleListPiiLevel],
+    queryFn: () => listOpsRoleAssignments({ piiLevel: roleListPiiLevel }),
     enabled: Boolean(rbacMeQuery.data?.permissions.roleManage),
     retry: false
   });
@@ -581,6 +585,27 @@ export function OpsConsolePage() {
         <h3>Role Assignment</h3>
         {canManageRoles ? (
           <>
+            <div className="echo-ops-grant-row">
+              <label className="echo-ops-role-label">
+                <span>PII Visibility</span>
+                <select
+                  aria-label="Role List PII Visibility"
+                  onChange={(event) => setRoleListPiiLevel(event.target.value as RoleListPiiLevel)}
+                  value={roleListPiiLevel}
+                >
+                  {ROLE_LIST_PII_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {roleListPiiLevel === "full" ? (
+              <InlineHint>Full PII mode is enabled for owner troubleshooting.</InlineHint>
+            ) : (
+              <InlineHint>Minimal mode masks email and fullname by default.</InlineHint>
+            )}
             <div className="echo-ops-grant-row">
               <TextField
                 aria-label="Target User ID"
