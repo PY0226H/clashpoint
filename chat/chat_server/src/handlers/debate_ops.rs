@@ -44,11 +44,126 @@ const OPS_DEBATE_SESSION_CREATE_IDEMPOTENCY_MAX_LEN: usize = 160;
 const OPS_DEBATE_SESSION_UPDATE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
 const OPS_DEBATE_SESSION_UPDATE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
 const OPS_DEBATE_SESSION_UPDATE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_RBAC_ME_USER_RATE_LIMIT_PER_WINDOW: u64 = 120;
+const OPS_RBAC_ME_IP_RATE_LIMIT_PER_WINDOW: u64 = 240;
+const OPS_RBAC_ME_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_RBAC_ROLES_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 60;
 const OPS_RBAC_ROLES_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const OPS_RBAC_ROLES_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
+const OPS_RBAC_ROLES_WRITE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
+const OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+
+#[derive(Debug, Default)]
+struct OpsRbacMeMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    owner_total: AtomicU64,
+    non_owner_total: AtomicU64,
+    latency_ms_total: AtomicU64,
+    latency_ms_samples_total: AtomicU64,
+}
+
+impl OpsRbacMeMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, is_owner: bool, latency_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        if is_owner {
+            self.owner_total.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.non_owner_total.fetch_add(1, Ordering::Relaxed);
+        }
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self, latency_ms: u64) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+            self.owner_total.load(Ordering::Relaxed),
+            self.non_owner_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpsRbacRolesWriteMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    upsert_total: AtomicU64,
+    revoke_total: AtomicU64,
+    latency_ms_total: AtomicU64,
+    latency_ms_samples_total: AtomicU64,
+}
+
+impl OpsRbacRolesWriteMetrics {
+    fn observe_start_upsert(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+        self.upsert_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_start_revoke(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+        self.revoke_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, latency_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self, latency_ms: u64) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+            self.upsert_total.load(Ordering::Relaxed),
+            self.revoke_total.load(Ordering::Relaxed),
+        )
+    }
+}
 
 #[derive(Debug, Default)]
 struct OpsRbacRolesListMetrics {
@@ -109,6 +224,9 @@ impl OpsRbacRolesListMetrics {
 
 static OPS_RBAC_ROLES_LIST_METRICS: LazyLock<OpsRbacRolesListMetrics> =
     LazyLock::new(OpsRbacRolesListMetrics::default);
+static OPS_RBAC_ME_METRICS: LazyLock<OpsRbacMeMetrics> = LazyLock::new(OpsRbacMeMetrics::default);
+static OPS_RBAC_ROLES_WRITE_METRICS: LazyLock<OpsRbacRolesWriteMetrics> =
+    LazyLock::new(OpsRbacRolesWriteMetrics::default);
 
 /// Create debate topic by authorized ops role.
 #[utoipa::path(
@@ -548,6 +666,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
         (status = 200, description = "Current ops RBAC capabilities", body = crate::GetOpsRbacMeOutput),
         (status = 401, description = "Auth error", body = crate::ErrorOutput),
         (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
         (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
@@ -557,9 +676,110 @@ pub(crate) async fn list_ops_role_assignments_handler(
 pub(crate) async fn get_ops_rbac_me_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_ops_rbac_me(&user).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    OPS_RBAC_ME_METRICS.observe_start();
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_me_user",
+        &user.id.to_string(),
+        OPS_RBAC_ME_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ME_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_me_user", user_decision);
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        OPS_RBAC_ME_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_me_read_rate_limited",
+            decision = "rate_limited_user",
+            "get ops rbac me blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_me",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_me_ip",
+        &ip_limit_key,
+        OPS_RBAC_ME_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ME_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(&headers, "ops_rbac_me_ip", ip_decision);
+    if !ip_decision.allowed {
+        OPS_RBAC_ME_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_me_read_rate_limited",
+            decision = "rate_limited_ip",
+            "get ops rbac me blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_me",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let ret = match state.get_ops_rbac_me(&user).await {
+        Ok(v) => v,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            OPS_RBAC_ME_METRICS.observe_failure(latency_ms);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                audit_event = "ops_rbac_me_read_failed",
+                decision = "failed",
+                latency_ms,
+                "get ops rbac me failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    OPS_RBAC_ME_METRICS.observe_success(ret.is_owner, latency_ms);
+    let (
+        request_total,
+        success_total,
+        failed_total,
+        rate_limited_total,
+        owner_total,
+        non_owner_total,
+    ) = OPS_RBAC_ME_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        audit_event = "ops_rbac_me_read",
+        decision = "success",
+        is_owner = ret.is_owner,
+        role = ret.role.as_deref().unwrap_or(""),
+        latency_ms,
+        ops_rbac_me_request_total = request_total,
+        ops_rbac_me_success_total = success_total,
+        ops_rbac_me_failed_total = failed_total,
+        ops_rbac_me_rate_limited_total = rate_limited_total,
+        ops_rbac_me_owner_total = owner_total,
+        ops_rbac_me_non_owner_total = non_owner_total,
+        "get ops rbac me served"
+    );
+    Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
 /// Get current ops observability config snapshot.
@@ -943,6 +1163,7 @@ pub(crate) async fn discard_kafka_dlq_event_handler(
         (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Target user not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
         (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
         (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
@@ -954,12 +1175,118 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
     Path(user_id): Path<u64>,
+    headers: HeaderMap,
     Json(input): Json<UpsertOpsRoleInput>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    OPS_RBAC_ROLES_WRITE_METRICS.observe_start_upsert();
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_roles_write_user",
+        &user.id.to_string(),
+        OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_roles_write_user", user_decision);
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        OPS_RBAC_ROLES_WRITE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            target_user_id = user_id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_roles_write_upsert_rate_limited",
+            decision = "rate_limited_user",
+            "upsert ops role assignment blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_roles_write",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_roles_write_ip",
+        &ip_limit_key,
+        OPS_RBAC_ROLES_WRITE_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_roles_write_ip", ip_decision);
+    if !ip_decision.allowed {
+        OPS_RBAC_ROLES_WRITE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            target_user_id = user_id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_roles_write_upsert_rate_limited",
+            decision = "rate_limited_ip",
+            "upsert ops role assignment blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_roles_write",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let ret = match state
         .upsert_ops_role_assignment_by_owner(&user, user_id, input)
-        .await?;
-    Ok((StatusCode::OK, Json(ret)))
+        .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            tracing::warn!(
+                user_id = user.id,
+                target_user_id = user_id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                audit_event = "ops_rbac_roles_write_upsert_failed",
+                decision = "failed",
+                latency_ms,
+                "upsert ops role assignment failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    OPS_RBAC_ROLES_WRITE_METRICS.observe_success(latency_ms);
+    let (
+        request_total,
+        success_total,
+        failed_total,
+        rate_limited_total,
+        upsert_total,
+        revoke_total,
+    ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        target_user_id = user_id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        audit_event = "ops_rbac_roles_write_upsert",
+        decision = "success",
+        role = ret.role.as_str(),
+        latency_ms,
+        ops_rbac_roles_write_request_total = request_total,
+        ops_rbac_roles_write_success_total = success_total,
+        ops_rbac_roles_write_failed_total = failed_total,
+        ops_rbac_roles_write_rate_limited_total = rate_limited_total,
+        ops_rbac_roles_write_upsert_total = upsert_total,
+        ops_rbac_roles_write_revoke_total = revoke_total,
+        "upsert ops role assignment served"
+    );
+    Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
 /// Revoke an ops role assignment (owner only).
@@ -974,6 +1301,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         (status = 401, description = "Auth error", body = crate::ErrorOutput),
         (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
         (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
@@ -984,11 +1312,117 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
     Path(user_id): Path<u64>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    OPS_RBAC_ROLES_WRITE_METRICS.observe_start_revoke();
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_roles_write_user",
+        &user.id.to_string(),
+        OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_roles_write_user", user_decision);
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        OPS_RBAC_ROLES_WRITE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            target_user_id = user_id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_roles_write_revoke_rate_limited",
+            decision = "rate_limited_user",
+            "revoke ops role assignment blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_roles_write",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_roles_write_ip",
+        &ip_limit_key,
+        OPS_RBAC_ROLES_WRITE_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_roles_write_ip", ip_decision);
+    if !ip_decision.allowed {
+        OPS_RBAC_ROLES_WRITE_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            target_user_id = user_id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_roles_write_revoke_rate_limited",
+            decision = "rate_limited_ip",
+            "revoke ops role assignment blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_roles_write",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let ret = match state
         .revoke_ops_role_assignment_by_owner(&user, user_id)
-        .await?;
-    Ok((StatusCode::OK, Json(ret)))
+        .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            tracing::warn!(
+                user_id = user.id,
+                target_user_id = user_id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                audit_event = "ops_rbac_roles_write_revoke_failed",
+                decision = "failed",
+                latency_ms,
+                "revoke ops role assignment failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    OPS_RBAC_ROLES_WRITE_METRICS.observe_success(latency_ms);
+    let (
+        request_total,
+        success_total,
+        failed_total,
+        rate_limited_total,
+        upsert_total,
+        revoke_total,
+    ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        target_user_id = user_id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        audit_event = "ops_rbac_roles_write_revoke",
+        decision = "success",
+        removed = ret.removed,
+        latency_ms,
+        ops_rbac_roles_write_request_total = request_total,
+        ops_rbac_roles_write_success_total = success_total,
+        ops_rbac_roles_write_failed_total = failed_total,
+        ops_rbac_roles_write_rate_limited_total = rate_limited_total,
+        ops_rbac_roles_write_upsert_total = upsert_total,
+        ops_rbac_roles_write_revoke_total = revoke_total,
+        "revoke ops role assignment served"
+    );
+    Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
 /// List judge reports for ops review with evidence/anomaly filters.

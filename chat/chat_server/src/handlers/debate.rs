@@ -640,6 +640,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_ops_rbac_me_route_should_return_429_when_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Me Rate Limited",
+            "ops-rbac-me-rate-limited@acme.org",
+            "+8613810000002",
+            "ops-rbac-me-rate-limited-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/me")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "ops_rbac_me_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_me");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_ops_rbac_me_route_should_return_403_for_unbound_user() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let user = state
@@ -662,6 +689,35 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_rbac_me_route_should_return_500_when_owner_source_missing() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Me Missing Owner Source",
+            "ops-rbac-me-missing-owner-source@acme.org",
+            "+8613810000003",
+            "ops-rbac-me-missing-owner-source-sid",
+        )
+        .await?;
+        sqlx::query("DELETE FROM platform_admin_owners WHERE singleton_key = TRUE")
+            .execute(&state.pool)
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/me")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "platform_owner_not_configured");
         Ok(())
     }
 
@@ -885,6 +941,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_429_when_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-rate-limited-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("x-test-force-rate-limit", "ops_rbac_roles_write_user")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_write");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn put_ops_rbac_roles_user_id_route_should_return_403_for_unbound_user() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let user = state
@@ -1013,6 +1092,29 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert!(error.error.contains("ops_permission_denied:role_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_429_when_rate_limited() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-revoke-rate-limited-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "ops_rbac_roles_write_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_write");
         Ok(())
     }
 
