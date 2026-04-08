@@ -340,14 +340,14 @@
 | debate-judge-job-request-rate-limit-tuning-baseline | user/session + ip/session 双限频已落地，但阈值仍为工程初值，缺真实样本回标。 | 输出限频基线报告：命中率、误杀率、`p95/p99`、建议阈值区间与客户端退避策略。 | 执行接口专项压测并归档命令、时间戳与报告到 `docs/loadtest/evidence/`。 |
 | debate-judge-job-request-lock-contention-baseline | 已缩短事务临界区，但缺热点并发场景的锁等待量化证据。 | 形成可复核热点并发报告：锁等待/冲突占比、成功率、延迟分位与容量建议。 | 使用同一 session 高并发压测并归档报告到 `docs/consistency_reports/`。 |
 
-## AE. debate-ops-topics-create-hardening 后续待办（来源：当前开发计划）
+## AE. debate-ops-topics-ops-hardening 后续待办（来源：当前开发计划）
 
 | 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|
 | debate-ops-topics-conflict-code-standardization | `POST /api/debate/ops/topics` 已能正确返回 `409`，但机读码语义仍部分依赖展示文案。 | 统一冲突错误为稳定 machine code（权限/幂等/业务冲突可直接分支），并保持 message 可读。 | 回归创建冲突场景，验证客户端仅凭 code 即可完成分支；归档响应样例。 |
-| debate-ops-topics-update-dedupe-guard | 创建链路已做规范化查重，但 `PUT /api/debate/ops/topics/{id}` 尚未补“排除自身”重复校验。 | 更新接口补齐 `title_norm+category` 查重（排除当前 id），防止通过更新制造重复。 | 新增 update 冲突回归测试，验证同 id 更新放行、跨 id 重复阻断。 |
 | debate-ops-topics-db-unique-constraint-rollout | 当前重复防护以应用层锁+查重为主，尚未引入 DB 强唯一约束。 | 完成存量去重评估与迁移预案，并分阶段上线 `(title_norm, category)` 唯一约束（或等效表达式唯一索引）。 | 迁移预演（含回滚）+ 并发压测，归档 before/after 冲突行为对比报告。 |
 | debate-ops-topics-category-dictionary-config | `category` 白名单已可用，但仍硬编码在服务端代码中。 | 支持配置中心或字典表驱动，新增分类无需发版；保留默认兜底。 | 新增分类热更新/配置变更联调记录，回归非法分类仍返回稳定 `400`。 |
-| debate-ops-topics-rate-limit-idempotency-integration-evidence | 单测环境常用 `RedisStore::Disabled`，限流与 in-flight 锁缺真实阻断证据。 | 在 Redis 开启联调环境形成可复核证据：限流命中、短锁冲突、回放一致。 | 执行联调脚本并归档命令、时间戳、响应样本与日志到 `docs/consistency_reports/`。 |
+| debate-ops-topics-update-rate-limit-idempotency-hardening | `PUT /api/debate/ops/topics/{id}` 本轮已完成正确性治理，但尚未接入更新侧限流与幂等保护。 | 更新接口接入 request_guard（user/ip 限流 + 幂等键策略），与创建接口治理水位对齐。 | Redis 开启环境下完成联调：限流命中、重试回放一致、冲突分支可观测；归档证据到 `docs/consistency_reports/`。 |
+| debate-ops-topics-update-route-matrix | 更新接口已补模型层关键回归，但路由层 `200/400/401/403/404/409/422/500` 全矩阵仍未封板。 | 新增 update route 专项测试矩阵，覆盖鉴权、门禁、提取器失败、业务冲突和成功路径。 | 执行路由回归并归档测试结果，确保后续中间件/注解调整可被门禁拦截。 |
 | debate-ops-topics-length-semantics-decision | 当前长度口径为字节数，中文字符场景可能与产品“字符数”预期有偏差。 | 明确并冻结长度语义（字节或字符），若切换需补迁移说明与回归矩阵。 | 评审结论文档 + 边界回归测试（中英文/emoji）通过并归档。 |
 | debate-ops-topics-owner-configurability | Owner 历史语义仍存在硬编码实现痕迹，平台化弹性不足。 | 迁移为角色/配置驱动，不依赖固定 user_id。 | 回归 owner/ops_admin/ops_reviewer 权限矩阵并归档结果。 |

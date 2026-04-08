@@ -349,12 +349,16 @@ fn maybe_override_rate_limit_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{get_router, models::CreateUser, DebateTopic, ErrorOutput, UpsertOpsRoleInput};
+    use crate::{
+        get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
+        UpsertOpsRoleInput,
+    };
     use anyhow::Result;
     use axum::{
         body::Body,
         http::{Method, Request, StatusCode},
     };
+    use chrono::{Duration, Utc};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -407,6 +411,26 @@ mod tests {
         let _ = state.bind_phone_for_user(user.id, phone).await?;
         let token = issue_token_for_user(state, user.id, sid).await?;
         Ok((user, token))
+    }
+
+    async fn seed_topic(state: &AppState) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO debate_topics(
+                title, description, category, stance_pro, stance_con, context_seed, is_active, created_by
+            )
+            VALUES ($1, $2, $3, $4, $5, NULL, true, 1)
+            RETURNING id
+            "#,
+        )
+        .bind("ops-session-topic")
+        .bind("desc")
+        .bind("technology")
+        .bind("pro")
+        .bind("con")
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(row.0)
     }
 
     #[tokio::test]
@@ -819,6 +843,177 @@ mod tests {
         assert_eq!(
             error.error,
             "debate conflict: debate_topic_duplicate_title_in_category"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_session_ops_route_should_replay_with_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Session Replay",
+            "ops-session-replay@acme.org",
+            "+8613810001111",
+            "ops-session-replay-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let topic_id = seed_topic(&state).await?;
+        let app = get_router(state.clone()).await?;
+        let now = Utc::now();
+        let payload = serde_json::json!({
+            "topicId": topic_id,
+            "status": "scheduled",
+            "scheduledStartAt": (now + Duration::minutes(10)).to_rfc3339(),
+            "endAt": (now + Duration::minutes(60)).to_rfc3339(),
+            "maxParticipantsPerSide": 120
+        });
+
+        let req1 = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-session-route-key-1")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res1 = app.clone().oneshot(req1).await?;
+        assert_eq!(res1.status(), StatusCode::CREATED);
+        let body1 = res1.into_body().collect().await?.to_bytes();
+        let first: DebateSessionSummary = serde_json::from_slice(&body1)?;
+
+        let req2 = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-session-route-key-1")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res2 = app.oneshot(req2).await?;
+        assert_eq!(res2.status(), StatusCode::CREATED);
+        let body2 = res2.into_body().collect().await?.to_bytes();
+        let second: DebateSessionSummary = serde_json::from_slice(&body2)?;
+        assert_eq!(first.id, second.id);
+
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_debate_session_audits
+            WHERE session_id = $1
+            "#,
+        )
+        .bind(first.id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_session_ops_route_should_reject_too_long_idempotency_key() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Session Key Long",
+            "ops-session-key-long@acme.org",
+            "+8613810002222",
+            "ops-session-key-long-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let topic_id = seed_topic(&state).await?;
+        let app = get_router(state).await?;
+        let now = Utc::now();
+        let payload = serde_json::json!({
+            "topicId": topic_id,
+            "status": "scheduled",
+            "scheduledStartAt": (now + Duration::minutes(10)).to_rfc3339(),
+            "endAt": (now + Duration::minutes(60)).to_rfc3339(),
+            "maxParticipantsPerSide": 50
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "k".repeat(161))
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "ops_debate_session_create_idempotency_key_too_long"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_debate_session_ops_route_should_reject_past_end_at() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_admin, token) = create_bound_user_and_token(
+            &state,
+            "Ops Session Expired",
+            "ops-session-expired@acme.org",
+            "+8613810003333",
+            "ops-session-expired-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_admin".to_string(),
+                },
+            )
+            .await?;
+        let topic_id = seed_topic(&state).await?;
+        let app = get_router(state).await?;
+        let now = Utc::now();
+        let payload = serde_json::json!({
+            "topicId": topic_id,
+            "status": "scheduled",
+            "scheduledStartAt": (now - Duration::minutes(120)).to_rfc3339(),
+            "endAt": (now - Duration::minutes(10)).to_rfc3339(),
+            "maxParticipantsPerSide": 30
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "debate error: session endAt must be in the future"
         );
         Ok(())
     }

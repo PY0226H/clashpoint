@@ -527,6 +527,115 @@ async fn create_debate_session_by_owner_should_validate_status_and_topic() -> Re
         .await?;
     assert_eq!(open_future.status, "open");
     assert!(!open_future.joinable);
+
+    let expired_err = state
+        .create_debate_session_by_owner(
+            &owner,
+            OpsCreateDebateSessionInput {
+                topic_id: topic_id as u64,
+                status: Some("scheduled".to_string()),
+                scheduled_start_at: now - Duration::minutes(40),
+                end_at: now - Duration::minutes(5),
+                max_participants_per_side: Some(200),
+            },
+        )
+        .await
+        .expect_err("end_at in the past should fail");
+    match expired_err {
+        AppError::DebateError(msg) => assert!(msg.contains("session endAt must be in the future")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_debate_session_by_owner_should_reject_topic_id_overflow() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state
+        .find_user_by_id(1)
+        .await?
+        .expect("owner user should exist");
+    let now = Utc::now();
+
+    let err = state
+        .create_debate_session_by_owner(
+            &owner,
+            OpsCreateDebateSessionInput {
+                topic_id: u64::MAX,
+                status: Some("scheduled".to_string()),
+                scheduled_start_at: now + Duration::minutes(5),
+                end_at: now + Duration::minutes(45),
+                max_participants_per_side: Some(100),
+            },
+        )
+        .await
+        .expect_err("overflow topic id should fail");
+    match err {
+        AppError::ValidationError(code) => assert_eq!(code, "debate_session_topic_id_invalid"),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_debate_session_by_owner_with_meta_should_replay_and_write_audit() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    state.grant_platform_admin(1).await?;
+    let owner = state
+        .find_user_by_id(1)
+        .await?
+        .expect("owner user should exist");
+    let (topic_id, _) = seed_topic_and_session(&state, "scheduled", 20).await?;
+    let now = Utc::now();
+    let input = OpsCreateDebateSessionInput {
+        topic_id: topic_id as u64,
+        status: Some("scheduled".to_string()),
+        scheduled_start_at: now + Duration::minutes(20),
+        end_at: now + Duration::minutes(80),
+        max_participants_per_side: Some(120),
+    };
+
+    let (first, replayed_first) = state
+        .create_debate_session_by_owner_with_meta(&owner, input.clone(), Some("ops-session-key-1"))
+        .await?;
+    assert!(!replayed_first);
+
+    let (second, replayed_second) = state
+        .create_debate_session_by_owner_with_meta(&owner, input, Some("ops-session-key-1"))
+        .await?;
+    assert!(replayed_second);
+    assert_eq!(first.id, second.id);
+
+    let audit_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM ops_debate_session_audits
+        WHERE session_id = $1
+          AND operator_user_id = $2
+        "#,
+    )
+    .bind(first.id)
+    .bind(owner.id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(audit_count, 2);
+
+    let idem_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(1)::bigint
+        FROM ops_debate_session_idempotency_keys
+        WHERE user_id = $1
+          AND idempotency_key = $2
+          AND session_id = $3
+        "#,
+    )
+    .bind(owner.id)
+    .bind("ops-session-key-1")
+    .bind(first.id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(idem_count, 1);
     Ok(())
 }
 

@@ -4,10 +4,13 @@ use crate::models::OpsPermission;
 const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE: &str = "create";
 const OPS_DEBATE_TOPIC_AUDIT_ACTION_CREATE_REPLAY: &str = "create_replay";
 const OPS_DEBATE_TOPIC_AUDIT_ACTION_UPDATE: &str = "update";
+const OPS_DEBATE_SESSION_AUDIT_ACTION_CREATE: &str = "create";
+const OPS_DEBATE_SESSION_AUDIT_ACTION_CREATE_REPLAY: &str = "create_replay";
 const DEBATE_TOPIC_DESCRIPTION_MAX_LEN: usize = 4000;
 const DEBATE_TOPIC_CONFLICT_DUPLICATE_TITLE_IN_CATEGORY: &str =
     "debate_topic_duplicate_title_in_category";
 const DEBATE_TOPIC_CONFLICT_REVISION: &str = "debate_topic_revision_conflict";
+const DEBATE_SESSION_INVALID_TOPIC_ID: &str = "debate_session_topic_id_invalid";
 
 #[allow(dead_code)]
 impl AppState {
@@ -170,9 +173,22 @@ impl AppState {
         user: &User,
         input: OpsCreateDebateSessionInput,
     ) -> Result<DebateSessionSummary, AppError> {
+        let (session, _) = self
+            .create_debate_session_by_owner_with_meta(user, input, None)
+            .await?;
+        Ok(session)
+    }
+
+    pub async fn create_debate_session_by_owner_with_meta(
+        &self,
+        user: &User,
+        input: OpsCreateDebateSessionInput,
+        idempotency_key: Option<&str>,
+    ) -> Result<(DebateSessionSummary, bool), AppError> {
         self.ensure_ops_permission(user, OpsPermission::DebateManage)
             .await?;
 
+        let topic_id = safe_u64_to_i64(input.topic_id, DEBATE_SESSION_INVALID_TOPIC_ID)?;
         let status = normalize_ops_session_status(input.status)?;
         if status.len() > DEBATE_SESSION_STATUS_MAX_LEN {
             return Err(AppError::DebateError(format!(
@@ -193,10 +209,37 @@ impl AppState {
             ));
         }
         let now = Utc::now();
-        if matches!(status.as_str(), "open" | "running") && input.end_at <= now {
+        if input.end_at <= now {
             return Err(AppError::DebateError(
-                "open/running session must end in the future".to_string(),
+                "session endAt must be in the future".to_string(),
             ));
+        }
+
+        let mut tx = self.pool.begin().await?;
+        if let Some(key) = idempotency_key {
+            let lock_key = format!("ops_debate_session_create:{}:{}", user.id, key);
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&lock_key)
+                .execute(&mut *tx)
+                .await?;
+            if let Some(existing_session_id) = self
+                .load_ops_debate_session_idempotency_row(&mut tx, user.id, key)
+                .await?
+            {
+                let existing = self
+                    .load_debate_session_by_id_for_ops(&mut tx, existing_session_id)
+                    .await?;
+                self.insert_ops_debate_session_audit(
+                    &mut tx,
+                    existing.id,
+                    user.id,
+                    OPS_DEBATE_SESSION_AUDIT_ACTION_CREATE_REPLAY,
+                    Some(key),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok((existing, true));
+            }
         }
 
         let topic_exists: Option<(i64,)> = sqlx::query_as(
@@ -204,10 +247,11 @@ impl AppState {
             SELECT id
             FROM debate_topics
             WHERE id = $1
+            FOR SHARE
             "#,
         )
-        .bind(input.topic_id as i64)
-        .fetch_optional(&self.pool)
+        .bind(topic_id)
+        .fetch_optional(&mut *tx)
         .await?;
 
         if topic_exists.is_none() {
@@ -217,7 +261,7 @@ impl AppState {
             )));
         }
 
-        let row = sqlx::query_as(
+        let row: DebateSessionSummary = sqlx::query_as(
             r#"
             INSERT INTO debate_sessions(
                 topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
@@ -233,15 +277,40 @@ impl AppState {
                 ) AS joinable
             "#,
         )
-        .bind(input.topic_id as i64)
+        .bind(topic_id)
         .bind(status)
         .bind(input.scheduled_start_at)
         .bind(input.end_at)
         .bind(max_per_side)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-        Ok(row)
+        if let Some(key) = idempotency_key {
+            sqlx::query(
+                r#"
+                INSERT INTO ops_debate_session_idempotency_keys(
+                    user_id, idempotency_key, session_id, created_at
+                )
+                VALUES ($1, $2, $3, NOW())
+                "#,
+            )
+            .bind(user.id)
+            .bind(key)
+            .bind(row.id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        self.insert_ops_debate_session_audit(
+            &mut tx,
+            row.id,
+            user.id,
+            OPS_DEBATE_SESSION_AUDIT_ACTION_CREATE,
+            idempotency_key,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok((row, false))
     }
 
     pub async fn update_debate_topic_by_owner(
@@ -432,6 +501,52 @@ impl AppState {
         Ok(row)
     }
 
+    async fn load_ops_debate_session_idempotency_row(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: i64,
+        idempotency_key: &str,
+    ) -> Result<Option<i64>, AppError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT session_id
+            FROM ops_debate_session_idempotency_keys
+            WHERE user_id = $1
+              AND idempotency_key = $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row.map(|v| v.0))
+    }
+
+    async fn load_debate_session_by_id_for_ops(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: i64,
+    ) -> Result<DebateSessionSummary, AppError> {
+        let row = sqlx::query_as(
+            r#"
+            SELECT
+                id, topic_id, status, scheduled_start_at, actual_start_at, end_at,
+                max_participants_per_side, pro_count, con_count, hot_score, created_at, updated_at,
+                (
+                    (status IN ('open', 'running'))
+                    AND scheduled_start_at <= NOW()
+                    AND end_at > NOW()
+                ) AS joinable
+            FROM debate_sessions
+            WHERE id = $1
+            "#,
+        )
+        .bind(session_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row)
+    }
+
     async fn insert_ops_debate_topic_audit(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -449,6 +564,31 @@ impl AppState {
             "#,
         )
         .bind(topic_id)
+        .bind(operator_user_id)
+        .bind(action)
+        .bind(idempotency_key)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_ops_debate_session_audit(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: i64,
+        operator_user_id: i64,
+        action: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO ops_debate_session_audits(
+                session_id, operator_user_id, action, idempotency_key, created_at
+            )
+            VALUES ($1, $2, $3, $4, NOW())
+            "#,
+        )
+        .bind(session_id)
         .bind(operator_user_id)
         .bind(action)
         .bind(idempotency_key)
