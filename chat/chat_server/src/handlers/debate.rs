@@ -621,6 +621,8 @@ mod tests {
         assert!(!out.permissions.judge_review);
         assert!(!out.permissions.judge_rejudge);
         assert!(!out.permissions.role_manage);
+        assert!(!out.rbac_revision.is_empty());
+        assert_ne!(out.rbac_revision, "empty");
         let audit_count: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(1)::bigint
@@ -782,6 +784,8 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let body = res.into_body().collect().await?.to_bytes();
         let out: ListOpsRoleAssignmentsOutput = serde_json::from_slice(&body)?;
+        assert!(!out.rbac_revision.is_empty());
+        assert_ne!(out.rbac_revision, "empty");
         assert!(out
             .items
             .iter()

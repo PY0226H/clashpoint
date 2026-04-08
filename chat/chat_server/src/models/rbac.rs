@@ -16,6 +16,7 @@ pub(crate) const OPS_RBAC_TARGET_USER_NOT_FOUND_CODE: &str = "ops_role_target_us
 const OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE: &str = "ops_role_assignment_user_id_invalid";
 const OPS_RBAC_ROLE_ASSIGNMENT_GRANTED_BY_INVALID_CODE: &str =
     "ops_role_assignment_granted_by_invalid";
+const OPS_RBAC_EMPTY_REVISION: &str = "empty";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum OpsPermission {
@@ -62,6 +63,7 @@ pub struct OpsRoleAssignment {
 #[serde(rename_all = "camelCase")]
 pub struct ListOpsRoleAssignmentsOutput {
     pub items: Vec<OpsRoleAssignment>,
+    pub rbac_revision: String,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -87,6 +89,7 @@ pub struct GetOpsRbacMeOutput {
     pub is_owner: bool,
     pub role: Option<String>,
     pub permissions: OpsPermissionFlags,
+    pub rbac_revision: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -143,7 +146,31 @@ fn map_assignment_row(row: OpsRoleAssignmentRow) -> Result<OpsRoleAssignment, Ap
     })
 }
 
+fn format_rbac_revision(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
 impl AppState {
+    async fn get_ops_rbac_revision(&self) -> Result<String, AppError> {
+        let revision: Option<DateTime<Utc>> = sqlx::query_scalar(
+            r#"
+            SELECT MAX(updated_at)
+            FROM (
+                SELECT updated_at
+                FROM platform_user_roles
+                UNION ALL
+                SELECT updated_at
+                FROM platform_admin_owners
+            ) updates
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(revision
+            .map(format_rbac_revision)
+            .unwrap_or_else(|| OPS_RBAC_EMPTY_REVISION.to_string()))
+    }
+
     pub(crate) async fn get_platform_admin_user_id(&self) -> Result<i64, AppError> {
         let owner_id: Option<i64> = sqlx::query_scalar(
             r#"
@@ -175,6 +202,7 @@ impl AppState {
 
     pub async fn get_ops_rbac_me(&self, user: &User) -> Result<GetOpsRbacMeOutput, AppError> {
         let owner_id = self.get_platform_admin_user_id().await?;
+        let rbac_revision = self.get_ops_rbac_revision().await?;
         if owner_id == user.id {
             return Ok(GetOpsRbacMeOutput {
                 user_id: user.id as u64,
@@ -186,6 +214,7 @@ impl AppState {
                     judge_rejudge: true,
                     role_manage: true,
                 },
+                rbac_revision,
             });
         }
 
@@ -211,6 +240,7 @@ impl AppState {
             is_owner: false,
             role,
             permissions,
+            rbac_revision,
         })
     }
 
@@ -274,6 +304,7 @@ impl AppState {
                 .into_iter()
                 .map(map_assignment_row)
                 .collect::<Result<Vec<_>, _>>()?,
+            rbac_revision: self.get_ops_rbac_revision().await?,
         })
     }
 
@@ -516,6 +547,7 @@ mod tests {
         assert!(owner_snapshot.permissions.judge_review);
         assert!(owner_snapshot.permissions.judge_rejudge);
         assert!(owner_snapshot.permissions.role_manage);
+        assert_ne!(owner_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
 
         state
             .upsert_ops_role_assignment_by_owner(
@@ -533,6 +565,7 @@ mod tests {
         assert!(viewer_snapshot.permissions.judge_review);
         assert!(!viewer_snapshot.permissions.judge_rejudge);
         assert!(!viewer_snapshot.permissions.role_manage);
+        assert_ne!(viewer_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         Ok(())
     }
 
@@ -553,10 +586,12 @@ mod tests {
         let next_snapshot = state.get_ops_rbac_me(&next_owner).await?;
         assert!(next_snapshot.is_owner);
         assert!(next_snapshot.permissions.role_manage);
+        assert_ne!(next_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
 
         let old_owner_snapshot = state.get_ops_rbac_me(&owner).await?;
         assert!(!old_owner_snapshot.is_owner);
         assert!(!old_owner_snapshot.permissions.role_manage);
+        assert_ne!(old_owner_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         Ok(())
     }
 
@@ -580,6 +615,7 @@ mod tests {
 
         let list = state.list_ops_role_assignments_by_owner(&owner).await?;
         assert!(!list.items.is_empty());
+        assert_ne!(list.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         assert!(list
             .items
             .iter()
@@ -590,6 +626,7 @@ mod tests {
 
         let list_after = state.list_ops_role_assignments_by_owner(&owner).await?;
         assert!(list_after.items.iter().all(|item| item.user_id != 2));
+        assert_ne!(list_after.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         Ok(())
     }
 }

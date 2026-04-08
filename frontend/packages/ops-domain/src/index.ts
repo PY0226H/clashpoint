@@ -22,6 +22,7 @@ export type GetOpsRbacMeOutput = {
   isOwner: boolean;
   role?: string | null;
   permissions: OpsPermissionFlags;
+  rbacRevision: string;
 };
 
 export type OpsRoleAssignment = {
@@ -36,6 +37,7 @@ export type OpsRoleAssignment = {
 
 export type ListOpsRoleAssignmentsOutput = {
   items: OpsRoleAssignment[];
+  rbacRevision: string;
 };
 
 export type RevokeOpsRoleOutput = {

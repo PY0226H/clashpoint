@@ -572,6 +572,9 @@ export function OpsConsolePage() {
             </article>
           ))}
         </div>
+        {rbacMeQuery.data?.rbacRevision ? (
+          <InlineHint>RBAC revision: {rbacMeQuery.data.rbacRevision}</InlineHint>
+        ) : null}
       </section>
 
       <section className="echo-lobby-panel">
@@ -616,6 +619,9 @@ export function OpsConsolePage() {
             {roleAssignmentsQuery.isLoading ? <InlineHint>Loading role assignments...</InlineHint> : null}
             {roleAssignmentsQuery.isError ? (
               <p className="echo-error">{toOpsDomainError(roleAssignmentsQuery.error)}</p>
+            ) : null}
+            {roleAssignmentsQuery.data?.rbacRevision ? (
+              <InlineHint>Role list revision: {roleAssignmentsQuery.data.rbacRevision}</InlineHint>
             ) : null}
             <div className="echo-ops-role-list">
               {(roleAssignmentsQuery.data?.items || []).map((item) => (
