@@ -204,15 +204,63 @@ type ApiErrorLike = {
   message?: string;
 };
 
+function normalizeOpsDomainErrorCode(raw: string | null): string | null {
+  const value = stripOpsDomainErrorPrefix(String(raw || "").trim());
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith("ops_permission_denied:")) {
+    const parts = value.split(":");
+    if (parts.length >= 2) {
+      return `${parts[0]}:${parts[1]}`;
+    }
+    return "ops_permission_denied";
+  }
+  if (value.startsWith("rate_limit_exceeded:")) {
+    const parts = value.split(":");
+    if (parts.length >= 2) {
+      return `${parts[0]}:${parts[1]}`;
+    }
+    return "rate_limit_exceeded";
+  }
+  if (value.startsWith("ops_role_target_user_not_found")) {
+    return "ops_role_target_user_not_found";
+  }
+  return value;
+}
+
+function stripOpsDomainErrorPrefix(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return value;
+  }
+  const lower = value.toLowerCase();
+  const prefixes = [
+    "debate conflict:",
+    "debate error:",
+    "not found:",
+    "validation error:",
+    "server error:"
+  ];
+  for (const prefix of prefixes) {
+    if (lower.startsWith(prefix)) {
+      return value.slice(prefix.length).trim();
+    }
+  }
+  return value;
+}
+
 export function getOpsDomainErrorInfo(error: unknown): OpsDomainErrorInfo {
   const known = error as ApiErrorLike;
   const status = typeof known.response?.status === "number" ? known.response.status : null;
-  const code =
-    known.response?.data?.error ||
+  const rawCode =
     known.response?.data?.code ||
+    known.response?.data?.error ||
     known.response?.data?.message ||
     null;
-  const message = code || known.message || "request failed";
+  const code = normalizeOpsDomainErrorCode(rawCode);
+  const message =
+    code || known.response?.data?.message || known.response?.data?.error || known.message || "request failed";
   return {
     status,
     code,

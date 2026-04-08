@@ -8,6 +8,14 @@ use utoipa::ToSchema;
 const ROLE_OPS_ADMIN: &str = "ops_admin";
 const ROLE_OPS_REVIEWER: &str = "ops_reviewer";
 const ROLE_OPS_VIEWER: &str = "ops_viewer";
+pub(crate) const OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE: &str =
+    "ops_permission_denied:role_manage";
+pub(crate) const OPS_RBAC_OWNER_NOT_CONFIGURED_CODE: &str = "platform_owner_not_configured";
+pub(crate) const OPS_RBAC_INVALID_ROLE_CODE: &str = "ops_role_invalid";
+pub(crate) const OPS_RBAC_TARGET_USER_NOT_FOUND_CODE: &str = "ops_role_target_user_not_found";
+const OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE: &str = "ops_role_assignment_user_id_invalid";
+const OPS_RBAC_ROLE_ASSIGNMENT_GRANTED_BY_INVALID_CODE: &str =
+    "ops_role_assignment_granted_by_invalid";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum OpsPermission {
@@ -100,7 +108,7 @@ fn normalize_ops_role(role: &str) -> Result<String, AppError> {
     );
     if !is_valid {
         return Err(AppError::DebateError(
-            "invalid role, expect one of: ops_admin, ops_reviewer, ops_viewer".to_string(),
+            OPS_RBAC_INVALID_ROLE_CODE.to_string(),
         ));
     }
     Ok(normalized)
@@ -116,16 +124,23 @@ fn role_grants_permission(role: &str, permission: OpsPermission) -> bool {
     }
 }
 
-fn map_assignment_row(row: OpsRoleAssignmentRow) -> OpsRoleAssignment {
-    OpsRoleAssignment {
-        user_id: row.user_id as u64,
+fn checked_i64_to_u64(value: i64, code: &'static str) -> Result<u64, AppError> {
+    u64::try_from(value).map_err(|_| AppError::ServerError(code.to_string()))
+}
+
+fn map_assignment_row(row: OpsRoleAssignmentRow) -> Result<OpsRoleAssignment, AppError> {
+    Ok(OpsRoleAssignment {
+        user_id: checked_i64_to_u64(row.user_id, OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE)?,
         user_email: row.user_email,
         user_fullname: row.user_fullname,
         role: row.role,
-        granted_by: row.granted_by as u64,
+        granted_by: checked_i64_to_u64(
+            row.granted_by,
+            OPS_RBAC_ROLE_ASSIGNMENT_GRANTED_BY_INVALID_CODE,
+        )?,
         created_at: row.created_at,
         updated_at: row.updated_at,
-    }
+    })
 }
 
 impl AppState {
@@ -140,7 +155,8 @@ impl AppState {
         )
         .fetch_optional(&self.pool)
         .await?;
-        owner_id.ok_or_else(|| AppError::ServerError("platform_owner_not_configured".to_string()))
+        owner_id
+            .ok_or_else(|| AppError::ServerError(OPS_RBAC_OWNER_NOT_CONFIGURED_CODE.to_string()))
     }
 
     async fn find_ops_role_for_user(&self, user_id: i64) -> Result<Option<String>, AppError> {
@@ -225,8 +241,7 @@ impl AppState {
         let owner_id = self.get_platform_admin_user_id().await?;
         if owner_id != user.id {
             return Err(AppError::DebateConflict(
-                "ops_permission_denied:role_manage:only platform admin can manage ops roles"
-                    .to_string(),
+                OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE.to_string(),
             ));
         }
         Ok(())
@@ -255,7 +270,10 @@ impl AppState {
         .fetch_all(&self.pool)
         .await?;
         Ok(ListOpsRoleAssignmentsOutput {
-            items: rows.into_iter().map(map_assignment_row).collect(),
+            items: rows
+                .into_iter()
+                .map(map_assignment_row)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 
@@ -279,7 +297,9 @@ impl AppState {
         .fetch_optional(&self.pool)
         .await?;
         if target_exists.is_none() {
-            return Err(AppError::NotFound(format!("user id {}", target_user_id)));
+            return Err(AppError::NotFound(
+                OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string(),
+            ));
         }
 
         let row: OpsRoleAssignmentRow = sqlx::query_as(
@@ -308,7 +328,7 @@ impl AppState {
         .bind(user.id)
         .fetch_one(&self.pool)
         .await?;
-        Ok(map_assignment_row(row))
+        map_assignment_row(row)
     }
 
     pub async fn revoke_ops_role_assignment_by_owner(
@@ -341,7 +361,9 @@ impl AppState {
             .fetch_optional(&self.pool)
             .await?;
         if user_exists.is_none() {
-            return Err(AppError::NotFound(format!("user id {}", user_id)));
+            return Err(AppError::NotFound(
+                OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string(),
+            ));
         }
 
         // Prefer current platform owner as grant source.

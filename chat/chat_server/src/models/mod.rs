@@ -64,11 +64,11 @@ pub use payment::{
     ListWalletLedger, VerifyIapErrorOutput, VerifyIapOrderInput, VerifyIapOrderOutput,
     WalletBalanceOutput, WalletLedgerItem, WalletLedgerListOutput,
 };
-pub(crate) use rbac::OpsPermission;
 pub use rbac::{
     GetOpsRbacMeOutput, ListOpsRoleAssignmentsOutput, OpsPermissionFlags, OpsRoleAssignment,
     RevokeOpsRoleOutput, UpsertOpsRoleInput,
 };
+pub(crate) use rbac::{OpsPermission, OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE};
 use serde::{Deserialize, Serialize};
 pub use user::{
     CreateUser, CreateUserWithPhoneAndSessionInput, CreateUserWithPhoneInput, SigninUser,

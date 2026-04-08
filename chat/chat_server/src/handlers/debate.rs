@@ -351,7 +351,8 @@ mod tests {
     use super::*;
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
-        GetOpsRbacMeOutput, ListOpsRoleAssignmentsOutput, UpsertOpsRoleInput,
+        GetOpsRbacMeOutput, ListOpsRoleAssignmentsOutput, OpsRoleAssignment, RevokeOpsRoleOutput,
+        UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -714,6 +715,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_ops_rbac_roles_route_should_return_429_when_rate_limited() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Roles Rate Limited",
+            "ops-rbac-roles-rate-limited@acme.org",
+            "+8613810000011",
+            "ops-rbac-roles-rate-limited-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/roles")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "ops_rbac_roles_list_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_list");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_ops_rbac_roles_route_should_return_403_for_unbound_user() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let user = state
@@ -761,9 +789,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::CONFLICT);
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
-        assert!(error.error.contains(
-            "ops_permission_denied:role_manage:only platform admin can manage ops roles"
-        ));
+        assert!(error.error.contains("ops_permission_denied:role_manage"));
         Ok(())
     }
 
@@ -793,6 +819,200 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "platform_owner_not_configured");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_200_for_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-rbac-upsert-owner-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: OpsRoleAssignment = serde_json::from_slice(&body)?;
+        assert_eq!(out.user_id, 2);
+        assert_eq!(out.role, "ops_reviewer");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_400_for_invalid_role() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-invalid-role-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_invalid"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_role_invalid"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_403_for_unbound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Upsert Unbound".to_string(),
+                email: "ops-rbac-upsert-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-rbac-upsert-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_409_for_non_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Upsert Non Owner",
+            "ops-rbac-upsert-non-owner@acme.org",
+            "+8613810000031",
+            "ops-rbac-upsert-non-owner-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:role_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_404_for_missing_target_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-rbac-upsert-not-found-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/999999")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_role_target_user_not_found"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_200_for_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let token = issue_token_for_user(&state, owner.id, "ops-rbac-revoke-owner-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: RevokeOpsRoleOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.user_id, 2);
+        assert!(out.removed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_409_for_non_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Revoke Non Owner",
+            "ops-rbac-revoke-non-owner@acme.org",
+            "+8613810000032",
+            "ops-rbac-revoke-non-owner-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:role_manage"));
         Ok(())
     }
 

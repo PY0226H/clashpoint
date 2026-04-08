@@ -1,3 +1,4 @@
+use crate::models::OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE;
 use crate::{
     application::request_guard::{
         build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
@@ -19,6 +20,13 @@ use axum::{
     Extension, Json,
 };
 use chat_core::User;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        LazyLock,
+    },
+    time::Instant,
+};
 
 #[cfg(test)]
 use crate::RateLimitDecision;
@@ -36,8 +44,71 @@ const OPS_DEBATE_SESSION_CREATE_IDEMPOTENCY_MAX_LEN: usize = 160;
 const OPS_DEBATE_SESSION_UPDATE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
 const OPS_DEBATE_SESSION_UPDATE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
 const OPS_DEBATE_SESSION_UPDATE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_RBAC_ROLES_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 60;
+const OPS_RBAC_ROLES_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 120;
+const OPS_RBAC_ROLES_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+
+#[derive(Debug, Default)]
+struct OpsRbacRolesListMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    permission_denied_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    result_items_total: AtomicU64,
+    result_items_samples_total: AtomicU64,
+    latency_ms_total: AtomicU64,
+    latency_ms_samples_total: AtomicU64,
+}
+
+impl OpsRbacRolesListMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, items_count: usize, latency_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        self.result_items_total
+            .fetch_add(items_count as u64, Ordering::Relaxed);
+        self.result_items_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self, latency_ms: u64) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_permission_denied(&self) {
+        self.permission_denied_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.permission_denied_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+static OPS_RBAC_ROLES_LIST_METRICS: LazyLock<OpsRbacRolesListMetrics> =
+    LazyLock::new(OpsRbacRolesListMetrics::default);
 
 /// Create debate topic by authorized ops role.
 #[utoipa::path(
@@ -352,6 +423,7 @@ pub(crate) async fn update_debate_session_ops_handler(
         (status = 401, description = "Auth error", body = crate::ErrorOutput),
         (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
         (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
@@ -361,9 +433,111 @@ pub(crate) async fn update_debate_session_ops_handler(
 pub(crate) async fn list_ops_role_assignments_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state.list_ops_role_assignments_by_owner(&user).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    OPS_RBAC_ROLES_LIST_METRICS.observe_start();
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_roles_list_user",
+        &user.id.to_string(),
+        OPS_RBAC_ROLES_LIST_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ROLES_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_roles_list_user", user_decision);
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        OPS_RBAC_ROLES_LIST_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_roles_list_read_rate_limited",
+            decision = "rate_limited_user",
+            "list ops rbac role assignments blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_roles_list",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key =
+        request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_rbac_roles_list_ip",
+        &ip_limit_key,
+        OPS_RBAC_ROLES_LIST_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_RBAC_ROLES_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision =
+        maybe_override_rate_limit_decision(&headers, "ops_rbac_roles_list_ip", ip_decision);
+    if !ip_decision.allowed {
+        OPS_RBAC_ROLES_LIST_METRICS.observe_rate_limited();
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            audit_event = "ops_rbac_roles_list_read_rate_limited",
+            decision = "rate_limited_ip",
+            "list ops rbac role assignments blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_rbac_roles_list",
+            build_rate_limit_headers(&ip_decision)?,
+        ));
+    }
+
+    let ret = match state.list_ops_role_assignments_by_owner(&user).await {
+        Ok(v) => v,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            OPS_RBAC_ROLES_LIST_METRICS.observe_failure(latency_ms);
+            if let AppError::DebateConflict(msg) = &err {
+                if msg == OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE
+                    || msg.starts_with(&format!("{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:"))
+                {
+                    OPS_RBAC_ROLES_LIST_METRICS.observe_permission_denied();
+                }
+            }
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                audit_event = "ops_rbac_roles_list_read_failed",
+                decision = "failed",
+                latency_ms,
+                "list ops rbac role assignments failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    OPS_RBAC_ROLES_LIST_METRICS.observe_success(ret.items.len(), latency_ms);
+    let (request_total, success_total, failed_total, permission_denied_total, rate_limited_total) =
+        OPS_RBAC_ROLES_LIST_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        audit_event = "ops_rbac_roles_list_read",
+        decision = "success",
+        result_count = ret.items.len(),
+        latency_ms,
+        ops_rbac_roles_list_request_total = request_total,
+        ops_rbac_roles_list_success_total = success_total,
+        ops_rbac_roles_list_failed_total = failed_total,
+        ops_rbac_roles_list_permission_denied_total = permission_denied_total,
+        ops_rbac_roles_list_rate_limited_total = rate_limited_total,
+        "list ops rbac role assignments served"
+    );
+    Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
 /// Get current user's ops RBAC capability snapshot.
@@ -764,8 +938,13 @@ pub(crate) async fn discard_kafka_dlq_event_handler(
     request_body = UpsertOpsRoleInput,
     responses(
         (status = 200, description = "Updated ops role assignment", body = crate::OpsRoleAssignment),
+        (status = 400, description = "Invalid role input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Target user not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -792,7 +971,10 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
     ),
     responses(
         (status = 200, description = "Revoke result", body = crate::RevokeOpsRoleOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -984,6 +1166,17 @@ pub(crate) async fn request_judge_rejudge_ops_handler(
     Ok((StatusCode::ACCEPTED, Json(ret)))
 }
 
+fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-request-id")
+        .or_else(|| headers.get("x-requestid"))
+        .or_else(|| headers.get("request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.chars().take(128).collect::<String>())
+}
+
 #[cfg(test)]
 fn maybe_override_rate_limit_decision(
     headers: &HeaderMap,
@@ -996,6 +1189,8 @@ fn maybe_override_rate_limit_decision(
         .map(str::trim)
         .unwrap_or_default();
     if forced.eq_ignore_ascii_case(target)
+        || (target == "ops_rbac_roles_list_user" && forced.eq_ignore_ascii_case("user"))
+        || (target == "ops_rbac_roles_list_ip" && forced.eq_ignore_ascii_case("ip"))
         || (target == "ops_debate_session_create_user" && forced.eq_ignore_ascii_case("user"))
         || (target == "ops_debate_session_create_ip" && forced.eq_ignore_ascii_case("ip"))
         || (target == "ops_debate_session_update_user" && forced.eq_ignore_ascii_case("user"))
