@@ -86,6 +86,14 @@ Detailed explanations now live under `docs/harness/`.
    - a migration, test baseline, or script cutover truly requires a short transition window
 5. Any temporary compatibility layer must state its removal condition in code comments or plan notes; do not leave indefinite fallback paths in place.
 
+### Comment style rule
+
+1. EchoIsle 默认使用精简中文注释，但只在代码本身不够自解释时添加。
+2. 注释优先说明“为什么这样做”、“这段逻辑在保护什么边界”或“这里在防什么风险”，不要逐行翻译代码表面行为。
+3. 新增事务补偿、Redis/DB 一致性收敛、并发/锁语义、幂等保护、时序约束、复杂分支判定时，应补精简中文注释。
+4. 简单赋值、普通 CRUD、显而易见的控制流不要为了“有注释”而加注释，避免制造注释噪音。
+5. 注释默认控制在 1 到 2 行，除非用户明确要求更详细的说明。
+
 ---
 
 ## Harness Docs
