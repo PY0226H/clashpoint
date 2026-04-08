@@ -692,6 +692,186 @@ fn build_ops_metrics_dictionary_items() -> Vec<OpsMetricsDictionaryItem> {
             target: Some("<300".to_string()),
         },
         OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_list.request_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC roles list request total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_list.success_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC roles list success total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_list.failed_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC roles list failed total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_list.permission_denied_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC roles list permission denied total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_list.rate_limited_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC roles list rate-limited total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_list.latency_p95_ms".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "ms".to_string(),
+            aggregation: "p95".to_string(),
+            description: "Ops RBAC roles list latency p95.".to_string(),
+            target: Some("<300".to_string()),
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.request_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC me request total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.success_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC me success total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.failed_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC me failed total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.rate_limited_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC me rate-limited total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.owner_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC me owner snapshot total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.non_owner_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC me non-owner snapshot total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.me.latency_p95_ms".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "ms".to_string(),
+            aggregation: "p95".to_string(),
+            description: "Ops RBAC me latency p95.".to_string(),
+            target: Some("<200".to_string()),
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.request_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC role write request total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.success_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC role write success total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.failed_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC role write failed total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.rate_limited_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC role write rate-limited total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.upsert_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC role upsert total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.revoke_total".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops RBAC role revoke total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.rbac.roles_write.latency_p95_ms".to_string(),
+            category: "ops_rbac".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "ms".to_string(),
+            aggregation: "p95".to_string(),
+            description: "Ops RBAC role write latency p95.".to_string(),
+            target: Some("<300".to_string()),
+        },
+        OpsMetricsDictionaryItem {
             key: "judge.dispatch.tick_success_total".to_string(),
             category: "judge_dispatch".to_string(),
             source: "chat_server.internal_ai.judge.dispatch.metrics".to_string(),
@@ -3316,6 +3496,46 @@ mod tests {
         );
         assert_eq!(map_ai_alert_status("resolved"), Some(ALERT_STATUS_CLEARED));
         assert_eq!(map_ai_alert_status("invalid"), None);
+    }
+
+    #[test]
+    fn build_ops_metrics_dictionary_items_should_include_ops_rbac_keys() {
+        let items = build_ops_metrics_dictionary_items();
+        let keys = items
+            .iter()
+            .map(|item| item.key.as_str())
+            .collect::<HashSet<_>>();
+        for required_key in [
+            "ops.rbac.roles_list.request_total",
+            "ops.rbac.roles_list.rate_limited_total",
+            "ops.rbac.roles_list.latency_p95_ms",
+            "ops.rbac.me.request_total",
+            "ops.rbac.me.owner_total",
+            "ops.rbac.me.non_owner_total",
+            "ops.rbac.me.latency_p95_ms",
+            "ops.rbac.roles_write.request_total",
+            "ops.rbac.roles_write.upsert_total",
+            "ops.rbac.roles_write.revoke_total",
+            "ops.rbac.roles_write.latency_p95_ms",
+        ] {
+            assert!(
+                keys.contains(required_key),
+                "missing required ops rbac metric key: {required_key}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_ops_metrics_dictionary_items_should_not_have_duplicate_keys() {
+        let items = build_ops_metrics_dictionary_items();
+        let mut unique_keys = HashSet::new();
+        for item in &items {
+            assert!(
+                unique_keys.insert(item.key.clone()),
+                "duplicate metric key found: {}",
+                item.key
+            );
+        }
     }
 
     #[test]

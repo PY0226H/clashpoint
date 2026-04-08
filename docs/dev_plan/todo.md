@@ -382,3 +382,12 @@
 | debate-ops-rbac-me-revision-cache-strategy | 当前权限快照无 `rbacRevision/policyVersion`，客户端缓存失效策略不显式。 | 增加快照版本字段并与客户端缓存策略联动，避免短时权限漂移。 | 角色变更后快照一致性联调通过，归档“变更前后版本号与 UI 行为”证据。 |
 | debate-ops-rbac-policy-unification | 同一 RBAC 快照被多模块消费，策略定义仍分散。 | 抽象统一 policy 层，沉淀可复用权限判定契约，降低多入口语义漂移。 | 选取 topics/iap/report 三条链路回归，验证策略统一后行为一致并归档。 |
 | debate-ops-rbac-me-phone-gate-policy-decision | `rbac/me` 仍受 `require_phone_bound` 门禁，运维应急场景策略待产品冻结。 | 明确并固化“是否保留手机门禁”的产品决策，接口行为、错误码与文档三者一致。 | 产出策略评审记录 + 对应路由回归（保留/放开）并归档。 |
+
+## AI. api058-rbac-roles-governance 后续待办（来源：当前开发计划）
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| debate-ops-rbac-roles-observability-dashboard-baseline | `ops.rbac.*` 指标与字典已落地，但 dashboard/告警阈值仍未接入。 | 建立 `ops.rbac.roles_list.*`、`ops.rbac.me.*`、`ops.rbac.roles_write.*` 看板与告警阈值，完成一次值班演练与复盘。 | 运维看板配置导出 + 告警演练记录 + 复盘文档归档。 |
+| debate-ops-rbac-roles-rate-limit-tuning-baseline | RBAC 三接口限流已接入，但阈值仍是工程初值，缺真实样本回标。 | 形成阈值调优基线报告：命中率、误杀率、`p95/p99`、建议参数区间。 | 执行 RBAC 管理面接口专项压测并归档命令、时间戳、结果报告到 `docs/loadtest/evidence/`。 |
+| debate-ops-rbac-audit-storage-trigger-decision | 审计已形成“两阶段策略”草案，但落库触发条件尚未评审冻结。 | 完成“日志即审计 vs 审计落库”评审并产出正式结论（含触发条件、留存策略、回滚路径）。 | 评审纪要 + 结论文档归档，并补充对应验收清单。 |
+| debate-ops-rbac-roles-revision-pii-policy | 角色列表仍缺 `revision` 与 PII 最小化策略定稿。 | 冻结 `revision` 字段方案与 PII 最小化边界，并更新 OpenAPI/前端消费契约。 | 回归“角色变更前后 revision + UI 刷新行为”，并归档 PII 策略评审记录。 |
