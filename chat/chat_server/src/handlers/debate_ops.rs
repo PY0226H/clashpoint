@@ -349,7 +349,10 @@ pub(crate) async fn update_debate_session_ops_handler(
     path = "/api/debate/ops/rbac/roles",
     responses(
         (status = 200, description = "Ops role assignments", body = crate::ListOpsRoleAssignmentsOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])

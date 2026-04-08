@@ -372,3 +372,13 @@
 | debate-ops-sessions-update-route-matrix-expansion | 本轮已补关键 route 用例，但 `401/403/422/500` 等边界矩阵仍可继续扩展。 | 完成 update 路由全矩阵测试封板，覆盖中间件、提取器与异常路径。 | 执行 route 专项测试并归档结果，确保后续中间件改动可被门禁拦截。 |
 | debate-ops-sessions-update-error-model-standardization | 当前 400/409 仍部分依赖文案串，机读稳定性不够强。 | 推进结构化错误模型（`code/message/details?`），客户端仅依赖 `code` 分支。 | 回归错误场景并验证客户端仅靠 `code` 完成分支，归档响应样例。 |
 | debate-ops-sessions-update-schedule-change-realtime-event | 非状态字段（时间/人数）变更暂无实时事件，客户端可能读取旧计划。 | 为计划字段变更补齐实时事件（或等效 outbox 通知）并完成消费侧联调。 | 计划更新联调通过，前后端可观测字段与事件快照归档。 |
+
+## AH. debate-ops-rbac-me-hardening 后续待办（来源：当前开发计划）
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| debate-ops-rbac-me-error-model-standardization | `GET /api/debate/ops/rbac/me` 已完成 owner 真源与测试治理，但错误语义仍偏字符串。 | 收敛为结构化错误模型（`code/message/details?`），客户端仅依赖 `code` 分支。 | 回归 `401/403/500` 场景并验证客户端只依赖 `code` 即可稳定分支；归档响应样例。 |
+| debate-ops-rbac-me-observability-dashboard-baseline | 控制平面读接口已稳定，但缺少 RBAC 专项看板与告警阈值。 | 建立 `ops_rbac_me_*` 指标看板与告警阈值，完成一次值班演练与复盘记录。 | 运维看板配置导出 + 告警演练记录 + 一次值班复盘归档。 |
+| debate-ops-rbac-me-revision-cache-strategy | 当前权限快照无 `rbacRevision/policyVersion`，客户端缓存失效策略不显式。 | 增加快照版本字段并与客户端缓存策略联动，避免短时权限漂移。 | 角色变更后快照一致性联调通过，归档“变更前后版本号与 UI 行为”证据。 |
+| debate-ops-rbac-policy-unification | 同一 RBAC 快照被多模块消费，策略定义仍分散。 | 抽象统一 policy 层，沉淀可复用权限判定契约，降低多入口语义漂移。 | 选取 topics/iap/report 三条链路回归，验证策略统一后行为一致并归档。 |
+| debate-ops-rbac-me-phone-gate-policy-decision | `rbac/me` 仍受 `require_phone_bound` 门禁，运维应急场景策略待产品冻结。 | 明确并固化“是否保留手机门禁”的产品决策，接口行为、错误码与文档三者一致。 | 产出策略评审记录 + 对应路由回归（保留/放开）并归档。 |
