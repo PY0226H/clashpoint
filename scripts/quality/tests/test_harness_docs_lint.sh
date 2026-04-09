@@ -57,15 +57,15 @@ EOF_CURRENT_PLAN
   cat >"$workspace/docs/dev_plan/todo.md" <<'EOF_TODO'
 # todo.md
 
-## A. 待办
+## A. 文档说明
 
-| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
-|---|---|---|---|
-| docs-lint-ci | 尚未接入 CI | 能在 CI 中执行 | build.yml 增加调用 |
+1. 本文件只记录技术债。
 
-## B. 说明
+## B. 当前写入区
 
-- 保持结构稳定。
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| docs-lint-ci | docs-lint | 工程债 | 当前先完成本地规则落地 | CI 接入时 | 能在 CI 中执行 | build.yml 增加调用 |
 EOF_TODO
 
   cat >"$workspace/docs/dev_plan/completed.md" <<'EOF_COMPLETED'
@@ -73,9 +73,9 @@ EOF_TODO
 
 ## A. 已完成
 
-| 模块 | 结论 | 代码证据 | 来源 |
-|---|---|---|---|
-| p1-3 | 已完成 | scripts/harness/module_turn_harness.sh | 主开发计划 |
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| p1-3 | 已完成 | scripts/harness/module_turn_harness.sh | 本地校验通过 | 主开发计划阶段收口 | （无） |
 EOF_COMPLETED
 
   cat >"$workspace/docs/harness/00-overview.md" <<'EOF_HARNESS'

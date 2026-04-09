@@ -1,9 +1,10 @@
 use crate::models::OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE;
 use crate::{
     application::request_guard::{
-        build_rate_limit_headers, enforce_rate_limit, rate_limit_exceeded_response,
-        release_idempotency_best_effort, request_idempotency_key_from_headers,
-        request_rate_limit_ip_key_from_headers, try_acquire_idempotency_or_fail_open,
+        build_rate_limit_headers, enforce_rate_limit, enforce_rate_limit_with_disabled_fallback,
+        rate_limit_exceeded_response, release_idempotency_best_effort,
+        request_idempotency_key_from_headers, request_rate_limit_ip_key_from_headers,
+        try_acquire_idempotency_or_fail_open,
     },
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
@@ -16,7 +17,7 @@ use crate::{
 };
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
 };
@@ -54,10 +55,22 @@ const OPS_RBAC_ROLES_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW: u64 = 30;
 const OPS_RBAC_ROLES_WRITE_IP_RATE_LIMIT_PER_WINDOW: u64 = 90;
 const OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_TTL_SECS: u64 = 30;
+const OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_MAX_LEN: usize = 160;
+const OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_SCOPE: &str = "ops_rbac_roles_write_upsert";
+const OPS_RBAC_REVISION_HEADER: &str = "x-rbac-revision";
 const OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ: &str = "roles_list_read";
 const OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ: &str = "rbac_me_read";
 const OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT: &str = "role_upsert";
 const OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE: &str = "role_revoke";
+const OPS_RBAC_AUDIT_FAILURE_PERMISSION_DENIED: &str = "permission_denied";
+const OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR: &str = "validation_error";
+const OPS_RBAC_AUDIT_FAILURE_NOT_FOUND: &str = "not_found";
+const OPS_RBAC_AUDIT_FAILURE_CONFLICT: &str = "conflict";
+const OPS_RBAC_AUDIT_FAILURE_AUTH_ERROR: &str = "auth_error";
+const OPS_RBAC_AUDIT_FAILURE_RATE_LIMITED: &str = "rate_limited";
+const OPS_RBAC_AUDIT_FAILURE_SERVER_ERROR: &str = "server_error";
+const OPS_RBAC_AUDIT_FAILURE_SYSTEM_ERROR: &str = "system_error";
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
@@ -137,6 +150,8 @@ struct OpsRbacAuditLogInput<'a> {
     result_count: Option<i64>,
     role: Option<&'a str>,
     removed: Option<bool>,
+    error_code: Option<&'a str>,
+    failure_reason: Option<&'a str>,
 }
 
 impl OpsRbacRolesWriteMetrics {
@@ -611,6 +626,8 @@ pub(crate) async fn list_ops_role_assignments_handler(
                 result_count: None,
                 role: None,
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -654,6 +671,8 @@ pub(crate) async fn list_ops_role_assignments_handler(
                 result_count: None,
                 role: None,
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -671,6 +690,7 @@ pub(crate) async fn list_ops_role_assignments_handler(
         Err(err) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_LIST_METRICS.observe_failure(latency_ms);
+            let (audit_error_code, audit_failure_reason) = classify_ops_rbac_failure(&err);
             if let AppError::DebateConflict(msg) = &err {
                 if msg == OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE
                     || msg.starts_with(&format!("{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:"))
@@ -699,6 +719,8 @@ pub(crate) async fn list_ops_role_assignments_handler(
                     result_count: None,
                     role: None,
                     removed: None,
+                    error_code: audit_error_code.as_deref(),
+                    failure_reason: Some(audit_failure_reason),
                 },
             )
             .await;
@@ -736,6 +758,8 @@ pub(crate) async fn list_ops_role_assignments_handler(
             result_count: i64::try_from(ret.items.len()).ok(),
             role: None,
             removed: None,
+            error_code: None,
+            failure_reason: None,
         },
     )
     .await;
@@ -798,6 +822,8 @@ pub(crate) async fn get_ops_rbac_me_handler(
                 result_count: None,
                 role: None,
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -839,6 +865,8 @@ pub(crate) async fn get_ops_rbac_me_handler(
                 result_count: None,
                 role: None,
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -853,6 +881,7 @@ pub(crate) async fn get_ops_rbac_me_handler(
         Err(err) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ME_METRICS.observe_failure(latency_ms);
+            let (audit_error_code, audit_failure_reason) = classify_ops_rbac_failure(&err);
             tracing::warn!(
                 user_id = user.id,
                 request_id = request_id.as_deref().unwrap_or_default(),
@@ -873,6 +902,8 @@ pub(crate) async fn get_ops_rbac_me_handler(
                     result_count: None,
                     role: None,
                     removed: None,
+                    error_code: audit_error_code.as_deref(),
+                    failure_reason: Some(audit_failure_reason),
                 },
             )
             .await;
@@ -916,6 +947,8 @@ pub(crate) async fn get_ops_rbac_me_handler(
             result_count: None,
             role: ret.role.as_deref(),
             removed: None,
+            error_code: None,
+            failure_reason: None,
         },
     )
     .await;
@@ -1298,7 +1331,7 @@ pub(crate) async fn discard_kafka_dlq_event_handler(
     request_body = UpsertOpsRoleInput,
     responses(
         (status = 200, description = "Updated ops role assignment", body = crate::OpsRoleAssignment),
-        (status = 400, description = "Invalid role input", body = crate::ErrorOutput),
+        (status = 400, description = "Invalid input", body = crate::ErrorOutput),
         (status = 401, description = "Auth error", body = crate::ErrorOutput),
         (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Target user not found", body = crate::ErrorOutput),
@@ -1324,7 +1357,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
     let requested_role = input.role.clone();
     OPS_RBAC_ROLES_WRITE_METRICS.observe_start_upsert();
 
-    let user_decision = enforce_rate_limit(
+    let user_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
         "ops_rbac_roles_write_user",
         &user.id.to_string(),
@@ -1357,6 +1390,8 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
                 result_count: None,
                 role: Some(requested_role.as_str()),
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -1368,7 +1403,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
 
     let ip_limit_key =
         request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
-    let ip_decision = enforce_rate_limit(
+    let ip_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
         "ops_rbac_roles_write_ip",
         &ip_limit_key,
@@ -1400,6 +1435,8 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
                 result_count: None,
                 role: Some(requested_role.as_str()),
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -1409,14 +1446,49 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         ));
     }
 
-    let ret = match state
-        .upsert_ops_role_assignment_by_owner(&user, user_id, input)
-        .await
-    {
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &headers,
+        "ops_rbac_roles_write_idempotency_key_invalid",
+        "ops_rbac_roles_write_idempotency_key_too_long",
+        OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_MAX_LEN,
+    )?;
+    let idempotency_lock_key = request_idempotency_key
+        .as_deref()
+        .map(|key| format!("u{}:t{user_id}:{key}", user.id));
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        let acquired = try_acquire_idempotency_or_fail_open(
+            &state,
+            OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_SCOPE,
+            lock_key,
+            OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_TTL_SECS,
+        )
+        .await;
+        if !acquired {
+            return Err(AppError::DebateConflict(
+                "idempotency_conflict:ops_rbac_roles_write".to_string(),
+            ));
+        }
+    }
+
+    let ret = state
+        .upsert_ops_role_assignment_by_owner_with_meta(
+            &user,
+            user_id,
+            input,
+            request_idempotency_key.as_deref(),
+            OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_TTL_SECS,
+        )
+        .await;
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        release_idempotency_best_effort(&state, OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_SCOPE, lock_key)
+            .await;
+    }
+    let (ret, replayed) = match ret {
         Ok(v) => v,
         Err(err) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            let (audit_error_code, audit_failure_reason) = classify_ops_rbac_failure(&err);
             tracing::warn!(
                 user_id = user.id,
                 target_user_id = user_id,
@@ -1438,6 +1510,8 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
                     result_count: None,
                     role: Some(requested_role.as_str()),
                     removed: None,
+                    error_code: audit_error_code.as_deref(),
+                    failure_reason: Some(audit_failure_reason),
                 },
             )
             .await;
@@ -1461,6 +1535,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         audit_event = "ops_rbac_roles_write_upsert",
         decision = "success",
         role = ret.role.as_str(),
+        replayed,
         latency_ms,
         ops_rbac_roles_write_request_total = request_total,
         ops_rbac_roles_write_success_total = success_total,
@@ -1470,21 +1545,33 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         ops_rbac_roles_write_revoke_total = revoke_total,
         "upsert ops role assignment served"
     );
-    insert_ops_rbac_audit_log_best_effort(
-        &state,
-        OpsRbacAuditLogInput {
-            event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
-            operator_user_id: user.id,
-            target_user_id,
-            decision: "success",
-            request_id: request_id.as_deref(),
-            result_count: None,
-            role: Some(ret.role.as_str()),
-            removed: None,
-        },
-    )
-    .await;
-    Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
+    if !replayed {
+        insert_ops_rbac_audit_log_best_effort(
+            &state,
+            OpsRbacAuditLogInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                operator_user_id: user.id,
+                target_user_id,
+                decision: "success",
+                request_id: request_id.as_deref(),
+                result_count: None,
+                role: Some(ret.role.as_str()),
+                removed: None,
+                error_code: None,
+                failure_reason: None,
+            },
+        )
+        .await;
+    }
+    let mut response_headers = user_rate_headers;
+    let rbac_revision = state.get_ops_rbac_revision().await?;
+    if let Ok(revision_value) = HeaderValue::from_str(&rbac_revision) {
+        response_headers.insert(
+            HeaderName::from_static(OPS_RBAC_REVISION_HEADER),
+            revision_value,
+        );
+    }
+    Ok((StatusCode::OK, response_headers, Json(ret)).into_response())
 }
 
 /// Revoke an ops role assignment (owner only).
@@ -1517,7 +1604,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
     let target_user_id = i64::try_from(user_id).ok();
     OPS_RBAC_ROLES_WRITE_METRICS.observe_start_revoke();
 
-    let user_decision = enforce_rate_limit(
+    let user_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
         "ops_rbac_roles_write_user",
         &user.id.to_string(),
@@ -1550,6 +1637,8 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                 result_count: None,
                 role: None,
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -1561,7 +1650,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
 
     let ip_limit_key =
         request_rate_limit_ip_key_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
-    let ip_decision = enforce_rate_limit(
+    let ip_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
         "ops_rbac_roles_write_ip",
         &ip_limit_key,
@@ -1593,6 +1682,8 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                 result_count: None,
                 role: None,
                 removed: None,
+                error_code: None,
+                failure_reason: None,
             },
         )
         .await;
@@ -1610,6 +1701,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         Err(err) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            let (audit_error_code, audit_failure_reason) = classify_ops_rbac_failure(&err);
             tracing::warn!(
                 user_id = user.id,
                 target_user_id = user_id,
@@ -1631,6 +1723,8 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                     result_count: None,
                     role: None,
                     removed: None,
+                    error_code: audit_error_code.as_deref(),
+                    failure_reason: Some(audit_failure_reason),
                 },
             )
             .await;
@@ -1674,6 +1768,8 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
             result_count: None,
             role: None,
             removed: Some(ret.removed),
+            error_code: None,
+            failure_reason: None,
         },
     )
     .await;
@@ -1855,6 +1951,53 @@ pub(crate) async fn request_judge_rejudge_ops_handler(
     Ok((StatusCode::ACCEPTED, Json(ret)))
 }
 
+fn classify_ops_rbac_failure(err: &AppError) -> (Option<String>, &'static str) {
+    match err {
+        AppError::DebateConflict(code)
+            if code == OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE
+                || code.starts_with(&format!("{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:")) =>
+        {
+            (
+                Some(truncate_ops_rbac_audit_error_code(code)),
+                OPS_RBAC_AUDIT_FAILURE_PERMISSION_DENIED,
+            )
+        }
+        AppError::DebateConflict(code) => (
+            Some(truncate_ops_rbac_audit_error_code(code)),
+            OPS_RBAC_AUDIT_FAILURE_CONFLICT,
+        ),
+        AppError::DebateError(code) | AppError::ValidationError(code) => (
+            Some(truncate_ops_rbac_audit_error_code(code)),
+            OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
+        ),
+        AppError::NotFound(code) => (
+            Some(truncate_ops_rbac_audit_error_code(code)),
+            OPS_RBAC_AUDIT_FAILURE_NOT_FOUND,
+        ),
+        AppError::AuthError(code) => (
+            Some(truncate_ops_rbac_audit_error_code(code)),
+            OPS_RBAC_AUDIT_FAILURE_AUTH_ERROR,
+        ),
+        AppError::NotLoggedIn => (
+            Some("auth_not_logged_in".to_string()),
+            OPS_RBAC_AUDIT_FAILURE_AUTH_ERROR,
+        ),
+        AppError::ThrottleError(code) => (
+            Some(truncate_ops_rbac_audit_error_code(code)),
+            OPS_RBAC_AUDIT_FAILURE_RATE_LIMITED,
+        ),
+        AppError::ServerError(code) => (
+            Some(truncate_ops_rbac_audit_error_code(code)),
+            OPS_RBAC_AUDIT_FAILURE_SERVER_ERROR,
+        ),
+        _ => (None, OPS_RBAC_AUDIT_FAILURE_SYSTEM_ERROR),
+    }
+}
+
+fn truncate_ops_rbac_audit_error_code(input: &str) -> String {
+    input.chars().take(128).collect()
+}
+
 async fn insert_ops_rbac_audit_log(
     state: &AppState,
     input: OpsRbacAuditLogInput<'_>,
@@ -1870,9 +2013,11 @@ async fn insert_ops_rbac_audit_log(
             result_count,
             role,
             removed,
+            error_code,
+            failure_reason,
             created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
         "#,
     )
     .bind(input.event_type)
@@ -1883,6 +2028,8 @@ async fn insert_ops_rbac_audit_log(
     .bind(input.result_count)
     .bind(input.role)
     .bind(input.removed)
+    .bind(input.error_code)
+    .bind(input.failure_reason)
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -1896,6 +2043,8 @@ async fn insert_ops_rbac_audit_log_best_effort(state: &AppState, input: OpsRbacA
             operator_user_id = input.operator_user_id,
             target_user_id = input.target_user_id.unwrap_or_default(),
             decision = input.decision,
+            error_code = input.error_code.unwrap_or_default(),
+            failure_reason = input.failure_reason.unwrap_or_default(),
             request_id = input.request_id.unwrap_or_default(),
             "persist ops rbac audit log failed: {}",
             err

@@ -482,6 +482,13 @@ impl AppState {
         };
         if mode == AppBootstrapMode::ApiServer {
             ensure_dev_super_account(&state).await?;
+            if let Err(err) = state.get_platform_admin_user_id().await {
+                warn!(
+                    "platform owner source check failed during bootstrap: {}",
+                    err
+                );
+                return Err(err);
+            }
         }
         if mode == AppBootstrapMode::ApiServer {
             spawn_background_workers(state.clone(), dispatch_trigger_rx);

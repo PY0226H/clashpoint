@@ -1,13 +1,65 @@
 # todo.md
 
-## A. P0 发布阻塞
+## A. 文档说明
+- 本文件只记录“明确延后”的技术债/收口债，不承担开发过程记录。
+- 只有在阶段收口时，才把活动计划中的延后项写入本文件。
+- 每条技术债都应写清：为什么这轮不做、何时再做、做到什么算完成。
+- 不要把新需求脑暴、产品 wishlist 或尚未开工的泛化设想直接写进本文件。
 
-| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
-|---|---|---|---|
-| v2-m4-iap-storekit-production-and-wallet-closure | 仍缺真机交易闭环证据；本地默认配置与夹具仍保留 mock 形态。 | 形成“购买->验单->到账->置顶消费”四证合一归档（前端录屏、后端订单、钱包账本、Apple 交易记录），并固定生产配置样本。 | `bash scripts/release/appstore_preflight_check.sh --runtime-env production --chat-config <prod-chat.yml> --tauri-app-config <prod-app.yml> --ai-judge-env <prod-ai.env>`；归档可审计证据索引。 |
-| v2-d-stage-acceptance-gate | 缺预发真实 L1/L2/L3/L4 + Soak + Spike 证据回填；当前仓库仅见样例与本机样本。 | 生成预发正式验收报告，包含阈值对比、失败归因、放行结论，并沉淀可复用 evidence 文件。 | `bash scripts/release/collect_v2d_regression_evidence.sh --output docs/loadtest/evidence/v2d_regression.env` + `bash scripts/release/v2d_stage_acceptance_gate.sh --regression-evidence docs/loadtest/evidence/v2d_regression.env --load-summary docs/loadtest/evidence/v2d_preprod_summary.env --report-out docs/loadtest/evidence/v2d_stage_acceptance_report.md` |
-| v2-m10-release-readiness-and-appstore-runbook | 提审材料、上线演练、回滚演练证据未封板。 | 提审材料齐套并可复核；上线与回滚演练均有时间戳、操作日志与结果证据。 | 运行 preflight 并输出 PASS；完成发布 checklist 的证据索引审计。 |
-| v2-m2-lobby-search-and-join-flow-environment-e2e | 联网环境 Playwright 实跑证据缺失。 | 在可联网环境完成 lobby E2E 实跑，沉淀 `playwright-report`、`test-results`、trace。 | `cd e2e && npm ci && npx playwright install --with-deps && npm run test:lobby`；将报告链接写入 evidence 索引。 |
+## B. 技术债总则
+- `来源模块`：该债务来自哪个已完成或阶段性完成的模块。
+- `债务类型`：建议使用 `发布前收口 / 性能压测 / 可靠性 / 可观测性 / 多端契约 / 环境依赖 / 工程债`。
+- `当前不做原因`：解释为什么这轮先不做，例如“距离上线较远”“当前无压测环境”“当前缺少真实联调对象”。
+- `触发时机`：写清未来何时该重新捡起，例如“上线前收口”“获得压测环境后”“多端联调窗口开启后”。
+
+## C. 当前写入区（新结构）
+
+### C1. 发布前收口债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| v2-m4-iap-storekit-production-and-wallet-closure | `pay-iap-verify-hardening`、`pay-wallet-hardening` | 发布前收口 | 产品尚未进入提审/上线窗口，当前没有真机与生产配置封板需求。 | 上线前收口 | 形成“购买 -> 验单 -> 到账 -> 置顶消费”四证合一归档，并固定生产配置样本。 | `bash scripts/release/appstore_preflight_check.sh --runtime-env production --chat-config <prod-chat.yml> --tauri-app-config <prod-app.yml> --ai-judge-env <prod-ai.env>`；归档证据索引。 |
+| v2-m10-release-readiness-and-appstore-runbook | 发布门禁工具链 | 发布前收口 | 当前距离上线还有距离，不需要现在就封板提审材料与演练证据。 | 上线前收口 | 提审材料齐套；上线与回滚演练均有时间戳、操作日志与结果证据。 | 运行 preflight 并完成发布 checklist 证据审计。 |
+
+### C2. 性能 / 压测债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| auth-sessions-list-load-baseline-and-rate-limit-tuning | `auth-sessions-list-hardening` | 性能压测 | 当前没有稳定压测环境，不值得在本地伪造长期基线。 | 有压测环境后 | 形成可复核压测报告：不同会话规模下的 `p95/p99`、返回条目分布、限频命中率与阈值建议。 | 执行列表接口专项压测并归档到 `docs/loadtest/evidence/`。 |
+| pay-iap-verify-rate-limit-and-retry-baseline | `pay-iap-verify-hardening` | 性能压测 | 当前缺真实交易样本与稳定压测环境，无法给出可信阈值。 | 有压测环境或上线前收口 | 形成可复核报告：`p95/p99`、限频命中率、冲突复用命中率、`retryAfterMs` 调参建议。 | 执行 verify 接口专项压测并归档到 `docs/loadtest/evidence/`。 |
+
+### C3. 可靠性 / 故障注入债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| auth-session-revoke-redis-fault-injection-evidence | `auth-session-revoke-hardening` | 可靠性 | 代码与测试已覆盖补偿路径，但当前没有必要为了本地阶段立即补全真实故障注入证据。 | 上线前收口或专项可靠性回合 | 形成可复核故障注入报告：故障窗口、outbox 堆积/清空曲线、最终一致性对账结论。 | 本地执行 revoke + Redis 故障注入，归档命令、时间戳、指标截图与报告到 `docs/consistency_reports/`。 |
+| auth-sms-send-callback-anti-replay | `auth-sms-send-hardening` | 可靠性 | 主链路已可用，防重放增强不阻塞当前本地开发闭环。 | 安全/上线前专项回合 | 落地签名 + 时间窗 + nonce 校验，并补齐成功/失败/重放攻击回归测试。 | `cd chat && cargo test -p chat-server handlers::auth::tests:: -- --nocapture` + callback 防重放专项用例。 |
+
+### C4. 可观测性 / 告警 / Dashboard 债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| auth-sessions-list-observability-dashboard-baseline | `auth-sessions-list-hardening` | 可观测性 | 当前产品仍处于本地开发阶段，不需要立即固化运维看板和告警阈值。 | 进入值班/上线前收口 | 建立 `auth_sessions_list_*` 与 retention worker 指标看板，完成告警阈值与值班演练记录。 | 运维看板配置导出 + 告警演练记录 + 值班复盘归档。 |
+| pay-iap-verify-observability-dashboard-baseline | `pay-iap-verify-hardening` | 可观测性 | 当前没有线上观测场景，提前固化看板收益有限。 | 上线前收口 | 建立 `iap_verify_*` 看板与告警阈值，完成一次值班演练与复盘记录。 | 运维看板配置导出 + 告警演练记录 + 一次值班复盘归档。 |
+
+### C5. 多端契约联调债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| auth-session-revoke-multi-client-contract-alignment | `auth-session-revoke-hardening` | 多端契约 | 当前本轮目标是完成后端主体治理，不需要同步把所有客户端联调封板。 | 多端联调窗口开启后 | 完成多客户端对 `revoked/affectedCount/result` 的提示文案、重试/刷新策略联调，并沉淀映射表。 | 客户端联调脚本 + 手工回归，归档“字段 -> 动作映射”与结果快照。 |
+| pay-iap-products-multi-client-contract-alignment | `pay-iap-products-list-hardening` | 多端契约 | 当前无统一多端联调窗口，先不占用本轮开发节奏。 | 多端联调窗口开启后 | Web/Mac/移动端统一 `items/revision/emptyReason` 与错误码映射策略，形成联调记录。 | 客户端联调脚本 + 手工回归，归档契约映射与结果快照。 |
+
+### C6. 环境依赖阻塞项
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| v2-m2-lobby-search-and-join-flow-environment-e2e | `v2-m2-lobby-search-and-join-flow` | 环境依赖 | 当前缺联网环境 Playwright 实跑条件。 | 获得可联网环境后 | 完成 lobby E2E 实跑并沉淀 `playwright-report`、`test-results`、trace。 | `cd e2e && npm ci && npx playwright install --with-deps && npm run test:lobby`；报告链接写入 evidence 索引。 |
+| b3-redis-collision-stress-high-scale-non-sandbox | `b3-outbox-switch-implementation-plan` | 环境依赖 | 当前会话受沙箱/环境限制，尚未形成高并发放大量化样本。 | 获得非受限环境后 | 在非受限环境产出 redis 多 worker 并发冲突压测报告。 | `cd ai_judge_service && ../scripts/py scripts/b3_report_collision_stress.py --workers 32 --mode redis` |
+
+### C7. 低优先级工程债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| debate-pg-listener-channel-migration-plan | `debate-ws-reliability-refactor` | 工程债 | 当前不阻塞主链路，且优先级低于真实业务收口与环境验证。 | 有余量的基础设施治理回合 | 补齐 PG listener 剩余通道迁移清单、优先级与执行顺序。 | 输出迁移清单文档并完成评审。 |
+
+## Z. 历史待迁移技术债（只读归档）
+- 下方内容保留旧结构，仅用于查询和后续分批迁移。
+- 新增技术债不要继续写入下方旧结构。
+
+## A. P0 发布阻塞
 
 ## B. AI 裁判收口项
 
@@ -384,6 +436,10 @@
 | debate-ops-rbac-me-phone-gate-policy-decision | `rbac/me` 仍受 `require_phone_bound` 门禁，运维应急场景策略待产品冻结。 | 明确并固化“是否保留手机门禁”的产品决策，接口行为、错误码与文档三者一致。 | 产出策略评审记录 + 对应路由回归（保留/放开）并归档。 |
 
 ## AI. api058-rbac-roles-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-08）：
+- `docs/dev_plan/当前开发计划.md` 中 API058 未完成项已并入本分组持续跟踪。
+- API058 已完成项已并入 `docs/dev_plan/completed.md`（条目：`api058-rbac-roles-governance-phase-closure`）。
 
 | 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|

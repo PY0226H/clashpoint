@@ -134,7 +134,7 @@ check_todo_doc() {
   if [[ "$(grep -c '^## ' "$file" || true)" -lt 2 ]]; then
     add_issue "warning" "todo_sections_too_few" "$file" "todo.md 的二级章节少于 2 个，建议检查长期待办结构。"
   fi
-  check_required_literal "$file" '| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |' "error" "todo_missing_table_header" "todo.md 缺少长期待办表头。"
+  check_required_literal "$file" '| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |' "error" "todo_missing_table_header" "todo.md 缺少技术债表头。"
 }
 
 check_completed_doc() {
@@ -150,7 +150,7 @@ check_completed_doc() {
   if [[ "$(grep -c '^## ' "$file" || true)" -lt 1 ]]; then
     add_issue "warning" "completed_sections_too_few" "$file" "completed.md 缺少二级章节，建议检查已完成模块结构。"
   fi
-  check_required_literal "$file" '| 模块 | 结论 | 代码证据 | 来源 |' "error" "completed_missing_table_header" "completed.md 缺少已完成模块表头。"
+  check_required_literal "$file" '| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |' "error" "completed_missing_table_header" "completed.md 缺少已完成模块表头。"
 }
 
 collect_section_statuses() {

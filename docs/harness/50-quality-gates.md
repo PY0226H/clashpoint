@@ -1,6 +1,6 @@
 # EchoIsle Quality Gates
 
-更新时间：2026-04-06
+更新时间：2026-04-08
 状态：当前质量门禁说明
 
 ---
@@ -70,6 +70,8 @@
    - 空 pointer
    - 悬空 pointer
    - 活动计划缺少关键章节
+   - `todo.md` 缺少新技术债表头
+   - `completed.md` 缺少新完成态表头
    - harness 文档缺少基础元信息
 
 ---

@@ -1,6 +1,6 @@
 # EchoIsle Harness Engineering 使用教程
 
-更新时间：2026-04-07
+更新时间：2026-04-08
 状态：基于当前已完成模块的实际使用手册
 
 ---
@@ -415,7 +415,7 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 放：
 
 1. 当前计划
-2. 长期待办
+2. 长期技术债
 3. 已完成沉淀
 
 不要默认再往里面放：
@@ -423,6 +423,19 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 1. 新验收报告
 2. 新门禁报告
 3. 新预检报告
+
+当前更准确的分工是：
+
+1. `当前开发计划.md`
+   - 只放这轮过程
+   - 可写完整计划、执行矩阵、过程回写
+2. `completed.md`
+   - 只放主体已完成模块快照
+   - 不写大段开发过程
+   - 如仍有后续债务，用“关联待办”指向 `todo.md`
+3. `todo.md`
+   - 只放明确延后的技术债/收口债
+   - 不放新需求脑暴或模糊 wishlist
 
 ### 9.2 `docs/explanation`
 
@@ -467,12 +480,31 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 3. 不要让两个线程共用 `default`
 4. 阶段结束后分别收口进 `todo.md` / `completed.md`
 
-### 10.3 做文档和规则治理
+### 10.3 阶段收口
+
+当你觉得“这轮先到这里”时，推荐固定按下面 4 步做：
+
+1. 把当前活动计划里“主体已落地”的内容写入 `completed.md`
+2. 把当前活动计划里“明确延后”的技术债写入 `todo.md`
+3. 在 `completed.md` 中给每条完成项补 `归档来源`
+4. 清空、重置或归档活动计划文档
+
+不要这样做：
+
+1. 不要把整个活动计划原样复制进 `completed.md`
+2. 不要把所有未完成内容都扔进 `todo.md`
+3. 不要把产品 wishlist 混进技术债池
+
+可以直接这样对 Codex 说：
+
+`把当前开发计划按阶段收口规范整合：主体已完成内容写入 completed，延后收口的技术债写入 todo，然后清空当前开发计划。`
+
+### 10.4 做文档和规则治理
 
 1. 直接用 `non-dev`
 2. 或直接跑 `harness_docs_lint.sh`
 
-### 10.4 想看当前运行态验证有没有统一出口
+### 10.5 想看当前运行态验证有没有统一出口
 
 1. 直接跑 `journey_verify.sh`
 2. 明确指定 `profile`
@@ -486,7 +518,7 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 
 你可以这样说：
 
-`这是一个 dev 任务，模块是 auth-session-hardening，先生成计划并写入当前开发计划，然后按统一入口 dry-run。`
+`这是一个 dev 任务，模块是 auth-session-hardening，先生成计划并写入当前活动计划文档，不要写入 todo/completed，然后按统一入口 dry-run。`
 
 ### 11.2 并行计划开发
 
@@ -498,7 +530,7 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 
 你可以这样说：
 
-`把 slot AI_module 当前计划里已完成内容整合进 completed.md，未完成内容整合进 todo.md，然后清空或归档该活动计划。`
+`把 slot AI_module 当前计划按阶段收口规范整合：主体已完成内容写入 completed.md，延后收口的技术债写入 todo.md，然后清空或归档该活动计划。`
 
 ### 11.4 文档治理
 

@@ -8,15 +8,30 @@ use utoipa::{IntoParams, ToSchema};
 const ROLE_OPS_ADMIN: &str = "ops_admin";
 const ROLE_OPS_REVIEWER: &str = "ops_reviewer";
 const ROLE_OPS_VIEWER: &str = "ops_viewer";
+const ROLE_PLATFORM_ROLE_ADMIN: &str = "platform_role_admin";
 pub(crate) const OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE: &str =
     "ops_permission_denied:role_manage";
 pub(crate) const OPS_RBAC_OWNER_NOT_CONFIGURED_CODE: &str = "platform_owner_not_configured";
 pub(crate) const OPS_RBAC_INVALID_ROLE_CODE: &str = "ops_role_invalid";
 pub(crate) const OPS_RBAC_TARGET_USER_NOT_FOUND_CODE: &str = "ops_role_target_user_not_found";
+pub(crate) const OPS_RBAC_TARGET_USER_ID_OUT_OF_RANGE_CODE: &str =
+    "ops_role_target_user_id_out_of_range";
 const OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE: &str = "ops_role_assignment_user_id_invalid";
 const OPS_RBAC_ROLE_ASSIGNMENT_GRANTED_BY_INVALID_CODE: &str =
     "ops_role_assignment_granted_by_invalid";
 const OPS_RBAC_EMPTY_REVISION: &str = "empty";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpsRoleManageAccess {
+    Owner,
+    DelegatedRoleAdmin,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OpsRoleManageContext {
+    owner_user_id: i64,
+    access: OpsRoleManageAccess,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum OpsPermission {
@@ -122,7 +137,7 @@ fn normalize_ops_role(role: &str) -> Result<String, AppError> {
     let normalized = role.trim().to_lowercase();
     let is_valid = matches!(
         normalized.as_str(),
-        ROLE_OPS_ADMIN | ROLE_OPS_REVIEWER | ROLE_OPS_VIEWER
+        ROLE_OPS_ADMIN | ROLE_OPS_REVIEWER | ROLE_OPS_VIEWER | ROLE_PLATFORM_ROLE_ADMIN
     );
     if !is_valid {
         return Err(AppError::DebateError(
@@ -142,8 +157,22 @@ fn role_grants_permission(role: &str, permission: OpsPermission) -> bool {
     }
 }
 
+fn role_grants_role_manage(role: &str) -> bool {
+    role == ROLE_PLATFORM_ROLE_ADMIN
+}
+
+fn role_manage_permission_denied(reason: &str) -> AppError {
+    AppError::DebateConflict(format!(
+        "{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:{reason}"
+    ))
+}
+
 fn checked_i64_to_u64(value: i64, code: &'static str) -> Result<u64, AppError> {
     u64::try_from(value).map_err(|_| AppError::ServerError(code.to_string()))
+}
+
+fn checked_u64_to_i64(value: u64, code: &'static str) -> Result<i64, AppError> {
+    i64::try_from(value).map_err(|_| AppError::DebateError(code.to_string()))
 }
 
 fn map_assignment_row(row: OpsRoleAssignmentRow) -> Result<OpsRoleAssignment, AppError> {
@@ -208,7 +237,7 @@ fn format_rbac_revision(value: DateTime<Utc>) -> String {
 }
 
 impl AppState {
-    async fn get_ops_rbac_revision(&self) -> Result<String, AppError> {
+    pub(crate) async fn get_ops_rbac_revision(&self) -> Result<String, AppError> {
         let revision: Option<DateTime<Utc>> = sqlx::query_scalar(
             r#"
             SELECT MAX(updated_at)
@@ -281,7 +310,7 @@ impl AppState {
                 debate_manage: role_grants_permission(role_value, OpsPermission::DebateManage),
                 judge_review: role_grants_permission(role_value, OpsPermission::JudgeReview),
                 judge_rejudge: role_grants_permission(role_value, OpsPermission::JudgeRejudge),
-                role_manage: false,
+                role_manage: role_grants_role_manage(role_value),
             }
         } else {
             OpsPermissionFlags {
@@ -324,11 +353,46 @@ impl AppState {
         Ok(())
     }
 
-    async fn ensure_platform_admin_for_ops_rbac(&self, user: &User) -> Result<(), AppError> {
+    async fn resolve_ops_role_manage_context(
+        &self,
+        user: &User,
+    ) -> Result<OpsRoleManageContext, AppError> {
         let owner_id = self.get_platform_admin_user_id().await?;
-        if owner_id != user.id {
-            return Err(AppError::DebateConflict(
-                OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE.to_string(),
+        if owner_id == user.id {
+            return Ok(OpsRoleManageContext {
+                owner_user_id: owner_id,
+                access: OpsRoleManageAccess::Owner,
+            });
+        }
+        let role = self.find_ops_role_for_user(user.id).await?;
+        if matches!(role.as_deref(), Some(ROLE_PLATFORM_ROLE_ADMIN)) {
+            return Ok(OpsRoleManageContext {
+                owner_user_id: owner_id,
+                access: OpsRoleManageAccess::DelegatedRoleAdmin,
+            });
+        }
+        Err(AppError::DebateConflict(
+            OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE.to_string(),
+        ))
+    }
+
+    fn enforce_delegated_role_manage_constraints(
+        context: OpsRoleManageContext,
+        target_user_id: i64,
+        target_role: Option<&str>,
+    ) -> Result<(), AppError> {
+        if context.access != OpsRoleManageAccess::DelegatedRoleAdmin {
+            return Ok(());
+        }
+        // 委派管理员是受限治理角色：不能改 owner，也不能管理同级委派资格。
+        if target_user_id == context.owner_user_id {
+            return Err(role_manage_permission_denied(
+                "delegated_role_admin_cannot_manage_owner",
+            ));
+        }
+        if matches!(target_role, Some(ROLE_PLATFORM_ROLE_ADMIN)) {
+            return Err(role_manage_permission_denied(
+                "delegated_role_admin_cannot_manage_role_admin",
             ));
         }
         Ok(())
@@ -339,7 +403,7 @@ impl AppState {
         user: &User,
         pii_level: OpsRbacPiiLevel,
     ) -> Result<ListOpsRoleAssignmentsOutput, AppError> {
-        self.ensure_platform_admin_for_ops_rbac(user).await?;
+        self.resolve_ops_role_manage_context(user).await?;
         let rows: Vec<OpsRoleAssignmentRow> = sqlx::query_as(
             r#"
             SELECT
@@ -372,52 +436,207 @@ impl AppState {
         target_user_id: u64,
         input: UpsertOpsRoleInput,
     ) -> Result<OpsRoleAssignment, AppError> {
-        self.ensure_platform_admin_for_ops_rbac(user).await?;
-        let role = normalize_ops_role(&input.role)?;
+        let (assignment, _) = self
+            .upsert_ops_role_assignment_by_owner_with_meta(user, target_user_id, input, None, 0)
+            .await?;
+        Ok(assignment)
+    }
 
-        let target_exists: Option<(i64,)> = sqlx::query_as(
-            r#"
-            SELECT id
-            FROM users
-            WHERE id = $1
-            "#,
-        )
-        .bind(target_user_id as i64)
-        .fetch_optional(&self.pool)
-        .await?;
-        if target_exists.is_none() {
-            return Err(AppError::NotFound(
-                OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string(),
-            ));
+    pub async fn upsert_ops_role_assignment_by_owner_with_meta(
+        &self,
+        user: &User,
+        target_user_id: u64,
+        input: UpsertOpsRoleInput,
+        idempotency_key: Option<&str>,
+        idempotency_ttl_secs: u64,
+    ) -> Result<(OpsRoleAssignment, bool), AppError> {
+        let role_manage_context = self.resolve_ops_role_manage_context(user).await?;
+        let role = normalize_ops_role(&input.role)?;
+        let target_user_id =
+            checked_u64_to_i64(target_user_id, OPS_RBAC_TARGET_USER_ID_OUT_OF_RANGE_CODE)?;
+        Self::enforce_delegated_role_manage_constraints(
+            role_manage_context,
+            target_user_id,
+            Some(role.as_str()),
+        )?;
+
+        if let Some(idempotency_key) = idempotency_key {
+            let mut tx = self.pool.begin().await?;
+            let advisory_lock_key = format!(
+                "ops_rbac_role_upsert:{}:{}:{}",
+                user.id, target_user_id, idempotency_key
+            );
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+                .bind(&advisory_lock_key)
+                .execute(&mut *tx)
+                .await?;
+
+            let idempotency_created_at: Option<DateTime<Utc>> = sqlx::query_scalar(
+                r#"
+                SELECT created_at
+                FROM ops_rbac_role_upsert_idempotency_keys
+                WHERE operator_user_id = $1
+                  AND target_user_id = $2
+                  AND idempotency_key = $3
+                "#,
+            )
+            .bind(user.id)
+            .bind(target_user_id)
+            .bind(idempotency_key)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(created_at) = idempotency_created_at {
+                let now = Utc::now();
+                let age_secs = now.signed_duration_since(created_at).num_seconds();
+                let is_fresh = idempotency_ttl_secs == 0 || age_secs < idempotency_ttl_secs as i64;
+                if is_fresh {
+                    let existing_row: Option<OpsRoleAssignmentRow> = sqlx::query_as(
+                        r#"
+                        SELECT
+                            r.user_id,
+                            COALESCE(u.email, '') AS user_email,
+                            u.fullname AS user_fullname,
+                            r.role,
+                            r.granted_by,
+                            r.created_at,
+                            r.updated_at
+                        FROM platform_user_roles r
+                        JOIN users u ON u.id = r.user_id
+                        WHERE r.user_id = $1
+                        "#,
+                    )
+                    .bind(target_user_id)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+                    if let Some(existing_row) = existing_row {
+                        tx.commit().await?;
+                        return Ok((map_assignment_row(existing_row)?, true));
+                    }
+                }
+                sqlx::query(
+                    r#"
+                    DELETE FROM ops_rbac_role_upsert_idempotency_keys
+                    WHERE operator_user_id = $1
+                      AND target_user_id = $2
+                      AND idempotency_key = $3
+                    "#,
+                )
+                .bind(user.id)
+                .bind(target_user_id)
+                .bind(idempotency_key)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            let row: Option<OpsRoleAssignmentRow> = sqlx::query_as(
+                r#"
+                WITH upserted AS (
+                    INSERT INTO platform_user_roles(
+                        user_id, role, granted_by, created_at, updated_at
+                    )
+                    SELECT u.id, $2, $3, NOW(), NOW()
+                    FROM users u
+                    WHERE u.id = $1
+                    ON CONFLICT (user_id)
+                    DO UPDATE
+                    SET role = EXCLUDED.role,
+                        granted_by = EXCLUDED.granted_by,
+                        updated_at = NOW()
+                    RETURNING
+                        user_id,
+                        role,
+                        granted_by,
+                        created_at,
+                        updated_at
+                )
+                SELECT
+                    up.user_id,
+                    COALESCE(u.email, '') AS user_email,
+                    u.fullname AS user_fullname,
+                    up.role,
+                    up.granted_by,
+                    up.created_at,
+                    up.updated_at
+                FROM upserted up
+                JOIN users u ON u.id = up.user_id
+                "#,
+            )
+            .bind(target_user_id)
+            .bind(role.as_str())
+            .bind(user.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let row = row.ok_or_else(|| {
+                AppError::NotFound(OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string())
+            })?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO ops_rbac_role_upsert_idempotency_keys(
+                    operator_user_id,
+                    target_user_id,
+                    idempotency_key,
+                    role,
+                    created_at
+                )
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (operator_user_id, target_user_id, idempotency_key)
+                DO UPDATE
+                SET role = EXCLUDED.role,
+                    created_at = NOW()
+                "#,
+            )
+            .bind(user.id)
+            .bind(target_user_id)
+            .bind(idempotency_key)
+            .bind(role.as_str())
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok((map_assignment_row(row)?, false));
         }
 
-        let row: OpsRoleAssignmentRow = sqlx::query_as(
+        let row: Option<OpsRoleAssignmentRow> = sqlx::query_as(
             r#"
-            INSERT INTO platform_user_roles(
-                user_id, role, granted_by, created_at, updated_at
+            WITH upserted AS (
+                INSERT INTO platform_user_roles(
+                    user_id, role, granted_by, created_at, updated_at
+                )
+                SELECT u.id, $2, $3, NOW(), NOW()
+                FROM users u
+                WHERE u.id = $1
+                ON CONFLICT (user_id)
+                DO UPDATE
+                SET role = EXCLUDED.role,
+                    granted_by = EXCLUDED.granted_by,
+                    updated_at = NOW()
+                RETURNING
+                    user_id,
+                    role,
+                    granted_by,
+                    created_at,
+                    updated_at
             )
-            VALUES ($1, $2, $3, NOW(), NOW())
-            ON CONFLICT (user_id)
-            DO UPDATE
-            SET role = EXCLUDED.role,
-                granted_by = EXCLUDED.granted_by,
-                updated_at = NOW()
-            RETURNING
-                user_id,
-                (SELECT COALESCE(email, '') FROM users WHERE id = platform_user_roles.user_id) AS user_email,
-                (SELECT fullname FROM users WHERE id = platform_user_roles.user_id) AS user_fullname,
-                role,
-                granted_by,
-                created_at,
-                updated_at
+            SELECT
+                up.user_id,
+                COALESCE(u.email, '') AS user_email,
+                u.fullname AS user_fullname,
+                up.role,
+                up.granted_by,
+                up.created_at,
+                up.updated_at
+            FROM upserted up
+            JOIN users u ON u.id = up.user_id
             "#,
         )
-        .bind(target_user_id as i64)
-        .bind(role)
+        .bind(target_user_id)
+        .bind(role.as_str())
         .bind(user.id)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        map_assignment_row(row)
+        let row =
+            row.ok_or_else(|| AppError::NotFound(OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string()))?;
+        Ok((map_assignment_row(row)?, false))
     }
 
     pub async fn revoke_ops_role_assignment_by_owner(
@@ -425,7 +644,19 @@ impl AppState {
         user: &User,
         target_user_id: u64,
     ) -> Result<RevokeOpsRoleOutput, AppError> {
-        self.ensure_platform_admin_for_ops_rbac(user).await?;
+        let role_manage_context = self.resolve_ops_role_manage_context(user).await?;
+        let target_user_id =
+            checked_u64_to_i64(target_user_id, OPS_RBAC_TARGET_USER_ID_OUT_OF_RANGE_CODE)?;
+        let target_role = self.find_ops_role_for_user(target_user_id).await?;
+        Self::enforce_delegated_role_manage_constraints(
+            role_manage_context,
+            target_user_id,
+            target_role.as_deref(),
+        )?;
+        let target_user_id_u64 = checked_i64_to_u64(
+            target_user_id,
+            OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE,
+        )?;
         let removed = sqlx::query_scalar::<_, i64>(
             r#"
             DELETE FROM platform_user_roles
@@ -433,20 +664,21 @@ impl AppState {
             RETURNING user_id
             "#,
         )
-        .bind(target_user_id as i64)
+        .bind(target_user_id)
         .fetch_optional(&self.pool)
         .await?
         .is_some();
 
         Ok(RevokeOpsRoleOutput {
-            user_id: target_user_id,
+            user_id: target_user_id_u64,
             removed,
         })
     }
 
     pub async fn grant_platform_admin(&self, user_id: u64) -> Result<(), AppError> {
+        let user_id = checked_u64_to_i64(user_id, OPS_RBAC_TARGET_USER_ID_OUT_OF_RANGE_CODE)?;
         let user_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
-            .bind(user_id as i64)
+            .bind(user_id)
             .fetch_optional(&self.pool)
             .await?;
         if user_exists.is_none() {
@@ -472,7 +704,7 @@ impl AppState {
                 .fetch_optional(&self.pool)
                 .await?,
         )
-        .unwrap_or(user_id as i64);
+        .unwrap_or(user_id);
 
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -486,7 +718,7 @@ impl AppState {
                 updated_at = NOW()
             "#,
         )
-        .bind(user_id as i64)
+        .bind(user_id)
         .bind(ROLE_OPS_ADMIN)
         .bind(granted_by)
         .execute(&mut *tx)
@@ -504,7 +736,7 @@ impl AppState {
                 updated_at = NOW()
             "#,
         )
-        .bind(user_id as i64)
+        .bind(user_id)
         .bind(granted_by)
         .execute(&mut *tx)
         .await?;
@@ -516,6 +748,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::CreateUser;
     use anyhow::Result;
 
     #[tokio::test]
@@ -628,6 +861,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_ops_rbac_me_should_grant_role_manage_for_delegated_role_admin() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let delegated = state
+            .create_user(&CreateUser {
+                fullname: "Delegated Role Admin".to_string(),
+                email: "delegated-role-admin@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: ROLE_PLATFORM_ROLE_ADMIN.to_string(),
+                },
+            )
+            .await?;
+
+        let delegated_snapshot = state.get_ops_rbac_me(&delegated).await?;
+        assert!(!delegated_snapshot.is_owner);
+        assert_eq!(
+            delegated_snapshot.role.as_deref(),
+            Some(ROLE_PLATFORM_ROLE_ADMIN)
+        );
+        assert!(!delegated_snapshot.permissions.debate_manage);
+        assert!(!delegated_snapshot.permissions.judge_review);
+        assert!(!delegated_snapshot.permissions.judge_rejudge);
+        assert!(delegated_snapshot.permissions.role_manage);
+        assert_ne!(delegated_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
+
+        let err = state
+            .ensure_ops_permission(&delegated, OpsPermission::DebateManage)
+            .await
+            .expect_err("delegated role admin should not manage debate directly");
+        match err {
+            AppError::DebateConflict(msg) => {
+                assert!(msg.contains("ops_permission_denied:debate_manage:"))
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn grant_platform_admin_should_update_owner_source() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
@@ -689,6 +969,125 @@ mod tests {
             .await?;
         assert!(list_after.items.iter().all(|item| item.user_id != 2));
         assert_ne!(list_after.rbac_revision, OPS_RBAC_EMPTY_REVISION);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delegated_role_admin_should_manage_ops_roles_with_guardrails() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let delegated = state
+            .create_user(&CreateUser {
+                fullname: "Delegated Manager".to_string(),
+                email: "delegated-manager@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let target_regular = state
+            .create_user(&CreateUser {
+                fullname: "Regular Target".to_string(),
+                email: "delegated-regular-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let target_role_admin = state
+            .create_user(&CreateUser {
+                fullname: "Role Admin Target".to_string(),
+                email: "delegated-role-admin-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: ROLE_PLATFORM_ROLE_ADMIN.to_string(),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                target_role_admin.id as u64,
+                UpsertOpsRoleInput {
+                    role: ROLE_PLATFORM_ROLE_ADMIN.to_string(),
+                },
+            )
+            .await?;
+
+        let assigned = state
+            .upsert_ops_role_assignment_by_owner(
+                &delegated,
+                target_regular.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        assert_eq!(assigned.user_id, target_regular.id as u64);
+        assert_eq!(assigned.role, "ops_reviewer");
+
+        let revoke_regular = state
+            .revoke_ops_role_assignment_by_owner(&delegated, target_regular.id as u64)
+            .await?;
+        assert!(revoke_regular.removed);
+
+        let assign_owner_err = state
+            .upsert_ops_role_assignment_by_owner(
+                &delegated,
+                owner.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await
+            .expect_err("delegated role admin should not manage owner");
+        match assign_owner_err {
+            AppError::DebateConflict(code) => assert_eq!(
+                code,
+                format!(
+                    "{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:delegated_role_admin_cannot_manage_owner"
+                )
+            ),
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let assign_role_admin_err = state
+            .upsert_ops_role_assignment_by_owner(
+                &delegated,
+                target_regular.id as u64,
+                UpsertOpsRoleInput {
+                    role: ROLE_PLATFORM_ROLE_ADMIN.to_string(),
+                },
+            )
+            .await
+            .expect_err("delegated role admin should not assign role admin");
+        match assign_role_admin_err {
+            AppError::DebateConflict(code) => assert_eq!(
+                code,
+                format!(
+                    "{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:delegated_role_admin_cannot_manage_role_admin"
+                )
+            ),
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let revoke_role_admin_err = state
+            .revoke_ops_role_assignment_by_owner(&delegated, target_role_admin.id as u64)
+            .await
+            .expect_err("delegated role admin should not revoke role admin");
+        match revoke_role_admin_err {
+            AppError::DebateConflict(code) => assert_eq!(
+                code,
+                format!(
+                    "{OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE}:delegated_role_admin_cannot_manage_role_admin"
+                )
+            ),
+            other => panic!("unexpected error: {other}"),
+        }
         Ok(())
     }
 

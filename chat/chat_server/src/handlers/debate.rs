@@ -821,6 +821,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_ops_rbac_roles_route_should_return_200_for_delegated_role_admin() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (delegated, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Roles Delegated Admin",
+            "ops-rbac-roles-delegated-admin@acme.org",
+            "+86138100000131",
+            "ops-rbac-roles-delegated-admin-sid",
+        )
+        .await?;
+        let target = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Roles Delegated Target".to_string(),
+                email: "ops-rbac-roles-delegated-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: "platform_role_admin".to_string(),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                target.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/rbac/roles")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: ListOpsRoleAssignmentsOutput = serde_json::from_slice(&body)?;
+        assert!(out
+            .items
+            .iter()
+            .any(|item| item.user_id == target.id as u64));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_ops_rbac_roles_route_should_return_full_pii_when_requested() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
@@ -1019,6 +1074,14 @@ mod tests {
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
+        let revision = res
+            .headers()
+            .get("x-rbac-revision")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(!revision.is_empty());
+        assert_ne!(revision, "empty");
         let body = res.into_body().collect().await?.to_bytes();
         let out: OpsRoleAssignment = serde_json::from_slice(&body)?;
         assert_eq!(out.user_id, 2);
@@ -1042,6 +1105,52 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert_eq!(audit_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_200_for_delegated_role_admin(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (delegated, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Upsert Delegated",
+            "ops-rbac-upsert-delegated@acme.org",
+            "+86138100000311",
+            "ops-rbac-upsert-delegated-sid",
+        )
+        .await?;
+        let target = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Upsert Delegated Target".to_string(),
+                email: "ops-rbac-upsert-delegated-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: "platform_role_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/rbac/roles/{}", target.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: OpsRoleAssignment = serde_json::from_slice(&body)?;
+        assert_eq!(out.user_id, target.id as u64);
+        assert_eq!(out.role, "ops_reviewer");
         Ok(())
     }
 
@@ -1109,6 +1218,200 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_429_when_ip_rate_limited() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-ip-rate-limited-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("x-real-ip", "127.0.0.1")
+            .header("x-test-force-rate-limit", "ops_rbac_roles_write_ip")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_write");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_500_when_owner_source_missing(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-owner-source-missing-sid")
+                .await?;
+        sqlx::query("DELETE FROM platform_admin_owners WHERE singleton_key = TRUE")
+            .execute(&state.pool)
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "platform_owner_not_configured");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_400_for_user_id_out_of_range(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-out-of-range-sid").await?;
+        let app = get_router(state).await?;
+        let overflow_user_id = (i64::MAX as u128 + 1).to_string();
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/rbac/roles/{overflow_user_id}"))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.code.as_deref(),
+            Some("ops_role_target_user_id_out_of_range")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_replay_with_idempotency_key() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-idempotency-sid").await?;
+        let app = get_router(state.clone()).await?;
+
+        let req1 = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-rbac-upsert-route-key-1")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res1 = app.clone().oneshot(req1).await?;
+        assert_eq!(res1.status(), StatusCode::OK);
+        let body1 = res1.into_body().collect().await?.to_bytes();
+        let out1: OpsRoleAssignment = serde_json::from_slice(&body1)?;
+
+        let req2 = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-rbac-upsert-route-key-1")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res2 = app.oneshot(req2).await?;
+        assert_eq!(res2.status(), StatusCode::OK);
+        let body2 = res2.into_body().collect().await?.to_bytes();
+        let out2: OpsRoleAssignment = serde_json::from_slice(&body2)?;
+        assert_eq!(out1.user_id, out2.user_id);
+        assert_eq!(out1.role, out2.role);
+        assert_eq!(out1.updated_at, out2.updated_at);
+
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND decision = 'success'
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_reject_too_long_idempotency_key() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-idempotency-long-sid").await?;
+        let app = get_router(state).await?;
+        let long_key = "k".repeat(161);
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", long_key)
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.code.as_deref(),
+            Some("ops_rbac_roles_write_idempotency_key_too_long")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_rate_limit_with_local_fallback_when_redis_disabled(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-local-fallback-sid").await?;
+        let app = get_router(state).await?;
+
+        for _ in 0..30 {
+            let req = Request::builder()
+                .method(Method::PUT)
+                .uri("/api/debate/ops/rbac/roles/2")
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+            let res = app.clone().oneshot(req).await?;
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_write");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn put_ops_rbac_roles_user_id_route_should_return_403_for_unbound_user() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let user = state
@@ -1138,7 +1441,7 @@ mod tests {
     #[tokio::test]
     async fn put_ops_rbac_roles_user_id_route_should_return_409_for_non_owner() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
-        let (_user, token) = create_bound_user_and_token(
+        let (user, token) = create_bound_user_and_token(
             &state,
             "Ops Rbac Upsert Non Owner",
             "ops-rbac-upsert-non-owner@acme.org",
@@ -1146,12 +1449,14 @@ mod tests {
             "ops-rbac-upsert-non-owner-sid",
         )
         .await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-non-owner-failure";
 
         let req = Request::builder()
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res = app.oneshot(req).await?;
@@ -1159,6 +1464,89 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert!(error.error.contains("ops_permission_denied:role_manage"));
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(user.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.1.as_deref(), Some("permission_denied"));
+        assert!(audit_row
+            .0
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ops_permission_denied:role_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_409_when_delegated_manage_owner_or_role_admin(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (delegated, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Upsert Delegated Guard",
+            "ops-rbac-upsert-delegated-guard@acme.org",
+            "+86138100000312",
+            "ops-rbac-upsert-delegated-guard-sid",
+        )
+        .await?;
+        let target = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Upsert Delegated Guard Target".to_string(),
+                email: "ops-rbac-upsert-delegated-guard-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: "platform_role_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req_owner = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/rbac/roles/{}", owner.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_viewer"}"#))?;
+        let res_owner = app.clone().oneshot(req_owner).await?;
+        assert_eq!(res_owner.status(), StatusCode::CONFLICT);
+        let body_owner = res_owner.into_body().collect().await?.to_bytes();
+        let owner_error: ErrorOutput = serde_json::from_slice(&body_owner)?;
+        assert!(owner_error
+            .error
+            .contains("delegated_role_admin_cannot_manage_owner"));
+
+        let req_role_admin = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/debate/ops/rbac/roles/{}", target.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"platform_role_admin"}"#))?;
+        let res_role_admin = app.oneshot(req_role_admin).await?;
+        assert_eq!(res_role_admin.status(), StatusCode::CONFLICT);
+        let body_role_admin = res_role_admin.into_body().collect().await?.to_bytes();
+        let role_admin_error: ErrorOutput = serde_json::from_slice(&body_role_admin)?;
+        assert!(role_admin_error
+            .error
+            .contains("delegated_role_admin_cannot_manage_role_admin"));
         Ok(())
     }
 
@@ -1235,6 +1623,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_200_for_delegated_role_admin(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (delegated, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Revoke Delegated",
+            "ops-rbac-revoke-delegated@acme.org",
+            "+86138100000321",
+            "ops-rbac-revoke-delegated-sid",
+        )
+        .await?;
+        let target = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Revoke Delegated Target".to_string(),
+                email: "ops-rbac-revoke-delegated-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: "platform_role_admin".to_string(),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                target.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri(format!("/api/debate/ops/rbac/roles/{}", target.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: RevokeOpsRoleOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.user_id, target.id as u64);
+        assert!(out.removed);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn delete_ops_rbac_roles_user_id_route_should_return_409_for_non_owner() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let (_user, token) = create_bound_user_and_token(
@@ -1257,6 +1699,61 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert!(error.error.contains("ops_permission_denied:role_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_409_when_delegated_revoke_role_admin(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (delegated, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rbac Revoke Delegated Guard",
+            "ops-rbac-revoke-delegated-guard@acme.org",
+            "+86138100000322",
+            "ops-rbac-revoke-delegated-guard-sid",
+        )
+        .await?;
+        let target = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rbac Revoke Delegated Guard Target".to_string(),
+                email: "ops-rbac-revoke-delegated-guard-target@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                delegated.id as u64,
+                UpsertOpsRoleInput {
+                    role: "platform_role_admin".to_string(),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                target.id as u64,
+                UpsertOpsRoleInput {
+                    role: "platform_role_admin".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri(format!("/api/debate/ops/rbac/roles/{}", target.id))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("delegated_role_admin_cannot_manage_role_admin"));
         Ok(())
     }
 

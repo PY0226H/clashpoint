@@ -12,7 +12,7 @@ use std::{
 };
 use tracing::warn;
 
-use crate::{AppError, AppState, ErrorOutput, RateLimitDecision};
+use crate::{redis_store::RedisStore, AppError, AppState, ErrorOutput, RateLimitDecision};
 
 #[derive(Debug, Clone, Copy)]
 struct LocalRateLimitBucket {
@@ -43,9 +43,36 @@ pub(crate) async fn enforce_rate_limit(
                 "rate limit degraded to local fallback, scope={}, key={}, err={}",
                 scope, key, err
             );
-            local_rate_limit_fallback_decision(scope, key, limit, window_secs.max(1))
+            local_rate_limit_fallback_decision(
+                scope,
+                &build_local_rate_limit_fallback_key(state, key),
+                limit,
+                window_secs.max(1),
+            )
         }
     }
+}
+
+pub(crate) async fn enforce_rate_limit_with_disabled_fallback(
+    state: &AppState,
+    scope: &str,
+    key: &str,
+    limit: u64,
+    window_secs: u64,
+) -> RateLimitDecision {
+    if matches!(&state.redis, RedisStore::Disabled { .. }) {
+        return local_rate_limit_fallback_decision(
+            scope,
+            &build_local_rate_limit_fallback_key(state, key),
+            limit,
+            window_secs.max(1),
+        );
+    }
+    enforce_rate_limit(state, scope, key, limit, window_secs).await
+}
+
+fn build_local_rate_limit_fallback_key(state: &AppState, key: &str) -> String {
+    format!("{:p}::{}", &state.pool, key.trim())
 }
 
 fn local_rate_limit_fallback_decision(

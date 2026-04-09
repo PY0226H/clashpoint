@@ -2077,7 +2077,7 @@ impl AppState {
             r#"
             SELECT user_id
             FROM platform_user_roles
-            WHERE role IN ('ops_admin', 'ops_reviewer', 'ops_viewer')
+            WHERE role IN ('ops_admin', 'ops_reviewer', 'ops_viewer', 'platform_role_admin')
             "#,
         )
         .fetch_all(&self.pool)

@@ -1,13 +1,40 @@
 # completed.md
 
-## A. 汇总口径
-- 基线时间：2026-03-31（America/Los_Angeles）。
-- 判定基线：按当前工作区现状（含未提交改动）判定。
-- 判定规则：仅当“代码/脚本/配置已落地，且不存在证据缺口描述”时纳入本文件。
-- 说明：本文件仅保留结论型信息，不保留历史过程记录。
+## A. 文档说明
+- 本文件只记录“主体已完成”的模块快照，不承担开发过程记录。
+- 每条完成项至少包含：模块、结论、代码证据、验证结论、归档来源。
+- 若模块仍有后续压测、上线前收口、联调或告警固化工作，统一放入 `todo.md`，并在本文件用“关联待办”指向对应债务项。
+- `归档来源` 记录的是“阶段收口来源/回合来源”，不是必须长期存在的计划文件路径。
 - 历史前端路径说明：文中 `chatapp/...` 为历史证据路径，已于 2026-04-06（Phase6）净删除；当前前端主线目录为 `frontend/apps/*` 与 `frontend/packages/*`。
 
-## B. 已完成模块
+## B. 当前写入区（新结构）
+
+### B1. 认证治理
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| auth-session-revoke-hardening | `DELETE /api/auth/sessions/{sid}` 全链路优化已落地。 | `chat/chat_server/src/handlers/auth.rs`、`chat/migrations/20260402182000_auth_session_revoke_hardening.sql` | 本地回归测试与 handler/model 专项测试已补齐。 | 历史完成项迁移（2026-04-08） | `auth-session-revoke-redis-fault-injection-evidence`；`auth-session-revoke-multi-client-contract-alignment` |
+| auth-sms-send-hardening | `POST /api/auth/v2/sms/send` 全链路优化已落地。 | `chat/chat_server/src/handlers/auth.rs`、`chat/chat_server/src/openapi.rs`、`chat/migrations/20260402203000_auth_sms_send_hardening.sql` | 本地回归测试已补齐，专项错误语义与指标已落地。 | 历史完成项迁移（2026-04-08） | `auth-sms-send-multi-client-contract-alignment`；`auth-sms-send-redis-fault-injection-evidence`；`auth-sms-send-callback-anti-replay` |
+
+### B2. 支付与钱包
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| pay-iap-verify-hardening | `POST /api/pay/iap/verify` 全链路优化已落地。 | `chat/chat_server/src/handlers/payment.rs`、`chat/chat_server/src/models/payment/order_ops.rs`、`chat/chat_server/src/openapi.rs` | handler/model 回归矩阵已补齐，事务边界与稳定错误码已收敛。 | 历史完成项迁移（2026-04-08） | `pay-iap-verify-multi-client-contract-alignment`；`pay-iap-verify-rate-limit-and-retry-baseline`；`pay-iap-verify-observability-dashboard-baseline` |
+| pay-wallet-hardening | `GET /api/pay/wallet` 全链路优化已落地。 | `chat/chat_server/src/handlers/payment.rs`、`chat/chat_server/src/application/runtime_workers.rs` | 读缓存、账本对账 worker 与回归测试矩阵已落地。 | 历史完成项迁移（2026-04-08） | `pay-wallet-observability-dashboard-baseline`；`pay-wallet-reconcile-parameter-tuning`；`pay-wallet-reconcile-ops-query-surface` |
+
+### B3. Debate / Ops / Room API
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| debate-ops-topics-create-hardening | `POST /api/debate/ops/topics` 全链路优化已落地。 | `chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/models/debate/ops.rs`、`chat/migrations/20260407224500_ops_debate_topic_create_hardening.sql` | route + service 回归测试已通过。 | 历史完成项迁移（2026-04-08） | （无） |
+| api058-rbac-roles-governance-phase-closure | `GET /api/debate/ops/rbac/roles` 阶段性收口已完成并归档。 | `chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/models/rbac.rs`、`chat/migrations/20260408042000_ops_rbac_audits.sql` | OpenAPI、限流、审计落库与前后端契约同步已完成。 | 当前开发计划阶段收口（2026-04-08） | （无） |
+
+### B4. 基础设施与工具链
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| workspace-removal-closure | workspace 概念已完成清理并切到单租户语义。 | `scripts/quality/verify_chat_migrations_fresh.sh` | fresh migration 验证脚本可用于确认无 `ws_id` 列与 `workspaces` 表。 | 历史完成项迁移（2026-04-08） | （无） |
+
+## Z. 历史完成归档（待迁移）
+- 下方内容保留旧结构，仅用于查询和后续分批迁移。
+- 新增完成项不要继续写入下方旧结构。
 
 ### B1. 产品主链路
 | 模块 | 结论 | 代码证据 | 来源 |
@@ -126,6 +153,7 @@
 | debate-judge-job-request-hardening | `POST /api/debate/sessions/{id}/judge/jobs` 全链路优化已落地（OpenAPI `202/400/401/403/404/409/429/500` 补齐、幂等键治理与双 header 支持、持久化幂等回放表、user/session + ip/session 双限频、稳定冲突错误码、final enqueue 失败 `degraded` 可观测、自动触发 requester 审计语义收敛、reason 稳定语义升级、handler/model 回归测试补齐）。 | `chat/chat_server/src/handlers/debate_judge.rs`、`chat/chat_server/src/models/judge/request_report.rs`、`chat/chat_server/src/models/judge/tests/request_judge_job.rs`、`chat/migrations/20260405004000_judge_request_idempotency.sql` | 当前开发计划（`POST /api/debate/sessions/{id}/judge/jobs` JJOB-01~JJOB-10 方案A） |
 | debate-judge-report-read-hardening | `GET /api/debate/sessions/{id}/judge-report` 全链路优化已落地（OpenAPI 错误谱系补齐、死参数移除、参赛者+ops 权限收敛、user/session + ip/session 双限频、`REPEATABLE READ READ ONLY` 读一致性、`status/statusReason/progress` 状态机升级、`error_code/contract_failure_type` 结构化落库、概览与 `/judge-report/final` 详情拆分、索引增强、handler/model 回归测试补齐）。 | `chat/chat_server/src/handlers/debate_judge.rs`、`chat/chat_server/src/models/judge/request_report_query.rs`、`chat/chat_server/src/models/judge/types.rs`、`chat/chat_server/src/openapi.rs`、`chat/chat_server/src/lib.rs`、`chat/chat_server/src/models/judge/tests/request_judge_report_query.rs`、`chat/migrations/20260405012000_judge_report_query_hardening.sql` | 当前开发计划（`GET /api/debate/sessions/{id}/judge-report` JREP-01~JREP-10 方案A） |
 | debate-ops-rbac-me-hardening | `GET /api/debate/ops/rbac/me` 全链路优化已落地（Owner 真源从硬编码迁移为 `platform_admin_owners`、`grant_platform_admin` 同步 owner 真源、OpenAPI 补齐 `200/401/403/500`、route 级 `200/401/403` 回归补齐、告警接收人 Owner 来源统一到真源表）。 | `chat/chat_server/src/models/rbac.rs`、`chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/handlers/debate.rs`、`chat/chat_server/src/models/ops_observability.rs`、`chat/migrations/20260408034000_ops_platform_owner_source.sql` | 当前开发计划（`GET /api/debate/ops/rbac/me` 全链路优化） |
+| api058-rbac-roles-governance-phase-closure | `GET /api/debate/ops/rbac/roles` 已完成阶段性收口（OpenAPI 与 route 矩阵对齐、RBAC 三接口限流与结构化错误模型统一、`ops_rbac_audits` 审计落库、`rbacRevision` 落地、默认 `piiLevel=minimal` + 显式 `full`、前后端契约同步）。剩余治理项已转入 `todo.md` 持续跟踪。 | `chat/chat_server/src/handlers/debate.rs`、`chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/models/rbac.rs`、`chat/chat_server/src/models/mod.rs`、`chat/migrations/20260408042000_ops_rbac_audits.sql`、`chat/scripts/ops_rbac_audits_query.sh`、`chat/scripts/ops_rbac_audits_retention.sh`、`frontend/packages/ops-domain/src/index.ts`、`frontend/packages/app-shell/src/pages/OpsConsolePage.tsx` | 当前开发计划（API058 阶段性收口，2026-04-08 已整合归档） |
 
 ## C. 每项最小证据（汇总）
 - 服务端 v3 派发与回放：`ai_judge_service/app/app_factory.py`、`chat/chat_server/src/handlers/debate_ops.rs`。

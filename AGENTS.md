@@ -128,3 +128,4 @@ Use this file when you need a lightweight codebase map before opening implementa
 2. Prefer concise summaries over loading long documents wholesale.
 3. Treat `docs/harness/` as the detailed rules layer, and `AGENTS.md` as the navigation layer.
 4. Do not assume future-phase behavior is already active unless a harness doc explicitly marks it as current.
+5. 阶段收口时，`completed.md` 只记录主体完成快照，`todo.md` 只记录延后技术债；不要把活动计划正文原样复制进长期文档。
