@@ -65,6 +65,15 @@ const OPS_RBAC_ROLES_WRITE_BODY_INVALID_JSON_CODE: &str = "ops_rbac_roles_write_
 const OPS_RBAC_ROLES_WRITE_BODY_DATA_INVALID_CODE: &str = "ops_rbac_roles_write_body_data_invalid";
 const OPS_RBAC_ROLES_WRITE_BODY_READ_FAILED_CODE: &str = "ops_rbac_roles_write_body_read_failed";
 const OPS_RBAC_ROLES_WRITE_BODY_REJECTED_CODE: &str = "ops_rbac_roles_write_body_rejected";
+const OPS_JUDGE_REPLAY_EXECUTE_CONTENT_TYPE_INVALID_CODE: &str =
+    "ops_judge_replay_execute_content_type_invalid";
+const OPS_JUDGE_REPLAY_EXECUTE_BODY_INVALID_JSON_CODE: &str =
+    "ops_judge_replay_execute_body_invalid_json";
+const OPS_JUDGE_REPLAY_EXECUTE_BODY_DATA_INVALID_CODE: &str =
+    "ops_judge_replay_execute_body_data_invalid";
+const OPS_JUDGE_REPLAY_EXECUTE_BODY_READ_FAILED_CODE: &str =
+    "ops_judge_replay_execute_body_read_failed";
+const OPS_JUDGE_REPLAY_EXECUTE_BODY_REJECTED_CODE: &str = "ops_judge_replay_execute_body_rejected";
 const OPS_RBAC_IF_MATCH_INVALID_CODE: &str = "ops_rbac_if_match_invalid";
 const OPS_RBAC_IF_MATCH_REQUIRED_CODE: &str = "ops_rbac_if_match_required";
 const OPS_RBAC_REVISION_HEADER: &str = "x-rbac-revision";
@@ -2409,8 +2418,14 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
     request_body = ExecuteJudgeReplayOpsInput,
     responses(
         (status = 200, description = "Replay execute accepted", body = crate::ExecuteJudgeReplayOpsOutput),
+        (status = 400, description = "Invalid input", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Replay target not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission or state conflict", body = crate::ErrorOutput),
+        (status = 415, description = "Unsupported media type", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2419,10 +2434,67 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
 pub(crate) async fn execute_judge_replay_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
-    Json(input): Json<ExecuteJudgeReplayOpsInput>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state.execute_judge_replay_by_owner(&user, input).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    headers: HeaderMap,
+    input: Result<Json<ExecuteJudgeReplayOpsInput>, JsonRejection>,
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let input = match input {
+        Ok(Json(input)) => input,
+        Err(rejection) => {
+            let (status, error_code) = classify_ops_judge_replay_execute_body_rejection(&rejection);
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                status = status.as_u16(),
+                error_code,
+                latency_ms,
+                decision = "failed",
+                result = "extractor_rejected",
+                "execute ops judge replay request rejected by extractor: {}",
+                rejection
+            );
+            return Ok((status, Json(crate::ErrorOutput::new(error_code))).into_response());
+        }
+    };
+
+    let request_scope = input.scope.clone();
+    let request_job_id = input.job_id;
+    let ret = match state.execute_judge_replay_by_owner(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                scope = request_scope.as_str(),
+                job_id = request_job_id,
+                latency_ms,
+                decision = "failed",
+                result = classify_ops_judge_replay_execute_failure(&err),
+                "execute ops judge replay failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        scope = ret.scope.as_str(),
+        job_id = ret.job_id,
+        audit_id = ret.audit_id,
+        previous_status = ret.previous_status.as_str(),
+        new_status = ret.new_status.as_str(),
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "execute ops judge replay served"
+    );
+    Ok((StatusCode::OK, Json(ret)).into_response())
 }
 
 /// List replay execute audit actions for ops diagnostics.
@@ -2548,6 +2620,43 @@ fn classify_ops_rbac_upsert_body_rejection(
             OPS_RBAC_ROLES_WRITE_BODY_REJECTED_CODE,
             OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
         ),
+    }
+}
+
+fn classify_ops_judge_replay_execute_body_rejection(
+    rejection: &JsonRejection,
+) -> (StatusCode, &'static str) {
+    match rejection {
+        JsonRejection::MissingJsonContentType(_) => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            OPS_JUDGE_REPLAY_EXECUTE_CONTENT_TYPE_INVALID_CODE,
+        ),
+        JsonRejection::JsonSyntaxError(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            OPS_JUDGE_REPLAY_EXECUTE_BODY_INVALID_JSON_CODE,
+        ),
+        JsonRejection::JsonDataError(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            OPS_JUDGE_REPLAY_EXECUTE_BODY_DATA_INVALID_CODE,
+        ),
+        JsonRejection::BytesRejection(_) => (
+            StatusCode::BAD_REQUEST,
+            OPS_JUDGE_REPLAY_EXECUTE_BODY_READ_FAILED_CODE,
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            OPS_JUDGE_REPLAY_EXECUTE_BODY_REJECTED_CODE,
+        ),
+    }
+}
+
+fn classify_ops_judge_replay_execute_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::DebateConflict(_) => "conflict",
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::NotLoggedIn | AppError::AuthError(_) => "auth_error",
+        _ => "server_error",
     }
 }
 

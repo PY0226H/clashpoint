@@ -55,6 +55,13 @@
 |---|---|---|---|---|---|---|
 | debate-pg-listener-channel-migration-plan | `debate-ws-reliability-refactor` | 工程债 | 当前不阻塞主链路，且优先级低于真实业务收口与环境验证。 | 有余量的基础设施治理回合 | 补齐 PG listener 剩余通道迁移清单、优先级与执行顺序。 | 输出迁移清单文档并完成评审。 |
 
+### C8. API065 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api065-replay-execute-idempotency-key-rollout-decision | `api065-judge-replay-execute-governance-phase-closure` | 可靠性 | 当前已通过状态机与事务锁收敛重复执行风险，但缺真实重复提交样本，不适合立即引入额外幂等存储协议。 | execute 冲突率持续上升或出现重复触发投诉 | 形成 Go/No-Go 评审结论；若 Go，落地 `Idempotency-Key` 协议、冲突语义与回归测试。 | 统计 execute 冲突分布 + 评审记录；若落地则执行 `cargo test -p chat-server judge_replay` 并归档。 |
+| api065-replay-execute-rate-limit-rollout-decision | `api065-judge-replay-execute-governance-phase-closure` | 性能压测 | 当前无稳定线上流量样本，先观察结构化日志与锁等待，不在本轮提前上限频以避免误伤 Ops 应急操作。 | execute QPS/锁等待异常或压测窗口开启 | 形成 user/ip 限流阈值建议并完成 Go/No-Go；若 Go，落地限频与告警阈值。 | 执行 execute 压测 + 锁等待观测，归档报告到 `docs/loadtest/evidence/`。 |
+| api065-replay-execute-permission-status-semantics-review | `api065-judge-replay-execute-governance-phase-closure` | 多端契约 | 当前接口沿用历史 `409` 权限拒绝语义，短期不改避免跨端回归面扩大。 | 多端联调窗口开启或持续出现权限语义歧义反馈 | 形成 409/403 统一语义评审结论；若切换，完成前后端错误码映射与回归封板。 | 联调脚本 + 错误码映射表 + route 回归结果归档。 |
+
 ## Z. 历史待迁移技术债（只读归档）
 - 下方内容保留旧结构，仅用于查询和后续分批迁移。
 - 新增技术债不要继续写入下方旧结构。

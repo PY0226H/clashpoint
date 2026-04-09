@@ -242,6 +242,95 @@ fn replay_preview_query(scope: &str, job_id: u64) -> GetJudgeReplayPreviewOpsQue
     }
 }
 
+fn replay_execute_input(
+    scope: &str,
+    job_id: u64,
+    reason: Option<String>,
+) -> ExecuteJudgeReplayOpsInput {
+    ExecuteJudgeReplayOpsInput {
+        scope: scope.to_string(),
+        job_id,
+        reason,
+    }
+}
+
+async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Result<i64> {
+    let (session_id, phase_no, message_start_id, message_end_id, message_count): (
+        i64,
+        i32,
+        i64,
+        i64,
+        i32,
+    ) = sqlx::query_as(
+        r#"
+        SELECT session_id, phase_no, message_start_id, message_end_id, message_count
+        FROM judge_phase_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_phase_reports(
+            phase_job_id,
+            session_id,
+            phase_no,
+            message_start_id,
+            message_end_id,
+            message_count,
+            pro_summary_grounded,
+            con_summary_grounded,
+            pro_retrieval_bundle,
+            con_retrieval_bundle,
+            agent1_score,
+            agent2_score,
+            agent3_weighted_score,
+            prompt_hashes,
+            token_usage,
+            latency_ms,
+            error_codes,
+            degradation_level,
+            judge_trace,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10,
+            $11, $12, $13,
+            $14, $15, $16, $17,
+            $18, $19, NOW(), NOW()
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(phase_job_id)
+    .bind(session_id)
+    .bind(phase_no)
+    .bind(message_start_id)
+    .bind(message_end_id)
+    .bind(message_count)
+    .bind(json!([{"side": "pro", "summary": "summary"}]))
+    .bind(json!([{"side": "con", "summary": "summary"}]))
+    .bind(json!([]))
+    .bind(json!([]))
+    .bind(json!({"pro": 72.0}))
+    .bind(json!({"con": 68.0}))
+    .bind(json!({"pro": 0.52, "con": 0.48}))
+    .bind(json!({"system": "prompt-hash"}))
+    .bind(json!({"input": 1, "output": 1}))
+    .bind(json!({"total": 1}))
+    .bind(json!([]))
+    .bind(0_i32)
+    .bind(json!({"trace": "ok"}))
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.0)
+}
+
 async fn seed_failed_final_job_for_stats(
     state: &AppState,
     created_at: chrono::DateTime<Utc>,
@@ -1200,6 +1289,316 @@ async fn get_judge_replay_preview_by_owner_should_reject_out_of_range_job_id() -
         }
         other => panic!("unexpected error: {other}"),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_require_judge_rejudge_permission() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .execute_judge_replay_by_owner(&outsider, replay_execute_input("phase", 1, None))
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_rejudge"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_invalid_scope() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .execute_judge_replay_by_owner(&owner, replay_execute_input("invalid", 1, None))
+        .await
+        .expect_err("invalid scope should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("scope must be one of: phase, final")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_too_long_reason() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input("phase", 1, Some("r".repeat(501))),
+        )
+        .await
+        .expect_err("too long reason should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("reason is too long, max 500 chars")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_return_not_found_for_missing_jobs() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let phase_err = state
+        .execute_judge_replay_by_owner(&owner, replay_execute_input("phase", 999_999, None))
+        .await
+        .expect_err("missing phase job should fail");
+    match phase_err {
+        AppError::NotFound(msg) => assert!(msg.contains("judge phase job id 999999")),
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let final_err = state
+        .execute_judge_replay_by_owner(&owner, replay_execute_input("final", 999_999, None))
+        .await
+        .expect_err("missing final job should fail");
+    match final_err {
+        AppError::NotFound(msg) => assert!(msg.contains("judge final job id 999999")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_non_failed_status() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let (_phase_session_id, phase_job_id) =
+        seed_phase_job_for_trace_replay(&state, Utc::now(), "dispatched", None).await?;
+    let (_final_session_id, final_job_id) =
+        seed_final_job_for_trace_replay(&state, Utc::now(), "dispatched", None, None, None).await?;
+
+    let phase_err = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input("phase", phase_job_id as u64, None),
+        )
+        .await
+        .expect_err("non-failed phase should fail");
+    match phase_err {
+        AppError::DebateConflict(msg) => {
+            assert!(msg.contains("replay execute requires failed phase job"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let final_err = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input("final", final_job_id as u64, None),
+        )
+        .await
+        .expect_err("non-failed final should fail");
+    match final_err {
+        AppError::DebateConflict(msg) => {
+            assert!(msg.contains("replay execute requires failed final job"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_when_phase_report_exists() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let phase_job_id = seed_failed_phase_job(&state, session_id).await?;
+    insert_phase_report_for_job(&state, phase_job_id).await?;
+
+    let err = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input("phase", phase_job_id as u64, None),
+        )
+        .await
+        .expect_err("phase report exists should fail");
+    match err {
+        AppError::DebateConflict(msg) => assert!(msg.contains("already has report")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_when_final_report_exists() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let final_job_id = upsert_final_job(
+        &state,
+        session_id,
+        "failed",
+        Some("[response_accepted_false] accepted=false"),
+        Some("response_accepted_false"),
+        Some("final_contract_blocked"),
+    )
+    .await?;
+    upsert_final_report(&state, session_id, final_job_id, "pro").await?;
+
+    let err = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input("final", final_job_id as u64, None),
+        )
+        .await
+        .expect_err("final report exists should fail");
+    match err {
+        AppError::DebateConflict(msg) => assert!(msg.contains("already has report")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reject_out_of_range_job_id() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let overflow_job_id = (i64::MAX as u64).saturating_add(1);
+
+    let err = state
+        .execute_judge_replay_by_owner(&owner, replay_execute_input("phase", overflow_job_id, None))
+        .await
+        .expect_err("overflow job id should fail");
+    match err {
+        AppError::DebateError(msg) => {
+            assert_eq!(msg, "ops_judge_replay_execute_job_id_out_of_range")
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_judge_replay_by_owner_should_reset_phase_and_final_jobs_and_write_audit(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let phase_session_id = seed_topic_and_session(&state, "judging").await?;
+    let phase_job_id = seed_failed_phase_job(&state, phase_session_id).await?;
+    let phase_out = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input(
+                "phase",
+                phase_job_id as u64,
+                Some("  manual replay for phase  ".to_string()),
+            ),
+        )
+        .await?;
+    assert_eq!(phase_out.scope, "phase");
+    assert_eq!(phase_out.job_id, phase_job_id as u64);
+    assert_eq!(phase_out.previous_status, "failed");
+    assert_eq!(phase_out.new_status, "queued");
+    assert!(phase_out.new_trace_id.starts_with("judge-replay-phase-"));
+    assert!(phase_out
+        .new_idempotency_key
+        .starts_with("judge-replay:phase:"));
+
+    let phase_row: (String, i32, Option<String>, String, String) = sqlx::query_as(
+        r#"
+        SELECT status, dispatch_attempts, error_message, trace_id, idempotency_key
+        FROM judge_phase_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(phase_row.0, "queued");
+    assert_eq!(phase_row.1, 0);
+    assert!(phase_row.2.is_none());
+    assert_eq!(phase_row.3, phase_out.new_trace_id);
+    assert_eq!(phase_row.4, phase_out.new_idempotency_key);
+
+    let phase_audit: (String, Option<String>, String, String) = sqlx::query_as(
+        r#"
+        SELECT scope, reason, previous_status, new_status
+        FROM judge_replay_actions
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_out.audit_id as i64)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(phase_audit.0, "phase");
+    assert_eq!(phase_audit.1.as_deref(), Some("manual replay for phase"));
+    assert_eq!(phase_audit.2, "failed");
+    assert_eq!(phase_audit.3, "queued");
+
+    let final_session_id = seed_topic_and_session(&state, "judging").await?;
+    let final_job_id = upsert_final_job(
+        &state,
+        final_session_id,
+        "failed",
+        Some("[response_accepted_false] accepted=false"),
+        Some("response_accepted_false"),
+        Some("final_contract_blocked"),
+    )
+    .await?;
+    let final_out = state
+        .execute_judge_replay_by_owner(
+            &owner,
+            replay_execute_input(
+                "final",
+                final_job_id as u64,
+                Some("manual replay for final".to_string()),
+            ),
+        )
+        .await?;
+    assert_eq!(final_out.scope, "final");
+    assert_eq!(final_out.job_id, final_job_id as u64);
+    assert_eq!(final_out.previous_status, "failed");
+    assert_eq!(final_out.new_status, "queued");
+    assert!(final_out.new_trace_id.starts_with("judge-replay-final-"));
+    assert!(final_out
+        .new_idempotency_key
+        .starts_with("judge-replay:final:"));
+
+    let final_row: (
+        String,
+        i32,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+    ) = sqlx::query_as(
+        r#"
+        SELECT
+            status,
+            dispatch_attempts,
+            error_message,
+            error_code,
+            contract_failure_type,
+            trace_id,
+            idempotency_key
+        FROM judge_final_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(final_row.0, "queued");
+    assert_eq!(final_row.1, 0);
+    assert!(final_row.2.is_none());
+    assert!(final_row.3.is_none());
+    assert!(final_row.4.is_none());
+    assert_eq!(final_row.5, final_out.new_trace_id);
+    assert_eq!(final_row.6, final_out.new_idempotency_key);
     Ok(())
 }
 

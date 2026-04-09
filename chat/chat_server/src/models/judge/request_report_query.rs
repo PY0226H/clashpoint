@@ -23,6 +23,8 @@ const MAX_OPS_REPLAY_ACTIONS_STATUS_LEN: usize = 32;
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
 const OPS_JUDGE_REPLAY_PREVIEW_JOB_ID_OUT_OF_RANGE: &str =
     "ops_judge_replay_preview_job_id_out_of_range";
+const OPS_JUDGE_REPLAY_EXECUTE_JOB_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_execute_job_id_out_of_range";
 
 const JUDGE_REPORT_STATUS_READY: &str = "ready";
 const JUDGE_REPORT_STATUS_PENDING: &str = "pending";
@@ -1248,6 +1250,7 @@ impl AppState {
         let scope = normalize_replay_scope(input.scope.as_str())?;
         let reason = normalize_optional_replay_reason(input.reason)?;
         let job_id = input.job_id;
+        let job_id_i64 = checked_u64_to_i64(job_id, OPS_JUDGE_REPLAY_EXECUTE_JOB_ID_OUT_OF_RANGE)?;
         let new_status = "queued".to_string();
 
         if scope == "phase" {
@@ -1277,7 +1280,7 @@ impl AppState {
                 FOR UPDATE
                 "#,
             )
-            .bind(job_id as i64)
+            .bind(job_id_i64)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("judge phase job id {}", job_id)))?;
@@ -1414,7 +1417,7 @@ impl AppState {
             FOR UPDATE
             "#,
         )
-        .bind(job_id as i64)
+        .bind(job_id_i64)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("judge final job id {}", job_id)))?;

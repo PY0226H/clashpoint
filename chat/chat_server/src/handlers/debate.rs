@@ -351,9 +351,10 @@ mod tests {
     use super::*;
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
-        GetJudgeFinalDispatchFailureStatsOutput, GetJudgeReplayPreviewOpsOutput,
-        GetOpsRbacMeOutput, ListJudgeReviewOpsOutput, ListJudgeTraceReplayOpsOutput,
-        ListOpsRoleAssignmentsOutput, OpsRoleAssignment, RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        ExecuteJudgeReplayOpsOutput, GetJudgeFinalDispatchFailureStatsOutput,
+        GetJudgeReplayPreviewOpsOutput, GetOpsRbacMeOutput, ListJudgeReviewOpsOutput,
+        ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput, OpsRoleAssignment,
+        RevokeOpsRoleOutput, UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -3949,6 +3950,406 @@ mod tests {
                 .and_then(|value| value.as_i64()),
             Some(1)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": 1_u64
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_403_for_unbound_user() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Replay Execute Unbound".to_string(),
+                email: "ops-replay-execute-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-replay-execute-unbound-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": 1_u64
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute No Role",
+            "ops-replay-execute-no-role@acme.org",
+            "+8613810007791",
+            "ops-replay-execute-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": 1_u64
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:judge_rejudge"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_400_for_invalid_scope() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Invalid Scope",
+            "ops-replay-execute-invalid-scope@acme.org",
+            "+8613810007792",
+            "ops-replay-execute-invalid-scope-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "invalid",
+            "jobId": 1_u64
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("scope must be one of: phase, final"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_400_for_too_long_reason(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Long Reason",
+            "ops-replay-execute-long-reason@acme.org",
+            "+8613810007793",
+            "ops-replay-execute-long-reason-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": 1_u64,
+            "reason": "r".repeat(501)
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("reason is too long, max 500 chars"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_404_for_missing_job() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Missing Job",
+            "ops-replay-execute-missing-job@acme.org",
+            "+8613810007794",
+            "ops-replay-execute-missing-job-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": 999_999_u64
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("judge phase job id 999999"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_415_for_non_json_content_type(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Invalid Content Type",
+            "ops-replay-execute-invalid-content-type@acme.org",
+            "+8613810007795",
+            "ops-replay-execute-invalid-content-type-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "text/plain")
+            .body(Body::from("{\"scope\":\"phase\",\"jobId\":1}"))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "ops_judge_replay_execute_content_type_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_422_for_invalid_json_body(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Invalid Json",
+            "ops-replay-execute-invalid-json@acme.org",
+            "+8613810007796",
+            "ops-replay-execute-invalid-json-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from("{\"scope\":\"phase\",\"jobId\":1"))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "ops_judge_replay_execute_body_invalid_json");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_400_for_out_of_range_job_id(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Overflow Job Id",
+            "ops-replay-execute-overflow-job-id@acme.org",
+            "+8613810007797",
+            "ops-replay-execute-overflow-job-id-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": (i64::MAX as u64).saturating_add(1)
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_judge_replay_execute_job_id_out_of_range"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_replay_execute_route_should_return_200_for_phase_and_final(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Execute Reviewer",
+            "ops-replay-execute-reviewer@acme.org",
+            "+8613810007798",
+            "ops-replay-execute-reviewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let phase_job_id = seed_judge_phase_job_for_replay_preview(&state, "failed").await?;
+        let final_job_id = seed_judge_final_job_for_replay_preview(&state, "failed").await?;
+        let app = get_router(state).await?;
+
+        let phase_payload = serde_json::json!({
+            "scope": "phase",
+            "jobId": phase_job_id as u64,
+            "reason": "manual replay for phase"
+        });
+        let phase_req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&phase_payload)?))?;
+        let phase_res = app.clone().oneshot(phase_req).await?;
+        assert_eq!(phase_res.status(), StatusCode::OK);
+        let phase_body = phase_res.into_body().collect().await?.to_bytes();
+        let phase_out: ExecuteJudgeReplayOpsOutput = serde_json::from_slice(&phase_body)?;
+        assert_eq!(phase_out.scope, "phase");
+        assert_eq!(phase_out.job_id, phase_job_id as u64);
+        assert_eq!(phase_out.previous_status, "failed");
+        assert_eq!(phase_out.new_status, "queued");
+
+        let final_payload = serde_json::json!({
+            "scope": "final",
+            "jobId": final_job_id as u64,
+            "reason": "manual replay for final"
+        });
+        let final_req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-replay/execute")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&final_payload)?))?;
+        let final_res = app.oneshot(final_req).await?;
+        assert_eq!(final_res.status(), StatusCode::OK);
+        let final_body = final_res.into_body().collect().await?.to_bytes();
+        let final_out: ExecuteJudgeReplayOpsOutput = serde_json::from_slice(&final_body)?;
+        assert_eq!(final_out.scope, "final");
+        assert_eq!(final_out.job_id, final_job_id as u64);
+        assert_eq!(final_out.previous_status, "failed");
+        assert_eq!(final_out.new_status, "queued");
         Ok(())
     }
 
