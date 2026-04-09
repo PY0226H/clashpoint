@@ -513,3 +513,16 @@
 | api063-trace-replay-query-performance-baseline | `UNION ALL + 相关子查询` 在大数据量与高 limit 场景下性能边界尚无封板报告。 | 产出 explain+压测基线，明确是否需要 SQL 改写（LATERAL/预聚合）或索引增强。 | 归档查询计划、`p95/p99`、吞吐与 CPU 指标到 `docs/loadtest/evidence/`。 |
 | api063-trace-replay-read-rate-limit-rollout-decision | 接口已补观测日志，但读限流是否接入缺真实流量样本支撑。 | 基于 2~4 周观测数据完成 Go/No-Go 复评，若 Go 先落 user 维度后评估 ip 维度。 | 归档请求量、`limit` 分布、`p95/p99` 与 DB 压力指标，形成正式决策文档。 |
 | api063-trace-replay-permission-status-semantics-review | 权限拒绝仍是 `409 ops_permission_denied:*`，与常见 `403` 语义存在跨端认知偏差。 | 完成语义评审结论（维持 409 或迁移 403）并给出客户端迁移策略。 | 产出评审纪要 + 契约更新记录 + 对应回归测试清单。 |
+
+## AO. api064-judge-replay-preview-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-09）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API064 未完成项已并入本分组持续跟踪。
+- API064 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api064-judge-replay-preview-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api064-replay-preview-read-rate-limit-rollout-decision | preview 接口已补观测日志，但读限流是否启用缺真实流量样本支撑。 | 基于 2~4 周观测数据完成 Go/No-Go 复评；若 Go，先落 user 维度限流，再评估 ip 维度。 | 归档请求量、`message_count/snapshot_bytes` 分布、`p95/p99` 与 DB 读压力指标，形成正式决策文档。 |
+| api064-replay-preview-payload-governance-evaluation | phase 预览返回完整消息体，容量与响应体治理策略尚未冻结。 | 形成 payload 治理方案（保留现状 / 分层返回 / 裁剪策略）并明确兼容与回滚路径。 | 输出方案文档并完成至少 1 轮前后端联调评审纪要，补充容量对比基线。 |
+| api064-replay-preview-query-consistency-snapshot-evaluation | phase 分支采用 job + messages 双查询，是否需要读事务快照仍无样本结论。 | 完成一致性风险评估，明确是否引入事务快照或保持现状并附触发阈值。 | 归档异常样本统计（`message_count mismatch`）与评审纪要，补充对应回归/压测证据。 |
+| api064-replay-preview-permission-status-semantics-review | 权限拒绝仍沿用 `409 ops_permission_denied:*`，与常见 `403` 语义存在跨端认知偏差。 | 完成语义评审结论（维持 409 或迁移 403）并给出客户端迁移策略。 | 产出评审纪要 + 契约更新记录 + 对应回归测试清单。 |

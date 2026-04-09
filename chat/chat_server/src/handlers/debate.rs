@@ -351,9 +351,9 @@ mod tests {
     use super::*;
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
-        GetJudgeFinalDispatchFailureStatsOutput, GetOpsRbacMeOutput, ListJudgeReviewOpsOutput,
-        ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput, OpsRoleAssignment,
-        RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        GetJudgeFinalDispatchFailureStatsOutput, GetJudgeReplayPreviewOpsOutput,
+        GetOpsRbacMeOutput, ListJudgeReviewOpsOutput, ListJudgeTraceReplayOpsOutput,
+        ListOpsRoleAssignmentsOutput, OpsRoleAssignment, RevokeOpsRoleOutput, UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -458,6 +458,89 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         Ok((topic_id, row.0))
+    }
+
+    async fn seed_judge_phase_job_for_replay_preview(
+        state: &AppState,
+        status: &str,
+    ) -> Result<i64> {
+        let (_topic_id, session_id) = seed_topic_and_session(state).await?;
+        let now = Utc::now();
+        let first_message_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO session_messages(session_id, user_id, side, content, created_at)
+            VALUES ($1, 1, 'pro', 'phase replay preview message 1', $2)
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(now - Duration::seconds(1))
+        .fetch_one(&state.pool)
+        .await?;
+        let second_message_id: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO session_messages(session_id, user_id, side, content, created_at)
+            VALUES ($1, 2, 'con', 'phase replay preview message 2', $2)
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(now)
+        .fetch_one(&state.pool)
+        .await?;
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO judge_phase_jobs(
+                session_id, phase_no, message_start_id, message_end_id, message_count,
+                status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
+            )
+            VALUES (
+                $1, 1, $2, $3, 2,
+                $4, $5, $6, 'v3', 'v3-default',
+                'default', 'hybrid_v1', 2, NOW(), NULL
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(first_message_id.0)
+        .bind(second_message_id.0)
+        .bind(status)
+        .bind(format!("trace-phase-preview-{session_id}-{status}"))
+        .bind(format!("judge_phase_preview:{session_id}:{status}:v3"))
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    async fn seed_judge_final_job_for_replay_preview(
+        state: &AppState,
+        status: &str,
+    ) -> Result<i64> {
+        let (_topic_id, session_id) = seed_topic_and_session(state).await?;
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO judge_final_jobs(
+                session_id, phase_start_no, phase_end_no,
+                status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                topic_domain, dispatch_attempts, last_dispatch_at, error_message
+            )
+            VALUES (
+                $1, 1, 3,
+                $2, $3, $4, 'v3', 'v3-default',
+                'default', 2, NOW(), NULL
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(session_id)
+        .bind(status)
+        .bind(format!("trace-final-preview-{session_id}-{status}"))
+        .bind(format!("judge_final_preview:{session_id}:{status}:v3"))
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(row.0)
     }
 
     #[tokio::test]
@@ -3645,6 +3728,227 @@ mod tests {
         assert_eq!(out.failed_count, 0);
         assert_eq!(out.replay_eligible_count, 0);
         assert!(out.items.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_preview_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=1")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_preview_route_should_return_403_for_unbound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Replay Preview Unbound".to_string(),
+                email: "ops-replay-preview-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-replay-preview-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=1")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_preview_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Preview No Role",
+            "ops-replay-preview-no-role@acme.org",
+            "+8613810007787",
+            "ops-replay-preview-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=1")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:judge_review"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_preview_route_should_return_400_for_invalid_scope() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Preview Invalid Scope",
+            "ops-replay-preview-invalid-scope@acme.org",
+            "+8613810007788",
+            "ops-replay-preview-invalid-scope-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/preview?scope=invalid&jobId=1")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("scope must be one of: phase, final"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_preview_route_should_return_404_for_missing_job() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Preview Not Found",
+            "ops-replay-preview-not-found@acme.org",
+            "+8613810007789",
+            "ops-replay-preview-not-found-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=999999")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("judge phase job id 999999"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_preview_route_should_return_200_for_phase_and_final() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Preview Viewer",
+            "ops-replay-preview-viewer@acme.org",
+            "+8613810007790",
+            "ops-replay-preview-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let phase_job_id = seed_judge_phase_job_for_replay_preview(&state, "failed").await?;
+        let final_job_id = seed_judge_final_job_for_replay_preview(&state, "dispatched").await?;
+        let app = get_router(state).await?;
+
+        let phase_req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/ops/judge-replay/preview?scope=phase&jobId={phase_job_id}"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let phase_res = app.clone().oneshot(phase_req).await?;
+        assert_eq!(phase_res.status(), StatusCode::OK);
+        let phase_body = phase_res.into_body().collect().await?.to_bytes();
+        let phase_out: GetJudgeReplayPreviewOpsOutput = serde_json::from_slice(&phase_body)?;
+        assert!(phase_out.side_effect_free);
+        assert_eq!(phase_out.meta.scope, "phase");
+        assert_eq!(phase_out.meta.job_id, phase_job_id as u64);
+        assert!(phase_out.meta.replay_eligible);
+        assert_eq!(phase_out.meta.message_count, Some(2));
+        let phase_messages = phase_out
+            .request_snapshot
+            .get("messages")
+            .and_then(|value| value.as_array())
+            .expect("phase messages should exist");
+        assert_eq!(phase_messages.len(), 2);
+
+        let final_req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/ops/judge-replay/preview?scope=final&jobId={final_job_id}"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let final_res = app.oneshot(final_req).await?;
+        assert_eq!(final_res.status(), StatusCode::OK);
+        let final_body = final_res.into_body().collect().await?.to_bytes();
+        let final_out: GetJudgeReplayPreviewOpsOutput = serde_json::from_slice(&final_body)?;
+        assert!(final_out.side_effect_free);
+        assert_eq!(final_out.meta.scope, "final");
+        assert_eq!(final_out.meta.job_id, final_job_id as u64);
+        assert!(!final_out.meta.replay_eligible);
+        assert_eq!(
+            final_out.meta.replay_block_reason.as_deref(),
+            Some("job_status_not_terminal")
+        );
+        assert_eq!(
+            final_out
+                .request_snapshot
+                .get("phase_start_no")
+                .and_then(|value| value.as_i64()),
+            Some(1)
+        );
         Ok(())
     }
 

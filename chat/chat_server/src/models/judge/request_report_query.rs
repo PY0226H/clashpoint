@@ -21,6 +21,8 @@ const MAX_REPLAY_REASON_LEN: usize = 500;
 const MAX_OPS_REPLAY_ACTIONS_KEYWORD_LEN: usize = 100;
 const MAX_OPS_REPLAY_ACTIONS_STATUS_LEN: usize = 32;
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
+const OPS_JUDGE_REPLAY_PREVIEW_JOB_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_preview_job_id_out_of_range";
 
 const JUDGE_REPORT_STATUS_READY: &str = "ready";
 const JUDGE_REPORT_STATUS_PENDING: &str = "pending";
@@ -164,6 +166,10 @@ fn normalize_replay_scope(scope: &str) -> Result<String, AppError> {
             "scope must be one of: phase, final".to_string(),
         ))
     }
+}
+
+fn checked_u64_to_i64(value: u64, code: &'static str) -> Result<i64, AppError> {
+    i64::try_from(value).map_err(|_| AppError::DebateError(code.to_string()))
 }
 
 fn is_replay_eligible_status(status: &str) -> bool {
@@ -1016,6 +1022,8 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::JudgeReview)
             .await?;
         let scope = normalize_replay_scope(query.scope.as_str())?;
+        let job_id_i64 =
+            checked_u64_to_i64(query.job_id, OPS_JUDGE_REPLAY_PREVIEW_JOB_ID_OUT_OF_RANGE)?;
         if scope == "phase" {
             let job: JudgePhaseReplayJobRow = sqlx::query_as(
                 r#"
@@ -1042,7 +1050,7 @@ impl AppState {
                 LIMIT 1
                 "#,
             )
-            .bind(query.job_id as i64)
+            .bind(job_id_i64)
             .fetch_optional(&self.pool)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("judge phase job id {}", query.job_id)))?;
@@ -1168,7 +1176,7 @@ impl AppState {
             LIMIT 1
             "#,
         )
-        .bind(query.job_id as i64)
+        .bind(job_id_i64)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("judge final job id {}", query.job_id)))?;

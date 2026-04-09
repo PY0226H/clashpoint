@@ -2343,8 +2343,12 @@ pub(crate) async fn list_judge_trace_replay_ops_handler(
     ),
     responses(
         (status = 200, description = "Ops replay preview snapshot", body = crate::GetJudgeReplayPreviewOpsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 404, description = "Replay target not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2353,11 +2357,48 @@ pub(crate) async fn list_judge_trace_replay_ops_handler(
 pub(crate) async fn get_judge_replay_preview_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<GetJudgeReplayPreviewOpsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state
-        .get_judge_replay_preview_by_owner(&user, input)
-        .await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let query_scope = input.scope.clone();
+    let query_job_id = input.job_id;
+    let ret = match state.get_judge_replay_preview_by_owner(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                scope = query_scope.as_str(),
+                job_id = query_job_id,
+                latency_ms,
+                decision = "failed",
+                "get ops judge replay preview failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let snapshot_bytes = serde_json::to_vec(&ret.request_snapshot)
+        .map(|payload| payload.len() as u64)
+        .unwrap_or_default();
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        scope = ret.meta.scope.as_str(),
+        job_id = ret.meta.job_id,
+        status = ret.meta.status.as_str(),
+        replay_eligible = ret.meta.replay_eligible,
+        message_count = ret.meta.message_count.unwrap_or_default(),
+        snapshot_hash = ret.snapshot_hash.as_str(),
+        snapshot_bytes,
+        latency_ms,
+        decision = "success",
+        "get ops judge replay preview served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 

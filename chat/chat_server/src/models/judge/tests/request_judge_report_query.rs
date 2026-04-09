@@ -235,6 +235,13 @@ fn default_trace_replay_query() -> ListJudgeTraceReplayOpsQuery {
     }
 }
 
+fn replay_preview_query(scope: &str, job_id: u64) -> GetJudgeReplayPreviewOpsQuery {
+    GetJudgeReplayPreviewOpsQuery {
+        scope: scope.to_string(),
+        job_id,
+    }
+}
+
 async fn seed_failed_final_job_for_stats(
     state: &AppState,
     created_at: chrono::DateTime<Utc>,
@@ -1041,6 +1048,158 @@ async fn list_judge_trace_replay_by_owner_should_keep_stable_order_when_created_
             .then_with(|| b.2.cmp(&a.2))
     });
     assert_eq!(observed, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_reject_invalid_scope() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .get_judge_replay_preview_by_owner(&owner, replay_preview_query("invalid", 1))
+        .await
+        .expect_err("invalid scope should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("scope must be one of: phase, final")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_return_not_found_for_missing_jobs() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let phase_err = state
+        .get_judge_replay_preview_by_owner(&owner, replay_preview_query("phase", 999_999))
+        .await
+        .expect_err("missing phase job should be rejected");
+    match phase_err {
+        AppError::NotFound(msg) => assert!(msg.contains("judge phase job id 999999")),
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let final_err = state
+        .get_judge_replay_preview_by_owner(&owner, replay_preview_query("final", 999_999))
+        .await
+        .expect_err("missing final job should be rejected");
+    match final_err {
+        AppError::NotFound(msg) => assert!(msg.contains("judge final job id 999999")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_reject_phase_message_count_mismatch() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let (_session_id, phase_job_id) =
+        seed_phase_job_for_trace_replay(&state, Utc::now(), "failed", None).await?;
+    sqlx::query(
+        r#"
+        UPDATE judge_phase_jobs
+        SET message_count = message_count + 1
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .execute(&state.pool)
+    .await?;
+
+    let err = state
+        .get_judge_replay_preview_by_owner(
+            &owner,
+            replay_preview_query("phase", phase_job_id as u64),
+        )
+        .await
+        .expect_err("message count mismatch should fail");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("message_count mismatch")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_reject_invalid_final_phase_range() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let (_session_id, final_job_id) =
+        seed_final_job_for_trace_replay(&state, Utc::now(), "failed", None, None, None).await?;
+    // 生产库由 check constraint 兜底，这里临时移除约束以覆盖防御分支。
+    sqlx::query("ALTER TABLE judge_final_jobs DROP CONSTRAINT IF EXISTS judge_final_jobs_check")
+        .execute(&state.pool)
+        .await?;
+    sqlx::query(
+        r#"
+        UPDATE judge_final_jobs
+        SET phase_start_no = 4, phase_end_no = 3
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .execute(&state.pool)
+    .await?;
+
+    let err = state
+        .get_judge_replay_preview_by_owner(
+            &owner,
+            replay_preview_query("final", final_job_id as u64),
+        )
+        .await
+        .expect_err("invalid final phase range should fail");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("phase range invalid")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_mark_replay_block_reason_for_non_terminal_status(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let (_session_id, final_job_id) =
+        seed_final_job_for_trace_replay(&state, Utc::now(), "dispatched", None, None, None).await?;
+
+    let out = state
+        .get_judge_replay_preview_by_owner(
+            &owner,
+            replay_preview_query("final", final_job_id as u64),
+        )
+        .await?;
+    assert_eq!(out.meta.scope, "final");
+    assert_eq!(out.meta.job_id, final_job_id as u64);
+    assert!(!out.meta.replay_eligible);
+    assert_eq!(
+        out.meta.replay_block_reason.as_deref(),
+        Some("job_status_not_terminal")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_replay_preview_by_owner_should_reject_out_of_range_job_id() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let overflow_job_id = (i64::MAX as u64).saturating_add(1);
+
+    let err = state
+        .get_judge_replay_preview_by_owner(&owner, replay_preview_query("phase", overflow_job_id))
+        .await
+        .expect_err("overflow job id should fail");
+    match err {
+        AppError::DebateError(msg) => {
+            assert_eq!(msg, "ops_judge_replay_preview_job_id_out_of_range")
+        }
+        other => panic!("unexpected error: {other}"),
+    }
     Ok(())
 }
 
