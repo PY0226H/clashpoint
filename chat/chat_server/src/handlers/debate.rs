@@ -2214,6 +2214,13 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert!(error.error.contains("ops_permission_denied:role_manage"));
+        // non-owner 且缺失 If-Match 时，当前契约优先返回权限拒绝（409），而不是 if-match-required（400）。
+        assert!(error
+            .code
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("ops_permission_denied:role_manage"));
+        assert_ne!(error.code.as_deref(), Some("ops_rbac_if_match_required"));
         Ok(())
     }
 
@@ -2448,6 +2455,85 @@ mod tests {
         .await?;
         assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_revision_conflict"));
         assert_eq!(outbox_row.1.as_deref(), Some("conflict"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_400_when_if_match_invalid_and_record_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-revoke-invalid-if-match-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-revoke-invalid-if-match";
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", "W/\"stale\"")
+            .header("x-request-id", request_id)
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.code.as_deref(), Some("ops_rbac_if_match_invalid"));
+
+        let target_role: Option<String> =
+            sqlx::query_scalar("SELECT role FROM platform_user_roles WHERE user_id = $1")
+                .bind(2_i64)
+                .fetch_optional(&state.pool)
+                .await?;
+        assert_eq!(target_role.as_deref(), Some("ops_reviewer"));
+
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("ops_rbac_if_match_invalid"));
+        assert_eq!(audit_row.1.as_deref(), Some("validation_error"));
+
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_if_match_invalid"));
+        assert_eq!(outbox_row.1.as_deref(), Some("validation_error"));
         Ok(())
     }
 

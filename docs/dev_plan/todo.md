@@ -447,3 +447,15 @@
 | debate-ops-rbac-roles-rate-limit-tuning-baseline | RBAC 三接口限流已接入，但阈值仍是工程初值，缺真实样本回标。 | 形成阈值调优基线报告：命中率、误杀率、`p95/p99`、建议参数区间。 | 执行 RBAC 管理面接口专项压测并归档命令、时间戳、结果报告到 `docs/loadtest/evidence/`。 |
 | debate-ops-rbac-audit-query-surface-and-retention-policy | 审计落库与脚本级查询/留存已落地，但“脚本级 vs 受控 API”与归档层策略尚未评审冻结。 | 完成 RBAC 审计查询面形态决策（脚本或 API）与留存/归档策略定稿，形成正式结论与回滚路径。 | 评审纪要 + 结论文档归档，并补充受控查询演练与留存执行验收清单。 |
 | debate-ops-rbac-roles-pagination-pii-policy | `rbacRevision` 已落地，PII 已收口为“默认 minimal + 显式 full”；分页触发阈值与扩展分页契约仍未定稿。 | 冻结分页触发阈值与分页预案（cursor/limit 或等效），并固化 full PII 触发条件与审计要求。 | 回归分页边界与 PII 策略场景，并归档“revision + UI 刷新行为 + 策略评审记录”。 |
+
+## AJ. api059-rbac-roles-write-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-09）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API059 未解决项已并入本分组持续跟踪。
+- API059 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api059-rbac-roles-write-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api059-rbac-write-trusted-proxy-production-rollout | `server.forwarded_header_trust` 机制已落地，但生产代理链路白名单（`trusted_proxy_ids/cidrs`）与误配排查 Runbook 尚未完成运维收口。 | 形成并上线生产白名单配置，完成一次误配/缺配演练并沉淀排查手册。 | 生产前在预发执行“trusted/untrusted 透传头”对照回归，归档配置快照、演练命令与结果记录到 `docs/consistency_reports/`。 |
+| api059-rbac-write-forwarded-header-governance-rollout | API059 已完成“仅可信代理采信转发头”，但 auth/payment/ticket 等控制面写接口尚未统一复用同策略。 | 完成跨接口治理清单与改造收口，确保“转发头采信边界”在控制面写路径一致。 | 输出治理评审清单并执行接口级回归（至少覆盖 auth/payment/ticket 各 1 条核心写路径），归档结果到 `docs/consistency_reports/`。 |
+| api059-rbac-write-observability-and-load-baseline | API059 功能闭环已完成，但 RBAC 写链路尚未形成正式 dashboard/告警阈值与并发冲突/限流压测基线。 | 建立 `ops.rbac.roles_write.*` 观测看板与告警阈值，并形成 `ops_rbac_revision_conflict`、限流命中率、`p95/p99` 压测基线报告。 | 执行 RBAC 写接口专项压测，导出看板配置与告警演练记录，统一归档到 `docs/loadtest/evidence/` 与 `docs/consistency_reports/`。 |

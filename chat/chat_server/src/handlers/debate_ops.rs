@@ -66,6 +66,7 @@ const OPS_RBAC_ROLES_WRITE_BODY_DATA_INVALID_CODE: &str = "ops_rbac_roles_write_
 const OPS_RBAC_ROLES_WRITE_BODY_READ_FAILED_CODE: &str = "ops_rbac_roles_write_body_read_failed";
 const OPS_RBAC_ROLES_WRITE_BODY_REJECTED_CODE: &str = "ops_rbac_roles_write_body_rejected";
 const OPS_RBAC_IF_MATCH_INVALID_CODE: &str = "ops_rbac_if_match_invalid";
+const OPS_RBAC_IF_MATCH_REQUIRED_CODE: &str = "ops_rbac_if_match_required";
 const OPS_RBAC_REVISION_HEADER: &str = "x-rbac-revision";
 const OPS_RBAC_WARNING_HEADER: &str = "x-rbac-warning";
 const OPS_RBAC_WARNING_OWNER_SELF_ROLE_ASSIGNMENT_NO_EFFECT: &str =
@@ -153,6 +154,10 @@ struct OpsRbacRolesWriteMetrics {
     rate_limited_total: AtomicU64,
     upsert_total: AtomicU64,
     revoke_total: AtomicU64,
+    if_match_invalid_total: AtomicU64,
+    if_match_missing_total: AtomicU64,
+    revoke_removed_total: AtomicU64,
+    revoke_noop_total: AtomicU64,
     latency_ms_total: AtomicU64,
     latency_ms_samples_total: AtomicU64,
 }
@@ -228,6 +233,32 @@ impl OpsRbacRolesWriteMetrics {
 
     fn observe_rate_limited(&self) {
         self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_if_match_invalid(&self) {
+        self.if_match_invalid_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_if_match_missing(&self) {
+        self.if_match_missing_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_revoke_outcome(&self, removed: bool) {
+        let target = if removed {
+            &self.revoke_removed_total
+        } else {
+            &self.revoke_noop_total
+        };
+        target.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot_revoke_signals(&self) -> (u64, u64, u64, u64) {
+        (
+            self.if_match_invalid_total.load(Ordering::Relaxed),
+            self.if_match_missing_total.load(Ordering::Relaxed),
+            self.revoke_removed_total.load(Ordering::Relaxed),
+            self.revoke_noop_total.load(Ordering::Relaxed),
+        )
     }
 
     fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64, u64) {
@@ -1480,6 +1511,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         Err(error_code) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            OPS_RBAC_ROLES_WRITE_METRICS.observe_if_match_invalid();
             let (
                 request_total,
                 success_total,
@@ -1671,6 +1703,9 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
             let (audit_error_code, audit_failure_reason) = classify_ops_rbac_failure(&err);
+            if audit_error_code.as_deref() == Some(OPS_RBAC_IF_MATCH_REQUIRED_CODE) {
+                OPS_RBAC_ROLES_WRITE_METRICS.observe_if_match_missing();
+            }
             tracing::warn!(
                 user_id = user.id,
                 target_user_id = user_id,
@@ -1801,6 +1836,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         Err(error_code) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            OPS_RBAC_ROLES_WRITE_METRICS.observe_if_match_invalid();
             let (
                 request_total,
                 success_total,
@@ -1810,6 +1846,12 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                 upsert_total,
                 revoke_total,
             ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot();
+            let (
+                if_match_invalid_total,
+                if_match_missing_total,
+                revoke_removed_total,
+                revoke_noop_total,
+            ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot_revoke_signals();
             tracing::warn!(
                 user_id = user.id,
                 target_user_id = user_id,
@@ -1826,6 +1868,10 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                 ops_rbac_roles_write_rate_limited_total = rate_limited_total,
                 ops_rbac_roles_write_upsert_total = upsert_total,
                 ops_rbac_roles_write_revoke_total = revoke_total,
+                ops_rbac_roles_write_if_match_invalid_total = if_match_invalid_total,
+                ops_rbac_roles_write_if_match_missing_total = if_match_missing_total,
+                ops_rbac_roles_write_revoke_removed_total = revoke_removed_total,
+                ops_rbac_roles_write_revoke_noop_total = revoke_noop_total,
                 "revoke ops role assignment rejected because if-match is invalid"
             );
             insert_ops_rbac_audit_log_best_effort(
@@ -1961,6 +2007,15 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
             let latency_ms = started_at.elapsed().as_millis() as u64;
             OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
             let (audit_error_code, audit_failure_reason) = classify_ops_rbac_failure(&err);
+            if audit_error_code.as_deref() == Some(OPS_RBAC_IF_MATCH_REQUIRED_CODE) {
+                OPS_RBAC_ROLES_WRITE_METRICS.observe_if_match_missing();
+            }
+            let (
+                if_match_invalid_total,
+                if_match_missing_total,
+                revoke_removed_total,
+                revoke_noop_total,
+            ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot_revoke_signals();
             tracing::warn!(
                 user_id = user.id,
                 target_user_id = user_id,
@@ -1968,6 +2023,10 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
                 audit_event = "ops_rbac_roles_write_revoke_failed",
                 decision = "failed",
                 latency_ms,
+                ops_rbac_roles_write_if_match_invalid_total = if_match_invalid_total,
+                ops_rbac_roles_write_if_match_missing_total = if_match_missing_total,
+                ops_rbac_roles_write_revoke_removed_total = revoke_removed_total,
+                ops_rbac_roles_write_revoke_noop_total = revoke_noop_total,
                 "revoke ops role assignment failed: {}",
                 err
             );
@@ -1992,6 +2051,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
     };
     let latency_ms = started_at.elapsed().as_millis() as u64;
     OPS_RBAC_ROLES_WRITE_METRICS.observe_success(latency_ms);
+    OPS_RBAC_ROLES_WRITE_METRICS.observe_revoke_outcome(ret.removed);
     let (
         request_total,
         success_total,
@@ -2001,6 +2061,8 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         upsert_total,
         revoke_total,
     ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot();
+    let (if_match_invalid_total, if_match_missing_total, revoke_removed_total, revoke_noop_total) =
+        OPS_RBAC_ROLES_WRITE_METRICS.snapshot_revoke_signals();
     tracing::info!(
         user_id = user.id,
         target_user_id = user_id,
@@ -2016,6 +2078,10 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         ops_rbac_roles_write_rate_limited_total = rate_limited_total,
         ops_rbac_roles_write_upsert_total = upsert_total,
         ops_rbac_roles_write_revoke_total = revoke_total,
+        ops_rbac_roles_write_if_match_invalid_total = if_match_invalid_total,
+        ops_rbac_roles_write_if_match_missing_total = if_match_missing_total,
+        ops_rbac_roles_write_revoke_removed_total = revoke_removed_total,
+        ops_rbac_roles_write_revoke_noop_total = revoke_noop_total,
         "revoke ops role assignment served"
     );
     if let Err(err) =

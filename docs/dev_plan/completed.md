@@ -26,6 +26,7 @@
 |---|---|---|---|---|---|
 | debate-ops-topics-create-hardening | `POST /api/debate/ops/topics` 全链路优化已落地。 | `chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/models/debate/ops.rs`、`chat/migrations/20260407224500_ops_debate_topic_create_hardening.sql` | route + service 回归测试已通过。 | 历史完成项迁移（2026-04-08） | （无） |
 | api058-rbac-roles-governance-phase-closure | `GET /api/debate/ops/rbac/roles` 阶段性收口已完成并归档。 | `chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/models/rbac.rs`、`chat/migrations/20260408042000_ops_rbac_audits.sql` | OpenAPI、限流、审计落库与前后端契约同步已完成。 | 当前开发计划阶段收口（2026-04-08） | （无） |
+| api059-rbac-roles-write-governance-phase-closure | `PUT /api/debate/ops/rbac/roles/:user_id` 阶段性收口已完成（S0~S3-8：输入边界、原子写、幂等、受限委派、415/422 观测、If-Match 条件写与服务端强制、审计 outbox worker + 成功同事务入队、Owner 自写 warning、trusted proxy 来源治理）。 | `chat/chat_server/src/handlers/debate_ops.rs`、`chat/chat_server/src/handlers/debate.rs`、`chat/chat_server/src/models/rbac.rs`、`chat/chat_server/src/application/request_guard.rs`、`chat/chat_server/src/config.rs`、`frontend/packages/ops-domain/src/index.ts`、`frontend/packages/app-shell/src/pages/OpsConsolePage.tsx` | `ops_rbac_roles_user_id_route_should` 路由回归组通过（30 条）；`request_rate_limit_ip_key_with_user_fallback_should` 单测通过；`module-turn-harness --strict` 全量门禁通过并产出工件。 | 当前开发计划阶段收口（2026-04-09） | `api059-rbac-write-trusted-proxy-production-rollout`；`api059-rbac-write-forwarded-header-governance-rollout`；`api059-rbac-write-observability-and-load-baseline` |
 
 ### B4. 基础设施与工具链
 | 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
