@@ -29,6 +29,7 @@ const ALERT_STATUS_OPTIONS = ["all", "raised", "suppressed", "cleared"] as const
 const ALERT_PAGE_SIZE_OPTIONS = [1, 3, 5, 10] as const;
 const OBSERVABILITY_ERROR_MAX_VISIBLE = 4;
 const OBSERVABILITY_ERROR_MAX_CHARS = 120;
+const OPS_RBAC_REVISION_CONFLICT_CODE = "ops_rbac_revision_conflict";
 type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
 type RoleListPiiLevel = NonNullable<ListOpsRoleAssignmentsInput["piiLevel"]>;
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
@@ -259,6 +260,10 @@ export function OpsConsolePage() {
     enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
     retry: false
   });
+  const roleWriteRevision = String(
+    roleAssignmentsQuery.data?.rbacRevision || rbacMeQuery.data?.rbacRevision || ""
+  ).trim();
+  const roleWriteRevisionReady = roleWriteRevision.length > 0;
 
   useEffect(() => {
     setAlertPageIndex(0);
@@ -268,8 +273,8 @@ export function OpsConsolePage() {
   }, [splitReviewAuditPageSize]);
 
   const upsertRoleMutation = useMutation({
-    mutationFn: async (payload: { userId: number; role: OpsRole }) =>
-      upsertOpsRoleAssignment(payload.userId, payload.role),
+    mutationFn: async (payload: { userId: number; role: OpsRole; expectedRevision: string }) =>
+      upsertOpsRoleAssignment(payload.userId, payload.role, payload.expectedRevision),
     onSuccess: (result) => {
       setPageHint(`Granted ${result.role} to user #${result.userId}.`);
       setTargetUserId("");
@@ -277,12 +282,20 @@ export function OpsConsolePage() {
       void queryClient.invalidateQueries({ queryKey: ["ops-rbac-me"] });
     },
     onError: (error) => {
-      setPageHint(toOpsDomainError(error));
+      const info = getOpsDomainErrorInfo(error);
+      if (info.code === OPS_RBAC_REVISION_CONFLICT_CODE) {
+        setPageHint("RBAC revision conflict detected. Snapshot refreshed, please retry.");
+        void queryClient.invalidateQueries({ queryKey: ["ops-role-assignments"] });
+        void queryClient.invalidateQueries({ queryKey: ["ops-rbac-me"] });
+        return;
+      }
+      setPageHint(info.message || toOpsDomainError(error));
     }
   });
 
   const revokeRoleMutation = useMutation({
-    mutationFn: async (userId: number) => revokeOpsRoleAssignment(userId),
+    mutationFn: async (payload: { userId: number; expectedRevision: string }) =>
+      revokeOpsRoleAssignment(payload.userId, payload.expectedRevision),
     onSuccess: (result) => {
       setPageHint(
         result.removed
@@ -290,9 +303,17 @@ export function OpsConsolePage() {
           : `No role assignment existed for user #${result.userId}.`
       );
       void queryClient.invalidateQueries({ queryKey: ["ops-role-assignments"] });
+      void queryClient.invalidateQueries({ queryKey: ["ops-rbac-me"] });
     },
     onError: (error) => {
-      setPageHint(toOpsDomainError(error));
+      const info = getOpsDomainErrorInfo(error);
+      if (info.code === OPS_RBAC_REVISION_CONFLICT_CODE) {
+        setPageHint("RBAC revision conflict detected. Snapshot refreshed, please retry.");
+        void queryClient.invalidateQueries({ queryKey: ["ops-role-assignments"] });
+        void queryClient.invalidateQueries({ queryKey: ["ops-rbac-me"] });
+        return;
+      }
+      setPageHint(info.message || toOpsDomainError(error));
     }
   });
   const applyAnomalyActionMutation = useMutation({
@@ -628,13 +649,18 @@ export function OpsConsolePage() {
                 </select>
               </label>
               <Button
-                disabled={upsertRoleMutation.isPending || !targetUserId.trim()}
-                onClick={() =>
+                disabled={upsertRoleMutation.isPending || !targetUserId.trim() || !roleWriteRevisionReady}
+                onClick={() => {
+                  if (!roleWriteRevisionReady) {
+                    setPageHint("RBAC revision is not ready yet. Please retry in a moment.");
+                    return;
+                  }
                   upsertRoleMutation.mutate({
                     userId: Number(targetUserId),
-                    role: targetRole
-                  })
-                }
+                    role: targetRole,
+                    expectedRevision: roleWriteRevision
+                  });
+                }}
                 type="button"
               >
                 {upsertRoleMutation.isPending ? "Granting..." : "Grant Role"}
@@ -647,6 +673,9 @@ export function OpsConsolePage() {
             ) : null}
             {roleAssignmentsQuery.data?.rbacRevision ? (
               <InlineHint>Role list revision: {roleAssignmentsQuery.data.rbacRevision}</InlineHint>
+            ) : null}
+            {!roleWriteRevisionReady ? (
+              <InlineHint>RBAC revision is loading. Role write actions stay disabled until revision is ready.</InlineHint>
             ) : null}
             <div className="echo-ops-role-list">
               {(roleAssignmentsQuery.data?.items || []).map((item) => (
@@ -663,8 +692,17 @@ export function OpsConsolePage() {
                   <InlineHint>grantedBy: #{item.grantedBy}</InlineHint>
                   <div className="echo-ops-role-actions">
                     <Button
-                      disabled={revokeRoleMutation.isPending}
-                      onClick={() => revokeRoleMutation.mutate(item.userId)}
+                      disabled={revokeRoleMutation.isPending || !roleWriteRevisionReady}
+                      onClick={() => {
+                        if (!roleWriteRevisionReady) {
+                          setPageHint("RBAC revision is not ready yet. Please retry in a moment.");
+                          return;
+                        }
+                        revokeRoleMutation.mutate({
+                          userId: item.userId,
+                          expectedRevision: roleWriteRevision
+                        });
+                      }}
                       type="button"
                     >
                       Revoke #{item.userId}

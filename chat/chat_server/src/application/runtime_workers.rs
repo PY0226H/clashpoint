@@ -39,6 +39,10 @@ pub(crate) fn spawn_background_workers(
         spawn_event_outbox_relay_worker(state.clone());
     }
 
+    if runtime.ops_rbac_audit_outbox_worker_enabled {
+        spawn_ops_rbac_audit_outbox_worker(state.clone());
+    }
+
     spawn_auth_refresh_consistency_outbox_worker(state.clone());
     spawn_auth_token_version_invalidation_retry_worker(state.clone());
     spawn_auth_sessions_retention_cleanup_worker(state.clone());
@@ -268,6 +272,35 @@ fn spawn_event_outbox_relay_worker(state: AppState) {
                     state.observe_event_outbox_worker_error();
                     warn!("event outbox relay worker tick failed: {}", err);
                 }
+            }
+            sleep(Duration::from_secs(interval_secs)).await;
+        }
+    });
+}
+
+fn spawn_ops_rbac_audit_outbox_worker(state: AppState) {
+    tokio::spawn(async move {
+        let interval_secs = state
+            .config
+            .worker_runtime
+            .ops_rbac_audit_outbox_poll_interval_secs
+            .max(1);
+        loop {
+            match state
+                .retry_ops_rbac_audit_outbox_once(
+                    crate::handlers::debate_ops::OPS_RBAC_AUDIT_OUTBOX_BATCH_SIZE,
+                )
+                .await
+            {
+                Ok(report) => {
+                    debug!(
+                        attempted = report.attempted,
+                        delivered = report.delivered,
+                        requeued = report.requeued,
+                        "ops rbac audit outbox worker tick success"
+                    );
+                }
+                Err(err) => warn!("ops rbac audit outbox worker tick failed: {}", err),
             }
             sleep(Duration::from_secs(interval_secs)).await;
         }

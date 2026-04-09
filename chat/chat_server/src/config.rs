@@ -34,6 +34,16 @@ pub struct ServerConfig {
     pub port: u16,
     pub db_url: String,
     pub base_dir: PathBuf,
+    #[serde(default)]
+    pub forwarded_header_trust: ServerForwardedHeaderTrustConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerForwardedHeaderTrustConfig {
+    #[serde(default)]
+    pub trusted_proxy_ids: Vec<String>,
+    #[serde(default)]
+    pub trusted_proxy_cidrs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +162,8 @@ pub struct WorkerRuntimeConfig {
     pub ai_judge_alert_outbox_bridge_worker_enabled: bool,
     #[serde(default = "default_worker_runtime_event_outbox_relay_worker_enabled")]
     pub event_outbox_relay_worker_enabled: bool,
+    #[serde(default = "default_worker_runtime_ops_rbac_audit_outbox_worker_enabled")]
+    pub ops_rbac_audit_outbox_worker_enabled: bool,
     #[serde(default = "default_worker_runtime_debate_lifecycle_interval_secs")]
     pub debate_lifecycle_interval_secs: u64,
     #[serde(default = "default_worker_runtime_debate_lifecycle_batch_size")]
@@ -170,6 +182,8 @@ pub struct WorkerRuntimeConfig {
     pub event_outbox_base_backoff_ms: u64,
     #[serde(default = "default_worker_runtime_event_outbox_max_backoff_ms")]
     pub event_outbox_max_backoff_ms: u64,
+    #[serde(default = "default_worker_runtime_ops_rbac_audit_outbox_poll_interval_secs")]
+    pub ops_rbac_audit_outbox_poll_interval_secs: u64,
     #[serde(
         default = "default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold"
     )]
@@ -242,6 +256,8 @@ impl Default for WorkerRuntimeConfig {
                 default_worker_runtime_ai_judge_alert_outbox_bridge_worker_enabled(),
             event_outbox_relay_worker_enabled:
                 default_worker_runtime_event_outbox_relay_worker_enabled(),
+            ops_rbac_audit_outbox_worker_enabled:
+                default_worker_runtime_ops_rbac_audit_outbox_worker_enabled(),
             debate_lifecycle_interval_secs: default_worker_runtime_debate_lifecycle_interval_secs(),
             debate_lifecycle_batch_size: default_worker_runtime_debate_lifecycle_batch_size(),
             ops_observability_interval_secs: default_worker_runtime_ops_observability_interval_secs(
@@ -253,6 +269,8 @@ impl Default for WorkerRuntimeConfig {
             event_outbox_max_attempts: default_worker_runtime_event_outbox_max_attempts(),
             event_outbox_base_backoff_ms: default_worker_runtime_event_outbox_base_backoff_ms(),
             event_outbox_max_backoff_ms: default_worker_runtime_event_outbox_max_backoff_ms(),
+            ops_rbac_audit_outbox_poll_interval_secs:
+                default_worker_runtime_ops_rbac_audit_outbox_poll_interval_secs(),
             kafka_readiness_pending_dlq_blocking_count_threshold:
                 default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold(),
             kafka_readiness_pending_dlq_oldest_age_blocking_secs:
@@ -484,6 +502,10 @@ fn default_worker_runtime_event_outbox_relay_worker_enabled() -> bool {
     true
 }
 
+fn default_worker_runtime_ops_rbac_audit_outbox_worker_enabled() -> bool {
+    true
+}
+
 fn default_worker_runtime_debate_lifecycle_interval_secs() -> u64 {
     2
 }
@@ -518,6 +540,10 @@ fn default_worker_runtime_event_outbox_base_backoff_ms() -> u64 {
 
 fn default_worker_runtime_event_outbox_max_backoff_ms() -> u64 {
     60_000
+}
+
+fn default_worker_runtime_ops_rbac_audit_outbox_poll_interval_secs() -> u64 {
+    1
 }
 
 fn default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold() -> u64 {
@@ -633,6 +659,7 @@ mod tests {
                 port: 6688,
                 db_url: "postgres://test@localhost:5432/test".to_string(),
                 base_dir: std::path::PathBuf::from("/tmp/chat_server_test"),
+                forwarded_header_trust: ServerForwardedHeaderTrustConfig::default(),
             },
             auth: AuthConfig {
                 sk: "sk".to_string(),
@@ -754,6 +781,7 @@ mod tests {
         assert!(cfg.ops_observability_worker_enabled);
         assert!(cfg.ai_judge_alert_outbox_bridge_worker_enabled);
         assert!(cfg.event_outbox_relay_worker_enabled);
+        assert!(cfg.ops_rbac_audit_outbox_worker_enabled);
         assert_eq!(cfg.debate_lifecycle_interval_secs, 2);
         assert_eq!(cfg.debate_lifecycle_batch_size, 200);
         assert_eq!(cfg.ops_observability_interval_secs, 30);
@@ -763,6 +791,7 @@ mod tests {
         assert_eq!(cfg.event_outbox_max_attempts, 12);
         assert_eq!(cfg.event_outbox_base_backoff_ms, 500);
         assert_eq!(cfg.event_outbox_max_backoff_ms, 60_000);
+        assert_eq!(cfg.ops_rbac_audit_outbox_poll_interval_secs, 1);
         assert_eq!(cfg.kafka_readiness_pending_dlq_blocking_count_threshold, 1);
         assert_eq!(
             cfg.kafka_readiness_pending_dlq_oldest_age_blocking_secs,

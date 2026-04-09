@@ -119,6 +119,7 @@ mod tests {
                 port: 0,
                 db_url: "postgres://localhost:5432/chat".to_string(),
                 base_dir: PathBuf::from("/tmp/chat"),
+                forwarded_header_trust: crate::config::ServerForwardedHeaderTrustConfig::default(),
             },
             auth: crate::config::AuthConfig {
                 sk: include_str!("../../../chat_core/fixtures/encoding.pem").to_string(),

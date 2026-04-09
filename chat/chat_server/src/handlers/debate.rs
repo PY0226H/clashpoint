@@ -414,6 +414,11 @@ mod tests {
         Ok((user, token))
     }
 
+    async fn current_rbac_revision(state: &AppState) -> Result<String> {
+        let revision = state.get_ops_rbac_revision().await?;
+        Ok(revision)
+    }
+
     async fn seed_topic(state: &AppState) -> Result<i64> {
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -1064,11 +1069,13 @@ mod tests {
         let token = issue_token_for_user(&state, owner.id, "ops-rbac-upsert-owner-sid").await?;
         let app = get_router(state.clone()).await?;
         let request_id = "ops-rbac-upsert-success";
+        let revision = current_rbac_revision(&state).await?;
 
         let req = Request::builder()
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
             .header("x-request-id", request_id)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
@@ -1129,6 +1136,275 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_include_warning_for_owner_self_write(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-owner-self-warning-sid")
+                .await?;
+        let revision = current_rbac_revision(&state).await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/1")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_viewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let warning = res
+            .headers()
+            .get("x-rbac-warning")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(warning, "owner_self_role_assignment_no_effect");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_200_when_if_match_matches_revision(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let expected_revision = state.get_ops_rbac_revision().await?;
+        assert_ne!(expected_revision, "empty");
+
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-if-match-success-sid").await?;
+        let app = get_router(state.clone()).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", expected_revision.as_str())
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_admin"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let returned_revision = res
+            .headers()
+            .get("x-rbac-revision")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(!returned_revision.is_empty());
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: OpsRoleAssignment = serde_json::from_slice(&body)?;
+        assert_eq!(out.user_id, 2);
+        assert_eq!(out.role, "ops_admin");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_409_when_if_match_stale() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-if-match-conflict-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-if-match-conflict";
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", "empty")
+            .header("x-request-id", request_id)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_admin"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.code.as_deref(), Some("ops_rbac_revision_conflict"));
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("ops_rbac_revision_conflict"));
+        assert_eq!(audit_row.1.as_deref(), Some("conflict"));
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_revision_conflict"));
+        assert_eq!(outbox_row.1.as_deref(), Some("conflict"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_400_for_invalid_if_match_and_record_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-invalid-if-match-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-invalid-if-match";
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", r#"W/"invalid""#)
+            .header("x-request-id", request_id)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.code.as_deref(), Some("ops_rbac_if_match_invalid"));
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("ops_rbac_if_match_invalid"));
+        assert_eq!(audit_row.1.as_deref(), Some("validation_error"));
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_if_match_invalid"));
+        assert_eq!(outbox_row.1.as_deref(), Some("validation_error"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_400_when_if_match_missing_and_record_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-missing-if-match-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-missing-if-match";
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.code.as_deref(), Some("ops_rbac_if_match_required"));
+
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("ops_rbac_if_match_required"));
+        assert_eq!(audit_row.1.as_deref(), Some("validation_error"));
+
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_if_match_required"));
+        assert_eq!(outbox_row.1.as_deref(), Some("validation_error"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn put_ops_rbac_roles_user_id_route_should_return_200_for_delegated_role_admin(
     ) -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -1157,12 +1433,14 @@ mod tests {
                 },
             )
             .await?;
+        let revision = current_rbac_revision(&state).await?;
         let app = get_router(state).await?;
 
         let req = Request::builder()
             .method(Method::PUT)
             .uri(format!("/api/debate/ops/rbac/roles/{}", target.id))
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res = app.oneshot(req).await?;
@@ -1463,16 +1741,25 @@ mod tests {
         let token =
             issue_token_for_user(&state, owner.id, "ops-rbac-upsert-idempotency-sid").await?;
         let app = get_router(state.clone()).await?;
+        let revision = current_rbac_revision(&state).await?;
 
         let req1 = Request::builder()
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
             .header("Content-Type", "application/json")
             .header("idempotency-key", "ops-rbac-upsert-route-key-1")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res1 = app.clone().oneshot(req1).await?;
         assert_eq!(res1.status(), StatusCode::OK);
+        let revision_after_first = res1
+            .headers()
+            .get("x-rbac-revision")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(!revision_after_first.is_empty());
         let body1 = res1.into_body().collect().await?.to_bytes();
         let out1: OpsRoleAssignment = serde_json::from_slice(&body1)?;
 
@@ -1480,6 +1767,7 @@ mod tests {
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision_after_first)
             .header("Content-Type", "application/json")
             .header("idempotency-key", "ops-rbac-upsert-route-key-1")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
@@ -1544,13 +1832,15 @@ mod tests {
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let token =
             issue_token_for_user(&state, owner.id, "ops-rbac-upsert-local-fallback-sid").await?;
-        let app = get_router(state).await?;
+        let app = get_router(state.clone()).await?;
 
         for _ in 0..30 {
+            let revision = current_rbac_revision(&state).await?;
             let req = Request::builder()
                 .method(Method::PUT)
                 .uri("/api/debate/ops/rbac/roles/2")
                 .header("Authorization", format!("Bearer {}", token))
+                .header("If-Match", revision)
                 .header("Content-Type", "application/json")
                 .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
             let res = app.clone().oneshot(req).await?;
@@ -1738,12 +2028,14 @@ mod tests {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let token = issue_token_for_user(&state, owner.id, "ops-rbac-upsert-not-found-sid").await?;
+        let revision = current_rbac_revision(&state).await?;
         let app = get_router(state).await?;
 
         let req = Request::builder()
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/999999")
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res = app.oneshot(req).await?;
@@ -1770,11 +2062,13 @@ mod tests {
         let token = issue_token_for_user(&state, owner.id, "ops-rbac-revoke-owner-sid").await?;
         let app = get_router(state.clone()).await?;
         let request_id = "ops-rbac-revoke-success";
+        let revision = current_rbac_revision(&state).await?;
 
         let req = Request::builder()
             .method(Method::DELETE)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
             .header("x-request-id", request_id)
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
@@ -1801,6 +2095,43 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert_eq!(audit_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_include_warning_for_owner_self_write(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                owner.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-revoke-owner-self-warning-sid")
+                .await?;
+        let revision = current_rbac_revision(&state).await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/1")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let warning = res
+            .headers()
+            .get("x-rbac-warning")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(warning, "owner_self_role_assignment_no_effect");
         Ok(())
     }
 
@@ -1842,12 +2173,14 @@ mod tests {
                 },
             )
             .await?;
+        let revision = current_rbac_revision(&state).await?;
         let app = get_router(state).await?;
 
         let req = Request::builder()
             .method(Method::DELETE)
             .uri(format!("/api/debate/ops/rbac/roles/{}", target.id))
             .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", revision)
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::OK);
@@ -1959,6 +2292,240 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "rate_limit_exceeded:ops_rbac_roles_write");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ops_rbac_audit_outbox_worker_once_should_deliver_pending_jobs() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let request_id = "ops-rbac-outbox-worker-once";
+        sqlx::query(
+            r#"
+            INSERT INTO ops_rbac_audit_outbox_jobs(
+                event_type,
+                operator_user_id,
+                target_user_id,
+                decision,
+                request_id,
+                error_code,
+                failure_reason,
+                attempts,
+                next_retry_at,
+                locked_until,
+                delivered_at,
+                last_error,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                'role_upsert',
+                1,
+                2,
+                'failed',
+                $1,
+                'ops_permission_denied:role_manage',
+                'permission_denied',
+                0,
+                NOW() - INTERVAL '1 second',
+                NULL,
+                NULL,
+                NULL,
+                NOW(),
+                NOW()
+            )
+            "#,
+        )
+        .bind(request_id)
+        .execute(&state.pool)
+        .await?;
+
+        let report = state.retry_ops_rbac_audit_outbox_once(32).await?;
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.delivered, 1);
+        assert_eq!(report.requeued, 0);
+
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = 1
+              AND target_user_id = 2
+              AND decision = 'failed'
+              AND request_id = $1
+            "#,
+        )
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
+
+        let delivered_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE request_id = $1
+              AND delivered_at IS NOT NULL
+            "#,
+        )
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(delivered_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_409_when_if_match_stale(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-revoke-if-match-conflict-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-revoke-if-match-conflict";
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("If-Match", "empty")
+            .header("x-request-id", request_id)
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.code.as_deref(), Some("ops_rbac_revision_conflict"));
+        let target_role: Option<String> =
+            sqlx::query_scalar("SELECT role FROM platform_user_roles WHERE user_id = $1")
+                .bind(2_i64)
+                .fetch_optional(&state.pool)
+                .await?;
+        assert_eq!(target_role.as_deref(), Some("ops_reviewer"));
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("ops_rbac_revision_conflict"));
+        assert_eq!(audit_row.1.as_deref(), Some("conflict"));
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_revision_conflict"));
+        assert_eq!(outbox_row.1.as_deref(), Some("conflict"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_ops_rbac_roles_user_id_route_should_return_400_when_if_match_missing_and_record_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-revoke-missing-if-match-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-revoke-missing-if-match";
+
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.code.as_deref(), Some("ops_rbac_if_match_required"));
+
+        let target_role: Option<String> =
+            sqlx::query_scalar("SELECT role FROM platform_user_roles WHERE user_id = $1")
+                .bind(2_i64)
+                .fetch_optional(&state.pool)
+                .await?;
+        assert_eq!(target_role.as_deref(), Some("ops_reviewer"));
+
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("ops_rbac_if_match_required"));
+        assert_eq!(audit_row.1.as_deref(), Some("validation_error"));
+
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.0.as_deref(), Some("ops_rbac_if_match_required"));
+        assert_eq!(outbox_row.1.as_deref(), Some("validation_error"));
         Ok(())
     }
 

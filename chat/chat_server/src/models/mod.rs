@@ -66,8 +66,8 @@ pub use payment::{
 };
 pub use rbac::{
     GetOpsRbacMeOutput, ListOpsRoleAssignmentsOutput, ListOpsRoleAssignmentsQuery,
-    OpsPermissionFlags, OpsRbacPiiLevel, OpsRoleAssignment, RevokeOpsRoleOutput,
-    UpsertOpsRoleInput,
+    OpsPermissionFlags, OpsRbacPiiLevel, OpsRbacRevokeMeta, OpsRbacUpsertMeta, OpsRoleAssignment,
+    RevokeOpsRoleOutput, UpsertOpsRoleInput,
 };
 pub(crate) use rbac::{OpsPermission, OPS_RBAC_PERMISSION_DENIED_ROLE_MANAGE_CODE};
 use serde::{Deserialize, Serialize};

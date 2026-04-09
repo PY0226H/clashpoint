@@ -2,6 +2,9 @@ server:
   port: 6688
   db_url: postgres://panyihang@localhost:5432/chat_super_trial
   base_dir: /tmp/chat_server
+  forwarded_header_trust:
+    trusted_proxy_ids: []
+    trusted_proxy_cidrs: []
 auth:
   sk: |
     -----BEGIN PRIVATE KEY-----

@@ -1,10 +1,11 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-function json(route: Route, status: number, payload: unknown) {
+function json(route: Route, status: number, payload: unknown, extraHeaders?: Record<string, string>) {
   return route.fulfill({
     status,
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      ...(extraHeaders || {})
     },
     body: JSON.stringify(payload)
   });
@@ -91,6 +92,12 @@ async function installAuthMocks(page: Page) {
       updatedAt: "2026-01-01T00:12:00Z"
     }
   ];
+  let opsRbacRevision = "rbac_rev_1";
+  let nextOpsRbacRevisionSeq = 2;
+  function rotateOpsRbacRevision() {
+    opsRbacRevision = `rbac_rev_${nextOpsRbacRevisionSeq}`;
+    nextOpsRbacRevisionSeq += 1;
+  }
   const opsObservabilityConfig = {
     thresholds: {
       lowSuccessRateThreshold: 95,
@@ -394,13 +401,15 @@ async function installAuthMocks(page: Page) {
           judgeReview: true,
           judgeRejudge: true,
           roleManage: true
-        }
+        },
+        rbacRevision: opsRbacRevision
       });
     }
 
     if (pathname === "/api/debate/ops/rbac/roles" && request.method() === "GET") {
       return json(route, 200, {
-        items: opsRoleAssignments
+        items: opsRoleAssignments,
+        rbacRevision: opsRbacRevision
       });
     }
 
@@ -683,6 +692,13 @@ async function installAuthMocks(page: Page) {
 
     const upsertRoleMatch = pathname.match(/^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/);
     if (upsertRoleMatch?.[1] && request.method() === "PUT") {
+      const expectedRevision = String(request.headers()["if-match"] || "").trim();
+      if (!expectedRevision) {
+        return json(route, 400, { error: "ops_rbac_if_match_required" });
+      }
+      if (expectedRevision !== opsRbacRevision) {
+        return json(route, 409, { error: "ops_rbac_revision_conflict" });
+      }
       const targetUserId = Number(upsertRoleMatch[1]);
       const role = String(body?.role || "").trim().toLowerCase();
       if (!["ops_admin", "ops_reviewer", "ops_viewer"].includes(role)) {
@@ -693,7 +709,8 @@ async function installAuthMocks(page: Page) {
       if (existing) {
         existing.role = role as "ops_admin" | "ops_reviewer" | "ops_viewer";
         existing.updatedAt = nowIso;
-        return json(route, 200, existing);
+        rotateOpsRbacRevision();
+        return json(route, 200, existing, { "x-rbac-revision": opsRbacRevision });
       }
       const created = {
         userId: targetUserId,
@@ -705,21 +722,30 @@ async function installAuthMocks(page: Page) {
         updatedAt: nowIso
       };
       opsRoleAssignments.unshift(created);
-      return json(route, 200, created);
+      rotateOpsRbacRevision();
+      return json(route, 200, created, { "x-rbac-revision": opsRbacRevision });
     }
 
     const revokeRoleMatch = pathname.match(/^\/api\/debate\/ops\/rbac\/roles\/(\d+)$/);
     if (revokeRoleMatch?.[1] && request.method() === "DELETE") {
+      const expectedRevision = String(request.headers()["if-match"] || "").trim();
+      if (!expectedRevision) {
+        return json(route, 400, { error: "ops_rbac_if_match_required" });
+      }
+      if (expectedRevision !== opsRbacRevision) {
+        return json(route, 409, { error: "ops_rbac_revision_conflict" });
+      }
       const targetUserId = Number(revokeRoleMatch[1]);
       const index = opsRoleAssignments.findIndex((item) => item.userId === targetUserId);
       const removed = index >= 0;
       if (removed) {
         opsRoleAssignments.splice(index, 1);
       }
+      rotateOpsRbacRevision();
       return json(route, 200, {
         userId: targetUserId,
         removed
-      });
+      }, { "x-rbac-revision": opsRbacRevision });
     }
 
     if (pathname === "/api/debate/sessions" && request.method() === "GET") {
@@ -1279,7 +1305,8 @@ test("@auth-error ops console should degrade when judge review permission missin
         judgeReview: false,
         judgeRejudge: false,
         roleManage: false
-      }
+      },
+      rbacRevision: "rbac_rev_auth_error"
     });
   });
 

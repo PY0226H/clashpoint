@@ -2,7 +2,7 @@ use crate::{AppError, AppState};
 use chat_core::User;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, Transaction};
 use utoipa::{IntoParams, ToSchema};
 
 const ROLE_OPS_ADMIN: &str = "ops_admin";
@@ -16,10 +16,15 @@ pub(crate) const OPS_RBAC_INVALID_ROLE_CODE: &str = "ops_role_invalid";
 pub(crate) const OPS_RBAC_TARGET_USER_NOT_FOUND_CODE: &str = "ops_role_target_user_not_found";
 pub(crate) const OPS_RBAC_TARGET_USER_ID_OUT_OF_RANGE_CODE: &str =
     "ops_role_target_user_id_out_of_range";
+pub(crate) const OPS_RBAC_IF_MATCH_REQUIRED_CODE: &str = "ops_rbac_if_match_required";
+pub(crate) const OPS_RBAC_REVISION_CONFLICT_CODE: &str = "ops_rbac_revision_conflict";
 const OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE: &str = "ops_role_assignment_user_id_invalid";
 const OPS_RBAC_ROLE_ASSIGNMENT_GRANTED_BY_INVALID_CODE: &str =
     "ops_role_assignment_granted_by_invalid";
 const OPS_RBAC_EMPTY_REVISION: &str = "empty";
+const OPS_RBAC_WRITE_REVISION_LOCK_KEY: &str = "ops_rbac_roles_write_revision_lock";
+const OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT: &str = "role_upsert";
+const OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE: &str = "role_revoke";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpsRoleManageAccess {
@@ -101,6 +106,22 @@ pub struct ListOpsRoleAssignmentsOutput {
 pub struct RevokeOpsRoleOutput {
     pub user_id: u64,
     pub removed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpsRbacUpsertMeta<'a> {
+    pub expected_rbac_revision: Option<&'a str>,
+    pub idempotency_key: Option<&'a str>,
+    pub idempotency_ttl_secs: u64,
+    pub success_request_id: Option<&'a str>,
+    pub require_if_match: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpsRbacRevokeMeta<'a> {
+    pub expected_rbac_revision: Option<&'a str>,
+    pub success_request_id: Option<&'a str>,
+    pub require_if_match: bool,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -234,6 +255,116 @@ fn map_assignment_row_with_pii_level(
 
 fn format_rbac_revision(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+async fn get_ops_rbac_revision_tx(tx: &mut Transaction<'_, Postgres>) -> Result<String, AppError> {
+    let revision: Option<DateTime<Utc>> = sqlx::query_scalar(
+        r#"
+        SELECT MAX(updated_at)
+        FROM (
+            SELECT updated_at
+            FROM platform_user_roles
+            UNION ALL
+            SELECT updated_at
+            FROM platform_admin_owners
+        ) updates
+        "#,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(revision
+        .map(format_rbac_revision)
+        .unwrap_or_else(|| OPS_RBAC_EMPTY_REVISION.to_string()))
+}
+
+fn ensure_expected_ops_rbac_revision(
+    expected_rbac_revision: Option<&str>,
+    current_revision: &str,
+    require_if_match: bool,
+) -> Result<(), AppError> {
+    if let Some(expected) = expected_rbac_revision {
+        if expected != current_revision {
+            return Err(AppError::DebateConflict(
+                OPS_RBAC_REVISION_CONFLICT_CODE.to_string(),
+            ));
+        }
+    } else if require_if_match {
+        return Err(AppError::DebateError(
+            OPS_RBAC_IF_MATCH_REQUIRED_CODE.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OpsRbacAuditOutboxInput<'a> {
+    event_type: &'a str,
+    operator_user_id: i64,
+    target_user_id: Option<i64>,
+    decision: &'a str,
+    request_id: Option<&'a str>,
+    result_count: Option<i64>,
+    role: Option<&'a str>,
+    removed: Option<bool>,
+    error_code: Option<&'a str>,
+    failure_reason: Option<&'a str>,
+}
+
+async fn acquire_ops_rbac_revision_lock(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), AppError> {
+    // 控制面写频率低，这里用事务级 advisory lock 让 If-Match 校验与落库具备串行语义。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(OPS_RBAC_WRITE_REVISION_LOCK_KEY)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn enqueue_ops_rbac_audit_outbox_job_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    input: OpsRbacAuditOutboxInput<'_>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO ops_rbac_audit_outbox_jobs(
+            event_type,
+            operator_user_id,
+            target_user_id,
+            decision,
+            request_id,
+            result_count,
+            role,
+            removed,
+            error_code,
+            failure_reason,
+            attempts,
+            next_retry_at,
+            locked_until,
+            delivered_at,
+            last_error,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            0, NOW(), NULL, NULL, NULL, NOW(), NOW()
+        )
+        "#,
+    )
+    .bind(input.event_type)
+    .bind(input.operator_user_id)
+    .bind(input.target_user_id)
+    .bind(input.decision)
+    .bind(input.request_id)
+    .bind(input.result_count)
+    .bind(input.role)
+    .bind(input.removed)
+    .bind(input.error_code)
+    .bind(input.failure_reason)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 impl AppState {
@@ -437,7 +568,12 @@ impl AppState {
         input: UpsertOpsRoleInput,
     ) -> Result<OpsRoleAssignment, AppError> {
         let (assignment, _) = self
-            .upsert_ops_role_assignment_by_owner_with_meta(user, target_user_id, input, None, 0)
+            .upsert_ops_role_assignment_by_owner_with_meta(
+                user,
+                target_user_id,
+                input,
+                OpsRbacUpsertMeta::default(),
+            )
             .await?;
         Ok(assignment)
     }
@@ -447,8 +583,7 @@ impl AppState {
         user: &User,
         target_user_id: u64,
         input: UpsertOpsRoleInput,
-        idempotency_key: Option<&str>,
-        idempotency_ttl_secs: u64,
+        meta: OpsRbacUpsertMeta<'_>,
     ) -> Result<(OpsRoleAssignment, bool), AppError> {
         let role_manage_context = self.resolve_ops_role_manage_context(user).await?;
         let role = normalize_ops_role(&input.role)?;
@@ -460,8 +595,15 @@ impl AppState {
             Some(role.as_str()),
         )?;
 
-        if let Some(idempotency_key) = idempotency_key {
+        if let Some(idempotency_key) = meta.idempotency_key {
             let mut tx = self.pool.begin().await?;
+            acquire_ops_rbac_revision_lock(&mut tx).await?;
+            let current_revision = get_ops_rbac_revision_tx(&mut tx).await?;
+            ensure_expected_ops_rbac_revision(
+                meta.expected_rbac_revision,
+                &current_revision,
+                meta.require_if_match,
+            )?;
             let advisory_lock_key = format!(
                 "ops_rbac_role_upsert:{}:{}:{}",
                 user.id, target_user_id, idempotency_key
@@ -488,7 +630,8 @@ impl AppState {
             if let Some(created_at) = idempotency_created_at {
                 let now = Utc::now();
                 let age_secs = now.signed_duration_since(created_at).num_seconds();
-                let is_fresh = idempotency_ttl_secs == 0 || age_secs < idempotency_ttl_secs as i64;
+                let is_fresh =
+                    meta.idempotency_ttl_secs == 0 || age_secs < meta.idempotency_ttl_secs as i64;
                 if is_fresh {
                     let existing_row: Option<OpsRoleAssignmentRow> = sqlx::query_as(
                         r#"
@@ -592,9 +735,34 @@ impl AppState {
             .bind(role.as_str())
             .execute(&mut *tx)
             .await?;
+            enqueue_ops_rbac_audit_outbox_job_tx(
+                &mut tx,
+                OpsRbacAuditOutboxInput {
+                    event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                    operator_user_id: user.id,
+                    target_user_id: Some(target_user_id),
+                    decision: "success",
+                    request_id: meta.success_request_id,
+                    result_count: None,
+                    role: Some(role.as_str()),
+                    removed: None,
+                    error_code: None,
+                    failure_reason: None,
+                },
+            )
+            .await?;
             tx.commit().await?;
             return Ok((map_assignment_row(row)?, false));
         }
+
+        let mut tx = self.pool.begin().await?;
+        acquire_ops_rbac_revision_lock(&mut tx).await?;
+        let current_revision = get_ops_rbac_revision_tx(&mut tx).await?;
+        ensure_expected_ops_rbac_revision(
+            meta.expected_rbac_revision,
+            &current_revision,
+            meta.require_if_match,
+        )?;
 
         let row: Option<OpsRoleAssignmentRow> = sqlx::query_as(
             r#"
@@ -632,10 +800,27 @@ impl AppState {
         .bind(target_user_id)
         .bind(role.as_str())
         .bind(user.id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
         let row =
             row.ok_or_else(|| AppError::NotFound(OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string()))?;
+        enqueue_ops_rbac_audit_outbox_job_tx(
+            &mut tx,
+            OpsRbacAuditOutboxInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                operator_user_id: user.id,
+                target_user_id: Some(target_user_id),
+                decision: "success",
+                request_id: meta.success_request_id,
+                result_count: None,
+                role: Some(role.as_str()),
+                removed: None,
+                error_code: None,
+                failure_reason: None,
+            },
+        )
+        .await?;
+        tx.commit().await?;
         Ok((map_assignment_row(row)?, false))
     }
 
@@ -643,6 +828,20 @@ impl AppState {
         &self,
         user: &User,
         target_user_id: u64,
+    ) -> Result<RevokeOpsRoleOutput, AppError> {
+        self.revoke_ops_role_assignment_by_owner_with_meta(
+            user,
+            target_user_id,
+            OpsRbacRevokeMeta::default(),
+        )
+        .await
+    }
+
+    pub async fn revoke_ops_role_assignment_by_owner_with_meta(
+        &self,
+        user: &User,
+        target_user_id: u64,
+        meta: OpsRbacRevokeMeta<'_>,
     ) -> Result<RevokeOpsRoleOutput, AppError> {
         let role_manage_context = self.resolve_ops_role_manage_context(user).await?;
         let target_user_id =
@@ -657,6 +856,15 @@ impl AppState {
             target_user_id,
             OPS_RBAC_ROLE_ASSIGNMENT_USER_ID_INVALID_CODE,
         )?;
+        let mut tx = self.pool.begin().await?;
+        acquire_ops_rbac_revision_lock(&mut tx).await?;
+        let current_revision = get_ops_rbac_revision_tx(&mut tx).await?;
+        ensure_expected_ops_rbac_revision(
+            meta.expected_rbac_revision,
+            &current_revision,
+            meta.require_if_match,
+        )?;
+
         let removed = sqlx::query_scalar::<_, i64>(
             r#"
             DELETE FROM platform_user_roles
@@ -665,9 +873,26 @@ impl AppState {
             "#,
         )
         .bind(target_user_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .is_some();
+        enqueue_ops_rbac_audit_outbox_job_tx(
+            &mut tx,
+            OpsRbacAuditOutboxInput {
+                event_type: OPS_RBAC_AUDIT_EVENT_ROLE_REVOKE,
+                operator_user_id: user.id,
+                target_user_id: Some(target_user_id),
+                decision: "success",
+                request_id: meta.success_request_id,
+                result_count: None,
+                role: None,
+                removed: Some(removed),
+                error_code: None,
+                failure_reason: None,
+            },
+        )
+        .await?;
+        tx.commit().await?;
 
         Ok(RevokeOpsRoleOutput {
             user_id: target_user_id_u64,
@@ -969,6 +1194,158 @@ mod tests {
             .await?;
         assert!(list_after.items.iter().all(|item| item.user_id != 2));
         assert_ne!(list_after.rbac_revision, OPS_RBAC_EMPTY_REVISION);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_with_meta_should_enqueue_success_audit_outbox() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let request_id = "req-upsert-tx";
+
+        let (_assignment, replayed) = state
+            .upsert_ops_role_assignment_by_owner_with_meta(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+                OpsRbacUpsertMeta {
+                    success_request_id: Some(request_id),
+                    ..OpsRbacUpsertMeta::default()
+                },
+            )
+            .await?;
+        assert!(!replayed);
+
+        let outbox_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND decision = 'success'
+              AND request_id = $3
+              AND role = $4
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .bind(request_id)
+        .bind("ops_reviewer")
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_with_meta_replay_should_not_duplicate_success_audit_outbox() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+        let (_first, replayed_first) = state
+            .upsert_ops_role_assignment_by_owner_with_meta(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+                OpsRbacUpsertMeta {
+                    idempotency_key: Some("idem-key-1"),
+                    idempotency_ttl_secs: 30,
+                    success_request_id: Some("req-upsert-first"),
+                    ..OpsRbacUpsertMeta::default()
+                },
+            )
+            .await?;
+        assert!(!replayed_first);
+
+        let (_second, replayed_second) = state
+            .upsert_ops_role_assignment_by_owner_with_meta(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+                OpsRbacUpsertMeta {
+                    idempotency_key: Some("idem-key-1"),
+                    idempotency_ttl_secs: 30,
+                    success_request_id: Some("req-upsert-second"),
+                    ..OpsRbacUpsertMeta::default()
+                },
+            )
+            .await?;
+        assert!(replayed_second);
+
+        let outbox_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND decision = 'success'
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn revoke_with_meta_should_enqueue_success_audit_outbox() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let request_id = "req-revoke-tx";
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                2,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+
+        let output = state
+            .revoke_ops_role_assignment_by_owner_with_meta(
+                &owner,
+                2,
+                OpsRbacRevokeMeta {
+                    success_request_id: Some(request_id),
+                    ..OpsRbacRevokeMeta::default()
+                },
+            )
+            .await?;
+        assert!(output.removed);
+
+        let outbox_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_revoke'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND decision = 'success'
+              AND request_id = $3
+              AND removed = $4
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .bind(request_id)
+        .bind(true)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_count, 1);
         Ok(())
     }
 

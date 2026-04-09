@@ -210,6 +210,16 @@ type ApiErrorLike = {
   message?: string;
 };
 
+const OPS_RBAC_IF_MATCH_REQUIRED_CODE = "ops_rbac_if_match_required";
+
+function normalizeRequiredOpsRbacRevision(expectedRevision: string): string {
+  const normalized = String(expectedRevision || "").trim();
+  if (!normalized) {
+    throw new Error(OPS_RBAC_IF_MATCH_REQUIRED_CODE);
+  }
+  return normalized;
+}
+
 function normalizeOpsDomainErrorCode(raw: string | null): string | null {
   const value = stripOpsDomainErrorPrefix(String(raw || "").trim());
   if (!value) {
@@ -301,19 +311,37 @@ export async function listOpsRoleAssignments(
 
 export async function upsertOpsRoleAssignment(
   userId: number,
-  role: OpsRole
+  role: OpsRole,
+  expectedRevision: string
 ): Promise<OpsRoleAssignment> {
   const normalizedUserId = Math.floor(Number(userId) || 0);
   const normalizedRole = String(role || "").trim().toLowerCase() as OpsRole;
-  const response = await http.put<OpsRoleAssignment>(`/debate/ops/rbac/roles/${normalizedUserId}`, {
-    role: normalizedRole
-  });
+  const ifMatch = normalizeRequiredOpsRbacRevision(expectedRevision);
+  const response = await http.put<OpsRoleAssignment>(
+    `/debate/ops/rbac/roles/${normalizedUserId}`,
+    {
+      role: normalizedRole
+    },
+    {
+      headers: {
+        "If-Match": ifMatch
+      }
+    }
+  );
   return response.data;
 }
 
-export async function revokeOpsRoleAssignment(userId: number): Promise<RevokeOpsRoleOutput> {
+export async function revokeOpsRoleAssignment(
+  userId: number,
+  expectedRevision: string
+): Promise<RevokeOpsRoleOutput> {
   const normalizedUserId = Math.floor(Number(userId) || 0);
-  const response = await http.delete<RevokeOpsRoleOutput>(`/debate/ops/rbac/roles/${normalizedUserId}`);
+  const ifMatch = normalizeRequiredOpsRbacRevision(expectedRevision);
+  const response = await http.delete<RevokeOpsRoleOutput>(`/debate/ops/rbac/roles/${normalizedUserId}`, {
+    headers: {
+      "If-Match": ifMatch
+    }
+  });
   return response.data;
 }
 
