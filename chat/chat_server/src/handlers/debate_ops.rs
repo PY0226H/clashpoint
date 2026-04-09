@@ -16,12 +16,13 @@ use crate::{
     UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
 };
 use chat_core::User;
+use sqlx::FromRow;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -58,6 +59,12 @@ const OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_TTL_SECS: u64 = 30;
 const OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_MAX_LEN: usize = 160;
 const OPS_RBAC_ROLES_WRITE_IDEMPOTENCY_SCOPE: &str = "ops_rbac_roles_write_upsert";
+const OPS_RBAC_ROLES_WRITE_CONTENT_TYPE_INVALID_CODE: &str =
+    "ops_rbac_roles_write_content_type_invalid";
+const OPS_RBAC_ROLES_WRITE_BODY_INVALID_JSON_CODE: &str = "ops_rbac_roles_write_body_invalid_json";
+const OPS_RBAC_ROLES_WRITE_BODY_DATA_INVALID_CODE: &str = "ops_rbac_roles_write_body_data_invalid";
+const OPS_RBAC_ROLES_WRITE_BODY_READ_FAILED_CODE: &str = "ops_rbac_roles_write_body_read_failed";
+const OPS_RBAC_ROLES_WRITE_BODY_REJECTED_CODE: &str = "ops_rbac_roles_write_body_rejected";
 const OPS_RBAC_REVISION_HEADER: &str = "x-rbac-revision";
 const OPS_RBAC_AUDIT_EVENT_ROLES_LIST_READ: &str = "roles_list_read";
 const OPS_RBAC_AUDIT_EVENT_RBAC_ME_READ: &str = "rbac_me_read";
@@ -71,6 +78,11 @@ const OPS_RBAC_AUDIT_FAILURE_AUTH_ERROR: &str = "auth_error";
 const OPS_RBAC_AUDIT_FAILURE_RATE_LIMITED: &str = "rate_limited";
 const OPS_RBAC_AUDIT_FAILURE_SERVER_ERROR: &str = "server_error";
 const OPS_RBAC_AUDIT_FAILURE_SYSTEM_ERROR: &str = "system_error";
+const OPS_RBAC_AUDIT_OUTBOX_BATCH_SIZE: i64 = 32;
+const OPS_RBAC_AUDIT_OUTBOX_LOCK_SECS: i64 = 15;
+const OPS_RBAC_AUDIT_OUTBOX_RETRY_BASE_BACKOFF_MS: u64 = 500;
+const OPS_RBAC_AUDIT_OUTBOX_RETRY_MAX_BACKOFF_MS: u64 = 60_000;
+const OPS_RBAC_AUDIT_OUTBOX_ERROR_MAX_LEN: usize = 512;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
@@ -133,6 +145,7 @@ struct OpsRbacRolesWriteMetrics {
     request_total: AtomicU64,
     success_total: AtomicU64,
     failed_total: AtomicU64,
+    extractor_rejected_total: AtomicU64,
     rate_limited_total: AtomicU64,
     upsert_total: AtomicU64,
     revoke_total: AtomicU64,
@@ -152,6 +165,22 @@ struct OpsRbacAuditLogInput<'a> {
     removed: Option<bool>,
     error_code: Option<&'a str>,
     failure_reason: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct OpsRbacAuditOutboxJob {
+    id: i64,
+    event_type: String,
+    operator_user_id: i64,
+    target_user_id: Option<i64>,
+    decision: String,
+    request_id: Option<String>,
+    result_count: Option<i64>,
+    role: Option<String>,
+    removed: Option<bool>,
+    error_code: Option<String>,
+    failure_reason: Option<String>,
+    attempts: i32,
 }
 
 impl OpsRbacRolesWriteMetrics {
@@ -181,15 +210,21 @@ impl OpsRbacRolesWriteMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn observe_extractor_rejected(&self) {
+        self.extractor_rejected_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn observe_rate_limited(&self) {
         self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64) {
+    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64, u64) {
         (
             self.request_total.load(Ordering::Relaxed),
             self.success_total.load(Ordering::Relaxed),
             self.failed_total.load(Ordering::Relaxed),
+            self.extractor_rejected_total.load(Ordering::Relaxed),
             self.rate_limited_total.load(Ordering::Relaxed),
             self.upsert_total.load(Ordering::Relaxed),
             self.revoke_total.load(Ordering::Relaxed),
@@ -1337,6 +1372,7 @@ pub(crate) async fn discard_kafka_dlq_event_handler(
         (status = 404, description = "Target user not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
         (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 415, description = "Unsupported media type", body = crate::ErrorOutput),
         (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
         (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
@@ -1349,13 +1385,69 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
     State(state): State<AppState>,
     Path(user_id): Path<u64>,
     headers: HeaderMap,
-    Json(input): Json<UpsertOpsRoleInput>,
+    input: Result<Json<UpsertOpsRoleInput>, JsonRejection>,
 ) -> Result<Response, AppError> {
     let started_at = Instant::now();
     let request_id = request_id_from_headers(&headers);
     let target_user_id = i64::try_from(user_id).ok();
-    let requested_role = input.role.clone();
     OPS_RBAC_ROLES_WRITE_METRICS.observe_start_upsert();
+    let input = match input {
+        Ok(Json(input)) => input,
+        Err(rejection) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            OPS_RBAC_ROLES_WRITE_METRICS.observe_failure(latency_ms);
+            OPS_RBAC_ROLES_WRITE_METRICS.observe_extractor_rejected();
+            let (status, error_code, failure_reason) =
+                classify_ops_rbac_upsert_body_rejection(&rejection);
+            let (
+                request_total,
+                success_total,
+                failed_total,
+                extractor_rejected_total,
+                rate_limited_total,
+                upsert_total,
+                revoke_total,
+            ) = OPS_RBAC_ROLES_WRITE_METRICS.snapshot();
+            tracing::warn!(
+                user_id = user.id,
+                target_user_id = user_id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                audit_event = "ops_rbac_roles_write_upsert_extractor_rejected",
+                decision = "failed",
+                status = status.as_u16(),
+                error_code,
+                failure_reason,
+                latency_ms,
+                ops_rbac_roles_write_request_total = request_total,
+                ops_rbac_roles_write_success_total = success_total,
+                ops_rbac_roles_write_failed_total = failed_total,
+                ops_rbac_roles_write_extractor_rejected_total = extractor_rejected_total,
+                ops_rbac_roles_write_rate_limited_total = rate_limited_total,
+                ops_rbac_roles_write_upsert_total = upsert_total,
+                ops_rbac_roles_write_revoke_total = revoke_total,
+                "upsert ops role assignment request rejected by extractor: {}",
+                rejection
+            );
+            insert_ops_rbac_audit_log_best_effort(
+                &state,
+                OpsRbacAuditLogInput {
+                    event_type: OPS_RBAC_AUDIT_EVENT_ROLE_UPSERT,
+                    operator_user_id: user.id,
+                    target_user_id,
+                    decision: "failed",
+                    request_id: request_id.as_deref(),
+                    result_count: None,
+                    role: None,
+                    removed: None,
+                    error_code: Some(error_code),
+                    failure_reason: Some(failure_reason),
+                },
+            )
+            .await;
+            return Ok((status, Json(crate::ErrorOutput::new(error_code))).into_response());
+        }
+    };
+    let requested_role = input.role.clone();
 
     let user_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
@@ -1524,6 +1616,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         request_total,
         success_total,
         failed_total,
+        extractor_rejected_total,
         rate_limited_total,
         upsert_total,
         revoke_total,
@@ -1540,6 +1633,7 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         ops_rbac_roles_write_request_total = request_total,
         ops_rbac_roles_write_success_total = success_total,
         ops_rbac_roles_write_failed_total = failed_total,
+        ops_rbac_roles_write_extractor_rejected_total = extractor_rejected_total,
         ops_rbac_roles_write_rate_limited_total = rate_limited_total,
         ops_rbac_roles_write_upsert_total = upsert_total,
         ops_rbac_roles_write_revoke_total = revoke_total,
@@ -1737,6 +1831,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         request_total,
         success_total,
         failed_total,
+        extractor_rejected_total,
         rate_limited_total,
         upsert_total,
         revoke_total,
@@ -1752,6 +1847,7 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         ops_rbac_roles_write_request_total = request_total,
         ops_rbac_roles_write_success_total = success_total,
         ops_rbac_roles_write_failed_total = failed_total,
+        ops_rbac_roles_write_extractor_rejected_total = extractor_rejected_total,
         ops_rbac_roles_write_rate_limited_total = rate_limited_total,
         ops_rbac_roles_write_upsert_total = upsert_total,
         ops_rbac_roles_write_revoke_total = revoke_total,
@@ -1994,6 +2090,38 @@ fn classify_ops_rbac_failure(err: &AppError) -> (Option<String>, &'static str) {
     }
 }
 
+fn classify_ops_rbac_upsert_body_rejection(
+    rejection: &JsonRejection,
+) -> (StatusCode, &'static str, &'static str) {
+    match rejection {
+        JsonRejection::MissingJsonContentType(_) => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            OPS_RBAC_ROLES_WRITE_CONTENT_TYPE_INVALID_CODE,
+            OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
+        ),
+        JsonRejection::JsonSyntaxError(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            OPS_RBAC_ROLES_WRITE_BODY_INVALID_JSON_CODE,
+            OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
+        ),
+        JsonRejection::JsonDataError(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            OPS_RBAC_ROLES_WRITE_BODY_DATA_INVALID_CODE,
+            OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
+        ),
+        JsonRejection::BytesRejection(_) => (
+            StatusCode::BAD_REQUEST,
+            OPS_RBAC_ROLES_WRITE_BODY_READ_FAILED_CODE,
+            OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            OPS_RBAC_ROLES_WRITE_BODY_REJECTED_CODE,
+            OPS_RBAC_AUDIT_FAILURE_VALIDATION_ERROR,
+        ),
+    }
+}
+
 fn truncate_ops_rbac_audit_error_code(input: &str) -> String {
     input.chars().take(128).collect()
 }
@@ -2035,20 +2163,270 @@ async fn insert_ops_rbac_audit_log(
     Ok(())
 }
 
+fn sanitize_ops_rbac_audit_outbox_error(raw: &str) -> String {
+    if raw.len() <= OPS_RBAC_AUDIT_OUTBOX_ERROR_MAX_LEN {
+        return raw.to_string();
+    }
+    raw.chars()
+        .take(OPS_RBAC_AUDIT_OUTBOX_ERROR_MAX_LEN)
+        .collect()
+}
+
+fn ops_rbac_audit_outbox_retry_backoff_ms(attempts: i32) -> u64 {
+    let exp = attempts.max(1) as u32;
+    let factor = 2_u64.saturating_pow(exp.saturating_sub(1));
+    OPS_RBAC_AUDIT_OUTBOX_RETRY_BASE_BACKOFF_MS
+        .saturating_mul(factor)
+        .min(OPS_RBAC_AUDIT_OUTBOX_RETRY_MAX_BACKOFF_MS)
+}
+
+async fn enqueue_ops_rbac_audit_outbox_job(
+    state: &AppState,
+    input: OpsRbacAuditLogInput<'_>,
+) -> Result<i64, AppError> {
+    let outbox_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO ops_rbac_audit_outbox_jobs(
+            event_type,
+            operator_user_id,
+            target_user_id,
+            decision,
+            request_id,
+            result_count,
+            role,
+            removed,
+            error_code,
+            failure_reason,
+            attempts,
+            next_retry_at,
+            locked_until,
+            delivered_at,
+            last_error,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            0, NOW(), NULL, NULL, NULL, NOW(), NOW()
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(input.event_type)
+    .bind(input.operator_user_id)
+    .bind(input.target_user_id)
+    .bind(input.decision)
+    .bind(input.request_id)
+    .bind(input.result_count)
+    .bind(input.role)
+    .bind(input.removed)
+    .bind(input.error_code)
+    .bind(input.failure_reason)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(outbox_id)
+}
+
+async fn claim_ops_rbac_audit_outbox_jobs(
+    state: &AppState,
+    batch_size: i64,
+) -> Result<Vec<OpsRbacAuditOutboxJob>, AppError> {
+    let mut tx = state.pool.begin().await?;
+    let jobs: Vec<OpsRbacAuditOutboxJob> = sqlx::query_as(
+        r#"
+        WITH due AS (
+            SELECT id
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE delivered_at IS NULL
+              AND next_retry_at <= NOW()
+              AND (locked_until IS NULL OR locked_until <= NOW())
+            ORDER BY next_retry_at ASC, created_at ASC, id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE ops_rbac_audit_outbox_jobs q
+        SET locked_until = NOW() + ($2::bigint * INTERVAL '1 second'),
+            attempts = q.attempts + 1,
+            updated_at = NOW()
+        FROM due
+        WHERE q.id = due.id
+        RETURNING
+            q.id,
+            q.event_type,
+            q.operator_user_id,
+            q.target_user_id,
+            q.decision,
+            q.request_id,
+            q.result_count,
+            q.role,
+            q.removed,
+            q.error_code,
+            q.failure_reason,
+            q.attempts
+        "#,
+    )
+    .bind(batch_size.max(1))
+    .bind(OPS_RBAC_AUDIT_OUTBOX_LOCK_SECS)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(jobs)
+}
+
+async fn deliver_ops_rbac_audit_outbox_job(
+    state: &AppState,
+    job: &OpsRbacAuditOutboxJob,
+) -> Result<(), AppError> {
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        r#"
+        INSERT INTO ops_rbac_audits(
+            event_type,
+            operator_user_id,
+            target_user_id,
+            decision,
+            request_id,
+            result_count,
+            role,
+            removed,
+            error_code,
+            failure_reason,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        "#,
+    )
+    .bind(&job.event_type)
+    .bind(job.operator_user_id)
+    .bind(job.target_user_id)
+    .bind(&job.decision)
+    .bind(job.request_id.as_deref())
+    .bind(job.result_count)
+    .bind(job.role.as_deref())
+    .bind(job.removed)
+    .bind(job.error_code.as_deref())
+    .bind(job.failure_reason.as_deref())
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE ops_rbac_audit_outbox_jobs
+        SET delivered_at = NOW(),
+            locked_until = NULL,
+            last_error = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND delivered_at IS NULL
+        "#,
+    )
+    .bind(job.id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn reschedule_ops_rbac_audit_outbox_job(
+    state: &AppState,
+    job_id: i64,
+    backoff_ms: u64,
+    last_error: &str,
+) -> Result<(), AppError> {
+    let backoff_ms_i64 = i64::try_from(backoff_ms).unwrap_or(i64::MAX);
+    sqlx::query(
+        r#"
+        UPDATE ops_rbac_audit_outbox_jobs
+        SET next_retry_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+            locked_until = NULL,
+            last_error = $3,
+            updated_at = NOW()
+        WHERE id = $1
+          AND delivered_at IS NULL
+        "#,
+    )
+    .bind(job_id)
+    .bind(backoff_ms_i64)
+    .bind(last_error)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn dispatch_ops_rbac_audit_outbox_once(
+    state: &AppState,
+    batch_size: i64,
+) -> Result<(), AppError> {
+    let jobs = claim_ops_rbac_audit_outbox_jobs(state, batch_size).await?;
+    for job in jobs {
+        if let Err(err) = deliver_ops_rbac_audit_outbox_job(state, &job).await {
+            let retry_backoff_ms = ops_rbac_audit_outbox_retry_backoff_ms(job.attempts);
+            let last_error = sanitize_ops_rbac_audit_outbox_error(&err.to_string());
+            reschedule_ops_rbac_audit_outbox_job(state, job.id, retry_backoff_ms, &last_error)
+                .await?;
+            tracing::warn!(
+                audit_event = "ops_rbac_audit_outbox_deliver_failed",
+                outbox_job_id = job.id,
+                event_type = job.event_type,
+                operator_user_id = job.operator_user_id,
+                target_user_id = job.target_user_id.unwrap_or_default(),
+                decision = job.decision,
+                attempts = job.attempts,
+                retry_backoff_ms,
+                "deliver ops rbac audit outbox job failed: {}",
+                err
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn insert_ops_rbac_audit_log_best_effort(state: &AppState, input: OpsRbacAuditLogInput<'_>) {
-    if let Err(err) = insert_ops_rbac_audit_log(state, input).await {
-        tracing::warn!(
-            audit_event = "ops_rbac_audit_write_failed",
-            event_type = input.event_type,
-            operator_user_id = input.operator_user_id,
-            target_user_id = input.target_user_id.unwrap_or_default(),
-            decision = input.decision,
-            error_code = input.error_code.unwrap_or_default(),
-            failure_reason = input.failure_reason.unwrap_or_default(),
-            request_id = input.request_id.unwrap_or_default(),
-            "persist ops rbac audit log failed: {}",
-            err
-        );
+    match enqueue_ops_rbac_audit_outbox_job(state, input).await {
+        Ok(outbox_job_id) => {
+            if let Err(err) =
+                dispatch_ops_rbac_audit_outbox_once(state, OPS_RBAC_AUDIT_OUTBOX_BATCH_SIZE).await
+            {
+                tracing::warn!(
+                    audit_event = "ops_rbac_audit_outbox_dispatch_failed",
+                    outbox_job_id,
+                    event_type = input.event_type,
+                    operator_user_id = input.operator_user_id,
+                    target_user_id = input.target_user_id.unwrap_or_default(),
+                    decision = input.decision,
+                    request_id = input.request_id.unwrap_or_default(),
+                    "dispatch ops rbac audit outbox failed: {}",
+                    err
+                );
+            }
+        }
+        Err(outbox_err) => {
+            tracing::warn!(
+                audit_event = "ops_rbac_audit_outbox_enqueue_failed",
+                event_type = input.event_type,
+                operator_user_id = input.operator_user_id,
+                target_user_id = input.target_user_id.unwrap_or_default(),
+                decision = input.decision,
+                error_code = input.error_code.unwrap_or_default(),
+                failure_reason = input.failure_reason.unwrap_or_default(),
+                request_id = input.request_id.unwrap_or_default(),
+                "enqueue ops rbac audit outbox failed: {}",
+                outbox_err
+            );
+            if let Err(err) = insert_ops_rbac_audit_log(state, input).await {
+                tracing::warn!(
+                    audit_event = "ops_rbac_audit_write_failed",
+                    event_type = input.event_type,
+                    operator_user_id = input.operator_user_id,
+                    target_user_id = input.target_user_id.unwrap_or_default(),
+                    decision = input.decision,
+                    error_code = input.error_code.unwrap_or_default(),
+                    failure_reason = input.failure_reason.unwrap_or_default(),
+                    request_id = input.request_id.unwrap_or_default(),
+                    "persist ops rbac audit log failed: {}",
+                    err
+                );
+            }
+        }
     }
 }
 

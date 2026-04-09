@@ -1105,6 +1105,26 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         assert_eq!(audit_count, 1);
+        let outbox_delivered_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND target_user_id = $2
+              AND role = $3
+              AND decision = 'success'
+              AND request_id = $4
+              AND delivered_at IS NOT NULL
+            "#,
+        )
+        .bind(owner.id)
+        .bind(2_i64)
+        .bind("ops_reviewer")
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_delivered_count, 1);
         Ok(())
     }
 
@@ -1173,6 +1193,146 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert!(error.error.contains("ops_role_invalid"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_422_for_invalid_json_and_record_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-invalid-json-sid").await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-invalid-json";
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"role":"ops_reviewer""#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.code.as_deref(),
+            Some("ops_rbac_roles_write_body_invalid_json")
+        );
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(
+            audit_row.0.as_deref(),
+            Some("ops_rbac_roles_write_body_invalid_json")
+        );
+        assert_eq!(audit_row.1.as_deref(), Some("validation_error"));
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(
+            outbox_row.0.as_deref(),
+            Some("ops_rbac_roles_write_body_invalid_json")
+        );
+        assert_eq!(outbox_row.1.as_deref(), Some("validation_error"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn put_ops_rbac_roles_user_id_route_should_return_415_without_content_type_and_record_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-rbac-upsert-missing-content-type-sid")
+                .await?;
+        let app = get_router(state.clone()).await?;
+        let request_id = "ops-rbac-upsert-missing-content-type";
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/rbac/roles/2")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", request_id)
+            .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.code.as_deref(),
+            Some("ops_rbac_roles_write_content_type_invalid")
+        );
+        let audit_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audits
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(
+            audit_row.0.as_deref(),
+            Some("ops_rbac_roles_write_content_type_invalid")
+        );
+        assert_eq!(audit_row.1.as_deref(), Some("validation_error"));
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(owner.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(
+            outbox_row.0.as_deref(),
+            Some("ops_rbac_roles_write_content_type_invalid")
+        );
+        assert_eq!(outbox_row.1.as_deref(), Some("validation_error"));
         Ok(())
     }
 
@@ -1482,6 +1642,28 @@ mod tests {
         .await?;
         assert_eq!(audit_row.1.as_deref(), Some("permission_denied"));
         assert!(audit_row
+            .0
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ops_permission_denied:role_manage"));
+        let outbox_row: (Option<String>, Option<String>) = sqlx::query_as(
+            r#"
+            SELECT error_code, failure_reason
+            FROM ops_rbac_audit_outbox_jobs
+            WHERE event_type = 'role_upsert'
+              AND operator_user_id = $1
+              AND decision = 'failed'
+              AND request_id = $2
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(user.id)
+        .bind(request_id)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(outbox_row.1.as_deref(), Some("permission_denied"));
+        assert!(outbox_row
             .0
             .as_deref()
             .unwrap_or_default()
