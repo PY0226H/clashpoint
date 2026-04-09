@@ -219,6 +219,18 @@ fn normalize_optional_winner_filter(winner: Option<String>) -> Result<Option<Str
 
 fn detect_ops_review_abnormal_flags(item: &JudgeReviewOpsItem) -> Vec<String> {
     let mut flags = Vec::new();
+    let winner_first_missing = item
+        .winner_first
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .is_none();
+    let winner_second_missing = item
+        .winner_second
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .is_none();
     if item.verdict_evidence_count == 0 {
         flags.push("missing_verdict_evidence_refs".to_string());
     }
@@ -234,6 +246,9 @@ fn detect_ops_review_abnormal_flags(item: &JudgeReviewOpsItem) -> Vec<String> {
         if first != second {
             flags.push("winner_inconsistent_between_two_passes".to_string());
         }
+    }
+    if winner_first_missing || winner_second_missing {
+        flags.push("winner_pass_missing".to_string());
     }
     flags
 }

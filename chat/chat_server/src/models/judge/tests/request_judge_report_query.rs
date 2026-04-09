@@ -1,6 +1,7 @@
 use super::*;
 use crate::models::UpsertOpsRoleInput;
 use anyhow::{Context, Result};
+use chrono::{Duration, Utc};
 use serde_json::json;
 
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
@@ -190,6 +191,67 @@ async fn upsert_final_report(
     Ok(row.0)
 }
 
+#[derive(Debug, Clone)]
+struct OpsReviewSeedInput {
+    winner: &'static str,
+    pro_score: i32,
+    con_score: i32,
+    verdict_evidence_count: u32,
+    needs_draw_vote: bool,
+    winner_first: Option<&'static str>,
+    winner_second: Option<&'static str>,
+    rejudge_triggered: bool,
+    created_at: chrono::DateTime<Utc>,
+}
+
+fn default_ops_review_query() -> ListJudgeReviewOpsQuery {
+    ListJudgeReviewOpsQuery {
+        from: None,
+        to: None,
+        winner: None,
+        rejudge_triggered: None,
+        has_verdict_evidence: None,
+        anomaly_only: false,
+        limit: Some(50),
+    }
+}
+
+async fn seed_ops_review_case(state: &AppState, input: OpsReviewSeedInput) -> Result<u64> {
+    let session_id = seed_topic_and_session(state, "judging").await?;
+    let final_job_id = upsert_final_job(state, session_id, "succeeded", None, None, None).await?;
+    let report_id = upsert_final_report(state, session_id, final_job_id, input.winner).await?;
+    let verdict_evidence_refs = (0..input.verdict_evidence_count)
+        .map(|idx| json!({"id": format!("evidence-{session_id}-{idx}")}))
+        .collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        UPDATE judge_final_reports
+        SET pro_score = $1,
+            con_score = $2,
+            winner_first = $3,
+            winner_second = $4,
+            rejudge_triggered = $5,
+            needs_draw_vote = $6,
+            verdict_evidence_refs = $7::jsonb,
+            created_at = $8,
+            updated_at = $8
+        WHERE id = $9
+        "#,
+    )
+    .bind(input.pro_score as f64)
+    .bind(input.con_score as f64)
+    .bind(input.winner_first)
+    .bind(input.winner_second)
+    .bind(input.rejudge_triggered)
+    .bind(input.needs_draw_vote)
+    .bind(json!(verdict_evidence_refs))
+    .bind(input.created_at)
+    .bind(report_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(report_id as u64)
+}
+
 #[tokio::test]
 async fn get_latest_judge_report_should_forbid_non_participant_non_ops() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
@@ -327,5 +389,244 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
     assert_eq!(final_report.final_job_id, final_job_id as u64);
     assert_eq!(final_report.winner, "pro");
     assert_eq!(final_report.dimension_scores, json!({"logic": 72.0}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_reviews_by_owner_should_reject_invalid_winner_filter() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let mut query = default_ops_review_query();
+    query.winner = Some("invalid".to_string());
+
+    let err = state
+        .list_judge_reviews_by_owner(&owner, query)
+        .await
+        .expect_err("invalid winner should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("invalid winner")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_reviews_by_owner_should_require_judge_review_permission() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .list_judge_reviews_by_owner(&outsider, default_ops_review_query())
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_reviews_by_owner_should_apply_anomaly_only_scan_limit_multiplier() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+
+    for idx in 0..8_i64 {
+        let is_abnormal = idx == 0;
+        seed_ops_review_case(
+            &state,
+            OpsReviewSeedInput {
+                winner: "pro",
+                pro_score: 90,
+                con_score: 60,
+                verdict_evidence_count: if is_abnormal { 0 } else { 1 },
+                needs_draw_vote: false,
+                winner_first: Some("pro"),
+                winner_second: Some("pro"),
+                rejudge_triggered: false,
+                created_at: now - Duration::seconds(idx),
+            },
+        )
+        .await?;
+    }
+
+    for idx in 8..12_i64 {
+        seed_ops_review_case(
+            &state,
+            OpsReviewSeedInput {
+                winner: "pro",
+                pro_score: 90,
+                con_score: 60,
+                verdict_evidence_count: 0,
+                needs_draw_vote: false,
+                winner_first: Some("pro"),
+                winner_second: Some("pro"),
+                rejudge_triggered: false,
+                created_at: now - Duration::seconds(idx),
+            },
+        )
+        .await?;
+    }
+
+    let output = state
+        .list_judge_reviews_by_owner(
+            &owner,
+            ListJudgeReviewOpsQuery {
+                anomaly_only: true,
+                limit: Some(2),
+                ..default_ops_review_query()
+            },
+        )
+        .await?;
+
+    assert_eq!(output.scanned_count, 8);
+    assert_eq!(output.returned_count, 1);
+    assert_eq!(output.items.len(), 1);
+    assert!(output.items[0]
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "missing_verdict_evidence_refs"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_reviews_by_owner_should_mark_abnormal_flags_and_mark_missing_winner_pass(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+
+    let missing_evidence_report_id = seed_ops_review_case(
+        &state,
+        OpsReviewSeedInput {
+            winner: "pro",
+            pro_score: 95,
+            con_score: 70,
+            verdict_evidence_count: 0,
+            needs_draw_vote: false,
+            winner_first: Some("pro"),
+            winner_second: Some("pro"),
+            rejudge_triggered: false,
+            created_at: now,
+        },
+    )
+    .await?;
+    let narrow_gap_report_id = seed_ops_review_case(
+        &state,
+        OpsReviewSeedInput {
+            winner: "pro",
+            pro_score: 72,
+            con_score: 70,
+            verdict_evidence_count: 1,
+            needs_draw_vote: false,
+            winner_first: Some("pro"),
+            winner_second: Some("pro"),
+            rejudge_triggered: false,
+            created_at: now - Duration::seconds(1),
+        },
+    )
+    .await?;
+    let draw_without_vote_report_id = seed_ops_review_case(
+        &state,
+        OpsReviewSeedInput {
+            winner: "draw",
+            pro_score: 71,
+            con_score: 71,
+            verdict_evidence_count: 1,
+            needs_draw_vote: false,
+            winner_first: Some("draw"),
+            winner_second: Some("draw"),
+            rejudge_triggered: false,
+            created_at: now - Duration::seconds(2),
+        },
+    )
+    .await?;
+    let winner_conflict_report_id = seed_ops_review_case(
+        &state,
+        OpsReviewSeedInput {
+            winner: "pro",
+            pro_score: 90,
+            con_score: 70,
+            verdict_evidence_count: 1,
+            needs_draw_vote: false,
+            winner_first: Some("pro"),
+            winner_second: Some("con"),
+            rejudge_triggered: false,
+            created_at: now - Duration::seconds(3),
+        },
+    )
+    .await?;
+    let winner_pass_missing_report_id = seed_ops_review_case(
+        &state,
+        OpsReviewSeedInput {
+            winner: "pro",
+            pro_score: 88,
+            con_score: 70,
+            verdict_evidence_count: 1,
+            needs_draw_vote: false,
+            winner_first: None,
+            winner_second: Some("pro"),
+            rejudge_triggered: false,
+            created_at: now - Duration::seconds(4),
+        },
+    )
+    .await?;
+
+    let output = state
+        .list_judge_reviews_by_owner(&owner, default_ops_review_query())
+        .await?;
+    let items_by_id = output
+        .items
+        .iter()
+        .map(|item| (item.report_id, item))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let missing_evidence_item = items_by_id
+        .get(&missing_evidence_report_id)
+        .expect("missing evidence item should exist");
+    assert!(missing_evidence_item
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "missing_verdict_evidence_refs"));
+
+    let narrow_gap_item = items_by_id
+        .get(&narrow_gap_report_id)
+        .expect("narrow score gap item should exist");
+    assert!(narrow_gap_item
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "narrow_score_gap"));
+
+    let draw_without_vote_item = items_by_id
+        .get(&draw_without_vote_report_id)
+        .expect("draw without vote item should exist");
+    assert!(draw_without_vote_item
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "draw_without_vote_flow"));
+
+    let winner_conflict_item = items_by_id
+        .get(&winner_conflict_report_id)
+        .expect("winner conflict item should exist");
+    assert!(winner_conflict_item
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "winner_inconsistent_between_two_passes"));
+
+    let winner_pass_missing_item = items_by_id
+        .get(&winner_pass_missing_report_id)
+        .expect("winner pass missing item should exist");
+    assert!(winner_pass_missing_item
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "winner_pass_missing"));
+    assert!(!winner_pass_missing_item
+        .abnormal_flags
+        .iter()
+        .any(|flag| flag == "winner_inconsistent_between_two_passes"));
     Ok(())
 }

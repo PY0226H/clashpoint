@@ -459,3 +459,30 @@
 | api059-rbac-write-trusted-proxy-production-rollout | `server.forwarded_header_trust` 机制已落地，但生产代理链路白名单（`trusted_proxy_ids/cidrs`）与误配排查 Runbook 尚未完成运维收口。 | 形成并上线生产白名单配置，完成一次误配/缺配演练并沉淀排查手册。 | 生产前在预发执行“trusted/untrusted 透传头”对照回归，归档配置快照、演练命令与结果记录到 `docs/consistency_reports/`。 |
 | api059-rbac-write-forwarded-header-governance-rollout | API059 已完成“仅可信代理采信转发头”，但 auth/payment/ticket 等控制面写接口尚未统一复用同策略。 | 完成跨接口治理清单与改造收口，确保“转发头采信边界”在控制面写路径一致。 | 输出治理评审清单并执行接口级回归（至少覆盖 auth/payment/ticket 各 1 条核心写路径），归档结果到 `docs/consistency_reports/`。 |
 | api059-rbac-write-observability-and-load-baseline | API059 功能闭环已完成，但 RBAC 写链路尚未形成正式 dashboard/告警阈值与并发冲突/限流压测基线。 | 建立 `ops.rbac.roles_write.*` 观测看板与告警阈值，并形成 `ops_rbac_revision_conflict`、限流命中率、`p95/p99` 压测基线报告。 | 执行 RBAC 写接口专项压测，导出看板配置与告警演练记录，统一归档到 `docs/loadtest/evidence/` 与 `docs/consistency_reports/`。 |
+
+## AK. api060-rbac-roles-delete-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-09）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API060 未完成项已并入本分组持续跟踪。
+- API060 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api060-rbac-roles-delete-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api060-rbac-delete-trusted-proxy-production-rollout | trusted proxy 门控机制已落地，但预发/生产 `trusted_proxy_ids/cidrs` 白名单与误配演练尚未运维收口。 | 完成白名单配置上线、误配/缺配演练与 runbook 定版，确保来源信任边界可运维。 | 在预发执行 trusted/untrusted 转发头对照回归，归档配置快照、演练命令、响应与日志证据到 `docs/consistency_reports/`。 |
+| api060-rbac-delete-forwarded-header-governance-rollout | API060 已收敛来源信任边界，但 auth/payment/ticket 控制面写接口尚未统一复用。 | 完成跨接口治理清单与分批改造收口，统一“仅可信代理采信转发头”的策略。 | 按接口清单执行回归（至少 auth/payment/ticket 各 1 条核心写路径），归档报告到 `docs/consistency_reports/`。 |
+| api060-rbac-delete-observability-and-load-baseline | DELETE 已补充 revoke 观测信号，但未形成 dashboard、告警阈值与压测基线封板。 | 建立 `ops.rbac.roles_write.*` 看板，冻结冲突率/限流率/outbox 健康度阈值，并形成压测基线报告。 | 执行 RBAC 写链路专项压测，导出看板和告警演练证据，归档到 `docs/loadtest/evidence/` 与 `docs/consistency_reports/`。 |
+| api060-rbac-delete-semantic-strategy-observation | DELETE 去噪与 strict 语义当前为“观察期决策”（No-Go + 观测侧聚合），缺真实运行样本支撑下一步。 | 基于 2~4 周样本输出评审结论：保持现状或升级为协议变更（`idempotency-key`/strict mode）。 | 归档样本统计与评审纪要，明确 Go/No-Go 与回滚条件，并同步学习文档与 API 契约。 |
+
+## AL. api061-judge-reviews-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-09）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API061 未完成项已并入本分组持续跟踪。
+- API061 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api061-judge-reviews-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api061-judge-reviews-pagination-upgrade-evaluation | 当前仅 `limit`，缺少 cursor 翻页；深历史审核需要重复扫描新窗口。 | 形成 `time+id` cursor 方案与迁移评审（含响应契约、兼容策略、回滚路径）。 | 输出接口方案文档并完成至少 1 轮前后端联调评审纪要。 |
+| api061-judge-reviews-threshold-configurability | `narrow_score_gap` 等异常阈值硬编码在服务端，策略调参需发版。 | 将核心异常阈值配置化（配置表或配置中心），并支持灰度回滚。 | 通过配置变更回归验证阈值生效与回滚，归档配置快照和测试报告。 |
+| api061-judge-reviews-query-performance-baseline | `($N IS NULL OR ...)` 与 JSONB 长度判断在大数据量下性能边界不明确。 | 产出 explain+压测封板报告，明确是否需要索引/SQL 改写。 | 归档查询计划、`p95/p99`、吞吐与 CPU 指标到 `docs/loadtest/evidence/`。 |
+| api061-judge-reviews-permission-status-semantics-review | 权限拒绝仍是 `409 ops_permission_denied:*`，与常见 `403` 语义存在认知偏差。 | 完成错误语义评审结论（维持 409 或迁移 403）并给出客户端迁移方案。 | 产出评审纪要与契约更新记录，补充相应回归测试。 |
+| api061-judge-reviews-read-rate-limit-rollout-decision | 本轮对读限流结论为 No-Go（后置），缺线上样本支撑下一步阈值设计。 | 基于 2~4 周观测数据完成 Go/No-Go 复评，若 Go 先落 user 维度限流再评估 ip 维度。 | 归档 scanned/returned/anomaly_hit 统计与压测结果，形成正式决策文档。 |

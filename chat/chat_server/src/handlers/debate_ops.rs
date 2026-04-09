@@ -2127,7 +2127,11 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
     ),
     responses(
         (status = 200, description = "Ops judge review list", body = crate::ListJudgeReviewOpsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2136,9 +2140,45 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
 pub(crate) async fn list_judge_reviews_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<ListJudgeReviewOpsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.list_judge_reviews_by_owner(&user, input).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let anomaly_only = input.anomaly_only;
+    let ret = match state.list_judge_reviews_by_owner(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                anomaly_only,
+                latency_ms,
+                decision = "failed",
+                "list ops judge reviews failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let anomaly_hit_count = ret
+        .items
+        .iter()
+        .filter(|item| !item.abnormal_flags.is_empty())
+        .count();
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        anomaly_only,
+        scanned_count = ret.scanned_count,
+        returned_count = ret.returned_count,
+        anomaly_hit_count,
+        latency_ms,
+        decision = "success",
+        "list ops judge reviews served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
