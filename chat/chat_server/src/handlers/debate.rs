@@ -351,8 +351,8 @@ mod tests {
     use super::*;
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
-        GetOpsRbacMeOutput, ListJudgeReviewOpsOutput, ListOpsRoleAssignmentsOutput,
-        OpsRoleAssignment, RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        GetJudgeFinalDispatchFailureStatsOutput, GetOpsRbacMeOutput, ListJudgeReviewOpsOutput,
+        ListOpsRoleAssignmentsOutput, OpsRoleAssignment, RevokeOpsRoleOutput, UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -3345,6 +3345,156 @@ mod tests {
         assert_eq!(out.scanned_count, 0);
         assert_eq!(out.returned_count, 0);
         assert!(out.items.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_final_dispatch_failure_stats_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-final-dispatch/failure-stats")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_final_dispatch_failure_stats_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Failure Stats Unbound".to_string(),
+                email: "ops-failure-stats-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-failure-stats-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-final-dispatch/failure-stats")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_final_dispatch_failure_stats_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Failure Stats No Role",
+            "ops-failure-stats-no-role@acme.org",
+            "+8613810007781",
+            "ops-failure-stats-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-final-dispatch/failure-stats")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:judge_review"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_final_dispatch_failure_stats_route_should_return_400_when_from_later_than_to(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Failure Stats Invalid Window",
+            "ops-failure-stats-invalid-window@acme.org",
+            "+8613810007782",
+            "ops-failure-stats-invalid-window-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-final-dispatch/failure-stats?from=2026-01-03T00:00:00Z&to=2026-01-02T00:00:00Z")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("from must be <= to"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_final_dispatch_failure_stats_route_should_return_200_for_ops_viewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Failure Stats Viewer",
+            "ops-failure-stats-viewer@acme.org",
+            "+8613810007783",
+            "ops-failure-stats-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-final-dispatch/failure-stats?limit=20")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetJudgeFinalDispatchFailureStatsOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.total_failed_jobs, 0);
+        assert_eq!(out.scanned_failed_jobs, 0);
+        assert!(!out.truncated);
+        assert_eq!(out.unknown_failed_jobs, 0);
+        assert!(out.by_type.is_empty());
         Ok(())
     }
 

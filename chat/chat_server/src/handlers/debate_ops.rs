@@ -2191,7 +2191,11 @@ pub(crate) async fn list_judge_reviews_ops_handler(
     ),
     responses(
         (status = 200, description = "Ops final dispatch failure type stats", body = crate::GetJudgeFinalDispatchFailureStatsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2200,11 +2204,65 @@ pub(crate) async fn list_judge_reviews_ops_handler(
 pub(crate) async fn list_judge_final_dispatch_failure_stats_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<GetJudgeFinalDispatchFailureStatsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let window_from = input.from;
+    let window_to = input.to;
+    let scan_limit = input.limit.unwrap_or(500).clamp(1, 5000);
+    let ret = match state
         .get_judge_final_dispatch_failure_stats_by_owner(&user, input)
-        .await?;
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                window_from = ?window_from,
+                window_to = ?window_to,
+                scan_limit,
+                latency_ms,
+                decision = "failed",
+                "list ops final dispatch failure stats failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let total_failed_jobs = ret.total_failed_jobs;
+    let scanned_failed_jobs = ret.scanned_failed_jobs;
+    let unknown_failed_jobs = ret.unknown_failed_jobs;
+    let truncated = ret.truncated;
+    let unknown_rate = if scanned_failed_jobs == 0 {
+        0.0
+    } else {
+        unknown_failed_jobs as f64 / scanned_failed_jobs as f64
+    };
+    let truncated_rate = total_failed_jobs.saturating_sub(scanned_failed_jobs) as f64
+        / total_failed_jobs.max(1) as f64;
+    let scan_coverage = scanned_failed_jobs as f64 / total_failed_jobs.max(1) as f64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        window_from = ?window_from,
+        window_to = ?window_to,
+        scan_limit,
+        total_failed_jobs,
+        scanned_failed_jobs,
+        unknown_failed_jobs,
+        truncated,
+        unknown_rate,
+        truncated_rate,
+        scan_coverage,
+        latency_ms,
+        decision = "success",
+        "list ops final dispatch failure stats served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 

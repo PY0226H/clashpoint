@@ -486,3 +486,17 @@
 | api061-judge-reviews-query-performance-baseline | `($N IS NULL OR ...)` 与 JSONB 长度判断在大数据量下性能边界不明确。 | 产出 explain+压测封板报告，明确是否需要索引/SQL 改写。 | 归档查询计划、`p95/p99`、吞吐与 CPU 指标到 `docs/loadtest/evidence/`。 |
 | api061-judge-reviews-permission-status-semantics-review | 权限拒绝仍是 `409 ops_permission_denied:*`，与常见 `403` 语义存在认知偏差。 | 完成错误语义评审结论（维持 409 或迁移 403）并给出客户端迁移方案。 | 产出评审纪要与契约更新记录，补充相应回归测试。 |
 | api061-judge-reviews-read-rate-limit-rollout-decision | 本轮对读限流结论为 No-Go（后置），缺线上样本支撑下一步阈值设计。 | 基于 2~4 周观测数据完成 Go/No-Go 复评，若 Go 先落 user 维度限流再评估 ip 维度。 | 归档 scanned/returned/anomaly_hit 统计与压测结果，形成正式决策文档。 |
+
+## AM. api062-judge-final-dispatch-failure-stats-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-09）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API062 未完成项已并入本分组持续跟踪。
+- API062 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api062-judge-final-dispatch-failure-stats-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api062-failure-stats-alert-threshold-baseline | 接口已输出 `unknown_rate/truncated_rate/scan_coverage/latency_ms`，但告警阈值尚未在监控平台固化。 | 固化阈值（初版建议：`unknown_rate>0.20`、`truncated_rate>0.80`、`p95>300ms`）并完成一次告警演练。 | 导出看板/告警配置与演练复盘，归档到 `docs/consistency_reports/`。 |
+| api062-failure-stats-read-rate-limit-rollout-decision | 当前读接口未接限流，是否接入缺真实流量样本支撑。 | 基于 2~4 周观测数据完成 Go/No-Go 复评，若 Go 先落 user 维度后评估 ip 维度。 | 归档请求量、`scan_limit` 分布、`p95/p99` 与 DB 压力指标，形成正式决策文档。 |
+| api062-failure-stats-permission-status-semantics-review | 权限拒绝语义仍是 `409 ops_permission_denied:*`，与常见 `403` 语义存在跨端认知偏差。 | 完成语义评审结论（维持 409 或迁移 403）并给出客户端迁移策略。 | 产出评审纪要 + 契约更新记录 + 对应回归测试清单。 |
+| api062-failure-stats-failure-type-filter-evaluation | 当前仅支持窗口+limit，不支持 `failureType` 定向过滤。 | 形成 `failureType` 过滤增强方案（契约、索引、回滚路径）并完成评审。 | 输出方案文档并完成至少 1 轮前后端联调评审纪要。 |
+| api062-failure-stats-query-performance-baseline | COUNT + 采样双查询在大数据量下性能边界尚无封板报告。 | 产出 explain+压测基线，明确是否需要默认窗口收紧或索引/SQL 改写。 | 归档查询计划、`p95/p99`、吞吐与 CPU 指标到 `docs/loadtest/evidence/`。 |

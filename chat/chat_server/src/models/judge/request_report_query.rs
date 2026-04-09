@@ -358,12 +358,13 @@ fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDi
             .as_deref()
             .and_then(extract_dispatch_error_code)
     });
-    let contract_failure_type = resolve_contract_failure_type(
-        status.as_str(),
-        error_code.as_deref(),
-        error_message.as_deref(),
-    )
-    .or(row.contract_failure_type);
+    let contract_failure_type = row.contract_failure_type.or_else(|| {
+        resolve_contract_failure_type(
+            status.as_str(),
+            error_code.as_deref(),
+            error_message.as_deref(),
+        )
+    });
     let (contract_failure_hint, contract_failure_action) =
         resolve_contract_failure_hint_and_action(contract_failure_type.as_deref());
     let contract_violation_blocked = error_message
@@ -386,23 +387,48 @@ fn map_final_dispatch_diagnostics(row: JudgeFinalJobSnapshotRow) -> JudgeFinalDi
     }
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct FinalDispatchFailureSampleRow {
+    status: String,
+    error_message: Option<String>,
+    error_code: Option<String>,
+    contract_failure_type: Option<String>,
+}
+
 fn build_final_dispatch_failure_stats(
-    rows: Vec<(String, Option<String>)>,
+    rows: Vec<FinalDispatchFailureSampleRow>,
 ) -> Option<JudgeFinalDispatchFailureStats> {
     if rows.is_empty() {
         return None;
     }
     let mut counters: HashMap<String, u32> = HashMap::new();
-    for (status, error_message) in rows {
-        let error_code = error_message
+    for row in rows {
+        let structured_failure_type = row
+            .contract_failure_type
             .as_deref()
-            .and_then(extract_dispatch_error_code);
-        let failure_type = resolve_contract_failure_type(
-            status.as_str(),
-            error_code.as_deref(),
-            error_message.as_deref(),
-        )
-        .unwrap_or_else(|| CONTRACT_FAILURE_UNKNOWN.to_string());
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let error_code = row
+            .error_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| {
+                row.error_message
+                    .as_deref()
+                    .and_then(extract_dispatch_error_code)
+            });
+        let failure_type = structured_failure_type
+            .or_else(|| {
+                resolve_contract_failure_type(
+                    row.status.as_str(),
+                    error_code.as_deref(),
+                    row.error_message.as_deref(),
+                )
+            })
+            .unwrap_or_else(|| CONTRACT_FAILURE_UNKNOWN.to_string());
         let entry = counters.entry(failure_type).or_insert(0);
         *entry = entry.saturating_add(1);
     }
@@ -747,9 +773,9 @@ impl AppState {
         .bind(query.to)
         .fetch_one(&self.pool)
         .await?;
-        let sampled_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let sampled_rows: Vec<FinalDispatchFailureSampleRow> = sqlx::query_as(
             r#"
-            SELECT status, error_message
+            SELECT status, error_message, error_code, contract_failure_type
             FROM judge_final_jobs
             WHERE status = 'failed'
               AND ($1::timestamptz IS NULL OR created_at >= $1)

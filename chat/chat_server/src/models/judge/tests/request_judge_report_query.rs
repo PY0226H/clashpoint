@@ -216,6 +216,45 @@ fn default_ops_review_query() -> ListJudgeReviewOpsQuery {
     }
 }
 
+fn default_failure_stats_query() -> GetJudgeFinalDispatchFailureStatsQuery {
+    GetJudgeFinalDispatchFailureStatsQuery {
+        from: None,
+        to: None,
+        limit: Some(500),
+    }
+}
+
+async fn seed_failed_final_job_for_stats(
+    state: &AppState,
+    created_at: chrono::DateTime<Utc>,
+    error_message: Option<&str>,
+    error_code: Option<&str>,
+    contract_failure_type: Option<&str>,
+) -> Result<i64> {
+    let session_id = seed_topic_and_session(state, "judging").await?;
+    let final_job_id = upsert_final_job(
+        state,
+        session_id,
+        "failed",
+        error_message,
+        error_code,
+        contract_failure_type,
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE judge_final_jobs
+        SET created_at = $1, updated_at = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(created_at)
+    .bind(final_job_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(final_job_id)
+}
+
 async fn seed_ops_review_case(state: &AppState, input: OpsReviewSeedInput) -> Result<u64> {
     let session_id = seed_topic_and_session(state, "judging").await?;
     let final_job_id = upsert_final_job(state, session_id, "succeeded", None, None, None).await?;
@@ -425,6 +464,167 @@ async fn list_judge_reviews_by_owner_should_require_judge_review_permission() ->
         }
         other => panic!("unexpected error: {other}"),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_final_dispatch_failure_stats_by_owner_should_require_judge_review_permission(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .get_judge_final_dispatch_failure_stats_by_owner(&outsider, default_failure_stats_query())
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_final_dispatch_failure_stats_by_owner_should_reject_invalid_window() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .get_judge_final_dispatch_failure_stats_by_owner(
+            &owner,
+            GetJudgeFinalDispatchFailureStatsQuery {
+                from: Some(Utc::now()),
+                to: Some(Utc::now() - Duration::seconds(1)),
+                limit: Some(10),
+            },
+        )
+        .await
+        .expect_err("invalid window should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("from must be <= to")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_final_dispatch_failure_stats_by_owner_should_return_zero_for_empty_window(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let out = state
+        .get_judge_final_dispatch_failure_stats_by_owner(
+            &owner,
+            GetJudgeFinalDispatchFailureStatsQuery {
+                from: Some(Utc::now() + Duration::days(1)),
+                to: Some(Utc::now() + Duration::days(2)),
+                limit: Some(20),
+            },
+        )
+        .await?;
+    assert_eq!(out.total_failed_jobs, 0);
+    assert_eq!(out.scanned_failed_jobs, 0);
+    assert!(!out.truncated);
+    assert_eq!(out.unknown_failed_jobs, 0);
+    assert!(out.by_type.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_final_dispatch_failure_stats_by_owner_should_mark_truncated_when_scan_limited(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+    for idx in 0..3_i64 {
+        seed_failed_final_job_for_stats(
+            &state,
+            now - Duration::seconds(idx),
+            Some("[response_accepted_false] accepted=false"),
+            None,
+            None,
+        )
+        .await?;
+    }
+
+    let out = state
+        .get_judge_final_dispatch_failure_stats_by_owner(
+            &owner,
+            GetJudgeFinalDispatchFailureStatsQuery {
+                from: None,
+                to: None,
+                limit: Some(2),
+            },
+        )
+        .await?;
+    assert_eq!(out.total_failed_jobs, 3);
+    assert_eq!(out.scanned_failed_jobs, 2);
+    assert!(out.truncated);
+    assert_eq!(out.unknown_failed_jobs, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_final_dispatch_failure_stats_by_owner_should_prefer_structured_failure_type(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+
+    seed_failed_final_job_for_stats(
+        &state,
+        now - Duration::seconds(1),
+        Some("[response_accepted_false] accepted=false"),
+        Some("response_accepted_false"),
+        Some("final_contract_blocked"),
+    )
+    .await?;
+    seed_failed_final_job_for_stats(
+        &state,
+        now - Duration::seconds(2),
+        Some("[response_job_id_mismatch] job_id mismatch"),
+        None,
+        None,
+    )
+    .await?;
+    seed_failed_final_job_for_stats(
+        &state,
+        now - Duration::seconds(3),
+        Some("unrecognized transport timeout"),
+        None,
+        None,
+    )
+    .await?;
+
+    let out = state
+        .get_judge_final_dispatch_failure_stats_by_owner(&owner, default_failure_stats_query())
+        .await?;
+
+    assert_eq!(out.total_failed_jobs, 3);
+    assert_eq!(out.scanned_failed_jobs, 3);
+    assert!(!out.truncated);
+    assert_eq!(out.unknown_failed_jobs, 1);
+    let types = out
+        .by_type
+        .iter()
+        .map(|item| item.failure_type.as_str())
+        .collect::<Vec<_>>();
+    assert!(types.contains(&"final_contract_blocked"));
+    assert!(types.contains(&"response_job_id_mismatch"));
+    assert!(types.contains(&"unknown_contract_failure"));
+    // 所有分组 count 都为 1 时，应该按 failure_type 字典序稳定排序。
+    assert_eq!(
+        types,
+        vec![
+            "final_contract_blocked",
+            "response_job_id_mismatch",
+            "unknown_contract_failure"
+        ]
+    );
     Ok(())
 }
 
