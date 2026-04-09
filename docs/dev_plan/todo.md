@@ -500,3 +500,16 @@
 | api062-failure-stats-permission-status-semantics-review | 权限拒绝语义仍是 `409 ops_permission_denied:*`，与常见 `403` 语义存在跨端认知偏差。 | 完成语义评审结论（维持 409 或迁移 403）并给出客户端迁移策略。 | 产出评审纪要 + 契约更新记录 + 对应回归测试清单。 |
 | api062-failure-stats-failure-type-filter-evaluation | 当前仅支持窗口+limit，不支持 `failureType` 定向过滤。 | 形成 `failureType` 过滤增强方案（契约、索引、回滚路径）并完成评审。 | 输出方案文档并完成至少 1 轮前后端联调评审纪要。 |
 | api062-failure-stats-query-performance-baseline | COUNT + 采样双查询在大数据量下性能边界尚无封板报告。 | 产出 explain+压测基线，明确是否需要默认窗口收紧或索引/SQL 改写。 | 归档查询计划、`p95/p99`、吞吐与 CPU 指标到 `docs/loadtest/evidence/`。 |
+
+## AN. api063-judge-trace-replay-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-09）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API063 未完成项已并入本分组持续跟踪。
+- API063 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api063-judge-trace-replay-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api063-trace-replay-pagination-upgrade-evaluation | 当前仅 `limit`，无 cursor 翻页；深历史追踪需要重复扫窗口。 | 形成 `created_at + job_id + scope` cursor 方案（含响应契约、兼容策略、回滚路径）并完成评审。 | 输出接口方案文档并完成至少 1 轮前后端联调评审纪要。 |
+| api063-trace-replay-query-performance-baseline | `UNION ALL + 相关子查询` 在大数据量与高 limit 场景下性能边界尚无封板报告。 | 产出 explain+压测基线，明确是否需要 SQL 改写（LATERAL/预聚合）或索引增强。 | 归档查询计划、`p95/p99`、吞吐与 CPU 指标到 `docs/loadtest/evidence/`。 |
+| api063-trace-replay-read-rate-limit-rollout-decision | 接口已补观测日志，但读限流是否接入缺真实流量样本支撑。 | 基于 2~4 周观测数据完成 Go/No-Go 复评，若 Go 先落 user 维度后评估 ip 维度。 | 归档请求量、`limit` 分布、`p95/p99` 与 DB 压力指标，形成正式决策文档。 |
+| api063-trace-replay-permission-status-semantics-review | 权限拒绝仍是 `409 ops_permission_denied:*`，与常见 `403` 语义存在跨端认知偏差。 | 完成语义评审结论（维持 409 或迁移 403）并给出客户端迁移策略。 | 产出评审纪要 + 契约更新记录 + 对应回归测试清单。 |

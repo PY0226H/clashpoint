@@ -557,23 +557,28 @@ fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceRep
     } else {
         u32::try_from(row.replay_action_count).unwrap_or(u32::MAX)
     };
+    let scope = row.scope;
     let status = row.status;
     let error_message = row.error_message;
-    let error_code = error_message
-        .as_deref()
-        .and_then(extract_dispatch_error_code);
-    let contract_failure_type = if row.scope == "final" {
-        resolve_contract_failure_type(
-            status.as_str(),
-            error_code.as_deref(),
-            error_message.as_deref(),
-        )
+    let error_code = row.error_code.or_else(|| {
+        error_message
+            .as_deref()
+            .and_then(extract_dispatch_error_code)
+    });
+    let contract_failure_type = if scope == "final" {
+        row.contract_failure_type.or_else(|| {
+            resolve_contract_failure_type(
+                status.as_str(),
+                error_code.as_deref(),
+                error_message.as_deref(),
+            )
+        })
     } else {
         None
     };
     let replay_eligible = matches!(status.as_str(), "failed" | "succeeded");
     let replay_recommendation = if replay_eligible {
-        if row.scope == "phase" {
+        if scope == "phase" {
             Some("replay_phase_job".to_string())
         } else {
             Some("replay_final_job".to_string())
@@ -583,7 +588,7 @@ fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceRep
     };
 
     JudgeTraceReplayOpsItem {
-        scope: row.scope,
+        scope,
         session_id: row.session_id as u64,
         trace_id: row.trace_id,
         idempotency_key: row.idempotency_key,
@@ -845,6 +850,8 @@ impl AppState {
                 item.dispatch_attempts,
                 item.last_dispatch_at,
                 item.error_message,
+                item.error_code,
+                item.contract_failure_type,
                 item.phase_job_id,
                 item.final_job_id,
                 item.phase_no,
@@ -866,6 +873,8 @@ impl AppState {
                     p.dispatch_attempts,
                     p.last_dispatch_at,
                     p.error_message,
+                    NULL::varchar AS error_code,
+                    NULL::varchar AS contract_failure_type,
                     p.id AS phase_job_id,
                     NULL::bigint AS final_job_id,
                     p.phase_no,
@@ -910,6 +919,8 @@ impl AppState {
                     f.dispatch_attempts,
                     f.last_dispatch_at,
                     f.error_message,
+                    f.error_code,
+                    f.contract_failure_type,
                     NULL::bigint AS phase_job_id,
                     f.id AS final_job_id,
                     NULL::int AS phase_no,
@@ -944,7 +955,10 @@ impl AppState {
             ) AS item
             WHERE ($4::varchar IS NULL OR item.scope = $4)
               AND ($5::varchar IS NULL OR item.status = $5)
-            ORDER BY item.created_at DESC
+            ORDER BY
+                item.created_at DESC,
+                COALESCE(item.phase_job_id, item.final_job_id) DESC,
+                item.scope DESC
             LIMIT $6
             "#,
         )

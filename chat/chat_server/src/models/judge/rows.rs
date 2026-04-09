@@ -95,6 +95,8 @@ pub(super) struct JudgeTraceReplayOpsRow {
     pub dispatch_attempts: i32,
     pub last_dispatch_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,
+    pub error_code: Option<String>,
+    pub contract_failure_type: Option<String>,
     pub phase_job_id: Option<i64>,
     pub final_job_id: Option<i64>,
     pub phase_no: Option<i32>,

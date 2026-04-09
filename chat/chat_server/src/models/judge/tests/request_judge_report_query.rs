@@ -224,6 +224,17 @@ fn default_failure_stats_query() -> GetJudgeFinalDispatchFailureStatsQuery {
     }
 }
 
+fn default_trace_replay_query() -> ListJudgeTraceReplayOpsQuery {
+    ListJudgeTraceReplayOpsQuery {
+        from: None,
+        to: None,
+        session_id: None,
+        scope: None,
+        status: None,
+        limit: Some(100),
+    }
+}
+
 async fn seed_failed_final_job_for_stats(
     state: &AppState,
     created_at: chrono::DateTime<Utc>,
@@ -253,6 +264,127 @@ async fn seed_failed_final_job_for_stats(
     .execute(&state.pool)
     .await?;
     Ok(final_job_id)
+}
+
+async fn seed_phase_job_for_trace_replay(
+    state: &AppState,
+    created_at: chrono::DateTime<Utc>,
+    status: &str,
+    error_message: Option<&str>,
+) -> Result<(i64, i64)> {
+    let session_id = seed_topic_and_session(state, "judging").await?;
+    let message_ids = seed_messages(state, session_id, 2).await?;
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_phase_jobs(
+            session_id, phase_no, message_start_id, message_end_id, message_count,
+            status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+            topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
+        )
+        VALUES (
+            $1, 1, $2, $3, 2,
+            $4, $5, $6, 'v3', 'v3-default',
+            'default', 'hybrid_v1', 2, $7, $8
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(session_id)
+    .bind(message_ids[0])
+    .bind(message_ids[1])
+    .bind(status)
+    .bind(format!("trace-phase-{session_id}-{status}"))
+    .bind(format!("judge_phase:{session_id}:{status}:v3:v3-default"))
+    .bind(created_at)
+    .bind(error_message)
+    .fetch_one(&state.pool)
+    .await?;
+    let phase_job_id = row.0;
+    sqlx::query(
+        r#"
+        UPDATE judge_phase_jobs
+        SET created_at = $1, updated_at = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(created_at)
+    .bind(phase_job_id)
+    .execute(&state.pool)
+    .await?;
+    Ok((session_id, phase_job_id))
+}
+
+async fn seed_final_job_for_trace_replay(
+    state: &AppState,
+    created_at: chrono::DateTime<Utc>,
+    status: &str,
+    error_message: Option<&str>,
+    error_code: Option<&str>,
+    contract_failure_type: Option<&str>,
+) -> Result<(i64, i64)> {
+    let session_id = seed_topic_and_session(state, "judging").await?;
+    let final_job_id = upsert_final_job(
+        state,
+        session_id,
+        status,
+        error_message,
+        error_code,
+        contract_failure_type,
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE judge_final_jobs
+        SET created_at = $1, updated_at = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(created_at)
+    .bind(final_job_id)
+    .execute(&state.pool)
+    .await?;
+    Ok((session_id, final_job_id))
+}
+
+async fn seed_replay_action_for_trace_replay(
+    state: &AppState,
+    scope: &str,
+    job_id: i64,
+    session_id: i64,
+    created_at: chrono::DateTime<Utc>,
+    reason: Option<&str>,
+) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO judge_replay_actions(
+            scope, job_id, session_id, requested_by, reason,
+            previous_status, new_status,
+            previous_trace_id, new_trace_id,
+            previous_idempotency_key, new_idempotency_key,
+            created_at
+        )
+        VALUES (
+            $1, $2, $3, 1, $4,
+            'failed', 'queued',
+            $5, $6,
+            $7, $8,
+            $9
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(scope)
+    .bind(job_id)
+    .bind(session_id)
+    .bind(reason)
+    .bind(format!("prev-trace-{scope}-{job_id}"))
+    .bind(format!("new-trace-{scope}-{job_id}"))
+    .bind(format!("prev-idemp-{scope}-{job_id}"))
+    .bind(format!("new-idemp-{scope}-{job_id}"))
+    .bind(created_at)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.0)
 }
 
 async fn seed_ops_review_case(state: &AppState, input: OpsReviewSeedInput) -> Result<u64> {
@@ -625,6 +757,290 @@ async fn get_judge_final_dispatch_failure_stats_by_owner_should_prefer_structure
             "unknown_contract_failure"
         ]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_require_judge_review_permission() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .list_judge_trace_replay_by_owner(&outsider, default_trace_replay_query())
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_reject_invalid_window() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .list_judge_trace_replay_by_owner(
+            &owner,
+            ListJudgeTraceReplayOpsQuery {
+                from: Some(Utc::now()),
+                to: Some(Utc::now() - Duration::seconds(1)),
+                ..default_trace_replay_query()
+            },
+        )
+        .await
+        .expect_err("invalid window should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("from must be <= to")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_reject_invalid_scope_filter() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .list_judge_trace_replay_by_owner(
+            &owner,
+            ListJudgeTraceReplayOpsQuery {
+                scope: Some("invalid".to_string()),
+                ..default_trace_replay_query()
+            },
+        )
+        .await
+        .expect_err("invalid scope should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("scope must be one of: phase, final")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_reject_invalid_status_filter() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .list_judge_trace_replay_by_owner(
+            &owner,
+            ListJudgeTraceReplayOpsQuery {
+                status: Some("invalid".to_string()),
+                ..default_trace_replay_query()
+            },
+        )
+        .await
+        .expect_err("invalid status should be rejected");
+    match err {
+        AppError::DebateError(msg) => {
+            assert!(msg.contains("status must be one of: queued, dispatched, succeeded, failed"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_aggregate_counts_and_replay_eligibility(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+    seed_phase_job_for_trace_replay(
+        &state,
+        now - Duration::seconds(1),
+        "failed",
+        Some("[phase_artifact_incomplete] report missing"),
+    )
+    .await?;
+    seed_final_job_for_trace_replay(
+        &state,
+        now - Duration::seconds(2),
+        "dispatched",
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let out = state
+        .list_judge_trace_replay_by_owner(&owner, default_trace_replay_query())
+        .await?;
+    assert_eq!(out.scanned_count, 2);
+    assert_eq!(out.returned_count, 2);
+    assert_eq!(out.phase_count, 1);
+    assert_eq!(out.final_count, 1);
+    assert_eq!(out.failed_count, 1);
+    assert_eq!(out.replay_eligible_count, 1);
+
+    let phase_item = out
+        .items
+        .iter()
+        .find(|item| item.scope == "phase")
+        .expect("phase item should exist");
+    assert!(phase_item.replay_eligible);
+    assert_eq!(
+        phase_item.replay_recommendation.as_deref(),
+        Some("replay_phase_job")
+    );
+    let final_item = out
+        .items
+        .iter()
+        .find(|item| item.scope == "final")
+        .expect("final item should exist");
+    assert!(!final_item.replay_eligible);
+    assert!(final_item.replay_recommendation.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_prefer_structured_fields_and_map_replay_summary(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+    let (session_id, final_job_id) = seed_final_job_for_trace_replay(
+        &state,
+        now,
+        "failed",
+        Some("[response_accepted_false] accepted=false"),
+        Some("response_job_id_mismatch"),
+        Some("final_contract_blocked"),
+    )
+    .await?;
+    let _old_audit_id = seed_replay_action_for_trace_replay(
+        &state,
+        "final",
+        final_job_id,
+        session_id,
+        now - Duration::seconds(2),
+        Some("old replay"),
+    )
+    .await?;
+    let latest_audit_id = seed_replay_action_for_trace_replay(
+        &state,
+        "final",
+        final_job_id,
+        session_id,
+        now - Duration::seconds(1),
+        Some("latest replay"),
+    )
+    .await?;
+
+    let out = state
+        .list_judge_trace_replay_by_owner(
+            &owner,
+            ListJudgeTraceReplayOpsQuery {
+                session_id: Some(session_id as u64),
+                ..default_trace_replay_query()
+            },
+        )
+        .await?;
+    assert_eq!(out.scanned_count, 1);
+    assert_eq!(out.returned_count, 1);
+    let item = out.items.first().expect("one item should exist");
+    assert_eq!(item.scope, "final");
+    assert_eq!(item.error_code.as_deref(), Some("response_job_id_mismatch"));
+    assert_eq!(
+        item.contract_failure_type.as_deref(),
+        Some("final_contract_blocked")
+    );
+    assert_eq!(item.replay_action_count, 2);
+    assert_eq!(item.latest_replay_action_id, Some(latest_audit_id as u64));
+    assert_eq!(item.latest_replay_at, Some(now - Duration::seconds(1)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_fallback_to_error_message_when_structured_missing(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+    let (session_id, _final_job_id) = seed_final_job_for_trace_replay(
+        &state,
+        now,
+        "failed",
+        Some("[response_accepted_false] accepted=false"),
+        None,
+        None,
+    )
+    .await?;
+
+    let out = state
+        .list_judge_trace_replay_by_owner(
+            &owner,
+            ListJudgeTraceReplayOpsQuery {
+                session_id: Some(session_id as u64),
+                ..default_trace_replay_query()
+            },
+        )
+        .await?;
+    assert_eq!(out.scanned_count, 1);
+    let item = out.items.first().expect("one item should exist");
+    assert_eq!(item.error_code.as_deref(), Some("response_accepted_false"));
+    assert_eq!(
+        item.contract_failure_type.as_deref(),
+        Some("response_accepted_false")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_trace_replay_by_owner_should_keep_stable_order_when_created_at_ties(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let tie_time = Utc::now();
+    seed_phase_job_for_trace_replay(&state, tie_time, "succeeded", None).await?;
+    seed_final_job_for_trace_replay(
+        &state,
+        tie_time,
+        "failed",
+        Some("[response_job_id_mismatch] job_id mismatch"),
+        None,
+        None,
+    )
+    .await?;
+    seed_phase_job_for_trace_replay(
+        &state,
+        tie_time,
+        "failed",
+        Some("[phase_artifact_incomplete] report missing"),
+    )
+    .await?;
+
+    let out = state
+        .list_judge_trace_replay_by_owner(
+            &owner,
+            ListJudgeTraceReplayOpsQuery {
+                limit: Some(10),
+                ..default_trace_replay_query()
+            },
+        )
+        .await?;
+    assert_eq!(out.scanned_count, 3);
+    assert_eq!(out.returned_count, 3);
+
+    let observed = out
+        .items
+        .iter()
+        .map(|item| (item.created_at, item.job_id, item.scope.clone()))
+        .collect::<Vec<_>>();
+    let mut expected = observed.clone();
+    expected.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| b.2.cmp(&a.2))
+    });
+    assert_eq!(observed, expected);
     Ok(())
 }
 

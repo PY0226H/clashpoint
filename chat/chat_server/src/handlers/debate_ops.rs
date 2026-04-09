@@ -2275,7 +2275,11 @@ pub(crate) async fn list_judge_final_dispatch_failure_stats_ops_handler(
     ),
     responses(
         (status = 200, description = "Ops judge trace/replay aggregation", body = crate::ListJudgeTraceReplayOpsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2284,9 +2288,49 @@ pub(crate) async fn list_judge_final_dispatch_failure_stats_ops_handler(
 pub(crate) async fn list_judge_trace_replay_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<ListJudgeTraceReplayOpsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.list_judge_trace_replay_by_owner(&user, input).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let window_from = input.from;
+    let window_to = input.to;
+    let query_limit = input.limit.unwrap_or(100).clamp(1, 500);
+    let ret = match state.list_judge_trace_replay_by_owner(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                window_from = ?window_from,
+                window_to = ?window_to,
+                query_limit,
+                latency_ms,
+                decision = "failed",
+                "list ops judge trace replay failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        window_from = ?window_from,
+        window_to = ?window_to,
+        query_limit,
+        scanned_count = ret.scanned_count,
+        returned_count = ret.returned_count,
+        phase_count = ret.phase_count,
+        final_count = ret.final_count,
+        failed_count = ret.failed_count,
+        replay_eligible_count = ret.replay_eligible_count,
+        latency_ms,
+        decision = "success",
+        "list ops judge trace replay served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
