@@ -352,9 +352,9 @@ mod tests {
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
         ExecuteJudgeReplayOpsOutput, GetJudgeFinalDispatchFailureStatsOutput,
-        GetJudgeReplayPreviewOpsOutput, GetOpsRbacMeOutput, ListJudgeReviewOpsOutput,
-        ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput, OpsRoleAssignment,
-        RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        GetJudgeReplayPreviewOpsOutput, GetOpsRbacMeOutput, ListJudgeReplayActionsOpsOutput,
+        ListJudgeReviewOpsOutput, ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput,
+        OpsRoleAssignment, RevokeOpsRoleOutput, UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -4350,6 +4350,194 @@ mod tests {
         assert_eq!(final_out.job_id, final_job_id as u64);
         assert_eq!(final_out.previous_status, "failed");
         assert_eq!(final_out.new_status, "queued");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_actions_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/actions")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_actions_route_should_return_403_for_unbound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Replay Actions Unbound".to_string(),
+                email: "ops-replay-actions-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-replay-actions-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_actions_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Actions No Role",
+            "ops-replay-actions-no-role@acme.org",
+            "+8613810007799",
+            "ops-replay-actions-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:judge_review"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_actions_route_should_return_400_when_from_later_than_to(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Actions Invalid Window",
+            "ops-replay-actions-invalid-window@acme.org",
+            "+8613810007800",
+            "ops-replay-actions-invalid-window-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/actions?from=2026-01-03T00:00:00Z&to=2026-01-02T00:00:00Z")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("from must be <= to"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_actions_route_should_return_400_for_out_of_range_session_id(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Actions Overflow Session",
+            "ops-replay-actions-overflow-session@acme.org",
+            "+8613810007802",
+            "ops-replay-actions-overflow-session-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let overflow_session_id = (i64::MAX as u64).saturating_add(1);
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/ops/judge-replay/actions?sessionId={overflow_session_id}"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_judge_replay_actions_session_id_out_of_range"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_judge_replay_actions_route_should_return_200_for_ops_viewer() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Replay Actions Viewer",
+            "ops-replay-actions-viewer@acme.org",
+            "+8613810007801",
+            "ops-replay-actions-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/judge-replay/actions?limit=20")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: ListJudgeReplayActionsOpsOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.scanned_count, 0);
+        assert_eq!(out.returned_count, 0);
+        assert!(!out.has_more);
+        assert!(out.items.is_empty());
         Ok(())
     }
 

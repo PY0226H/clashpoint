@@ -25,6 +25,12 @@ const OPS_JUDGE_REPLAY_PREVIEW_JOB_ID_OUT_OF_RANGE: &str =
     "ops_judge_replay_preview_job_id_out_of_range";
 const OPS_JUDGE_REPLAY_EXECUTE_JOB_ID_OUT_OF_RANGE: &str =
     "ops_judge_replay_execute_job_id_out_of_range";
+const OPS_JUDGE_REPLAY_ACTIONS_SESSION_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_actions_session_id_out_of_range";
+const OPS_JUDGE_REPLAY_ACTIONS_JOB_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_actions_job_id_out_of_range";
+const OPS_JUDGE_REPLAY_ACTIONS_REQUESTED_BY_OUT_OF_RANGE: &str =
+    "ops_judge_replay_actions_requested_by_out_of_range";
 
 const JUDGE_REPORT_STATUS_READY: &str = "ready";
 const JUDGE_REPORT_STATUS_PENDING: &str = "pending";
@@ -1547,9 +1553,22 @@ impl AppState {
         }
 
         let scope_filter = normalize_optional_trace_scope_filter(query.scope)?;
-        let session_id_filter = query.session_id.map(|v| v as i64);
-        let job_id_filter = query.job_id.map(|v| v as i64);
-        let requested_by_filter = query.requested_by.map(|v| v as i64);
+        let session_id_filter = query
+            .session_id
+            .map(|value| {
+                checked_u64_to_i64(value, OPS_JUDGE_REPLAY_ACTIONS_SESSION_ID_OUT_OF_RANGE)
+            })
+            .transpose()?;
+        let job_id_filter = query
+            .job_id
+            .map(|value| checked_u64_to_i64(value, OPS_JUDGE_REPLAY_ACTIONS_JOB_ID_OUT_OF_RANGE))
+            .transpose()?;
+        let requested_by_filter = query
+            .requested_by
+            .map(|value| {
+                checked_u64_to_i64(value, OPS_JUDGE_REPLAY_ACTIONS_REQUESTED_BY_OUT_OF_RANGE)
+            })
+            .transpose()?;
         let previous_status_filter = normalize_optional_replay_actions_status_filter(
             "previousStatus",
             query.previous_status,

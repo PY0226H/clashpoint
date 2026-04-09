@@ -235,6 +235,23 @@ fn default_trace_replay_query() -> ListJudgeTraceReplayOpsQuery {
     }
 }
 
+fn default_replay_actions_query() -> ListJudgeReplayActionsOpsQuery {
+    ListJudgeReplayActionsOpsQuery {
+        from: None,
+        to: None,
+        scope: None,
+        session_id: None,
+        job_id: None,
+        requested_by: None,
+        previous_status: None,
+        new_status: None,
+        reason_keyword: None,
+        trace_keyword: None,
+        limit: Some(50),
+        offset: Some(0),
+    }
+}
+
 fn replay_preview_query(scope: &str, job_id: u64) -> GetJudgeReplayPreviewOpsQuery {
     GetJudgeReplayPreviewOpsQuery {
         scope: scope.to_string(),
@@ -1137,6 +1154,291 @@ async fn list_judge_trace_replay_by_owner_should_keep_stable_order_when_created_
             .then_with(|| b.2.cmp(&a.2))
     });
     assert_eq!(observed, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_require_judge_review_permission() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .list_judge_replay_actions_by_owner(&outsider, default_replay_actions_query())
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_reject_invalid_window() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                from: Some(Utc::now()),
+                to: Some(Utc::now() - Duration::seconds(1)),
+                ..default_replay_actions_query()
+            },
+        )
+        .await
+        .expect_err("invalid window should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("from must be <= to")),
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_reject_out_of_range_filters() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let overflow_u64 = (i64::MAX as u64).saturating_add(1);
+
+    let session_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                session_id: Some(overflow_u64),
+                ..default_replay_actions_query()
+            },
+        )
+        .await
+        .expect_err("overflow session_id should fail");
+    match session_err {
+        AppError::DebateError(msg) => {
+            assert_eq!(msg, "ops_judge_replay_actions_session_id_out_of_range")
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let job_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                job_id: Some(overflow_u64),
+                ..default_replay_actions_query()
+            },
+        )
+        .await
+        .expect_err("overflow job_id should fail");
+    match job_err {
+        AppError::DebateError(msg) => {
+            assert_eq!(msg, "ops_judge_replay_actions_job_id_out_of_range")
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let requested_by_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                requested_by: Some(overflow_u64),
+                ..default_replay_actions_query()
+            },
+        )
+        .await
+        .expect_err("overflow requested_by should fail");
+    match requested_by_err {
+        AppError::DebateError(msg) => {
+            assert_eq!(msg, "ops_judge_replay_actions_requested_by_out_of_range")
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_apply_filters_and_keep_stable_order(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+
+    let (phase_session_id, phase_job_id) =
+        seed_phase_job_for_trace_replay(&state, now - Duration::seconds(10), "failed", None)
+            .await?;
+    let _phase_old = seed_replay_action_for_trace_replay(
+        &state,
+        "phase",
+        phase_job_id,
+        phase_session_id,
+        now - Duration::seconds(2),
+        Some("alpha replay old"),
+    )
+    .await?;
+    let phase_latest = seed_replay_action_for_trace_replay(
+        &state,
+        "phase",
+        phase_job_id,
+        phase_session_id,
+        now - Duration::seconds(1),
+        Some("alpha replay latest"),
+    )
+    .await?;
+
+    let (final_session_id, final_job_id) = seed_final_job_for_trace_replay(
+        &state,
+        now - Duration::seconds(10),
+        "failed",
+        None,
+        None,
+        None,
+    )
+    .await?;
+    let _final_audit_id = seed_replay_action_for_trace_replay(
+        &state,
+        "final",
+        final_job_id,
+        final_session_id,
+        now - Duration::seconds(3),
+        Some("beta replay"),
+    )
+    .await?;
+
+    let output = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                scope: Some("phase".to_string()),
+                session_id: Some(phase_session_id as u64),
+                job_id: Some(phase_job_id as u64),
+                requested_by: Some(1),
+                previous_status: Some("FAILED".to_string()),
+                new_status: Some("queued".to_string()),
+                reason_keyword: Some("alpha".to_string()),
+                trace_keyword: Some(format!("phase-{phase_job_id}")),
+                ..default_replay_actions_query()
+            },
+        )
+        .await?;
+
+    assert_eq!(output.scanned_count, 2);
+    assert_eq!(output.returned_count, 2);
+    assert!(!output.has_more);
+    assert_eq!(output.items.len(), 2);
+    assert!(output.items[0].created_at >= output.items[1].created_at);
+    assert_eq!(output.items[0].scope, "phase");
+    assert_eq!(output.items[0].session_id, phase_session_id as u64);
+    assert_eq!(output.items[0].job_id, phase_job_id as u64);
+    assert_eq!(output.items[0].requested_by, 1);
+    assert_eq!(output.items[0].previous_status, "failed");
+    assert_eq!(output.items[0].new_status, "queued");
+    assert_eq!(output.items[0].audit_id, phase_latest as u64);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_apply_limit_and_offset_clamp() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let now = Utc::now();
+    let (phase_session_id, phase_job_id) =
+        seed_phase_job_for_trace_replay(&state, now - Duration::seconds(10), "failed", None)
+            .await?;
+    seed_replay_action_for_trace_replay(
+        &state,
+        "phase",
+        phase_job_id,
+        phase_session_id,
+        now - Duration::seconds(3),
+        Some("alpha replay 1"),
+    )
+    .await?;
+    seed_replay_action_for_trace_replay(
+        &state,
+        "phase",
+        phase_job_id,
+        phase_session_id,
+        now - Duration::seconds(2),
+        Some("alpha replay 2"),
+    )
+    .await?;
+    seed_replay_action_for_trace_replay(
+        &state,
+        "phase",
+        phase_job_id,
+        phase_session_id,
+        now - Duration::seconds(1),
+        Some("alpha replay 3"),
+    )
+    .await?;
+
+    let clamped_limit_out = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                limit: Some(0),
+                ..default_replay_actions_query()
+            },
+        )
+        .await?;
+    assert_eq!(clamped_limit_out.scanned_count, 3);
+    assert_eq!(clamped_limit_out.returned_count, 1);
+    assert!(clamped_limit_out.has_more);
+
+    let clamped_offset_out = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                offset: Some(20_000),
+                ..default_replay_actions_query()
+            },
+        )
+        .await?;
+    assert_eq!(clamped_offset_out.scanned_count, 3);
+    assert_eq!(clamped_offset_out.returned_count, 0);
+    assert!(!clamped_offset_out.has_more);
+    assert!(clamped_offset_out.items.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_replay_actions_by_owner_should_validate_status_and_keyword_input() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+
+    let status_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                previous_status: Some("invalid$status".to_string()),
+                ..default_replay_actions_query()
+            },
+        )
+        .await
+        .expect_err("invalid status should fail");
+    match status_err {
+        AppError::DebateError(msg) => {
+            assert!(msg.contains("previousStatus contains unsupported characters"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let keyword_err = state
+        .list_judge_replay_actions_by_owner(
+            &owner,
+            ListJudgeReplayActionsOpsQuery {
+                reason_keyword: Some("k".repeat(101)),
+                ..default_replay_actions_query()
+            },
+        )
+        .await
+        .expect_err("too long reason keyword should fail");
+    match keyword_err {
+        AppError::DebateError(msg) => assert!(msg.contains("reasonKeyword is too long")),
+        other => panic!("unexpected error: {other}"),
+    }
     Ok(())
 }
 

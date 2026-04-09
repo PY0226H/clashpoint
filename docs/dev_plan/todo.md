@@ -62,6 +62,14 @@
 | api065-replay-execute-rate-limit-rollout-decision | `api065-judge-replay-execute-governance-phase-closure` | 性能压测 | 当前无稳定线上流量样本，先观察结构化日志与锁等待，不在本轮提前上限频以避免误伤 Ops 应急操作。 | execute QPS/锁等待异常或压测窗口开启 | 形成 user/ip 限流阈值建议并完成 Go/No-Go；若 Go，落地限频与告警阈值。 | 执行 execute 压测 + 锁等待观测，归档报告到 `docs/loadtest/evidence/`。 |
 | api065-replay-execute-permission-status-semantics-review | `api065-judge-replay-execute-governance-phase-closure` | 多端契约 | 当前接口沿用历史 `409` 权限拒绝语义，短期不改避免跨端回归面扩大。 | 多端联调窗口开启或持续出现权限语义歧义反馈 | 形成 409/403 统一语义评审结论；若切换，完成前后端错误码映射与回归封板。 | 联调脚本 + 错误码映射表 + route 回归结果归档。 |
 
+### C9. API066 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api066-replay-actions-cursor-pagination-evaluation | `api066-judge-replay-actions-governance-phase-closure` | 工程债 | 当前 `offset + count/list` 方案已可满足本地阶段，提前切 cursor 会扩大前后端联动改造面。 | 列表深分页成本上升或进入多端统一分页改造窗口 | 形成 cursor/keyset 设计评审结论并落地 `(created_at,id)` 游标协议与回归测试。 | 方案评审记录 + `cargo test -p chat-server list_judge_replay_actions_by_owner_should -- --nocapture` + 前端联调记录。 |
+| api066-replay-actions-read-rate-limit-rollout-decision | `api066-judge-replay-actions-governance-phase-closure` | 性能压测 | 当前缺少真实 Ops 检索流量样本，先观察结构化日志，不在本轮提前启用读限流避免误伤排障。 | 查询 QPS/慢查询占比异常或压测窗口开启 | 形成 user/ip 限流阈值 Go/No-Go 结论；若 Go，落地限流与告警阈值并补测试。 | 压测报告 + 错误预算评审记录 + route 回归结果归档。 |
+| api066-replay-actions-query-rejection-unification | `api066-judge-replay-actions-governance-phase-closure` | 多端契约 | 当前接口沿用 `Query<T>` 默认提取错误语义，单点改造收益低于家族统一改造。 | API 家族统一错误语义治理启动 | 完成 QueryRejection 统一包装并给出稳定错误码映射表。 | 接口家族联调脚本 + 错误码映射表 + route 回归结果归档。 |
+| api066-replay-actions-pgtrgm-real-benchmark-baseline | `api066-judge-replay-actions-governance-phase-closure` | 性能压测 | 本轮仅完成 dry-run 基线，缺真实库（含/不含 `pg_trgm`）的可对比样本。 | 拿到可压测数据库或上线前容量收口 | 形成真实 before/after 基线报告，明确 `ILIKE` 场景性能下限与告警阈值建议。 | `bash chat/scripts/ai_judge_replay_actions_perf_regression_suite.sh ...` + `..._gate.sh ...`，报告归档到 `docs/consistency_reports/`。 |
+
 ## Z. 历史待迁移技术债（只读归档）
 - 下方内容保留旧结构，仅用于查询和后续分批迁移。
 - 新增技术债不要继续写入下方旧结构。

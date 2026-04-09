@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-04-09T12:21:06Z",
+  "suiteOutputDir": "/Users/panyihang/Documents/EchoIsle/docs/consistency_reports/api066_replay_actions_perf_20260409_dryrun",
+  "samplesTsv": "/Users/panyihang/Documents/EchoIsle/docs/consistency_reports/api066_replay_actions_perf_20260409_dryrun/samples.tsv",
+  "thresholds": {
+    "minEffectiveImprovePct": -20,
+    "maxRegressionPct": 10,
+    "expectedRounds": 3
+  },
+  "overall": {
+    "status": "WARN",
+    "pass": 0,
+    "warn": 3,
+    "fail": 0,
+    "failOnWarn": 0,
+    "exitCode": 0
+  },
+  "scenarios": [
+    {"scenario":"A","beforeCount":3,"afterCount":3,"beforeAvgMs":0.000000,"afterAvgMs":0.000000,"deltaMs":"0.000","deltaPct":null,"status":"WARN","note":"before average is zero, delta percent unavailable"},
+    {"scenario":"B","beforeCount":3,"afterCount":3,"beforeAvgMs":0.000000,"afterAvgMs":0.000000,"deltaMs":"0.000","deltaPct":null,"status":"WARN","note":"before average is zero, delta percent unavailable"},
+    {"scenario":"C","beforeCount":3,"afterCount":3,"beforeAvgMs":0.000000,"afterAvgMs":0.000000,"deltaMs":"0.000","deltaPct":null,"status":"WARN","note":"before average is zero, delta percent unavailable"}
+  ]
+}

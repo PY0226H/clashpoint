@@ -2506,7 +2506,11 @@ pub(crate) async fn execute_judge_replay_ops_handler(
     ),
     responses(
         (status = 200, description = "Replay execute audit actions", body = crate::ListJudgeReplayActionsOpsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2515,11 +2519,83 @@ pub(crate) async fn execute_judge_replay_ops_handler(
 pub(crate) async fn list_judge_replay_actions_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<ListJudgeReplayActionsOpsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state
-        .list_judge_replay_actions_by_owner(&user, input)
-        .await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let window_from = input.from;
+    let window_to = input.to;
+    let query_scope = input.scope.clone().unwrap_or_default();
+    let query_session_id = input.session_id.unwrap_or_default();
+    let query_job_id = input.job_id.unwrap_or_default();
+    let query_requested_by = input.requested_by.unwrap_or_default();
+    let query_previous_status = input.previous_status.clone().unwrap_or_default();
+    let query_new_status = input.new_status.clone().unwrap_or_default();
+    let has_reason_keyword = input
+        .reason_keyword
+        .as_ref()
+        .map(|keyword| !keyword.trim().is_empty())
+        .unwrap_or(false);
+    let has_trace_keyword = input
+        .trace_keyword
+        .as_ref()
+        .map(|keyword| !keyword.trim().is_empty())
+        .unwrap_or(false);
+    let query_limit = input.limit.unwrap_or(100).clamp(1, 500);
+    let query_offset = input.offset.unwrap_or(0).clamp(0, 10_000);
+    let ret = match state.list_judge_replay_actions_by_owner(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                window_from = ?window_from,
+                window_to = ?window_to,
+                scope = query_scope.as_str(),
+                session_id = query_session_id,
+                job_id = query_job_id,
+                requested_by = query_requested_by,
+                previous_status = query_previous_status.as_str(),
+                new_status = query_new_status.as_str(),
+                has_reason_keyword,
+                has_trace_keyword,
+                query_limit,
+                query_offset,
+                latency_ms,
+                decision = "failed",
+                result = "query_failed",
+                "list ops judge replay actions failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        window_from = ?window_from,
+        window_to = ?window_to,
+        scope = query_scope.as_str(),
+        session_id = query_session_id,
+        job_id = query_job_id,
+        requested_by = query_requested_by,
+        previous_status = query_previous_status.as_str(),
+        new_status = query_new_status.as_str(),
+        has_reason_keyword,
+        has_trace_keyword,
+        query_limit,
+        query_offset,
+        scanned_count = ret.scanned_count,
+        returned_count = ret.returned_count,
+        has_more = ret.has_more,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "list ops judge replay actions served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 

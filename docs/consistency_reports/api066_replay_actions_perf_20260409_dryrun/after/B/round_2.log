@@ -1,0 +1,8 @@
+=== ai_judge_replay_actions query plan baseline ===
+--- COUNT query plan ---
+Planning Time: 0.000 ms
+Execution Time: 0.000 ms
+--- LIST query plan ---
+Planning Time: 0.000 ms
+Execution Time: 0.000 ms
+=== baseline finished ===
