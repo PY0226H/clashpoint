@@ -98,37 +98,46 @@ impl AppState {
             r#"
             WITH due AS (
                 SELECT
-                    s.id AS session_id,
+                    p.session_id,
+                    p.rejudge_run_no,
                     MIN(p.phase_no) AS phase_start_no,
                     MAX(p.phase_no) AS phase_end_no
-                FROM debate_sessions s
-                JOIN judge_phase_jobs p ON p.session_id = s.id
+                FROM judge_phase_jobs p
+                JOIN debate_sessions s ON s.id = p.session_id
                 WHERE s.status = 'closed'
                   AND NOT EXISTS(
                     SELECT 1
                     FROM judge_final_jobs f
-                    WHERE f.session_id = s.id
+                    WHERE f.session_id = p.session_id
+                      AND f.rejudge_run_no = p.rejudge_run_no
                   )
-                GROUP BY s.id
+                GROUP BY p.session_id, p.rejudge_run_no
                 HAVING COUNT(*) FILTER (WHERE p.status <> 'succeeded') = 0
                    AND COUNT(*) > 0
                 ORDER BY MAX(p.updated_at) ASC
                 LIMIT $1
             )
             INSERT INTO judge_final_jobs(
-                session_id, phase_start_no, phase_end_no,
+                session_id, rejudge_run_no, phase_start_no, phase_end_no,
                 status, trace_id, idempotency_key, rubric_version, judge_policy_version,
                 topic_domain, dispatch_attempts
             )
             SELECT
                 d.session_id,
+                d.rejudge_run_no,
                 d.phase_start_no,
                 d.phase_end_no,
                 'queued',
-                format('judge-final-%s-%s', d.session_id::text, d.phase_end_no::text),
                 format(
-                    'judge_final:%s:%s:%s:%s:%s',
+                    'judge-final-%s-r%s-%s',
                     d.session_id::text,
+                    d.rejudge_run_no::text,
+                    d.phase_end_no::text
+                ),
+                format(
+                    'judge_final:%s:%s:%s:%s:%s:%s',
+                    d.session_id::text,
+                    d.rejudge_run_no::text,
                     d.phase_start_no::text,
                     d.phase_end_no::text,
                     'v3',
@@ -139,7 +148,7 @@ impl AppState {
                 'default',
                 0
             FROM due d
-            ON CONFLICT (session_id) DO NOTHING
+            ON CONFLICT (session_id, rejudge_run_no) DO NOTHING
             "#,
         )
         .bind(batch_size)

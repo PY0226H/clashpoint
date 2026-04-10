@@ -2608,8 +2608,12 @@ pub(crate) async fn list_judge_replay_actions_ops_handler(
     ),
     responses(
         (status = 202, description = "Rejudge job accepted", body = crate::RequestJudgeJobOutput),
+        (status = 400, description = "Invalid request input", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission or state conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2618,10 +2622,58 @@ pub(crate) async fn list_judge_replay_actions_ops_handler(
 pub(crate) async fn request_judge_rejudge_ops_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.request_judge_rejudge_by_owner(id, &user).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let ret = match state.request_judge_rejudge_by_owner(id, &user).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_judge_rejudge_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                session_id = id,
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "request ops judge rejudge failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        session_id = id,
+        accepted = ret.accepted,
+        status = ret.status.as_str(),
+        reason = ret.reason.as_deref().unwrap_or_default(),
+        queued_phase_jobs = ret.queued_phase_jobs,
+        queued_final_job = ret.queued_final_job,
+        trigger_mode = ret.trigger_mode.as_str(),
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "request ops judge rejudge served"
+    );
     Ok((StatusCode::ACCEPTED, Json(ret)))
+}
+
+fn classify_ops_judge_rejudge_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
 }
 
 fn classify_ops_rbac_failure(err: &AppError) -> (Option<String>, &'static str) {

@@ -69,12 +69,12 @@ async fn seed_failed_phase_job(state: &AppState, session_id: i64) -> Result<i64>
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO judge_phase_jobs(
-            session_id, phase_no, message_start_id, message_end_id, message_count,
+            session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count,
             status, trace_id, idempotency_key, rubric_version, judge_policy_version,
             topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
         )
         VALUES (
-            $1, 1, $2, $3, 2,
+            $1, 1, 1, $2, $3, 2,
             'failed', $4, $5, 'v3', 'v3-default',
             'default', 'hybrid_v1', 2, NOW(), $6
         )
@@ -85,7 +85,7 @@ async fn seed_failed_phase_job(state: &AppState, session_id: i64) -> Result<i64>
     .bind(message_ids[0])
     .bind(message_ids[1])
     .bind(format!("trace-phase-failed-{session_id}"))
-    .bind(format!("judge_phase:{session_id}:1:v3:v3-default"))
+    .bind(format!("judge_phase:{session_id}:1:1:v3:v3-default"))
     .bind("[phase_artifact_incomplete] phase report mismatch")
     .fetch_one(&state.pool)
     .await?;
@@ -103,18 +103,18 @@ async fn upsert_final_job(
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO judge_final_jobs(
-            session_id, phase_start_no, phase_end_no,
+            session_id, rejudge_run_no, phase_start_no, phase_end_no,
             status, trace_id, idempotency_key, rubric_version, judge_policy_version,
             topic_domain, dispatch_attempts, last_dispatch_at,
             error_message, error_code, contract_failure_type
         )
         VALUES (
-            $1, 1, 3,
+            $1, 1, 1, 3,
             $2, $3, $4, 'v3', 'v3-default',
             'default', 2, NOW(),
             $5, $6, $7
         )
-        ON CONFLICT (session_id)
+        ON CONFLICT (session_id, rejudge_run_no)
         DO UPDATE
         SET status = EXCLUDED.status,
             trace_id = EXCLUDED.trace_id,
@@ -131,7 +131,7 @@ async fn upsert_final_job(
     .bind(session_id)
     .bind(status)
     .bind(format!("trace-final-{session_id}-{status}"))
-    .bind(format!("judge_final:{session_id}:{status}:v3:v3-default"))
+    .bind(format!("judge_final:{session_id}:1:{status}:v3:v3-default"))
     .bind(error_message)
     .bind(error_code)
     .bind(contract_failure_type)
@@ -149,18 +149,18 @@ async fn upsert_final_report(
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO judge_final_reports(
-            final_job_id, session_id, winner, pro_score, con_score, dimension_scores,
+            final_job_id, session_id, rejudge_run_no, winner, pro_score, con_score, dimension_scores,
             final_rationale, verdict_evidence_refs, phase_rollup_summary, retrieval_snapshot_rollup,
             winner_first, winner_second, rejudge_triggered, needs_draw_vote,
             judge_trace, audit_alerts, error_codes, degradation_level
         )
         VALUES (
-            $1, $2, $3, 73.0, 70.0, '{"logic": 72.0}'::jsonb,
+            $1, $2, 1, $3, 73.0, 70.0, '{"logic": 72.0}'::jsonb,
             'ready final rationale', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
             'pro', 'con', false, false,
             '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, 0
         )
-        ON CONFLICT (session_id)
+        ON CONFLICT (session_id, rejudge_run_no)
         DO UPDATE
         SET final_job_id = EXCLUDED.final_job_id,
             winner = EXCLUDED.winner,
@@ -272,15 +272,22 @@ fn replay_execute_input(
 }
 
 async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Result<i64> {
-    let (session_id, phase_no, message_start_id, message_end_id, message_count): (
+    let (session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count): (
         i64,
+        i32,
         i32,
         i64,
         i64,
         i32,
     ) = sqlx::query_as(
         r#"
-        SELECT session_id, phase_no, message_start_id, message_end_id, message_count
+        SELECT
+            session_id,
+            rejudge_run_no,
+            phase_no,
+            message_start_id,
+            message_end_id,
+            message_count
         FROM judge_phase_jobs
         WHERE id = $1
         "#,
@@ -294,6 +301,7 @@ async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Res
         INSERT INTO judge_phase_reports(
             phase_job_id,
             session_id,
+            rejudge_run_no,
             phase_no,
             message_start_id,
             message_end_id,
@@ -315,17 +323,18 @@ async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Res
             updated_at
         )
         VALUES (
-            $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10,
-            $11, $12, $13,
-            $14, $15, $16, $17,
-            $18, $19, NOW(), NOW()
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11,
+            $12, $13, $14,
+            $15, $16, $17, $18,
+            $19, $20, NOW(), NOW()
         )
         RETURNING id
         "#,
     )
     .bind(phase_job_id)
     .bind(session_id)
+    .bind(rejudge_run_no)
     .bind(phase_no)
     .bind(message_start_id)
     .bind(message_end_id)
@@ -390,12 +399,12 @@ async fn seed_phase_job_for_trace_replay(
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO judge_phase_jobs(
-            session_id, phase_no, message_start_id, message_end_id, message_count,
+            session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count,
             status, trace_id, idempotency_key, rubric_version, judge_policy_version,
             topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
         )
         VALUES (
-            $1, 1, $2, $3, 2,
+            $1, 1, 1, $2, $3, 2,
             $4, $5, $6, 'v3', 'v3-default',
             'default', 'hybrid_v1', 2, $7, $8
         )
@@ -407,7 +416,7 @@ async fn seed_phase_job_for_trace_replay(
     .bind(message_ids[1])
     .bind(status)
     .bind(format!("trace-phase-{session_id}-{status}"))
-    .bind(format!("judge_phase:{session_id}:{status}:v3:v3-default"))
+    .bind(format!("judge_phase:{session_id}:1:{status}:v3:v3-default"))
     .bind(created_at)
     .bind(error_message)
     .fetch_one(&state.pool)
@@ -543,7 +552,7 @@ async fn get_latest_judge_report_should_forbid_non_participant_non_ops() -> Resu
     let outsider = find_user(&state, 2).await?;
 
     let err = state
-        .get_latest_judge_report(session_id as u64, &outsider)
+        .get_latest_judge_report(session_id as u64, &outsider, None)
         .await
         .expect_err("non participant should be forbidden");
     match err {
@@ -571,7 +580,7 @@ async fn get_latest_judge_report_should_allow_ops_viewer_non_participant() -> Re
         .await?;
 
     let out = state
-        .get_latest_judge_report(session_id as u64, &ops_viewer)
+        .get_latest_judge_report(session_id as u64, &ops_viewer, None)
         .await?;
     assert_eq!(out.status, "absent");
     assert_eq!(out.status_reason, "no_judge_jobs");
@@ -588,7 +597,7 @@ async fn get_latest_judge_report_should_return_blocked_when_phase_failed_without
     seed_failed_phase_job(&state, session_id).await?;
 
     let out = state
-        .get_latest_judge_report(session_id as u64, &participant)
+        .get_latest_judge_report(session_id as u64, &participant, None)
         .await?;
     assert_eq!(out.status, "blocked");
     assert_eq!(out.status_reason, "phase_failed_waiting_replay");
@@ -616,7 +625,7 @@ async fn get_latest_judge_report_should_return_degraded_with_structured_final_fa
     .await?;
 
     let out = state
-        .get_latest_judge_report(session_id as u64, &participant)
+        .get_latest_judge_report(session_id as u64, &participant, None)
         .await?;
     assert_eq!(out.status, "degraded");
     assert_eq!(out.status_reason, "final_dispatch_failed");
@@ -649,7 +658,7 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
     let final_report_id = upsert_final_report(&state, session_id, final_job_id, "pro").await?;
 
     let overview = state
-        .get_latest_judge_report(session_id as u64, &participant)
+        .get_latest_judge_report(session_id as u64, &participant, None)
         .await?;
     assert_eq!(overview.status, "ready");
     assert_eq!(overview.status_reason, "final_report_ready");
@@ -663,7 +672,7 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
     assert_eq!(summary.winner, "pro");
 
     let detail = state
-        .get_latest_judge_final_report(session_id as u64, &participant)
+        .get_latest_judge_final_report(session_id as u64, &participant, None)
         .await?;
     let final_report = detail
         .final_report
@@ -673,6 +682,75 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
     assert_eq!(final_report.final_job_id, final_job_id as u64);
     assert_eq!(final_report.winner, "pro");
     assert_eq!(final_report.dimension_scores, json!({"logic": 72.0}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_support_explicit_rejudge_run_no() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let participant = find_user(&state, 2).await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    seed_messages(&state, session_id, 2).await?;
+
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let final_report_id = upsert_final_report(&state, session_id, final_job_id, "pro").await?;
+
+    state
+        .request_judge_rejudge_by_owner(session_id as u64, &owner)
+        .await?;
+
+    let latest = state
+        .get_latest_judge_report(session_id as u64, &participant, None)
+        .await?;
+    assert_eq!(latest.status, "pending");
+    assert!(latest.final_report_summary.is_none());
+
+    let run1 = state
+        .get_latest_judge_report(session_id as u64, &participant, Some(1))
+        .await?;
+    assert_eq!(run1.status, "ready");
+    assert_eq!(
+        run1.final_report_summary
+            .as_ref()
+            .map(|summary| summary.final_report_id),
+        Some(final_report_id as u64)
+    );
+
+    let run1_final = state
+        .get_latest_judge_final_report(session_id as u64, &participant, Some(1))
+        .await?;
+    assert_eq!(
+        run1_final
+            .final_report
+            .as_ref()
+            .map(|report| report.final_job_id),
+        Some(final_job_id as u64)
+    );
+
+    let run2_final = state
+        .get_latest_judge_final_report(session_id as u64, &participant, Some(2))
+        .await?;
+    assert!(run2_final.final_report.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_latest_judge_report_should_reject_invalid_rejudge_run_no() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let participant = find_user(&state, 2).await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+
+    let err = state
+        .get_latest_judge_report(session_id as u64, &participant, Some(0))
+        .await
+        .expect_err("run_no=0 should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert_eq!(msg, "judge_report_run_no_invalid"),
+        other => panic!("unexpected error: {other}"),
+    }
     Ok(())
 }
 

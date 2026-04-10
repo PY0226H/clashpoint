@@ -31,6 +31,8 @@ const OPS_JUDGE_REPLAY_ACTIONS_JOB_ID_OUT_OF_RANGE: &str =
     "ops_judge_replay_actions_job_id_out_of_range";
 const OPS_JUDGE_REPLAY_ACTIONS_REQUESTED_BY_OUT_OF_RANGE: &str =
     "ops_judge_replay_actions_requested_by_out_of_range";
+const JUDGE_REPORT_RUN_NO_OUT_OF_RANGE: &str = "judge_report_run_no_out_of_range";
+const JUDGE_REPORT_RUN_NO_INVALID: &str = "judge_report_run_no_invalid";
 
 const JUDGE_REPORT_STATUS_READY: &str = "ready";
 const JUDGE_REPORT_STATUS_PENDING: &str = "pending";
@@ -178,6 +180,36 @@ fn normalize_replay_scope(scope: &str) -> Result<String, AppError> {
 
 fn checked_u64_to_i64(value: u64, code: &'static str) -> Result<i64, AppError> {
     i64::try_from(value).map_err(|_| AppError::DebateError(code.to_string()))
+}
+
+async fn resolve_target_rejudge_run_no(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: i64,
+    requested_run_no: Option<u32>,
+) -> Result<i32, AppError> {
+    if let Some(run_no) = requested_run_no {
+        if run_no == 0 {
+            return Err(AppError::DebateError(
+                JUDGE_REPORT_RUN_NO_INVALID.to_string(),
+            ));
+        }
+        return i32::try_from(run_no)
+            .map_err(|_| AppError::DebateError(JUDGE_REPORT_RUN_NO_OUT_OF_RANGE.to_string()));
+    }
+
+    let latest_run_no: i32 = sqlx::query_scalar(
+        r#"
+        SELECT GREATEST(
+            COALESCE((SELECT MAX(rejudge_run_no) FROM judge_phase_jobs WHERE session_id = $1), 0),
+            COALESCE((SELECT MAX(rejudge_run_no) FROM judge_final_jobs WHERE session_id = $1), 0),
+            COALESCE((SELECT MAX(rejudge_run_no) FROM judge_final_reports WHERE session_id = $1), 0)
+        )::int
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(latest_run_no)
 }
 
 fn is_replay_eligible_status(status: &str) -> bool {
@@ -1038,6 +1070,7 @@ impl AppState {
                 SELECT
                     id,
                     session_id,
+                    rejudge_run_no,
                     phase_no,
                     message_start_id,
                     message_end_id,
@@ -1167,6 +1200,7 @@ impl AppState {
             SELECT
                 id,
                 session_id,
+                rejudge_run_no,
                 phase_start_no,
                 phase_end_no,
                 status,
@@ -1266,6 +1300,7 @@ impl AppState {
                 SELECT
                     id,
                     session_id,
+                    rejudge_run_no,
                     phase_no,
                     message_start_id,
                     message_end_id,
@@ -1345,6 +1380,7 @@ impl AppState {
                     scope,
                     job_id,
                     session_id,
+                    rejudge_run_no,
                     requested_by,
                     reason,
                     previous_status,
@@ -1362,11 +1398,12 @@ impl AppState {
                     $3,
                     $4,
                     $5,
-                    'queued',
                     $6,
+                    'queued',
                     $7,
                     $8,
                     $9,
+                    $10,
                     NOW()
                 )
                 RETURNING id, created_at
@@ -1374,6 +1411,7 @@ impl AppState {
             )
             .bind(job.id)
             .bind(job.session_id)
+            .bind(job.rejudge_run_no)
             .bind(user.id)
             .bind(reason)
             .bind(&previous_status)
@@ -1406,6 +1444,7 @@ impl AppState {
             SELECT
                 id,
                 session_id,
+                rejudge_run_no,
                 phase_start_no,
                 phase_end_no,
                 status,
@@ -1484,6 +1523,7 @@ impl AppState {
                 scope,
                 job_id,
                 session_id,
+                rejudge_run_no,
                 requested_by,
                 reason,
                 previous_status,
@@ -1501,11 +1541,12 @@ impl AppState {
                 $3,
                 $4,
                 $5,
-                'queued',
                 $6,
+                'queued',
                 $7,
                 $8,
                 $9,
+                $10,
                 NOW()
             )
             RETURNING id, created_at
@@ -1513,6 +1554,7 @@ impl AppState {
         )
         .bind(job.id)
         .bind(job.session_id)
+        .bind(job.rejudge_run_no)
         .bind(user.id)
         .bind(reason)
         .bind(&previous_status)
@@ -1730,6 +1772,7 @@ impl AppState {
         &self,
         session_id: u64,
         user: &User,
+        requested_run_no: Option<u32>,
     ) -> Result<GetJudgeReportOutput, AppError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -1756,6 +1799,9 @@ impl AppState {
         self.ensure_judge_report_read_access(&mut tx, session_id_i64, user)
             .await?;
 
+        let latest_run_no =
+            resolve_target_rejudge_run_no(&mut tx, session_id_i64, requested_run_no).await?;
+
         let latest_phase_job: Option<JudgePhaseJobSnapshotRow> = sqlx::query_as(
             r#"
             SELECT
@@ -1768,11 +1814,13 @@ impl AppState {
                 error_message
             FROM judge_phase_jobs
             WHERE session_id = $1
+              AND rejudge_run_no = $2
             ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
         .bind(session_id_i64)
+        .bind(latest_run_no)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -1790,10 +1838,13 @@ impl AppState {
                 contract_failure_type
             FROM judge_final_jobs
             WHERE session_id = $1
+              AND rejudge_run_no = $2
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
         .bind(session_id_i64)
+        .bind(latest_run_no)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -1807,9 +1858,11 @@ impl AppState {
                 COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed_phase_jobs
             FROM judge_phase_jobs
             WHERE session_id = $1
+              AND rejudge_run_no = $2
             "#,
         )
         .bind(session_id_i64)
+        .bind(latest_run_no)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -1837,10 +1890,13 @@ impl AppState {
                 created_at
             FROM judge_final_reports
             WHERE session_id = $1
+              AND rejudge_run_no = $2
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
         .bind(session_id_i64)
+        .bind(latest_run_no)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -1914,6 +1970,7 @@ impl AppState {
         &self,
         session_id: u64,
         user: &User,
+        requested_run_no: Option<u32>,
     ) -> Result<GetJudgeReportFinalOutput, AppError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -1940,6 +1997,9 @@ impl AppState {
         self.ensure_judge_report_read_access(&mut tx, session_id_i64, user)
             .await?;
 
+        let latest_run_no =
+            resolve_target_rejudge_run_no(&mut tx, session_id_i64, requested_run_no).await?;
+
         let final_report_row: Option<JudgeFinalReportRow> = sqlx::query_as(
             r#"
             SELECT
@@ -1964,10 +2024,13 @@ impl AppState {
                 created_at
             FROM judge_final_reports
             WHERE session_id = $1
+              AND rejudge_run_no = $2
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
         .bind(session_id_i64)
+        .bind(latest_run_no)
         .fetch_optional(&mut *tx)
         .await?;
         tx.commit().await?;

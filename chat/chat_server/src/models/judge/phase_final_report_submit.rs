@@ -105,6 +105,7 @@ impl AppState {
             SELECT
                 id,
                 session_id,
+                rejudge_run_no,
                 phase_no,
                 message_start_id,
                 message_end_id,
@@ -186,6 +187,7 @@ impl AppState {
             INSERT INTO judge_phase_reports(
                 phase_job_id,
                 session_id,
+                rejudge_run_no,
                 phase_no,
                 message_start_id,
                 message_end_id,
@@ -207,16 +209,17 @@ impl AppState {
                 updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10,
-                $11, $12, $13,
-                $14, $15, $16, $17,
-                $18, $19, NOW(), NOW()
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11,
+                $12, $13, $14,
+                $15, $16, $17, $18,
+                $19, $20, NOW(), NOW()
             )
             "#,
         )
         .bind(job.id)
         .bind(job.session_id)
+        .bind(job.rejudge_run_no)
         .bind(job.phase_no)
         .bind(job.message_start_id)
         .bind(job.message_end_id)
@@ -309,6 +312,7 @@ impl AppState {
             SELECT
                 id,
                 session_id,
+                rejudge_run_no,
                 status
             FROM judge_final_jobs
             WHERE id = $1
@@ -365,6 +369,7 @@ impl AppState {
             INSERT INTO judge_final_reports(
                 final_job_id,
                 session_id,
+                rejudge_run_no,
                 winner,
                 pro_score,
                 con_score,
@@ -385,10 +390,10 @@ impl AppState {
                 updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5,
-                $6, $7, $8, $9, $10,
-                $11, $12, $13, $14,
-                $15, $16, $17, $18,
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11,
+                $12, $13, $14, $15,
+                $16, $17, $18, $19,
                 NOW(), NOW()
             )
             RETURNING id
@@ -396,6 +401,7 @@ impl AppState {
         )
         .bind(job.id)
         .bind(job.session_id)
+        .bind(job.rejudge_run_no)
         .bind(winner)
         .bind(pro_score)
         .bind(con_score)

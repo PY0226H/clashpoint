@@ -7,7 +7,7 @@ use crate::{
     AppError, AppState, RateLimitDecision, RequestJudgeJobInput, SubmitDrawVoteInput,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Extension, Json,
@@ -578,7 +578,8 @@ mod tests {
     get,
     path = "/api/debate/sessions/{id}/judge-report",
     params(
-        ("id" = u64, Path, description = "Debate session id")
+        ("id" = u64, Path, description = "Debate session id"),
+        ("rejudgeRunNo" = Option<u32>, Query, description = "Optional rejudge run number; defaults to latest run")
     ),
     responses(
         (status = 200, description = "Judge report query result", body = crate::GetJudgeReportOutput),
@@ -597,6 +598,7 @@ pub(crate) async fn get_latest_judge_report_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
     Path(id): Path<u64>,
+    Query(query): Query<crate::GetJudgeReportQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     let started_at = Instant::now();
@@ -644,7 +646,10 @@ pub(crate) async fn get_latest_judge_report_handler(
     }
     let rate_headers = build_rate_limit_headers(&effective_decision)?;
 
-    let ret = match state.get_latest_judge_report(id, &user).await {
+    let ret = match state
+        .get_latest_judge_report(id, &user, query.rejudge_run_no)
+        .await
+    {
         Ok(v) => v,
         Err(AppError::DebateConflict(code)) if code == JUDGE_REPORT_READ_FORBIDDEN => {
             JUDGE_REPORT_READ_METRICS.observe_failed();
@@ -683,7 +688,8 @@ pub(crate) async fn get_latest_judge_report_handler(
     get,
     path = "/api/debate/sessions/{id}/judge-report/final",
     params(
-        ("id" = u64, Path, description = "Debate session id")
+        ("id" = u64, Path, description = "Debate session id"),
+        ("rejudgeRunNo" = Option<u32>, Query, description = "Optional rejudge run number; defaults to latest run")
     ),
     responses(
         (status = 200, description = "Judge final report detail", body = crate::GetJudgeReportFinalOutput),
@@ -702,6 +708,7 @@ pub(crate) async fn get_latest_judge_final_report_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
     Path(id): Path<u64>,
+    Query(query): Query<crate::GetJudgeReportQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     let started_at = Instant::now();
@@ -748,7 +755,10 @@ pub(crate) async fn get_latest_judge_final_report_handler(
     }
     let rate_headers = build_rate_limit_headers(&effective_decision)?;
 
-    let ret = match state.get_latest_judge_final_report(id, &user).await {
+    let ret = match state
+        .get_latest_judge_final_report(id, &user, query.rejudge_run_no)
+        .await
+    {
         Ok(v) => v,
         Err(AppError::DebateConflict(code)) if code == JUDGE_REPORT_READ_FORBIDDEN => {
             JUDGE_REPORT_READ_METRICS.observe_failed();

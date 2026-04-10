@@ -189,6 +189,12 @@ pub struct GetJudgeReportOutput {
     pub final_report_summary: Option<JudgeFinalReportSummary>,
 }
 
+#[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgeReportQuery {
+    pub rejudge_run_no: Option<u32>,
+}
+
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetJudgeReportFinalOutput {

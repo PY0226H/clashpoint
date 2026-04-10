@@ -354,7 +354,7 @@ mod tests {
         ExecuteJudgeReplayOpsOutput, GetJudgeFinalDispatchFailureStatsOutput,
         GetJudgeReplayPreviewOpsOutput, GetOpsRbacMeOutput, ListJudgeReplayActionsOpsOutput,
         ListJudgeReviewOpsOutput, ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput,
-        OpsRoleAssignment, RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        OpsRoleAssignment, RequestJudgeJobOutput, RevokeOpsRoleOutput, UpsertOpsRoleInput,
     };
     use anyhow::Result;
     use axum::{
@@ -492,12 +492,12 @@ mod tests {
         let row: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO judge_phase_jobs(
-                session_id, phase_no, message_start_id, message_end_id, message_count,
+                session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count,
                 status, trace_id, idempotency_key, rubric_version, judge_policy_version,
                 topic_domain, retrieval_profile, dispatch_attempts, last_dispatch_at, error_message
             )
             VALUES (
-                $1, 1, $2, $3, 2,
+                $1, 1, 1, $2, $3, 2,
                 $4, $5, $6, 'v3', 'v3-default',
                 'default', 'hybrid_v1', 2, NOW(), NULL
             )
@@ -509,7 +509,7 @@ mod tests {
         .bind(second_message_id.0)
         .bind(status)
         .bind(format!("trace-phase-preview-{session_id}-{status}"))
-        .bind(format!("judge_phase_preview:{session_id}:{status}:v3"))
+        .bind(format!("judge_phase_preview:{session_id}:1:{status}:v3"))
         .fetch_one(&state.pool)
         .await?;
         Ok(row.0)
@@ -523,12 +523,12 @@ mod tests {
         let row: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO judge_final_jobs(
-                session_id, phase_start_no, phase_end_no,
+                session_id, rejudge_run_no, phase_start_no, phase_end_no,
                 status, trace_id, idempotency_key, rubric_version, judge_policy_version,
                 topic_domain, dispatch_attempts, last_dispatch_at, error_message
             )
             VALUES (
-                $1, 1, 3,
+                $1, 1, 1, 3,
                 $2, $3, $4, 'v3', 'v3-default',
                 'default', 2, NOW(), NULL
             )
@@ -542,6 +542,101 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         Ok(row.0)
+    }
+
+    async fn seed_ops_rejudge_session(
+        state: &AppState,
+        status: &str,
+        with_final_report: bool,
+    ) -> Result<i64> {
+        let (_topic_id, session_id) = seed_topic_and_session(state).await?;
+        sqlx::query(
+            r#"
+            UPDATE debate_sessions
+            SET status = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(session_id)
+        .bind(status)
+        .execute(&state.pool)
+        .await?;
+
+        if with_final_report {
+            let final_job_id: (i64,) = sqlx::query_as(
+                r#"
+                INSERT INTO judge_final_jobs(
+                    session_id, rejudge_run_no, phase_start_no, phase_end_no,
+                    status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                    topic_domain, dispatch_attempts
+                )
+                VALUES (
+                    $1, 1, 1, 1,
+                    'succeeded', $2, $3, 'v3', 'v3-default',
+                    'default', 1
+                )
+                ON CONFLICT (session_id, rejudge_run_no)
+                DO UPDATE
+                SET status = EXCLUDED.status,
+                    trace_id = EXCLUDED.trace_id,
+                    idempotency_key = EXCLUDED.idempotency_key,
+                    dispatch_attempts = EXCLUDED.dispatch_attempts,
+                    updated_at = NOW()
+                RETURNING id
+                "#,
+            )
+            .bind(session_id)
+            .bind(format!("trace-rejudge-final-{session_id}"))
+            .bind(format!(
+                "judge_final:{session_id}:1:succeeded:v3:v3-default"
+            ))
+            .fetch_one(&state.pool)
+            .await?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO judge_final_reports(
+                    final_job_id, session_id, rejudge_run_no, winner, pro_score, con_score, dimension_scores,
+                    final_rationale, verdict_evidence_refs, phase_rollup_summary, retrieval_snapshot_rollup,
+                    winner_first, winner_second, rejudge_triggered, needs_draw_vote,
+                    judge_trace, audit_alerts, error_codes, degradation_level
+                )
+                VALUES (
+                    $1, $2, 1, 'pro', 73.0, 70.0, '{"logic":72.0}'::jsonb,
+                    'ops rejudge ready', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                    'pro', 'con', false, false,
+                    '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, 0
+                )
+                ON CONFLICT (session_id, rejudge_run_no)
+                DO UPDATE
+                SET final_job_id = EXCLUDED.final_job_id,
+                    winner = EXCLUDED.winner,
+                    pro_score = EXCLUDED.pro_score,
+                    con_score = EXCLUDED.con_score,
+                    dimension_scores = EXCLUDED.dimension_scores,
+                    final_rationale = EXCLUDED.final_rationale,
+                    verdict_evidence_refs = EXCLUDED.verdict_evidence_refs,
+                    phase_rollup_summary = EXCLUDED.phase_rollup_summary,
+                    retrieval_snapshot_rollup = EXCLUDED.retrieval_snapshot_rollup,
+                    winner_first = EXCLUDED.winner_first,
+                    winner_second = EXCLUDED.winner_second,
+                    rejudge_triggered = EXCLUDED.rejudge_triggered,
+                    needs_draw_vote = EXCLUDED.needs_draw_vote,
+                    judge_trace = EXCLUDED.judge_trace,
+                    audit_alerts = EXCLUDED.audit_alerts,
+                    error_codes = EXCLUDED.error_codes,
+                    degradation_level = EXCLUDED.degradation_level,
+                    updated_at = NOW()
+                "#,
+            )
+            .bind(final_job_id.0)
+            .bind(session_id)
+            .execute(&state.pool)
+            .await?;
+        }
+
+        Ok(session_id)
     }
 
     #[tokio::test]
@@ -4538,6 +4633,239 @@ mod tests {
         assert_eq!(out.returned_count, 0);
         assert!(!out.has_more);
         assert!(out.items.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions/1/judge/rejudge")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_403_for_unbound_user() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Rejudge Unbound".to_string(),
+                email: "ops-rejudge-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-rejudge-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions/1/judge/rejudge")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rejudge No Role",
+            "ops-rejudge-no-role@acme.org",
+            "+8613810007803",
+            "ops-rejudge-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions/1/judge/rejudge")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:judge_rejudge"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_404_for_missing_session(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rejudge Missing Session",
+            "ops-rejudge-missing-session@acme.org",
+            "+8613810007804",
+            "ops-rejudge-missing-session-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/sessions/999999/judge/rejudge")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("debate session id 999999"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_409_when_report_missing(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rejudge Missing Report",
+            "ops-rejudge-missing-report@acme.org",
+            "+8613810007805",
+            "ops-rejudge-missing-report-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let session_id = seed_ops_rejudge_session(&state, "closed", false).await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/api/debate/ops/sessions/{session_id}/judge/rejudge"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("judge_request_rejudge_requires_existing_report"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_400_for_out_of_range_session_id(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rejudge Overflow Session",
+            "ops-rejudge-overflow-session@acme.org",
+            "+8613810007806",
+            "ops-rejudge-overflow-session-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let overflow_session_id = (i64::MAX as u64).saturating_add(1);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/api/debate/ops/sessions/{overflow_session_id}/judge/rejudge"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_judge_rejudge_session_id_out_of_range"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_sessions_judge_rejudge_route_should_return_202_when_accepted() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Rejudge Accepted",
+            "ops-rejudge-accepted@acme.org",
+            "+8613810007807",
+            "ops-rejudge-accepted-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let session_id = seed_ops_rejudge_session(&state, "closed", true).await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/api/debate/ops/sessions/{session_id}/judge/rejudge"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: RequestJudgeJobOutput = serde_json::from_slice(&body)?;
+        assert!(out.accepted);
+        assert_eq!(out.session_id, session_id as u64);
+        assert_eq!(out.trigger_mode, "ops_rejudge");
         Ok(())
     }
 

@@ -23,6 +23,7 @@ pub(super) struct JudgeJobRequestIdempotencyRow {
 pub(super) struct JudgePhaseJobForUpdate {
     pub id: i64,
     pub session_id: i64,
+    pub rejudge_run_no: i32,
     pub phase_no: i32,
     pub message_start_id: i64,
     pub message_end_id: i64,
@@ -34,6 +35,7 @@ pub(super) struct JudgePhaseJobForUpdate {
 pub(super) struct JudgeFinalJobForUpdate {
     pub id: i64,
     pub session_id: i64,
+    pub rejudge_run_no: i32,
     pub status: String,
 }
 
@@ -113,6 +115,7 @@ pub(super) struct JudgeTraceReplayOpsRow {
 pub(super) struct JudgePhaseReplayJobRow {
     pub id: i64,
     pub session_id: i64,
+    pub rejudge_run_no: i32,
     pub phase_no: i32,
     pub message_start_id: i64,
     pub message_end_id: i64,
@@ -134,6 +137,7 @@ pub(super) struct JudgePhaseReplayJobRow {
 pub(super) struct JudgeFinalReplayJobRow {
     pub id: i64,
     pub session_id: i64,
+    pub rejudge_run_no: i32,
     pub phase_start_no: i32,
     pub phase_end_no: i32,
     pub status: String,

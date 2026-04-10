@@ -17,6 +17,7 @@ const JUDGE_REQUEST_CONFLICT_FINAL_REPORT_EXISTS: &str =
 const JUDGE_REQUEST_CONFLICT_IDEMPOTENCY_INFLIGHT: &str = "judge_request_idempotency_inflight";
 const JUDGE_REQUEST_CONFLICT_IDEMPOTENCY_PAYLOAD_MISMATCH: &str =
     "judge_request_idempotency_payload_mismatch";
+const JUDGE_REQUEST_SESSION_ID_OUT_OF_RANGE: &str = "ops_judge_rejudge_session_id_out_of_range";
 
 const JUDGE_REQUEST_REASON_PHASE_JOBS_QUEUED: &str = "phase_jobs_queued";
 const JUDGE_REQUEST_REASON_ALREADY_QUEUED: &str = "already_queued";
@@ -325,6 +326,7 @@ impl AppState {
         tx: &mut Transaction<'_, Postgres>,
         session_id: i64,
         session_status: &str,
+        rejudge_run_no: i32,
     ) -> Result<EnqueuePhaseJobsResult, AppError> {
         let total_messages: i64 = sqlx::query_scalar(
             r#"
@@ -361,30 +363,31 @@ impl AppState {
                 .resolve_phase_boundaries(tx, session_id, phase_no, total_messages)
                 .await?;
 
-            let trace_id = format!("judge-phase-{session_id}-{phase_no}");
+            let trace_id = format!("judge-phase-{session_id}-r{rejudge_run_no}-{phase_no}");
             let idempotency_key = format!(
-                "judge_phase:{session_id}:{phase_no}:{PHASE_RUBRIC_VERSION}:{PHASE_POLICY_VERSION}"
+                "judge_phase:{session_id}:{rejudge_run_no}:{phase_no}:{PHASE_RUBRIC_VERSION}:{PHASE_POLICY_VERSION}"
             );
 
             let inserted_id: Option<i64> = sqlx::query_scalar(
                 r#"
                 INSERT INTO judge_phase_jobs(
-                    session_id, phase_no, message_start_id, message_end_id, message_count,
+                    session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count,
                     status, trace_id, idempotency_key, rubric_version, judge_policy_version,
                     topic_domain, retrieval_profile, dispatch_attempts,
                     created_at, updated_at
                 )
                 VALUES (
-                    $1, $2, $3, $4, $5,
-                    'queued', $6, $7, $8, $9,
-                    $10, $11, 0,
+                    $1, $2, $3, $4, $5, $6,
+                    'queued', $7, $8, $9, $10,
+                    $11, $12, 0,
                     NOW(), NOW()
                 )
-                ON CONFLICT (session_id, phase_no) DO NOTHING
+                ON CONFLICT (session_id, rejudge_run_no, phase_no) DO NOTHING
                 RETURNING id
                 "#,
             )
             .bind(session_id)
+            .bind(rejudge_run_no)
             .bind(phase_no)
             .bind(message_start_id)
             .bind(message_end_id)
@@ -408,6 +411,27 @@ impl AppState {
         })
     }
 
+    async fn load_latest_rejudge_run_no(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: i64,
+    ) -> Result<i32, AppError> {
+        let max_run_no: i32 = sqlx::query_scalar(
+            r#"
+            SELECT GREATEST(
+                COALESCE((SELECT MAX(rejudge_run_no) FROM judge_phase_jobs WHERE session_id = $1), 0),
+                COALESCE((SELECT MAX(rejudge_run_no) FROM judge_phase_reports WHERE session_id = $1), 0),
+                COALESCE((SELECT MAX(rejudge_run_no) FROM judge_final_jobs WHERE session_id = $1), 0),
+                COALESCE((SELECT MAX(rejudge_run_no) FROM judge_final_reports WHERE session_id = $1), 0)
+            )::int
+            "#,
+        )
+        .bind(session_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(max_run_no)
+    }
+
     async fn request_judge_job_internal(
         &self,
         session_id: u64,
@@ -415,6 +439,9 @@ impl AppState {
         input: RequestJudgeJobInput,
         flow: JudgeJobRequestFlow<'_>,
     ) -> Result<RequestJudgeJobOutput, AppError> {
+        let session_id_i64 = i64::try_from(session_id).map_err(|_| {
+            AppError::DebateError(JUDGE_REQUEST_SESSION_ID_OUT_OF_RANGE.to_string())
+        })?;
         let request_hash = build_judge_job_request_hash(&input);
         if let Some(idempotency_key) = flow.request_idempotency_key {
             if let Some(replayed) = self
@@ -438,7 +465,7 @@ impl AppState {
             WHERE id = $1
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .fetch_optional(&mut *tx)
         .await?
         else {
@@ -461,7 +488,7 @@ impl AppState {
                 WHERE session_id = $1 AND user_id = $2
                 "#,
             )
-            .bind(session_id as i64)
+            .bind(session_id_i64)
             .bind(user.id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -477,11 +504,11 @@ impl AppState {
             SELECT id
             FROM judge_final_reports
             WHERE session_id = $1
-            ORDER BY created_at DESC
+            ORDER BY rejudge_run_no DESC, created_at DESC
             LIMIT 1
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
         .fetch_optional(&mut *tx)
         .await?
         .is_some();
@@ -497,13 +524,27 @@ impl AppState {
             ));
         }
 
+        let rejudge_run_no = if flow.trigger_mode == "ops_rejudge" {
+            let latest = self
+                .load_latest_rejudge_run_no(&mut tx, session_id_i64)
+                .await?;
+            latest.saturating_add(1)
+        } else {
+            1
+        };
+
         let phase_enqueue = self
-            .enqueue_missing_phase_jobs_for_session(&mut tx, session_id as i64, &session.status)
+            .enqueue_missing_phase_jobs_for_session(
+                &mut tx,
+                session_id_i64,
+                &session.status,
+                rejudge_run_no,
+            )
             .await?;
         tx.commit().await?;
 
         self.trigger_judge_dispatch(JudgeDispatchTrigger {
-            job_id: session_id as i64,
+            job_id: session_id_i64,
             source: "event:v3_request",
         });
 
@@ -522,10 +563,12 @@ impl AppState {
             SELECT id
             FROM judge_final_jobs
             WHERE session_id = $1
+              AND rejudge_run_no = $2
             LIMIT 1
             "#,
         )
-        .bind(session_id as i64)
+        .bind(session_id_i64)
+        .bind(rejudge_run_no)
         .fetch_optional(&self.pool)
         .await?
         .is_some();
