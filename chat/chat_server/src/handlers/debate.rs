@@ -352,14 +352,17 @@ mod tests {
     use crate::{
         get_router, models::CreateUser, DebateSessionSummary, DebateTopic, ErrorOutput,
         ExecuteJudgeReplayOpsOutput, GetJudgeFinalDispatchFailureStatsOutput,
-        GetJudgeReplayPreviewOpsOutput, GetOpsRbacMeOutput, ListJudgeReplayActionsOpsOutput,
-        ListJudgeReviewOpsOutput, ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput,
-        OpsRoleAssignment, RequestJudgeJobOutput, RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        GetJudgeReplayPreviewOpsOutput, GetOpsMetricsDictionaryOutput,
+        GetOpsObservabilityConfigOutput, GetOpsRbacMeOutput, GetOpsServiceSplitReadinessOutput,
+        GetOpsSloSnapshotOutput, ListJudgeReplayActionsOpsOutput, ListJudgeReviewOpsOutput,
+        ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput,
+        ListOpsServiceSplitReviewAuditsOutput, OpsRoleAssignment, RequestJudgeJobOutput,
+        RevokeOpsRoleOutput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
     };
     use anyhow::Result;
     use axum::{
         body::Body,
-        http::{Method, Request, StatusCode},
+        http::{header, Method, Request, StatusCode},
     };
     use chrono::{Duration, Utc};
     use http_body_util::BodyExt;
@@ -805,6 +808,8 @@ mod tests {
         assert!(!out.permissions.debate_manage);
         assert!(!out.permissions.judge_review);
         assert!(!out.permissions.judge_rejudge);
+        assert!(!out.permissions.observability_read);
+        assert!(!out.permissions.observability_manage);
         assert!(!out.permissions.role_manage);
         assert!(!out.rbac_revision.is_empty());
         assert_ne!(out.rbac_revision, "empty");
@@ -3346,6 +3351,767 @@ mod tests {
             error.error,
             "debate conflict: debate_session_revision_conflict"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_config_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/config")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_config_route_should_return_403_for_unbound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Observability Config Unbound".to_string(),
+                email: "ops-observability-config-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token =
+            issue_token_for_user(&state, user.id, "ops-observability-config-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/config")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_config_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Observability Config No Role",
+            "ops-observability-config-no-role@acme.org",
+            "+8613810007806",
+            "ops-observability-config-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/config")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_read"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_config_route_should_return_200_for_ops_viewer() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Observability Config Viewer",
+            "ops-observability-config-viewer@acme.org",
+            "+8613810007807",
+            "ops-observability-config-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/config")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsObservabilityConfigOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.thresholds.low_success_rate_threshold, 80.0);
+        assert!(out.anomaly_state.is_empty());
+        assert_eq!(out.config_revision, "empty");
+        assert!(out.updated_by.is_none());
+        assert!(out.updated_at.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_config_route_should_return_defaults_for_owner() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-observability-config-owner-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/config")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsObservabilityConfigOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.thresholds.low_success_rate_threshold, 80.0);
+        assert!(out.anomaly_state.is_empty());
+        assert_eq!(out.config_revision, "empty");
+        assert!(out.updated_by.is_none());
+        assert!(out.updated_at.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_metrics_dictionary_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_metrics_dictionary_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Metrics Dictionary Unbound".to_string(),
+                email: "ops-metrics-dictionary-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token =
+            issue_token_for_user(&state, user.id, "ops-metrics-dictionary-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_metrics_dictionary_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Metrics Dictionary No Role",
+            "ops-metrics-dictionary-no-role@acme.org",
+            "+8613810007810",
+            "ops-metrics-dictionary-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_read"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_metrics_dictionary_route_should_return_200_for_ops_viewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Metrics Dictionary Viewer",
+            "ops-metrics-dictionary-viewer@acme.org",
+            "+8613810007811",
+            "ops-metrics-dictionary-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let etag_header = res
+            .headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(!etag_header.is_empty());
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsMetricsDictionaryOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.version, "v1");
+        assert!(!out.dictionary_revision.is_empty());
+        assert!(!out.items.is_empty());
+        assert!(out.items.iter().any(|item| item.key == "api.request_total"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_metrics_dictionary_route_should_return_200_for_owner(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-metrics-dictionary-owner-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let etag_header = res
+            .headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(!etag_header.is_empty());
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsMetricsDictionaryOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.version, "v1");
+        assert!(!out.dictionary_revision.is_empty());
+        assert!(!out.items.is_empty());
+        assert!(out.items.iter().any(|item| item.key == "api.request_total"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_metrics_dictionary_route_should_return_304_when_etag_matches(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-metrics-dictionary-etag-owner-sid").await?;
+        let app = get_router(state).await?;
+
+        let first_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let first_res = app.clone().oneshot(first_req).await?;
+        assert_eq!(first_res.status(), StatusCode::OK);
+        let etag = first_res
+            .headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(!etag.is_empty());
+
+        let second_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/metrics-dictionary")
+            .header("Authorization", format!("Bearer {}", token))
+            .header(header::IF_NONE_MATCH, etag)
+            .body(Body::empty())?;
+        let second_res = app.oneshot(second_req).await?;
+        assert_eq!(second_res.status(), StatusCode::NOT_MODIFIED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_slo_snapshot_route_should_return_401_without_token() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/slo-snapshot")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_slo_snapshot_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops SLO Snapshot Unbound".to_string(),
+                email: "ops-slo-snapshot-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-slo-snapshot-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/slo-snapshot")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_slo_snapshot_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops SLO Snapshot No Role",
+            "ops-slo-snapshot-no-role@acme.org",
+            "+8613810007812",
+            "ops-slo-snapshot-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/slo-snapshot")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_read"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_slo_snapshot_route_should_return_200_for_ops_viewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops SLO Snapshot Viewer",
+            "ops-slo-snapshot-viewer@acme.org",
+            "+8613810007813",
+            "ops-slo-snapshot-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/slo-snapshot")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsSloSnapshotOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.window_minutes, 10);
+        assert_eq!(out.rules.len(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_service_split_readiness_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_service_split_readiness_route_should_return_403_for_unbound_user() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Split Readiness Unbound".to_string(),
+                email: "ops-split-readiness-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token =
+            issue_token_for_user(&state, user.id, "ops-split-readiness-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_service_split_readiness_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Readiness No Role",
+            "ops-split-readiness-no-role@acme.org",
+            "+8613810007814",
+            "ops-split-readiness-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_read"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_service_split_readiness_route_should_return_200_for_ops_viewer() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Readiness Viewer",
+            "ops-split-readiness-viewer@acme.org",
+            "+8613810007815",
+            "ops-split-readiness-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsServiceSplitReadinessOutput = serde_json::from_slice(&body)?;
+        assert!(matches!(
+            out.overall_status.as_str(),
+            "hold" | "review_required"
+        ));
+        assert_eq!(out.thresholds.len(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness/reviews")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Split Review Audits Unbound".to_string(),
+                email: "ops-split-review-audits-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token =
+            issue_token_for_user(&state, user.id, "ops-split-review-audits-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness/reviews")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Review Audits No Role",
+            "ops-split-review-audits-no-role@acme.org",
+            "+8613810007816",
+            "ops-split-review-audits-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness/reviews")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_read"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_route_should_return_200_for_ops_viewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Review Audits Viewer",
+            "ops-split-review-audits-viewer@acme.org",
+            "+8613810007817",
+            "ops-split-review-audits-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_service_split_review(
+                &owner,
+                UpsertOpsServiceSplitReviewInput {
+                    payment_compliance_required: Some(true),
+                    review_note: Some("api072-route-note-a".to_string()),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_service_split_review(
+                &owner,
+                UpsertOpsServiceSplitReviewInput {
+                    payment_compliance_required: Some(false),
+                    review_note: Some("api072-route-note-b".to_string()),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness/reviews?limit=10&offset=0&paymentComplianceRequired=true")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-request-id", "ops-split-review-audits-success")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: ListOpsServiceSplitReviewAuditsOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.limit, 10);
+        assert_eq!(out.offset, 0);
+        assert!(!out.items.is_empty());
+        assert!(out
+            .items
+            .iter()
+            .all(|item| item.payment_compliance_required == Some(true)));
+        assert!(out
+            .items
+            .iter()
+            .any(|item| item.review_note == "api072-route-note-a"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_route_should_return_429_when_rate_limited(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Review Audits Rate Limited",
+            "ops-split-review-audits-rate-limited@acme.org",
+            "+8613810007818",
+            "ops-split-review-audits-rate-limited-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness/reviews")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "ops_split_review_audits_user")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "rate_limit_exceeded:ops_split_review_audits");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_route_should_return_400_for_invalid_created_window(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(
+            &state,
+            owner.id,
+            "ops-split-review-audits-invalid-window-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/split-readiness/reviews?createdAfter=2026-01-03T00:00:00Z&createdBefore=2026-01-02T00:00:00Z")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("createdAfter must be <= createdBefore"));
         Ok(())
     }
 

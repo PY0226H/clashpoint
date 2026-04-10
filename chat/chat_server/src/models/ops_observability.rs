@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha1::{Digest, Sha1};
 use sqlx::FromRow;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
@@ -47,6 +48,8 @@ const SPLIT_READINESS_PRESSURE_FAILED_RATIO_MIN_DISPATCHED: u64 = 30;
 const SPLIT_READINESS_WS_RUNNING_SESSIONS_THRESHOLD: i64 = 100;
 const SPLIT_READINESS_WS_MESSAGES_10M_THRESHOLD: i64 = 20_000;
 const SPLIT_REVIEW_NOTE_MAX_LEN: usize = 1000;
+const SPLIT_REVIEW_STALE_THRESHOLD_HOURS: i64 = 24 * 30;
+const OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY: &str = "empty";
 
 fn clamp_float(value: f64, min: f64, max: f64, fallback: f64) -> f64 {
     if !value.is_finite() {
@@ -124,6 +127,7 @@ pub struct GetOpsObservabilityConfigOutput {
     pub thresholds: OpsObservabilityThresholds,
     #[serde(default)]
     pub anomaly_state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+    pub config_revision: String,
     pub updated_by: Option<u64>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -179,6 +183,10 @@ pub struct UpsertOpsServiceSplitReviewInput {
 pub struct ListOpsServiceSplitReviewAuditsQuery {
     pub limit: Option<u64>,
     pub offset: Option<u64>,
+    pub updated_by: Option<u64>,
+    pub payment_compliance_required: Option<bool>,
+    pub created_after: Option<DateTime<Utc>>,
+    pub created_before: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
@@ -225,6 +233,7 @@ pub struct OpsMetricsDictionaryItem {
 #[serde(rename_all = "camelCase")]
 pub struct GetOpsMetricsDictionaryOutput {
     pub version: String,
+    pub dictionary_revision: String,
     pub generated_at_ms: i64,
     pub items: Vec<OpsMetricsDictionaryItem>,
 }
@@ -401,6 +410,13 @@ enum AiJudgeAlertDeliveryOutcome {
 
 #[derive(Debug, Clone, FromRow)]
 struct OpsAlertStateRow {
+    is_active: bool,
+    last_emitted_status: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct OpsAlertStateByKeyRow {
+    alert_key: String,
     is_active: bool,
     last_emitted_status: String,
 }
@@ -642,6 +658,26 @@ fn apply_anomaly_action(
     Ok(normalize_anomaly_state(anomaly_state, now_ms))
 }
 
+fn normalize_updated_by(raw: i64) -> Option<u64> {
+    // 防御式处理历史脏数据，避免 i64 -> u64 的隐式溢出。
+    match u64::try_from(raw) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warn!(
+                updated_by = raw,
+                "ops observability config has invalid updated_by, fallback to null"
+            );
+            None
+        }
+    }
+}
+
+fn format_ops_observability_config_revision(updated_at: Option<DateTime<Utc>>) -> String {
+    updated_at
+        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+        .unwrap_or_else(|| OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY.to_string())
+}
+
 fn build_output(
     row: Option<OpsObservabilityConfigRow>,
     now_ms: i64,
@@ -650,6 +686,7 @@ fn build_output(
         return GetOpsObservabilityConfigOutput {
             thresholds: OpsObservabilityThresholds::default(),
             anomaly_state: HashMap::new(),
+            config_revision: OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY.to_string(),
             updated_by: None,
             updated_at: None,
         };
@@ -657,7 +694,8 @@ fn build_output(
     GetOpsObservabilityConfigOutput {
         thresholds: parse_thresholds(row.thresholds_json),
         anomaly_state: parse_anomaly_state(row.anomaly_state_json, now_ms),
-        updated_by: Some(row.updated_by as u64),
+        config_revision: format_ops_observability_config_revision(Some(row.updated_at)),
+        updated_by: normalize_updated_by(row.updated_by),
         updated_at: Some(row.updated_at),
     }
 }
@@ -964,6 +1002,14 @@ fn build_ops_metrics_dictionary_items() -> Vec<OpsMetricsDictionaryItem> {
     ]
 }
 
+fn build_ops_metrics_dictionary_revision(items: &[OpsMetricsDictionaryItem]) -> String {
+    let mut hasher = Sha1::new();
+    // 使用稳定 JSON 序列作为 revision 输入，确保同内容产生同 revision。
+    let payload = serde_json::to_vec(items).unwrap_or_default();
+    hasher.update(payload);
+    format!("sha1:{:x}", hasher.finalize())
+}
+
 fn build_ops_slo_signal_snapshot(signal: OpsRecentJudgeSignal) -> OpsSloSignalSnapshot {
     let success_count = signal.success_count.max(0) as u64;
     let failed_count = signal.failed_count.max(0) as u64;
@@ -998,6 +1044,33 @@ fn normalize_split_review_audit_limit(limit: Option<u64>) -> i64 {
 
 fn normalize_split_review_audit_offset(offset: Option<u64>) -> i64 {
     offset.unwrap_or(0).min(50_000) as i64
+}
+
+fn normalize_split_review_audit_updated_by_filter(
+    updated_by: Option<u64>,
+) -> Result<Option<i64>, AppError> {
+    updated_by
+        .map(|value| {
+            i64::try_from(value).map_err(|_| {
+                AppError::DebateError("split review updatedBy out of range".to_string())
+            })
+        })
+        .transpose()
+}
+
+fn normalize_split_review_audit_created_window(
+    created_after: Option<DateTime<Utc>>,
+    created_before: Option<DateTime<Utc>>,
+) -> Result<(Option<DateTime<Utc>>, Option<DateTime<Utc>>), AppError> {
+    if let (Some(after), Some(before)) = (created_after, created_before) {
+        if after > before {
+            return Err(AppError::DebateError(
+                "invalid split review created window: createdAfter must be <= createdBefore"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok((created_after, created_before))
 }
 
 fn normalize_alert_status_filter(status: Option<String>) -> Result<Option<String>, AppError> {
@@ -1042,16 +1115,26 @@ fn parse_recipient_ids(value: &Value) -> Vec<u64> {
         .collect()
 }
 
+fn map_split_review_audit_i64_to_u64(value: i64, field: &'static str) -> Result<u64, AppError> {
+    u64::try_from(value).map_err(|_| {
+        warn!(
+            field,
+            value, "ops split review audit has invalid negative integer value"
+        );
+        AppError::ServerError(format!("ops_split_review_audit_invalid_{field}"))
+    })
+}
+
 fn map_split_review_audit_row(
     row: OpsServiceSplitReviewAuditRow,
-) -> OpsServiceSplitReviewAuditItem {
-    OpsServiceSplitReviewAuditItem {
-        id: row.id as u64,
+) -> Result<OpsServiceSplitReviewAuditItem, AppError> {
+    Ok(OpsServiceSplitReviewAuditItem {
+        id: map_split_review_audit_i64_to_u64(row.id, "id")?,
         payment_compliance_required: row.payment_compliance_required,
         review_note: row.review_note,
-        updated_by: row.updated_by as u64,
+        updated_by: map_split_review_audit_i64_to_u64(row.updated_by, "updated_by")?,
         created_at: row.created_at,
-    }
+    })
 }
 
 fn build_http_url(base: &str, path: &str) -> String {
@@ -1233,92 +1316,186 @@ fn evaluate_alert_for_rule(
             } else {
                 (signal.success_count as f64 * 100.0) / completed as f64
             };
-            let is_active = completed >= thresholds.min_request_for_cache_hit_check
-                && success_rate < thresholds.low_success_rate_threshold;
+            let sample_enough = completed >= thresholds.min_request_for_cache_hit_check;
+            let is_active = sample_enough && success_rate < thresholds.low_success_rate_threshold;
+            let comparison = if !sample_enough {
+                "insufficient_sample"
+            } else if is_active {
+                "below_threshold"
+            } else {
+                "above_or_equal_threshold"
+            };
+            let message = if !sample_enough {
+                format!(
+                    "最近{}分钟完成样本 {} 小于最小阈值 {}，暂不触发成功率告警",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    completed,
+                    thresholds.min_request_for_cache_hit_check
+                )
+            } else if is_active {
+                format!(
+                    "最近{}分钟判决成功率 {:.2}% 低于阈值 {:.2}%",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    success_rate,
+                    thresholds.low_success_rate_threshold
+                )
+            } else {
+                format!(
+                    "最近{}分钟判决成功率 {:.2}% 不低于阈值 {:.2}%",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    success_rate,
+                    thresholds.low_success_rate_threshold
+                )
+            };
             EvaluatedAlert {
                 alert_key: spec.alert_key.to_string(),
                 rule_type: spec.rule_type.to_string(),
                 severity: ALERT_SEVERITY_WARNING.to_string(),
                 title: spec.title.to_string(),
-                message: format!(
-                    "最近{}分钟判决成功率 {:.2}% 低于阈值 {:.2}%",
-                    OPS_ALERT_EVAL_WINDOW_MINUTES,
-                    success_rate,
-                    thresholds.low_success_rate_threshold
-                ),
+                message,
                 metrics: serde_json::json!({
                     "windowMinutes": OPS_ALERT_EVAL_WINDOW_MINUTES,
                     "completedCount": completed,
+                    "minCompletedForEval": thresholds.min_request_for_cache_hit_check,
                     "successCount": signal.success_count,
                     "failedCount": signal.failed_count,
                     "successRatePct": success_rate,
                     "thresholdPct": thresholds.low_success_rate_threshold,
+                    "comparison": comparison,
                 }),
                 is_active,
             }
         }
         OPS_ALERT_RULE_HIGH_RETRY => {
             let completed = signal.success_count + signal.failed_count;
-            let is_active = completed >= thresholds.min_request_for_cache_hit_check
-                && signal.avg_dispatch_attempts > thresholds.high_retry_threshold;
+            let sample_enough = completed >= thresholds.min_request_for_cache_hit_check;
+            let is_active =
+                sample_enough && signal.avg_dispatch_attempts > thresholds.high_retry_threshold;
+            let comparison = if !sample_enough {
+                "insufficient_sample"
+            } else if is_active {
+                "above_threshold"
+            } else {
+                "at_or_below_threshold"
+            };
+            let message = if !sample_enough {
+                format!(
+                    "最近{}分钟完成样本 {} 小于最小阈值 {}，暂不触发重试告警",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    completed,
+                    thresholds.min_request_for_cache_hit_check
+                )
+            } else if is_active {
+                format!(
+                    "最近{}分钟平均 dispatch_attempts {:.2} 高于阈值 {:.2}",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    signal.avg_dispatch_attempts,
+                    thresholds.high_retry_threshold
+                )
+            } else {
+                format!(
+                    "最近{}分钟平均 dispatch_attempts {:.2} 不高于阈值 {:.2}",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    signal.avg_dispatch_attempts,
+                    thresholds.high_retry_threshold
+                )
+            };
             EvaluatedAlert {
                 alert_key: spec.alert_key.to_string(),
                 rule_type: spec.rule_type.to_string(),
                 severity: ALERT_SEVERITY_WARNING.to_string(),
                 title: spec.title.to_string(),
-                message: format!(
-                    "最近{}分钟平均 dispatch_attempts {:.2} 高于阈值 {:.2}",
-                    OPS_ALERT_EVAL_WINDOW_MINUTES,
-                    signal.avg_dispatch_attempts,
-                    thresholds.high_retry_threshold
-                ),
+                message,
                 metrics: serde_json::json!({
                     "windowMinutes": OPS_ALERT_EVAL_WINDOW_MINUTES,
                     "completedCount": completed,
+                    "minCompletedForEval": thresholds.min_request_for_cache_hit_check,
                     "avgDispatchAttempts": signal.avg_dispatch_attempts,
                     "threshold": thresholds.high_retry_threshold,
+                    "comparison": comparison,
                 }),
                 is_active,
             }
         }
         OPS_ALERT_RULE_HIGH_DB_LATENCY => {
             let completed = signal.success_count + signal.failed_count;
-            let is_active = completed >= thresholds.min_request_for_cache_hit_check
+            let sample_enough = completed >= thresholds.min_request_for_cache_hit_check;
+            let is_active = sample_enough
                 && signal.p95_latency_ms > thresholds.high_db_latency_threshold_ms as f64;
+            let comparison = if !sample_enough {
+                "insufficient_sample"
+            } else if is_active {
+                "above_threshold"
+            } else {
+                "at_or_below_threshold"
+            };
+            let message = if !sample_enough {
+                format!(
+                    "最近{}分钟完成样本 {} 小于最小阈值 {}，暂不触发时延告警",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    completed,
+                    thresholds.min_request_for_cache_hit_check
+                )
+            } else if is_active {
+                format!(
+                    "最近{}分钟判决链路 P95 时延 {:.0}ms 高于阈值 {}ms",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    signal.p95_latency_ms,
+                    thresholds.high_db_latency_threshold_ms
+                )
+            } else {
+                format!(
+                    "最近{}分钟判决链路 P95 时延 {:.0}ms 不高于阈值 {}ms",
+                    OPS_ALERT_EVAL_WINDOW_MINUTES,
+                    signal.p95_latency_ms,
+                    thresholds.high_db_latency_threshold_ms
+                )
+            };
             EvaluatedAlert {
                 alert_key: spec.alert_key.to_string(),
                 rule_type: spec.rule_type.to_string(),
                 severity: ALERT_SEVERITY_WARNING.to_string(),
                 title: spec.title.to_string(),
-                message: format!(
-                    "最近{}分钟判决链路 P95 时延 {:.0}ms 高于阈值 {}ms",
-                    OPS_ALERT_EVAL_WINDOW_MINUTES,
-                    signal.p95_latency_ms,
-                    thresholds.high_db_latency_threshold_ms
-                ),
+                message,
                 metrics: serde_json::json!({
                     "windowMinutes": OPS_ALERT_EVAL_WINDOW_MINUTES,
                     "completedCount": completed,
+                    "minCompletedForEval": thresholds.min_request_for_cache_hit_check,
                     "p95LatencyMs": signal.p95_latency_ms,
                     "thresholdMs": thresholds.high_db_latency_threshold_ms,
+                    "comparison": comparison,
                 }),
                 is_active,
             }
         }
         OPS_ALERT_RULE_DLQ_PENDING => {
             let is_active = signal.pending_dlq_count as f64 > thresholds.high_coalesced_threshold;
+            let comparison = if is_active {
+                "above_threshold"
+            } else {
+                "at_or_below_threshold"
+            };
+            let message = if is_active {
+                format!(
+                    "当前 DLQ pending 数量 {} 超过阈值 {:.2}",
+                    signal.pending_dlq_count, thresholds.high_coalesced_threshold
+                )
+            } else {
+                format!(
+                    "当前 DLQ pending 数量 {} 未超过阈值 {:.2}",
+                    signal.pending_dlq_count, thresholds.high_coalesced_threshold
+                )
+            };
             EvaluatedAlert {
                 alert_key: spec.alert_key.to_string(),
                 rule_type: spec.rule_type.to_string(),
                 severity: ALERT_SEVERITY_WARNING.to_string(),
                 title: spec.title.to_string(),
-                message: format!(
-                    "当前 DLQ pending 数量 {} 超过阈值 {:.2}",
-                    signal.pending_dlq_count, thresholds.high_coalesced_threshold
-                ),
+                message,
                 metrics: serde_json::json!({
                     "pendingDlqCount": signal.pending_dlq_count,
                     "threshold": thresholds.high_coalesced_threshold,
+                    "comparison": comparison,
                 }),
                 is_active,
             }
@@ -1441,7 +1618,7 @@ impl AppState {
         user: &User,
         input: UpsertOpsServiceSplitReviewInput,
     ) -> Result<GetOpsServiceSplitReadinessOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let review_note = normalize_split_review_note(input.review_note)?;
         let before_snapshot = self.get_ops_service_split_readiness(user).await?;
@@ -1509,16 +1686,28 @@ impl AppState {
         user: &User,
         query: ListOpsServiceSplitReviewAuditsQuery,
     ) -> Result<ListOpsServiceSplitReviewAuditsOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let limit = normalize_split_review_audit_limit(query.limit);
         let offset = normalize_split_review_audit_offset(query.offset);
+        let updated_by = normalize_split_review_audit_updated_by_filter(query.updated_by)?;
+        let payment_compliance_required = query.payment_compliance_required;
+        let (created_after, created_before) =
+            normalize_split_review_audit_created_window(query.created_after, query.created_before)?;
         let total: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(1)::bigint
             FROM ops_service_split_review_audits
+            WHERE ($1::bigint IS NULL OR updated_by = $1)
+              AND ($2::boolean IS NULL OR payment_compliance_required IS NOT DISTINCT FROM $2)
+              AND ($3::timestamptz IS NULL OR created_at >= $3)
+              AND ($4::timestamptz IS NULL OR created_at <= $4)
             "#,
         )
+        .bind(updated_by)
+        .bind(payment_compliance_required)
+        .bind(created_after)
+        .bind(created_before)
         .fetch_one(&self.pool)
         .await?;
         let rows: Vec<OpsServiceSplitReviewAuditRow> = sqlx::query_as(
@@ -1526,19 +1715,31 @@ impl AppState {
             SELECT
                 id, payment_compliance_required, review_note, updated_by, created_at
             FROM ops_service_split_review_audits
+            WHERE ($1::bigint IS NULL OR updated_by = $1)
+              AND ($2::boolean IS NULL OR payment_compliance_required IS NOT DISTINCT FROM $2)
+              AND ($3::timestamptz IS NULL OR created_at >= $3)
+              AND ($4::timestamptz IS NULL OR created_at <= $4)
             ORDER BY created_at DESC, id DESC
-            LIMIT $1 OFFSET $2
+            LIMIT $5 OFFSET $6
             "#,
         )
+        .bind(updated_by)
+        .bind(payment_compliance_required)
+        .bind(created_after)
+        .bind(created_before)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.pool)
         .await?;
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            items.push(map_split_review_audit_row(row)?);
+        }
         Ok(ListOpsServiceSplitReviewAuditsOutput {
             total: total.max(0) as u64,
             limit: limit as u64,
             offset: offset as u64,
-            items: rows.into_iter().map(map_split_review_audit_row).collect(),
+            items,
         })
     }
 
@@ -1546,7 +1747,7 @@ impl AppState {
         &self,
         user: &User,
     ) -> Result<GetOpsServiceSplitReadinessOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let generated_at_ms = now_millis();
         let signal = self.load_recent_judge_signal().await?;
@@ -1597,10 +1798,26 @@ impl AppState {
         )
         .fetch_one(&self.pool)
         .await?;
-        let failed_ratio = if dispatch_metrics.dispatched_total == 0 {
+        let failed_ratio_lifetime = if dispatch_metrics.dispatched_total == 0 {
             0.0
         } else {
             dispatch_metrics.failed_total as f64 / dispatch_metrics.dispatched_total as f64
+        };
+        let window_completed =
+            signal.success_count.max(0) as u64 + signal.failed_count.max(0) as u64;
+        let failed_ratio_window = if window_completed == 0 {
+            0.0
+        } else {
+            signal.failed_count.max(0) as f64 / window_completed as f64
+        };
+        let failed_ratio_sample_enough =
+            window_completed >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_MIN_DISPATCHED;
+        let failed_ratio_comparison = if !failed_ratio_sample_enough {
+            "insufficient_sample"
+        } else if failed_ratio_window >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_THRESHOLD {
+            "above_threshold"
+        } else {
+            "below_threshold"
         };
 
         let dispatch_pressure_triggered = pending_running_jobs
@@ -1608,9 +1825,8 @@ impl AppState {
             || signal.pending_dlq_count >= SPLIT_READINESS_PRESSURE_PENDING_DLQ_THRESHOLD
             || signal.avg_dispatch_attempts >= SPLIT_READINESS_PRESSURE_AVG_ATTEMPTS_THRESHOLD
             || signal.p95_latency_ms >= SPLIT_READINESS_PRESSURE_P95_MS_THRESHOLD
-            || (dispatch_metrics.dispatched_total
-                >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_MIN_DISPATCHED
-                && failed_ratio >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_THRESHOLD);
+            || (failed_ratio_sample_enough
+                && failed_ratio_window >= SPLIT_READINESS_PRESSURE_FAILED_RATIO_THRESHOLD);
         let dispatch_pressure_status = if dispatch_pressure_triggered {
             "met"
         } else {
@@ -1625,6 +1841,15 @@ impl AppState {
         let payment_compliance_required = compliance_review
             .as_ref()
             .and_then(|row| row.payment_compliance_required);
+        let review_age_hours = compliance_review.as_ref().map(|row| {
+            generated_at_ms
+                .saturating_sub(row.updated_at.timestamp_millis())
+                .max(0)
+                / 3_600_000
+        });
+        let review_stale = review_age_hours
+            .map(|age| age >= SPLIT_REVIEW_STALE_THRESHOLD_HOURS)
+            .unwrap_or(true);
         let payment_compliance_status = match payment_compliance_required {
             Some(true) => "met",
             Some(false) => "not_met",
@@ -1658,7 +1883,12 @@ impl AppState {
                     "pendingDlqCount": signal.pending_dlq_count.max(0),
                     "avgDispatchAttempts": signal.avg_dispatch_attempts.max(0.0),
                     "p95LatencyMs": signal.p95_latency_ms.max(0.0),
-                    "dispatchFailedRatio": failed_ratio.max(0.0),
+                    "dispatchFailedRatio": failed_ratio_window.max(0.0),
+                    "dispatchFailedRatioWindow": failed_ratio_window.max(0.0),
+                    "dispatchFailedRatioLifetime": failed_ratio_lifetime.max(0.0),
+                    "dispatchFailedRatioSampleCompleted": window_completed,
+                    "dispatchFailedRatioSampleMinCompleted": SPLIT_READINESS_PRESSURE_FAILED_RATIO_MIN_DISPATCHED,
+                    "failedRatioComparison": failed_ratio_comparison,
                     "metrics": {
                         "dispatchedTotal": dispatch_metrics.dispatched_total,
                         "failedTotal": dispatch_metrics.failed_total,
@@ -1686,6 +1916,9 @@ impl AppState {
                     "reviewNote": compliance_review.as_ref().map(|v| v.review_note.clone()).unwrap_or_default(),
                     "updatedBy": compliance_review.as_ref().map(|v| v.updated_by as u64),
                     "updatedAt": compliance_review.as_ref().map(|v| v.updated_at.to_rfc3339()),
+                    "reviewAgeHours": review_age_hours,
+                    "stale": review_stale,
+                    "staleThresholdHours": SPLIT_REVIEW_STALE_THRESHOLD_HOURS,
                     "note": "该阈值由人工评审录入，不由运行时指标自动判定"
                 }),
             },
@@ -1730,12 +1963,14 @@ impl AppState {
         &self,
         user: &User,
     ) -> Result<GetOpsMetricsDictionaryOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
+        let items = build_ops_metrics_dictionary_items();
         Ok(GetOpsMetricsDictionaryOutput {
             version: "v1".to_string(),
+            dictionary_revision: build_ops_metrics_dictionary_revision(&items),
             generated_at_ms: now_millis(),
-            items: build_ops_metrics_dictionary_items(),
+            items,
         })
     }
 
@@ -1743,7 +1978,7 @@ impl AppState {
         &self,
         user: &User,
     ) -> Result<GetOpsSloSnapshotOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let now_ms = now_millis();
         let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
@@ -1766,19 +2001,38 @@ impl AppState {
         };
         let signal = self.load_recent_judge_signal().await?;
         let signal_snapshot = build_ops_slo_signal_snapshot(signal);
-        let mut rules = Vec::with_capacity(rule_specs().len());
-        for spec in rule_specs() {
+        let specs = rule_specs();
+        let alert_keys: Vec<String> = specs
+            .iter()
+            .map(|spec| spec.alert_key.to_string())
+            .collect();
+        let previous_rows: Vec<OpsAlertStateByKeyRow> = sqlx::query_as(
+            r#"
+            SELECT alert_key, is_active, last_emitted_status
+            FROM ops_alert_states
+            WHERE alert_key = ANY($1::text[])
+            "#,
+        )
+        .bind(&alert_keys)
+        .fetch_all(&self.pool)
+        .await?;
+        let previous_by_key: HashMap<String, OpsAlertStateRow> = previous_rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.alert_key,
+                    OpsAlertStateRow {
+                        is_active: row.is_active,
+                        last_emitted_status: row.last_emitted_status,
+                    },
+                )
+            })
+            .collect();
+
+        let mut rules = Vec::with_capacity(specs.len());
+        for spec in specs {
             let evaluated = evaluate_alert_for_rule(spec, &thresholds, signal);
-            let previous: Option<OpsAlertStateRow> = sqlx::query_as(
-                r#"
-                SELECT is_active, last_emitted_status
-                FROM ops_alert_states
-                WHERE alert_key = $1
-                "#,
-            )
-            .bind(spec.alert_key)
-            .fetch_optional(&self.pool)
-            .await?;
+            let previous = previous_by_key.get(spec.alert_key);
             let suppressed = anomaly_state
                 .get(spec.alert_key)
                 .map(|v| v.suppress_until_ms > now_ms)
@@ -1800,7 +2054,7 @@ impl AppState {
                 is_active: evaluated.is_active,
                 status: status.to_string(),
                 suppressed,
-                last_emitted_status: previous.map(|v| v.last_emitted_status),
+                last_emitted_status: previous.map(|v| v.last_emitted_status.clone()),
                 message: evaluated.message,
                 metrics: evaluated.metrics,
             });
@@ -1819,7 +2073,7 @@ impl AppState {
         &self,
         user: &User,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
             r#"
@@ -1838,7 +2092,7 @@ impl AppState {
         user: &User,
         input: OpsObservabilityThresholds,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let thresholds = normalize_thresholds(input);
         let thresholds_json = serde_json::to_value(&thresholds)
@@ -1868,7 +2122,7 @@ impl AppState {
         user: &User,
         input: UpdateOpsObservabilityAnomalyStateInput,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let now_ms = now_millis();
         let anomaly_state = normalize_anomaly_state(input.anomaly_state, now_ms);
@@ -1903,7 +2157,7 @@ impl AppState {
         user: &User,
         input: ApplyOpsObservabilityAnomalyActionInput,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let now_ms = now_millis();
         let default_thresholds_json =
@@ -1959,7 +2213,7 @@ impl AppState {
         user: &User,
         query: ListOpsAlertNotificationsQuery,
     ) -> Result<ListOpsAlertNotificationsOutput, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let status = normalize_alert_status_filter(query.status)?;
         let limit = normalize_alert_limit(query.limit);
@@ -2445,7 +2699,7 @@ impl AppState {
         &self,
         user: &User,
     ) -> Result<OpsAlertEvalReport, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let now_ms = now_millis();
         let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
@@ -2489,7 +2743,7 @@ impl AppState {
         &self,
         user: &User,
     ) -> Result<OpsAlertEvalReport, AppError> {
-        self.ensure_ops_permission(user, OpsPermission::JudgeReview)
+        self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let now_ms = now_millis();
         let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
@@ -2777,6 +3031,103 @@ mod tests {
         Ok((format!("http://{}", addr), callbacks))
     }
 
+    async fn seed_split_readiness_session(state: &AppState, owner_user_id: i64) -> Result<i64> {
+        let topic_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO debate_topics(
+                title, description, category, stance_pro, stance_con, is_active, created_by
+            )
+            VALUES ('split-readiness-topic', 'desc', 'game', 'pro', 'con', true, $1)
+            RETURNING id
+            "#,
+        )
+        .bind(owner_user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        let session_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO debate_sessions(
+                topic_id, status, scheduled_start_at, actual_start_at, end_at, max_participants_per_side
+            )
+            VALUES (
+                $1, 'closed',
+                NOW() - INTERVAL '40 minutes',
+                NOW() - INTERVAL '35 minutes',
+                NOW() - INTERVAL '5 minutes',
+                500
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(topic_id)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(session_id)
+    }
+
+    async fn seed_split_readiness_final_jobs(
+        state: &AppState,
+        session_id: i64,
+        failed_count: usize,
+        succeeded_count: usize,
+    ) -> Result<()> {
+        for idx in 0..failed_count {
+            sqlx::query(
+                r#"
+                INSERT INTO judge_final_jobs(
+                    session_id, rejudge_run_no, phase_start_no, phase_end_no,
+                    status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                    topic_domain, dispatch_attempts, created_at, updated_at
+                )
+                VALUES (
+                    $1, $2, 1, 1,
+                    'failed',
+                    $3,
+                    $4,
+                    'v3', 'v3-default', 'default',
+                    1,
+                    NOW() - INTERVAL '2 minutes',
+                    NOW() - INTERVAL '1 minutes'
+                )
+                "#,
+            )
+            .bind(session_id)
+            .bind((idx as i32) + 1)
+            .bind(format!("split-readiness-failed-{session_id}-{idx}"))
+            .bind(format!("split_readiness:failed:{session_id}:{idx}"))
+            .execute(&state.pool)
+            .await?;
+        }
+        for idx in 0..succeeded_count {
+            sqlx::query(
+                r#"
+                INSERT INTO judge_final_jobs(
+                    session_id, rejudge_run_no, phase_start_no, phase_end_no,
+                    status, trace_id, idempotency_key, rubric_version, judge_policy_version,
+                    topic_domain, dispatch_attempts, created_at, updated_at
+                )
+                VALUES (
+                    $1, $2, 1, 1,
+                    'succeeded',
+                    $3,
+                    $4,
+                    'v3', 'v3-default', 'default',
+                    1,
+                    NOW() - INTERVAL '2 minutes',
+                    NOW() - INTERVAL '1 minutes'
+                )
+                "#,
+            )
+            .bind(session_id)
+            .bind((failed_count as i32) + (idx as i32) + 1)
+            .bind(format!("split-readiness-succeeded-{session_id}-{idx}"))
+            .bind(format!("split_readiness:succeeded:{session_id}:{idx}"))
+            .execute(&state.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn get_ops_observability_config_should_return_defaults_when_missing() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -2785,13 +3136,92 @@ mod tests {
         let ret = state.get_ops_observability_config(&owner).await?;
         assert_eq!(ret.thresholds.low_success_rate_threshold, 80.0);
         assert!(ret.anomaly_state.is_empty());
+        assert_eq!(ret.config_revision, OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY);
         assert!(ret.updated_by.is_none());
         assert!(ret.updated_at.is_none());
         Ok(())
     }
 
+    #[test]
+    fn build_output_should_fallback_to_none_when_updated_by_out_of_range() {
+        let row = OpsObservabilityConfigRow {
+            thresholds_json: serde_json::json!({}),
+            anomaly_state_json: serde_json::json!({}),
+            updated_by: -1,
+            updated_at: Utc::now(),
+        };
+        let ret = build_output(Some(row), now_millis());
+        assert!(ret.updated_by.is_none());
+    }
+
     #[tokio::test]
-    async fn upsert_ops_observability_config_should_allow_ops_viewer_review_permission(
+    async fn upsert_ops_observability_config_should_allow_ops_reviewer_manage_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let reviewer = state
+            .find_user_by_id(2)
+            .await?
+            .expect("reviewer should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+
+        let threshold_ret = state
+            .upsert_ops_observability_thresholds(
+                &reviewer,
+                OpsObservabilityThresholds {
+                    low_success_rate_threshold: 75.0,
+                    high_retry_threshold: 1.5,
+                    high_coalesced_threshold: 2.5,
+                    high_db_latency_threshold_ms: 1500,
+                    low_cache_hit_rate_threshold: 25.0,
+                    min_request_for_cache_hit_check: 30,
+                },
+            )
+            .await?;
+        assert_eq!(threshold_ret.updated_by, Some(reviewer.id as u64));
+        assert_eq!(threshold_ret.thresholds.low_success_rate_threshold, 75.0);
+        assert_ne!(
+            threshold_ret.config_revision,
+            OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY
+        );
+
+        let state_ret = state
+            .upsert_ops_observability_anomaly_state(
+                &reviewer,
+                UpdateOpsObservabilityAnomalyStateInput {
+                    anomaly_state: HashMap::from([(
+                        "db_errors".to_string(),
+                        OpsObservabilityAnomalyStateValue {
+                            acknowledged_at_ms: 1000,
+                            suppress_until_ms: now_millis() + 60_000,
+                        },
+                    )]),
+                },
+            )
+            .await?;
+        assert_eq!(state_ret.updated_by, Some(reviewer.id as u64));
+        assert!(state_ret.anomaly_state.contains_key("db_errors"));
+        assert_eq!(
+            state_ret
+                .anomaly_state
+                .get("db_errors")
+                .map(|item| item.acknowledged_at_ms),
+            Some(1000)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_config_should_reject_ops_viewer_manage_permission(
     ) -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         state.grant_platform_admin(1).await?;
@@ -2810,45 +3240,16 @@ mod tests {
             )
             .await?;
 
-        let threshold_ret = state
-            .upsert_ops_observability_thresholds(
-                &viewer,
-                OpsObservabilityThresholds {
-                    low_success_rate_threshold: 75.0,
-                    high_retry_threshold: 1.5,
-                    high_coalesced_threshold: 2.5,
-                    high_db_latency_threshold_ms: 1500,
-                    low_cache_hit_rate_threshold: 25.0,
-                    min_request_for_cache_hit_check: 30,
-                },
-            )
-            .await?;
-        assert_eq!(threshold_ret.updated_by, Some(viewer.id as u64));
-        assert_eq!(threshold_ret.thresholds.low_success_rate_threshold, 75.0);
-
-        let state_ret = state
-            .upsert_ops_observability_anomaly_state(
-                &viewer,
-                UpdateOpsObservabilityAnomalyStateInput {
-                    anomaly_state: HashMap::from([(
-                        "db_errors".to_string(),
-                        OpsObservabilityAnomalyStateValue {
-                            acknowledged_at_ms: 1000,
-                            suppress_until_ms: now_millis() + 60_000,
-                        },
-                    )]),
-                },
-            )
-            .await?;
-        assert_eq!(state_ret.updated_by, Some(viewer.id as u64));
-        assert!(state_ret.anomaly_state.contains_key("db_errors"));
-        assert_eq!(
-            state_ret
-                .anomaly_state
-                .get("db_errors")
-                .map(|item| item.acknowledged_at_ms),
-            Some(1000)
-        );
+        let err = state
+            .upsert_ops_observability_thresholds(&viewer, OpsObservabilityThresholds::default())
+            .await
+            .expect_err("ops_viewer should not manage observability config");
+        match err {
+            AppError::DebateConflict(msg) => {
+                assert!(msg.starts_with("ops_permission_denied:observability_manage:"));
+            }
+            other => panic!("unexpected error: {}", other),
+        }
         Ok(())
     }
 
@@ -2863,7 +3264,7 @@ mod tests {
             .expect_err("missing ops role should be rejected");
         match err {
             AppError::DebateConflict(msg) => {
-                assert!(msg.starts_with("ops_permission_denied:judge_review:"));
+                assert!(msg.starts_with("ops_permission_denied:observability_manage:"));
             }
             other => panic!("unexpected error: {}", other),
         }
@@ -3195,6 +3596,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn normalize_split_review_audit_pagination_should_clamp_values() {
+        assert_eq!(normalize_split_review_audit_limit(None), 20);
+        assert_eq!(normalize_split_review_audit_limit(Some(0)), 1);
+        assert_eq!(normalize_split_review_audit_limit(Some(999)), 200);
+        assert_eq!(normalize_split_review_audit_offset(None), 0);
+        assert_eq!(normalize_split_review_audit_offset(Some(99_999)), 50_000);
+    }
+
+    #[test]
+    fn normalize_split_review_audit_created_window_should_validate_order() {
+        let now = Utc::now();
+        let valid = normalize_split_review_audit_created_window(
+            Some(now - chrono::Duration::hours(1)),
+            Some(now),
+        );
+        assert!(valid.is_ok());
+
+        let err = normalize_split_review_audit_created_window(
+            Some(now + chrono::Duration::hours(1)),
+            Some(now),
+        )
+        .expect_err("createdAfter later than createdBefore should fail");
+        match err {
+            AppError::DebateError(message) => {
+                assert!(message.contains("createdAfter must be <= createdBefore"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn map_split_review_audit_row_should_reject_negative_i64_fields() {
+        let row = OpsServiceSplitReviewAuditRow {
+            id: -1,
+            payment_compliance_required: Some(true),
+            review_note: "note".to_string(),
+            updated_by: 1,
+            created_at: Utc::now(),
+        };
+        let err = map_split_review_audit_row(row).expect_err("negative id should fail mapping");
+        match err {
+            AppError::ServerError(code) => {
+                assert_eq!(code, "ops_split_review_audit_invalid_id");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
     #[tokio::test]
     async fn upsert_ops_service_split_review_should_support_set_and_clear_flag() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -3217,6 +3667,12 @@ mod tests {
             .expect("payment threshold should exist");
         assert_eq!(set_item.status, "met");
         assert!(set_item.triggered);
+        assert_eq!(set_item.evidence["stale"], Value::Bool(false));
+        assert_eq!(
+            set_item.evidence["staleThresholdHours"],
+            Value::from(SPLIT_REVIEW_STALE_THRESHOLD_HOURS)
+        );
+        assert!(set_item.evidence["reviewAgeHours"].is_number());
         assert_eq!(set_ret.overall_status, "review_required");
 
         let clear_ret = state
@@ -3239,6 +3695,10 @@ mod tests {
             clear_item.evidence["manualInputRequired"],
             Value::Bool(true),
             "clearing compliance flag should return to manual-input-required state"
+        );
+        assert_eq!(
+            clear_item.evidence["staleThresholdHours"],
+            Value::from(SPLIT_REVIEW_STALE_THRESHOLD_HOURS)
         );
         Ok(())
     }
@@ -3321,6 +3781,268 @@ mod tests {
             None => panic!("row should not be None after concurrent set"),
         }
         assert_eq!(payment_item.evidence["reviewNote"], Value::String(row.1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_ops_service_split_review_audits_should_support_filters_and_window() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let reviewer = state
+            .find_user_by_id(2)
+            .await?
+            .expect("reviewer should exist");
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+
+        state
+            .upsert_ops_service_split_review(
+                &owner,
+                UpsertOpsServiceSplitReviewInput {
+                    payment_compliance_required: Some(true),
+                    review_note: Some("api072-filter-note-a".to_string()),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_service_split_review(
+                &reviewer,
+                UpsertOpsServiceSplitReviewInput {
+                    payment_compliance_required: Some(false),
+                    review_note: Some("api072-filter-note-b".to_string()),
+                },
+            )
+            .await?;
+        state
+            .upsert_ops_service_split_review(
+                &owner,
+                UpsertOpsServiceSplitReviewInput {
+                    payment_compliance_required: Some(true),
+                    review_note: Some("api072-filter-note-c".to_string()),
+                },
+            )
+            .await?;
+
+        sqlx::query(
+            "UPDATE ops_service_split_review_audits SET created_at = NOW() - INTERVAL '3 hours' WHERE review_note = 'api072-filter-note-a'",
+        )
+        .execute(&state.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE ops_service_split_review_audits SET created_at = NOW() - INTERVAL '2 hours' WHERE review_note = 'api072-filter-note-b'",
+        )
+        .execute(&state.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE ops_service_split_review_audits SET created_at = NOW() - INTERVAL '1 hours' WHERE review_note = 'api072-filter-note-c'",
+        )
+        .execute(&state.pool)
+        .await?;
+
+        let all = state
+            .list_ops_service_split_review_audits(
+                &owner,
+                ListOpsServiceSplitReviewAuditsQuery {
+                    limit: Some(20),
+                    offset: Some(0),
+                    updated_by: None,
+                    payment_compliance_required: None,
+                    created_after: None,
+                    created_before: None,
+                },
+            )
+            .await?;
+        let filtered_notes: Vec<&str> = all
+            .items
+            .iter()
+            .filter_map(|item| match item.review_note.as_str() {
+                "api072-filter-note-a" | "api072-filter-note-b" | "api072-filter-note-c" => {
+                    Some(item.review_note.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            filtered_notes,
+            vec![
+                "api072-filter-note-c",
+                "api072-filter-note-b",
+                "api072-filter-note-a"
+            ]
+        );
+
+        let by_reviewer = state
+            .list_ops_service_split_review_audits(
+                &owner,
+                ListOpsServiceSplitReviewAuditsQuery {
+                    limit: Some(20),
+                    offset: Some(0),
+                    updated_by: Some(reviewer.id as u64),
+                    payment_compliance_required: None,
+                    created_after: None,
+                    created_before: None,
+                },
+            )
+            .await?;
+        let reviewer_notes: Vec<&str> = by_reviewer
+            .items
+            .iter()
+            .filter_map(|item| {
+                if item.review_note == "api072-filter-note-b" {
+                    Some(item.review_note.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(reviewer_notes, vec!["api072-filter-note-b"]);
+
+        let required_only = state
+            .list_ops_service_split_review_audits(
+                &owner,
+                ListOpsServiceSplitReviewAuditsQuery {
+                    limit: Some(20),
+                    offset: Some(0),
+                    updated_by: None,
+                    payment_compliance_required: Some(true),
+                    created_after: None,
+                    created_before: None,
+                },
+            )
+            .await?;
+        let required_notes: Vec<&str> = required_only
+            .items
+            .iter()
+            .filter_map(|item| match item.review_note.as_str() {
+                "api072-filter-note-a" | "api072-filter-note-c" => Some(item.review_note.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            required_notes,
+            vec!["api072-filter-note-c", "api072-filter-note-a"]
+        );
+
+        let now = Utc::now();
+        let window = state
+            .list_ops_service_split_review_audits(
+                &owner,
+                ListOpsServiceSplitReviewAuditsQuery {
+                    limit: Some(20),
+                    offset: Some(0),
+                    updated_by: None,
+                    payment_compliance_required: None,
+                    created_after: Some(
+                        now - chrono::Duration::hours(2) - chrono::Duration::minutes(30),
+                    ),
+                    created_before: Some(
+                        now - chrono::Duration::hours(1) - chrono::Duration::minutes(30),
+                    ),
+                },
+            )
+            .await?;
+        let window_notes: Vec<&str> = window
+            .items
+            .iter()
+            .filter_map(|item| {
+                if item.review_note == "api072-filter-note-b" {
+                    Some(item.review_note.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(window_notes, vec!["api072-filter-note-b"]);
+
+        let invalid_window = state
+            .list_ops_service_split_review_audits(
+                &owner,
+                ListOpsServiceSplitReviewAuditsQuery {
+                    limit: Some(20),
+                    offset: Some(0),
+                    updated_by: None,
+                    payment_compliance_required: None,
+                    created_after: Some(now - chrono::Duration::hours(1)),
+                    created_before: Some(now - chrono::Duration::hours(2)),
+                },
+            )
+            .await
+            .expect_err("invalid created window should fail");
+        match invalid_window {
+            AppError::DebateError(message) => {
+                assert!(message.contains("createdAfter must be <= createdBefore"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_service_split_readiness_should_trigger_dispatch_pressure_when_window_failed_ratio_exceeds_threshold(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+        let session_id = seed_split_readiness_session(&state, owner.id).await?;
+        seed_split_readiness_final_jobs(&state, session_id, 12, 18).await?;
+
+        let ret = state.get_ops_service_split_readiness(&owner).await?;
+        let dispatch_item = ret
+            .thresholds
+            .iter()
+            .find(|item| item.key == "judge_dispatch_pressure")
+            .expect("dispatch threshold should exist");
+        assert!(dispatch_item.triggered);
+        assert_eq!(dispatch_item.status, "met");
+        assert_eq!(
+            dispatch_item.evidence["failedRatioComparison"],
+            Value::String("above_threshold".to_string())
+        );
+        assert_eq!(
+            dispatch_item.evidence["dispatchFailedRatioSampleCompleted"],
+            Value::from(30)
+        );
+        assert_eq!(ret.overall_status, "review_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_service_split_readiness_should_not_trigger_dispatch_pressure_when_window_failed_ratio_sample_insufficient(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+        let session_id = seed_split_readiness_session(&state, owner.id).await?;
+        seed_split_readiness_final_jobs(&state, session_id, 10, 0).await?;
+
+        let ret = state.get_ops_service_split_readiness(&owner).await?;
+        let dispatch_item = ret
+            .thresholds
+            .iter()
+            .find(|item| item.key == "judge_dispatch_pressure")
+            .expect("dispatch threshold should exist");
+        assert!(!dispatch_item.triggered);
+        assert_eq!(dispatch_item.status, "not_met");
+        assert_eq!(
+            dispatch_item.evidence["failedRatioComparison"],
+            Value::String("insufficient_sample".to_string())
+        );
+        assert_eq!(
+            dispatch_item.evidence["dispatchFailedRatioSampleCompleted"],
+            Value::from(10)
+        );
+        assert_eq!(ret.overall_status, "hold");
         Ok(())
     }
 
@@ -3462,6 +4184,86 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_alert_for_rule_low_success_rate_should_report_active_message_when_below_threshold()
+    {
+        let spec = rule_specs()
+            .iter()
+            .find(|item| item.rule_type == OPS_ALERT_RULE_LOW_SUCCESS_RATE)
+            .expect("low success rule should exist");
+        let thresholds = OpsObservabilityThresholds::default();
+        let evaluated = evaluate_alert_for_rule(
+            spec,
+            &thresholds,
+            OpsRecentJudgeSignal {
+                success_count: 10,
+                failed_count: 10,
+                avg_dispatch_attempts: 1.0,
+                p95_latency_ms: 100.0,
+                pending_dlq_count: 0,
+            },
+        );
+        assert!(evaluated.is_active);
+        assert!(evaluated.message.contains("低于阈值"));
+        assert_eq!(
+            evaluated.metrics["comparison"],
+            Value::String("below_threshold".to_string())
+        );
+    }
+
+    #[test]
+    fn evaluate_alert_for_rule_low_success_rate_should_report_clear_message_when_healthy() {
+        let spec = rule_specs()
+            .iter()
+            .find(|item| item.rule_type == OPS_ALERT_RULE_LOW_SUCCESS_RATE)
+            .expect("low success rule should exist");
+        let thresholds = OpsObservabilityThresholds::default();
+        let evaluated = evaluate_alert_for_rule(
+            spec,
+            &thresholds,
+            OpsRecentJudgeSignal {
+                success_count: 19,
+                failed_count: 1,
+                avg_dispatch_attempts: 1.0,
+                p95_latency_ms: 100.0,
+                pending_dlq_count: 0,
+            },
+        );
+        assert!(!evaluated.is_active);
+        assert!(evaluated.message.contains("不低于阈值"));
+        assert_eq!(
+            evaluated.metrics["comparison"],
+            Value::String("above_or_equal_threshold".to_string())
+        );
+    }
+
+    #[test]
+    fn evaluate_alert_for_rule_low_success_rate_should_report_insufficient_sample_when_completed_zero(
+    ) {
+        let spec = rule_specs()
+            .iter()
+            .find(|item| item.rule_type == OPS_ALERT_RULE_LOW_SUCCESS_RATE)
+            .expect("low success rule should exist");
+        let thresholds = OpsObservabilityThresholds::default();
+        let evaluated = evaluate_alert_for_rule(
+            spec,
+            &thresholds,
+            OpsRecentJudgeSignal {
+                success_count: 0,
+                failed_count: 0,
+                avg_dispatch_attempts: 0.0,
+                p95_latency_ms: 0.0,
+                pending_dlq_count: 0,
+            },
+        );
+        assert!(!evaluated.is_active);
+        assert!(evaluated.message.contains("小于最小阈值"));
+        assert_eq!(
+            evaluated.metrics["comparison"],
+            Value::String("insufficient_sample".to_string())
+        );
+    }
+
+    #[test]
     fn build_emit_plan_should_raise_after_suppression_expires() {
         let evaluated = EvaluatedAlert {
             alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
@@ -3535,6 +4337,68 @@ mod tests {
                 "duplicate metric key found: {}",
                 item.key
             );
+        }
+    }
+
+    #[test]
+    fn build_ops_metrics_dictionary_revision_should_be_stable_for_same_items() {
+        let items = build_ops_metrics_dictionary_items();
+        let rev_a = build_ops_metrics_dictionary_revision(&items);
+        let rev_b = build_ops_metrics_dictionary_revision(&items);
+        assert_eq!(rev_a, rev_b);
+        assert!(rev_a.starts_with("sha1:"));
+    }
+
+    #[test]
+    fn build_ops_metrics_dictionary_revision_should_change_when_items_change() {
+        let items = build_ops_metrics_dictionary_items();
+        let original = build_ops_metrics_dictionary_revision(&items);
+        let mut changed = items.clone();
+        changed[0].description.push_str(" [changed]");
+        let updated = build_ops_metrics_dictionary_revision(&changed);
+        assert_ne!(original, updated);
+    }
+
+    #[test]
+    fn build_ops_metrics_dictionary_items_should_have_valid_fields() {
+        let items = build_ops_metrics_dictionary_items();
+        for item in &items {
+            assert!(
+                !item.key.trim().is_empty(),
+                "metrics dictionary key should not be empty"
+            );
+            assert!(
+                !item.category.trim().is_empty(),
+                "metrics dictionary category should not be empty"
+            );
+            assert!(
+                !item.source.trim().is_empty(),
+                "metrics dictionary source should not be empty"
+            );
+            assert!(
+                !item.unit.trim().is_empty(),
+                "metrics dictionary unit should not be empty"
+            );
+            assert!(
+                !item.aggregation.trim().is_empty(),
+                "metrics dictionary aggregation should not be empty"
+            );
+            assert!(
+                !item.description.trim().is_empty(),
+                "metrics dictionary description should not be empty"
+            );
+            if let Some(target) = &item.target {
+                let normalized = target.trim();
+                assert!(
+                    !normalized.is_empty(),
+                    "metrics dictionary target should not be empty"
+                );
+                assert!(
+                    matches!(normalized.chars().next(), Some('<') | Some('>') | Some('=')),
+                    "metrics dictionary target should start with comparator: {}",
+                    target
+                );
+            }
         }
     }
 

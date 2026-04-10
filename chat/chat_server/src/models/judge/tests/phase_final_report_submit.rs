@@ -41,6 +41,27 @@ async fn seed_dispatched_phase_job(
     message_end_id: i64,
     message_count: i32,
 ) -> Result<i64> {
+    seed_phase_job_with_status(
+        state,
+        session_id,
+        phase_no,
+        message_start_id,
+        message_end_id,
+        message_count,
+        "dispatched",
+    )
+    .await
+}
+
+async fn seed_phase_job_with_status(
+    state: &AppState,
+    session_id: i64,
+    phase_no: i32,
+    message_start_id: i64,
+    message_end_id: i64,
+    message_count: i32,
+    status: &str,
+) -> Result<i64> {
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO judge_phase_jobs(
@@ -50,7 +71,7 @@ async fn seed_dispatched_phase_job(
         )
         VALUES (
             $1, $2, $3, $4, $5,
-            'dispatched', $6, $7, 'v3', 'v3-default',
+            $6, $7, $8, 'v3', 'v3-default',
             'default', 'hybrid_v1', 1
         )
         RETURNING id
@@ -61,6 +82,7 @@ async fn seed_dispatched_phase_job(
     .bind(message_start_id)
     .bind(message_end_id)
     .bind(message_count)
+    .bind(status)
     .bind(format!("trace-phase-{session_id}-{phase_no}"))
     .bind(format!("judge_phase:{session_id}:{phase_no}:v3:v3-default"))
     .fetch_one(&state.pool)
@@ -280,6 +302,184 @@ async fn submit_judge_phase_report_should_be_idempotent_by_job_id() -> Result<()
     .fetch_one(&state.pool)
     .await?;
     assert_eq!(count.0, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_phase_report_should_accept_queued_job_and_mark_job_succeeded() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let message_ids = seed_messages(&state, session_id, 2).await?;
+    let phase_job_id = seed_phase_job_with_status(
+        &state,
+        session_id,
+        1,
+        message_ids[0],
+        message_ids[1],
+        2,
+        "queued",
+    )
+    .await?;
+
+    let ret = state
+        .submit_judge_phase_report(
+            phase_job_id as u64,
+            build_phase_report_input(
+                session_id as u64,
+                1,
+                message_ids[0] as u64,
+                message_ids[1] as u64,
+                2,
+            ),
+        )
+        .await?;
+
+    assert_eq!(ret.status, "succeeded");
+
+    let persisted_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM judge_phase_reports
+        WHERE phase_job_id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(persisted_count.0, 1);
+
+    let job_row: (String,) = sqlx::query_as(
+        r#"
+        SELECT status
+        FROM judge_phase_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(job_row.0, "succeeded");
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_phase_report_should_reject_failed_job() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let message_ids = seed_messages(&state, session_id, 2).await?;
+    let phase_job_id = seed_phase_job_with_status(
+        &state,
+        session_id,
+        1,
+        message_ids[0],
+        message_ids[1],
+        2,
+        "failed",
+    )
+    .await?;
+
+    let err = state
+        .submit_judge_phase_report(
+            phase_job_id as u64,
+            build_phase_report_input(
+                session_id as u64,
+                1,
+                message_ids[0] as u64,
+                message_ids[1] as u64,
+                2,
+            ),
+        )
+        .await
+        .expect_err("failed job should be rejected");
+
+    match err {
+        AppError::DebateConflict(msg) => {
+            assert!(msg.contains("is failed, cannot submit report"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let persisted_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM judge_phase_reports
+        WHERE phase_job_id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(persisted_count.0, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_phase_report_should_allow_degraded_agent3_weights() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let message_ids = seed_messages(&state, session_id, 2).await?;
+    let phase_job_id =
+        seed_dispatched_phase_job(&state, session_id, 1, message_ids[0], message_ids[1], 2).await?;
+
+    let mut input = build_phase_report_input(
+        session_id as u64,
+        1,
+        message_ids[0] as u64,
+        message_ids[1] as u64,
+        2,
+    );
+    input.agent3_weighted_score.w1 = 1.0;
+    input.agent3_weighted_score.w2 = 0.0;
+    input.degradation_level = 2;
+
+    let ret = state
+        .submit_judge_phase_report(phase_job_id as u64, input)
+        .await?;
+    assert_eq!(ret.status, "succeeded");
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_phase_report_should_reject_invalid_agent3_weight_sum() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let message_ids = seed_messages(&state, session_id, 2).await?;
+    let phase_job_id =
+        seed_dispatched_phase_job(&state, session_id, 1, message_ids[0], message_ids[1], 2).await?;
+
+    let mut input = build_phase_report_input(
+        session_id as u64,
+        1,
+        message_ids[0] as u64,
+        message_ids[1] as u64,
+        2,
+    );
+    input.agent3_weighted_score.w1 = 0.2;
+    input.agent3_weighted_score.w2 = 0.2;
+
+    let err = state
+        .submit_judge_phase_report(phase_job_id as u64, input)
+        .await
+        .expect_err("invalid weight sum should be rejected");
+
+    match err {
+        AppError::DebateError(msg) => {
+            assert!(msg.contains("w1+w2"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let persisted_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM judge_phase_reports
+        WHERE phase_job_id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(persisted_count.0, 0);
     Ok(())
 }
 

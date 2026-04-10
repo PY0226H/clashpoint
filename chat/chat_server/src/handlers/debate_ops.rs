@@ -17,7 +17,10 @@ use crate::{
 };
 use axum::{
     extract::{rejection::JsonRejection, Path, Query, State},
-    http::{header::IF_MATCH, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    http::{
+        header::ETAG, header::IF_MATCH, header::IF_NONE_MATCH, HeaderMap, HeaderName, HeaderValue,
+        StatusCode,
+    },
     response::{IntoResponse, Response},
     Extension, Json,
 };
@@ -28,8 +31,9 @@ use std::{
         atomic::{AtomicU64, Ordering},
         LazyLock,
     },
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::RwLock;
 
 #[cfg(test)]
 use crate::RateLimitDecision;
@@ -99,6 +103,15 @@ const OPS_RBAC_AUDIT_OUTBOX_RETRY_MAX_BACKOFF_MS: u64 = 60_000;
 const OPS_RBAC_AUDIT_OUTBOX_ERROR_MAX_LEN: usize = 512;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_PER_WINDOW: u64 = 6;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_SPLIT_READINESS_CACHE_TTL_MS: i64 = 3_000;
+const OPS_SPLIT_REVIEW_AUDITS_USER_RATE_LIMIT_PER_WINDOW: u64 = 120;
+const OPS_SPLIT_REVIEW_AUDITS_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+
+#[derive(Debug, Clone)]
+struct OpsSplitReadinessCacheEntry {
+    expires_at_ms: i64,
+    output: crate::GetOpsServiceSplitReadinessOutput,
+}
 
 #[derive(Debug, Default)]
 struct OpsRbacMeMetrics {
@@ -345,6 +358,8 @@ static OPS_RBAC_ROLES_LIST_METRICS: LazyLock<OpsRbacRolesListMetrics> =
 static OPS_RBAC_ME_METRICS: LazyLock<OpsRbacMeMetrics> = LazyLock::new(OpsRbacMeMetrics::default);
 static OPS_RBAC_ROLES_WRITE_METRICS: LazyLock<OpsRbacRolesWriteMetrics> =
     LazyLock::new(OpsRbacRolesWriteMetrics::default);
+static OPS_SPLIT_READINESS_CACHE: LazyLock<RwLock<Option<OpsSplitReadinessCacheEntry>>> =
+    LazyLock::new(|| RwLock::new(None));
 
 /// Create debate topic by authorized ops role.
 #[utoipa::path(
@@ -1062,7 +1077,10 @@ pub(crate) async fn get_ops_rbac_me_handler(
     path = "/api/debate/ops/observability/config",
     responses(
         (status = 200, description = "Ops observability config", body = crate::GetOpsObservabilityConfigOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1071,8 +1089,39 @@ pub(crate) async fn get_ops_rbac_me_handler(
 pub(crate) async fn get_ops_observability_config_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_ops_observability_config(&user).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let ret = match state.get_ops_observability_config(&user).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_observability_config_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "get ops observability config failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let anomaly_state_size = ret.anomaly_state.len();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        updated_by_present = ret.updated_by.is_some(),
+        anomaly_state_size,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "get ops observability config served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -1082,7 +1131,11 @@ pub(crate) async fn get_ops_observability_config_handler(
     path = "/api/debate/ops/observability/metrics-dictionary",
     responses(
         (status = 200, description = "Ops metrics dictionary", body = crate::GetOpsMetricsDictionaryOutput),
+        (status = 304, description = "Not modified"),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1091,9 +1144,63 @@ pub(crate) async fn get_ops_observability_config_handler(
 pub(crate) async fn get_ops_observability_metrics_dictionary_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_ops_metrics_dictionary(&user).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let ret = match state.get_ops_metrics_dictionary(&user).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_metrics_dictionary_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "get ops observability metrics dictionary failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let etag_value = format_ops_metrics_dictionary_etag(&ret.dictionary_revision);
+    if let Some(if_none_match) = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if matches_ops_metrics_dictionary_etag(if_none_match, &ret.dictionary_revision) {
+            tracing::info!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                version = ret.version.as_str(),
+                item_count = ret.items.len(),
+                latency_ms,
+                decision = "not_modified",
+                result = "not_modified",
+                "get ops observability metrics dictionary not modified"
+            );
+            let mut response_headers = HeaderMap::new();
+            if let Ok(header_value) = HeaderValue::from_str(&etag_value) {
+                response_headers.insert(ETAG, header_value);
+            }
+            return Ok((StatusCode::NOT_MODIFIED, response_headers).into_response());
+        }
+    }
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        version = ret.version.as_str(),
+        item_count = ret.items.len(),
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "get ops observability metrics dictionary served"
+    );
+    let mut response_headers = HeaderMap::new();
+    if let Ok(header_value) = HeaderValue::from_str(&etag_value) {
+        response_headers.insert(ETAG, header_value);
+    }
+    Ok((StatusCode::OK, response_headers, Json(ret)).into_response())
 }
 
 /// Get current SLO snapshot for ops observability.
@@ -1102,7 +1209,10 @@ pub(crate) async fn get_ops_observability_metrics_dictionary_handler(
     path = "/api/debate/ops/observability/slo-snapshot",
     responses(
         (status = 200, description = "Ops SLO snapshot", body = crate::GetOpsSloSnapshotOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1111,8 +1221,43 @@ pub(crate) async fn get_ops_observability_metrics_dictionary_handler(
 pub(crate) async fn get_ops_observability_slo_snapshot_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_ops_observability_slo_snapshot(&user).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let ret = match state.get_ops_observability_slo_snapshot(&user).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_slo_snapshot_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "get ops observability slo snapshot failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let rules_total = ret.rules.len();
+    let rules_active = ret.rules.iter().filter(|item| item.is_active).count();
+    let rules_suppressed = ret.rules.iter().filter(|item| item.suppressed).count();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        window_minutes = ret.window_minutes,
+        rules_total,
+        rules_active,
+        rules_suppressed,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "get ops observability slo snapshot served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -1122,7 +1267,10 @@ pub(crate) async fn get_ops_observability_slo_snapshot_handler(
     path = "/api/debate/ops/observability/split-readiness",
     responses(
         (status = 200, description = "Service split readiness snapshot", body = crate::GetOpsServiceSplitReadinessOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1131,8 +1279,83 @@ pub(crate) async fn get_ops_observability_slo_snapshot_handler(
 pub(crate) async fn get_ops_service_split_readiness_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.get_ops_service_split_readiness(&user).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+
+    if let Err(err) = state
+        .ensure_ops_permission(&user, crate::OpsPermission::ObservabilityRead)
+        .await
+    {
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        let failure_type = classify_ops_split_readiness_failure(&err);
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            latency_ms,
+            cache_hit = false,
+            decision = "failed",
+            result = failure_type,
+            "get ops service split readiness failed: {}",
+            err
+        );
+        return Err(err);
+    }
+
+    if let Some(cached) = get_cached_ops_split_readiness().await {
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        let triggered_count = cached
+            .thresholds
+            .iter()
+            .filter(|item| item.triggered)
+            .count();
+        tracing::info!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            overall_status = cached.overall_status.as_str(),
+            triggered_count,
+            latency_ms,
+            cache_hit = true,
+            decision = "success",
+            result = "success",
+            "get ops service split readiness served"
+        );
+        return Ok((StatusCode::OK, Json(cached)));
+    }
+
+    let ret = match state.get_ops_service_split_readiness(&user).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_split_readiness_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                cache_hit = false,
+                decision = "failed",
+                result = failure_type,
+                "get ops service split readiness failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    set_cached_ops_split_readiness(&ret).await;
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let triggered_count = ret.thresholds.iter().filter(|item| item.triggered).count();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        overall_status = ret.overall_status.as_str(),
+        triggered_count,
+        latency_ms,
+        cache_hit = false,
+        decision = "success",
+        result = "success",
+        "get ops service split readiness served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -1145,7 +1368,11 @@ pub(crate) async fn get_ops_service_split_readiness_handler(
     ),
     responses(
         (status = 200, description = "Service split readiness review audits", body = crate::ListOpsServiceSplitReviewAuditsOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limited", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1154,12 +1381,121 @@ pub(crate) async fn get_ops_service_split_readiness_handler(
 pub(crate) async fn list_ops_service_split_review_audits_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<ListOpsServiceSplitReviewAuditsQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let ret = state
+) -> Result<Response, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let query_for_log = query.clone();
+    let user_rate_decision = enforce_rate_limit(
+        &state,
+        "ops_split_review_audits_user",
+        &user.id.to_string(),
+        OPS_SPLIT_REVIEW_AUDITS_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_SPLIT_REVIEW_AUDITS_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_rate_decision = maybe_override_rate_limit_decision(
+        &headers,
+        "ops_split_review_audits_user",
+        user_rate_decision,
+    );
+    let user_rate_headers = build_rate_limit_headers(&user_rate_decision)?;
+    if !user_rate_decision.allowed {
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            limit = query_for_log.limit.unwrap_or(20),
+            offset = query_for_log.offset.unwrap_or(0),
+            updated_by = query_for_log.updated_by.unwrap_or_default(),
+            payment_compliance_required = query_for_log
+                .payment_compliance_required
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unset".to_string()),
+            created_after = query_for_log
+                .created_after
+                .map(|v| v.to_rfc3339())
+                .unwrap_or_default(),
+            created_before = query_for_log
+                .created_before
+                .map(|v| v.to_rfc3339())
+                .unwrap_or_default(),
+            latency_ms,
+            decision = "rate_limited_user",
+            result = "rate_limited",
+            "list split readiness review audits blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_split_review_audits",
+            user_rate_headers,
+        ));
+    }
+
+    let ret = match state
         .list_ops_service_split_review_audits(&user, query)
-        .await?;
-    Ok((StatusCode::OK, Json(ret)))
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_split_review_audits_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                limit = query_for_log.limit.unwrap_or(20),
+                offset = query_for_log.offset.unwrap_or(0),
+                updated_by = query_for_log.updated_by.unwrap_or_default(),
+                payment_compliance_required = query_for_log
+                    .payment_compliance_required
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unset".to_string()),
+                created_after = query_for_log
+                    .created_after
+                    .map(|v| v.to_rfc3339())
+                    .unwrap_or_default(),
+                created_before = query_for_log
+                    .created_before
+                    .map(|v| v.to_rfc3339())
+                    .unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "list split readiness review audits failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        total = ret.total,
+        limit = ret.limit,
+        offset = ret.offset,
+        returned_count = ret.items.len(),
+        updated_by = query_for_log.updated_by.unwrap_or_default(),
+        payment_compliance_required = query_for_log
+            .payment_compliance_required
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unset".to_string()),
+        created_after = query_for_log
+            .created_after
+            .map(|v| v.to_rfc3339())
+            .unwrap_or_default(),
+        created_before = query_for_log
+            .created_before
+            .map(|v| v.to_rfc3339())
+            .unwrap_or_default(),
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "list split readiness review audits served"
+    );
+    Ok((StatusCode::OK, user_rate_headers, Json(ret)).into_response())
 }
 
 /// Upsert manual review input for split-readiness compliance threshold.
@@ -1181,6 +1517,7 @@ pub(crate) async fn upsert_ops_service_split_review_handler(
     Json(input): Json<UpsertOpsServiceSplitReviewInput>,
 ) -> Result<impl IntoResponse, AppError> {
     let ret = state.upsert_ops_service_split_review(&user, input).await?;
+    invalidate_cached_ops_split_readiness().await;
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -2676,6 +3013,81 @@ fn classify_ops_judge_rejudge_failure(err: &AppError) -> &'static str {
     }
 }
 
+fn classify_ops_observability_config_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_metrics_dictionary_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_slo_snapshot_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_split_readiness_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_split_review_audits_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn format_ops_metrics_dictionary_etag(revision: &str) -> String {
+    format!("\"{revision}\"")
+}
+
+fn matches_ops_metrics_dictionary_etag(if_none_match: &str, revision: &str) -> bool {
+    if_none_match.split(',').any(|raw| {
+        let candidate = raw.trim();
+        if candidate == "*" {
+            return true;
+        }
+        let stripped = candidate.strip_prefix("W/").unwrap_or(candidate).trim();
+        stripped == revision || stripped == format_ops_metrics_dictionary_etag(revision)
+    })
+}
+
 fn classify_ops_rbac_failure(err: &AppError) -> (Option<String>, &'static str) {
     match err {
         AppError::DebateConflict(code)
@@ -3121,6 +3533,48 @@ fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(|v| v.chars().take(128).collect::<String>())
+}
+
+fn now_millis_for_ops_handler() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis().min(i64::MAX as u128) as i64,
+        Err(_) => 0,
+    }
+}
+
+async fn get_cached_ops_split_readiness() -> Option<crate::GetOpsServiceSplitReadinessOutput> {
+    if cfg!(test) {
+        return None;
+    }
+    let now_ms = now_millis_for_ops_handler();
+    let guard = OPS_SPLIT_READINESS_CACHE.read().await;
+    guard.as_ref().and_then(|entry| {
+        if entry.expires_at_ms > now_ms {
+            Some(entry.output.clone())
+        } else {
+            None
+        }
+    })
+}
+
+async fn set_cached_ops_split_readiness(output: &crate::GetOpsServiceSplitReadinessOutput) {
+    if cfg!(test) {
+        return;
+    }
+    let mut guard = OPS_SPLIT_READINESS_CACHE.write().await;
+    *guard = Some(OpsSplitReadinessCacheEntry {
+        expires_at_ms: now_millis_for_ops_handler()
+            .saturating_add(OPS_SPLIT_READINESS_CACHE_TTL_MS),
+        output: output.clone(),
+    });
+}
+
+async fn invalidate_cached_ops_split_readiness() {
+    if cfg!(test) {
+        return;
+    }
+    let mut guard = OPS_SPLIT_READINESS_CACHE.write().await;
+    *guard = None;
 }
 
 async fn should_emit_ops_rbac_owner_self_role_warning(

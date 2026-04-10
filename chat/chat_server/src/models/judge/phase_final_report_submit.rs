@@ -6,6 +6,7 @@ const MAX_PHASE_SUMMARY_TEXT_LEN: usize = 8000;
 const MAX_PHASE_RATIONALE_TEXT_LEN: usize = 8000;
 const MAX_FINAL_RATIONALE_TEXT_LEN: usize = 12000;
 const MAX_ERROR_CODE_COUNT: usize = 64;
+const AGENT_WEIGHT_SUM_EPSILON: f64 = 1e-6;
 
 impl AppState {
     pub async fn submit_judge_phase_report(
@@ -90,12 +91,11 @@ impl AppState {
         validate_percentage_score(agent3_weighted_score.con, "agent3_weighted_score.con")?;
         validate_ratio(agent3_weighted_score.w1, "agent3_weighted_score.w1")?;
         validate_ratio(agent3_weighted_score.w2, "agent3_weighted_score.w2")?;
-        if agent3_weighted_score.w2 <= agent3_weighted_score.w1 {
-            return Err(AppError::DebateError(format!(
-                "invalid agent3 weights: w1={}, w2={}, expect w2 > w1",
-                agent3_weighted_score.w1, agent3_weighted_score.w2
-            )));
-        }
+        validate_weight_sum(
+            agent3_weighted_score.w1,
+            agent3_weighted_score.w2,
+            "agent3_weighted_score",
+        )?;
 
         let error_codes = normalize_error_codes(error_codes);
 
@@ -149,9 +149,10 @@ impl AppState {
                 job_id
             )));
         }
-        if job.status != "dispatched" && job.status != "succeeded" {
+        // phase dispatch 与回调是同步链路，回调落库时 job 可能仍处于 queued。
+        if job.status != "queued" && job.status != "dispatched" && job.status != "succeeded" {
             return Err(AppError::DebateConflict(format!(
-                "judge phase job {} is not dispatched, current status {}",
+                "judge phase job {} is not queued/dispatched/succeeded, current status {}",
                 job_id, job.status
             )));
         }
@@ -248,7 +249,7 @@ impl AppState {
                 dispatch_locked_until = NULL,
                 updated_at = NOW()
             WHERE id = $1
-              AND status IN ('dispatched', 'succeeded')
+              AND status IN ('queued', 'dispatched', 'succeeded')
             "#,
         )
         .bind(job.id)
@@ -463,6 +464,17 @@ fn validate_ratio(score: f64, field: &str) -> Result<(), AppError> {
     if !score.is_finite() || !(0.0..=1.0).contains(&score) {
         return Err(AppError::DebateError(format!(
             "invalid {field}: {score}, expect finite number in 0..=1"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_weight_sum(w1: f64, w2: f64, field: &str) -> Result<(), AppError> {
+    let sum = w1 + w2;
+    if (sum - 1.0).abs() > AGENT_WEIGHT_SUM_EPSILON {
+        return Err(AppError::DebateError(format!(
+            "invalid {field}: w1+w2={}, expect approximately 1",
+            sum
         )));
     }
     Ok(())

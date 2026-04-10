@@ -14,6 +14,8 @@ export type OpsPermissionFlags = {
   debateManage: boolean;
   judgeReview: boolean;
   judgeRejudge: boolean;
+  observabilityRead: boolean;
+  observabilityManage: boolean;
   roleManage: boolean;
 };
 
@@ -151,6 +153,15 @@ export type ListOpsServiceSplitReviewAuditsOutput = {
   limit: number;
   offset: number;
   items: OpsServiceSplitReviewAuditItem[];
+};
+
+export type ListOpsServiceSplitReviewAuditsInput = {
+  limit?: number;
+  offset?: number;
+  updatedBy?: number;
+  paymentComplianceRequired?: boolean;
+  createdAfter?: string;
+  createdBefore?: string;
 };
 
 export type OpsAlertNotificationItem = {
@@ -385,16 +396,19 @@ export async function upsertOpsServiceSplitReview(
   return response.data;
 }
 
-export async function listOpsServiceSplitReviewAudits(input?: {
-  limit?: number;
-  offset?: number;
-}): Promise<ListOpsServiceSplitReviewAuditsOutput> {
+export async function listOpsServiceSplitReviewAudits(
+  input?: ListOpsServiceSplitReviewAuditsInput
+): Promise<ListOpsServiceSplitReviewAuditsOutput> {
   const response = await http.get<ListOpsServiceSplitReviewAuditsOutput>(
     "/debate/ops/observability/split-readiness/reviews",
     {
       params: {
         limit: input?.limit ?? 3,
-        offset: input?.offset ?? 0
+        offset: input?.offset ?? 0,
+        updatedBy: input?.updatedBy,
+        paymentComplianceRequired: input?.paymentComplianceRequired,
+        createdAfter: input?.createdAfter,
+        createdBefore: input?.createdBefore
       }
     }
   );

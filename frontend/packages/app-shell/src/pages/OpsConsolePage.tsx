@@ -34,7 +34,7 @@ type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
 type RoleListPiiLevel = NonNullable<ListOpsRoleAssignmentsInput["piiLevel"]>;
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
 type SplitReviewSelection = "unset" | "required" | "not_required";
-type SplitReviewAuditComplianceFilter = "all" | SplitReviewSelection;
+type SplitReviewAuditComplianceFilter = "all" | "required" | "not_required";
 
 const THRESHOLD_FIELD_ORDER: ThresholdFieldKey[] = [
   "lowSuccessRateThreshold",
@@ -164,21 +164,63 @@ function toSplitReviewSelectionLabel(value: unknown): SplitReviewSelection {
   return mapSplitReviewPayloadToSelection(value);
 }
 
+function extractSplitReviewThresholdItem(
+  input: ReturnType<typeof getOpsServiceSplitReadiness> extends Promise<infer T> ? T : never
+): { evidence: Record<string, unknown> } | null {
+  const item = input.thresholds.find((threshold) => threshold.key === "payment_compliance_isolation");
+  const evidence = item?.evidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return null;
+  }
+  return { evidence: evidence as Record<string, unknown> };
+}
+
 function extractSplitReviewFromReadiness(input: ReturnType<typeof getOpsServiceSplitReadiness> extends Promise<infer T> ? T : never): {
   selection: SplitReviewSelection;
   note: string;
 } {
-  const item = input.thresholds.find((threshold) => threshold.key === "payment_compliance_review");
-  const evidence = item?.evidence;
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+  const extracted = extractSplitReviewThresholdItem(input);
+  if (!extracted) {
     return { selection: "unset", note: "" };
   }
-  const paymentValue = (evidence as Record<string, unknown>).paymentComplianceRequired;
-  const noteRaw = (evidence as Record<string, unknown>).reviewNote;
+  const paymentValue = extracted.evidence.paymentComplianceRequired;
+  const noteRaw = extracted.evidence.reviewNote;
   return {
     selection: mapSplitReviewPayloadToSelection(paymentValue),
     note: typeof noteRaw === "string" ? noteRaw : ""
   };
+}
+
+function extractSplitReviewFreshnessHint(
+  input: ReturnType<typeof getOpsServiceSplitReadiness> extends Promise<infer T> ? T : never
+): string | null {
+  const extracted = extractSplitReviewThresholdItem(input);
+  if (!extracted) {
+    return null;
+  }
+  const manualInputRequired = extracted.evidence.manualInputRequired === true;
+  const stale = extracted.evidence.stale === true;
+  const reviewAgeHoursRaw = extracted.evidence.reviewAgeHours;
+  const staleThresholdHoursRaw = extracted.evidence.staleThresholdHours;
+  const reviewAgeHours =
+    typeof reviewAgeHoursRaw === "number" && Number.isFinite(reviewAgeHoursRaw)
+      ? Math.max(0, Math.floor(reviewAgeHoursRaw))
+      : null;
+  const staleThresholdHours =
+    typeof staleThresholdHoursRaw === "number" && Number.isFinite(staleThresholdHoursRaw)
+      ? Math.max(0, Math.floor(staleThresholdHoursRaw))
+      : null;
+
+  if (manualInputRequired) {
+    return "split review manual input required.";
+  }
+  if (stale) {
+    if (reviewAgeHours !== null && staleThresholdHours !== null) {
+      return `split review is stale (${reviewAgeHours}h >= ${staleThresholdHours}h), please revalidate.`;
+    }
+    return "split review is stale, please revalidate.";
+  }
+  return null;
 }
 
 export function OpsConsolePage() {
@@ -195,7 +237,7 @@ export function OpsConsolePage() {
   const [splitReviewAuditPageIndex, setSplitReviewAuditPageIndex] = useState(0);
   const [splitReviewAuditComplianceFilter, setSplitReviewAuditComplianceFilter] =
     useState<SplitReviewAuditComplianceFilter>("all");
-  const [splitReviewAuditKeywordFilter, setSplitReviewAuditKeywordFilter] = useState("");
+  const [splitReviewAuditUpdatedByFilter, setSplitReviewAuditUpdatedByFilter] = useState("");
   const [splitReviewAuditCreatedAfterIso, setSplitReviewAuditCreatedAfterIso] = useState("");
   const [splitReviewAuditCreatedBeforeIso, setSplitReviewAuditCreatedBeforeIso] = useState("");
   const [thresholdDraft, setThresholdDraft] = useState<Record<ThresholdFieldKey, string> | null>(null);
@@ -218,35 +260,68 @@ export function OpsConsolePage() {
   const observabilityConfigQuery = useQuery({
     queryKey: ["ops-observability-config"],
     queryFn: () => getOpsObservabilityConfig(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    enabled: Boolean(rbacMeQuery.data?.permissions.observabilityRead),
     retry: false
   });
   const sloSnapshotQuery = useQuery({
     queryKey: ["ops-observability-slo"],
     queryFn: () => getOpsSloSnapshot(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    enabled: Boolean(rbacMeQuery.data?.permissions.observabilityRead),
     retry: false
   });
   const metricsDictionaryQuery = useQuery({
     queryKey: ["ops-observability-metrics-dictionary"],
     queryFn: () => getOpsMetricsDictionary(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    enabled: Boolean(rbacMeQuery.data?.permissions.observabilityRead),
     retry: false
   });
   const splitReadinessQuery = useQuery({
     queryKey: ["ops-observability-split-readiness"],
     queryFn: () => getOpsServiceSplitReadiness(),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    enabled: Boolean(rbacMeQuery.data?.permissions.observabilityRead),
     retry: false
   });
+  const splitReviewAuditUpdatedBy = useMemo(() => {
+    const raw = splitReviewAuditUpdatedByFilter.trim();
+    if (!raw) {
+      return undefined;
+    }
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return undefined;
+    }
+    return parsed;
+  }, [splitReviewAuditUpdatedByFilter]);
+  const splitReviewAuditPaymentFilter =
+    splitReviewAuditComplianceFilter === "all"
+      ? undefined
+      : splitReviewAuditComplianceFilter === "required"
+        ? true
+        : splitReviewAuditComplianceFilter === "not_required"
+          ? false
+          : undefined;
+  const splitReviewAuditCreatedAfter = splitReviewAuditCreatedAfterIso.trim() || undefined;
+  const splitReviewAuditCreatedBefore = splitReviewAuditCreatedBeforeIso.trim() || undefined;
   const splitReviewAuditsQuery = useQuery({
-    queryKey: ["ops-observability-split-review-audits", splitReviewAuditPageSize, splitReviewAuditPageIndex],
+    queryKey: [
+      "ops-observability-split-review-audits",
+      splitReviewAuditPageSize,
+      splitReviewAuditPageIndex,
+      splitReviewAuditUpdatedBy,
+      splitReviewAuditPaymentFilter,
+      splitReviewAuditCreatedAfter,
+      splitReviewAuditCreatedBefore
+    ],
     queryFn: () =>
       listOpsServiceSplitReviewAudits({
         limit: splitReviewAuditPageSize,
-        offset: splitReviewAuditPageIndex * splitReviewAuditPageSize
+        offset: splitReviewAuditPageIndex * splitReviewAuditPageSize,
+        updatedBy: splitReviewAuditUpdatedBy,
+        paymentComplianceRequired: splitReviewAuditPaymentFilter,
+        createdAfter: splitReviewAuditCreatedAfter,
+        createdBefore: splitReviewAuditCreatedBefore
       }),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    enabled: Boolean(rbacMeQuery.data?.permissions.observabilityRead),
     retry: false
   });
   const alertsQuery = useQuery({
@@ -257,7 +332,7 @@ export function OpsConsolePage() {
         limit: alertPageSize,
         offset: alertPageIndex * alertPageSize
       }),
-    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    enabled: Boolean(rbacMeQuery.data?.permissions.observabilityRead),
     retry: false
   });
   const roleWriteRevision = String(
@@ -270,7 +345,13 @@ export function OpsConsolePage() {
   }, [alertPageSize, alertStatusFilter]);
   useEffect(() => {
     setSplitReviewAuditPageIndex(0);
-  }, [splitReviewAuditPageSize]);
+  }, [
+    splitReviewAuditPageSize,
+    splitReviewAuditComplianceFilter,
+    splitReviewAuditCreatedAfterIso,
+    splitReviewAuditCreatedBeforeIso,
+    splitReviewAuditUpdatedByFilter
+  ]);
 
   const upsertRoleMutation = useMutation({
     mutationFn: async (payload: { userId: number; role: OpsRole; expectedRevision: string }) =>
@@ -379,13 +460,16 @@ export function OpsConsolePage() {
   });
 
   const canManageRoles = Boolean(rbacMeQuery.data?.permissions.roleManage);
-  const canReviewJudge = Boolean(rbacMeQuery.data?.permissions.judgeReview);
+  const canReadObservability = Boolean(rbacMeQuery.data?.permissions.observabilityRead);
+  const canManageObservability = Boolean(rbacMeQuery.data?.permissions.observabilityManage);
   const permissions = rbacMeQuery.data?.permissions;
   const permissionRows = useMemo(
     () => [
       { key: "debate_manage", value: permissions?.debateManage ?? false },
       { key: "judge_review", value: permissions?.judgeReview ?? false },
       { key: "judge_rejudge", value: permissions?.judgeRejudge ?? false },
+      { key: "observability_read", value: permissions?.observabilityRead ?? false },
+      { key: "observability_manage", value: permissions?.observabilityManage ?? false },
       { key: "role_manage", value: permissions?.roleManage ?? false }
     ],
     [permissions]
@@ -403,51 +487,11 @@ export function OpsConsolePage() {
   const splitReviewAuditPageCount = Math.max(1, Math.ceil(totalSplitReviewAudits / splitReviewAuditPageSize));
   const canGoPrevSplitReviewAuditPage = splitReviewAuditPageIndex > 0;
   const canGoNextSplitReviewAuditPage = splitReviewAuditPageIndex + 1 < splitReviewAuditPageCount;
-  const splitReviewAuditItems = splitReviewAuditsQuery.data?.items;
-  const splitReviewAuditPageItemCount = splitReviewAuditItems?.length ?? 0;
-  const filteredSplitReviewAuditItems = useMemo(() => {
-    const normalizedKeyword = splitReviewAuditKeywordFilter.trim().toLowerCase();
-    const createdAfterRaw = splitReviewAuditCreatedAfterIso.trim();
-    const createdBeforeRaw = splitReviewAuditCreatedBeforeIso.trim();
-    const createdAfterMs = createdAfterRaw ? Date.parse(createdAfterRaw) : NaN;
-    const createdBeforeMs = createdBeforeRaw ? Date.parse(createdBeforeRaw) : NaN;
-    const hasCreatedAfter = Number.isFinite(createdAfterMs);
-    const hasCreatedBefore = Number.isFinite(createdBeforeMs);
-    const sourceItems = splitReviewAuditItems ?? [];
-
-    return sourceItems.filter((item) => {
-      const selection = toSplitReviewSelectionLabel(item.paymentComplianceRequired);
-      if (splitReviewAuditComplianceFilter !== "all" && selection !== splitReviewAuditComplianceFilter) {
-        return false;
-      }
-      if (normalizedKeyword) {
-        const haystacks = [String(item.id), item.reviewNote, String(item.updatedBy)];
-        const matched = haystacks.some((text) => text.toLowerCase().includes(normalizedKeyword));
-        if (!matched) {
-          return false;
-        }
-      }
-      if (hasCreatedAfter || hasCreatedBefore) {
-        const createdAtMs = Date.parse(item.createdAt);
-        if (!Number.isFinite(createdAtMs)) {
-          return false;
-        }
-        if (hasCreatedAfter && createdAtMs < createdAfterMs) {
-          return false;
-        }
-        if (hasCreatedBefore && createdAtMs > createdBeforeMs) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [
-    splitReviewAuditComplianceFilter,
-    splitReviewAuditCreatedAfterIso,
-    splitReviewAuditCreatedBeforeIso,
-    splitReviewAuditItems,
-    splitReviewAuditKeywordFilter
-  ]);
+  const splitReviewFreshnessHint = splitReadinessQuery.data
+    ? extractSplitReviewFreshnessHint(splitReadinessQuery.data)
+    : null;
+  const splitReviewAuditItems = splitReviewAuditsQuery.data?.items ?? [];
+  const splitReviewAuditPageItemCount = splitReviewAuditItems.length;
   const observabilityErrors = useMemo(() => {
     const seen = new Set<string>();
     const items = [
@@ -557,7 +601,7 @@ export function OpsConsolePage() {
 
   function clearSplitReviewAuditFilters() {
     setSplitReviewAuditComplianceFilter("all");
-    setSplitReviewAuditKeywordFilter("");
+    setSplitReviewAuditUpdatedByFilter("");
     setSplitReviewAuditCreatedAfterIso("");
     setSplitReviewAuditCreatedBeforeIso("");
     setPageHint("Split review audit filters cleared.");
@@ -722,7 +766,7 @@ export function OpsConsolePage() {
 
       <section className="echo-lobby-panel">
         <h3>Observability Snapshot</h3>
-        {canReviewJudge ? (
+        {canReadObservability ? (
           <>
             <div className="echo-ops-alert-toolbar">
               <label className="echo-ops-role-label">
@@ -778,6 +822,7 @@ export function OpsConsolePage() {
                 <span>Suppress Minutes</span>
                 <TextField
                   aria-label="Suppress Minutes"
+                  disabled={!canManageObservability}
                   inputMode="numeric"
                   onChange={(event) => setSuppressMinutesInput(event.target.value)}
                   placeholder="10"
@@ -785,14 +830,14 @@ export function OpsConsolePage() {
                 />
               </label>
               <Button
-                disabled={evaluateObservabilityMutation.isPending}
+                disabled={evaluateObservabilityMutation.isPending || !canManageObservability}
                 onClick={() => evaluateObservabilityMutation.mutate(false)}
                 type="button"
               >
                 Evaluate Once
               </Button>
               <Button
-                disabled={evaluateObservabilityMutation.isPending}
+                disabled={evaluateObservabilityMutation.isPending || !canManageObservability}
                 onClick={() => evaluateObservabilityMutation.mutate(true)}
                 type="button"
               >
@@ -854,7 +899,7 @@ export function OpsConsolePage() {
                     <div className="echo-ops-rule-actions">
                       <Button
                         aria-label={`Acknowledge ${rule.alertKey}`}
-                        disabled={applyAnomalyActionMutation.isPending}
+                        disabled={applyAnomalyActionMutation.isPending || !canManageObservability}
                         onClick={() =>
                           applyAnomalyActionMutation.mutate({
                             alertKey: rule.alertKey,
@@ -867,7 +912,7 @@ export function OpsConsolePage() {
                       </Button>
                       <Button
                         aria-label={`Suppress ${rule.alertKey}`}
-                        disabled={applyAnomalyActionMutation.isPending}
+                        disabled={applyAnomalyActionMutation.isPending || !canManageObservability}
                         onClick={() =>
                           applyAnomalyActionMutation.mutate({
                             alertKey: rule.alertKey,
@@ -881,7 +926,7 @@ export function OpsConsolePage() {
                       </Button>
                       <Button
                         aria-label={`Clear ${rule.alertKey}`}
-                        disabled={applyAnomalyActionMutation.isPending}
+                        disabled={applyAnomalyActionMutation.isPending || !canManageObservability}
                         onClick={() =>
                           applyAnomalyActionMutation.mutate({
                             alertKey: rule.alertKey,
@@ -909,6 +954,7 @@ export function OpsConsolePage() {
                           <span>{THRESHOLD_FIELD_LABELS[key]}</span>
                           <TextField
                             aria-label={`Threshold ${key}`}
+                            disabled={!canManageObservability}
                             inputMode="decimal"
                             onChange={(event) => onThresholdFieldChange(key, event.target.value)}
                             type="number"
@@ -919,14 +965,16 @@ export function OpsConsolePage() {
                     </div>
                     <div className="echo-ops-threshold-actions">
                       <Button
-                        disabled={upsertThresholdMutation.isPending || !thresholdDirty}
+                        disabled={
+                          upsertThresholdMutation.isPending || !thresholdDirty || !canManageObservability
+                        }
                         onClick={submitThresholds}
                         type="button"
                       >
                         {upsertThresholdMutation.isPending ? "Saving..." : "Save Thresholds"}
                       </Button>
                       <Button
-                        disabled={!thresholdDirty || upsertThresholdMutation.isPending}
+                        disabled={!thresholdDirty || upsertThresholdMutation.isPending || !canManageObservability}
                         onClick={resetThresholdDraft}
                         type="button"
                       >
@@ -961,6 +1009,7 @@ export function OpsConsolePage() {
                   <span>Payment Compliance</span>
                   <select
                     aria-label="Split Review Payment Compliance"
+                    disabled={!canManageObservability}
                     onChange={(event) => setSplitReviewSelection(event.target.value as SplitReviewSelection)}
                     value={splitReviewSelection}
                   >
@@ -974,6 +1023,7 @@ export function OpsConsolePage() {
                   <textarea
                     aria-label="Split Review Note"
                     className="echo-room-input"
+                    disabled={!canManageObservability}
                     onChange={(event) => setSplitReviewNote(event.target.value)}
                     placeholder="Add split readiness review note"
                     rows={3}
@@ -982,7 +1032,7 @@ export function OpsConsolePage() {
                 </label>
                 <div className="echo-ops-threshold-actions">
                   <Button
-                    disabled={upsertSplitReviewMutation.isPending}
+                    disabled={upsertSplitReviewMutation.isPending || !canManageObservability}
                     onClick={() => upsertSplitReviewMutation.mutate()}
                     type="button"
                   >
@@ -994,9 +1044,6 @@ export function OpsConsolePage() {
                 ) : null}
                 <InlineHint>
                   audits: total {totalSplitReviewAudits} | page {splitReviewAuditPageIndex + 1}/{splitReviewAuditPageCount}
-                </InlineHint>
-                <InlineHint>
-                  page matches: {filteredSplitReviewAuditItems.length}/{splitReviewAuditPageItemCount}
                 </InlineHint>
                 <div className="echo-ops-split-review-filters">
                   <label className="echo-ops-role-label">
@@ -1011,16 +1058,16 @@ export function OpsConsolePage() {
                       <option value="all">all</option>
                       <option value="required">required</option>
                       <option value="not_required">not_required</option>
-                      <option value="unset">unset</option>
                     </select>
                   </label>
                   <label className="echo-ops-role-label">
-                    <span>Note Keyword</span>
+                    <span>Updated By</span>
                     <TextField
-                      aria-label="Split Review Keyword Filter"
-                      onChange={(event) => setSplitReviewAuditKeywordFilter(event.target.value)}
-                      placeholder="filter by id/note/user"
-                      value={splitReviewAuditKeywordFilter}
+                      aria-label="Split Review Updated By Filter"
+                      inputMode="numeric"
+                      onChange={(event) => setSplitReviewAuditUpdatedByFilter(event.target.value)}
+                      placeholder="user id"
+                      value={splitReviewAuditUpdatedByFilter}
                     />
                   </label>
                   <label className="echo-ops-role-label">
@@ -1080,7 +1127,7 @@ export function OpsConsolePage() {
                   </div>
                 </div>
                 <div className="echo-ops-review-audit-list">
-                  {filteredSplitReviewAuditItems.map((item) => (
+                  {splitReviewAuditItems.map((item) => (
                     <InlineHint key={item.id}>
                       #{item.id} | compliance:{" "}
                       {toSplitReviewSelectionLabel(item.paymentComplianceRequired)} | by #{item.updatedBy} | at{" "}
@@ -1089,11 +1136,6 @@ export function OpsConsolePage() {
                   ))}
                   {!splitReviewAuditsQuery.isLoading && splitReviewAuditPageItemCount === 0 ? (
                     <InlineHint>No split review audits.</InlineHint>
-                  ) : null}
-                  {!splitReviewAuditsQuery.isLoading &&
-                  splitReviewAuditPageItemCount > 0 &&
-                  filteredSplitReviewAuditItems.length === 0 ? (
-                    <InlineHint>No audits matched filters on this page.</InlineHint>
                   ) : null}
                 </div>
               </article>
@@ -1117,9 +1159,10 @@ export function OpsConsolePage() {
                 next step: {splitReadinessQuery.data.nextStep} (thresholds: {splitReadinessQuery.data.thresholds.length})
               </InlineHint>
             ) : null}
+            {splitReviewFreshnessHint ? <InlineHint>{splitReviewFreshnessHint}</InlineHint> : null}
           </>
         ) : (
-          <InlineHint>Observability panels require `judge_review` permission.</InlineHint>
+          <InlineHint>Observability panels require `observability_read` permission.</InlineHint>
         )}
       </section>
 

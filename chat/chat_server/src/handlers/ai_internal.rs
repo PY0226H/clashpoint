@@ -16,9 +16,11 @@ use axum::{
     request_body = SubmitJudgePhaseReportInput,
     responses(
         (status = 200, description = "Judge phase report persisted", body = crate::SubmitJudgePhaseReportOutput),
+        (status = 401, description = "Missing or invalid internal key", body = ErrorOutput),
         (status = 400, description = "Invalid input", body = ErrorOutput),
         (status = 404, description = "Judge phase job not found", body = ErrorOutput),
         (status = 409, description = "Job state conflict", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
     ),
     security(
         ("internal_key" = [])

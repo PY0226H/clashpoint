@@ -70,6 +70,52 @@
 | api066-replay-actions-query-rejection-unification | `api066-judge-replay-actions-governance-phase-closure` | 多端契约 | 当前接口沿用 `Query<T>` 默认提取错误语义，单点改造收益低于家族统一改造。 | API 家族统一错误语义治理启动 | 完成 QueryRejection 统一包装并给出稳定错误码映射表。 | 接口家族联调脚本 + 错误码映射表 + route 回归结果归档。 |
 | api066-replay-actions-pgtrgm-real-benchmark-baseline | `api066-judge-replay-actions-governance-phase-closure` | 性能压测 | 本轮仅完成 dry-run 基线，缺真实库（含/不含 `pg_trgm`）的可对比样本。 | 拿到可压测数据库或上线前容量收口 | 形成真实 before/after 基线报告，明确 `ILIKE` 场景性能下限与告警阈值建议。 | `bash chat/scripts/ai_judge_replay_actions_perf_regression_suite.sh ...` + `..._gate.sh ...`，报告归档到 `docs/consistency_reports/`。 |
 
+### C10. API067 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api067-rejudge-run-versioning-migration-baseline-verify | `api067-judge-rejudge-run-versioning-phase-closure` | 环境依赖 | 本地库存在迁移基线漂移（`sqlx migrate run` 报 `relation \"users\" already exists`），当前执行结果不具备标准验收可信度。 | 获得标准迁移基线库后 | 在标准基线库完成 run/version 迁移验收并归档证据（执行记录、结果摘要、SQL 校验输出）。 | `cd chat && DATABASE_URL=<baseline_db> ./scripts/ai_judge_rejudge_run_versioning_verify.sh`。 |
+| api067-rejudge-rate-limit-rollout-decision | `api067-judge-rejudge-run-versioning-phase-closure` | 性能压测 | 当前缺真实 Ops 重判流量样本，提前固化阈值容易误伤应急操作。 | rejudge QPS 异常或压测窗口开启 | 形成 user/session 与 ip/session 限流阈值 Go/No-Go 结论；若 Go，完成限流落地与告警阈值封板。 | 执行 rejudge 压测并归档报告 + route 回归结果。 |
+| api067-rejudge-idempotency-strategy-rollout-decision | `api067-judge-rejudge-run-versioning-phase-closure` | 可靠性 | 当前 run/version 已支持“每次新 run”语义，尚缺真实重复触发样本，不宜提前引入额外幂等存储协议。 | 出现重复触发投诉或锁冲突指标上升 | 形成幂等策略 Go/No-Go 结论；若 Go，落地 `Idempotency-Key` 协议、冲突语义与回归测试。 | 冲突分布统计 + 评审记录；若落地则执行 `cargo test -p chat-server rejudge -- --nocapture` 并归档。 |
+| api067-rejudge-observability-and-fault-drill-closure | `api067-judge-rejudge-run-versioning-phase-closure` | 可观测性 | 当前已补接口结构化日志，但发布前告警看板与故障演练证据尚未封板。 | 上线前收口 | 建立 rejudge 频率/成功率/degraded 比例/耗时看板，并完成一次故障注入演练与复盘。 | 告警配置导出 + 演练记录 + 复盘文档归档。 |
+| api067-rejudge-dedicated-audit-surface-evaluation | `api067-judge-rejudge-run-versioning-phase-closure` | 工程债 | 当前已具备 replay actions 审计与结构化日志，独立 rejudge 主事件审计表属于增强项，不阻塞本阶段交付。 | 合规审计检索需求提升或值班复盘频繁受阻 | 完成独立 rejudge 审计建模评审；若 Go，落地审计表与查询面并补回归测试。 | 评审记录 + 迁移脚本 + `cargo test -p chat-server rejudge -- --nocapture`。 |
+
+### C11. API068 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api068-observability-config-read-cache-rollout-decision | `api068-observability-config-governance-phase-closure` | 性能压测 | 当前本地阶段接口规模较小，先完成契约/权限收敛；提前引入缓存会放大行为面与排障复杂度。 | Ops 高频刷新导致 DB 读压上升，或进入上线前容量收口 | 形成缓存 Go/No-Go 评审；若 Go，落地 `3~5s` 短 TTL + 写后失效，并补齐一致性与回归测试。 | 压测报告 + 评审结论；若落地则执行 `cargo test -p chat-server get_ops_observability_config -- --nocapture` 与写后读一致性专项用例。 |
+| api068-observability-config-read-rate-limit-rollout-decision | `api068-observability-config-governance-phase-closure` | 性能压测 | 真实 Ops 流量样本不足，当前不宜提前固化阈值，以免误伤值班排障操作。 | 读取 QPS 异常、出现滥刷迹象，或压测窗口开启 | 形成 user/ip 限流阈值 Go/No-Go 结论；若 Go，落地限流、告警阈值与错误语义回归。 | 压测与日志分布分析归档；若落地则执行 route 回归并补 `429` 断言。 |
+| api068-observability-anomaly-state-lifecycle-governance | `api068-observability-config-governance-phase-closure` | 工程债 | 当前仅在读路径惰性清理，功能可用但持久层压缩策略尚未设计定稿。 | anomaly_state 冗余规模上升、排障可读性下降，或进入发布前治理回合 | 明确“定时压缩”或“写时压缩”方案并落地，保证历史冗余键可控且行为可审计。 | 方案评审记录 + 数据体量对比报告 + 相关 model 测试通过。 |
+
+### C12. API069 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api069-metrics-dictionary-source-of-truth-governance | `api069-observability-metrics-dictionary-governance-phase-closure` | 工程债 | 当前已补齐 revision/缓存与质量门禁，优先保证现网可维护；“字典与埋点同源治理”改造面较大，不适合在本轮并入。 | 指标定义漂移频发、跨服务字典协同需求提升，或进入发布前治理回合 | 完成 C1（代码 registry 同源）或 C2（manifest + 代码生成）方案评审并落地，确保“新增/下线埋点”与字典变更一致。 | 方案评审记录 + 回归测试 + 变更前后对照报告归档。 |
+| api069-metrics-dictionary-category-filter-evaluation | `api069-observability-metrics-dictionary-governance-phase-closure` | 性能压测 | 当前字典规模（33项）全量返回成本可接受，提前扩展筛选参数收益有限且会放大契约面。 | 指标规模持续增长、客户端拉取频率上升，或出现明显传输/解析成本压力 | 形成 `category` 过滤 Go/No-Go 结论；若 Go，落地可选查询参数且保持默认全量兼容。 | 压测与链路观测报告 + route/model 回归测试归档。 |
+| api069-metrics-dictionary-permission-semantics-review | `api069-observability-metrics-dictionary-governance-phase-closure` | 多端契约 | 当前沿用最小权限策略（`platform_role_admin` 默认无 `ObservabilityRead`），短期不改可避免跨角色行为震荡。 | 产品/安全评审窗口开启，或出现角色语义争议反馈 | 明确并冻结权限语义（是否放开 `platform_role_admin` 读取），同步更新权限矩阵、学习文档与回归测试。 | 评审结论归档 + route 回归 + 权限矩阵文档同步。 |
+
+### C13. API070 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api070-slo-snapshot-window-anchor-unification | `api070-observability-slo-snapshot-governance-phase-closure` | 工程债 | 当前先完成契约/权限/语义收敛，时间口径统一会牵涉信号层统计定义与多接口一致性，不适合与本轮并行硬切。 | 出现“成功率与时延观感不一致”反馈，或进入 API070 第二轮治理窗口 | 统一 `load_recent_judge_signal` 的时间锚点口径并文档化（单一采用 `updated_at` 或 `created_at`），补齐回归测试。 | `cargo test -p chat-server get_ops_observability_slo_snapshot -- --nocapture` + 指标口径对照报告归档。 |
+| api070-slo-snapshot-threshold-domain-rename-cutover | `api070-observability-slo-snapshot-governance-phase-closure` | 工程债 | 当前阈值字段兼容历史命名，直接硬切会联动配置写接口、前端阈值面板与存量配置迁移，改造面较大。 | 发生调参误配事故，或进入 observability 阈值统一治理回合 | 完成字段域拆分并硬切：`high_coalesced_threshold -> dlq_pending_threshold`、`min_request_for_cache_hit_check -> min_completed_for_slo_eval`，同步迁移与前后端契约。 | 迁移脚本 + route/model 回归 + 前端 typecheck 与联调记录归档。 |
+| api070-slo-snapshot-read-protection-rollout-decision | `api070-observability-slo-snapshot-governance-phase-closure` | 性能压测 | 当前已先完成 N+1 消除与日志补位，真实 QPS 样本不足，暂不提前固化缓存/限流阈值以免误伤值班操作。 | Ops 面板高频刷新导致 DB 压力上升，或压测窗口开启 | 完成读保护 Go/No-Go 评审；若 Go，落地“2~5s 短 TTL 缓存”或“user/ip 读限流”并补齐告警阈值。 | 压测报告 + 慢查询观测 + route 回归结果归档。 |
+| api070-slo-snapshot-last-emitted-freshness-indicator | `api070-observability-slo-snapshot-governance-phase-closure` | 可观测性 | 当前返回 `lastEmittedStatus` 但缺“最近评估时间/新鲜度”提示，不阻塞本轮主链收口。 | 值班复盘中频繁出现“状态是否过期”判读困难 | 在规则快照中补充状态新鲜度字段（如 `lastEvaluatedAtMs`），并同步前端提示策略。 | route/model 回归 + 前端展示联调记录 + 值班演练记录归档。 |
+
+### C14. API071 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api071-split-readiness-cache-ttl-automation-coverage | `api071-observability-split-readiness-governance-phase-closure` | 工程债 | 当前测试环境中 handler 缓存逻辑默认禁用，本轮优先完成主链路治理与契约收口。 | 进入 API071 第二轮治理或发布前稳定性回合 | 增加可控时钟或集成测试，覆盖“TTL 内命中、TTL 外刷新、review 写后失效”三类行为。 | 新增缓存专项测试并归档：`cargo test -p chat-server split_readiness_cache -- --nocapture`（按最终命名）。 |
+| api071-split-readiness-evidence-schema-typing | `api071-observability-split-readiness-governance-phase-closure` | 工程债 | 当前 `thresholds[].evidence` 使用自由 JSON 可快速演进，但不利于编译期契约保护；本轮不扩大重构面。 | 字段漂移导致前端运行时兼容问题，或 API071+ 家族统一契约治理启动 | 按规则类型引入强类型 schema（至少覆盖 `judge_dispatch_pressure` 与 `payment_compliance_isolation`），并完成前后端同步。 | 后端类型与 OpenAPI 同步回归 + 前端 typecheck + 契约映射文档归档。 |
+| api071-split-readiness-threshold-config-center | `api071-observability-split-readiness-governance-phase-closure` | 可运维性 | 当前阈值常量硬编码可满足本地阶段，提前平台化会显著扩大改造范围。 | 调参频率上升、需要审计阈值变更，或进入 observability 平台化阶段 | 阈值配置接入版本化配置源，具备“版本号、生效时间、回滚策略、变更审计”。 | 配置变更演练 + 回滚演练 + 回归测试与审计日志归档。 |
+| api071-split-readiness-multi-instance-cache-consistency | `api071-observability-split-readiness-governance-phase-closure` | 可靠性 | 当前采用进程内 3 秒缓存，适配本地/单实例阶段；多实例一致性优化不阻塞本轮交付。 | 进入多实例部署或出现节点间快照不一致排障案例 | 形成共享缓存或统一限流方案并落地，保证多节点读一致性与可观测性。 | 多实例对照压测 + 一致性检查脚本 + 结果归档到 `docs/consistency_reports/`。 |
+
+### C15. API072 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api072-split-review-audits-cursor-pagination-evaluation | `api072-observability-split-readiness-reviews-governance-phase-closure` | 性能压测 | 当前已完成契约、回归、过滤与限流收口；直接切 cursor 会扩大前后端联动改造面，本轮先保留 offset。 | 深分页响应时延上升，或进入 observability 查询模型统一治理窗口 | 形成 cursor/keyset Go/No-Go 结论；若 Go，落地基于 `(created_at,id)` 的游标协议并补齐回归测试。 | 压测报告 + 评审记录 + `cargo test -p chat-server list_ops_service_split_review_audits -- --nocapture`（按最终命名） + 前端联调归档。 |
+| api072-split-review-audits-revision-etag-evaluation | `api072-observability-split-readiness-reviews-governance-phase-closure` | 工程债 | 当前控制台读压主要通过 user 限流兜底，`revision/etag` 协商缓存改造收益需结合真实刷新频率评估。 | 控制台轮询频率提升或出现重复拉取成本明显上升 | 形成 `revision/ETag + If-None-Match` 方案评审并落地（若 Go），支持 `304` 协商返回。 | 评审结论 + route/model 回归 + 端到端缓存命中验证归档。 |
+| api072-split-review-audits-retention-governance | `api072-observability-split-readiness-reviews-governance-phase-closure` | 可运维性 | 当前数据规模可控，本轮优先完成接口治理闭环；审计归档策略需要跨模块一致性评审。 | 审计表增长显著、查询成本上升，或进入发布前数据治理回合 | 明确保留周期、归档与清理策略（含审计可追溯要求），并形成执行与回滚 SOP。 | retention 方案评审记录 + 演练日志 + 查询基线对比报告归档。 |
+
 ## Z. 历史待迁移技术债（只读归档）
 - 下方内容保留旧结构，仅用于查询和后续分批迁移。
 - 新增技术债不要继续写入下方旧结构。
@@ -541,3 +587,16 @@
 | api064-replay-preview-payload-governance-evaluation | phase 预览返回完整消息体，容量与响应体治理策略尚未冻结。 | 形成 payload 治理方案（保留现状 / 分层返回 / 裁剪策略）并明确兼容与回滚路径。 | 输出方案文档并完成至少 1 轮前后端联调评审纪要，补充容量对比基线。 |
 | api064-replay-preview-query-consistency-snapshot-evaluation | phase 分支采用 job + messages 双查询，是否需要读事务快照仍无样本结论。 | 完成一致性风险评估，明确是否引入事务快照或保持现状并附触发阈值。 | 归档异常样本统计（`message_count mismatch`）与评审纪要，补充对应回归/压测证据。 |
 | api064-replay-preview-permission-status-semantics-review | 权限拒绝仍沿用 `409 ops_permission_denied:*`，与常见 `403` 语义存在跨端认知偏差。 | 完成语义评审结论（维持 409 或迁移 403）并给出客户端迁移策略。 | 产出评审纪要 + 契约更新记录 + 对应回归测试清单。 |
+
+## AP. api049-phase-report-hardening 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API049 未完成项已并入本分组持续跟踪。
+- API049 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api049-phase-report-hardening-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api049-phase-report-idempotent-echo-truth | 幂等短路分支仍回显输入 `sessionId/phaseNo`，非 job 真值，可能掩盖上游 payload 漂移。 | 幂等分支返回 job 真值（或在幂等返回前做一致性校验），并冻结契约行为。 | 新增模型回归：重复回调 + 错配入参场景，验证返回值与 job 真值一致；归档测试记录。 |
+| api049-phase-report-message-ids-window-validation | `messageIds` 仅校验非空/非零，未校验是否落在 job 消息窗口。 | 增加 `messageIds` 窗口校验与去重约束，拒绝越界引用。 | 新增模型回归：越界/重复 `messageIds` 场景返回 `400`，并归档回归结果。 |
+| api049-phase-report-rejection-observability-baseline | 回调拒绝原因（状态冲突/权重非法等）缺专项指标与告警阈值。 | 建立拒绝原因分桶指标与结构化日志字段，完成 dashboard 与告警阈值封板。 | 导出看板配置 + 告警演练记录 + 一次值班复盘归档。 |
+| api049-phase-report-dispatching-state-evolution | 当前为最小止血策略，尚未引入 `dispatching` 稳态模型统一 worker/回调时序语义。 | 完成 `dispatching` 演进设计与落地（含迁移、回滚、测试），统一状态机语义。 | 评审纪要 + 迁移脚本演练 + worker/callback 闭环集成回归通过并归档。 |

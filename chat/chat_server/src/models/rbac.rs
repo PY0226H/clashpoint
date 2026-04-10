@@ -43,6 +43,8 @@ pub(crate) enum OpsPermission {
     DebateManage,
     JudgeReview,
     JudgeRejudge,
+    ObservabilityRead,
+    ObservabilityManage,
 }
 
 fn permission_key(permission: OpsPermission) -> &'static str {
@@ -50,6 +52,8 @@ fn permission_key(permission: OpsPermission) -> &'static str {
         OpsPermission::DebateManage => "debate_manage",
         OpsPermission::JudgeReview => "judge_review",
         OpsPermission::JudgeRejudge => "judge_rejudge",
+        OpsPermission::ObservabilityRead => "observability_read",
+        OpsPermission::ObservabilityManage => "observability_manage",
     }
 }
 
@@ -130,6 +134,8 @@ pub struct OpsPermissionFlags {
     pub debate_manage: bool,
     pub judge_review: bool,
     pub judge_rejudge: bool,
+    pub observability_read: bool,
+    pub observability_manage: bool,
     pub role_manage: bool,
 }
 
@@ -175,6 +181,12 @@ fn role_grants_permission(role: &str, permission: OpsPermission) -> bool {
             matches!(role, ROLE_OPS_ADMIN | ROLE_OPS_REVIEWER | ROLE_OPS_VIEWER)
         }
         OpsPermission::JudgeRejudge => matches!(role, ROLE_OPS_ADMIN | ROLE_OPS_REVIEWER),
+        OpsPermission::ObservabilityRead => {
+            matches!(role, ROLE_OPS_ADMIN | ROLE_OPS_REVIEWER | ROLE_OPS_VIEWER)
+        }
+        OpsPermission::ObservabilityManage => {
+            matches!(role, ROLE_OPS_ADMIN | ROLE_OPS_REVIEWER)
+        }
     }
 }
 
@@ -429,6 +441,8 @@ impl AppState {
                     debate_manage: true,
                     judge_review: true,
                     judge_rejudge: true,
+                    observability_read: true,
+                    observability_manage: true,
                     role_manage: true,
                 },
                 rbac_revision,
@@ -441,6 +455,14 @@ impl AppState {
                 debate_manage: role_grants_permission(role_value, OpsPermission::DebateManage),
                 judge_review: role_grants_permission(role_value, OpsPermission::JudgeReview),
                 judge_rejudge: role_grants_permission(role_value, OpsPermission::JudgeRejudge),
+                observability_read: role_grants_permission(
+                    role_value,
+                    OpsPermission::ObservabilityRead,
+                ),
+                observability_manage: role_grants_permission(
+                    role_value,
+                    OpsPermission::ObservabilityManage,
+                ),
                 role_manage: role_grants_role_manage(role_value),
             }
         } else {
@@ -448,6 +470,8 @@ impl AppState {
                 debate_manage: false,
                 judge_review: false,
                 judge_rejudge: false,
+                observability_read: false,
+                observability_manage: false,
                 role_manage: false,
             }
         };
@@ -1002,6 +1026,9 @@ mod tests {
         state
             .ensure_ops_permission(&user, OpsPermission::JudgeRejudge)
             .await?;
+        state
+            .ensure_ops_permission(&user, OpsPermission::ObservabilityManage)
+            .await?;
         Ok(())
     }
 
@@ -1024,6 +1051,9 @@ mod tests {
         state
             .ensure_ops_permission(&user, OpsPermission::JudgeReview)
             .await?;
+        state
+            .ensure_ops_permission(&user, OpsPermission::ObservabilityRead)
+            .await?;
         let manage_err = state
             .ensure_ops_permission(&user, OpsPermission::DebateManage)
             .await
@@ -1041,6 +1071,16 @@ mod tests {
         match rejudge_err {
             AppError::DebateConflict(msg) => {
                 assert!(msg.contains("ops_permission_denied:judge_rejudge:"))
+            }
+            other => panic!("unexpected error: {}", other),
+        }
+        let observability_manage_err = state
+            .ensure_ops_permission(&user, OpsPermission::ObservabilityManage)
+            .await
+            .expect_err("viewer should not manage observability");
+        match observability_manage_err {
+            AppError::DebateConflict(msg) => {
+                assert!(msg.contains("ops_permission_denied:observability_manage:"))
             }
             other => panic!("unexpected error: {}", other),
         }
@@ -1062,6 +1102,8 @@ mod tests {
         assert!(owner_snapshot.permissions.debate_manage);
         assert!(owner_snapshot.permissions.judge_review);
         assert!(owner_snapshot.permissions.judge_rejudge);
+        assert!(owner_snapshot.permissions.observability_read);
+        assert!(owner_snapshot.permissions.observability_manage);
         assert!(owner_snapshot.permissions.role_manage);
         assert_ne!(owner_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
 
@@ -1080,6 +1122,8 @@ mod tests {
         assert!(!viewer_snapshot.permissions.debate_manage);
         assert!(viewer_snapshot.permissions.judge_review);
         assert!(!viewer_snapshot.permissions.judge_rejudge);
+        assert!(viewer_snapshot.permissions.observability_read);
+        assert!(!viewer_snapshot.permissions.observability_manage);
         assert!(!viewer_snapshot.permissions.role_manage);
         assert_ne!(viewer_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         Ok(())
@@ -1116,6 +1160,8 @@ mod tests {
         assert!(!delegated_snapshot.permissions.debate_manage);
         assert!(!delegated_snapshot.permissions.judge_review);
         assert!(!delegated_snapshot.permissions.judge_rejudge);
+        assert!(!delegated_snapshot.permissions.observability_read);
+        assert!(!delegated_snapshot.permissions.observability_manage);
         assert!(delegated_snapshot.permissions.role_manage);
         assert_ne!(delegated_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
 
@@ -1153,6 +1199,8 @@ mod tests {
 
         let old_owner_snapshot = state.get_ops_rbac_me(&owner).await?;
         assert!(!old_owner_snapshot.is_owner);
+        assert!(!old_owner_snapshot.permissions.observability_read);
+        assert!(!old_owner_snapshot.permissions.observability_manage);
         assert!(!old_owner_snapshot.permissions.role_manage);
         assert_ne!(old_owner_snapshot.rbac_revision, OPS_RBAC_EMPTY_REVISION);
         Ok(())
