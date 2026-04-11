@@ -63,8 +63,14 @@ impl AppState {
                         | DispatchFailureCode::ResponseJobIdMismatch => report.failed_contract += 1,
                         DispatchFailureCode::Http4xx => report.failed_http_4xx += 1,
                         DispatchFailureCode::Http429 => report.failed_http_429 += 1,
-                        DispatchFailureCode::Http5xx
-                        | DispatchFailureCode::HttpUnexpectedStatus => report.failed_http_5xx += 1,
+                        DispatchFailureCode::Http5xx => report.failed_http_5xx += 1,
+                        DispatchFailureCode::HttpUnexpectedStatus => {
+                            report.failed_http_unexpected += 1
+                        }
+                        DispatchFailureCode::Timeout => {
+                            report.timed_out_failed += 1;
+                            report.failed_network += 1;
+                        }
                         DispatchFailureCode::NetworkSendFailed => report.failed_network += 1,
                         DispatchFailureCode::BuildClientFailed
                         | DispatchFailureCode::PayloadBuildFailed => report.failed_internal += 1,
@@ -73,19 +79,21 @@ impl AppState {
             }
         }
 
+        self.dispatch_metrics.observe_phase_tick_success(&report);
         self.dispatch_metrics
             .observe_tick_success(&JudgeDispatchTickReport {
                 claimed: report.claimed,
                 dispatched: report.dispatched,
                 failed: report.failed,
                 marked_failed: report.marked_failed,
-                timed_out_failed: 0,
+                timed_out_failed: report.timed_out_failed,
                 terminal_failed: report.terminal_failed,
                 retryable_failed: report.retryable_failed,
                 failed_contract: report.failed_contract,
                 failed_http_4xx: report.failed_http_4xx,
                 failed_http_429: report.failed_http_429,
                 failed_http_5xx: report.failed_http_5xx,
+                failed_http_unexpected: report.failed_http_unexpected,
                 failed_network: report.failed_network,
                 failed_internal: report.failed_internal,
             });
@@ -227,8 +235,14 @@ impl AppState {
                         | DispatchFailureCode::ResponseJobIdMismatch => report.failed_contract += 1,
                         DispatchFailureCode::Http4xx => report.failed_http_4xx += 1,
                         DispatchFailureCode::Http429 => report.failed_http_429 += 1,
-                        DispatchFailureCode::Http5xx
-                        | DispatchFailureCode::HttpUnexpectedStatus => report.failed_http_5xx += 1,
+                        DispatchFailureCode::Http5xx => report.failed_http_5xx += 1,
+                        DispatchFailureCode::HttpUnexpectedStatus => {
+                            report.failed_http_unexpected += 1
+                        }
+                        DispatchFailureCode::Timeout => {
+                            report.timed_out_failed += 1;
+                            report.failed_network += 1;
+                        }
                         DispatchFailureCode::NetworkSendFailed => report.failed_network += 1,
                         DispatchFailureCode::BuildClientFailed
                         | DispatchFailureCode::PayloadBuildFailed => report.failed_internal += 1,
@@ -237,19 +251,21 @@ impl AppState {
             }
         }
 
+        self.dispatch_metrics.observe_final_tick_success(&report);
         self.dispatch_metrics
             .observe_tick_success(&JudgeDispatchTickReport {
                 claimed: report.claimed,
                 dispatched: report.dispatched,
                 failed: report.failed,
                 marked_failed: report.marked_failed,
-                timed_out_failed: 0,
+                timed_out_failed: report.timed_out_failed,
                 terminal_failed: report.terminal_failed,
                 retryable_failed: report.retryable_failed,
                 failed_contract: report.failed_contract,
                 failed_http_4xx: report.failed_http_4xx,
                 failed_http_429: report.failed_http_429,
                 failed_http_5xx: report.failed_http_5xx,
+                failed_http_unexpected: report.failed_http_unexpected,
                 failed_network: report.failed_network,
                 failed_internal: report.failed_internal,
             });
@@ -262,6 +278,56 @@ impl AppState {
 
     pub(crate) fn observe_dispatch_worker_error(&self) {
         self.dispatch_metrics.observe_tick_error();
+    }
+
+    pub(crate) fn observe_dispatch_tick_trigger(&self, trigger_source: &str) {
+        self.dispatch_metrics.observe_tick_trigger(trigger_source);
+    }
+
+    pub(crate) async fn refresh_dispatch_backlog_metrics(&self) -> Result<(), AppError> {
+        let queued_phase_jobs: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM judge_phase_jobs
+            WHERE status = 'queued'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let queued_final_jobs: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM judge_final_jobs
+            WHERE status = 'queued'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let oldest_phase_queued_age_secs: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::bigint
+            FROM judge_phase_jobs
+            WHERE status = 'queued'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let oldest_final_queued_age_secs: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::bigint
+            FROM judge_final_jobs
+            WHERE status = 'queued'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        self.dispatch_metrics.observe_backlog(
+            queued_phase_jobs.max(0) as u64,
+            queued_final_jobs.max(0) as u64,
+            oldest_phase_queued_age_secs.unwrap_or_default().max(0) as u64,
+            oldest_final_queued_age_secs.unwrap_or_default().max(0) as u64,
+        );
+        Ok(())
     }
 
     async fn claim_pending_phase_dispatch_jobs(
@@ -476,12 +542,10 @@ impl AppState {
             .send()
             .await
             .map_err(|e| {
+                let code = classify_dispatch_send_error_code(e.is_timeout());
                 DispatchSendError::retryable(
-                    DispatchFailureCode::NetworkSendFailed,
-                    coded_error_message(
-                        DispatchFailureCode::NetworkSendFailed,
-                        &format!("phase dispatch request io failed: {e}"),
-                    ),
+                    code,
+                    coded_error_message(code, &format!("phase dispatch request io failed: {e}")),
                 )
             })?;
 
@@ -520,26 +584,13 @@ impl AppState {
                 "phase dispatch request failed: status={}, body={}",
                 status, body
             );
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                let code = DispatchFailureCode::Http429;
-                Err(DispatchSendError::retryable(
-                    code,
-                    coded_error_message(code, &message),
-                ))
-            } else if status.is_client_error() {
-                let code = DispatchFailureCode::Http4xx;
+            let (code, terminal) = classify_dispatch_http_status(status);
+            if terminal {
                 Err(DispatchSendError::terminal(
                     code,
                     coded_error_message(code, &message),
                 ))
-            } else if status.is_server_error() {
-                let code = DispatchFailureCode::Http5xx;
-                Err(DispatchSendError::retryable(
-                    code,
-                    coded_error_message(code, &message),
-                ))
             } else {
-                let code = DispatchFailureCode::HttpUnexpectedStatus;
                 Err(DispatchSendError::retryable(
                     code,
                     coded_error_message(code, &message),
@@ -575,12 +626,10 @@ impl AppState {
             .send()
             .await
             .map_err(|e| {
+                let code = classify_dispatch_send_error_code(e.is_timeout());
                 DispatchSendError::retryable(
-                    DispatchFailureCode::NetworkSendFailed,
-                    coded_error_message(
-                        DispatchFailureCode::NetworkSendFailed,
-                        &format!("final dispatch request io failed: {e}"),
-                    ),
+                    code,
+                    coded_error_message(code, &format!("final dispatch request io failed: {e}")),
                 )
             })?;
 
@@ -619,26 +668,13 @@ impl AppState {
                 "final dispatch request failed: status={}, body={}",
                 status, body
             );
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                let code = DispatchFailureCode::Http429;
-                Err(DispatchSendError::retryable(
-                    code,
-                    coded_error_message(code, &message),
-                ))
-            } else if status.is_client_error() {
-                let code = DispatchFailureCode::Http4xx;
+            let (code, terminal) = classify_dispatch_http_status(status);
+            if terminal {
                 Err(DispatchSendError::terminal(
                     code,
                     coded_error_message(code, &message),
                 ))
-            } else if status.is_server_error() {
-                let code = DispatchFailureCode::Http5xx;
-                Err(DispatchSendError::retryable(
-                    code,
-                    coded_error_message(code, &message),
-                ))
             } else {
-                let code = DispatchFailureCode::HttpUnexpectedStatus;
                 Err(DispatchSendError::retryable(
                     code,
                     coded_error_message(code, &message),

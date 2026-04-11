@@ -274,7 +274,16 @@ mod tests {
         let payload: crate::GetJudgeDispatchMetricsOutput = serde_json::from_slice(&body)?;
         assert_eq!(payload.tick_success_total, 0);
         assert_eq!(payload.tick_error_total, 0);
+        assert_eq!(payload.phase_tick_success_total, 0);
+        assert_eq!(payload.final_tick_success_total, 0);
+        assert_eq!(payload.trigger_polling_total, 0);
+        assert_eq!(payload.trigger_event_total, 0);
         assert_eq!(payload.failed_total, 0);
+        assert_eq!(payload.timed_out_failed_total, 0);
+        assert_eq!(payload.failed_http_unexpected_total, 0);
+        assert_eq!(payload.queued_phase_jobs, 0);
+        assert_eq!(payload.queued_final_jobs, 0);
+        assert_eq!(payload.dispatch_success_rate_pct, 0.0);
         Ok(())
     }
 
