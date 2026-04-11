@@ -30,6 +30,8 @@ const ALERT_PAGE_SIZE_OPTIONS = [1, 3, 5, 10] as const;
 const OBSERVABILITY_ERROR_MAX_VISIBLE = 4;
 const OBSERVABILITY_ERROR_MAX_CHARS = 120;
 const OPS_RBAC_REVISION_CONFLICT_CODE = "ops_rbac_revision_conflict";
+const OPS_OBSERVABILITY_REVISION_CONFLICT_CODE = "ops_observability_revision_conflict";
+const OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE = "ops_observability_if_match_required";
 type AlertStatusFilter = (typeof ALERT_STATUS_OPTIONS)[number];
 type RoleListPiiLevel = NonNullable<ListOpsRoleAssignmentsInput["piiLevel"]>;
 type ThresholdFieldKey = keyof OpsObservabilityThresholds;
@@ -430,7 +432,10 @@ export function OpsConsolePage() {
     }
   });
   const upsertThresholdMutation = useMutation({
-    mutationFn: async (payload: OpsObservabilityThresholds) => upsertOpsObservabilityThresholds(payload),
+    mutationFn: async (payload: OpsObservabilityThresholds) => {
+      const expectedRevision = observabilityConfigQuery.data?.configRevision || "";
+      return upsertOpsObservabilityThresholds(payload, expectedRevision);
+    },
     onSuccess: (ret) => {
       setThresholdDraft(toThresholdDraft(ret.thresholds));
       setThresholdDirty(false);
@@ -438,6 +443,17 @@ export function OpsConsolePage() {
       void invalidateObservabilityQueries();
     },
     onError: (error) => {
+      const info = getOpsDomainErrorInfo(error);
+      if (info.code === OPS_OBSERVABILITY_REVISION_CONFLICT_CODE) {
+        setPageHint("Observability config revision conflict detected. Snapshot refreshed, please retry.");
+        void invalidateObservabilityQueries();
+        return;
+      }
+      if (info.code === OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE) {
+        setPageHint("Observability config revision missing, snapshot refreshed. Please retry.");
+        void invalidateObservabilityQueries();
+        return;
+      }
       setPageHint(toOpsDomainError(error));
     }
   });

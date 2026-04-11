@@ -649,3 +649,17 @@
 | api073-split-review-alert-outbox-async-rollout | 当前已改为 best-effort，但告警仍在同步请求路径内执行，尚未彻底 outbox 异步化。 | 完成 outbox 事件建模与 worker 派发重试落地，主写入与通知链路彻底解耦。 | 迁移脚本演练 + 故障注入回归（通知失败可补偿）+ 指标看板归档。 |
 | api073-split-review-cache-consistency-evaluation | 当前 `GET` 3 秒短缓存 + `PUT` 失效在并发下仍存在短时竞态窗口。 | 形成缓存一致性 Go/No-Go 结论；若 Go，落地版本化缓存或写后回填策略并补齐回归。 | 并发读写压测与一致性对照报告归档到 `docs/consistency_reports/`。 |
 | api073-split-review-audit-schema-structuring | 审计表当前缺 `action_type/request_id/source` 等结构字段，行为归因成本高。 | 完成审计 schema 增强评审并落地（如 `action_type/request_id/source`），支持后续报表与归责分析。 | 迁移脚本 + 查询回归 + 审计报表示例归档。 |
+
+## AT. api074-observability-thresholds-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API074 延后事项已并入本分组持续跟踪。
+- API074 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api074-observability-thresholds-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api074-thresholds-low-cache-hit-wire-or-remove | `lowCacheHitRateThreshold` 当前仅存储与回显，未接入告警评估，形成“可配但不生效”认知偏差。 | 完成 Go/No-Go 结论：要么接入评估链路并补齐告警规则，要么从契约中移除并完成迁移说明。 | 规则评审记录 + `cargo test -p chat-server evaluate_alert_for_rule -- --nocapture`（按最终命名）+ 学习文档同步归档。 |
+| api074-thresholds-coalesced-domain-rename-cutover | `highCoalescedThreshold` 实际用于 `dlq_pending` 判定，字段语义与命名长期偏离。 | 完成字段域重命名方案（含迁移脚本、前后端契约切换、回滚策略），并冻结统一语义。 | 迁移演练 + route/model 回归 + `pnpm --dir frontend typecheck` 通过并归档。 |
+| api074-thresholds-update-immediate-evaluation-decision | 当前阈值更新只落库，不会立即触发一次评估，调参反馈链路存在时延。 | 形成“写后异步触发评估”或“继续手动触发”Go/No-Go 结论；若 Go，落地异步触发与幂等保护。 | 故障注入/并发压测报告 + 评审纪要 + 回归测试归档。 |
+| api074-thresholds-patch-or-config-center-evaluation | 当前仍为全量 PUT；未来阈值项扩展后，调用心智与维护成本可能上升。 | 完成 PATCH 语义或配置中心化的阶段评审结论（保持 PUT / 升级 PATCH / 配置中心），并给出迁移路径。 | 方案评审文档 + PoC 或成本评估报告归档到 `docs/consistency_reports/`。 |
+| api074-thresholds-422-business-error-unification | 当前 `422` 仍依赖框架默认 Json 提取器错误，业务错误码与提示口径未统一。 | 完成提取器错误统一包装（Json/Query）与稳定业务错误码映射，并同步前端文案。 | route 回归补齐 `422` 业务码断言 + 前端错误提示联调记录归档。 |

@@ -56,7 +56,7 @@ pub use ops_observability::{
     OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds, OpsServiceSplitReviewAuditItem,
     OpsServiceSplitThresholdItem, OpsSloRuleSnapshotItem, OpsSloSignalSnapshot,
     RunOpsObservabilityEvaluationQuery, UpdateOpsObservabilityAnomalyStateInput,
-    UpsertOpsServiceSplitReviewInput,
+    UpsertOpsObservabilityThresholdsMeta, UpsertOpsServiceSplitReviewInput,
 };
 pub use payment::{
     GetIapOrderByTransaction, GetIapOrderByTransactionOutput, IapOrderProbeStatus,

@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, Transaction};
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +52,12 @@ const SPLIT_READINESS_WS_MESSAGES_10M_THRESHOLD: i64 = 20_000;
 const SPLIT_REVIEW_NOTE_MAX_LEN: usize = 1000;
 const SPLIT_REVIEW_STALE_THRESHOLD_HOURS: i64 = 24 * 30;
 const OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY: &str = "empty";
+pub(crate) const OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE: &str =
+    "ops_observability_if_match_required";
+pub(crate) const OPS_OBSERVABILITY_REVISION_CONFLICT_CODE: &str =
+    "ops_observability_revision_conflict";
+const OPS_OBSERVABILITY_WRITE_REVISION_LOCK_KEY: &str = "ops_observability_thresholds_write_lock";
+const OPS_OBSERVABILITY_THRESHOLD_AUDIT_REQUEST_ID_MAX_LEN: usize = 128;
 #[cfg(test)]
 static OPS_SPLIT_REVIEW_ALERT_EMIT_FORCE_FAIL: AtomicBool = AtomicBool::new(false);
 
@@ -180,6 +186,13 @@ pub struct RunOpsObservabilityEvaluationQuery {
 pub struct UpsertOpsServiceSplitReviewInput {
     pub payment_compliance_required: Option<bool>,
     pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpsertOpsObservabilityThresholdsMeta<'a> {
+    pub expected_config_revision: Option<&'a str>,
+    pub require_if_match: bool,
+    pub request_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Deserialize)]
@@ -680,6 +693,36 @@ fn format_ops_observability_config_revision(updated_at: Option<DateTime<Utc>>) -
     updated_at
         .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
         .unwrap_or_else(|| OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY.to_string())
+}
+
+fn ensure_expected_ops_observability_revision(
+    expected_config_revision: Option<&str>,
+    current_revision: &str,
+    require_if_match: bool,
+) -> Result<(), AppError> {
+    if let Some(expected) = expected_config_revision {
+        if expected != current_revision {
+            return Err(AppError::DebateConflict(
+                OPS_OBSERVABILITY_REVISION_CONFLICT_CODE.to_string(),
+            ));
+        }
+    } else if require_if_match {
+        return Err(AppError::DebateError(
+            OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_threshold_audit_request_id(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .chars()
+                .take(OPS_OBSERVABILITY_THRESHOLD_AUDIT_REQUEST_ID_MAX_LEN)
+                .collect::<String>()
+        })
 }
 
 fn build_output(
@@ -1642,6 +1685,17 @@ fn build_split_review_transition_plan(
     None
 }
 
+async fn acquire_ops_observability_revision_lock(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), AppError> {
+    // 控制面阈值写频率低，使用事务级 advisory lock 让 If-Match 校验与写入保持串行语义。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(OPS_OBSERVABILITY_WRITE_REVISION_LOCK_KEY)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 impl AppState {
     pub async fn upsert_ops_service_split_review(
         &self,
@@ -2149,11 +2203,52 @@ impl AppState {
         user: &User,
         input: OpsObservabilityThresholds,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
+        self.upsert_ops_observability_thresholds_with_meta(
+            user,
+            input,
+            UpsertOpsObservabilityThresholdsMeta::default(),
+        )
+        .await
+    }
+
+    pub async fn upsert_ops_observability_thresholds_with_meta(
+        &self,
+        user: &User,
+        input: OpsObservabilityThresholds,
+        meta: UpsertOpsObservabilityThresholdsMeta<'_>,
+    ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let thresholds = normalize_thresholds(input);
+        let normalized_request_id = normalize_threshold_audit_request_id(meta.request_id);
         let thresholds_json = serde_json::to_value(&thresholds)
             .context("serialize observability thresholds failed")?;
+        let mut tx = self.pool.begin().await?;
+        acquire_ops_observability_revision_lock(&mut tx).await?;
+        let current_row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE singleton_id = 1
+            FOR UPDATE
+            "#,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let current_revision = format_ops_observability_config_revision(
+            current_row.as_ref().map(|row| row.updated_at),
+        );
+        ensure_expected_ops_observability_revision(
+            meta.expected_config_revision,
+            &current_revision,
+            meta.require_if_match,
+        )?;
+        let before_thresholds = current_row
+            .as_ref()
+            .map(|row| parse_thresholds(row.thresholds_json.clone()))
+            .unwrap_or_default();
+        let before_thresholds_json = serde_json::to_value(&before_thresholds)
+            .context("serialize before observability thresholds failed")?;
         sqlx::query(
             r#"
             INSERT INTO ops_observability_configs(
@@ -2169,9 +2264,41 @@ impl AppState {
         )
         .bind(thresholds_json)
         .bind(user.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        self.get_ops_observability_config(user).await
+        let after_row: OpsObservabilityConfigRow = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE singleton_id = 1
+            "#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let after_thresholds = parse_thresholds(after_row.thresholds_json.clone());
+        let after_thresholds_json = serde_json::to_value(&after_thresholds)
+            .context("serialize after observability thresholds failed")?;
+        sqlx::query(
+            r#"
+            INSERT INTO ops_observability_threshold_audits(
+                singleton_id,
+                before_thresholds_json,
+                after_thresholds_json,
+                updated_by,
+                request_id,
+                created_at
+            )
+            VALUES (1, $1, $2, $3, $4, NOW())
+            "#,
+        )
+        .bind(before_thresholds_json)
+        .bind(after_thresholds_json)
+        .bind(user.id)
+        .bind(normalized_request_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(build_output(Some(after_row), now_millis()))
     }
 
     pub async fn upsert_ops_observability_anomaly_state(
@@ -3325,6 +3452,131 @@ mod tests {
             }
             other => panic!("unexpected error: {}", other),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_with_meta_should_require_if_match_when_enabled(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let err = state
+            .upsert_ops_observability_thresholds_with_meta(
+                &owner,
+                OpsObservabilityThresholds::default(),
+                UpsertOpsObservabilityThresholdsMeta {
+                    expected_config_revision: None,
+                    require_if_match: true,
+                    request_id: Some("obs-thresholds-require-if-match"),
+                },
+            )
+            .await
+            .expect_err("missing if-match should be rejected");
+        match err {
+            AppError::DebateError(code) => {
+                assert_eq!(code, OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE);
+            }
+            other => panic!("unexpected error: {}", other),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_with_meta_should_reject_stale_revision(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_observability_thresholds(
+                &owner,
+                OpsObservabilityThresholds {
+                    low_success_rate_threshold: 70.0,
+                    high_retry_threshold: 1.1,
+                    high_coalesced_threshold: 2.2,
+                    high_db_latency_threshold_ms: 1400,
+                    low_cache_hit_rate_threshold: 30.0,
+                    min_request_for_cache_hit_check: 40,
+                },
+            )
+            .await?;
+        let err = state
+            .upsert_ops_observability_thresholds_with_meta(
+                &owner,
+                OpsObservabilityThresholds::default(),
+                UpsertOpsObservabilityThresholdsMeta {
+                    expected_config_revision: Some(OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY),
+                    require_if_match: true,
+                    request_id: Some("obs-thresholds-stale"),
+                },
+            )
+            .await
+            .expect_err("stale revision should be rejected");
+        match err {
+            AppError::DebateConflict(code) => {
+                assert_eq!(code, OPS_OBSERVABILITY_REVISION_CONFLICT_CODE);
+            }
+            other => panic!("unexpected error: {}", other),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_with_meta_should_persist_audit_diff() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_observability_thresholds(
+                &owner,
+                OpsObservabilityThresholds {
+                    low_success_rate_threshold: 70.0,
+                    high_retry_threshold: 1.1,
+                    high_coalesced_threshold: 2.2,
+                    high_db_latency_threshold_ms: 1400,
+                    low_cache_hit_rate_threshold: 30.0,
+                    min_request_for_cache_hit_check: 40,
+                },
+            )
+            .await?;
+        let config_before = state.get_ops_observability_config(&owner).await?;
+        let ret = state
+            .upsert_ops_observability_thresholds_with_meta(
+                &owner,
+                OpsObservabilityThresholds {
+                    low_success_rate_threshold: 85.0,
+                    high_retry_threshold: 1.6,
+                    high_coalesced_threshold: 3.2,
+                    high_db_latency_threshold_ms: 1800,
+                    low_cache_hit_rate_threshold: 18.0,
+                    min_request_for_cache_hit_check: 22,
+                },
+                UpsertOpsObservabilityThresholdsMeta {
+                    expected_config_revision: Some(config_before.config_revision.as_str()),
+                    require_if_match: true,
+                    request_id: Some("obs-thresholds-audit-diff"),
+                },
+            )
+            .await?;
+        assert_eq!(ret.thresholds.low_success_rate_threshold, 85.0);
+
+        let audit_row: (Option<String>, Value, Value) = sqlx::query_as(
+            r#"
+            SELECT request_id, before_thresholds_json, after_thresholds_json
+            FROM ops_observability_threshold_audits
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("obs-thresholds-audit-diff"));
+        let before_thresholds = parse_thresholds(audit_row.1);
+        let after_thresholds = parse_thresholds(audit_row.2);
+        assert_eq!(before_thresholds.low_success_rate_threshold, 70.0);
+        assert_eq!(after_thresholds.low_success_rate_threshold, 85.0);
         Ok(())
     }
 

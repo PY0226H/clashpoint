@@ -356,8 +356,9 @@ mod tests {
         GetOpsObservabilityConfigOutput, GetOpsRbacMeOutput, GetOpsServiceSplitReadinessOutput,
         GetOpsSloSnapshotOutput, ListJudgeReplayActionsOpsOutput, ListJudgeReviewOpsOutput,
         ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput,
-        ListOpsServiceSplitReviewAuditsOutput, OpsRoleAssignment, RequestJudgeJobOutput,
-        RevokeOpsRoleOutput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
+        ListOpsServiceSplitReviewAuditsOutput, OpsObservabilityThresholds, OpsRoleAssignment,
+        RequestJudgeJobOutput, RevokeOpsRoleOutput, UpsertOpsRoleInput,
+        UpsertOpsServiceSplitReviewInput,
     };
     use anyhow::Result;
     use axum::{
@@ -3489,6 +3490,263 @@ mod tests {
         assert_eq!(out.config_revision, "empty");
         assert!(out.updated_by.is_none());
         assert!(out.updated_at.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "lowSuccessRateThreshold": 80.0,
+            "highRetryThreshold": 1.0,
+            "highCoalescedThreshold": 2.0,
+            "highDbLatencyThresholdMs": 1200,
+            "lowCacheHitRateThreshold": 20.0,
+            "minRequestForCacheHitCheck": 20
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Thresholds Unbound".to_string(),
+                email: "ops-thresholds-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-thresholds-unbound-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "lowSuccessRateThreshold": 80.0,
+            "highRetryThreshold": 1.0,
+            "highCoalescedThreshold": 2.0,
+            "highDbLatencyThresholdMs": 1200,
+            "lowCacheHitRateThreshold": 20.0,
+            "minRequestForCacheHitCheck": 20
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Thresholds No Role",
+            "ops-thresholds-no-role@acme.org",
+            "+8613810007813",
+            "ops-thresholds-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "lowSuccessRateThreshold": 80.0,
+            "highRetryThreshold": 1.0,
+            "highCoalescedThreshold": 2.0,
+            "highDbLatencyThresholdMs": 1200,
+            "lowCacheHitRateThreshold": 20.0,
+            "minRequestForCacheHitCheck": 20
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_422_for_invalid_body(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-thresholds-invalid-body-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(r#"{"lowSuccessRateThreshold":88}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_400_when_if_match_missing(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-thresholds-missing-if-match-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::to_vec(&OpsObservabilityThresholds::default())?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_observability_if_match_required"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_400_when_if_match_invalid(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-thresholds-invalid-if-match-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::to_vec(&OpsObservabilityThresholds::default())?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "W/\"invalid\"")
+            .body(Body::from(payload))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_observability_if_match_invalid"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_409_when_if_match_stale(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-thresholds-if-match-stale-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::to_vec(&OpsObservabilityThresholds::default())?;
+
+        let first_req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(payload.clone()))?;
+        let first_res = app.clone().oneshot(first_req).await?;
+        assert_eq!(first_res.status(), StatusCode::OK);
+
+        let stale_req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(payload))?;
+        let stale_res = app.oneshot(stale_req).await?;
+        assert_eq!(stale_res.status(), StatusCode::CONFLICT);
+        let body = stale_res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_observability_revision_conflict"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_thresholds_route_should_return_200_for_ops_reviewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Thresholds Reviewer",
+            "ops-thresholds-reviewer@acme.org",
+            "+8613810007814",
+            "ops-thresholds-reviewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "lowSuccessRateThreshold": 82.0,
+            "highRetryThreshold": 1.3,
+            "highCoalescedThreshold": 3.0,
+            "highDbLatencyThresholdMs": 1500,
+            "lowCacheHitRateThreshold": 26.0,
+            "minRequestForCacheHitCheck": 24
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/thresholds")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsObservabilityConfigOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.thresholds.low_success_rate_threshold, 82.0);
+        assert_eq!(out.updated_by, Some(ops_reviewer.id as u64));
+        assert_ne!(out.config_revision, "empty");
         Ok(())
     }
 

@@ -13,7 +13,8 @@ use crate::{
     ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
     OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta, OpsUpdateDebateSessionInput,
     OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
+    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityThresholdsMeta,
+    UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
 use axum::{
     extract::{rejection::JsonRejection, Path, Query, State},
@@ -80,6 +81,7 @@ const OPS_JUDGE_REPLAY_EXECUTE_BODY_READ_FAILED_CODE: &str =
 const OPS_JUDGE_REPLAY_EXECUTE_BODY_REJECTED_CODE: &str = "ops_judge_replay_execute_body_rejected";
 const OPS_RBAC_IF_MATCH_INVALID_CODE: &str = "ops_rbac_if_match_invalid";
 const OPS_RBAC_IF_MATCH_REQUIRED_CODE: &str = "ops_rbac_if_match_required";
+const OPS_OBSERVABILITY_IF_MATCH_INVALID_CODE: &str = "ops_observability_if_match_invalid";
 const OPS_RBAC_REVISION_HEADER: &str = "x-rbac-revision";
 const OPS_RBAC_WARNING_HEADER: &str = "x-rbac-warning";
 const OPS_RBAC_WARNING_OWNER_SELF_ROLE_ASSIGNMENT_NO_EFFECT: &str =
@@ -1574,10 +1576,18 @@ pub(crate) async fn upsert_ops_service_split_review_handler(
 #[utoipa::path(
     put,
     path = "/api/debate/ops/observability/thresholds",
+    params(
+        ("If-Match" = String, Header, description = "Required expected config revision. Supports plain revision string or quoted string.")
+    ),
     request_body = OpsObservabilityThresholds,
     responses(
         (status = 200, description = "Updated ops observability config", body = crate::GetOpsObservabilityConfigOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1586,11 +1596,89 @@ pub(crate) async fn upsert_ops_service_split_review_handler(
 pub(crate) async fn upsert_ops_observability_thresholds_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<OpsObservabilityThresholds>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state
-        .upsert_ops_observability_thresholds(&user, input)
-        .await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let expected_config_revision = match parse_ops_observability_if_match_header(&headers) {
+        Ok(value) => value,
+        Err(code) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                result = "validation_error",
+                "upsert ops observability thresholds rejected because if-match is invalid: {}",
+                code
+            );
+            return Err(AppError::DebateError(code.to_string()));
+        }
+    };
+    let revision_before = expected_config_revision
+        .as_deref()
+        .unwrap_or("unset")
+        .to_string();
+    let low_success_rate_threshold = input.low_success_rate_threshold;
+    let high_retry_threshold = input.high_retry_threshold;
+    let high_coalesced_threshold = input.high_coalesced_threshold;
+    let high_db_latency_threshold_ms = input.high_db_latency_threshold_ms;
+    let low_cache_hit_rate_threshold = input.low_cache_hit_rate_threshold;
+    let min_request_for_cache_hit_check = input.min_request_for_cache_hit_check;
+    let ret = match state
+        .upsert_ops_observability_thresholds_with_meta(
+            &user,
+            input,
+            UpsertOpsObservabilityThresholdsMeta {
+                expected_config_revision: expected_config_revision.as_deref(),
+                require_if_match: true,
+                request_id: request_id.as_deref(),
+            },
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_observability_thresholds_upsert_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                revision_before = revision_before.as_str(),
+                low_success_rate_threshold,
+                high_retry_threshold,
+                high_coalesced_threshold,
+                high_db_latency_threshold_ms,
+                low_cache_hit_rate_threshold,
+                min_request_for_cache_hit_check,
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "upsert ops observability thresholds failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        revision_before = revision_before.as_str(),
+        revision_after = ret.config_revision.as_str(),
+        low_success_rate_threshold = ret.thresholds.low_success_rate_threshold,
+        high_retry_threshold = ret.thresholds.high_retry_threshold,
+        high_coalesced_threshold = ret.thresholds.high_coalesced_threshold,
+        high_db_latency_threshold_ms = ret.thresholds.high_db_latency_threshold_ms,
+        low_cache_hit_rate_threshold = ret.thresholds.low_cache_hit_rate_threshold,
+        min_request_for_cache_hit_check = ret.thresholds.min_request_for_cache_hit_check,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "upsert ops observability thresholds served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -3134,6 +3222,18 @@ fn classify_ops_split_review_upsert_failure(err: &AppError) -> &'static str {
     }
 }
 
+fn classify_ops_observability_thresholds_upsert_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
 fn format_ops_metrics_dictionary_etag(revision: &str) -> String {
     format!("\"{revision}\"")
 }
@@ -3688,6 +3788,37 @@ fn parse_ops_rbac_if_match_header(headers: &HeaderMap) -> Result<Option<String>,
     };
     if normalized.len() > 128 || normalized.contains('"') {
         return Err(OPS_RBAC_IF_MATCH_INVALID_CODE);
+    }
+    Ok(Some(normalized.to_string()))
+}
+
+fn parse_ops_observability_if_match_header(
+    headers: &HeaderMap,
+) -> Result<Option<String>, &'static str> {
+    let Some(value) = headers.get(IF_MATCH) else {
+        return Ok(None);
+    };
+    let raw = value
+        .to_str()
+        .map_err(|_| OPS_OBSERVABILITY_IF_MATCH_INVALID_CODE)?
+        .trim();
+    if raw.is_empty() || raw == "*" || raw.contains(',') {
+        return Err(OPS_OBSERVABILITY_IF_MATCH_INVALID_CODE);
+    }
+    if raw.starts_with("W/") || raw.starts_with("w/") {
+        return Err(OPS_OBSERVABILITY_IF_MATCH_INVALID_CODE);
+    }
+    let normalized = if raw.starts_with('"') || raw.ends_with('"') {
+        raw.strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or(OPS_OBSERVABILITY_IF_MATCH_INVALID_CODE)?
+    } else {
+        raw
+    };
+    if normalized.len() > 128 || normalized.contains('"') {
+        return Err(OPS_OBSERVABILITY_IF_MATCH_INVALID_CODE);
     }
     Ok(Some(normalized.to_string()))
 }

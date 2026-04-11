@@ -68,6 +68,7 @@ export type OpsObservabilityAnomalyStateValue = {
 export type GetOpsObservabilityConfigOutput = {
   thresholds: OpsObservabilityThresholds;
   anomalyState: Record<string, OpsObservabilityAnomalyStateValue>;
+  configRevision: string;
   updatedBy?: number | null;
   updatedAt?: string | null;
 };
@@ -222,11 +223,20 @@ type ApiErrorLike = {
 };
 
 const OPS_RBAC_IF_MATCH_REQUIRED_CODE = "ops_rbac_if_match_required";
+const OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE = "ops_observability_if_match_required";
 
 function normalizeRequiredOpsRbacRevision(expectedRevision: string): string {
   const normalized = String(expectedRevision || "").trim();
   if (!normalized) {
     throw new Error(OPS_RBAC_IF_MATCH_REQUIRED_CODE);
+  }
+  return normalized;
+}
+
+function normalizeRequiredOpsObservabilityRevision(expectedRevision: string): string {
+  const normalized = String(expectedRevision || "").trim();
+  if (!normalized) {
+    throw new Error(OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE);
   }
   return normalized;
 }
@@ -362,9 +372,19 @@ export async function getOpsObservabilityConfig(): Promise<GetOpsObservabilityCo
 }
 
 export async function upsertOpsObservabilityThresholds(
-  input: OpsObservabilityThresholds
+  input: OpsObservabilityThresholds,
+  expectedRevision: string
 ): Promise<GetOpsObservabilityConfigOutput> {
-  const response = await http.put<GetOpsObservabilityConfigOutput>("/debate/ops/observability/thresholds", input);
+  const ifMatch = normalizeRequiredOpsObservabilityRevision(expectedRevision);
+  const response = await http.put<GetOpsObservabilityConfigOutput>(
+    "/debate/ops/observability/thresholds",
+    input,
+    {
+      headers: {
+        "If-Match": ifMatch
+      }
+    }
+  );
   return response.data;
 }
 
