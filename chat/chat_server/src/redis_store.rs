@@ -1,15 +1,29 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
+use chrono::Utc;
 use redis::{aio::ConnectionManager, Client};
-use serde::Serialize;
-use tokio::time::timeout;
+use serde::{Deserialize, Serialize};
+use tokio::{sync::Mutex, time::timeout};
 use tracing::warn;
 use utoipa::ToSchema;
 
 use crate::config::RedisConfig;
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+const REDIS_HEALTH_CACHE_TTL_MS: i64 = 2_000;
+const REDIS_HEALTH_STATUS_DISABLED: &str = "disabled";
+const REDIS_HEALTH_STATUS_READY: &str = "ready";
+const REDIS_HEALTH_STATUS_DEGRADED: &str = "degraded";
+const REDIS_HEALTH_REASON_OK: &str = "ok";
+const REDIS_HEALTH_REASON_DISABLED_BY_CONFIG: &str = "redis_disabled_by_config";
+const REDIS_HEALTH_REASON_STARTUP_FAIL_OPEN: &str = "redis_unavailable_startup_fail_open";
+const REDIS_HEALTH_REASON_PING_TIMEOUT: &str = "redis_ping_timeout";
+const REDIS_HEALTH_REASON_PING_COMMAND_FAILED: &str = "redis_ping_command_failed";
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RedisHealthOutput {
     pub enabled: bool,
@@ -18,6 +32,12 @@ pub struct RedisHealthOutput {
     pub key_prefix: String,
     pub default_ttl_secs: u64,
     pub message: String,
+    pub status: String,
+    pub reason_code: String,
+    pub checked_at_ms: i64,
+    pub ping_latency_ms: Option<u64>,
+    pub timeout_ms: u64,
+    pub cache_hit: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +86,14 @@ pub(crate) enum RedisStore {
 pub(crate) struct RedisStoreInner {
     config: RedisConfig,
     manager: ConnectionManager,
+    health_cache: Mutex<Option<RedisHealthCacheEntry>>,
+    health_probe_guard: Mutex<()>,
+}
+
+#[derive(Debug, Clone)]
+struct RedisHealthCacheEntry {
+    output: RedisHealthOutput,
+    expires_at_ms: i64,
 }
 
 impl RedisStore {
@@ -84,6 +112,8 @@ impl RedisStore {
         let inner = Arc::new(RedisStoreInner {
             config: config.clone(),
             manager,
+            health_cache: Mutex::new(None),
+            health_probe_guard: Mutex::new(()),
         });
 
         if let Err(err) = inner.ping().await {
@@ -117,32 +147,28 @@ impl RedisStore {
 
     pub async fn health_snapshot(&self) -> RedisHealthOutput {
         match self {
-            Self::Disabled { config, message } => RedisHealthOutput {
-                enabled: false,
-                ready: false,
-                startup_policy: config.startup_policy_label().to_string(),
-                key_prefix: config.key_prefix.clone(),
-                default_ttl_secs: config.default_ttl_secs,
-                message: message.clone(),
-            },
-            Self::Enabled(inner) => match inner.ping().await {
-                Ok(_) => RedisHealthOutput {
-                    enabled: true,
-                    ready: true,
-                    startup_policy: inner.config.startup_policy_label().to_string(),
-                    key_prefix: inner.config.key_prefix.clone(),
-                    default_ttl_secs: inner.config.default_ttl_secs,
-                    message: "ok".to_string(),
-                },
-                Err(err) => RedisHealthOutput {
-                    enabled: true,
+            Self::Disabled { config, message } => {
+                let reason_code = if message.contains("fail_open") {
+                    REDIS_HEALTH_REASON_STARTUP_FAIL_OPEN
+                } else {
+                    REDIS_HEALTH_REASON_DISABLED_BY_CONFIG
+                };
+                RedisHealthOutput {
+                    enabled: false,
                     ready: false,
-                    startup_policy: inner.config.startup_policy_label().to_string(),
-                    key_prefix: inner.config.key_prefix.clone(),
-                    default_ttl_secs: inner.config.default_ttl_secs,
-                    message: format!("degraded: {err}"),
-                },
-            },
+                    startup_policy: config.startup_policy_label().to_string(),
+                    key_prefix: config.key_prefix.clone(),
+                    default_ttl_secs: config.default_ttl_secs,
+                    message: message.clone(),
+                    status: REDIS_HEALTH_STATUS_DISABLED.to_string(),
+                    reason_code: reason_code.to_string(),
+                    checked_at_ms: now_ms(),
+                    ping_latency_ms: None,
+                    timeout_ms: config.healthcheck_timeout_ms.max(1),
+                    cache_hit: false,
+                }
+            }
+            Self::Enabled(inner) => inner.health_snapshot_with_cache().await,
         }
     }
 
@@ -502,6 +528,87 @@ return 1
 }
 
 impl RedisStoreInner {
+    async fn health_snapshot_with_cache(&self) -> RedisHealthOutput {
+        let now = now_ms();
+        if let Some(cached) = self.load_cached_health_snapshot(now).await {
+            return cached;
+        }
+
+        let _probe_guard = self.health_probe_guard.lock().await;
+        let now = now_ms();
+        if let Some(cached) = self.load_cached_health_snapshot(now).await {
+            return cached;
+        }
+
+        let started = Instant::now();
+        let ping_result = self.ping().await;
+        let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let timeout_ms = self.config.healthcheck_timeout_ms.max(1);
+        let checked_at_ms = now_ms();
+        let output = match ping_result {
+            Ok(_) => RedisHealthOutput {
+                enabled: true,
+                ready: true,
+                startup_policy: self.config.startup_policy_label().to_string(),
+                key_prefix: self.config.key_prefix.clone(),
+                default_ttl_secs: self.config.default_ttl_secs,
+                message: REDIS_HEALTH_REASON_OK.to_string(),
+                status: REDIS_HEALTH_STATUS_READY.to_string(),
+                reason_code: REDIS_HEALTH_REASON_OK.to_string(),
+                checked_at_ms,
+                ping_latency_ms: Some(latency_ms),
+                timeout_ms,
+                cache_hit: false,
+            },
+            Err(err) => {
+                let reason_code = if err.to_string().contains("redis ping timeout") {
+                    REDIS_HEALTH_REASON_PING_TIMEOUT
+                } else {
+                    REDIS_HEALTH_REASON_PING_COMMAND_FAILED
+                };
+                RedisHealthOutput {
+                    enabled: true,
+                    ready: false,
+                    startup_policy: self.config.startup_policy_label().to_string(),
+                    key_prefix: self.config.key_prefix.clone(),
+                    default_ttl_secs: self.config.default_ttl_secs,
+                    message: format!("degraded: {err}"),
+                    status: REDIS_HEALTH_STATUS_DEGRADED.to_string(),
+                    reason_code: reason_code.to_string(),
+                    checked_at_ms,
+                    ping_latency_ms: Some(latency_ms),
+                    timeout_ms,
+                    cache_hit: false,
+                }
+            }
+        };
+
+        self.store_cached_health_snapshot(output.clone()).await;
+        output
+    }
+
+    async fn load_cached_health_snapshot(&self, now: i64) -> Option<RedisHealthOutput> {
+        let mut cache = self.health_cache.lock().await;
+        if let Some(entry) = cache.as_ref() {
+            if entry.expires_at_ms > now {
+                let mut output = entry.output.clone();
+                output.cache_hit = true;
+                return Some(output);
+            }
+        }
+        *cache = None;
+        None
+    }
+
+    async fn store_cached_health_snapshot(&self, output: RedisHealthOutput) {
+        let mut cache = self.health_cache.lock().await;
+        let expires_at_ms = now_ms().saturating_add(REDIS_HEALTH_CACHE_TTL_MS);
+        *cache = Some(RedisHealthCacheEntry {
+            output,
+            expires_at_ms,
+        });
+    }
+
     async fn ping(&self) -> anyhow::Result<()> {
         let mut conn = self.manager.clone();
         let timeout_ms = self.config.healthcheck_timeout_ms.max(1);
@@ -513,6 +620,10 @@ impl RedisStoreInner {
             .context("redis ping command failed")?;
         Ok(())
     }
+}
+
+fn now_ms() -> i64 {
+    Utc::now().timestamp_millis()
 }
 
 #[cfg(test)]
@@ -578,5 +689,38 @@ mod tests {
             .await
             .expect("disabled store should not fail");
         assert!(ret);
+    }
+
+    #[tokio::test]
+    async fn health_snapshot_should_return_machine_readable_fields_when_disabled() {
+        let config = RedisConfig {
+            healthcheck_timeout_ms: 123,
+            ..RedisConfig::default()
+        };
+        let store = RedisStore::Disabled {
+            config,
+            message: "redis disabled by config".to_string(),
+        };
+
+        let output = store.health_snapshot().await;
+        assert!(!output.enabled);
+        assert!(!output.ready);
+        assert_eq!(output.status, REDIS_HEALTH_STATUS_DISABLED);
+        assert_eq!(output.reason_code, REDIS_HEALTH_REASON_DISABLED_BY_CONFIG);
+        assert_eq!(output.timeout_ms, 123);
+        assert_eq!(output.ping_latency_ms, None);
+        assert!(!output.cache_hit);
+    }
+
+    #[tokio::test]
+    async fn health_snapshot_should_mark_startup_fail_open_reason_when_disabled_message_matches() {
+        let store = RedisStore::Disabled {
+            config: RedisConfig::default(),
+            message: "redis unavailable at startup (fail_open): dial timeout".to_string(),
+        };
+
+        let output = store.health_snapshot().await;
+        assert_eq!(output.status, REDIS_HEALTH_STATUS_DISABLED);
+        assert_eq!(output.reason_code, REDIS_HEALTH_REASON_STARTUP_FAIL_OPEN);
     }
 }

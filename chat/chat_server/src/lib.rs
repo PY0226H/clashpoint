@@ -275,6 +275,7 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             post(submit_judge_final_report_handler),
         )
         .route("/infra/redis/health", get(get_redis_health_handler))
+        .route("/infra/redis/ready", get(get_redis_ready_handler))
         .route(
             "/auth/consistency/metrics",
             get(get_auth_consistency_metrics_handler),

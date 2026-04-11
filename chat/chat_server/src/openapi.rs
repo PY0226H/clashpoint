@@ -126,6 +126,7 @@ pub(crate) trait OpenApiRouter {
             submit_judge_phase_report_handler,
             submit_judge_final_report_handler,
             get_redis_health_handler,
+            get_redis_ready_handler,
             get_auth_consistency_metrics_handler,
             get_judge_dispatch_metrics_handler,
             list_iap_products_handler,

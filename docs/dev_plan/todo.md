@@ -600,3 +600,30 @@
 | api049-phase-report-message-ids-window-validation | `messageIds` 仅校验非空/非零，未校验是否落在 job 消息窗口。 | 增加 `messageIds` 窗口校验与去重约束，拒绝越界引用。 | 新增模型回归：越界/重复 `messageIds` 场景返回 `400`，并归档回归结果。 |
 | api049-phase-report-rejection-observability-baseline | 回调拒绝原因（状态冲突/权重非法等）缺专项指标与告警阈值。 | 建立拒绝原因分桶指标与结构化日志字段，完成 dashboard 与告警阈值封板。 | 导出看板配置 + 告警演练记录 + 一次值班复盘归档。 |
 | api049-phase-report-dispatching-state-evolution | 当前为最小止血策略，尚未引入 `dispatching` 稳态模型统一 worker/回调时序语义。 | 完成 `dispatching` 演进设计与落地（含迁移、回滚、测试），统一状态机语义。 | 评审纪要 + 迁移脚本演练 + worker/callback 闭环集成回归通过并归档。 |
+
+## AQ. api050-final-report-hardening 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API050 未完成项已并入本分组持续跟踪。
+- API050 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api050-final-report-hardening-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api050-final-report-winner-draw-vote-consistency-governance | 当前仅做 winner 枚举合法性校验，未强约束 `winner=draw` 与 `needsDrawVote=true` 及 `winnerFirst/winnerSecond` 的一致性。 | 增加 final 语义一致性校验与稳定错误码，避免写入冲突组合。 | 新增模型回归：draw 场景/冲突组合场景，验证拒绝语义与错误码；归档测试记录。 |
+| api050-final-report-rejection-observability-baseline | 回调拒绝原因（状态冲突、session mismatch、字段非法）缺统一分桶指标与告警阈值。 | 建立拒绝原因分桶指标与结构化日志字段，完成 dashboard 与告警阈值封板。 | 导出看板配置 + 告警演练记录 + 一次值班复盘归档。 |
+| api050-final-report-dispatching-state-evolution | 当前采用“准入放宽”止血，尚未引入 `dispatching` 中间态统一 worker/回调语义。 | 完成 `dispatching` 状态机方案评审与落地（含迁移、回滚、测试）。 | 评审纪要 + 迁移演练 + worker/callback 闭环集成回归通过并归档。 |
+| api050-final-report-callback-signature-anti-replay | 当前仅 `x-ai-internal-key` 校验，缺签名时间窗与 nonce 防重放。 | 上线前落地 HMAC 签名（body hash + timestamp + nonce）与短窗去重校验。 | 回调签名联调脚本 + 重放攻击回归测试 + 安全审计记录归档。 |
+
+## AR. api051-redis-health-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API051 后置事项已并入本分组持续跟踪。
+- API051 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api051-redis-health-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api051-redis-health-callback-signature-anti-replay | 内部探针接口仍使用静态 `x-ai-internal-key`，缺签名时间窗与 nonce 防重放。 | 上线前落地 HMAC 签名（method/path/body hash + timestamp + nonce）与短窗去重校验，形成密钥轮转方案。 | 签名联调脚本 + 重放攻击回归测试 + 轮转演练记录归档。 |
+| api051-redis-health-source-guard-and-rate-limit-rollout | 当前未对来源网段/可信代理做约束，接口级限频也未封板。 | 完成来源信任边界（trusted proxy 或 mTLS）与探针级限频策略，并固化误配排障 runbook。 | 预发执行 trusted/untrusted 来源对照回归 + 限频压测，归档配置快照与结果。 |
+| api051-redis-ready-204-positive-path-test-coverage | 当前单测环境默认 redis disabled，仅覆盖 `/ready` 的 `401/503`，缺 `204` 正路径自动化回归。 | 增加可控的 `Enabled+ready=true` 测试桩或集成测试，补齐 `204` 正路径自动化断言。 | `cargo test -p chat-server ai_internal -- --nocapture` 中新增 `ready=204` 用例通过并归档。 |
+| api051-redis-health-multi-instance-cache-consistency-evaluation | 当前缓存为进程内 2 秒快照，多实例部署下一致性策略未冻结。 | 形成多实例一致性方案评审（共享缓存、统一探针入口或保持本地缓存并文档化约束）并冻结结论。 | 多实例对照测试 + 评审纪要归档到 `docs/consistency_reports/`。 |
+| api051-redis-health-observability-dashboard-baseline | 接口已补结构化日志与内存计数，但 dashboard 与告警阈值未封板。 | 建立 `redis_probe_*` 指标看板与阈值（超时率、degraded 比例、探测时延），完成一次值班演练与复盘。 | 看板配置导出 + 告警演练记录 + 值班复盘归档。 |

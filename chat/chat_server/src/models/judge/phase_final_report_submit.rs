@@ -341,7 +341,7 @@ impl AppState {
         if existing_report_id.is_some() {
             tx.commit().await?;
             return Ok(SubmitJudgeFinalReportOutput {
-                session_id,
+                session_id: job.session_id as u64,
                 status: "succeeded".to_string(),
             });
         }
@@ -352,9 +352,10 @@ impl AppState {
                 job_id
             )));
         }
-        if job.status != "dispatched" && job.status != "succeeded" {
+        // final dispatch 与回调同样是同步链路，回调落库时 job 可能仍处于 queued。
+        if job.status != "queued" && job.status != "dispatched" && job.status != "succeeded" {
             return Err(AppError::DebateConflict(format!(
-                "judge final job {} is not dispatched, current status {}",
+                "judge final job {} is not queued/dispatched/succeeded, current status {}",
                 job_id, job.status
             )));
         }
@@ -436,7 +437,7 @@ impl AppState {
                 dispatch_locked_until = NULL,
                 updated_at = NOW()
             WHERE id = $1
-              AND status IN ('dispatched', 'succeeded')
+              AND status IN ('queued', 'dispatched', 'succeeded')
             "#,
         )
         .bind(job.id)

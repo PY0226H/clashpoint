@@ -96,6 +96,23 @@ async fn seed_dispatched_final_job(
     phase_start_no: i32,
     phase_end_no: i32,
 ) -> Result<i64> {
+    seed_final_job_with_status(
+        state,
+        session_id,
+        phase_start_no,
+        phase_end_no,
+        "dispatched",
+    )
+    .await
+}
+
+async fn seed_final_job_with_status(
+    state: &AppState,
+    session_id: i64,
+    phase_start_no: i32,
+    phase_end_no: i32,
+    status: &str,
+) -> Result<i64> {
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO judge_final_jobs(
@@ -105,7 +122,7 @@ async fn seed_dispatched_final_job(
         )
         VALUES (
             $1, $2, $3,
-            'dispatched', $4, $5, 'v3', 'v3-default',
+            $4, $5, $6, 'v3', 'v3-default',
             'default', 1
         )
         RETURNING id
@@ -114,7 +131,8 @@ async fn seed_dispatched_final_job(
     .bind(session_id)
     .bind(phase_start_no)
     .bind(phase_end_no)
-    .bind(format!("trace-final-{session_id}-{phase_end_no}"))
+    .bind(status)
+    .bind(format!("trace-final-{session_id}-{phase_end_no}-{status}"))
     .bind(format!(
         "judge_final:{session_id}:{phase_start_no}:{phase_end_no}:v3:v3-default"
     ))
@@ -554,5 +572,190 @@ async fn submit_judge_final_report_should_be_idempotent_by_job_id() -> Result<()
     .fetch_one(&state.pool)
     .await?;
     assert_eq!(count.0, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_report_should_accept_queued_job_and_mark_job_succeeded() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_final_job_with_status(&state, session_id, 1, 2, "queued").await?;
+
+    let ret = state
+        .submit_judge_final_report(
+            final_job_id as u64,
+            build_final_report_input(session_id as u64, "pro"),
+        )
+        .await?;
+    assert_eq!(ret.status, "succeeded");
+
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM judge_final_reports
+        WHERE final_job_id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(count.0, 1);
+
+    let job_status: (String,) = sqlx::query_as(
+        r#"
+        SELECT status
+        FROM judge_final_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(job_status.0, "succeeded");
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_report_should_reject_failed_job() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_final_job_with_status(&state, session_id, 1, 2, "failed").await?;
+
+    let err = state
+        .submit_judge_final_report(
+            final_job_id as u64,
+            build_final_report_input(session_id as u64, "pro"),
+        )
+        .await
+        .expect_err("failed final job should be rejected");
+
+    match err {
+        AppError::DebateConflict(msg) => {
+            assert!(msg.contains("is failed, cannot submit report"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM judge_final_reports
+        WHERE final_job_id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(count.0, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_report_should_reject_session_id_mismatch() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    let mut input = build_final_report_input(session_id as u64, "pro");
+    input.session_id = (session_id + 1) as u64;
+    let err = state
+        .submit_judge_final_report(final_job_id as u64, input)
+        .await
+        .expect_err("session mismatch should be rejected");
+
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("session_id mismatch")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_report_idempotent_should_return_job_session_id() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    let input = build_final_report_input(session_id as u64, "draw");
+    state
+        .submit_judge_final_report(final_job_id as u64, input)
+        .await?;
+
+    let mut replay = build_final_report_input((session_id + 100) as u64, "draw");
+    replay.needs_draw_vote = true;
+    let ret = state
+        .submit_judge_final_report(final_job_id as u64, replay)
+        .await?;
+    assert_eq!(ret.session_id, session_id as u64);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_report_should_create_draw_vote_when_needed() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    let mut input = build_final_report_input(session_id as u64, "draw");
+    input.needs_draw_vote = true;
+    state
+        .submit_judge_final_report(final_job_id as u64, input.clone())
+        .await?;
+    state
+        .submit_judge_final_report(final_job_id as u64, input)
+        .await?;
+
+    let vote_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM judge_draw_votes
+        WHERE session_id = $1
+        "#,
+    )
+    .bind(session_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(vote_count.0, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_report_should_reject_invalid_winner_fields() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+    let mut bad_winner = build_final_report_input(session_id as u64, "pro");
+    bad_winner.winner = "invalid".to_string();
+    let err = state
+        .submit_judge_final_report(final_job_id as u64, bad_winner)
+        .await
+        .expect_err("invalid winner should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("invalid winner")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut bad_first = build_final_report_input(session_id as u64, "pro");
+    bad_first.winner_first = Some("invalid".to_string());
+    let err = state
+        .submit_judge_final_report(final_job_id as u64, bad_first)
+        .await
+        .expect_err("invalid winner_first should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("invalid winner_first")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut bad_second = build_final_report_input(session_id as u64, "pro");
+    bad_second.winner_second = Some("invalid".to_string());
+    let err = state
+        .submit_judge_final_report(final_job_id as u64, bad_second)
+        .await
+        .expect_err("invalid winner_second should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("invalid winner_second")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     Ok(())
 }
