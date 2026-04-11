@@ -864,6 +864,8 @@ mod test_util {
     }
 
     async fn pick_reachable_maintenance_url(preferred: Option<&str>) -> String {
+        const CONNECT_RETRY_TIMES: usize = 5;
+        const CONNECT_RETRY_BACKOFF_MS: u64 = 120;
         let mut candidates = Vec::<String>::new();
         if let Some(url) = preferred {
             candidates.push(to_maintenance_db_url(url));
@@ -877,9 +879,16 @@ mod test_util {
         }
         candidates.dedup();
 
-        for candidate in candidates.iter() {
-            if can_connect(candidate).await {
-                return candidate.clone();
+        for attempt in 0..CONNECT_RETRY_TIMES {
+            for candidate in candidates.iter() {
+                if can_connect(candidate).await {
+                    return candidate.clone();
+                }
+            }
+            // 并发测试下可能出现短暂连接抖动，做有限重试避免把环境瞬态误判成不可达。
+            if attempt + 1 < CONNECT_RETRY_TIMES {
+                tokio::time::sleep(std::time::Duration::from_millis(CONNECT_RETRY_BACKOFF_MS))
+                    .await;
             }
         }
 

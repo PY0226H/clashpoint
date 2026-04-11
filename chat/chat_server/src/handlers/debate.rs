@@ -355,7 +355,7 @@ mod tests {
         GetJudgeReplayPreviewOpsOutput, GetOpsMetricsDictionaryOutput,
         GetOpsObservabilityConfigOutput, GetOpsRbacMeOutput, GetOpsServiceSplitReadinessOutput,
         GetOpsSloSnapshotOutput, ListJudgeReplayActionsOpsOutput, ListJudgeReviewOpsOutput,
-        ListJudgeTraceReplayOpsOutput, ListOpsRoleAssignmentsOutput,
+        ListJudgeTraceReplayOpsOutput, ListKafkaDlqEventsOutput, ListOpsRoleAssignmentsOutput,
         ListOpsServiceSplitReviewAuditsOutput, OpsObservabilityThresholds, OpsRoleAssignment,
         RequestJudgeJobOutput, RevokeOpsRoleOutput, UpsertOpsRoleInput,
         UpsertOpsServiceSplitReviewInput,
@@ -463,6 +463,55 @@ mod tests {
         .fetch_one(&state.pool)
         .await?;
         Ok((topic_id, row.0))
+    }
+
+    async fn insert_kafka_dlq_event_for_list_test(
+        state: &AppState,
+        event_id: &str,
+        updated_at: chrono::DateTime<Utc>,
+    ) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            INSERT INTO kafka_dlq_events(
+                consumer_group,
+                topic,
+                partition,
+                message_offset,
+                event_id,
+                event_type,
+                aggregate_id,
+                payload,
+                status,
+                failure_count,
+                error_message,
+                first_failed_at,
+                last_failed_at,
+                updated_at
+            )
+            VALUES (
+                'test-group',
+                'test-topic',
+                0,
+                100,
+                $1,
+                'judge.score.generated',
+                CONCAT('agg-', $1),
+                jsonb_build_object('eventId', $1),
+                'pending',
+                1,
+                'mock error',
+                $2,
+                $2,
+                $2
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(event_id)
+        .bind(updated_at)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(row.0)
     }
 
     async fn seed_judge_phase_job_for_replay_preview(
@@ -3352,6 +3401,294 @@ mod tests {
             error.error,
             "debate conflict: debate_session_revision_conflict"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_kafka_dlq_route_should_support_cursor_pagination() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Kafka Dlq Cursor Pagination",
+            "ops-kafka-dlq-cursor-pagination@acme.org",
+            "+8613810008810",
+            "ops-kafka-dlq-cursor-pagination-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let now = Utc::now();
+        insert_kafka_dlq_event_for_list_test(
+            &state,
+            "ops-kafka-dlq-cursor-pagination-1",
+            now - Duration::seconds(30),
+        )
+        .await?;
+        insert_kafka_dlq_event_for_list_test(
+            &state,
+            "ops-kafka-dlq-cursor-pagination-2",
+            now - Duration::seconds(20),
+        )
+        .await?;
+        insert_kafka_dlq_event_for_list_test(
+            &state,
+            "ops-kafka-dlq-cursor-pagination-3",
+            now - Duration::seconds(10),
+        )
+        .await?;
+
+        let app = get_router(state).await?;
+        let first_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/kafka/dlq?status=pending&limit=2&includeTotal=false")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let first_res = app.clone().oneshot(first_req).await?;
+        assert_eq!(first_res.status(), StatusCode::OK);
+        let first_body = first_res.into_body().collect().await?.to_bytes();
+        let first_page: ListKafkaDlqEventsOutput = serde_json::from_slice(&first_body)?;
+        assert_eq!(first_page.total, None);
+        assert_eq!(first_page.items.len(), 2);
+        assert!(first_page.has_more);
+        assert_eq!(
+            first_page.items[0].event_id,
+            "ops-kafka-dlq-cursor-pagination-3"
+        );
+        assert_eq!(
+            first_page.items[1].event_id,
+            "ops-kafka-dlq-cursor-pagination-2"
+        );
+        let next_cursor = first_page
+            .next_cursor
+            .clone()
+            .expect("first page should include next cursor");
+        let encoded_cursor = next_cursor.replace('|', "%7C");
+
+        let second_req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/ops/kafka/dlq?status=pending&limit=2&offset=9999&includeTotal=false&cursor={encoded_cursor}"
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let second_res = app.oneshot(second_req).await?;
+        assert_eq!(second_res.status(), StatusCode::OK);
+        let second_body = second_res.into_body().collect().await?.to_bytes();
+        let second_page: ListKafkaDlqEventsOutput = serde_json::from_slice(&second_body)?;
+        assert_eq!(second_page.total, None);
+        assert_eq!(second_page.offset, 0);
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(
+            second_page.items[0].event_id,
+            "ops-kafka-dlq-cursor-pagination-1"
+        );
+        assert!(!second_page.has_more);
+        assert!(second_page.next_cursor.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_kafka_dlq_route_should_return_400_for_invalid_cursor() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Kafka Dlq Invalid Cursor",
+            "ops-kafka-dlq-invalid-cursor@acme.org",
+            "+8613810008815",
+            "ops-kafka-dlq-invalid-cursor-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/kafka/dlq?status=pending&cursor=bad-cursor")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "ops_kafka_dlq_cursor_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_kafka_dlq_replay_route_should_return_415_for_non_json_content_type(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Kafka Dlq Replay Invalid Content Type",
+            "ops-kafka-dlq-replay-invalid-content-type@acme.org",
+            "+8613810008811",
+            "ops-kafka-dlq-replay-invalid-content-type-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/kafka/dlq/1/replay")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "text/plain")
+            .body(Body::from("{\"reason\":\"manual replay\"}"))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "ops_kafka_dlq_action_content_type_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_kafka_dlq_replay_route_should_return_422_for_invalid_json_body() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Kafka Dlq Replay Invalid Json",
+            "ops-kafka-dlq-replay-invalid-json@acme.org",
+            "+8613810008812",
+            "ops-kafka-dlq-replay-invalid-json-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/kafka/dlq/1/replay")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from("{\"reason\":\"manual replay\""))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "ops_kafka_dlq_action_body_invalid_json");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_kafka_dlq_replay_route_should_return_400_for_empty_reason() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Kafka Dlq Replay Empty Reason",
+            "ops-kafka-dlq-replay-empty-reason@acme.org",
+            "+8613810008813",
+            "ops-kafka-dlq-replay-empty-reason-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "reason": "   "
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/kafka/dlq/1/replay")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_kafka_dlq_action_reason_required"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_kafka_dlq_discard_route_should_return_409_for_inflight_idempotency_conflict(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Kafka Dlq Discard Idempotency Conflict",
+            "ops-kafka-dlq-discard-idempotency-conflict@acme.org",
+            "+8613810008814",
+            "ops-kafka-dlq-discard-idempotency-conflict-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "reason": "manual discard conflict simulation"
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/kafka/dlq/1/discard")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("idempotency-key", "ops-kafka-dlq-discard-conflict-key")
+            .header("x-test-force-idempotency-conflict", "true")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("idempotency_conflict:ops_kafka_dlq_discard"));
         Ok(())
     }
 

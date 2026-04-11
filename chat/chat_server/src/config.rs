@@ -184,6 +184,14 @@ pub struct WorkerRuntimeConfig {
     pub event_outbox_max_backoff_ms: u64,
     #[serde(default = "default_worker_runtime_ops_rbac_audit_outbox_poll_interval_secs")]
     pub ops_rbac_audit_outbox_poll_interval_secs: u64,
+    #[serde(default = "default_worker_runtime_kafka_dlq_retention_cleanup_worker_enabled")]
+    pub kafka_dlq_retention_cleanup_worker_enabled: bool,
+    #[serde(default = "default_worker_runtime_kafka_dlq_retention_cleanup_interval_secs")]
+    pub kafka_dlq_retention_cleanup_interval_secs: u64,
+    #[serde(default = "default_worker_runtime_kafka_dlq_retention_days")]
+    pub kafka_dlq_retention_days: i64,
+    #[serde(default = "default_worker_runtime_kafka_dlq_retention_cleanup_batch_size")]
+    pub kafka_dlq_retention_cleanup_batch_size: i64,
     #[serde(
         default = "default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold"
     )]
@@ -271,6 +279,13 @@ impl Default for WorkerRuntimeConfig {
             event_outbox_max_backoff_ms: default_worker_runtime_event_outbox_max_backoff_ms(),
             ops_rbac_audit_outbox_poll_interval_secs:
                 default_worker_runtime_ops_rbac_audit_outbox_poll_interval_secs(),
+            kafka_dlq_retention_cleanup_worker_enabled:
+                default_worker_runtime_kafka_dlq_retention_cleanup_worker_enabled(),
+            kafka_dlq_retention_cleanup_interval_secs:
+                default_worker_runtime_kafka_dlq_retention_cleanup_interval_secs(),
+            kafka_dlq_retention_days: default_worker_runtime_kafka_dlq_retention_days(),
+            kafka_dlq_retention_cleanup_batch_size:
+                default_worker_runtime_kafka_dlq_retention_cleanup_batch_size(),
             kafka_readiness_pending_dlq_blocking_count_threshold:
                 default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold(),
             kafka_readiness_pending_dlq_oldest_age_blocking_secs:
@@ -546,6 +561,22 @@ fn default_worker_runtime_ops_rbac_audit_outbox_poll_interval_secs() -> u64 {
     1
 }
 
+fn default_worker_runtime_kafka_dlq_retention_cleanup_worker_enabled() -> bool {
+    true
+}
+
+fn default_worker_runtime_kafka_dlq_retention_cleanup_interval_secs() -> u64 {
+    300
+}
+
+fn default_worker_runtime_kafka_dlq_retention_days() -> i64 {
+    14
+}
+
+fn default_worker_runtime_kafka_dlq_retention_cleanup_batch_size() -> i64 {
+    500
+}
+
 fn default_worker_runtime_kafka_readiness_pending_dlq_blocking_count_threshold() -> u64 {
     1
 }
@@ -792,6 +823,10 @@ mod tests {
         assert_eq!(cfg.event_outbox_base_backoff_ms, 500);
         assert_eq!(cfg.event_outbox_max_backoff_ms, 60_000);
         assert_eq!(cfg.ops_rbac_audit_outbox_poll_interval_secs, 1);
+        assert!(cfg.kafka_dlq_retention_cleanup_worker_enabled);
+        assert_eq!(cfg.kafka_dlq_retention_cleanup_interval_secs, 300);
+        assert_eq!(cfg.kafka_dlq_retention_days, 14);
+        assert_eq!(cfg.kafka_dlq_retention_cleanup_batch_size, 500);
         assert_eq!(cfg.kafka_readiness_pending_dlq_blocking_count_threshold, 1);
         assert_eq!(
             cfg.kafka_readiness_pending_dlq_oldest_age_blocking_secs,

@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "summary": {
+    "errors": 2,
+    "warnings": 1,
+    "checks": 12
+  },
+  "checked": ["slots-dir:/Users/panyihang/Documents/EchoIsle/.codex/plan-slots","slot-pointer:default","todo-doc:/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md","completed-doc:/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/00-overview.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/60-usage-tutorial.md","harness-doc:/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md"],
+  "errors": [{"code":"plan_shape_unknown","target":"/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md","message":"slot:default 未匹配开发计划或优化计划的已知结构。"},{"code":"plan_shape_unknown","target":"/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md","message":"default-current-plan 未匹配开发计划或优化计划的已知结构。"}],
+  "warnings": [{"code":"current_plan_missing_default_slot_note","target":"/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md","message":"当前开发计划未声明关联 slot 为 default。"}]
+}

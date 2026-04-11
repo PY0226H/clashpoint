@@ -511,6 +511,20 @@ struct AlertEmitContext<'a> {
     notification_fingerprint: &'a str,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SplitReviewAuditCreatedWindow {
+    created_after: Option<DateTime<Utc>>,
+    created_before: Option<DateTime<Utc>>,
+}
+
+struct AlertTransitionContext<'a> {
+    anomaly_state: &'a HashMap<String, OpsObservabilityAnomalyStateValue>,
+    evaluation_run_id: &'a str,
+    now_ms: i64,
+    recipients: &'a [u64],
+    report: &'a mut OpsAlertEvalReport,
+}
+
 fn normalize_thresholds_payload(
     payload: OpsObservabilityThresholdsPayload,
 ) -> OpsObservabilityThresholds {
@@ -1232,7 +1246,7 @@ fn normalize_split_review_audit_updated_by_filter(
 fn normalize_split_review_audit_created_window(
     created_after: Option<DateTime<Utc>>,
     created_before: Option<DateTime<Utc>>,
-) -> Result<(Option<DateTime<Utc>>, Option<DateTime<Utc>>), AppError> {
+) -> Result<SplitReviewAuditCreatedWindow, AppError> {
     if let (Some(after), Some(before)) = (created_after, created_before) {
         if after > before {
             return Err(AppError::DebateError(
@@ -1241,7 +1255,10 @@ fn normalize_split_review_audit_created_window(
             ));
         }
     }
-    Ok((created_after, created_before))
+    Ok(SplitReviewAuditCreatedWindow {
+        created_after,
+        created_before,
+    })
 }
 
 fn normalize_alert_status_filter(status: Option<String>) -> Result<Option<String>, AppError> {
@@ -1977,7 +1994,7 @@ impl AppState {
         let offset = normalize_split_review_audit_offset(query.offset);
         let updated_by = normalize_split_review_audit_updated_by_filter(query.updated_by)?;
         let payment_compliance_required = query.payment_compliance_required;
-        let (created_after, created_before) =
+        let created_window =
             normalize_split_review_audit_created_window(query.created_after, query.created_before)?;
         let total: i64 = sqlx::query_scalar(
             r#"
@@ -1991,8 +2008,8 @@ impl AppState {
         )
         .bind(updated_by)
         .bind(payment_compliance_required)
-        .bind(created_after)
-        .bind(created_before)
+        .bind(created_window.created_after)
+        .bind(created_window.created_before)
         .fetch_one(&self.pool)
         .await?;
         let rows: Vec<OpsServiceSplitReviewAuditRow> = sqlx::query_as(
@@ -2010,8 +2027,8 @@ impl AppState {
         )
         .bind(updated_by)
         .bind(payment_compliance_required)
-        .bind(created_after)
-        .bind(created_before)
+        .bind(created_window.created_after)
+        .bind(created_window.created_before)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.pool)
@@ -3184,12 +3201,15 @@ impl AppState {
         &self,
         evaluated: EvaluatedAlert,
         previous: Option<OpsAlertStateRow>,
-        anomaly_state: &HashMap<String, OpsObservabilityAnomalyStateValue>,
-        evaluation_run_id: &str,
-        now_ms: i64,
-        recipients: &[u64],
-        report: &mut OpsAlertEvalReport,
+        context: AlertTransitionContext<'_>,
     ) -> Result<(), AppError> {
+        let AlertTransitionContext {
+            anomaly_state,
+            evaluation_run_id,
+            now_ms,
+            recipients,
+            report,
+        } = context;
         let suppression_state = anomaly_state.get(&evaluated.alert_key);
         let Some(plan) = build_emit_plan(evaluated, previous, suppression_state, now_ms) else {
             return Ok(());
@@ -3234,11 +3254,13 @@ impl AppState {
                 self.process_single_alert_transition(
                     evaluated,
                     previous,
-                    &anomaly_state,
-                    evaluation_run_id.as_str(),
-                    now_ms,
-                    &recipients,
-                    &mut report,
+                    AlertTransitionContext {
+                        anomaly_state: &anomaly_state,
+                        evaluation_run_id: evaluation_run_id.as_str(),
+                        now_ms,
+                        recipients: &recipients,
+                        report: &mut report,
+                    },
                 )
                 .await?;
             }
@@ -3285,11 +3307,13 @@ impl AppState {
             self.process_single_alert_transition(
                 evaluated,
                 previous,
-                &anomaly_state,
-                evaluation_run_id.as_str(),
-                now_ms,
-                &recipients,
-                &mut report,
+                AlertTransitionContext {
+                    anomaly_state: &anomaly_state,
+                    evaluation_run_id: evaluation_run_id.as_str(),
+                    now_ms,
+                    recipients: &recipients,
+                    report: &mut report,
+                },
             )
             .await?;
         }

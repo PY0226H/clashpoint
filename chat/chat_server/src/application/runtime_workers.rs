@@ -43,6 +43,10 @@ pub(crate) fn spawn_background_workers(
         spawn_ops_rbac_audit_outbox_worker(state.clone());
     }
 
+    if runtime.kafka_dlq_retention_cleanup_worker_enabled {
+        spawn_kafka_dlq_retention_cleanup_worker(state.clone());
+    }
+
     spawn_auth_refresh_consistency_outbox_worker(state.clone());
     spawn_auth_token_version_invalidation_retry_worker(state.clone());
     spawn_auth_sessions_retention_cleanup_worker(state.clone());
@@ -315,6 +319,29 @@ fn spawn_ops_rbac_audit_outbox_worker(state: AppState) {
                     );
                 }
                 Err(err) => warn!("ops rbac audit outbox worker tick failed: {}", err),
+            }
+            sleep(Duration::from_secs(interval_secs)).await;
+        }
+    });
+}
+
+fn spawn_kafka_dlq_retention_cleanup_worker(state: AppState) {
+    tokio::spawn(async move {
+        let interval_secs = state
+            .config
+            .worker_runtime
+            .kafka_dlq_retention_cleanup_interval_secs
+            .max(1);
+        loop {
+            match state.cleanup_kafka_dlq_retention_once().await {
+                Ok(report) => {
+                    debug!(
+                        deleted_event_rows = report.deleted_event_rows,
+                        deleted_action_rows = report.deleted_action_rows,
+                        "kafka dlq retention cleanup worker tick success"
+                    );
+                }
+                Err(err) => warn!("kafka dlq retention cleanup worker tick failed: {}", err),
             }
             sleep(Duration::from_secs(interval_secs)).await;
         }

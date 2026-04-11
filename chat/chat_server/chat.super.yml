@@ -75,6 +75,10 @@ worker_runtime:
   event_outbox_max_attempts: 12
   event_outbox_base_backoff_ms: 500
   event_outbox_max_backoff_ms: 60000
+  kafka_dlq_retention_cleanup_worker_enabled: true
+  kafka_dlq_retention_cleanup_interval_secs: 300
+  kafka_dlq_retention_days: 14
+  kafka_dlq_retention_cleanup_batch_size: 500
 payment:
   verify_mode: mock
   apple_verify_url_prod: https://buy.itunes.apple.com/verifyReceipt

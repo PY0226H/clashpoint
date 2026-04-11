@@ -6,9 +6,9 @@ This file is the agent-facing table of contents for EchoIsle.
 
 Use it to find:
 
-1. which skills exist
+1. the default module-level harness entry
 2. which rules are currently enforced
-3. where the detailed harness docs live
+3. where the detailed harness docs and project map live
 
 Current status:
 
@@ -22,32 +22,12 @@ Current status:
 
 ---
 
-## Skills
+## Harness Entry
 
-A skill is a set of local instructions stored in a `SKILL.md` file.
-
-### Available skills (authoritative list)
-
-- `openai-docs`: Use when the user asks how to build with OpenAI products or APIs and needs up-to-date official documentation with citations, help choosing the latest model for a use case, or explicit GPT-5.4 upgrade and prompt-upgrade guidance; prioritize OpenAI docs MCP tools, use bundled references only as helper context, and restrict any fallback browsing to official OpenAI domains. (file: `/Users/panyihang/.codex/skills/.system/openai-docs/SKILL.md`)
-- `skill-creator`: Guide for creating effective skills. Use when users want to create or update a skill that extends Codex capabilities. (file: `/Users/panyihang/.codex/skills/.system/skill-creator/SKILL.md`)
-- `skill-installer`: Install Codex skills into `$CODEX_HOME/skills` from a curated list or a GitHub repo path. (file: `/Users/panyihang/.codex/skills/.system/skill-installer/SKILL.md`)
-- `post-module-test-guard`: Generate or update tests for changed module behavior and run repository quality gates after implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/SKILL.md`)
-- `module-turn-harness`: Single entry skill for module-level development turns. It classifies the task, runs the current pre/post hook chain, and exposes `--dry-run` / `--strict` orchestration semantics. (file: `/Users/panyihang/Documents/EchoIsle/skills/module-turn-harness/SKILL.md`)
-- `post-module-interview-journal`: Generate interview-ready development records after each module implementation. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-interview-journal/SKILL.md`)
-- `post-module-explanation-journal`: Generate deep Chinese explanation documents for newly added or modified module code under `docs/explanation`. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-explanation-journal/SKILL.md`)
-- `post-module-commit-message`: After each development round, generate a Conventional Commits compliant commit title that best matches the current Git changes. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-commit-message/SKILL.md`)
-- `post-module-plan-sync`: After each code development turn that adds or changes module behavior, sync the currently active development plan document with module status, next-step suggestions, and completion history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-module-plan-sync/SKILL.md`)
-- `python-venv-guard`: Enforce Python virtual environment usage before any Python command, and forbid global python/pip usage. (file: `/Users/panyihang/Documents/EchoIsle/skills/python-venv-guard/SKILL.md`)
-- `pre-module-prd-goal-guard`: Before each module development/refactor/optimization, default to `product-goals` summary and automatically fall back to the full PRD for high-risk work. (file: `/Users/panyihang/Documents/EchoIsle/skills/pre-module-prd-goal-guard/SKILL.md`)
-- `post-optimization-plan-sync`: After each module-level refactor or optimization turn, sync optimization matrix and next-step recommendation, then append optimization history. (file: `/Users/panyihang/Documents/EchoIsle/skills/post-optimization-plan-sync/SKILL.md`)
-
-### Skill usage rules
-
-1. The list above is the only skill source of truth for this repository.
-2. If the user names a skill, or the task clearly matches a skill description, that skill must be used.
-3. Use the minimal set of skills needed for the turn.
-4. Do not carry skills across turns unless the user re-mentions them.
-5. If a skill is unavailable or unreadable, say so briefly and continue with the best fallback.
+1. For module-level development, refactor, or optimization turns, use `module-turn-harness` as the default entry.
+2. Do not manually infer the full skill chain from `AGENTS.md`; the active hook chain is owned by `/Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh`.
+3. Detailed hook rules live in `/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md` and `/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md`.
+4. Repository skills live under `/Users/panyihang/Documents/EchoIsle/skills/`; load an individual `SKILL.md` only when explicitly invoked by the user or by the harness workflow.
 
 ---
 

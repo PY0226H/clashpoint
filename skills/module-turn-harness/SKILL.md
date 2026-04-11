@@ -46,7 +46,7 @@ description: "模块级开发统一入口。根据任务类型进入 dev/refacto
 
 1. PRD gate
 2. `post-module-test-guard` 对应自动化步骤
-3. commit message 推荐
+3. 对于当前任务，生成git commit message 推荐
 4. `post-module-plan-sync`
 5. knowledge pack 决策
 6. 按策略决定是否执行 `post-module-interview-journal`
@@ -58,7 +58,7 @@ description: "模块级开发统一入口。根据任务类型进入 dev/refacto
 
 1. PRD gate
 2. `post-module-test-guard` 对应自动化步骤
-3. commit message 推荐
+3. 对于当前任务，生成git commit message 推荐
 4. `post-optimization-plan-sync`
 5. knowledge pack 决策
 6. 按策略决定是否执行 `post-module-interview-journal`
@@ -138,7 +138,8 @@ bash scripts/harness/module_turn_harness.sh \
    - 只显示将执行的步骤，不真正执行
 
 10. `--strict`
-   - 任一步失败即停止
+
+- 任一步失败即停止
 
 ## 当前产物
 

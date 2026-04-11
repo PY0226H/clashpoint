@@ -310,7 +310,7 @@ impl AppState {
         trace_id: &str,
         idempotency_key: &str,
     ) -> Result<(), AppError> {
-        let message_start_id: i64 = sqlx::query_scalar(
+        let message_start_id: Option<i64> = sqlx::query_scalar(
             r#"
             SELECT id
             FROM session_messages
@@ -322,28 +322,34 @@ impl AppState {
         )
         .bind(session_id)
         .bind(JUDGE_PHASE_WINDOW_SIZE - 1)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
+        let Some(message_start_id) = message_start_id else {
+            return Err(AppError::DebateError(format!(
+                "phase checkpoint message window mismatch: session_id={session_id}, phase_no={phase_no}, message_count={message_count}, window_size={JUDGE_PHASE_WINDOW_SIZE}"
+            )));
+        };
 
         let message_count_i32 = i32::try_from(message_count)
             .map_err(|_| AppError::DebateError(format!("invalid message_count={message_count}")))?;
         let inserted_id: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO judge_phase_jobs(
-                session_id, phase_no, message_start_id, message_end_id, message_count,
+                session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count,
                 status, trace_id, idempotency_key, rubric_version, judge_policy_version,
                 topic_domain, retrieval_profile, created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5,
-                'queued', $6, $7, $8, $9,
-                $10, $11, NOW(), NOW()
+                $1, $2, $3, $4, $5, $6,
+                'queued', $7, $8, $9, $10,
+                $11, $12, NOW(), NOW()
             )
-            ON CONFLICT (session_id, phase_no) DO NOTHING
+            ON CONFLICT (session_id, rejudge_run_no, phase_no) DO NOTHING
             RETURNING id
             "#,
         )
         .bind(session_id)
+        .bind(JUDGE_PHASE_INITIAL_REJUDGE_RUN_NO)
         .bind(phase_no)
         .bind(message_start_id)
         .bind(latest_message_id)

@@ -43,8 +43,8 @@ pub use judge_dispatch::GetJudgeDispatchMetricsOutput;
 pub(crate) use judge_dispatch::JudgeDispatchTrigger;
 pub use kafka_dlq::{
     GetKafkaTransportReadinessOutput, KafkaConsumerRuntimeMetricsSnapshotOutput,
-    KafkaDlqActionOutput, KafkaDlqEventItem, KafkaOutboxRelayMetricsSnapshotOutput,
-    ListKafkaDlqEventsOutput, ListKafkaDlqEventsQuery,
+    KafkaDlqActionInput, KafkaDlqActionMeta, KafkaDlqActionOutput, KafkaDlqEventItem,
+    KafkaOutboxRelayMetricsSnapshotOutput, ListKafkaDlqEventsOutput, ListKafkaDlqEventsQuery,
 };
 pub use messages::{CreateMessage, ListMessages};
 pub use ops_observability::{

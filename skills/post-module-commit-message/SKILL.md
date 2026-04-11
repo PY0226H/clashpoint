@@ -55,6 +55,24 @@ git diff --cached --name-only
 - 检查 scope 是否清晰、稳定、可复用。
 - 检查是否满足 Conventional Commits 语法。
 
+## 脚本入口
+
+`module-turn-harness` 应优先复用本 skill 的脚本入口，而不是在 harness 内维护另一套 commit 推荐逻辑：
+
+```bash
+bash skills/post-module-commit-message/scripts/recommend_commit_message.sh \
+  --root /Users/panyihang/Documents/EchoIsle \
+  --task-kind dev \
+  --module <module-id> \
+  --summary "<summary>"
+```
+
+仅需要标题时可加：
+
+```bash
+--title-only
+```
+
 ## 默认输出模板
 
 ```text

@@ -16,10 +16,28 @@ use utoipa::{IntoParams, ToSchema};
 const DLQ_STATUS_PENDING: &str = "pending";
 const DLQ_STATUS_REPLAYED: &str = "replayed";
 const DLQ_STATUS_DISCARDED: &str = "discarded";
+const DLQ_ACTION_REPLAY: &str = "replay";
+const DLQ_ACTION_DISCARD: &str = "discard";
+const DLQ_ACTION_RESULT_SUCCESS: &str = "success";
+const DLQ_ACTION_RESULT_FAILED: &str = "failed";
+const DLQ_ACTION_RESULT_CONFLICT: &str = "conflict";
+const DLQ_ACTION_RESULT_NOT_FOUND: &str = "not_found";
+const DLQ_ERROR_CLASS_TIMEOUT: &str = "timeout";
+const DLQ_ERROR_CLASS_DB_CONFLICT: &str = "db_conflict";
+const DLQ_ERROR_CLASS_DB_LOCK: &str = "db_lock";
+const DLQ_ERROR_CLASS_PAYLOAD_INVALID: &str = "payload_invalid";
+const DLQ_ERROR_CLASS_UPSTREAM_UNAVAILABLE: &str = "upstream_unavailable";
+const DLQ_ERROR_CLASS_PERMISSION: &str = "permission";
+const DLQ_ERROR_CLASS_INTERNAL: &str = "internal";
+const DLQ_ERROR_MESSAGE_MASKED_BY_ROLE: &str = "masked_by_role";
 const NOTIFY_RUNTIME_SERVICE_NAME_PREFIX: &str = "notify_server";
 const NOTIFY_RUNTIME_SIGNAL_STALE_SECS: i64 = 300;
 const NOTIFY_RUNTIME_NO_COMMIT_WARMUP_SECS: i64 = 300;
 const DLQ_REPLAY_PROGRESS_STALE_SECS: i64 = 300;
+const DLQ_RETENTION_MIN_DAYS: i64 = 1;
+const DLQ_RETENTION_MAX_DAYS: i64 = 365;
+const DLQ_RETENTION_MIN_BATCH_SIZE: i64 = 1;
+const DLQ_RETENTION_MAX_BATCH_SIZE: i64 = 10_000;
 
 #[derive(Debug, Clone, Deserialize, ToSchema, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +46,8 @@ pub struct ListKafkaDlqEventsQuery {
     pub event_type: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
+    pub cursor: Option<String>,
+    pub include_total: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -44,6 +64,8 @@ pub struct KafkaDlqEventItem {
     pub status: String,
     pub failure_count: i32,
     pub error_message: String,
+    pub error_class: String,
+    pub error_code: String,
     pub first_failed_at: DateTime<Utc>,
     pub last_failed_at: DateTime<Utc>,
     pub replayed_at: Option<DateTime<Utc>>,
@@ -54,9 +76,11 @@ pub struct KafkaDlqEventItem {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListKafkaDlqEventsOutput {
-    pub total: u64,
+    pub total: Option<u64>,
     pub limit: u64,
     pub offset: u64,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
     pub items: Vec<KafkaDlqEventItem>,
 }
 
@@ -70,6 +94,25 @@ pub struct KafkaDlqActionOutput {
     pub replayed_at: Option<DateTime<Utc>>,
     pub discarded_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KafkaDlqActionInput {
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KafkaDlqActionMeta<'a> {
+    pub reason: Option<&'a str>,
+    pub request_id: Option<&'a str>,
+    pub idempotency_key: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct KafkaDlqRetentionCleanupReport {
+    pub deleted_event_rows: u64,
+    pub deleted_action_rows: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -159,6 +202,19 @@ struct KafkaDlqActionRow {
     updated_at: DateTime<Utc>,
 }
 
+struct KafkaDlqActionAuditInput<'a> {
+    dlq_event_id: u64,
+    action: &'a str,
+    operator_user_id: i64,
+    result: &'a str,
+    before_status: Option<&'a str>,
+    after_status: Option<&'a str>,
+    reason: Option<&'a str>,
+    request_id: Option<&'a str>,
+    idempotency_key: Option<&'a str>,
+    error_message: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct KafkaDlqRuntimeRow {
     pending_dlq_count: i64,
@@ -178,12 +234,48 @@ struct NotifyRuntimeSignalRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+struct ListKafkaDlqEventsCursor {
+    updated_at: DateTime<Utc>,
+    id: i64,
+}
+
 fn normalize_limit(limit: Option<u64>) -> i64 {
     limit.unwrap_or(20).clamp(1, 100) as i64
 }
 
 fn normalize_offset(offset: Option<u64>) -> i64 {
     offset.unwrap_or(0).min(50_000) as i64
+}
+
+fn format_kafka_dlq_cursor_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+fn encode_list_kafka_dlq_events_cursor(updated_at: DateTime<Utc>, id: i64) -> String {
+    format!("{}|{}", format_kafka_dlq_cursor_timestamp(updated_at), id)
+}
+
+fn decode_list_kafka_dlq_events_cursor(raw: &str) -> Result<ListKafkaDlqEventsCursor, AppError> {
+    let trimmed = raw.trim();
+    let Some((updated_at_raw, id_raw)) = trimmed.split_once('|') else {
+        return Err(AppError::ValidationError(
+            "ops_kafka_dlq_cursor_invalid".to_string(),
+        ));
+    };
+    let updated_at = DateTime::parse_from_rfc3339(updated_at_raw.trim())
+        .map(|ts| ts.with_timezone(&Utc))
+        .map_err(|_| AppError::ValidationError("ops_kafka_dlq_cursor_invalid".to_string()))?;
+    let id = id_raw
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| AppError::ValidationError("ops_kafka_dlq_cursor_invalid".to_string()))?;
+    if id <= 0 {
+        return Err(AppError::ValidationError(
+            "ops_kafka_dlq_cursor_invalid".to_string(),
+        ));
+    }
+    Ok(ListKafkaDlqEventsCursor { updated_at, id })
 }
 
 fn normalize_status_filter(status: Option<String>) -> Result<Option<String>, AppError> {
@@ -211,7 +303,71 @@ fn normalize_event_type_filter(event_type: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn map_dlq_row(row: KafkaDlqEventRow) -> KafkaDlqEventItem {
+fn normalize_dlq_action_reason(reason: Option<&str>) -> Result<String, AppError> {
+    let normalized = reason.unwrap_or_default().trim();
+    if normalized.is_empty() {
+        return Err(AppError::DebateError(
+            "ops_kafka_dlq_action_reason_required".to_string(),
+        ));
+    }
+    if normalized.len() > 240 {
+        return Err(AppError::DebateError(
+            "ops_kafka_dlq_action_reason_too_long".to_string(),
+        ));
+    }
+    Ok(normalized.to_string())
+}
+
+fn classify_dlq_error_message(error_message: &str) -> &'static str {
+    let normalized = error_message.to_ascii_lowercase();
+    if normalized.contains("timeout")
+        || normalized.contains("timed out")
+        || normalized.contains("deadline exceeded")
+    {
+        return DLQ_ERROR_CLASS_TIMEOUT;
+    }
+    if normalized.contains("deadlock") || normalized.contains("lock wait") {
+        return DLQ_ERROR_CLASS_DB_LOCK;
+    }
+    if normalized.contains("unique violation") || normalized.contains("duplicate key") {
+        return DLQ_ERROR_CLASS_DB_CONFLICT;
+    }
+    if normalized.contains("decode")
+        || normalized.contains("deserialize")
+        || normalized.contains("invalid json")
+        || normalized.contains("malformed")
+    {
+        return DLQ_ERROR_CLASS_PAYLOAD_INVALID;
+    }
+    if normalized.contains("connection refused")
+        || normalized.contains("connection reset")
+        || normalized.contains("unavailable")
+        || normalized.contains("network")
+    {
+        return DLQ_ERROR_CLASS_UPSTREAM_UNAVAILABLE;
+    }
+    if normalized.contains("permission denied")
+        || normalized.contains("forbidden")
+        || normalized.contains("unauthorized")
+    {
+        return DLQ_ERROR_CLASS_PERMISSION;
+    }
+    DLQ_ERROR_CLASS_INTERNAL
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DlqErrorDescriptor {
+    class: &'static str,
+    code: &'static str,
+}
+
+fn classify_dlq_error_descriptor(error_message: &str) -> DlqErrorDescriptor {
+    let class = classify_dlq_error_message(error_message);
+    DlqErrorDescriptor { class, code: class }
+}
+
+fn map_dlq_row(row: KafkaDlqEventRow, expose_raw_error_message: bool) -> KafkaDlqEventItem {
+    let descriptor = classify_dlq_error_descriptor(&row.error_message);
     KafkaDlqEventItem {
         id: row.id as u64,
         consumer_group: row.consumer_group,
@@ -223,7 +379,13 @@ fn map_dlq_row(row: KafkaDlqEventRow) -> KafkaDlqEventItem {
         aggregate_id: row.aggregate_id,
         status: row.status,
         failure_count: row.failure_count,
-        error_message: row.error_message,
+        error_message: if expose_raw_error_message {
+            row.error_message
+        } else {
+            DLQ_ERROR_MESSAGE_MASKED_BY_ROLE.to_string()
+        },
+        error_class: descriptor.class.to_string(),
+        error_code: descriptor.code.to_string(),
         first_failed_at: row.first_failed_at,
         last_failed_at: row.last_failed_at,
         replayed_at: row.replayed_at,
@@ -245,6 +407,71 @@ fn map_dlq_action_row(row: KafkaDlqActionRow) -> KafkaDlqActionOutput {
 }
 
 impl AppState {
+    pub(crate) async fn cleanup_kafka_dlq_retention_once(
+        &self,
+    ) -> Result<KafkaDlqRetentionCleanupReport, AppError> {
+        let retention_days = self
+            .config
+            .worker_runtime
+            .kafka_dlq_retention_days
+            .clamp(DLQ_RETENTION_MIN_DAYS, DLQ_RETENTION_MAX_DAYS);
+        let batch_size = self
+            .config
+            .worker_runtime
+            .kafka_dlq_retention_cleanup_batch_size
+            .clamp(DLQ_RETENTION_MIN_BATCH_SIZE, DLQ_RETENTION_MAX_BATCH_SIZE);
+        let cutoff = Utc::now() - chrono::Duration::days(retention_days);
+        self.cleanup_kafka_dlq_retention_before(cutoff, batch_size)
+            .await
+    }
+
+    async fn cleanup_kafka_dlq_retention_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        batch_size: i64,
+    ) -> Result<KafkaDlqRetentionCleanupReport, AppError> {
+        let batch_size =
+            batch_size.clamp(DLQ_RETENTION_MIN_BATCH_SIZE, DLQ_RETENTION_MAX_BATCH_SIZE);
+        let (deleted_event_rows, deleted_action_rows): (i64, i64) = sqlx::query_as(
+            r#"
+            WITH candidate AS (
+                SELECT id
+                FROM kafka_dlq_events
+                WHERE status IN ($1, $2)
+                  AND updated_at < $3
+                ORDER BY updated_at ASC, id ASC
+                LIMIT $4
+                FOR UPDATE SKIP LOCKED
+            ),
+            deleted_actions AS (
+                DELETE FROM kafka_dlq_event_actions actions
+                USING candidate c
+                WHERE actions.dlq_event_id = c.id
+                RETURNING actions.id
+            ),
+            deleted_events AS (
+                DELETE FROM kafka_dlq_events events
+                USING candidate c
+                WHERE events.id = c.id
+                RETURNING events.id
+            )
+            SELECT
+                COALESCE((SELECT COUNT(1)::bigint FROM deleted_events), 0) AS deleted_event_rows,
+                COALESCE((SELECT COUNT(1)::bigint FROM deleted_actions), 0) AS deleted_action_rows
+            "#,
+        )
+        .bind(DLQ_STATUS_REPLAYED)
+        .bind(DLQ_STATUS_DISCARDED)
+        .bind(cutoff)
+        .bind(batch_size)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(KafkaDlqRetentionCleanupReport {
+            deleted_event_rows: deleted_event_rows.max(0) as u64,
+            deleted_action_rows: deleted_action_rows.max(0) as u64,
+        })
+    }
+
     pub async fn get_kafka_transport_readiness(
         &self,
         user: &User,
@@ -466,6 +693,48 @@ impl AppState {
         })
     }
 
+    async fn append_kafka_dlq_action_audit_best_effort(&self, input: KafkaDlqActionAuditInput<'_>) {
+        if let Err(err) = sqlx::query(
+            r#"
+            INSERT INTO kafka_dlq_event_actions(
+                dlq_event_id,
+                action,
+                operator_user_id,
+                result,
+                before_status,
+                after_status,
+                reason,
+                request_id,
+                idempotency_key,
+                error_message
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(input.dlq_event_id as i64)
+        .bind(input.action)
+        .bind(input.operator_user_id)
+        .bind(input.result)
+        .bind(input.before_status)
+        .bind(input.after_status)
+        .bind(input.reason)
+        .bind(input.request_id)
+        .bind(input.idempotency_key)
+        .bind(input.error_message)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(
+                dlq_event_id = input.dlq_event_id,
+                action = input.action,
+                operator_user_id = input.operator_user_id,
+                result = input.result,
+                "append kafka dlq action audit failed: {}",
+                err
+            );
+        }
+    }
+
     pub async fn list_kafka_dlq_events(
         &self,
         user: &User,
@@ -473,49 +742,110 @@ impl AppState {
     ) -> Result<ListKafkaDlqEventsOutput, AppError> {
         self.ensure_ops_permission(user, OpsPermission::JudgeReview)
             .await?;
+        let expose_raw_error_message = match self
+            .ensure_ops_permission(user, OpsPermission::JudgeRejudge)
+            .await
+        {
+            Ok(()) => true,
+            Err(AppError::DebateConflict(_)) => false,
+            Err(err) => return Err(err),
+        };
         let limit = normalize_limit(query.limit);
-        let offset = normalize_offset(query.offset);
+        let limit_plus_one = limit + 1;
+        let cursor = match query.cursor.as_deref().map(str::trim) {
+            Some(raw) if !raw.is_empty() => Some(decode_list_kafka_dlq_events_cursor(raw)?),
+            _ => None,
+        };
+        let offset = if cursor.is_some() {
+            0
+        } else {
+            normalize_offset(query.offset)
+        };
         let status = normalize_status_filter(query.status)?;
         let event_type = normalize_event_type_filter(query.event_type);
+        let include_total = query.include_total.unwrap_or(false);
 
-        let total: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(1)
-            FROM kafka_dlq_events
-            WHERE ($1::text IS NULL OR status = $1)
-              AND ($2::text IS NULL OR event_type = $2)
-            "#,
-        )
-        .bind(status.as_deref())
-        .bind(event_type.as_deref())
-        .fetch_one(&self.pool)
-        .await?;
-
-        let rows: Vec<KafkaDlqEventRow> = sqlx::query_as(
-            r#"
-            SELECT
-                id, consumer_group, topic, partition, message_offset,
-                event_id, event_type, aggregate_id, status, failure_count, error_message,
-                first_failed_at, last_failed_at, replayed_at, discarded_at, updated_at
-            FROM kafka_dlq_events
-            WHERE ($1::text IS NULL OR status = $1)
-              AND ($2::text IS NULL OR event_type = $2)
-            ORDER BY updated_at DESC, id DESC
-            LIMIT $3 OFFSET $4
-            "#,
-        )
-        .bind(status.as_deref())
-        .bind(event_type.as_deref())
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+        let mut rows: Vec<KafkaDlqEventRow> = if let Some(cursor) = cursor.as_ref() {
+            sqlx::query_as(
+                r#"
+                SELECT
+                    id, consumer_group, topic, partition, message_offset,
+                    event_id, event_type, aggregate_id, status, failure_count, error_message,
+                    first_failed_at, last_failed_at, replayed_at, discarded_at, updated_at
+                FROM kafka_dlq_events
+                WHERE ($1::text IS NULL OR status = $1)
+                  AND ($2::text IS NULL OR event_type = $2)
+                  AND (updated_at, id) < ($3, $4)
+                ORDER BY updated_at DESC, id DESC
+                LIMIT $5
+                "#,
+            )
+            .bind(status.as_deref())
+            .bind(event_type.as_deref())
+            .bind(cursor.updated_at)
+            .bind(cursor.id)
+            .bind(limit_plus_one)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"
+                SELECT
+                    id, consumer_group, topic, partition, message_offset,
+                    event_id, event_type, aggregate_id, status, failure_count, error_message,
+                    first_failed_at, last_failed_at, replayed_at, discarded_at, updated_at
+                FROM kafka_dlq_events
+                WHERE ($1::text IS NULL OR status = $1)
+                  AND ($2::text IS NULL OR event_type = $2)
+                ORDER BY updated_at DESC, id DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(status.as_deref())
+            .bind(event_type.as_deref())
+            .bind(limit_plus_one)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        let has_more = (rows.len() as i64) > limit;
+        if has_more {
+            rows.truncate(limit as usize);
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|last| encode_list_kafka_dlq_events_cursor(last.updated_at, last.id))
+        } else {
+            None
+        };
+        let total = if include_total {
+            let total: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(1)
+                FROM kafka_dlq_events
+                WHERE ($1::text IS NULL OR status = $1)
+                  AND ($2::text IS NULL OR event_type = $2)
+                "#,
+            )
+            .bind(status.as_deref())
+            .bind(event_type.as_deref())
+            .fetch_one(&self.pool)
+            .await?;
+            Some(total.max(0) as u64)
+        } else {
+            None
+        };
 
         Ok(ListKafkaDlqEventsOutput {
-            total: total.max(0) as u64,
+            total,
             limit: limit as u64,
             offset: offset as u64,
-            items: rows.into_iter().map(map_dlq_row).collect(),
+            has_more,
+            next_cursor,
+            items: rows
+                .into_iter()
+                .map(|row| map_dlq_row(row, expose_raw_error_message))
+                .collect(),
         })
     }
 
@@ -523,9 +853,11 @@ impl AppState {
         &self,
         user: &User,
         id: u64,
+        meta: KafkaDlqActionMeta<'_>,
     ) -> Result<KafkaDlqActionOutput, AppError> {
         self.ensure_ops_permission(user, OpsPermission::JudgeRejudge)
             .await?;
+        let reason = normalize_dlq_action_reason(meta.reason)?;
 
         let row: Option<(String, String, i32, i64, Value, String)> = sqlx::query_as(
             r#"
@@ -538,44 +870,120 @@ impl AppState {
         .fetch_optional(&self.pool)
         .await?;
         let Some((consumer_group, topic, partition, message_offset, payload, status)) = row else {
-            return Err(AppError::NotFound(format!("kafka dlq event id {}", id)));
+            let message = format!("kafka dlq event id {}", id);
+            self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                dlq_event_id: id,
+                action: DLQ_ACTION_REPLAY,
+                operator_user_id: user.id,
+                result: DLQ_ACTION_RESULT_NOT_FOUND,
+                before_status: None,
+                after_status: None,
+                reason: Some(reason.as_str()),
+                request_id: meta.request_id,
+                idempotency_key: meta.idempotency_key,
+                error_message: Some(message.as_str()),
+            })
+            .await;
+            return Err(AppError::NotFound(message));
         };
-        if status == DLQ_STATUS_DISCARDED {
-            return Err(AppError::DebateConflict(format!(
-                "dlq event {} already discarded",
-                id
-            )));
+        if status != DLQ_STATUS_PENDING {
+            let message = format!("dlq event {} status {} cannot replay", id, status);
+            self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                dlq_event_id: id,
+                action: DLQ_ACTION_REPLAY,
+                operator_user_id: user.id,
+                result: DLQ_ACTION_RESULT_CONFLICT,
+                before_status: Some(status.as_str()),
+                after_status: Some(status.as_str()),
+                reason: Some(reason.as_str()),
+                request_id: meta.request_id,
+                idempotency_key: meta.idempotency_key,
+                error_message: Some(message.as_str()),
+            })
+            .await;
+            return Err(AppError::DebateConflict(message));
         }
-        let envelope: EventEnvelope = serde_json::from_value(payload).map_err(|err| {
-            AppError::DebateError(format!("dlq payload decode failed for id {}: {}", id, err))
-        })?;
-        let meta = WorkerEnvelopeMeta {
+        let envelope: EventEnvelope = match serde_json::from_value(payload) {
+            Ok(value) => value,
+            Err(err) => {
+                let message = format!("dlq payload decode failed for id {}: {}", id, err);
+                self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                    dlq_event_id: id,
+                    action: DLQ_ACTION_REPLAY,
+                    operator_user_id: user.id,
+                    result: DLQ_ACTION_RESULT_FAILED,
+                    before_status: Some(status.as_str()),
+                    after_status: Some(status.as_str()),
+                    reason: Some(reason.as_str()),
+                    request_id: meta.request_id,
+                    idempotency_key: meta.idempotency_key,
+                    error_message: Some(message.as_str()),
+                })
+                .await;
+                return Err(AppError::DebateError(message));
+            }
+        };
+        let worker_meta = WorkerEnvelopeMeta {
             consumer_group,
             topic,
             partition,
             offset: message_offset,
         };
-        let ret = process_worker_envelope(&self.pool, &meta, &envelope).await;
+        let ret = process_worker_envelope(&self.pool, &worker_meta, &envelope).await;
         match ret {
             Ok(WorkerProcessOutcome::Succeeded) | Ok(WorkerProcessOutcome::Duplicated) => {
-                let row: KafkaDlqActionRow = sqlx::query_as(
+                let row: Option<KafkaDlqActionRow> = sqlx::query_as(
                     r#"
                     UPDATE kafka_dlq_events
                     SET status = $2,
                         replayed_at = NOW(),
                         updated_at = NOW()
                     WHERE id = $1
+                      AND status = $3
                     RETURNING id, status, failure_count, error_message, replayed_at, discarded_at, updated_at
                     "#,
                 )
                 .bind(id as i64)
                 .bind(DLQ_STATUS_REPLAYED)
-                .fetch_one(&self.pool)
+                .bind(DLQ_STATUS_PENDING)
+                .fetch_optional(&self.pool)
                 .await?;
-                Ok(map_dlq_action_row(row))
+                let Some(row) = row else {
+                    let message = format!("dlq event {} replay conflict: status changed", id);
+                    self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                        dlq_event_id: id,
+                        action: DLQ_ACTION_REPLAY,
+                        operator_user_id: user.id,
+                        result: DLQ_ACTION_RESULT_CONFLICT,
+                        before_status: Some(status.as_str()),
+                        after_status: None,
+                        reason: Some(reason.as_str()),
+                        request_id: meta.request_id,
+                        idempotency_key: meta.idempotency_key,
+                        error_message: Some(message.as_str()),
+                    })
+                    .await;
+                    return Err(AppError::DebateConflict(message));
+                };
+                let output = map_dlq_action_row(row);
+                self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                    dlq_event_id: id,
+                    action: DLQ_ACTION_REPLAY,
+                    operator_user_id: user.id,
+                    result: DLQ_ACTION_RESULT_SUCCESS,
+                    before_status: Some(status.as_str()),
+                    after_status: Some(output.status.as_str()),
+                    reason: Some(reason.as_str()),
+                    request_id: meta.request_id,
+                    idempotency_key: meta.idempotency_key,
+                    error_message: None,
+                })
+                .await;
+                Ok(output)
             }
             Err(err) => {
-                let row: KafkaDlqActionRow = sqlx::query_as(
+                let replay_error_message = format!("replay retryable error: {}", err);
+                let row: Option<KafkaDlqActionRow> = sqlx::query_as(
                     r#"
                     UPDATE kafka_dlq_events
                     SET status = $2,
@@ -584,15 +992,48 @@ impl AppState {
                         last_failed_at = NOW(),
                         updated_at = NOW()
                     WHERE id = $1
+                      AND status = $4
                     RETURNING id, status, failure_count, error_message, replayed_at, discarded_at, updated_at
                     "#,
                 )
                 .bind(id as i64)
                 .bind(DLQ_STATUS_PENDING)
-                .bind(format!("replay retryable error: {}", err))
-                .fetch_one(&self.pool)
+                .bind(&replay_error_message)
+                .bind(DLQ_STATUS_PENDING)
+                .fetch_optional(&self.pool)
                 .await?;
-                Ok(map_dlq_action_row(row))
+                let Some(row) = row else {
+                    let message = format!("dlq event {} replay conflict: status changed", id);
+                    self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                        dlq_event_id: id,
+                        action: DLQ_ACTION_REPLAY,
+                        operator_user_id: user.id,
+                        result: DLQ_ACTION_RESULT_CONFLICT,
+                        before_status: Some(status.as_str()),
+                        after_status: None,
+                        reason: Some(reason.as_str()),
+                        request_id: meta.request_id,
+                        idempotency_key: meta.idempotency_key,
+                        error_message: Some(message.as_str()),
+                    })
+                    .await;
+                    return Err(AppError::DebateConflict(message));
+                };
+                let output = map_dlq_action_row(row);
+                self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                    dlq_event_id: id,
+                    action: DLQ_ACTION_REPLAY,
+                    operator_user_id: user.id,
+                    result: DLQ_ACTION_RESULT_FAILED,
+                    before_status: Some(status.as_str()),
+                    after_status: Some(output.status.as_str()),
+                    reason: Some(reason.as_str()),
+                    request_id: meta.request_id,
+                    idempotency_key: meta.idempotency_key,
+                    error_message: Some(replay_error_message.as_str()),
+                })
+                .await;
+                Ok(output)
             }
         }
     }
@@ -601,9 +1042,55 @@ impl AppState {
         &self,
         user: &User,
         id: u64,
+        meta: KafkaDlqActionMeta<'_>,
     ) -> Result<KafkaDlqActionOutput, AppError> {
         self.ensure_ops_permission(user, OpsPermission::JudgeRejudge)
             .await?;
+        let reason = normalize_dlq_action_reason(meta.reason)?;
+        let before_status: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT status
+            FROM kafka_dlq_events
+            WHERE id = $1
+            "#,
+        )
+        .bind(id as i64)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(before_status) = before_status else {
+            let message = format!("kafka dlq event id {}", id);
+            self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                dlq_event_id: id,
+                action: DLQ_ACTION_DISCARD,
+                operator_user_id: user.id,
+                result: DLQ_ACTION_RESULT_NOT_FOUND,
+                before_status: None,
+                after_status: None,
+                reason: Some(reason.as_str()),
+                request_id: meta.request_id,
+                idempotency_key: meta.idempotency_key,
+                error_message: Some(message.as_str()),
+            })
+            .await;
+            return Err(AppError::NotFound(message));
+        };
+        if before_status != DLQ_STATUS_PENDING {
+            let message = format!("dlq event {} status {} cannot discard", id, before_status);
+            self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                dlq_event_id: id,
+                action: DLQ_ACTION_DISCARD,
+                operator_user_id: user.id,
+                result: DLQ_ACTION_RESULT_CONFLICT,
+                before_status: Some(before_status.as_str()),
+                after_status: Some(before_status.as_str()),
+                reason: Some(reason.as_str()),
+                request_id: meta.request_id,
+                idempotency_key: meta.idempotency_key,
+                error_message: Some(message.as_str()),
+            })
+            .await;
+            return Err(AppError::DebateConflict(message));
+        }
         let row: Option<KafkaDlqActionRow> = sqlx::query_as(
             r#"
             UPDATE kafka_dlq_events
@@ -611,17 +1098,47 @@ impl AppState {
                 discarded_at = NOW(),
                 updated_at = NOW()
             WHERE id = $1
+              AND status = $3
             RETURNING id, status, failure_count, error_message, replayed_at, discarded_at, updated_at
             "#,
         )
         .bind(id as i64)
         .bind(DLQ_STATUS_DISCARDED)
+        .bind(DLQ_STATUS_PENDING)
         .fetch_optional(&self.pool)
         .await?;
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("kafka dlq event id {}", id)));
+            let message = format!("dlq event {} discard conflict: status changed", id);
+            self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+                dlq_event_id: id,
+                action: DLQ_ACTION_DISCARD,
+                operator_user_id: user.id,
+                result: DLQ_ACTION_RESULT_CONFLICT,
+                before_status: Some(before_status.as_str()),
+                after_status: None,
+                reason: Some(reason.as_str()),
+                request_id: meta.request_id,
+                idempotency_key: meta.idempotency_key,
+                error_message: Some(message.as_str()),
+            })
+            .await;
+            return Err(AppError::DebateConflict(message));
         };
-        Ok(map_dlq_action_row(row))
+        let output = map_dlq_action_row(row);
+        self.append_kafka_dlq_action_audit_best_effort(KafkaDlqActionAuditInput {
+            dlq_event_id: id,
+            action: DLQ_ACTION_DISCARD,
+            operator_user_id: user.id,
+            result: DLQ_ACTION_RESULT_SUCCESS,
+            before_status: Some(before_status.as_str()),
+            after_status: Some(output.status.as_str()),
+            reason: Some(reason.as_str()),
+            request_id: meta.request_id,
+            idempotency_key: meta.idempotency_key,
+            error_message: None,
+        })
+        .await;
+        Ok(output)
     }
 }
 
@@ -828,6 +1345,7 @@ fn evaluate_pending_dlq_replay_rate_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::UpsertOpsRoleInput;
     use anyhow::Result;
     use chrono::Duration;
     use serde_json::json;
@@ -839,6 +1357,28 @@ mod tests {
             .await?
             .expect("owner should exist in test fixture");
         Ok(owner)
+    }
+
+    async fn setup_ops_user_with_role(
+        state: &AppState,
+        owner: &User,
+        user_id: u64,
+        role: &str,
+    ) -> Result<User> {
+        state
+            .upsert_ops_role_assignment_by_owner(
+                owner,
+                user_id,
+                UpsertOpsRoleInput {
+                    role: role.to_string(),
+                },
+            )
+            .await?;
+        let user = state
+            .find_user_by_id(user_id as i64)
+            .await?
+            .expect("target user should exist in test fixture");
+        Ok(user)
     }
 
     async fn insert_pending_dlq_event(state: &AppState, event_id: &str) -> Result<()> {
@@ -907,6 +1447,164 @@ mod tests {
         .execute(&state.pool)
         .await?;
         Ok(())
+    }
+
+    async fn insert_discarded_dlq_event(state: &AppState, event_id: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO kafka_dlq_events(
+                consumer_group, topic, partition, message_offset,
+                event_id, event_type, aggregate_id, payload,
+                status, failure_count, error_message,
+                first_failed_at, last_failed_at, discarded_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'discarded', 1, 'discarded', NOW(), NOW(), NOW())
+            "#,
+        )
+        .bind("test-group")
+        .bind("debate.message.created")
+        .bind(0_i32)
+        .bind(3_i64)
+        .bind(event_id)
+        .bind("DebateMessageCreated")
+        .bind("session:1")
+        .bind(json!({
+            "eventId": event_id,
+            "eventType": "DebateMessageCreated",
+            "source": "test",
+            "aggregateId": "session:1",
+            "occurredAt": "2026-03-30T00:00:00Z",
+            "payload": {}
+        }))
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_succeeded_consume_ledger(state: &AppState, event_id: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO kafka_consume_ledger(
+                consumer_group, topic, partition, message_offset,
+                event_id, event_type, aggregate_id, payload,
+                status, error_message
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'succeeded', NULL)
+            "#,
+        )
+        .bind("test-group")
+        .bind("debate.message.created")
+        .bind(0_i32)
+        .bind(100_i64)
+        .bind(event_id)
+        .bind("DebateMessageCreated")
+        .bind("session:1")
+        .bind(json!({
+            "eventId": event_id,
+            "eventType": "DebateMessageCreated",
+            "source": "test",
+            "aggregateId": "session:1",
+            "occurredAt": "2026-03-30T00:00:00Z",
+            "payload": {}
+        }))
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_dlq_event_id(state: &AppState, event_id: &str) -> Result<u64> {
+        let id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM kafka_dlq_events
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind("test-group")
+        .bind(event_id)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(id as u64)
+    }
+
+    async fn set_dlq_event_updated_at(
+        state: &AppState,
+        event_id: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE kafka_dlq_events
+            SET updated_at = $3
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind("test-group")
+        .bind(event_id)
+        .bind(updated_at)
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn count_dlq_action_audits(
+        state: &AppState,
+        dlq_event_id: u64,
+        action: &str,
+        result: &str,
+    ) -> Result<u64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_event_actions
+            WHERE dlq_event_id = $1
+              AND action = $2
+              AND result = $3
+            "#,
+        )
+        .bind(dlq_event_id as i64)
+        .bind(action)
+        .bind(result)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok(count.max(0) as u64)
+    }
+
+    async fn insert_dlq_action_audit_for_test(
+        state: &AppState,
+        dlq_event_id: u64,
+        action: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO kafka_dlq_event_actions(
+                dlq_event_id,
+                action,
+                operator_user_id,
+                result,
+                before_status,
+                after_status,
+                reason
+            )
+            VALUES ($1, $2, $3, 'success', NULL, NULL, 'retention-cleanup-test')
+            "#,
+        )
+        .bind(dlq_event_id as i64)
+        .bind(action)
+        .bind(1_i64)
+        .execute(&state.pool)
+        .await?;
+        Ok(())
+    }
+
+    fn test_dlq_action_meta<'a>() -> KafkaDlqActionMeta<'a> {
+        KafkaDlqActionMeta {
+            reason: Some("test-ops-action"),
+            request_id: Some("req-test-kafka-dlq"),
+            idempotency_key: Some("idem-test-kafka-dlq"),
+        }
     }
 
     async fn upsert_notify_runtime_signal_for_test(
@@ -1021,6 +1719,582 @@ mod tests {
         assert!(normalize_status_filter(Some("unknown".to_string())).is_err());
         assert!(normalize_status_filter(Some("pending".to_string())).is_ok());
         assert!(normalize_status_filter(None).is_ok());
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_should_filter_and_clamp_pagination() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        insert_pending_dlq_event(&state, "dlq-list-pending").await?;
+        insert_replayed_dlq_event(&state, "dlq-list-replayed", Utc::now()).await?;
+
+        let output = state
+            .list_kafka_dlq_events(
+                &owner,
+                ListKafkaDlqEventsQuery {
+                    status: Some("PENDING".to_string()),
+                    event_type: None,
+                    limit: Some(999),
+                    offset: Some(0),
+                    cursor: None,
+                    include_total: Some(true),
+                },
+            )
+            .await?;
+
+        assert_eq!(output.limit, 100);
+        assert!(output.total.unwrap_or_default() >= 1);
+        assert!(!output.items.is_empty());
+        assert!(output
+            .items
+            .iter()
+            .all(|item| item.status == DLQ_STATUS_PENDING));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_kafka_dlq_retention_should_delete_only_old_terminal_rows() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let now = Utc::now();
+        let cutoff = now - Duration::days(14);
+        insert_pending_dlq_event(&state, "dlq-cleanup-pending-old").await?;
+        set_dlq_event_updated_at(&state, "dlq-cleanup-pending-old", now - Duration::days(40))
+            .await?;
+        insert_replayed_dlq_event(&state, "dlq-cleanup-replayed-old", now - Duration::days(40))
+            .await?;
+        insert_discarded_dlq_event(&state, "dlq-cleanup-discarded-old").await?;
+        set_dlq_event_updated_at(
+            &state,
+            "dlq-cleanup-discarded-old",
+            now - Duration::days(35),
+        )
+        .await?;
+        insert_replayed_dlq_event(
+            &state,
+            "dlq-cleanup-replayed-fresh",
+            now - Duration::days(2),
+        )
+        .await?;
+
+        let old_replayed_id = get_dlq_event_id(&state, "dlq-cleanup-replayed-old").await?;
+        let old_discarded_id = get_dlq_event_id(&state, "dlq-cleanup-discarded-old").await?;
+        let fresh_replayed_id = get_dlq_event_id(&state, "dlq-cleanup-replayed-fresh").await?;
+        insert_dlq_action_audit_for_test(&state, old_replayed_id, DLQ_ACTION_REPLAY).await?;
+        insert_dlq_action_audit_for_test(&state, old_discarded_id, DLQ_ACTION_DISCARD).await?;
+        insert_dlq_action_audit_for_test(&state, fresh_replayed_id, DLQ_ACTION_REPLAY).await?;
+
+        let first = state.cleanup_kafka_dlq_retention_before(cutoff, 1).await?;
+        assert_eq!(first.deleted_event_rows, 1);
+        assert_eq!(first.deleted_action_rows, 1);
+
+        let second = state.cleanup_kafka_dlq_retention_before(cutoff, 1).await?;
+        assert_eq!(second.deleted_event_rows, 1);
+        assert_eq!(second.deleted_action_rows, 1);
+
+        let third = state.cleanup_kafka_dlq_retention_before(cutoff, 1).await?;
+        assert_eq!(third.deleted_event_rows, 0);
+        assert_eq!(third.deleted_action_rows, 0);
+
+        let pending_old_exists: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_events
+            WHERE consumer_group = $1
+              AND event_id = $2
+            "#,
+        )
+        .bind("test-group")
+        .bind("dlq-cleanup-pending-old")
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(pending_old_exists, 1);
+
+        let fresh_replayed_exists: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_events
+            WHERE id = $1
+            "#,
+        )
+        .bind(fresh_replayed_id as i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(fresh_replayed_exists, 1);
+
+        let old_replayed_exists: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_events
+            WHERE id = $1
+            "#,
+        )
+        .bind(old_replayed_id as i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(old_replayed_exists, 0);
+
+        let old_discarded_exists: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_events
+            WHERE id = $1
+            "#,
+        )
+        .bind(old_discarded_id as i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(old_discarded_exists, 0);
+
+        let old_replayed_actions: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_event_actions
+            WHERE dlq_event_id = $1
+            "#,
+        )
+        .bind(old_replayed_id as i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(old_replayed_actions, 0);
+
+        let old_discarded_actions: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_event_actions
+            WHERE dlq_event_id = $1
+            "#,
+        )
+        .bind(old_discarded_id as i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(old_discarded_actions, 0);
+
+        let fresh_replayed_actions: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)
+            FROM kafka_dlq_event_actions
+            WHERE dlq_event_id = $1
+            "#,
+        )
+        .bind(fresh_replayed_id as i64)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(fresh_replayed_actions, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_should_reject_invalid_status_filter() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+
+        let err = state
+            .list_kafka_dlq_events(
+                &owner,
+                ListKafkaDlqEventsQuery {
+                    status: Some("bad-status".to_string()),
+                    event_type: None,
+                    limit: None,
+                    offset: None,
+                    cursor: None,
+                    include_total: None,
+                },
+            )
+            .await
+            .expect_err("invalid status should fail");
+        match err {
+            AppError::DebateError(message) => {
+                assert!(message.contains("invalid dlq status filter"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_should_reject_invalid_cursor() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+
+        let err = state
+            .list_kafka_dlq_events(
+                &owner,
+                ListKafkaDlqEventsQuery {
+                    status: None,
+                    event_type: None,
+                    limit: Some(20),
+                    offset: None,
+                    cursor: Some("bad-cursor".to_string()),
+                    include_total: None,
+                },
+            )
+            .await
+            .expect_err("invalid cursor should fail");
+        match err {
+            AppError::ValidationError(code) => assert_eq!(code, "ops_kafka_dlq_cursor_invalid"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_should_support_cursor_pagination_without_total() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        insert_pending_dlq_event(&state, "dlq-cursor-1").await?;
+        insert_pending_dlq_event(&state, "dlq-cursor-2").await?;
+        insert_pending_dlq_event(&state, "dlq-cursor-3").await?;
+        let now = Utc::now();
+        set_dlq_event_updated_at(&state, "dlq-cursor-1", now - Duration::seconds(30)).await?;
+        set_dlq_event_updated_at(&state, "dlq-cursor-2", now - Duration::seconds(20)).await?;
+        set_dlq_event_updated_at(&state, "dlq-cursor-3", now - Duration::seconds(10)).await?;
+
+        let first_page = state
+            .list_kafka_dlq_events(
+                &owner,
+                ListKafkaDlqEventsQuery {
+                    status: Some("pending".to_string()),
+                    event_type: None,
+                    limit: Some(2),
+                    offset: Some(0),
+                    cursor: None,
+                    include_total: Some(false),
+                },
+            )
+            .await?;
+        assert_eq!(first_page.total, None);
+        assert!(first_page.has_more);
+        assert_eq!(first_page.items.len(), 2);
+        assert_eq!(
+            first_page.items.first().map(|item| item.event_id.as_str()),
+            Some("dlq-cursor-3")
+        );
+        assert_eq!(
+            first_page.items.get(1).map(|item| item.event_id.as_str()),
+            Some("dlq-cursor-2")
+        );
+        let next_cursor = first_page
+            .next_cursor
+            .clone()
+            .expect("first page should include cursor");
+
+        let second_page = state
+            .list_kafka_dlq_events(
+                &owner,
+                ListKafkaDlqEventsQuery {
+                    status: Some("pending".to_string()),
+                    event_type: None,
+                    limit: Some(2),
+                    offset: Some(9999),
+                    cursor: Some(next_cursor),
+                    include_total: Some(false),
+                },
+            )
+            .await?;
+        assert_eq!(second_page.total, None);
+        assert!(!second_page.has_more);
+        assert_eq!(second_page.offset, 0);
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(
+            second_page.items.first().map(|item| item.event_id.as_str()),
+            Some("dlq-cursor-1")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_kafka_dlq_event_should_mark_replayed_when_worker_reports_duplicated(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-replay-duplicated";
+        insert_pending_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+        insert_succeeded_consume_ledger(&state, event_id).await?;
+
+        let output = state
+            .replay_kafka_dlq_event(&owner, dlq_event_id, test_dlq_action_meta())
+            .await?;
+        assert_eq!(output.status, DLQ_STATUS_REPLAYED);
+        assert_eq!(
+            count_dlq_action_audits(
+                &state,
+                dlq_event_id,
+                DLQ_ACTION_REPLAY,
+                DLQ_ACTION_RESULT_SUCCESS
+            )
+            .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_kafka_dlq_event_should_increment_failure_when_worker_still_fails() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-replay-failed";
+        insert_pending_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+
+        let output = state
+            .replay_kafka_dlq_event(&owner, dlq_event_id, test_dlq_action_meta())
+            .await?;
+        assert_eq!(output.status, DLQ_STATUS_PENDING);
+        assert_eq!(output.failure_count, 2);
+        assert_eq!(
+            count_dlq_action_audits(
+                &state,
+                dlq_event_id,
+                DLQ_ACTION_REPLAY,
+                DLQ_ACTION_RESULT_FAILED
+            )
+            .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_kafka_dlq_event_should_return_conflict_for_discarded_event() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-replay-discarded";
+        insert_discarded_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+
+        let err = state
+            .replay_kafka_dlq_event(&owner, dlq_event_id, test_dlq_action_meta())
+            .await
+            .expect_err("discarded event should reject replay");
+        assert!(matches!(err, AppError::DebateConflict(_)));
+        assert_eq!(
+            count_dlq_action_audits(
+                &state,
+                dlq_event_id,
+                DLQ_ACTION_REPLAY,
+                DLQ_ACTION_RESULT_CONFLICT
+            )
+            .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_kafka_dlq_event_should_mark_discarded_and_append_audit() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-discard-success";
+        insert_pending_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+
+        let output = state
+            .discard_kafka_dlq_event(&owner, dlq_event_id, test_dlq_action_meta())
+            .await?;
+        assert_eq!(output.status, DLQ_STATUS_DISCARDED);
+        assert_eq!(
+            count_dlq_action_audits(
+                &state,
+                dlq_event_id,
+                DLQ_ACTION_DISCARD,
+                DLQ_ACTION_RESULT_SUCCESS
+            )
+            .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_kafka_dlq_event_should_return_conflict_for_non_pending_event() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-discard-conflict";
+        insert_discarded_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+
+        let err = state
+            .discard_kafka_dlq_event(&owner, dlq_event_id, test_dlq_action_meta())
+            .await
+            .expect_err("discarded event should reject discard");
+        assert!(matches!(err, AppError::DebateConflict(_)));
+        assert_eq!(
+            count_dlq_action_audits(
+                &state,
+                dlq_event_id,
+                DLQ_ACTION_DISCARD,
+                DLQ_ACTION_RESULT_CONFLICT
+            )
+            .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_kafka_dlq_event_should_require_non_empty_reason() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-replay-empty-reason";
+        insert_pending_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+
+        let err = state
+            .replay_kafka_dlq_event(
+                &owner,
+                dlq_event_id,
+                KafkaDlqActionMeta {
+                    reason: Some("   "),
+                    request_id: Some("req-empty-reason"),
+                    idempotency_key: Some("idem-empty-reason"),
+                },
+            )
+            .await
+            .expect_err("empty reason should reject replay");
+        assert!(matches!(err, AppError::DebateError(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_kafka_dlq_event_should_require_non_empty_reason() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-discard-empty-reason";
+        insert_pending_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+
+        let err = state
+            .discard_kafka_dlq_event(
+                &owner,
+                dlq_event_id,
+                KafkaDlqActionMeta {
+                    reason: Some("  "),
+                    request_id: Some("req-discard-empty-reason"),
+                    idempotency_key: Some("idem-discard-empty-reason"),
+                },
+            )
+            .await
+            .expect_err("empty reason should reject discard");
+        assert!(matches!(err, AppError::DebateError(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_kafka_dlq_event_should_reject_too_long_reason() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let event_id = "dlq-replay-too-long-reason";
+        insert_pending_dlq_event(&state, event_id).await?;
+        let dlq_event_id = get_dlq_event_id(&state, event_id).await?;
+        let too_long_reason = "x".repeat(241);
+
+        let err = state
+            .replay_kafka_dlq_event(
+                &owner,
+                dlq_event_id,
+                KafkaDlqActionMeta {
+                    reason: Some(too_long_reason.as_str()),
+                    request_id: Some("req-too-long-reason"),
+                    idempotency_key: Some("idem-too-long-reason"),
+                },
+            )
+            .await
+            .expect_err("too long reason should reject replay");
+        assert!(matches!(err, AppError::DebateError(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_should_mask_error_message_for_ops_viewer() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let viewer = setup_ops_user_with_role(&state, &owner, 2, "ops_viewer").await?;
+        let event_id = "dlq-list-mask-viewer";
+        insert_pending_dlq_event(&state, event_id).await?;
+        sqlx::query(
+            r#"
+            UPDATE kafka_dlq_events
+            SET error_message = $2
+            WHERE consumer_group = $1
+              AND event_id = $3
+            "#,
+        )
+        .bind("test-group")
+        .bind("retryable worker error: unique violation on uq_messages_session_seq")
+        .bind(event_id)
+        .execute(&state.pool)
+        .await?;
+
+        let output = state
+            .list_kafka_dlq_events(
+                &viewer,
+                ListKafkaDlqEventsQuery {
+                    status: Some("pending".to_string()),
+                    event_type: None,
+                    limit: Some(20),
+                    offset: Some(0),
+                    cursor: None,
+                    include_total: None,
+                },
+            )
+            .await?;
+        let item = output
+            .items
+            .iter()
+            .find(|v| v.event_id == event_id)
+            .expect("target event should be listed");
+        assert_eq!(item.error_message, DLQ_ERROR_MESSAGE_MASKED_BY_ROLE);
+        assert_eq!(item.error_class, DLQ_ERROR_CLASS_DB_CONFLICT);
+        assert_eq!(item.error_code, DLQ_ERROR_CLASS_DB_CONFLICT);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_kafka_dlq_events_should_keep_raw_error_message_for_ops_reviewer() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = setup_ops_owner(&state).await?;
+        let reviewer = setup_ops_user_with_role(&state, &owner, 2, "ops_reviewer").await?;
+        let event_id = "dlq-list-mask-reviewer";
+        let raw_error = "retryable worker error: connection refused by upstream relay";
+        insert_pending_dlq_event(&state, event_id).await?;
+        sqlx::query(
+            r#"
+            UPDATE kafka_dlq_events
+            SET error_message = $2
+            WHERE consumer_group = $1
+              AND event_id = $3
+            "#,
+        )
+        .bind("test-group")
+        .bind(raw_error)
+        .bind(event_id)
+        .execute(&state.pool)
+        .await?;
+
+        let output = state
+            .list_kafka_dlq_events(
+                &reviewer,
+                ListKafkaDlqEventsQuery {
+                    status: Some("pending".to_string()),
+                    event_type: None,
+                    limit: Some(20),
+                    offset: Some(0),
+                    cursor: None,
+                    include_total: None,
+                },
+            )
+            .await?;
+        let item = output
+            .items
+            .iter()
+            .find(|v| v.event_id == event_id)
+            .expect("target event should be listed");
+        assert_eq!(item.error_message, raw_error);
+        assert_eq!(item.error_class, DLQ_ERROR_CLASS_UPSTREAM_UNAVAILABLE);
+        assert_eq!(item.error_code, DLQ_ERROR_CLASS_UPSTREAM_UNAVAILABLE);
+        Ok(())
     }
 
     #[test]

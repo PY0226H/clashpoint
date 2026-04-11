@@ -935,27 +935,27 @@ impl AppState {
                 OPS_RBAC_TARGET_USER_NOT_FOUND_CODE.to_string(),
             ));
         }
-
-        // Prefer current platform owner as grant source.
-        // If missing, fallback to conventional user id=1, and then self-grant in local edge cases.
-        let granted_by = sqlx::query_scalar::<_, i64>(
+        let mut tx = self.pool.begin().await?;
+        let previous_owner_id: Option<i64> = sqlx::query_scalar(
             r#"
             SELECT owner_user_id
             FROM platform_admin_owners
             WHERE singleton_key = TRUE
             LIMIT 1
+            FOR UPDATE
             "#,
         )
-        .fetch_optional(&self.pool)
-        .await?
-        .or(
+        .fetch_optional(&mut *tx)
+        .await?;
+        // 先复用旧 owner 作为授权来源，缺省再回退到 user=1，最后才自授权。
+        let granted_by = if let Some(owner_id) = previous_owner_id {
+            owner_id
+        } else {
             sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE id = 1")
-                .fetch_optional(&self.pool)
-                .await?,
-        )
-        .unwrap_or(user_id);
-
-        let mut tx = self.pool.begin().await?;
+                .fetch_optional(&mut *tx)
+                .await?
+                .unwrap_or(user_id)
+        };
         sqlx::query(
             r#"
             INSERT INTO platform_user_roles(user_id, role, granted_by, created_at, updated_at)
@@ -989,6 +989,12 @@ impl AppState {
         .bind(granted_by)
         .execute(&mut *tx)
         .await?;
+        if let Some(old_owner_id) = previous_owner_id.filter(|value| *value != user_id) {
+            sqlx::query("DELETE FROM platform_user_roles WHERE user_id = $1")
+                .bind(old_owner_id)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(())
     }

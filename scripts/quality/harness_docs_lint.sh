@@ -227,6 +227,10 @@ check_plan_file_shape() {
   local file="$1"
   local label="$2"
 
+  if [[ ! -s "$file" ]]; then
+    return
+  fi
+
   if has_literal "$file" '### 已完成/未完成矩阵'; then
     check_dev_plan_shape "$file" "$label"
     return
@@ -450,7 +454,7 @@ check_completed_doc "$ROOT/docs/dev_plan/completed.md"
 CURRENT_PLAN="$ROOT/docs/dev_plan/当前开发计划.md"
 if [[ -f "$CURRENT_PLAN" ]]; then
   check_plan_file_shape "$CURRENT_PLAN" "default-current-plan"
-  if ! has_literal "$CURRENT_PLAN" '关联 slot：`default`'; then
+  if [[ -s "$CURRENT_PLAN" ]] && ! has_literal "$CURRENT_PLAN" '关联 slot：`default`'; then
     add_issue "warning" "current_plan_missing_default_slot_note" "$CURRENT_PLAN" "当前开发计划未声明关联 slot 为 default。"
   fi
 else

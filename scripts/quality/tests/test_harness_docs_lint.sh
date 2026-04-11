@@ -105,6 +105,21 @@ expect_contains "happy path prints pass" "status: PASS" "$OK_STDOUT"
 expect_contains "happy path json ok" '"ok": true' "$OK_JSON"
 expect_contains "happy path markdown checked section" "## Checked" "$OK_MD"
 
+WORKSPACE_BLANK_PLAN="$TMP_DIR/workspace-blank-current-plan"
+make_workspace "$WORKSPACE_BLANK_PLAN"
+: >"$WORKSPACE_BLANK_PLAN/docs/dev_plan/当前开发计划.md"
+
+BLANK_PLAN_STDOUT="$TMP_DIR/blank-plan.stdout"
+BLANK_PLAN_JSON="$TMP_DIR/blank-plan.json"
+BLANK_PLAN_MD="$TMP_DIR/blank-plan.md"
+bash "$SCRIPT" \
+  --root "$WORKSPACE_BLANK_PLAN" \
+  --json-out "$BLANK_PLAN_JSON" \
+  --md-out "$BLANK_PLAN_MD" >"$BLANK_PLAN_STDOUT"
+
+expect_contains "blank current plan is allowed" "status: PASS" "$BLANK_PLAN_STDOUT"
+expect_contains "blank current plan json ok" '"ok": true' "$BLANK_PLAN_JSON"
+
 WORKSPACE_EMPTY="$TMP_DIR/workspace-empty-pointer"
 make_workspace "$WORKSPACE_EMPTY"
 : >"$WORKSPACE_EMPTY/.codex/plan-slots/default.txt"

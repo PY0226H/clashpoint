@@ -545,6 +545,18 @@ emit_commit_message_recommendation() {
     return 0
   fi
 
+  local script title
+  script="$ROOT/skills/post-module-commit-message/scripts/recommend_commit_message.sh"
+  if [[ -f "$script" ]]; then
+    COMMIT_RECOMMENDATION_BLOCK="$(bash "$script" --root "$ROOT" --task-kind "$TASK_KIND" --module "$MODULE" --summary "$SUMMARY")"
+    COMMIT_RECOMMENDATION_TITLE="$(printf '%s\n' "$COMMIT_RECOMMENDATION_BLOCK" | awk 'found == 1 && NF { print; exit } /^Recommended:$/ { found = 1 }')"
+    if [[ -z "$COMMIT_RECOMMENDATION_TITLE" ]]; then
+      COMMIT_RECOMMENDATION_TITLE="$(bash "$script" --root "$ROOT" --task-kind "$TASK_KIND" --module "$MODULE" --summary "$SUMMARY" --title-only)"
+    fi
+    printf '%s' "$COMMIT_RECOMMENDATION_BLOCK"
+    return 0
+  fi
+
   local type scope subject
   case "$TASK_KIND" in
     dev) type="feat" ;;
@@ -564,6 +576,7 @@ emit_commit_message_recommendation() {
 
   COMMIT_RECOMMENDATION_TITLE="$(printf '%s(%s): %s' "$type" "$scope" "$subject")"
   COMMIT_RECOMMENDATION_BLOCK="$(cat <<EOF_RECOMMEND
+Recommended:
 $COMMIT_RECOMMENDATION_TITLE
 
 Alternatives:
@@ -579,7 +592,7 @@ announce_commit_message_preview() {
   emit_commit_message_recommendation >/dev/null
   printf '\ncommit_message_preview:\n'
   printf 'recommended_commit_title: %s\n' "$COMMIT_RECOMMENDATION_TITLE"
-  printf 'Recommended:\n%s\n' "$COMMIT_RECOMMENDATION_BLOCK"
+  printf '%s\n' "$COMMIT_RECOMMENDATION_BLOCK"
 }
 
 run_interview_journal() {
@@ -709,10 +722,10 @@ record_commit_message_step() {
   local started_at finished_at
   started_at="$(iso_now)"
   step_header "post-commit-message" "Conventional Commits 推荐"
-  printf 'Recommended:\n'
   emit_commit_message_recommendation
+  printf '\n'
   finished_at="$(iso_now)"
-  log_step_result "post-commit-message" "Conventional Commits 推荐" "$([[ "$DRY_RUN" -eq 1 ]] && echo dry_run || echo pass)" "$started_at" "$finished_at" 0 "" "emit_commit_message_recommendation"
+  log_step_result "post-commit-message" "Conventional Commits 推荐" "$([[ "$DRY_RUN" -eq 1 ]] && echo dry_run || echo pass)" "$started_at" "$finished_at" 0 "$ROOT/skills/post-module-commit-message/SKILL.md" "post-module-commit-message recommend_commit_message.sh"
 }
 
 run_plan_sync() {

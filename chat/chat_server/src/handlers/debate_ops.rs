@@ -8,12 +8,12 @@ use crate::{
     },
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput,
     ApplyOpsObservabilityAnomalyActionMeta, ExecuteJudgeReplayOpsInput,
-    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
-    ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
-    ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsRoleAssignmentsQuery,
-    ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta, OpsUpdateDebateSessionInput,
-    OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
+    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery, KafkaDlqActionInput,
+    KafkaDlqActionMeta, ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery,
+    ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
+    ListOpsRoleAssignmentsQuery, ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput,
+    OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta,
+    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityAnomalyStateMeta,
     UpsertOpsObservabilityThresholdsMeta, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
@@ -112,6 +112,24 @@ const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_OBSERVABILITY_ALERTS_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 60;
 const OPS_OBSERVABILITY_ALERTS_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 180;
 const OPS_OBSERVABILITY_ALERTS_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_KAFKA_DLQ_ACTION_IDEMPOTENCY_TTL_SECS: u64 = 30;
+const OPS_KAFKA_DLQ_ACTION_IDEMPOTENCY_MAX_LEN: usize = 160;
+const OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_SCOPE: &str = "ops_kafka_dlq_replay";
+const OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_SCOPE: &str = "ops_kafka_dlq_discard";
+const OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_KEY_INVALID_CODE: &str =
+    "ops_kafka_dlq_replay_idempotency_key_invalid";
+const OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_KEY_TOO_LONG_CODE: &str =
+    "ops_kafka_dlq_replay_idempotency_key_too_long";
+const OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_KEY_INVALID_CODE: &str =
+    "ops_kafka_dlq_discard_idempotency_key_invalid";
+const OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_KEY_TOO_LONG_CODE: &str =
+    "ops_kafka_dlq_discard_idempotency_key_too_long";
+const OPS_KAFKA_DLQ_ACTION_CONTENT_TYPE_INVALID_CODE: &str =
+    "ops_kafka_dlq_action_content_type_invalid";
+const OPS_KAFKA_DLQ_ACTION_BODY_INVALID_JSON_CODE: &str = "ops_kafka_dlq_action_body_invalid_json";
+const OPS_KAFKA_DLQ_ACTION_BODY_DATA_INVALID_CODE: &str = "ops_kafka_dlq_action_body_data_invalid";
+const OPS_KAFKA_DLQ_ACTION_BODY_READ_FAILED_CODE: &str = "ops_kafka_dlq_action_body_read_failed";
+const OPS_KAFKA_DLQ_ACTION_BODY_REJECTED_CODE: &str = "ops_kafka_dlq_action_body_rejected";
 const OPS_SPLIT_READINESS_CACHE_TTL_MS: i64 = 3_000;
 const OPS_SPLIT_REVIEW_AUDITS_USER_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const OPS_SPLIT_REVIEW_AUDITS_RATE_LIMIT_WINDOW_SECS: u64 = 60;
@@ -1693,7 +1711,7 @@ pub(crate) async fn upsert_ops_service_split_review_handler(
         result = "success",
         "upsert split readiness review served"
     );
-    Ok((StatusCode::OK, Json(ret)))
+    Ok((StatusCode::OK, Json(ret)).into_response())
 }
 
 /// Upsert ops observability thresholds for platform scope.
@@ -1803,7 +1821,7 @@ pub(crate) async fn upsert_ops_observability_thresholds_handler(
         result = "success",
         "upsert ops observability thresholds served"
     );
-    Ok((StatusCode::OK, Json(ret)))
+    Ok((StatusCode::OK, Json(ret)).into_response())
 }
 
 /// Upsert ops observability anomaly-state map for platform scope.
@@ -1902,7 +1920,7 @@ pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
         result = "success",
         "upsert ops observability anomaly state served"
     );
-    Ok((StatusCode::OK, Json(ret)))
+    Ok((StatusCode::OK, Json(ret)).into_response())
 }
 
 /// Apply anomaly-state action for a single alert key in platform scope.
@@ -2314,7 +2332,11 @@ pub(crate) async fn list_ops_alert_notifications_handler(
     ),
     responses(
         (status = 200, description = "Kafka DLQ events", body = crate::ListKafkaDlqEventsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2356,10 +2378,17 @@ pub(crate) async fn get_kafka_transport_readiness_handler(
     params(
         ("id" = u64, Path, description = "Kafka DLQ event id")
     ),
+    request_body = KafkaDlqActionInput,
     responses(
         (status = 200, description = "Replay result", body = crate::KafkaDlqActionOutput),
+        (status = 400, description = "Invalid replay request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 404, description = "DLQ event not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission or state conflict", body = crate::ErrorOutput),
+        (status = 415, description = "Unsupported media type", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2368,10 +2397,105 @@ pub(crate) async fn get_kafka_transport_readiness_handler(
 pub(crate) async fn replay_kafka_dlq_event_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
+    input: Result<Json<KafkaDlqActionInput>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.replay_kafka_dlq_event(&user, id).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    let request_id = request_id_from_headers(&headers);
+    let input = match input {
+        Ok(Json(input)) => input,
+        Err(rejection) => {
+            let (status, error_code) = classify_ops_kafka_dlq_action_body_rejection(&rejection);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                dlq_event_id = id,
+                status = status.as_u16(),
+                error_code,
+                decision = "failed",
+                result = "extractor_rejected",
+                "replay kafka dlq event request rejected by extractor: {}",
+                rejection
+            );
+            return Ok((status, Json(crate::ErrorOutput::new(error_code))).into_response());
+        }
+    };
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &headers,
+        OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_KEY_INVALID_CODE,
+        OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_KEY_TOO_LONG_CODE,
+        OPS_KAFKA_DLQ_ACTION_IDEMPOTENCY_MAX_LEN,
+    )?;
+    let idempotency_lock_key = request_idempotency_key
+        .as_deref()
+        .map(|key| format!("u{}:e{id}:{key}", user.id));
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        let acquired = try_acquire_idempotency_or_fail_open(
+            &state,
+            OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_SCOPE,
+            lock_key,
+            OPS_KAFKA_DLQ_ACTION_IDEMPOTENCY_TTL_SECS,
+        )
+        .await;
+        #[cfg(test)]
+        let acquired = maybe_override_ops_kafka_dlq_idempotency_acquired(&headers, acquired);
+        if !acquired {
+            return Err(AppError::DebateConflict(
+                "idempotency_conflict:ops_kafka_dlq_replay".to_string(),
+            ));
+        }
+    }
+    let ret = match state
+        .replay_kafka_dlq_event(
+            &user,
+            id,
+            KafkaDlqActionMeta {
+                reason: Some(input.reason.as_str()),
+                request_id: request_id.as_deref(),
+                idempotency_key: request_idempotency_key.as_deref(),
+            },
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            if let Some(lock_key) = idempotency_lock_key.as_deref() {
+                release_idempotency_best_effort(
+                    &state,
+                    OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_SCOPE,
+                    lock_key,
+                )
+                .await;
+            }
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                dlq_event_id = id,
+                decision = "failed",
+                result = "failed",
+                "replay kafka dlq event failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        release_idempotency_best_effort(&state, OPS_KAFKA_DLQ_REPLAY_IDEMPOTENCY_SCOPE, lock_key)
+            .await;
+    }
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        dlq_event_id = id,
+        has_idempotency_key = request_idempotency_key.is_some(),
+        reason = input.reason.as_str(),
+        status = ret.status.as_str(),
+        failure_count = ret.failure_count,
+        decision = "success",
+        result = "success",
+        "replay kafka dlq event served"
+    );
+    Ok((StatusCode::OK, Json(ret)).into_response())
 }
 
 /// Discard Kafka DLQ event by id.
@@ -2381,10 +2505,17 @@ pub(crate) async fn replay_kafka_dlq_event_handler(
     params(
         ("id" = u64, Path, description = "Kafka DLQ event id")
     ),
+    request_body = KafkaDlqActionInput,
     responses(
         (status = 200, description = "Discard result", body = crate::KafkaDlqActionOutput),
+        (status = 400, description = "Invalid discard request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 404, description = "DLQ event not found", body = crate::ErrorOutput),
         (status = 409, description = "Permission or state conflict", body = crate::ErrorOutput),
+        (status = 415, description = "Unsupported media type", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2393,10 +2524,105 @@ pub(crate) async fn replay_kafka_dlq_event_handler(
 pub(crate) async fn discard_kafka_dlq_event_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
+    input: Result<Json<KafkaDlqActionInput>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.discard_kafka_dlq_event(&user, id).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    let request_id = request_id_from_headers(&headers);
+    let input = match input {
+        Ok(Json(input)) => input,
+        Err(rejection) => {
+            let (status, error_code) = classify_ops_kafka_dlq_action_body_rejection(&rejection);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                dlq_event_id = id,
+                status = status.as_u16(),
+                error_code,
+                decision = "failed",
+                result = "extractor_rejected",
+                "discard kafka dlq event request rejected by extractor: {}",
+                rejection
+            );
+            return Ok((status, Json(crate::ErrorOutput::new(error_code))).into_response());
+        }
+    };
+    let request_idempotency_key = request_idempotency_key_from_headers(
+        &headers,
+        OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_KEY_INVALID_CODE,
+        OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_KEY_TOO_LONG_CODE,
+        OPS_KAFKA_DLQ_ACTION_IDEMPOTENCY_MAX_LEN,
+    )?;
+    let idempotency_lock_key = request_idempotency_key
+        .as_deref()
+        .map(|key| format!("u{}:e{id}:{key}", user.id));
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        let acquired = try_acquire_idempotency_or_fail_open(
+            &state,
+            OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_SCOPE,
+            lock_key,
+            OPS_KAFKA_DLQ_ACTION_IDEMPOTENCY_TTL_SECS,
+        )
+        .await;
+        #[cfg(test)]
+        let acquired = maybe_override_ops_kafka_dlq_idempotency_acquired(&headers, acquired);
+        if !acquired {
+            return Err(AppError::DebateConflict(
+                "idempotency_conflict:ops_kafka_dlq_discard".to_string(),
+            ));
+        }
+    }
+    let ret = match state
+        .discard_kafka_dlq_event(
+            &user,
+            id,
+            KafkaDlqActionMeta {
+                reason: Some(input.reason.as_str()),
+                request_id: request_id.as_deref(),
+                idempotency_key: request_idempotency_key.as_deref(),
+            },
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            if let Some(lock_key) = idempotency_lock_key.as_deref() {
+                release_idempotency_best_effort(
+                    &state,
+                    OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_SCOPE,
+                    lock_key,
+                )
+                .await;
+            }
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                dlq_event_id = id,
+                decision = "failed",
+                result = "failed",
+                "discard kafka dlq event failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    if let Some(lock_key) = idempotency_lock_key.as_deref() {
+        release_idempotency_best_effort(&state, OPS_KAFKA_DLQ_DISCARD_IDEMPOTENCY_SCOPE, lock_key)
+            .await;
+    }
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        dlq_event_id = id,
+        has_idempotency_key = request_idempotency_key.is_some(),
+        reason = input.reason.as_str(),
+        status = ret.status.as_str(),
+        failure_count = ret.failure_count,
+        decision = "success",
+        result = "success",
+        "discard kafka dlq event served"
+    );
+    Ok((StatusCode::OK, Json(ret)).into_response())
 }
 
 /// Upsert an ops role assignment (owner only).
@@ -3902,6 +4128,33 @@ fn classify_ops_judge_replay_execute_body_rejection(
     }
 }
 
+fn classify_ops_kafka_dlq_action_body_rejection(
+    rejection: &JsonRejection,
+) -> (StatusCode, &'static str) {
+    match rejection {
+        JsonRejection::MissingJsonContentType(_) => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            OPS_KAFKA_DLQ_ACTION_CONTENT_TYPE_INVALID_CODE,
+        ),
+        JsonRejection::JsonSyntaxError(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            OPS_KAFKA_DLQ_ACTION_BODY_INVALID_JSON_CODE,
+        ),
+        JsonRejection::JsonDataError(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            OPS_KAFKA_DLQ_ACTION_BODY_DATA_INVALID_CODE,
+        ),
+        JsonRejection::BytesRejection(_) => (
+            StatusCode::BAD_REQUEST,
+            OPS_KAFKA_DLQ_ACTION_BODY_READ_FAILED_CODE,
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            OPS_KAFKA_DLQ_ACTION_BODY_REJECTED_CODE,
+        ),
+    }
+}
+
 fn classify_ops_judge_replay_execute_failure(err: &AppError) -> &'static str {
     match err {
         AppError::DebateConflict(_) => "conflict",
@@ -4409,4 +4662,18 @@ fn maybe_override_rate_limit_decision(
         decision.remaining = 0;
     }
     decision
+}
+
+#[cfg(test)]
+fn maybe_override_ops_kafka_dlq_idempotency_acquired(headers: &HeaderMap, acquired: bool) -> bool {
+    if headers
+        .get("x-test-force-idempotency-conflict")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    acquired
 }

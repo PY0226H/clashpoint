@@ -104,15 +104,16 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh \
 
 用途：
 
-1. 看当前有哪些 skill
+1. 确认模块级任务默认入口是不是 `module-turn-harness`
 2. 看当前有哪些强制规则
-3. 确认默认入口是不是 `module-turn-harness`
+3. 找到 `docs/harness/` 和 `docs/architecture/README.md` 的详细入口
 
 不适合做什么：
 
 1. 不适合当项目目录树
 2. 不适合当详细架构文档
 3. 不适合当开发计划正文
+4. 不适合当完整 skill registry；具体 skill 链由 `module-turn-harness` 和 harness 文档管理
 
 ### 4.2 `docs/architecture/README.md`
 
