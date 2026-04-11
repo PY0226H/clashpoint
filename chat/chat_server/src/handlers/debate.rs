@@ -4243,6 +4243,207 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Eval Once Unbound".to_string(),
+                email: "ops-eval-once-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-eval-once-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Eval Once No Role",
+            "ops-eval-once-no-role@acme.org",
+            "+8613810007826",
+            "ops-eval-once-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_400_for_invalid_query(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-eval-once-invalid-query-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once?dryRun=invalid")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_429_when_rate_limited(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-eval-once-rate-limited-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "ops_observability_evaluate_once")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "rate_limit_exceeded:ops_observability_evaluate_once_execute"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_200_for_ops_viewer_dry_run(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Eval Once Viewer",
+            "ops-eval-once-viewer@acme.org",
+            "+8613810007827",
+            "ops-eval-once-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once?dryRun=true")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(out["scopesScanned"], serde_json::json!(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_ops_observability_evaluate_once_route_should_return_200_for_ops_reviewer_execute(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Eval Once Reviewer",
+            "ops-eval-once-reviewer@acme.org",
+            "+8613810007828",
+            "ops-eval-once-reviewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/evaluate-once")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(out["scopesScanned"], serde_json::json!(1));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_ops_observability_metrics_dictionary_route_should_return_401_without_token(
     ) -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;

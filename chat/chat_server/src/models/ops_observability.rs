@@ -346,6 +346,8 @@ pub struct ListOpsServiceSplitReviewAuditsOutput {
 #[derive(Debug, Clone, Default, ToSchema, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpsAlertEvalReport {
+    #[serde(default)]
+    pub run_id: String,
     pub scopes_scanned: u64,
     pub alerts_raised: u64,
     pub alerts_cleared: u64,
@@ -497,6 +499,12 @@ struct EmitAlertPlan {
     status: &'static str,
     mark_active: bool,
     evaluated: EvaluatedAlert,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct AlertEmitContext<'a> {
+    evaluation_run_id: &'a str,
+    notification_fingerprint: &'a str,
 }
 
 fn normalize_thresholds_payload(
@@ -1022,6 +1030,51 @@ fn build_ops_metrics_dictionary_items() -> Vec<OpsMetricsDictionaryItem> {
             aggregation: "p95".to_string(),
             description: "Ops RBAC role write latency p95.".to_string(),
             target: Some("<300".to_string()),
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.observability.evaluate_once.request_total".to_string(),
+            category: "ops_observability".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops observability evaluate-once request total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.observability.evaluate_once.success_total".to_string(),
+            category: "ops_observability".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops observability evaluate-once success total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.observability.evaluate_once.failed_total".to_string(),
+            category: "ops_observability".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops observability evaluate-once failed total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.observability.evaluate_once.rate_limited_total".to_string(),
+            category: "ops_observability".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "count".to_string(),
+            aggregation: "sum".to_string(),
+            description: "Ops observability evaluate-once rate-limited total.".to_string(),
+            target: None,
+        },
+        OpsMetricsDictionaryItem {
+            key: "ops.observability.evaluate_once.latency_p95_ms".to_string(),
+            category: "ops_observability".to_string(),
+            source: "chat_server.handlers.debate_ops".to_string(),
+            unit: "ms".to_string(),
+            aggregation: "p95".to_string(),
+            description: "Ops observability evaluate-once latency p95.".to_string(),
+            target: Some("<3000".to_string()),
         },
         OpsMetricsDictionaryItem {
             key: "judge.dispatch.tick_success_total".to_string(),
@@ -1674,6 +1727,20 @@ fn build_emit_plan(
     None
 }
 
+fn build_ops_alert_notification_fingerprint(plan: &EmitAlertPlan, now_ms: i64) -> String {
+    let mut hasher = Sha1::new();
+    let minute_bucket = now_ms / 60_000;
+    hasher.update(plan.evaluated.alert_key.as_bytes());
+    hasher.update(plan.evaluated.rule_type.as_bytes());
+    hasher.update(plan.status.as_bytes());
+    hasher.update(plan.evaluated.severity.as_bytes());
+    hasher.update(plan.evaluated.message.as_bytes());
+    let metrics_payload = serde_json::to_string(&plan.evaluated.metrics).unwrap_or_default();
+    hasher.update(metrics_payload.as_bytes());
+    hasher.update(minute_bucket.to_string().as_bytes());
+    format!("obs_eval:{:x}", hasher.finalize())
+}
+
 fn build_split_review_required_alert(
     snapshot: &GetOpsServiceSplitReadinessOutput,
     triggered_by: i64,
@@ -1823,12 +1890,22 @@ impl AppState {
                                     "ops_split_review_alert_emit_forced_failure".to_string(),
                                 ))
                             } else {
-                                self.emit_observability_alert(plan, &recipients).await
+                                self.emit_observability_alert(
+                                    plan,
+                                    &recipients,
+                                    AlertEmitContext::default(),
+                                )
+                                .await
                             }
                         }
                         #[cfg(not(test))]
                         {
-                            self.emit_observability_alert(plan, &recipients).await
+                            self.emit_observability_alert(
+                                plan,
+                                &recipients,
+                                AlertEmitContext::default(),
+                            )
+                            .await
                         }
                     };
                     if let Err(err) = emit_result {
@@ -2726,7 +2803,7 @@ impl AppState {
             r#"
             SELECT user_id
             FROM platform_user_roles
-            WHERE role IN ('ops_admin', 'ops_reviewer', 'ops_viewer', 'platform_role_admin')
+            WHERE role IN ('ops_admin', 'ops_reviewer')
             "#,
         )
         .fetch_all(&self.pool)
@@ -2740,6 +2817,30 @@ impl AppState {
         let mut ret: Vec<u64> = set.into_iter().collect();
         ret.sort_unstable();
         Ok(ret)
+    }
+
+    async fn load_ops_alert_state_map(
+        &self,
+    ) -> Result<HashMap<String, OpsAlertStateRow>, AppError> {
+        let rows: Vec<OpsAlertStateByKeyRow> = sqlx::query_as(
+            r#"
+            SELECT alert_key, is_active, last_emitted_status
+            FROM ops_alert_states
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map = HashMap::with_capacity(rows.len());
+        for row in rows {
+            map.insert(
+                row.alert_key,
+                OpsAlertStateRow {
+                    is_active: row.is_active,
+                    last_emitted_status: row.last_emitted_status,
+                },
+            );
+        }
+        Ok(map)
     }
 
     async fn fetch_ai_judge_alert_outbox(
@@ -2934,17 +3035,22 @@ impl AppState {
         &self,
         plan: EmitAlertPlan,
         recipients: &[u64],
+        context: AlertEmitContext<'_>,
     ) -> Result<(), AppError> {
         let mut tx = self.pool.begin().await?;
         let recipients_json = serde_json::to_value(recipients).context("serialize recipients")?;
-        let notification_id: i64 = sqlx::query_scalar(
+        let notification_id: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO ops_alert_notifications(
                 alert_key, rule_type, severity, alert_status,
                 title, message, metrics_json, recipients_json,
+                evaluation_run_id, notification_fingerprint,
                 delivery_status, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+            ON CONFLICT (notification_fingerprint)
+                WHERE notification_fingerprint <> ''
+            DO NOTHING
             RETURNING id
             "#,
         )
@@ -2956,9 +3062,15 @@ impl AppState {
         .bind(&plan.evaluated.message)
         .bind(&plan.evaluated.metrics)
         .bind(recipients_json)
+        .bind(context.evaluation_run_id)
+        .bind(context.notification_fingerprint)
         .bind(ALERT_DELIVERY_PENDING)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
+        let Some(notification_id) = notification_id else {
+            tx.commit().await?;
+            return Ok(());
+        };
 
         let payload = serde_json::json!({
             "alert_key": plan.evaluated.alert_key,
@@ -2969,6 +3081,7 @@ impl AppState {
             "message": plan.evaluated.message,
             "metrics": plan.evaluated.metrics,
             "user_ids": recipients,
+            "evaluation_run_id": context.evaluation_run_id,
         });
         let notify_result = sqlx::query("SELECT pg_notify('ops_observability_alert', $1)")
             .bind(payload.to_string())
@@ -3034,21 +3147,13 @@ impl AppState {
     async fn process_single_alert_transition(
         &self,
         evaluated: EvaluatedAlert,
+        previous: Option<OpsAlertStateRow>,
         anomaly_state: &HashMap<String, OpsObservabilityAnomalyStateValue>,
+        evaluation_run_id: &str,
         now_ms: i64,
         recipients: &[u64],
         report: &mut OpsAlertEvalReport,
     ) -> Result<(), AppError> {
-        let previous: Option<OpsAlertStateRow> = sqlx::query_as(
-            r#"
-            SELECT is_active, last_emitted_status
-            FROM ops_alert_states
-            WHERE alert_key = $1
-            "#,
-        )
-        .bind(&evaluated.alert_key)
-        .fetch_optional(&self.pool)
-        .await?;
         let suppression_state = anomaly_state.get(&evaluated.alert_key);
         let Some(plan) = build_emit_plan(evaluated, previous, suppression_state, now_ms) else {
             return Ok(());
@@ -3059,7 +3164,16 @@ impl AppState {
             ALERT_STATUS_SUPPRESSED => report.alerts_suppressed += 1,
             _ => {}
         }
-        self.emit_observability_alert(plan, recipients).await
+        let notification_fingerprint = build_ops_alert_notification_fingerprint(&plan, now_ms);
+        self.emit_observability_alert(
+            plan,
+            recipients,
+            AlertEmitContext {
+                evaluation_run_id,
+                notification_fingerprint: notification_fingerprint.as_str(),
+            },
+        )
+        .await
     }
 
     pub async fn evaluate_ops_observability_alerts_once(
@@ -3067,8 +3181,11 @@ impl AppState {
     ) -> Result<OpsAlertEvalReport, AppError> {
         let now_ms = now_millis();
         let mut report = OpsAlertEvalReport::default();
+        let evaluation_run_id = format!("worker:{now_ms}");
+        report.run_id = evaluation_run_id.clone();
         let rows = self.list_observability_eval_scopes().await?;
         report.scopes_scanned = rows.len() as u64;
+        let alert_state_map = self.load_ops_alert_state_map().await?;
         for row in rows {
             let _scope_id = row.scope_id;
             let thresholds = parse_thresholds(row.thresholds_json.clone());
@@ -3077,9 +3194,12 @@ impl AppState {
             let recipients = self.list_alert_recipients().await?;
             for spec in rule_specs() {
                 let evaluated = evaluate_alert_for_rule(spec, &thresholds, signal);
+                let previous = alert_state_map.get(&evaluated.alert_key).cloned();
                 self.process_single_alert_transition(
                     evaluated,
+                    previous,
                     &anomaly_state,
+                    evaluation_run_id.as_str(),
                     now_ms,
                     &recipients,
                     &mut report,
@@ -3097,6 +3217,7 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let now_ms = now_millis();
+        let evaluation_run_id = format!("ops_execute:{}:{now_ms}", user.id);
         let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
             r#"
             SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
@@ -3115,16 +3236,21 @@ impl AppState {
             (OpsObservabilityThresholds::default(), HashMap::new())
         };
         let mut report = OpsAlertEvalReport {
+            run_id: evaluation_run_id.clone(),
             scopes_scanned: 1,
             ..OpsAlertEvalReport::default()
         };
         let signal = self.load_recent_judge_signal().await?;
         let recipients = self.list_alert_recipients().await?;
+        let alert_state_map = self.load_ops_alert_state_map().await?;
         for spec in rule_specs() {
             let evaluated = evaluate_alert_for_rule(spec, &thresholds, signal);
+            let previous = alert_state_map.get(&evaluated.alert_key).cloned();
             self.process_single_alert_transition(
                 evaluated,
+                previous,
                 &anomaly_state,
+                evaluation_run_id.as_str(),
                 now_ms,
                 &recipients,
                 &mut report,
@@ -3141,6 +3267,7 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let now_ms = now_millis();
+        let evaluation_run_id = format!("ops_preview:{}:{now_ms}", user.id);
         let row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
             r#"
             SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
@@ -3159,22 +3286,15 @@ impl AppState {
             (OpsObservabilityThresholds::default(), HashMap::new())
         };
         let mut report = OpsAlertEvalReport {
+            run_id: evaluation_run_id,
             scopes_scanned: 1,
             ..OpsAlertEvalReport::default()
         };
         let signal = self.load_recent_judge_signal().await?;
+        let alert_state_map = self.load_ops_alert_state_map().await?;
         for spec in rule_specs() {
             let evaluated = evaluate_alert_for_rule(spec, &thresholds, signal);
-            let previous: Option<OpsAlertStateRow> = sqlx::query_as(
-                r#"
-                SELECT is_active, last_emitted_status
-                FROM ops_alert_states
-                WHERE alert_key = $1
-                "#,
-            )
-            .bind(&evaluated.alert_key)
-            .fetch_optional(&self.pool)
-            .await?;
+            let previous = alert_state_map.get(&evaluated.alert_key).cloned();
             let suppression_state = anomaly_state.get(&evaluated.alert_key);
             let Some(plan) = build_emit_plan(evaluated, previous, suppression_state, now_ms) else {
                 continue;
@@ -4047,6 +4167,7 @@ mod tests {
         .await?;
 
         let report = state.evaluate_ops_observability_alerts_once().await?;
+        assert!(report.run_id.starts_with("worker:"));
         assert!(report.alerts_raised > 0 || report.alerts_suppressed > 0);
 
         let raised_count: i64 = sqlx::query_scalar(
@@ -4074,6 +4195,7 @@ mod tests {
             )
             .await?;
         let report2 = state.evaluate_ops_observability_alerts_once().await?;
+        assert!(report2.run_id.starts_with("worker:"));
         assert!(report2.alerts_cleared >= 1);
 
         let cleared_count: i64 = sqlx::query_scalar(
@@ -5136,6 +5258,62 @@ mod tests {
         assert!(plan.mark_active);
     }
 
+    #[tokio::test]
+    async fn emit_observability_alert_should_dedupe_by_notification_fingerprint() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let plan = EmitAlertPlan {
+            status: ALERT_STATUS_RAISED,
+            mark_active: true,
+            evaluated: EvaluatedAlert {
+                alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                rule_type: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                severity: ALERT_SEVERITY_WARNING.to_string(),
+                title: "dedupe".to_string(),
+                message: "dedupe message".to_string(),
+                metrics: serde_json::json!({
+                    "comparison": "above_threshold",
+                    "value": 2.5
+                }),
+                is_active: true,
+            },
+        };
+        let now_ms = now_millis();
+        let fingerprint = build_ops_alert_notification_fingerprint(&plan, now_ms);
+        state
+            .emit_observability_alert(
+                plan.clone(),
+                &[1],
+                AlertEmitContext {
+                    evaluation_run_id: "ops_execute:1:test",
+                    notification_fingerprint: fingerprint.as_str(),
+                },
+            )
+            .await?;
+        state
+            .emit_observability_alert(
+                plan,
+                &[1],
+                AlertEmitContext {
+                    evaluation_run_id: "ops_execute:1:test",
+                    notification_fingerprint: fingerprint.as_str(),
+                },
+            )
+            .await?;
+        let total: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_alert_notifications
+            WHERE notification_fingerprint = $1
+            "#,
+        )
+        .bind(fingerprint)
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(total, 1);
+        Ok(())
+    }
+
     #[test]
     fn map_ai_alert_status_should_support_runtime_aliases() {
         assert_eq!(map_ai_alert_status("raised"), Some(ALERT_STATUS_RAISED));
@@ -5171,6 +5349,27 @@ mod tests {
             assert!(
                 keys.contains(required_key),
                 "missing required ops rbac metric key: {required_key}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_ops_metrics_dictionary_items_should_include_ops_observability_eval_once_keys() {
+        let items = build_ops_metrics_dictionary_items();
+        let keys = items
+            .iter()
+            .map(|item| item.key.as_str())
+            .collect::<HashSet<_>>();
+        for required_key in [
+            "ops.observability.evaluate_once.request_total",
+            "ops.observability.evaluate_once.success_total",
+            "ops.observability.evaluate_once.failed_total",
+            "ops.observability.evaluate_once.rate_limited_total",
+            "ops.observability.evaluate_once.latency_p95_ms",
+        ] {
+            assert!(
+                keys.contains(required_key),
+                "missing required ops observability evaluate once metric key: {required_key}"
             );
         }
     }

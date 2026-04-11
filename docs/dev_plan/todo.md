@@ -688,3 +688,14 @@
 | api076-anomaly-actions-idempotency-key-rollout-decision | 当前未引入 `Idempotency-Key`，网络重试与用户连点会放大重复写与审计噪声。 | 基于真实流量与冲突样本形成 Go/No-Go 结论；若 Go，落地 key 作用域、TTL、冲突语义与回归测试。 | 压测/日志样本统计 + 评审记录；若落地则执行 `cargo test -p chat-server apply_ops_observability_anomaly_action -- --nocapture` 并归档。 |
 | api076-anomaly-actions-alert-key-governance | 当前 `alertKey` 仅做非空与长度校验，缺命名规范与统一治理，存在状态碎片化风险。 | 形成告警 key 规范（命名规则/来源映射/兼容策略）并完成后端校验与文档冻结。 | 指标字典映射评审 + route/model 回归 + 学习文档同步归档。 |
 | api076-anomaly-actions-event-sourcing-evaluation | 当前仍是“快照 + 审计”模型，长期回放与跨系统审计对账能力上限受限。 | 完成事件源化或 operation-log 方案可行性评审，明确是否进入下一阶段实施。 | 方案评审文档 + 成本评估 + PoC 结论归档到 `docs/consistency_reports/`。 |
+
+## AW. api077-observability-evaluate-once-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-11）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API077 阶段剩余事项已并入本分组持续跟踪。
+- API077 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api077-observability-evaluate-once-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api077-evaluate-once-recipient-policy-configurability | 当前接收人已收敛为 `owner + ops_admin + ops_reviewer`，但尚未支持按环境/班次动态配置。 | 完成接收人策略配置化方案（含默认值、越权防护、回滚策略）并落地最小可用配置入口。 | 产出方案评审纪要 + route/model 回归 + 一次值班联调记录并归档。 |
+| api077-evaluate-once-rate-limit-threshold-production-tuning | preview/execute + user/ip 双维限流已落地，但阈值仍是工程初值，缺真实流量回标。 | 基于 2~4 周运行数据完成阈值复核，形成 Go/No-Go 与参数调整结论。 | 归档限流命中率、误杀率、`p95/p99` 与执行成功率报告到 `docs/loadtest/evidence/` 或 `docs/consistency_reports/`。 |
