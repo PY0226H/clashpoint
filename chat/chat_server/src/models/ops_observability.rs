@@ -171,6 +171,7 @@ struct OpsServiceSplitReviewAuditRow {
 #[serde(rename_all = "camelCase")]
 pub struct ListOpsAlertNotificationsQuery {
     pub status: Option<String>,
+    pub delivery_status: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
 }
@@ -230,6 +231,8 @@ pub struct OpsAlertNotificationItem {
     pub message: String,
     pub metrics: Value,
     pub recipients: Vec<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluation_run_id: Option<String>,
     pub delivery_status: String,
     pub error_message: Option<String>,
     pub delivered_at: Option<DateTime<Utc>>,
@@ -375,6 +378,7 @@ struct OpsAlertNotificationRow {
     message: String,
     metrics_json: Value,
     recipients_json: Value,
+    evaluation_run_id: String,
     delivery_status: String,
     error_message: Option<String>,
     delivered_at: Option<DateTime<Utc>>,
@@ -1259,6 +1263,27 @@ fn normalize_alert_status_filter(status: Option<String>) -> Result<Option<String
     ))
 }
 
+fn normalize_alert_delivery_status_filter(
+    delivery_status: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let Some(delivery_status) = delivery_status else {
+        return Ok(None);
+    };
+    let normalized = delivery_status.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if matches!(
+        normalized.as_str(),
+        ALERT_DELIVERY_PENDING | ALERT_DELIVERY_SENT | ALERT_DELIVERY_FAILED
+    ) {
+        return Ok(Some(normalized));
+    }
+    Err(AppError::DebateError(
+        "invalid alert delivery status filter, expect pending/sent/failed".to_string(),
+    ))
+}
+
 fn normalize_split_review_note(raw: Option<String>) -> Result<String, AppError> {
     let note = raw.unwrap_or_default().trim().to_string();
     if note.chars().count() > SPLIT_REVIEW_NOTE_MAX_LEN {
@@ -1437,6 +1462,11 @@ fn map_alert_notification_row(row: OpsAlertNotificationRow) -> OpsAlertNotificat
         message: row.message,
         metrics: row.metrics_json,
         recipients: parse_recipient_ids(&row.recipients_json),
+        evaluation_run_id: if row.evaluation_run_id.trim().is_empty() {
+            None
+        } else {
+            Some(row.evaluation_run_id)
+        },
         delivery_status: row.delivery_status,
         error_message: row.error_message,
         delivered_at: row.delivered_at,
@@ -2688,6 +2718,7 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityRead)
             .await?;
         let status = normalize_alert_status_filter(query.status)?;
+        let delivery_status = normalize_alert_delivery_status_filter(query.delivery_status)?;
         let limit = normalize_alert_limit(query.limit);
         let offset = normalize_alert_offset(query.offset);
 
@@ -2696,9 +2727,11 @@ impl AppState {
             SELECT COUNT(1)
             FROM ops_alert_notifications
             WHERE ($1::text IS NULL OR alert_status = $1)
+              AND ($2::text IS NULL OR delivery_status = $2)
             "#,
         )
         .bind(status.as_deref())
+        .bind(delivery_status.as_deref())
         .fetch_one(&self.pool)
         .await?;
         let rows: Vec<OpsAlertNotificationRow> = sqlx::query_as(
@@ -2706,14 +2739,17 @@ impl AppState {
             SELECT
                 id, alert_key, rule_type, severity, alert_status,
                 title, message, metrics_json, recipients_json,
+                evaluation_run_id,
                 delivery_status, error_message, delivered_at, created_at, updated_at
             FROM ops_alert_notifications
             WHERE ($1::text IS NULL OR alert_status = $1)
+              AND ($2::text IS NULL OR delivery_status = $2)
             ORDER BY created_at DESC, id DESC
-            LIMIT $2 OFFSET $3
+            LIMIT $3 OFFSET $4
             "#,
         )
         .bind(status.as_deref())
+        .bind(delivery_status.as_deref())
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.pool)
@@ -4402,6 +4438,14 @@ mod tests {
         assert!(normalize_alert_status_filter(Some("cleared".to_string())).is_ok());
         assert!(normalize_alert_status_filter(Some("suppressed".to_string())).is_ok());
         assert!(normalize_alert_status_filter(Some("invalid".to_string())).is_err());
+    }
+
+    #[test]
+    fn normalize_alert_delivery_status_filter_should_validate_values() {
+        assert!(normalize_alert_delivery_status_filter(Some("pending".to_string())).is_ok());
+        assert!(normalize_alert_delivery_status_filter(Some("sent".to_string())).is_ok());
+        assert!(normalize_alert_delivery_status_filter(Some("failed".to_string())).is_ok());
+        assert!(normalize_alert_delivery_status_filter(Some("invalid".to_string())).is_err());
     }
 
     #[test]

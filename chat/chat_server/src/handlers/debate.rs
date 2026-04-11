@@ -4321,7 +4321,8 @@ mod tests {
     ) -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
-        let token = issue_token_for_user(&state, owner.id, "ops-eval-once-invalid-query-sid").await?;
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-eval-once-invalid-query-sid").await?;
         let app = get_router(state).await?;
 
         let req = Request::builder()
@@ -4440,6 +4441,191 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let out: serde_json::Value = serde_json::from_slice(&body)?;
         assert_eq!(out["scopesScanned"], serde_json::json!(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_403_for_unbound_user() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Alerts Unbound".to_string(),
+                email: "ops-alerts-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-alerts-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Alerts No Role",
+            "ops-alerts-no-role@acme.org",
+            "+8613810007829",
+            "ops-alerts-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_read"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_400_for_invalid_status() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-alerts-invalid-status-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts?status=invalid")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("invalid alert status filter"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_400_for_invalid_delivery_status(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-alerts-invalid-delivery-status-sid")
+                .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts?deliveryStatus=invalid")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("invalid alert delivery status filter"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_429_when_rate_limited() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-alerts-rate-limited-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-force-rate-limit", "ops_observability_alerts_list")
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(
+            error.error,
+            "rate_limit_exceeded:ops_observability_alerts_list"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_ops_observability_alerts_route_should_return_200_for_ops_viewer() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_viewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Alerts Viewer",
+            "ops-alerts-viewer@acme.org",
+            "+8613810007830",
+            "ops-alerts-viewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_viewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_viewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/debate/ops/observability/alerts?status=raised&deliveryStatus=failed&limit=999&offset=999999")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().contains_key("x-ratelimit-limit"));
+        assert!(res.headers().contains_key("x-ratelimit-remaining"));
+        assert!(res.headers().contains_key("x-ratelimit-reset"));
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(out["limit"], serde_json::json!(200));
+        assert_eq!(out["offset"], serde_json::json!(50000));
+        assert!(out["items"].is_array());
         Ok(())
     }
 

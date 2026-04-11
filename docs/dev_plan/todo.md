@@ -699,3 +699,15 @@
 |---|---|---|---|
 | api077-evaluate-once-recipient-policy-configurability | 当前接收人已收敛为 `owner + ops_admin + ops_reviewer`，但尚未支持按环境/班次动态配置。 | 完成接收人策略配置化方案（含默认值、越权防护、回滚策略）并落地最小可用配置入口。 | 产出方案评审纪要 + route/model 回归 + 一次值班联调记录并归档。 |
 | api077-evaluate-once-rate-limit-threshold-production-tuning | preview/execute + user/ip 双维限流已落地，但阈值仍是工程初值，缺真实流量回标。 | 基于 2~4 周运行数据完成阈值复核，形成 Go/No-Go 与参数调整结论。 | 归档限流命中率、误杀率、`p95/p99` 与执行成功率报告到 `docs/loadtest/evidence/` 或 `docs/consistency_reports/`。 |
+
+## AX. api078-observability-alerts-list-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-11）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API078 未完成事项已并入本分组持续跟踪。
+- API078 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api078-observability-alerts-list-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api078-alerts-list-offset-pagination-upgrade | 当前仍采用 `LIMIT/OFFSET`，深分页在数据增长后存在扫描成本放大风险。 | 完成 cursor 分页方案（`created_at + id`）评审与落地计划，形成兼容迁移与回滚路径。 | 输出方案文档 + 翻页一致性回归（无重复/漏项）+ 联调纪要归档。 |
+| api078-alerts-list-sql-plan-stability-evaluation | 查询仍使用 `($N IS NULL OR ...)` 可选过滤写法，复杂过滤组合下计划稳定性与索引利用率待验证。 | 完成 SQL 计划评估结论（保持现状或动态 SQL/索引优化）并固化实现策略。 | 归档 explain 对比、典型过滤场景延迟与 CPU 指标到 `docs/consistency_reports/`。 |
+| api078-alerts-list-performance-baseline-and-index-review | 尚未形成 API078 查询性能封板报告，索引优化策略未冻结。 | 完成压测基线与索引评审（是否新增复合索引）并给出 Go/No-Go 结论。 | 归档压测报告（`p95/p99`、吞吐、资源占用）与索引评审纪要到 `docs/loadtest/evidence/`。 |

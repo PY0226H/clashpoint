@@ -109,6 +109,9 @@ const OPS_OBSERVABILITY_EVAL_EXECUTE_IP_RATE_LIMIT_PER_WINDOW: u64 = 30;
 const OPS_OBSERVABILITY_EVAL_PREVIEW_USER_RATE_LIMIT_PER_WINDOW: u64 = 20;
 const OPS_OBSERVABILITY_EVAL_PREVIEW_IP_RATE_LIMIT_PER_WINDOW: u64 = 60;
 const OPS_OBSERVABILITY_EVAL_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const OPS_OBSERVABILITY_ALERTS_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 60;
+const OPS_OBSERVABILITY_ALERTS_LIST_IP_RATE_LIMIT_PER_WINDOW: u64 = 180;
+const OPS_OBSERVABILITY_ALERTS_LIST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const OPS_SPLIT_READINESS_CACHE_TTL_MS: i64 = 3_000;
 const OPS_SPLIT_REVIEW_AUDITS_USER_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const OPS_SPLIT_REVIEW_AUDITS_RATE_LIMIT_WINDOW_SECS: u64 = 60;
@@ -366,6 +369,8 @@ static OPS_RBAC_ROLES_WRITE_METRICS: LazyLock<OpsRbacRolesWriteMetrics> =
     LazyLock::new(OpsRbacRolesWriteMetrics::default);
 static OPS_OBSERVABILITY_EVAL_ONCE_METRICS: LazyLock<OpsObservabilityEvaluateOnceMetrics> =
     LazyLock::new(OpsObservabilityEvaluateOnceMetrics::default);
+static OPS_OBSERVABILITY_ALERTS_LIST_METRICS: LazyLock<OpsObservabilityAlertsListMetrics> =
+    LazyLock::new(OpsObservabilityAlertsListMetrics::default);
 static OPS_SPLIT_READINESS_CACHE: LazyLock<RwLock<Option<OpsSplitReadinessCacheEntry>>> =
     LazyLock::new(|| RwLock::new(None));
 
@@ -428,6 +433,56 @@ impl OpsObservabilityEvaluateOnceMetrics {
             self.rate_limited_total.load(Ordering::Relaxed),
             self.dry_run_total.load(Ordering::Relaxed),
             self.execute_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpsObservabilityAlertsListMetrics {
+    request_total: AtomicU64,
+    success_total: AtomicU64,
+    failed_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    items_total: AtomicU64,
+    items_samples_total: AtomicU64,
+    latency_ms_total: AtomicU64,
+    latency_ms_samples_total: AtomicU64,
+}
+
+impl OpsObservabilityAlertsListMetrics {
+    fn observe_start(&self) {
+        self.request_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_success(&self, items_count: usize, latency_ms: u64) {
+        self.success_total.fetch_add(1, Ordering::Relaxed);
+        self.items_total
+            .fetch_add(items_count as u64, Ordering::Relaxed);
+        self.items_samples_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_failure(&self, latency_ms: u64) {
+        self.failed_total.fetch_add(1, Ordering::Relaxed);
+        self.latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_ms_samples_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_rate_limited(&self) {
+        self.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u64, u64) {
+        (
+            self.request_total.load(Ordering::Relaxed),
+            self.success_total.load(Ordering::Relaxed),
+            self.failed_total.load(Ordering::Relaxed),
+            self.rate_limited_total.load(Ordering::Relaxed),
         )
     }
 }
@@ -2101,7 +2156,12 @@ pub(crate) async fn run_ops_observability_evaluation_once_handler(
     ),
     responses(
         (status = 200, description = "Ops alert notifications", body = crate::ListOpsAlertNotificationsOutput),
+        (status = 400, description = "Invalid query", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -2110,10 +2170,139 @@ pub(crate) async fn run_ops_observability_evaluation_once_handler(
 pub(crate) async fn list_ops_alert_notifications_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(input): Query<ListOpsAlertNotificationsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.list_ops_alert_notifications(&user, input).await?;
-    Ok((StatusCode::OK, Json(ret)))
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    OPS_OBSERVABILITY_ALERTS_LIST_METRICS.observe_start();
+    let status_filter = input.status.clone().unwrap_or_default();
+    let delivery_status_filter = input.delivery_status.clone().unwrap_or_default();
+    let limit = input.limit.unwrap_or(20);
+    let offset = input.offset.unwrap_or(0);
+
+    let user_decision = enforce_rate_limit(
+        &state,
+        "ops_observability_alerts_list_user",
+        &format!("user:{}", user.id),
+        OPS_OBSERVABILITY_ALERTS_LIST_USER_RATE_LIMIT_PER_WINDOW,
+        OPS_OBSERVABILITY_ALERTS_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let user_decision = maybe_override_rate_limit_decision(
+        &headers,
+        "ops_observability_alerts_list_user",
+        user_decision,
+    );
+    let user_rate_headers = build_rate_limit_headers(&user_decision)?;
+    if !user_decision.allowed {
+        OPS_OBSERVABILITY_ALERTS_LIST_METRICS.observe_rate_limited();
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            status_filter = status_filter.as_str(),
+            delivery_status_filter = delivery_status_filter.as_str(),
+            limit,
+            offset,
+            latency_ms,
+            decision = "rate_limited",
+            result = "rate_limited",
+            "list ops observability alerts blocked by user rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_observability_alerts_list",
+            user_rate_headers,
+        ));
+    }
+
+    let ip_limit_key = request_rate_limit_ip_key_with_user_fallback(
+        &headers,
+        user.id,
+        &state.config.server.forwarded_header_trust,
+    );
+    let ip_decision = enforce_rate_limit(
+        &state,
+        "ops_observability_alerts_list_ip",
+        &ip_limit_key,
+        OPS_OBSERVABILITY_ALERTS_LIST_IP_RATE_LIMIT_PER_WINDOW,
+        OPS_OBSERVABILITY_ALERTS_LIST_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    #[cfg(test)]
+    let ip_decision = maybe_override_rate_limit_decision(
+        &headers,
+        "ops_observability_alerts_list_ip",
+        ip_decision,
+    );
+    let ip_rate_headers = build_rate_limit_headers(&ip_decision)?;
+    if !ip_decision.allowed {
+        OPS_OBSERVABILITY_ALERTS_LIST_METRICS.observe_rate_limited();
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        tracing::warn!(
+            user_id = user.id,
+            request_id = request_id.as_deref().unwrap_or_default(),
+            status_filter = status_filter.as_str(),
+            delivery_status_filter = delivery_status_filter.as_str(),
+            limit,
+            offset,
+            latency_ms,
+            decision = "rate_limited",
+            result = "rate_limited",
+            "list ops observability alerts blocked by ip rate limiter"
+        );
+        return Ok(rate_limit_exceeded_response(
+            "ops_observability_alerts_list",
+            ip_rate_headers,
+        ));
+    }
+
+    let ret = match state.list_ops_alert_notifications(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            OPS_OBSERVABILITY_ALERTS_LIST_METRICS.observe_failure(latency_ms);
+            let failure_type = classify_ops_observability_alerts_list_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                status_filter = status_filter.as_str(),
+                delivery_status_filter = delivery_status_filter.as_str(),
+                limit,
+                offset,
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "list ops observability alerts failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    OPS_OBSERVABILITY_ALERTS_LIST_METRICS.observe_success(ret.items.len(), latency_ms);
+    let (request_total, success_total, failed_total, rate_limited_total) =
+        OPS_OBSERVABILITY_ALERTS_LIST_METRICS.snapshot();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        status_filter = status_filter.as_str(),
+        delivery_status_filter = delivery_status_filter.as_str(),
+        limit,
+        offset,
+        returned_count = ret.items.len(),
+        total_count = ret.total,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        ops_observability_alerts_list_request_total = request_total,
+        ops_observability_alerts_list_success_total = success_total,
+        ops_observability_alerts_list_failed_total = failed_total,
+        ops_observability_alerts_list_rate_limited_total = rate_limited_total,
+        "list ops observability alerts served"
+    );
+    Ok((StatusCode::OK, ip_rate_headers, Json(ret)).into_response())
 }
 
 /// List Kafka DLQ events for platform scope.
@@ -3584,6 +3773,18 @@ fn classify_ops_observability_evaluate_once_failure(err: &AppError) -> &'static 
     }
 }
 
+fn classify_ops_observability_alerts_list_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
 fn format_ops_metrics_dictionary_etag(revision: &str) -> String {
     format!("\"{revision}\"")
 }
@@ -4198,6 +4399,11 @@ fn maybe_override_rate_limit_decision(
         || ((target == "ops_observability_evaluate_once_preview_ip"
             || target == "ops_observability_evaluate_once_execute_ip")
             && forced.eq_ignore_ascii_case("ops_observability_evaluate_once_ip"))
+        || (target == "ops_observability_alerts_list_user"
+            && (forced.eq_ignore_ascii_case("ops_observability_alerts_list")
+                || forced.eq_ignore_ascii_case("ops_observability_alerts_list_user")))
+        || (target == "ops_observability_alerts_list_ip"
+            && forced.eq_ignore_ascii_case("ops_observability_alerts_list_ip"))
     {
         decision.allowed = false;
         decision.remaining = 0;
