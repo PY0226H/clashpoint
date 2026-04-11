@@ -663,3 +663,28 @@
 | api074-thresholds-update-immediate-evaluation-decision | 当前阈值更新只落库，不会立即触发一次评估，调参反馈链路存在时延。 | 形成“写后异步触发评估”或“继续手动触发”Go/No-Go 结论；若 Go，落地异步触发与幂等保护。 | 故障注入/并发压测报告 + 评审纪要 + 回归测试归档。 |
 | api074-thresholds-patch-or-config-center-evaluation | 当前仍为全量 PUT；未来阈值项扩展后，调用心智与维护成本可能上升。 | 完成 PATCH 语义或配置中心化的阶段评审结论（保持 PUT / 升级 PATCH / 配置中心），并给出迁移路径。 | 方案评审文档 + PoC 或成本评估报告归档到 `docs/consistency_reports/`。 |
 | api074-thresholds-422-business-error-unification | 当前 `422` 仍依赖框架默认 Json 提取器错误，业务错误码与提示口径未统一。 | 完成提取器错误统一包装（Json/Query）与稳定业务错误码映射，并同步前端文案。 | route 回归补齐 `422` 业务码断言 + 前端错误提示联调记录归档。 |
+
+## AU. api075-observability-anomaly-state-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API075 延后事项已并入本分组持续跟踪。
+- API075 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api075-observability-anomaly-state-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api075-anomaly-state-normalization-feedback-surface | 当前归一化丢弃信息仅在日志/审计可见，响应体无 dropped 详情，调用方不易自校验。 | 形成回执增强 Go/No-Go 结论；若 Go，落地 `droppedCount/retainedCount`（或等效）并补齐前后端契约。 | route 回归补齐回执断言 + 前端联调记录 + 学习文档同步归档。 |
+| api075-anomaly-state-full-put-vs-actions-boundary-decision | 全量 PUT 与单 key actions 并存，调用边界尚未冻结，存在高频误用全量接口风险。 | 完成接口职责边界评审并冻结策略（导入专用/API 权限分层/调用约束文档）。 | 评审纪要 + 权限/调用文档 + 关键场景回归记录归档。 |
+| api075-anomaly-state-write-rate-limit-evaluation | API075 当前无写限频封板，热点脚本可能频繁重写单例配置行。 | 基于真实流量与压测形成写限频 Go/No-Go 结论；若 Go，落地 user/ip 写保护阈值与告警。 | 压测报告 + 阈值评审记录 + route 回归（含 `429`）归档。 |
+| api075-anomaly-state-event-sourcing-evaluation | 当前为快照覆写模型，长期回放与合规审计能力上限受限。 | 完成事件源化/operation-log 方案可行性评审，明确是否进入下一阶段实施。 | 方案评审文档 + 成本评估 + PoC 结论归档到 `docs/consistency_reports/`。 |
+
+## AV. api076-observability-anomaly-state-actions-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API076 延后事项已并入本分组持续跟踪。
+- API076 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api076-observability-anomaly-state-actions-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api076-anomaly-actions-idempotency-key-rollout-decision | 当前未引入 `Idempotency-Key`，网络重试与用户连点会放大重复写与审计噪声。 | 基于真实流量与冲突样本形成 Go/No-Go 结论；若 Go，落地 key 作用域、TTL、冲突语义与回归测试。 | 压测/日志样本统计 + 评审记录；若落地则执行 `cargo test -p chat-server apply_ops_observability_anomaly_action -- --nocapture` 并归档。 |
+| api076-anomaly-actions-alert-key-governance | 当前 `alertKey` 仅做非空与长度校验，缺命名规范与统一治理，存在状态碎片化风险。 | 形成告警 key 规范（命名规则/来源映射/兼容策略）并完成后端校验与文档冻结。 | 指标字典映射评审 + route/model 回归 + 学习文档同步归档。 |
+| api076-anomaly-actions-event-sourcing-evaluation | 当前仍是“快照 + 审计”模型，长期回放与跨系统审计对账能力上限受限。 | 完成事件源化或 operation-log 方案可行性评审，明确是否进入下一阶段实施。 | 方案评审文档 + 成本评估 + PoC 结论归档到 `docs/consistency_reports/`。 |

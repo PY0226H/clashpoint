@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use sqlx::{FromRow, Postgres, Transaction};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
@@ -192,6 +192,18 @@ pub struct UpsertOpsServiceSplitReviewInput {
 pub struct UpsertOpsObservabilityThresholdsMeta<'a> {
     pub expected_config_revision: Option<&'a str>,
     pub require_if_match: bool,
+    pub request_id: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpsertOpsObservabilityAnomalyStateMeta<'a> {
+    pub expected_config_revision: Option<&'a str>,
+    pub require_if_match: bool,
+    pub request_id: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ApplyOpsObservabilityAnomalyActionMeta<'a> {
     pub request_id: Option<&'a str>,
 }
 
@@ -562,15 +574,21 @@ fn now_millis() -> i64 {
     Utc::now().timestamp_millis()
 }
 
-fn normalize_anomaly_state(
+#[derive(Debug, Clone)]
+struct NormalizeAnomalyStateResult {
+    state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+    input_count: usize,
+    retained_count: usize,
+    dropped_count: usize,
+}
+
+fn normalize_anomaly_state_with_stats(
     input: HashMap<String, OpsObservabilityAnomalyStateValue>,
     now_ms: i64,
-) -> HashMap<String, OpsObservabilityAnomalyStateValue> {
-    let mut ret = HashMap::new();
+) -> NormalizeAnomalyStateResult {
+    let input_count = input.len();
+    let mut normalized = BTreeMap::new();
     for (key_raw, item) in input {
-        if ret.len() >= MAX_STATE_ITEM_COUNT {
-            break;
-        }
         let key = key_raw.trim();
         if key.is_empty() || key.len() > MAX_STATE_KEY_LEN {
             continue;
@@ -584,7 +602,7 @@ fn normalize_anomaly_state(
         if acknowledged_at_ms <= 0 && suppress_until_ms <= 0 {
             continue;
         }
-        ret.insert(
+        normalized.insert(
             key.to_string(),
             OpsObservabilityAnomalyStateValue {
                 acknowledged_at_ms,
@@ -592,7 +610,30 @@ fn normalize_anomaly_state(
             },
         );
     }
-    ret
+
+    let mut retained_items: Vec<(String, OpsObservabilityAnomalyStateValue)> =
+        normalized.into_iter().collect();
+    if retained_items.len() > MAX_STATE_ITEM_COUNT {
+        retained_items.truncate(MAX_STATE_ITEM_COUNT);
+    }
+    let retained_count = retained_items.len();
+    let mut state = HashMap::with_capacity(retained_count);
+    for (key, value) in retained_items {
+        state.insert(key, value);
+    }
+    NormalizeAnomalyStateResult {
+        state,
+        input_count,
+        retained_count,
+        dropped_count: input_count.saturating_sub(retained_count),
+    }
+}
+
+fn normalize_anomaly_state(
+    input: HashMap<String, OpsObservabilityAnomalyStateValue>,
+    now_ms: i64,
+) -> HashMap<String, OpsObservabilityAnomalyStateValue> {
+    normalize_anomaly_state_with_stats(input, now_ms).state
 }
 
 fn parse_anomaly_state(
@@ -627,12 +668,16 @@ fn normalize_anomaly_suppress_minutes(raw: Option<i64>) -> i64 {
         .clamp(1, OPS_ANOMALY_SUPPRESS_MINUTES_MAX)
 }
 
-fn apply_anomaly_action(
-    current_state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+#[derive(Debug, Clone)]
+struct NormalizedAnomalyActionInput {
+    alert_key: String,
+    action: &'static str,
+    suppress_minutes: i64,
+}
+
+fn normalize_anomaly_action_input(
     input: &ApplyOpsObservabilityAnomalyActionInput,
-    now_ms: i64,
-) -> Result<HashMap<String, OpsObservabilityAnomalyStateValue>, AppError> {
-    let mut anomaly_state = current_state;
+) -> Result<NormalizedAnomalyActionInput, AppError> {
     let alert_key = normalize_anomaly_action_alert_key(&input.alert_key)
         .ok_or_else(|| AppError::DebateError("invalid alert key for anomaly action".to_string()))?;
     let action = normalize_anomaly_action(&input.action).ok_or_else(|| {
@@ -640,39 +685,61 @@ fn apply_anomaly_action(
             "invalid anomaly action, expect acknowledge/suppress/clear".to_string(),
         )
     })?;
+    Ok(NormalizedAnomalyActionInput {
+        alert_key,
+        action,
+        suppress_minutes: normalize_anomaly_suppress_minutes(input.suppress_minutes),
+    })
+}
 
-    match action {
+fn apply_anomaly_action_with_normalized(
+    current_state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+    input: &NormalizedAnomalyActionInput,
+    now_ms: i64,
+) -> HashMap<String, OpsObservabilityAnomalyStateValue> {
+    let mut anomaly_state = current_state;
+    match input.action {
         OPS_ANOMALY_ACTION_ACKNOWLEDGE => {
-            let mut item =
-                anomaly_state
-                    .remove(&alert_key)
-                    .unwrap_or(OpsObservabilityAnomalyStateValue {
-                        acknowledged_at_ms: 0,
-                        suppress_until_ms: 0,
-                    });
+            let mut item = anomaly_state.remove(&input.alert_key).unwrap_or(
+                OpsObservabilityAnomalyStateValue {
+                    acknowledged_at_ms: 0,
+                    suppress_until_ms: 0,
+                },
+            );
             item.acknowledged_at_ms = now_ms;
-            anomaly_state.insert(alert_key, item);
+            anomaly_state.insert(input.alert_key.clone(), item);
         }
         OPS_ANOMALY_ACTION_SUPPRESS => {
-            let mut item =
-                anomaly_state
-                    .remove(&alert_key)
-                    .unwrap_or(OpsObservabilityAnomalyStateValue {
-                        acknowledged_at_ms: 0,
-                        suppress_until_ms: 0,
-                    });
-            let minutes = normalize_anomaly_suppress_minutes(input.suppress_minutes);
+            let mut item = anomaly_state.remove(&input.alert_key).unwrap_or(
+                OpsObservabilityAnomalyStateValue {
+                    acknowledged_at_ms: 0,
+                    suppress_until_ms: 0,
+                },
+            );
             item.acknowledged_at_ms = now_ms.max(item.acknowledged_at_ms);
-            item.suppress_until_ms = now_ms.saturating_add(minutes.saturating_mul(60_000));
-            anomaly_state.insert(alert_key, item);
+            item.suppress_until_ms =
+                now_ms.saturating_add(input.suppress_minutes.saturating_mul(60_000));
+            anomaly_state.insert(input.alert_key.clone(), item);
         }
         OPS_ANOMALY_ACTION_CLEAR => {
-            anomaly_state.remove(&alert_key);
+            anomaly_state.remove(&input.alert_key);
         }
         _ => unreachable!("normalize_anomaly_action guarantees known variants"),
     }
+    normalize_anomaly_state(anomaly_state, now_ms)
+}
 
-    Ok(normalize_anomaly_state(anomaly_state, now_ms))
+fn apply_anomaly_action(
+    current_state: HashMap<String, OpsObservabilityAnomalyStateValue>,
+    input: &ApplyOpsObservabilityAnomalyActionInput,
+    now_ms: i64,
+) -> Result<HashMap<String, OpsObservabilityAnomalyStateValue>, AppError> {
+    let normalized = normalize_anomaly_action_input(input)?;
+    Ok(apply_anomaly_action_with_normalized(
+        current_state,
+        &normalized,
+        now_ms,
+    ))
 }
 
 fn normalize_updated_by(raw: i64) -> Option<u64> {
@@ -714,7 +781,7 @@ fn ensure_expected_ops_observability_revision(
     Ok(())
 }
 
-fn normalize_threshold_audit_request_id(raw: Option<&str>) -> Option<String> {
+fn normalize_ops_observability_audit_request_id(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| {
@@ -2220,7 +2287,7 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let thresholds = normalize_thresholds(input);
-        let normalized_request_id = normalize_threshold_audit_request_id(meta.request_id);
+        let normalized_request_id = normalize_ops_observability_audit_request_id(meta.request_id);
         let thresholds_json = serde_json::to_value(&thresholds)
             .context("serialize observability thresholds failed")?;
         let mut tx = self.pool.begin().await?;
@@ -2306,15 +2373,57 @@ impl AppState {
         user: &User,
         input: UpdateOpsObservabilityAnomalyStateInput,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
+        self.upsert_ops_observability_anomaly_state_with_meta(
+            user,
+            input,
+            UpsertOpsObservabilityAnomalyStateMeta::default(),
+        )
+        .await
+    }
+
+    pub async fn upsert_ops_observability_anomaly_state_with_meta(
+        &self,
+        user: &User,
+        input: UpdateOpsObservabilityAnomalyStateInput,
+        meta: UpsertOpsObservabilityAnomalyStateMeta<'_>,
+    ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let now_ms = now_millis();
-        let anomaly_state = normalize_anomaly_state(input.anomaly_state, now_ms);
-        let anomaly_state_json = serde_json::to_value(&anomaly_state)
+        let normalized_anomaly_state =
+            normalize_anomaly_state_with_stats(input.anomaly_state, now_ms);
+        let anomaly_state_json = serde_json::to_value(&normalized_anomaly_state.state)
             .context("serialize observability anomaly state failed")?;
+        let normalized_request_id = normalize_ops_observability_audit_request_id(meta.request_id);
         let default_thresholds_json =
             serde_json::to_value(OpsObservabilityThresholds::default())
                 .context("serialize default observability thresholds failed")?;
+        let mut tx = self.pool.begin().await?;
+        acquire_ops_observability_revision_lock(&mut tx).await?;
+        let current_row: Option<OpsObservabilityConfigRow> = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE singleton_id = 1
+            FOR UPDATE
+            "#,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let current_revision = format_ops_observability_config_revision(
+            current_row.as_ref().map(|row| row.updated_at),
+        );
+        ensure_expected_ops_observability_revision(
+            meta.expected_config_revision,
+            &current_revision,
+            meta.require_if_match,
+        )?;
+        let before_anomaly_state = current_row
+            .as_ref()
+            .map(|row| parse_anomaly_state(row.anomaly_state_json.clone(), now_ms))
+            .unwrap_or_default();
+        let before_anomaly_state_json = serde_json::to_value(&before_anomaly_state)
+            .context("serialize before observability anomaly state failed")?;
         sqlx::query(
             r#"
             INSERT INTO ops_observability_configs(
@@ -2331,9 +2440,47 @@ impl AppState {
         .bind(default_thresholds_json)
         .bind(anomaly_state_json)
         .bind(user.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        self.get_ops_observability_config(user).await
+        let after_row: OpsObservabilityConfigRow = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE singleton_id = 1
+            "#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let after_anomaly_state = parse_anomaly_state(after_row.anomaly_state_json.clone(), now_ms);
+        let after_anomaly_state_json = serde_json::to_value(&after_anomaly_state)
+            .context("serialize after observability anomaly state failed")?;
+        sqlx::query(
+            r#"
+            INSERT INTO ops_observability_anomaly_state_audits(
+                singleton_id,
+                before_anomaly_state_json,
+                after_anomaly_state_json,
+                updated_by,
+                request_id,
+                input_item_count,
+                retained_item_count,
+                dropped_item_count,
+                created_at
+            )
+            VALUES (1, $1, $2, $3, $4, $5, $6, $7, NOW())
+            "#,
+        )
+        .bind(before_anomaly_state_json)
+        .bind(after_anomaly_state_json)
+        .bind(user.id)
+        .bind(normalized_request_id)
+        .bind(normalized_anomaly_state.input_count as i64)
+        .bind(normalized_anomaly_state.retained_count as i64)
+        .bind(normalized_anomaly_state.dropped_count as i64)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(build_output(Some(after_row), now_ms))
     }
 
     pub async fn apply_ops_observability_anomaly_action(
@@ -2341,9 +2488,25 @@ impl AppState {
         user: &User,
         input: ApplyOpsObservabilityAnomalyActionInput,
     ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
+        self.apply_ops_observability_anomaly_action_with_meta(
+            user,
+            input,
+            ApplyOpsObservabilityAnomalyActionMeta::default(),
+        )
+        .await
+    }
+
+    pub async fn apply_ops_observability_anomaly_action_with_meta(
+        &self,
+        user: &User,
+        input: ApplyOpsObservabilityAnomalyActionInput,
+        meta: ApplyOpsObservabilityAnomalyActionMeta<'_>,
+    ) -> Result<GetOpsObservabilityConfigOutput, AppError> {
         self.ensure_ops_permission(user, OpsPermission::ObservabilityManage)
             .await?;
         let now_ms = now_millis();
+        let normalized_input = normalize_anomaly_action_input(&input)?;
+        let normalized_request_id = normalize_ops_observability_audit_request_id(meta.request_id);
         let default_thresholds_json =
             serde_json::to_value(OpsObservabilityThresholds::default())
                 .context("serialize default observability thresholds failed")?;
@@ -2361,9 +2524,9 @@ impl AppState {
         .bind(user.id)
         .execute(&mut *tx)
         .await?;
-        let anomaly_state_json_raw: Value = sqlx::query_scalar(
+        let current_row: OpsObservabilityConfigRow = sqlx::query_as(
             r#"
-            SELECT anomaly_state_json
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
             FROM ops_observability_configs
             WHERE singleton_id = 1
             FOR UPDATE
@@ -2371,7 +2534,8 @@ impl AppState {
         )
         .fetch_one(&mut *tx)
         .await?;
-        let existing = parse_anomaly_state(anomaly_state_json_raw, now_ms);
+        let existing = parse_anomaly_state(current_row.anomaly_state_json.clone(), now_ms);
+        let before_state = existing.get(&normalized_input.alert_key).cloned();
         let anomaly_state = apply_anomaly_action(existing, &input, now_ms)?;
         let anomaly_state_json = serde_json::to_value(&anomaly_state)
             .context("serialize observability anomaly action state failed")?;
@@ -2388,8 +2552,55 @@ impl AppState {
         .bind(user.id)
         .execute(&mut *tx)
         .await?;
+        let after_row: OpsObservabilityConfigRow = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE singleton_id = 1
+            "#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let after_anomaly_state = parse_anomaly_state(after_row.anomaly_state_json.clone(), now_ms);
+        let after_state = after_anomaly_state
+            .get(&normalized_input.alert_key)
+            .cloned();
+        let before_state_json = serde_json::to_value(before_state)
+            .context("serialize before observability anomaly action state failed")?;
+        let after_state_json = serde_json::to_value(after_state)
+            .context("serialize after observability anomaly action state failed")?;
+        let suppress_minutes = if normalized_input.action == OPS_ANOMALY_ACTION_SUPPRESS {
+            Some(normalized_input.suppress_minutes)
+        } else {
+            None
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO ops_observability_anomaly_action_audits(
+                singleton_id,
+                alert_key,
+                action,
+                suppress_minutes,
+                before_state_json,
+                after_state_json,
+                updated_by,
+                request_id,
+                created_at
+            )
+            VALUES (1, $1, $2, $3, $4, $5, $6, $7, NOW())
+            "#,
+        )
+        .bind(normalized_input.alert_key.as_str())
+        .bind(normalized_input.action)
+        .bind(suppress_minutes)
+        .bind(before_state_json)
+        .bind(after_state_json)
+        .bind(user.id)
+        .bind(normalized_request_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
-        self.get_ops_observability_config(user).await
+        Ok(build_output(Some(after_row), now_ms))
     }
 
     pub async fn list_ops_alert_notifications(
@@ -3580,6 +3791,187 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn normalize_anomaly_state_with_stats_should_keep_deterministic_subset_under_overflow() {
+        let now_ms = now_millis();
+        let mut input = HashMap::new();
+        for idx in (0..(MAX_STATE_ITEM_COUNT + 5)).rev() {
+            input.insert(
+                format!("rule_{idx:04}"),
+                OpsObservabilityAnomalyStateValue {
+                    acknowledged_at_ms: 0,
+                    suppress_until_ms: now_ms + 300_000,
+                },
+            );
+        }
+        let normalized = normalize_anomaly_state_with_stats(input, now_ms);
+        assert_eq!(normalized.input_count, MAX_STATE_ITEM_COUNT + 5);
+        assert_eq!(normalized.retained_count, MAX_STATE_ITEM_COUNT);
+        assert_eq!(normalized.dropped_count, 5);
+        assert!(normalized.state.contains_key("rule_0000"));
+        assert!(normalized
+            .state
+            .contains_key(format!("rule_{:04}", MAX_STATE_ITEM_COUNT - 1).as_str()));
+        assert!(!normalized
+            .state
+            .contains_key(format!("rule_{:04}", MAX_STATE_ITEM_COUNT).as_str()));
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_with_meta_should_require_if_match_when_enabled(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let err = state
+            .upsert_ops_observability_anomaly_state_with_meta(
+                &owner,
+                UpdateOpsObservabilityAnomalyStateInput {
+                    anomaly_state: HashMap::from([(
+                        OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                        OpsObservabilityAnomalyStateValue {
+                            acknowledged_at_ms: 0,
+                            suppress_until_ms: now_millis() + 300_000,
+                        },
+                    )]),
+                },
+                UpsertOpsObservabilityAnomalyStateMeta {
+                    expected_config_revision: None,
+                    require_if_match: true,
+                    request_id: Some("obs-anomaly-require-if-match"),
+                },
+            )
+            .await
+            .expect_err("missing if-match should be rejected");
+        match err {
+            AppError::DebateError(code) => {
+                assert_eq!(code, OPS_OBSERVABILITY_IF_MATCH_REQUIRED_CODE);
+            }
+            other => panic!("unexpected error: {}", other),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_with_meta_should_reject_stale_revision(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_observability_anomaly_state(
+                &owner,
+                UpdateOpsObservabilityAnomalyStateInput {
+                    anomaly_state: HashMap::from([(
+                        OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                        OpsObservabilityAnomalyStateValue {
+                            acknowledged_at_ms: 0,
+                            suppress_until_ms: now_millis() + 300_000,
+                        },
+                    )]),
+                },
+            )
+            .await?;
+        let err = state
+            .upsert_ops_observability_anomaly_state_with_meta(
+                &owner,
+                UpdateOpsObservabilityAnomalyStateInput {
+                    anomaly_state: HashMap::from([(
+                        OPS_ALERT_RULE_LOW_SUCCESS_RATE.to_string(),
+                        OpsObservabilityAnomalyStateValue {
+                            acknowledged_at_ms: 0,
+                            suppress_until_ms: now_millis() + 300_000,
+                        },
+                    )]),
+                },
+                UpsertOpsObservabilityAnomalyStateMeta {
+                    expected_config_revision: Some(OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY),
+                    require_if_match: true,
+                    request_id: Some("obs-anomaly-stale"),
+                },
+            )
+            .await
+            .expect_err("stale revision should be rejected");
+        match err {
+            AppError::DebateConflict(code) => {
+                assert_eq!(code, OPS_OBSERVABILITY_REVISION_CONFLICT_CODE);
+            }
+            other => panic!("unexpected error: {}", other),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_with_meta_should_persist_audit_diff(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        state
+            .upsert_ops_observability_anomaly_state(
+                &owner,
+                UpdateOpsObservabilityAnomalyStateInput {
+                    anomaly_state: HashMap::from([(
+                        OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                        OpsObservabilityAnomalyStateValue {
+                            acknowledged_at_ms: 1000,
+                            suppress_until_ms: now_millis() + 300_000,
+                        },
+                    )]),
+                },
+            )
+            .await?;
+        let config_before = state.get_ops_observability_config(&owner).await?;
+        let ret = state
+            .upsert_ops_observability_anomaly_state_with_meta(
+                &owner,
+                UpdateOpsObservabilityAnomalyStateInput {
+                    anomaly_state: HashMap::from([(
+                        OPS_ALERT_RULE_LOW_SUCCESS_RATE.to_string(),
+                        OpsObservabilityAnomalyStateValue {
+                            acknowledged_at_ms: 2000,
+                            suppress_until_ms: now_millis() + 300_000,
+                        },
+                    )]),
+                },
+                UpsertOpsObservabilityAnomalyStateMeta {
+                    expected_config_revision: Some(config_before.config_revision.as_str()),
+                    require_if_match: true,
+                    request_id: Some("obs-anomaly-audit-diff"),
+                },
+            )
+            .await?;
+        assert!(ret
+            .anomaly_state
+            .contains_key(OPS_ALERT_RULE_LOW_SUCCESS_RATE));
+
+        let audit_row: (Option<String>, Value, Value, i32, i32, i32) = sqlx::query_as(
+            r#"
+            SELECT
+                request_id,
+                before_anomaly_state_json,
+                after_anomaly_state_json,
+                input_item_count,
+                retained_item_count,
+                dropped_item_count
+            FROM ops_observability_anomaly_state_audits
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0.as_deref(), Some("obs-anomaly-audit-diff"));
+        assert_eq!(audit_row.3, 1);
+        assert_eq!(audit_row.4, 1);
+        assert_eq!(audit_row.5, 0);
+        let before_anomaly_state = parse_anomaly_state(audit_row.1, now_millis());
+        let after_anomaly_state = parse_anomaly_state(audit_row.2, now_millis());
+        assert!(before_anomaly_state.contains_key(OPS_ALERT_RULE_HIGH_RETRY));
+        assert!(after_anomaly_state.contains_key(OPS_ALERT_RULE_LOW_SUCCESS_RATE));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn evaluate_ops_observability_alerts_once_should_raise_and_clear_alerts() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
@@ -4532,6 +4924,107 @@ mod tests {
 
         let ret = state.get_ops_observability_config(&owner).await?;
         assert!(ret.anomaly_state.contains_key(OPS_ALERT_RULE_HIGH_RETRY));
+        assert!(ret
+            .anomaly_state
+            .contains_key(OPS_ALERT_RULE_LOW_SUCCESS_RATE));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_with_meta_should_persist_action_audit(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let now_ms = now_millis();
+
+        let ret = state
+            .apply_ops_observability_anomaly_action_with_meta(
+                &owner,
+                ApplyOpsObservabilityAnomalyActionInput {
+                    alert_key: OPS_ALERT_RULE_HIGH_RETRY.to_string(),
+                    action: OPS_ANOMALY_ACTION_SUPPRESS.to_string(),
+                    suppress_minutes: Some(5),
+                },
+                ApplyOpsObservabilityAnomalyActionMeta {
+                    request_id: Some("ops-action-audit-rid"),
+                },
+            )
+            .await?;
+        assert!(ret.anomaly_state.contains_key(OPS_ALERT_RULE_HIGH_RETRY));
+
+        let audit_row: (
+            String,
+            String,
+            Option<i32>,
+            Value,
+            Value,
+            i64,
+            Option<String>,
+        ) = sqlx::query_as(
+            r#"
+                SELECT
+                    alert_key,
+                    action,
+                    suppress_minutes,
+                    before_state_json,
+                    after_state_json,
+                    updated_by,
+                    request_id
+                FROM ops_observability_anomaly_action_audits
+                ORDER BY id DESC
+                LIMIT 1
+                "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_row.0, OPS_ALERT_RULE_HIGH_RETRY);
+        assert_eq!(audit_row.1, OPS_ANOMALY_ACTION_SUPPRESS);
+        assert_eq!(audit_row.2, Some(5));
+        assert_eq!(audit_row.3, Value::Null);
+        let after_state: OpsObservabilityAnomalyStateValue = serde_json::from_value(audit_row.4)?;
+        assert!(after_state.acknowledged_at_ms >= now_ms);
+        assert!(after_state.suppress_until_ms > now_ms);
+        assert_eq!(audit_row.5, owner.id);
+        assert_eq!(audit_row.6.as_deref(), Some("ops-action-audit-rid"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_with_meta_should_return_committed_snapshot(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+        let ret = state
+            .apply_ops_observability_anomaly_action_with_meta(
+                &owner,
+                ApplyOpsObservabilityAnomalyActionInput {
+                    alert_key: OPS_ALERT_RULE_LOW_SUCCESS_RATE.to_string(),
+                    action: OPS_ANOMALY_ACTION_ACKNOWLEDGE.to_string(),
+                    suppress_minutes: None,
+                },
+                ApplyOpsObservabilityAnomalyActionMeta {
+                    request_id: Some("ops-action-snapshot-rid"),
+                },
+            )
+            .await?;
+        let row: OpsObservabilityConfigRow = sqlx::query_as(
+            r#"
+            SELECT thresholds_json, anomaly_state_json, updated_by, updated_at
+            FROM ops_observability_configs
+            WHERE singleton_id = 1
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(
+            ret.config_revision,
+            format_ops_observability_config_revision(Some(row.updated_at))
+        );
+        assert_eq!(ret.updated_by, Some(owner.id as u64));
+        assert_eq!(ret.updated_at, Some(row.updated_at));
         assert!(ret
             .anomaly_state
             .contains_key(OPS_ALERT_RULE_LOW_SUCCESS_RATE));

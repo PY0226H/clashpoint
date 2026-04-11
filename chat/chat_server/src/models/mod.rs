@@ -48,14 +48,15 @@ pub use kafka_dlq::{
 };
 pub use messages::{CreateMessage, ListMessages};
 pub use ops_observability::{
-    ApplyOpsObservabilityAnomalyActionInput, GetOpsMetricsDictionaryOutput,
-    GetOpsObservabilityConfigOutput, GetOpsServiceSplitReadinessOutput, GetOpsSloSnapshotOutput,
-    ListOpsAlertNotificationsOutput, ListOpsAlertNotificationsQuery,
-    ListOpsServiceSplitReviewAuditsOutput, ListOpsServiceSplitReviewAuditsQuery,
-    OpsAlertEvalReport, OpsAlertNotificationItem, OpsMetricsDictionaryItem,
-    OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds, OpsServiceSplitReviewAuditItem,
-    OpsServiceSplitThresholdItem, OpsSloRuleSnapshotItem, OpsSloSignalSnapshot,
-    RunOpsObservabilityEvaluationQuery, UpdateOpsObservabilityAnomalyStateInput,
+    ApplyOpsObservabilityAnomalyActionInput, ApplyOpsObservabilityAnomalyActionMeta,
+    GetOpsMetricsDictionaryOutput, GetOpsObservabilityConfigOutput,
+    GetOpsServiceSplitReadinessOutput, GetOpsSloSnapshotOutput, ListOpsAlertNotificationsOutput,
+    ListOpsAlertNotificationsQuery, ListOpsServiceSplitReviewAuditsOutput,
+    ListOpsServiceSplitReviewAuditsQuery, OpsAlertEvalReport, OpsAlertNotificationItem,
+    OpsMetricsDictionaryItem, OpsObservabilityAnomalyStateValue, OpsObservabilityThresholds,
+    OpsServiceSplitReviewAuditItem, OpsServiceSplitThresholdItem, OpsSloRuleSnapshotItem,
+    OpsSloSignalSnapshot, RunOpsObservabilityEvaluationQuery,
+    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityAnomalyStateMeta,
     UpsertOpsObservabilityThresholdsMeta, UpsertOpsServiceSplitReviewInput,
 };
 pub use payment::{

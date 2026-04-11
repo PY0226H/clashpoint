@@ -3751,6 +3751,498 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Anomaly Unbound".to_string(),
+                email: "ops-anomaly-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-anomaly-unbound-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Anomaly No Role",
+            "ops-anomaly-no-role@acme.org",
+            "+8613810007815",
+            "ops-anomaly-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_422_for_invalid_body(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-anomaly-invalid-body-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(r#"{"anomalyState":{"high_retry":1}}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_400_when_if_match_missing(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-anomaly-missing-if-match-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_observability_if_match_required"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_400_when_if_match_invalid(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-anomaly-invalid-if-match-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "W/\"invalid\"")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_observability_if_match_invalid"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_409_when_if_match_stale(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-anomaly-stale-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let first_req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let first_res = app.clone().oneshot(first_req).await?;
+        assert_eq!(first_res.status(), StatusCode::OK);
+
+        let stale_req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let stale_res = app.oneshot(stale_req).await?;
+        assert_eq!(stale_res.status(), StatusCode::CONFLICT);
+        let body = stale_res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_observability_revision_conflict"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_observability_anomaly_state_route_should_return_200_for_ops_reviewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Anomaly Reviewer",
+            "ops-anomaly-reviewer@acme.org",
+            "+8613810007816",
+            "ops-anomaly-reviewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "anomalyState": {
+                "high_retry": {
+                    "acknowledgedAtMs": 1000,
+                    "suppressUntilMs": 4102444800000i64
+                },
+                "high_db_latency": {
+                    "acknowledgedAtMs": 0,
+                    "suppressUntilMs": 4102444800000i64
+                }
+            }
+        });
+
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/anomaly-state")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("If-Match", "empty")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsObservabilityConfigOutput = serde_json::from_slice(&body)?;
+        assert!(out.anomaly_state.contains_key("high_retry"));
+        assert_eq!(out.updated_by, Some(ops_reviewer.id as u64));
+        assert_ne!(out.config_revision, "empty");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "alertKey": "high_retry",
+            "action": "suppress",
+            "suppressMinutes": 5
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_403_for_unbound_user(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Action Unbound".to_string(),
+                email: "ops-action-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token = issue_token_for_user(&state, user.id, "ops-action-unbound-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "alertKey": "high_retry",
+            "action": "suppress",
+            "suppressMinutes": 5
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Action No Role",
+            "ops-action-no-role@acme.org",
+            "+8613810007817",
+            "ops-action-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "alertKey": "high_retry",
+            "action": "suppress",
+            "suppressMinutes": 5
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_422_for_invalid_body(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-action-invalid-body-sid").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"alertKey":"high_retry","action":1}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_400_for_invalid_action(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token = issue_token_for_user(&state, owner.id, "ops-action-invalid-action-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "alertKey": "high_retry",
+            "action": "invalid_action",
+            "suppressMinutes": 5
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("invalid anomaly action"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_400_for_invalid_alert_key(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-action-invalid-alert-key-sid").await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "alertKey": "   ",
+            "action": "suppress",
+            "suppressMinutes": 5
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("invalid alert key for anomaly action"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_ops_observability_anomaly_action_route_should_return_200_for_ops_reviewer(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Action Reviewer",
+            "ops-action-reviewer@acme.org",
+            "+8613810007818",
+            "ops-action-reviewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+        let payload = serde_json::json!({
+            "alertKey": "high_retry",
+            "action": "suppress",
+            "suppressMinutes": 5
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/observability/anomaly-state/actions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload)?))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsObservabilityConfigOutput = serde_json::from_slice(&body)?;
+        assert!(out.anomaly_state.contains_key("high_retry"));
+        assert_eq!(out.updated_by, Some(ops_reviewer.id as u64));
+        assert_ne!(out.config_revision, "empty");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_ops_observability_metrics_dictionary_route_should_return_401_without_token(
     ) -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;

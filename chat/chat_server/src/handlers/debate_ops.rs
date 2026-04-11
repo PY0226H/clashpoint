@@ -6,15 +6,16 @@ use crate::{
         request_idempotency_key_from_headers, request_rate_limit_ip_key_with_user_fallback,
         try_acquire_idempotency_or_fail_open,
     },
-    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput, ExecuteJudgeReplayOpsInput,
+    AppError, AppState, ApplyOpsObservabilityAnomalyActionInput,
+    ApplyOpsObservabilityAnomalyActionMeta, ExecuteJudgeReplayOpsInput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
     ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery,
     ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery, ListOpsRoleAssignmentsQuery,
     ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
     OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta, OpsUpdateDebateSessionInput,
     OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
-    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityThresholdsMeta,
-    UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
+    UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityAnomalyStateMeta,
+    UpsertOpsObservabilityThresholdsMeta, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
 use axum::{
     extract::{rejection::JsonRejection, Path, Query, State},
@@ -1686,10 +1687,18 @@ pub(crate) async fn upsert_ops_observability_thresholds_handler(
 #[utoipa::path(
     put,
     path = "/api/debate/ops/observability/anomaly-state",
+    params(
+        ("If-Match" = String, Header, description = "Required expected config revision. Supports plain revision string or quoted string.")
+    ),
     request_body = UpdateOpsObservabilityAnomalyStateInput,
     responses(
         (status = 200, description = "Updated ops observability config", body = crate::GetOpsObservabilityConfigOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1698,11 +1707,78 @@ pub(crate) async fn upsert_ops_observability_thresholds_handler(
 pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<UpdateOpsObservabilityAnomalyStateInput>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state
-        .upsert_ops_observability_anomaly_state(&user, input)
-        .await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let expected_config_revision = match parse_ops_observability_if_match_header(&headers) {
+        Ok(value) => value,
+        Err(code) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                result = "validation_error",
+                "upsert ops observability anomaly state rejected because if-match is invalid: {}",
+                code
+            );
+            return Err(AppError::DebateError(code.to_string()));
+        }
+    };
+    let revision_before = expected_config_revision
+        .as_deref()
+        .unwrap_or("unset")
+        .to_string();
+    let input_item_count = input.anomaly_state.len() as u64;
+    let ret = match state
+        .upsert_ops_observability_anomaly_state_with_meta(
+            &user,
+            input,
+            UpsertOpsObservabilityAnomalyStateMeta {
+                expected_config_revision: expected_config_revision.as_deref(),
+                require_if_match: true,
+                request_id: request_id.as_deref(),
+            },
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_observability_anomaly_state_upsert_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                revision_before = revision_before.as_str(),
+                input_item_count,
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "upsert ops observability anomaly state failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let retained_item_count = ret.anomaly_state.len() as u64;
+    let dropped_item_count = input_item_count.saturating_sub(retained_item_count);
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        revision_before = revision_before.as_str(),
+        revision_after = ret.config_revision.as_str(),
+        input_item_count,
+        retained_item_count,
+        dropped_item_count,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "upsert ops observability anomaly state served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -1714,7 +1790,11 @@ pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
     responses(
         (status = 200, description = "Updated ops observability config", body = crate::GetOpsObservabilityConfigOutput),
         (status = 400, description = "Invalid action input", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 422, description = "Request body parse error", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1723,11 +1803,57 @@ pub(crate) async fn upsert_ops_observability_anomaly_state_handler(
 pub(crate) async fn apply_ops_observability_anomaly_action_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<ApplyOpsObservabilityAnomalyActionInput>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state
-        .apply_ops_observability_anomaly_action(&user, input)
-        .await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let alert_key = input.alert_key.trim().chars().take(200).collect::<String>();
+    let action = input.action.trim().to_ascii_lowercase();
+    let suppress_minutes = input.suppress_minutes.unwrap_or_default();
+    let ret = match state
+        .apply_ops_observability_anomaly_action_with_meta(
+            &user,
+            input,
+            ApplyOpsObservabilityAnomalyActionMeta {
+                request_id: request_id.as_deref(),
+            },
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_observability_anomaly_action_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                alert_key = alert_key.as_str(),
+                action = action.as_str(),
+                suppress_minutes,
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "apply ops observability anomaly action failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        alert_key = alert_key.as_str(),
+        action = action.as_str(),
+        suppress_minutes,
+        revision_after = ret.config_revision.as_str(),
+        anomaly_state_size = ret.anomaly_state.len() as u64,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "apply ops observability anomaly action served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -3223,6 +3349,30 @@ fn classify_ops_split_review_upsert_failure(err: &AppError) -> &'static str {
 }
 
 fn classify_ops_observability_thresholds_upsert_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_observability_anomaly_state_upsert_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_observability_anomaly_action_failure(err: &AppError) -> &'static str {
     match err {
         AppError::NotFound(_) => "not_found",
         AppError::DebateConflict(_) => "conflict",
