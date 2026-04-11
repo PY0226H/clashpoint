@@ -1505,7 +1505,11 @@ pub(crate) async fn list_ops_service_split_review_audits_handler(
     request_body = UpsertOpsServiceSplitReviewInput,
     responses(
         (status = 200, description = "Service split readiness snapshot", body = crate::GetOpsServiceSplitReadinessOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
         (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
     ),
     security(
         ("token" = [])
@@ -1514,10 +1518,55 @@ pub(crate) async fn list_ops_service_split_review_audits_handler(
 pub(crate) async fn upsert_ops_service_split_review_handler(
     Extension(user): Extension<User>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<UpsertOpsServiceSplitReviewInput>,
 ) -> Result<impl IntoResponse, AppError> {
-    let ret = state.upsert_ops_service_split_review(&user, input).await?;
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let payment_compliance_required = input.payment_compliance_required;
+    let review_note_len = input
+        .review_note
+        .as_ref()
+        .map(|v| v.trim().chars().count())
+        .unwrap_or_default();
+    let ret = match state.upsert_ops_service_split_review(&user, input).await {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            let failure_type = classify_ops_split_review_upsert_failure(&err);
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                payment_compliance_required = payment_compliance_required
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unset".to_string()),
+                review_note_len,
+                latency_ms,
+                decision = "failed",
+                result = failure_type,
+                "upsert split readiness review failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
     invalidate_cached_ops_split_readiness().await;
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    let triggered_count = ret.thresholds.iter().filter(|item| item.triggered).count();
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        payment_compliance_required = payment_compliance_required
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unset".to_string()),
+        review_note_len,
+        overall_status = ret.overall_status.as_str(),
+        triggered_count,
+        latency_ms,
+        decision = "success",
+        result = "success",
+        "upsert split readiness review served"
+    );
     Ok((StatusCode::OK, Json(ret)))
 }
 
@@ -3062,6 +3111,18 @@ fn classify_ops_split_readiness_failure(err: &AppError) -> &'static str {
 }
 
 fn classify_ops_split_review_audits_failure(err: &AppError) -> &'static str {
+    match err {
+        AppError::NotFound(_) => "not_found",
+        AppError::DebateConflict(_) => "conflict",
+        AppError::DebateError(_) | AppError::ValidationError(_) => "validation_error",
+        AppError::AuthError(_) | AppError::NotLoggedIn => "auth_error",
+        AppError::ThrottleError(_) => "rate_limited",
+        AppError::ServerError(_) | AppError::SqlxError(_) | AppError::AnyError(_) => "server_error",
+        _ => "system_error",
+    }
+}
+
+fn classify_ops_split_review_upsert_failure(err: &AppError) -> &'static str {
     match err {
         AppError::NotFound(_) => "not_found",
         AppError::DebateConflict(_) => "conflict",

@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use sqlx::FromRow;
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
 use utoipa::{IntoParams, ToSchema};
 
@@ -50,6 +52,8 @@ const SPLIT_READINESS_WS_MESSAGES_10M_THRESHOLD: i64 = 20_000;
 const SPLIT_REVIEW_NOTE_MAX_LEN: usize = 1000;
 const SPLIT_REVIEW_STALE_THRESHOLD_HOURS: i64 = 24 * 30;
 const OPS_OBSERVABILITY_CONFIG_REVISION_EMPTY: &str = "empty";
+#[cfg(test)]
+static OPS_SPLIT_REVIEW_ALERT_EMIT_FORCE_FAIL: AtomicBool = AtomicBool::new(false);
 
 fn clamp_float(value: f64, min: f64, max: f64, fallback: f64) -> f64 {
     if !value.is_finite() {
@@ -1612,6 +1616,32 @@ fn build_split_review_cleared_alert(
     }
 }
 
+fn build_split_review_transition_plan(
+    before_snapshot: &GetOpsServiceSplitReadinessOutput,
+    after_snapshot: &GetOpsServiceSplitReadinessOutput,
+    triggered_by: i64,
+) -> Option<EmitAlertPlan> {
+    if before_snapshot.overall_status != "review_required"
+        && after_snapshot.overall_status == "review_required"
+    {
+        return Some(EmitAlertPlan {
+            status: ALERT_STATUS_RAISED,
+            mark_active: true,
+            evaluated: build_split_review_required_alert(after_snapshot, triggered_by),
+        });
+    }
+    if before_snapshot.overall_status == "review_required"
+        && after_snapshot.overall_status != "review_required"
+    {
+        return Some(EmitAlertPlan {
+            status: ALERT_STATUS_CLEARED,
+            mark_active: false,
+            evaluated: build_split_review_cleared_alert(after_snapshot, triggered_by),
+        });
+    }
+    None
+}
+
 impl AppState {
     pub async fn upsert_ops_service_split_review(
         &self,
@@ -1657,26 +1687,53 @@ impl AppState {
         .await?;
         tx.commit().await?;
         let after_snapshot = self.get_ops_service_split_readiness(user).await?;
-        if before_snapshot.overall_status != "review_required"
-            && after_snapshot.overall_status == "review_required"
+        if let Some(plan) =
+            build_split_review_transition_plan(&before_snapshot, &after_snapshot, user.id)
         {
-            let recipients = self.list_alert_recipients().await?;
-            let plan = EmitAlertPlan {
-                status: ALERT_STATUS_RAISED,
-                mark_active: true,
-                evaluated: build_split_review_required_alert(&after_snapshot, user.id),
-            };
-            self.emit_observability_alert(plan, &recipients).await?;
-        } else if before_snapshot.overall_status == "review_required"
-            && after_snapshot.overall_status != "review_required"
-        {
-            let recipients = self.list_alert_recipients().await?;
-            let plan = EmitAlertPlan {
-                status: ALERT_STATUS_CLEARED,
-                mark_active: false,
-                evaluated: build_split_review_cleared_alert(&after_snapshot, user.id),
-            };
-            self.emit_observability_alert(plan, &recipients).await?;
+            let alert_status = plan.status;
+            let alert_key = plan.evaluated.alert_key.clone();
+            match self.list_alert_recipients().await {
+                Ok(recipients) => {
+                    let emit_result: Result<(), AppError> = {
+                        #[cfg(test)]
+                        {
+                            if OPS_SPLIT_REVIEW_ALERT_EMIT_FORCE_FAIL.load(Ordering::Relaxed) {
+                                Err(AppError::ServerError(
+                                    "ops_split_review_alert_emit_forced_failure".to_string(),
+                                ))
+                            } else {
+                                self.emit_observability_alert(plan, &recipients).await
+                            }
+                        }
+                        #[cfg(not(test))]
+                        {
+                            self.emit_observability_alert(plan, &recipients).await
+                        }
+                    };
+                    if let Err(err) = emit_result {
+                        warn!(
+                            user_id = user.id,
+                            before_status = before_snapshot.overall_status.as_str(),
+                            after_status = after_snapshot.overall_status.as_str(),
+                            alert_status,
+                            alert_key = alert_key.as_str(),
+                            "upsert split review alert emission failed: {}",
+                            err
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        user_id = user.id,
+                        before_status = before_snapshot.overall_status.as_str(),
+                        after_status = after_snapshot.overall_status.as_str(),
+                        alert_status,
+                        alert_key = alert_key.as_str(),
+                        "upsert split review list alert recipients failed: {}",
+                        err
+                    );
+                }
+            }
         }
         Ok(after_snapshot)
     }
@@ -3781,6 +3838,52 @@ mod tests {
             None => panic!("row should not be None after concurrent set"),
         }
         assert_eq!(payment_item.evidence["reviewNote"], Value::String(row.1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_service_split_review_should_keep_main_write_when_alert_emit_failed_best_effort(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        state.grant_platform_admin(1).await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+
+        OPS_SPLIT_REVIEW_ALERT_EMIT_FORCE_FAIL.store(true, Ordering::Relaxed);
+        let ret = state
+            .upsert_ops_service_split_review(
+                &owner,
+                UpsertOpsServiceSplitReviewInput {
+                    payment_compliance_required: Some(true),
+                    review_note: Some("force-alert-fail".to_string()),
+                },
+            )
+            .await;
+        OPS_SPLIT_REVIEW_ALERT_EMIT_FORCE_FAIL.store(false, Ordering::Relaxed);
+
+        let ret = ret?;
+        assert_eq!(ret.overall_status, "review_required");
+
+        let row: (Option<bool>, String) = sqlx::query_as(
+            r#"
+            SELECT payment_compliance_required, review_note
+            FROM ops_service_split_reviews
+            WHERE singleton_id = 1
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(row, (Some(true), "force-alert-fail".to_string()));
+
+        let audit_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(1)::bigint
+            FROM ops_service_split_review_audits
+            WHERE review_note = 'force-alert-fail'
+            "#,
+        )
+        .fetch_one(&state.pool)
+        .await?;
+        assert_eq!(audit_count, 1);
         Ok(())
     }
 

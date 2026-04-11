@@ -4116,6 +4116,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_ops_service_split_review_route_should_return_401_without_token() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let payload = serde_json::json!({
+            "paymentComplianceRequired": true,
+            "reviewNote": "api073-unauthorized"
+        });
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/split-readiness/review")
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_service_split_review_route_should_return_403_for_unbound_user() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let user = state
+            .create_user(&CreateUser {
+                fullname: "Ops Split Review Upsert Unbound".to_string(),
+                email: "ops-split-review-upsert-unbound@acme.org".to_string(),
+                password: "123456".to_string(),
+            })
+            .await?;
+        let token =
+            issue_token_for_user(&state, user.id, "ops-split-review-upsert-unbound-sid").await?;
+        let app = get_router(state).await?;
+
+        let payload = serde_json::json!({
+            "paymentComplianceRequired": true,
+            "reviewNote": "api073-unbound"
+        });
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/split-readiness/review")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_phone_bind_required");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_service_split_review_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Review Upsert No Role",
+            "ops-split-review-upsert-no-role@acme.org",
+            "+8613810007819",
+            "ops-split-review-upsert-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let payload = serde_json::json!({
+            "paymentComplianceRequired": true,
+            "reviewNote": "api073-no-permission"
+        });
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/split-readiness/review")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error
+            .error
+            .contains("ops_permission_denied:observability_manage"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_service_split_review_route_should_return_400_for_too_long_review_note(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let token =
+            issue_token_for_user(&state, owner.id, "ops-split-review-upsert-owner-sid").await?;
+        let app = get_router(state).await?;
+
+        let payload = serde_json::json!({
+            "paymentComplianceRequired": true,
+            "reviewNote": "a".repeat(1001)
+        });
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/split-readiness/review")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("split readiness review note too long"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_service_split_review_route_should_return_200_for_ops_reviewer() -> Result<()>
+    {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let owner = state.find_user_by_id(1).await?.expect("owner should exist");
+        let (ops_reviewer, token) = create_bound_user_and_token(
+            &state,
+            "Ops Split Review Upsert Reviewer",
+            "ops-split-review-upsert-reviewer@acme.org",
+            "+8613810007820",
+            "ops-split-review-upsert-reviewer-sid",
+        )
+        .await?;
+        state
+            .upsert_ops_role_assignment_by_owner(
+                &owner,
+                ops_reviewer.id as u64,
+                UpsertOpsRoleInput {
+                    role: "ops_reviewer".to_string(),
+                },
+            )
+            .await?;
+        let app = get_router(state).await?;
+
+        let payload = serde_json::json!({
+            "paymentComplianceRequired": true,
+            "reviewNote": "api073-route-success"
+        });
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/debate/ops/observability/split-readiness/review")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .header("x-request-id", "api073-route-success")
+            .body(Body::from(payload.to_string()))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: GetOpsServiceSplitReadinessOutput = serde_json::from_slice(&body)?;
+        assert!(matches!(
+            out.overall_status.as_str(),
+            "hold" | "review_required"
+        ));
+        let payment_item = out
+            .thresholds
+            .iter()
+            .find(|item| item.key == "payment_compliance_isolation")
+            .expect("payment threshold should exist");
+        assert_eq!(payment_item.status, "met");
+        assert!(payment_item.triggered);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn get_ops_judge_reviews_route_should_return_401_without_token() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let app = get_router(state).await?;

@@ -116,6 +116,14 @@
 | api072-split-review-audits-revision-etag-evaluation | `api072-observability-split-readiness-reviews-governance-phase-closure` | 工程债 | 当前控制台读压主要通过 user 限流兜底，`revision/etag` 协商缓存改造收益需结合真实刷新频率评估。 | 控制台轮询频率提升或出现重复拉取成本明显上升 | 形成 `revision/ETag + If-None-Match` 方案评审并落地（若 Go），支持 `304` 协商返回。 | 评审结论 + route/model 回归 + 端到端缓存命中验证归档。 |
 | api072-split-review-audits-retention-governance | `api072-observability-split-readiness-reviews-governance-phase-closure` | 可运维性 | 当前数据规模可控，本轮优先完成接口治理闭环；审计归档策略需要跨模块一致性评审。 | 审计表增长显著、查询成本上升，或进入发布前数据治理回合 | 明确保留周期、归档与清理策略（含审计可追溯要求），并形成执行与回滚 SOP。 | retention 方案评审记录 + 演练日志 + 查询基线对比报告归档。 |
 
+### C16. API052 后置技术债
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| api052-dispatch-metrics-process-startup-freshness-indicator | `api052-judge-dispatch-metrics-governance-phase-closure` | 可观测性 | 本轮优先完成口径正确性与维度化，未扩展进程级可解释字段。 | 多实例部署或值班复盘出现“归零无法解释”时 | 在指标输出补齐 `processStartAtMs/instanceId` 或等效可解释字段，并更新文档与看板聚合策略。 | `cargo test -p chat-server judge_dispatch -- --nocapture` + 看板聚合规则回归记录归档。 |
+| api052-dispatch-metrics-internal-auth-signature-rollout | `api052-judge-dispatch-metrics-governance-phase-closure` | 发布前收口 | 当前仍处本地开发阶段，先不扩大到全内部 API 鉴权体系改造。 | 上线前安全收口窗口 | 将内部鉴权从静态 key 升级为 `key-id + HMAC(signature,timestamp,nonce)`，并支持时间窗、重放防护、密钥轮换。 | 安全回归脚本 + 401/签名错误/重放攻击用例通过并归档。 |
+| api052-dispatch-metrics-fault-injection-and-backlog-anomaly-drill | `api052-judge-dispatch-metrics-governance-phase-closure` | 可靠性 | 目前单测已覆盖口径，但真实超时与 backlog 异常注入演练尚未完成。 | 压测窗口开启或上线前可靠性演练 | 形成超时故障注入与 backlog 刷新异常演练报告，验证指标分桶与告警阈值可用。 | 压测/故障注入脚本执行记录 + 指标快照 + 复盘报告归档到 `docs/consistency_reports/`。 |
+| api052-dispatch-metrics-relaxed-snapshot-consistency-governance | `api052-judge-dispatch-metrics-governance-phase-closure` | 工程债 | 当前 `Relaxed` 快照满足性能目标，短期不做强一致快照重构。 | 出现守恒误报或看板依赖严格瞬时一致时 | 形成一致性策略评审（窗口平滑/采样聚合/强一致快照方案）并固化调用约束。 | 评审结论 + 指标守恒误报对比报告归档。 |
+
 ## Z. 历史待迁移技术债（只读归档）
 - 下方内容保留旧结构，仅用于查询和后续分批迁移。
 - 新增技术债不要继续写入下方旧结构。
@@ -627,3 +635,17 @@
 | api051-redis-ready-204-positive-path-test-coverage | 当前单测环境默认 redis disabled，仅覆盖 `/ready` 的 `401/503`，缺 `204` 正路径自动化回归。 | 增加可控的 `Enabled+ready=true` 测试桩或集成测试，补齐 `204` 正路径自动化断言。 | `cargo test -p chat-server ai_internal -- --nocapture` 中新增 `ready=204` 用例通过并归档。 |
 | api051-redis-health-multi-instance-cache-consistency-evaluation | 当前缓存为进程内 2 秒快照，多实例部署下一致性策略未冻结。 | 形成多实例一致性方案评审（共享缓存、统一探针入口或保持本地缓存并文档化约束）并冻结结论。 | 多实例对照测试 + 评审纪要归档到 `docs/consistency_reports/`。 |
 | api051-redis-health-observability-dashboard-baseline | 接口已补结构化日志与内存计数，但 dashboard 与告警阈值未封板。 | 建立 `redis_probe_*` 指标看板与阈值（超时率、degraded 比例、探测时延），完成一次值班演练与复盘。 | 看板配置导出 + 告警演练记录 + 值班复盘归档。 |
+
+## AS. api073-observability-split-readiness-review-governance 后续待办（来源：当前开发计划）
+
+整合说明（2026-04-10）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API073 未完成项已并入本分组持续跟踪。
+- API073 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api073-observability-split-readiness-review-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api073-split-review-revision-if-match-governance | 当前为单例 `UPSERT`，并发写入是“最后写覆盖”，缺少冲突提示与协同写保护。 | 落地 `revision + If-Match` 条件写（或等效版本控制），冲突返回稳定 `409` 语义，并完成前后端交互文案统一。 | route/model 回归补齐冲突场景 + 前端联调记录（刷新重试链路）归档。 |
+| api073-split-review-idempotency-key-rollout-decision | 当前写接口未启用 `Idempotency-Key`，网络重试会增加审计噪声。 | 形成幂等策略 Go/No-Go 结论；若 Go，落地 key 作用域、TTL 与冲突语义并补测试。 | 压测/回放样本统计 + 评审记录；若落地则执行 `cargo test -p chat-server upsert_ops_service_split_review_should -- --nocapture` 并归档。 |
+| api073-split-review-alert-outbox-async-rollout | 当前已改为 best-effort，但告警仍在同步请求路径内执行，尚未彻底 outbox 异步化。 | 完成 outbox 事件建模与 worker 派发重试落地，主写入与通知链路彻底解耦。 | 迁移脚本演练 + 故障注入回归（通知失败可补偿）+ 指标看板归档。 |
+| api073-split-review-cache-consistency-evaluation | 当前 `GET` 3 秒短缓存 + `PUT` 失效在并发下仍存在短时竞态窗口。 | 形成缓存一致性 Go/No-Go 结论；若 Go，落地版本化缓存或写后回填策略并补齐回归。 | 并发读写压测与一致性对照报告归档到 `docs/consistency_reports/`。 |
+| api073-split-review-audit-schema-structuring | 审计表当前缺 `action_type/request_id/source` 等结构字段，行为归因成本高。 | 完成审计 schema 增强评审并落地（如 `action_type/request_id/source`），支持后续报表与归责分析。 | 迁移脚本 + 查询回归 + 审计报表示例归档。 |
