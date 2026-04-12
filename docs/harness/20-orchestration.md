@@ -1,6 +1,6 @@
 # EchoIsle Orchestration
 
-更新时间：2026-04-06
+更新时间：2026-04-12
 状态：当前编排规则（P2-1 / P2-2 / P2-3 / P2-4 / P2-5 已落地）
 
 ---
@@ -32,7 +32,7 @@ EchoIsle 现在已经有统一的模块级入口：
 1. 通过 `module-turn-harness --task-kind dev` 进入
 2. 执行 PRD gate
 3. 执行 `post-module-test-guard` 对应自动化步骤
-4. 输出 commit message 建议
+4. 输出 commit message 建议（正文用于终端/对话回显，不写入 summary 正文）
 5. 执行 `post-module-plan-sync`
 6. 执行 knowledge pack 决策
 7. 若策略命中，再执行 `post-module-interview-journal`
@@ -45,7 +45,7 @@ EchoIsle 现在已经有统一的模块级入口：
 1. 通过 `module-turn-harness --task-kind refactor` 进入
 2. 执行 PRD gate
 3. 执行 `post-module-test-guard` 对应自动化步骤
-4. 输出 commit message 建议
+4. 输出 commit message 建议（正文用于终端/对话回显，不写入 summary 正文）
 5. 执行 `post-optimization-plan-sync`
 6. 执行 knowledge pack 决策
 7. 若策略命中，再执行 `post-module-interview-journal`
@@ -77,6 +77,7 @@ EchoIsle 现在已经有统一的模块级入口：
 9. 每次执行后（包含 `dry-run`），可直接查看 `artifacts/harness/` 下的 `.jsonl/.summary.json/.summary.md`
 10. 若你想强制覆盖自动判定，可显式传 `--prd-mode summary|full`
 11. 若你想控制 explanation/interview 是否补写，可显式传 `--knowledge-pack auto|skip|force`
+12. 回合结束后，agent 应在对话里直接展示 commit 推荐正文，不要只反馈 `post-commit-message` 步骤通过
 
 如果你不想使用统一入口，仍可按旧方式手工执行 hook，但那已退化为兼容 fallback，不再是默认主路径。
 

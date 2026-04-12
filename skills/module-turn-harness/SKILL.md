@@ -155,13 +155,34 @@ bash scripts/harness/module_turn_harness.sh \
 2. 关键证据路径
 3. 整轮回合的最终状态
 
+注意：
+
+1. `summary.json` / `summary.md` 只记录步骤状态与证据路径，不承载 commit 推荐正文。
+2. commit 推荐正文应由 agent 在对话中直接回显给用户。
+
 ## 当前限制
 
 1. PRD gate 已支持 `product-goals` 摘要优先，但高风险判定目前仍基于关键词与任务摘要
 2. 高风险判定当前仍主要基于关键词、摘要与 issues，不是代码语义级识别
 3. 已有 `journey_verify.sh` 统一 runtime verify 入口，但还没有接入当前主链
 4. 当前结构化日志记录的是“执行过程”，不等于 runtime verify
-5. commit message 当前由 harness 内置启发式生成推荐，不是独立脚本
+5. commit 推荐依赖 `post-module-commit-message` 脚本启发式，不是语义级变更理解
+
+## 对话输出约束（commit 推荐）
+
+执行 `module_turn_harness.sh` 后，必须额外做一次 commit 推荐回显：
+
+1. 使用与本轮一致的参数调用：
+```bash
+bash skills/post-module-commit-message/scripts/recommend_commit_message.sh \
+  --root <repo-root> \
+  --task-kind <dev|refactor|non-dev> \
+  --module "<module-id>" \
+  --summary "<one-line-summary>"
+```
+2. 在最终对话中直接输出 `Recommended`（可附 `Alternatives`），不要只说“post-commit-message pass”。
+3. 不要把 commit 推荐正文写入 `summary` 产物；`summary` 仅保留结构化执行状态。
+4. 若用户要求仅一条标题，可改用 `--title-only` 并直接回显标题。
 
 ## 推荐使用方式
 

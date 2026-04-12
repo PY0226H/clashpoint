@@ -16,6 +16,9 @@ description: "在每轮开发收尾时，根据当前 Git 改动生成符合 Con
 - 默认输出格式：`<type>(<scope>): <subject>`。
 - 若 scope 不明确，允许省略 scope：`<type>: <subject>`。
 - subject 使用小写开头的祈使语气短句，不加句号，建议不超过 72 字符。
+- 对话中至少回显 `Recommended` 主推荐；若用户需要可附 `Alternatives`。
+- 不允许仅以“步骤通过/step pass”代替推荐正文。
+- `summary` 产物仅记录执行状态，不承载推荐正文。
 
 ## 工作流
 
@@ -85,6 +88,12 @@ Alternatives:
 ```
 
 若不需要备选，可只输出 `Recommended` 一条。
+
+## 与 `module-turn-harness` 的协作约定
+
+1. `module-turn-harness` 负责把本步骤记录到结构化执行日志与 summary。
+2. agent 负责将本脚本输出的推荐正文在最终对话中明确展示给用户。
+3. 默认展示 `Recommended + Alternatives`；若用户明确要求精简，展示 `--title-only` 结果。
 
 ## 示例
 
