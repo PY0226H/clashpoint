@@ -3,9 +3,9 @@ import unittest
 from unittest.mock import patch
 
 from app.runtime_policy import (
-    is_production_env,
     PROVIDER_MOCK,
     PROVIDER_OPENAI,
+    is_production_env,
     normalize_provider,
     parse_env_bool,
     runtime_env_label,

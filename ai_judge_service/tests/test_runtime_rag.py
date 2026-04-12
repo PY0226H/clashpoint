@@ -4,9 +4,9 @@ from app.rag_retriever import RAG_BACKEND_MILVUS, RetrievedContext
 from app.runtime_rag import (
     apply_rag_payload_fields,
     build_milvus_config,
-    retrieve_runtime_contexts_with_meta,
-    retrieve_runtime_contexts,
     resolve_effective_rag_backend,
+    retrieve_runtime_contexts,
+    retrieve_runtime_contexts_with_meta,
 )
 from app.runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
 from app.settings import Settings
@@ -221,7 +221,9 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertEqual(result.retrieval_diagnostics["profileResolved"], "hybrid_v1")
         self.assertIsNone(result.retrieval_diagnostics["profileFallbackReason"])
 
-    def test_retrieve_runtime_contexts_with_meta_should_retry_without_hybrid_kwargs_for_legacy_fn(self) -> None:
+    def test_retrieve_runtime_contexts_with_meta_should_retry_without_hybrid_kwargs_for_legacy_fn(
+        self,
+    ) -> None:
         settings = _build_settings(rag_enabled=True)
         request = _build_rag_request()
         calls = {"count": 0}
@@ -243,7 +245,9 @@ class RuntimeRagTests(unittest.TestCase):
         self.assertTrue(result.retrieval_diagnostics["rerankEnabledEffective"])
         self.assertEqual(result.retrieval_diagnostics["lexicalEngineConfigured"], "bm25")
 
-    def test_retrieve_runtime_contexts_with_meta_should_fallback_unknown_profile_to_default(self) -> None:
+    def test_retrieve_runtime_contexts_with_meta_should_fallback_unknown_profile_to_default(
+        self,
+    ) -> None:
         settings = _build_settings(rag_enabled=True)
         request = _build_rag_request(retrieval_profile="unknown-profile")
         captured: dict[str, object] = {}

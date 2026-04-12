@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-from typing import Any
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,7 +22,9 @@ def _parse_args() -> argparse.Namespace:
         description="Run offline RAG quality baseline/profile comparison.",
     )
     parser.add_argument("--dataset-file", required=True, help="Path to eval dataset json file.")
-    parser.add_argument("--knowledge-file", required=True, help="Path to knowledge chunks json file.")
+    parser.add_argument(
+        "--knowledge-file", required=True, help="Path to knowledge chunks json file."
+    )
     parser.add_argument(
         "--profiles",
         default="hybrid_v1,hybrid_recall_v1,hybrid_precision_v1",
@@ -62,9 +64,7 @@ def _load_cases(path: str) -> list[RagEvalCase]:
         request = _build_rag_request(request_payload)
         case_id = str(row.get("caseId") or row.get("case_id") or f"case-{idx + 1}")
         expected_ids = tuple(
-            str(chunk_id).strip()
-            for chunk_id in expected
-            if str(chunk_id).strip()
+            str(chunk_id).strip() for chunk_id in expected if str(chunk_id).strip()
         )
         cases.append(
             RagEvalCase(
@@ -115,7 +115,9 @@ def _build_rag_request(payload: dict[str, Any]) -> RuntimeRagRequest:
                 user_id=row.get("user_id") or row.get("userId"),
             )
         )
-    retrieval_profile = str(payload.get("retrieval_profile") or payload.get("retrievalProfile") or "hybrid_v1")
+    retrieval_profile = str(
+        payload.get("retrieval_profile") or payload.get("retrievalProfile") or "hybrid_v1"
+    )
     return RuntimeRagRequest(
         topic=topic,
         messages=messages,

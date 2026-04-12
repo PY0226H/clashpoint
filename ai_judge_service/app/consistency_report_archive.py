@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import re
 import secrets
 import shutil
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,9 @@ def _extract_report_timestamp(filename: str, report_prefix: str) -> datetime | N
     matched = mode_ts_pattern.match(filename)
     if matched:
         try:
-            return datetime.strptime(matched.group(1), "%Y%m%d-%H%M%SZ").replace(tzinfo=timezone.utc)
+            return datetime.strptime(matched.group(1), "%Y%m%d-%H%M%SZ").replace(
+                tzinfo=timezone.utc
+            )
         except ValueError:
             return None
     matched = legacy_date_pattern.match(filename)

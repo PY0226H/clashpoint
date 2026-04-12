@@ -2,27 +2,29 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-import subprocess
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.b3_consistency_gate import build_default_report_path  # noqa: E402
 from app.b3_report_collision_stress import (  # noqa: E402
     CollisionStressRun,
     parse_report_path,
     render_collision_stress_markdown,
     summarize_collision_runs,
 )
-from app.b3_consistency_gate import build_default_report_path  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run collision stress against B3 report output path.")
+    parser = argparse.ArgumentParser(
+        description="Run collision stress against B3 report output path."
+    )
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--mode", choices=("memory", "auto", "redis"), default="memory")
     parser.add_argument("--report-dir", default="")

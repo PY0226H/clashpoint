@@ -29,4 +29,3 @@ def resolve_effective_style_mode(
     if normalized_request is not None:
         return normalized_request, "job_request"
     return STYLE_RATIONAL, "default"
-

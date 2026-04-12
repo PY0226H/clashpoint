@@ -72,9 +72,7 @@ class RagRetrieverTests(unittest.TestCase):
         self.assertEqual(parse_rag_backend("MILVUS"), RAG_BACKEND_MILVUS)
 
     def test_parse_source_whitelist_should_normalize_and_deduplicate(self) -> None:
-        ret = parse_source_whitelist(
-            " https://a.com/x/ ; https://b.com/y \nhttps://a.com/x "
-        )
+        ret = parse_source_whitelist(" https://a.com/x/ ; https://b.com/y \nhttps://a.com/x ")
         self.assertEqual(ret, ("https://a.com/x", "https://b.com/y"))
 
     def test_retrieve_contexts_should_rank_relevant_chunks_and_keep_context_seed(self) -> None:

@@ -1,0 +1,107 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-judge-service"
+version = "0.1.0"
+description = "EchoIsle AI judge service"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "fastapi==0.135.1",
+  "uvicorn==0.42.0",
+  "httpx==0.28.1",
+  "pydantic==2.11.7",
+  "redis==7.3.0",
+  "bm25s>=0.3.2",
+  "pymilvus>=2.5.0",
+  "sentence-transformers>=3.0.0",
+  "tiktoken>=0.8.0",
+]
+
+[dependency-groups]
+dev = [
+  "mypy==1.18.2",
+  "pre-commit==4.3.0",
+  "pyright==1.1.406",
+  "pytest==8.4.2",
+  "ruff==0.14.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["app", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+  "app/settings.py",
+  "app/runtime_policy.py",
+  "app/runtime_errors.py",
+  "app/token_budget.py",
+  "app/models.py",
+  "app/rag_profiles.py",
+  "app/openai_judge_client.py",
+]
+cache_dir = ".mypy_cache"
+warn_unused_configs = true
+warn_unused_ignores = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = [
+  "fastapi.*",
+  "httpx.*",
+  "redis.*",
+  "bm25s.*",
+  "pymilvus.*",
+  "sentence_transformers.*",
+  "tiktoken.*",
+]
+ignore_missing_imports = true
+
+# TODO(2026-05-31): 迁移期 strict 范围，要求每个 PR 只增不减目标覆盖。
+[[tool.mypy.overrides]]
+module = [
+  "app.settings",
+  "app.runtime_policy",
+  "app.runtime_errors",
+  "app.token_budget",
+  "app.models",
+  "app.rag_profiles",
+  "app.openai_judge_client",
+]
+strict = true
+
+# TODO(2026-05-31): 迁移期白名单，要求每个 PR 只减不增。
+[[tool.mypy.overrides]]
+module = [
+  "app.trace_store",
+  "app.phase_pipeline",
+  "app.rag_retriever",
+  "app.runtime_rag",
+  "app.milvus_indexer",
+  "app.lexical_retriever",
+  "app.callback_client",
+  "app.reranker_engine",
+]
+ignore_errors = true

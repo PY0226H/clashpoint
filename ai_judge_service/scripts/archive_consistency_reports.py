@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -16,7 +16,9 @@ DEFAULT_REPORT_PREFIX = "AI裁判B3一致性验收报告"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Archive old consistency reports into monthly folders.")
+    parser = argparse.ArgumentParser(
+        description="Archive old consistency reports into monthly folders."
+    )
     parser.add_argument("--report-dir", default="")
     parser.add_argument("--archive-dir", default="")
     parser.add_argument("--report-prefix", default=DEFAULT_REPORT_PREFIX)

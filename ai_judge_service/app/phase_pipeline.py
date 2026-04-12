@@ -13,12 +13,12 @@ from .models import (
     PhaseDispatchRequest,
 )
 from .openai_judge_client import OPENAI_META_KEY, call_openai_json
+from .rag_retriever import RetrievedContext
+from .reranker_engine import RerankCandidate, RerankRequest, rerank_with_fallback
 from .runtime_errors import classify_openai_failure
 from .runtime_policy import should_use_openai
 from .runtime_rag import RuntimeRagResult, retrieve_runtime_contexts_with_meta
 from .runtime_types import RagMessageContext, RagTopicContext, RuntimeRagRequest
-from .rag_retriever import RetrievedContext
-from .reranker_engine import RerankCandidate, RerankRequest, rerank_with_fallback
 from .settings import Settings
 from .token_budget import TokenSegment, count_tokens, pack_segments_with_budget
 
@@ -188,7 +188,9 @@ def _build_grounded_summary(
 
 
 def _summary_coverage_threshold(settings: Settings) -> float:
-    raw_value = getattr(settings, "phase_summary_coverage_min_ratio", DEFAULT_SUMMARY_COVERAGE_MIN_RATIO)
+    raw_value = getattr(
+        settings, "phase_summary_coverage_min_ratio", DEFAULT_SUMMARY_COVERAGE_MIN_RATIO
+    )
     try:
         threshold = float(raw_value)
     except (TypeError, ValueError):
@@ -611,7 +613,9 @@ def _build_side_rag_request(
     query_text: str | None = None,
 ) -> RuntimeRagRequest:
     query = str(query_text or "").strip()
-    topic_description = f"phase_{request.phase_no}" if not query else f"phase_{request.phase_no}:{query[:200]}"
+    topic_description = (
+        f"phase_{request.phase_no}" if not query else f"phase_{request.phase_no}:{query[:200]}"
+    )
     rag_messages = [
         RagMessageContext(
             message_id=msg.message_id,
@@ -826,12 +830,10 @@ def _build_retrieval_items(
         # 2) 同主题中出现显著正负语义分歧
         has_multi_source = len({s for s in sources if s}) >= 2
         has_positive = any(
-            _contains_any(f"{row.title} {row.content}", CONFLICT_POSITIVE_MARKERS)
-            for row in rows
+            _contains_any(f"{row.title} {row.content}", CONFLICT_POSITIVE_MARKERS) for row in rows
         )
         has_negative = any(
-            _contains_any(f"{row.title} {row.content}", CONFLICT_NEGATIVE_MARKERS)
-            for row in rows
+            _contains_any(f"{row.title} {row.content}", CONFLICT_NEGATIVE_MARKERS) for row in rows
         )
         if has_multi_source or (has_positive and has_negative):
             for row in rows:
@@ -926,9 +928,7 @@ def _retrieve_side_with_query_plan(
     error_codes: list[str] = []
     for result in query_results:
         diagnostics = (
-            result.retrieval_diagnostics
-            if isinstance(result.retrieval_diagnostics, dict)
-            else {}
+            result.retrieval_diagnostics if isinstance(result.retrieval_diagnostics, dict) else {}
         )
         error_code = diagnostics.get("errorCode")
         if error_code:
@@ -1043,7 +1043,9 @@ def _split_sentences(text: str, *, limit: int = 120) -> list[str]:
 
 
 def _parse_dimension_scores(raw: dict[str, Any]) -> dict[str, float]:
-    dimension_raw = raw.get("dimension_scores") or raw.get("dimensionScores") or raw.get("dimensions")
+    dimension_raw = (
+        raw.get("dimension_scores") or raw.get("dimensionScores") or raw.get("dimensions")
+    )
     if not isinstance(dimension_raw, dict):
         return {}
 
@@ -1074,14 +1076,14 @@ def _build_heuristic_dimension_scores(
     source_bundle: dict[str, Any],
 ) -> dict[str, float]:
     safe_hit_ratio = _clamp(hit_ratio, 0.0, 1.0)
-    key_point_hit_rate = len(hit_points) / float(max(1, len(_normalize_text_list(key_points, limit=12))))
+    key_point_hit_rate = len(hit_points) / float(
+        max(1, len(_normalize_text_list(key_points, limit=12)))
+    )
 
     target_text = str(target_summary.get("text") or "")
     target_text += "\n" + "\n".join(msg.content for msg in target_messages)
     sentence_token_sets = [
-        set(_tokenize(sentence))
-        for sentence in _split_sentences(target_text)
-        if sentence.strip()
+        set(_tokenize(sentence)) for sentence in _split_sentences(target_text) if sentence.strip()
     ]
 
     depth_samples: list[float] = []
@@ -1930,7 +1932,9 @@ def _compute_side_dimensions(
         rebuttal_overlaps.append(len(msg_tokens & opponent_tokens) / float(max(1, len(msg_tokens))))
     rebuttal_overlap = sum(rebuttal_overlaps) / float(max(1, len(rebuttal_overlaps)))
 
-    logic = _clamp((0.45 * logic_density + 0.25 * length_norm + 0.30 * diversity) * 100.0, 0.0, 100.0)
+    logic = _clamp(
+        (0.45 * logic_density + 0.25 * length_norm + 0.30 * diversity) * 100.0, 0.0, 100.0
+    )
     evidence = _clamp(
         (0.50 * retrieval_support + 0.30 * evidence_density + 0.20 * digit_density) * 100.0,
         0.0,
@@ -2094,8 +2098,12 @@ def _compute_phase_scores(
     agent2 = {
         "pro": agent2_pro,
         "con": agent2_con,
-        "hitItems": [item.get("chunkId") for item in pro_retrieval_items[:6] if item.get("chunkId")],
-        "missItems": [item.get("chunkId") for item in con_retrieval_items[:6] if item.get("chunkId")],
+        "hitItems": [
+            item.get("chunkId") for item in pro_retrieval_items[:6] if item.get("chunkId")
+        ],
+        "missItems": [
+            item.get("chunkId") for item in con_retrieval_items[:6] if item.get("chunkId")
+        ],
         "rationale": "agent2 emphasizes retrieval hit ratio with rebuttal strength.",
     }
     agent3 = {

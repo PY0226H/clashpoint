@@ -88,9 +88,7 @@ def load_knowledge_records(path: str) -> list[KnowledgeRecord]:
         raw_tags = row.get("tags")
         if isinstance(raw_tags, list):
             tags = tuple(
-                item.strip().lower()
-                for item in raw_tags
-                if isinstance(item, str) and item.strip()
+                item.strip().lower() for item in raw_tags if isinstance(item, str) and item.strip()
             )
         else:
             tags = tuple()
@@ -153,7 +151,9 @@ def _embed_batch_with_openai(
     with httpx.Client(timeout=max(1.0, cfg.openai_timeout_secs)) as client:
         resp = client.post(url, headers=headers, json=body)
     if resp.status_code // 100 != 2:
-        raise RuntimeError(f"openai embeddings failed: status={resp.status_code}, body={resp.text[:500]}")
+        raise RuntimeError(
+            f"openai embeddings failed: status={resp.status_code}, body={resp.text[:500]}"
+        )
     payload = resp.json()
     items = payload.get("data")
     if not isinstance(items, list):

@@ -18,7 +18,6 @@ from .reranker_engine import (
     normalize_rerank_device,
     normalize_rerank_engine,
 )
-from .runtime_types import DispatchRuntimeConfig
 from .runtime_policy import (
     PROVIDER_MOCK,
     PROVIDER_OPENAI,
@@ -27,6 +26,7 @@ from .runtime_policy import (
     parse_env_bool,
     runtime_env_label,
 )
+from .runtime_types import DispatchRuntimeConfig
 
 DEFAULT_RAG_SOURCE_WHITELIST = "https://teamfighttactics.leagueoflegends.com/en-us/news/"
 DEFAULT_REFLECTION_POLICY = "winner_mismatch_only"
@@ -160,7 +160,9 @@ def load_settings() -> Settings:
         provider=provider,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_model=os.getenv("AI_JUDGE_OPENAI_MODEL", "gpt-4.1-mini"),
-        openai_base_url=os.getenv("AI_JUDGE_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        openai_base_url=os.getenv("AI_JUDGE_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip(
+            "/"
+        ),
         openai_timeout_secs=float(os.getenv("AI_JUDGE_OPENAI_TIMEOUT_SECONDS", "25")),
         openai_temperature=float(os.getenv("AI_JUDGE_OPENAI_TEMPERATURE", "0.1")),
         openai_max_retries=int(os.getenv("AI_JUDGE_OPENAI_MAX_RETRIES", "2")),
@@ -201,13 +203,17 @@ def load_settings() -> Settings:
         rag_milvus_search_limit=int(os.getenv("AI_JUDGE_RAG_MILVUS_SEARCH_LIMIT", "20")),
         stage_agent_max_chunks=int(os.getenv("AI_JUDGE_STAGE_AGENT_MAX_CHUNKS", "12")),
         reflection_enabled=parse_env_bool(os.getenv("AI_JUDGE_REFLECTION_ENABLED"), default=True),
-        topic_memory_enabled=parse_env_bool(os.getenv("AI_JUDGE_TOPIC_MEMORY_ENABLED"), default=True),
+        topic_memory_enabled=parse_env_bool(
+            os.getenv("AI_JUDGE_TOPIC_MEMORY_ENABLED"), default=True
+        ),
         rag_hybrid_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_HYBRID_ENABLED"), default=True),
         rag_rerank_enabled=parse_env_bool(os.getenv("AI_JUDGE_RAG_RERANK_ENABLED"), default=True),
         reflection_policy=os.getenv(
             "AI_JUDGE_REFLECTION_POLICY",
             DEFAULT_REFLECTION_POLICY,
-        ).strip().lower(),
+        )
+        .strip()
+        .lower(),
         reflection_low_margin_threshold=int(
             os.getenv("AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD", "3")
         ),
@@ -235,27 +241,13 @@ def load_settings() -> Settings:
             "o200k_base",
         ).strip()
         or "o200k_base",
-        phase_prompt_max_tokens=int(
-            os.getenv("AI_JUDGE_PHASE_PROMPT_MAX_TOKENS", "3200")
-        ),
-        agent2_prompt_max_tokens=int(
-            os.getenv("AI_JUDGE_AGENT2_PROMPT_MAX_TOKENS", "3600")
-        ),
-        rag_query_max_tokens=int(
-            os.getenv("AI_JUDGE_RAG_QUERY_MAX_TOKENS", "1600")
-        ),
-        rag_snippet_max_tokens=int(
-            os.getenv("AI_JUDGE_RAG_SNIPPET_MAX_TOKENS", "180")
-        ),
-        embed_input_max_tokens=int(
-            os.getenv("AI_JUDGE_EMBED_INPUT_MAX_TOKENS", "2000")
-        ),
-        runtime_retry_max_attempts=int(
-            os.getenv("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS", "2")
-        ),
-        runtime_retry_backoff_ms=int(
-            os.getenv("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS", "200")
-        ),
+        phase_prompt_max_tokens=int(os.getenv("AI_JUDGE_PHASE_PROMPT_MAX_TOKENS", "3200")),
+        agent2_prompt_max_tokens=int(os.getenv("AI_JUDGE_AGENT2_PROMPT_MAX_TOKENS", "3600")),
+        rag_query_max_tokens=int(os.getenv("AI_JUDGE_RAG_QUERY_MAX_TOKENS", "1600")),
+        rag_snippet_max_tokens=int(os.getenv("AI_JUDGE_RAG_SNIPPET_MAX_TOKENS", "180")),
+        embed_input_max_tokens=int(os.getenv("AI_JUDGE_EMBED_INPUT_MAX_TOKENS", "2000")),
+        runtime_retry_max_attempts=int(os.getenv("AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS", "2")),
+        runtime_retry_backoff_ms=int(os.getenv("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS", "200")),
         compliance_block_enabled=parse_env_bool(
             os.getenv("AI_JUDGE_COMPLIANCE_BLOCK_ENABLED"),
             default=True,
@@ -276,9 +268,7 @@ def load_settings() -> Settings:
             os.getenv("AI_JUDGE_RAG_BM25_FALLBACK_TO_SIMPLE"),
             default=True,
         ),
-        rag_rerank_engine=normalize_rerank_engine(
-            os.getenv("AI_JUDGE_RAG_RERANK_ENGINE", "bge")
-        ),
+        rag_rerank_engine=normalize_rerank_engine(os.getenv("AI_JUDGE_RAG_RERANK_ENGINE", "bge")),
         rag_rerank_model=os.getenv(
             "AI_JUDGE_RAG_RERANK_MODEL",
             DEFAULT_BGE_MODEL,
@@ -287,9 +277,7 @@ def load_settings() -> Settings:
         rag_rerank_batch_size=int(os.getenv("AI_JUDGE_RAG_RERANK_BATCH_SIZE", "16")),
         rag_rerank_candidate_cap=int(os.getenv("AI_JUDGE_RAG_RERANK_CANDIDATE_CAP", "50")),
         rag_rerank_timeout_ms=int(os.getenv("AI_JUDGE_RAG_RERANK_TIMEOUT_MS", "12000")),
-        rag_rerank_device=normalize_rerank_device(
-            os.getenv("AI_JUDGE_RAG_RERANK_DEVICE", "cpu")
-        ),
+        rag_rerank_device=normalize_rerank_device(os.getenv("AI_JUDGE_RAG_RERANK_DEVICE", "cpu")),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings
@@ -301,7 +289,10 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
             "AI_JUDGE_REFLECTION_POLICY must be one of "
             f"{','.join(sorted(VALID_REFLECTION_POLICIES))}"
         )
-    if settings.reflection_low_margin_threshold < 0 or settings.reflection_low_margin_threshold > 50:
+    if (
+        settings.reflection_low_margin_threshold < 0
+        or settings.reflection_low_margin_threshold > 50
+    ):
         raise ValueError("AI_JUDGE_REFLECTION_LOW_MARGIN_THRESHOLD must be between 0 and 50")
     invalid_fault_nodes = [
         node for node in settings.fault_injection_nodes if node not in VALID_FAULT_INJECTION_NODES
@@ -324,9 +315,15 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_LIMIT must be between 1 and 20")
     if settings.topic_memory_min_evidence_refs < 0 or settings.topic_memory_min_evidence_refs > 20:
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS must be between 0 and 20")
-    if settings.topic_memory_min_rationale_chars < 0 or settings.topic_memory_min_rationale_chars > 2000:
+    if (
+        settings.topic_memory_min_rationale_chars < 0
+        or settings.topic_memory_min_rationale_chars > 2000
+    ):
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS must be between 0 and 2000")
-    if settings.topic_memory_min_quality_score < 0.0 or settings.topic_memory_min_quality_score > 1.0:
+    if (
+        settings.topic_memory_min_quality_score < 0.0
+        or settings.topic_memory_min_quality_score > 1.0
+    ):
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE must be between 0 and 1")
     if not settings.tokenizer_fallback_encoding.strip():
         raise ValueError("AI_JUDGE_TOKENIZER_FALLBACK_ENCODING cannot be empty")
@@ -346,15 +343,13 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS must be between 0 and 10000")
     if settings.rag_lexical_engine not in VALID_LEXICAL_ENGINES:
         raise ValueError(
-            "AI_JUDGE_RAG_LEXICAL_ENGINE must be one of "
-            + ",".join(sorted(VALID_LEXICAL_ENGINES))
+            "AI_JUDGE_RAG_LEXICAL_ENGINE must be one of " + ",".join(sorted(VALID_LEXICAL_ENGINES))
         )
     if not settings.rag_bm25_cache_dir.strip():
         raise ValueError("AI_JUDGE_RAG_BM25_CACHE_DIR cannot be empty")
     if settings.rag_rerank_engine not in VALID_RERANK_ENGINES:
         raise ValueError(
-            "AI_JUDGE_RAG_RERANK_ENGINE must be one of "
-            + ",".join(sorted(VALID_RERANK_ENGINES))
+            "AI_JUDGE_RAG_RERANK_ENGINE must be one of " + ",".join(sorted(VALID_RERANK_ENGINES))
         )
     if not settings.rag_rerank_model.strip():
         raise ValueError("AI_JUDGE_RAG_RERANK_MODEL cannot be empty")
@@ -366,8 +361,7 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_RAG_RERANK_TIMEOUT_MS must be between 100 and 60000")
     if settings.rag_rerank_device not in VALID_RERANK_DEVICES:
         raise ValueError(
-            "AI_JUDGE_RAG_RERANK_DEVICE must be one of "
-            + ",".join(sorted(VALID_RERANK_DEVICES))
+            "AI_JUDGE_RAG_RERANK_DEVICE must be one of " + ",".join(sorted(VALID_RERANK_DEVICES))
         )
     if settings.redis_enabled:
         if not settings.redis_url:
@@ -387,7 +381,9 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         if settings.provider == PROVIDER_OPENAI and not settings.openai_api_key.strip():
             raise ValueError("OPENAI_API_KEY cannot be empty when runtime env is production")
         if settings.fault_injection_nodes:
-            raise ValueError("AI_JUDGE_FAULT_INJECTION_NODES is forbidden when runtime env is production")
+            raise ValueError(
+                "AI_JUDGE_FAULT_INJECTION_NODES is forbidden when runtime env is production"
+            )
 
 
 def build_callback_client_config(settings: Settings) -> CallbackClientConfig:

@@ -68,8 +68,7 @@ class LexicalSearchResult:
 
 
 class LexicalRetriever(Protocol):
-    def search(self, request: LexicalSearchRequest) -> LexicalSearchResult:
-        ...
+    def search(self, request: LexicalSearchRequest) -> LexicalSearchResult: ...
 
 
 @dataclass(frozen=True)
@@ -236,10 +235,7 @@ class Bm25sLexicalRetriever:
         except Exception as err:
             raise RuntimeError("bm25_dependency_missing") from err
 
-        tokenized_documents = [
-            _build_document_terms(document)
-            for document in request.documents
-        ]
+        tokenized_documents = [_build_document_terms(document) for document in request.documents]
         retriever = bm25s.BM25(method="lucene")
         retriever.index(tokenized_documents, show_progress=False)
         return (
@@ -247,7 +243,9 @@ class Bm25sLexicalRetriever:
             (perf_counter() - started) * 1000.0,
         )
 
-    def _resolve_index(self, request: LexicalSearchRequest) -> tuple[_Bm25IndexBundle, bool, float, float]:
+    def _resolve_index(
+        self, request: LexicalSearchRequest
+    ) -> tuple[_Bm25IndexBundle, bool, float, float]:
         signature = _signature_for_request(request)
         cache_key = (signature, LEXICAL_TOKENIZER_PROFILE)
         with _INDEX_LOCK:

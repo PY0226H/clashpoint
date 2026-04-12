@@ -96,7 +96,9 @@ class LexicalRetrieverTests(unittest.TestCase):
 
     def test_search_lexical_should_invalidate_cache_when_knowledge_file_changes(self) -> None:
         documents = _build_documents()
-        with tempfile.NamedTemporaryFile("w+", suffix=".json", encoding="utf-8", delete=False) as knowledge_file:
+        with tempfile.NamedTemporaryFile(
+            "w+", suffix=".json", encoding="utf-8", delete=False
+        ) as knowledge_file:
             knowledge_path = Path(knowledge_file.name)
             json.dump([{"version": 1}], knowledge_file, ensure_ascii=False)
             knowledge_file.flush()

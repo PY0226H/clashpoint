@@ -183,11 +183,7 @@ def _load_knowledge_file(path: str) -> list[KnowledgeChunk]:
         raw_tags = row.get("tags")
         tags: tuple[str, ...]
         if isinstance(raw_tags, list):
-            tags = tuple(
-                v.strip().lower()
-                for v in raw_tags
-                if isinstance(v, str) and v.strip()
-            )
+            tags = tuple(v.strip().lower() for v in raw_tags if isinstance(v, str) and v.strip())
         else:
             tags = tuple()
         rows.append(
@@ -263,9 +259,7 @@ def _build_query_tokens(
 def _score_chunk(chunk: KnowledgeChunk, query_tokens: set[str]) -> float:
     if not query_tokens:
         return 0.0
-    chunk_tokens = _tokenize(
-        " ".join([chunk.title, chunk.content, " ".join(chunk.tags)])
-    )
+    chunk_tokens = _tokenize(" ".join([chunk.title, chunk.content, " ".join(chunk.tags)]))
     if not chunk_tokens:
         return 0.0
     overlap = len(query_tokens.intersection(chunk_tokens))
@@ -286,7 +280,9 @@ def _rrf_fuse(
     context_map: dict[str, RetrievedContext] = {}
     for rows in candidates:
         for rank, item in enumerate(rows):
-            score_map[item.chunk_id] = score_map.get(item.chunk_id, 0.0) + (1.0 / (rrf_k + rank + 1))
+            score_map[item.chunk_id] = score_map.get(item.chunk_id, 0.0) + (
+                1.0 / (rrf_k + rank + 1)
+            )
             previous = context_map.get(item.chunk_id)
             if previous is None or item.score > previous.score:
                 context_map[item.chunk_id] = item
@@ -1019,19 +1015,13 @@ def retrieve_contexts(
                 )
                 if hybrid_enabled
                 else "disabled",
-                "lexicalIndexCacheHit": bool(
-                    lexical_diagnostics.get("lexicalIndexCacheHit", False)
-                )
+                "lexicalIndexCacheHit": bool(lexical_diagnostics.get("lexicalIndexCacheHit", False))
                 if hybrid_enabled
                 else False,
-                "lexicalIndexBuildMs": float(
-                    lexical_diagnostics.get("lexicalIndexBuildMs", 0.0)
-                )
+                "lexicalIndexBuildMs": float(lexical_diagnostics.get("lexicalIndexBuildMs", 0.0))
                 if hybrid_enabled
                 else 0.0,
-                "lexicalIndexLoadMs": float(
-                    lexical_diagnostics.get("lexicalIndexLoadMs", 0.0)
-                )
+                "lexicalIndexLoadMs": float(lexical_diagnostics.get("lexicalIndexLoadMs", 0.0))
                 if hybrid_enabled
                 else 0.0,
                 "lexicalFallbackReason": lexical_diagnostics.get("lexicalFallbackReason")

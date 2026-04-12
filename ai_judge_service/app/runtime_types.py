@@ -42,4 +42,3 @@ class RuntimeRagRequest:
     topic: RagTopicContext
     messages: list[RagMessageContext]
     retrieval_profile: str = "hybrid_v1"
-

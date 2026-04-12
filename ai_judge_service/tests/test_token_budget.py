@@ -27,7 +27,9 @@ class TokenBudgetTests(unittest.TestCase):
         )
 
     @patch("app.token_budget._resolve_tiktoken_encoding", return_value=None)
-    def test_resolve_encoding_should_fallback_when_tiktoken_unavailable(self, _mock_resolve) -> None:
+    def test_resolve_encoding_should_fallback_when_tiktoken_unavailable(
+        self, _mock_resolve
+    ) -> None:
         resolution = resolve_encoding("unknown-model", fallback_encoding="o200k_base")
         self.assertEqual(resolution.encoding_name, "o200k_base")
         self.assertTrue(resolution.estimated)
@@ -35,7 +37,9 @@ class TokenBudgetTests(unittest.TestCase):
     def test_pack_segments_should_prioritize_high_priority_content(self) -> None:
         segments = [
             TokenSegment(segment_id="must_keep", text="关键内容 " * 20, priority=0, required=True),
-            TokenSegment(segment_id="secondary", text="次要内容 " * 40, priority=10, required=False),
+            TokenSegment(
+                segment_id="secondary", text="次要内容 " * 40, priority=10, required=False
+            ),
             TokenSegment(segment_id="tail", text="尾部内容 " * 40, priority=20, required=False),
         ]
         packed = pack_segments_with_budget("gpt-4.1-mini", segments, budget=80)

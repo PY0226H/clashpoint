@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta, timezone
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from app.b3_consistency_gate import (
@@ -126,7 +126,9 @@ class B3ConsistencyGateTests(unittest.TestCase):
             mode="redis",
             now=now,
         )
-        self.assertEqual(str(report), "/tmp/consistency/AI裁判B3一致性验收报告-redis-20260331-112233Z.md")
+        self.assertEqual(
+            str(report), "/tmp/consistency/AI裁判B3一致性验收报告-redis-20260331-112233Z.md"
+        )
 
     def test_prune_report_files_should_apply_age_and_count(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -168,7 +170,9 @@ class B3ConsistencyGateTests(unittest.TestCase):
             base.write_text("existing", encoding="utf-8")
             collide = root / "AI裁判B3一致性验收报告-redis-20260331-120000Z-aaaaaa.md"
             collide.write_text("existing", encoding="utf-8")
-            with patch("app.b3_consistency_gate.secrets.token_hex", side_effect=["aaaaaa", "bbbbbb"]):
+            with patch(
+                "app.b3_consistency_gate.secrets.token_hex", side_effect=["aaaaaa", "bbbbbb"]
+            ):
                 resolved = write_report_with_collision_retry(
                     report_path=base,
                     content="new-report",

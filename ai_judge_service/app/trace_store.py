@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-import json
 from threading import Lock
 from typing import Any, Protocol
 
@@ -325,15 +325,19 @@ def _trace_matches(record: TraceRecord, query: TraceQuery) -> bool:
     if query.created_before is not None and record.created_at > query.created_before:
         return False
 
-    if query.has_audit_alert is not None and _record_has_audit_alert(record) != query.has_audit_alert:
+    if (
+        query.has_audit_alert is not None
+        and _record_has_audit_alert(record) != query.has_audit_alert
+    ):
         return False
 
     return True
 
 
 class TraceStoreProtocol(Protocol):
-    def register_start(self, *, job_id: int, trace_id: str, request: dict[str, Any]) -> TraceRecord:
-        ...
+    def register_start(
+        self, *, job_id: int, trace_id: str, request: dict[str, Any]
+    ) -> TraceRecord: ...
 
     def register_success(
         self,
@@ -342,8 +346,7 @@ class TraceStoreProtocol(Protocol):
         response: dict[str, Any],
         callback_status: str,
         report_summary: dict[str, Any],
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def register_failure(
         self,
@@ -352,11 +355,11 @@ class TraceStoreProtocol(Protocol):
         response: dict[str, Any],
         callback_status: str,
         callback_error: str,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def set_idempotency_pending(self, *, key: str, job_id: int, ttl_secs: int | None = None) -> None:
-        ...
+    def set_idempotency_pending(
+        self, *, key: str, job_id: int, ttl_secs: int | None = None
+    ) -> None: ...
 
     def set_idempotency_success(
         self,
@@ -365,11 +368,9 @@ class TraceStoreProtocol(Protocol):
         job_id: int,
         response: dict[str, Any],
         ttl_secs: int | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def get_idempotency(self, key: str) -> IdempotencyRecord | None:
-        ...
+    def get_idempotency(self, key: str) -> IdempotencyRecord | None: ...
 
     def resolve_idempotency(
         self,
@@ -377,17 +378,13 @@ class TraceStoreProtocol(Protocol):
         key: str,
         job_id: int,
         ttl_secs: int | None = None,
-    ) -> IdempotencyResolution:
-        ...
+    ) -> IdempotencyResolution: ...
 
-    def clear_idempotency(self, key: str) -> None:
-        ...
+    def clear_idempotency(self, key: str) -> None: ...
 
-    def get_trace(self, job_id: int) -> TraceRecord | None:
-        ...
+    def get_trace(self, job_id: int) -> TraceRecord | None: ...
 
-    def list_traces(self, *, query: TraceQuery | None = None) -> list[TraceRecord]:
-        ...
+    def list_traces(self, *, query: TraceQuery | None = None) -> list[TraceRecord]: ...
 
     def upsert_audit_alert(
         self,
@@ -400,8 +397,7 @@ class TraceStoreProtocol(Protocol):
         title: str,
         message: str,
         details: dict[str, Any] | None = None,
-    ) -> AuditAlertRecord:
-        ...
+    ) -> AuditAlertRecord: ...
 
     def list_audit_alerts(
         self,
@@ -409,8 +405,7 @@ class TraceStoreProtocol(Protocol):
         job_id: int | None = None,
         status: str | None = None,
         limit: int = 50,
-    ) -> list[AuditAlertRecord]:
-        ...
+    ) -> list[AuditAlertRecord]: ...
 
     def transition_audit_alert(
         self,
@@ -420,16 +415,14 @@ class TraceStoreProtocol(Protocol):
         to_status: str,
         actor: str | None = None,
         reason: str | None = None,
-    ) -> AuditAlertRecord | None:
-        ...
+    ) -> AuditAlertRecord | None: ...
 
     def list_alert_outbox(
         self,
         *,
         delivery_status: str | None = None,
         limit: int = 50,
-    ) -> list[AlertOutboxEvent]:
-        ...
+    ) -> list[AlertOutboxEvent]: ...
 
     def mark_alert_outbox_delivery(
         self,
@@ -437,8 +430,7 @@ class TraceStoreProtocol(Protocol):
         event_id: str,
         delivery_status: str,
         error_message: str | None = None,
-    ) -> AlertOutboxEvent | None:
-        ...
+    ) -> AlertOutboxEvent | None: ...
 
     def mark_replay(
         self,
@@ -447,8 +439,7 @@ class TraceStoreProtocol(Protocol):
         winner: str | None,
         needs_draw_vote: bool | None,
         provider: str | None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def save_topic_memory(
         self,
@@ -462,8 +453,7 @@ class TraceStoreProtocol(Protocol):
         evidence_refs: list[dict[str, Any]] | None,
         provider: str | None,
         audit: dict[str, Any] | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def list_topic_memory(
         self,
@@ -471,8 +461,7 @@ class TraceStoreProtocol(Protocol):
         topic_domain: str,
         rubric_version: str,
         limit: int = 3,
-    ) -> list[TopicMemoryRecord]:
-        ...
+    ) -> list[TopicMemoryRecord]: ...
 
     def save_dispatch_receipt(
         self,
@@ -496,16 +485,14 @@ class TraceStoreProtocol(Protocol):
         status: str,
         request: dict[str, Any],
         response: dict[str, Any] | None,
-    ) -> DispatchReceiptRecord:
-        ...
+    ) -> DispatchReceiptRecord: ...
 
     def get_dispatch_receipt(
         self,
         *,
         dispatch_type: str,
         job_id: int,
-    ) -> DispatchReceiptRecord | None:
-        ...
+    ) -> DispatchReceiptRecord | None: ...
 
     def list_dispatch_receipts(
         self,
@@ -514,8 +501,7 @@ class TraceStoreProtocol(Protocol):
         session_id: int | None = None,
         status: str | None = None,
         limit: int = 200,
-    ) -> list[DispatchReceiptRecord]:
-        ...
+    ) -> list[DispatchReceiptRecord]: ...
 
 
 class TraceStore(TraceStoreProtocol):
@@ -571,9 +557,7 @@ class TraceStore(TraceStoreProtocol):
 
         for topic_key, rows in list(self._topic_memory.items()):
             filtered = [
-                row
-                for row in rows
-                if row.created_at + timedelta(seconds=self._ttl_secs) >= now
+                row for row in rows if row.created_at + timedelta(seconds=self._ttl_secs) >= now
             ]
             if filtered:
                 self._topic_memory[topic_key] = filtered[: self._topic_memory_limit]
@@ -583,9 +567,7 @@ class TraceStore(TraceStoreProtocol):
         expired_alert_job_ids: list[int] = []
         for job_id, rows in self._alerts_by_job.items():
             filtered_rows = [
-                row
-                for row in rows
-                if row.updated_at + timedelta(seconds=self._ttl_secs) >= now
+                row for row in rows if row.updated_at + timedelta(seconds=self._ttl_secs) >= now
             ]
             if filtered_rows:
                 self._alerts_by_job[job_id] = filtered_rows
@@ -595,9 +577,7 @@ class TraceStore(TraceStoreProtocol):
             self._alerts_by_job.pop(job_id, None)
 
         self._alerts_by_id = {
-            row.alert_id: row
-            for rows in self._alerts_by_job.values()
-            for row in rows
+            row.alert_id: row for rows in self._alerts_by_job.values() for row in rows
         }
 
         expired_event_ids: list[str] = []
@@ -663,7 +643,9 @@ class TraceStore(TraceStoreProtocol):
             record.callback_status = callback_status
             record.callback_error = callback_error
 
-    def set_idempotency_pending(self, *, key: str, job_id: int, ttl_secs: int | None = None) -> None:
+    def set_idempotency_pending(
+        self, *, key: str, job_id: int, ttl_secs: int | None = None
+    ) -> None:
         now = _utcnow()
         expires_at = now + timedelta(seconds=max(60, ttl_secs or self._ttl_secs))
         with self._lock:
@@ -1131,7 +1113,9 @@ class TraceStore(TraceStoreProtocol):
                 rubric_version=rubric_version.strip(),
                 judge_policy_version=judge_policy_version.strip(),
                 topic_domain=topic_domain.strip().lower() or "default",
-                retrieval_profile=(retrieval_profile.strip() if isinstance(retrieval_profile, str) else None),
+                retrieval_profile=(
+                    retrieval_profile.strip() if isinstance(retrieval_profile, str) else None
+                ),
                 phase_no=phase_no,
                 phase_start_no=phase_start_no,
                 phase_end_no=phase_end_no,
@@ -1253,7 +1237,9 @@ class RedisTraceStore(TraceStoreProtocol):
         except Exception:
             return
 
-    def _write_json(self, key: str, payload: dict[str, Any], *, ttl_secs: int | None = None) -> None:
+    def _write_json(
+        self, key: str, payload: dict[str, Any], *, ttl_secs: int | None = None
+    ) -> None:
         try:
             self._redis.set(
                 key,
@@ -1339,8 +1325,16 @@ class RedisTraceStore(TraceStoreProtocol):
             request=request if isinstance(request, dict) else {},
             status=str(payload.get("status") or "unknown"),
             response=response if isinstance(response, dict) else None,
-            callback_status=(str(payload.get("callback_status")) if payload.get("callback_status") is not None else None),
-            callback_error=(str(payload.get("callback_error")) if payload.get("callback_error") is not None else None),
+            callback_status=(
+                str(payload.get("callback_status"))
+                if payload.get("callback_status") is not None
+                else None
+            ),
+            callback_error=(
+                str(payload.get("callback_error"))
+                if payload.get("callback_error") is not None
+                else None
+            ),
             report_summary=report_summary if isinstance(report_summary, dict) else None,
             replays=replays,
         )
@@ -1370,7 +1364,9 @@ class RedisTraceStore(TraceStoreProtocol):
             "updated_at": record.updated_at.isoformat(),
         }
 
-    def _deserialize_dispatch_receipt(self, payload: dict[str, Any]) -> DispatchReceiptRecord | None:
+    def _deserialize_dispatch_receipt(
+        self, payload: dict[str, Any]
+    ) -> DispatchReceiptRecord | None:
         dispatch_type = _normalize_dispatch_type(payload.get("dispatch_type"))
         if not dispatch_type:
             return None
@@ -1457,7 +1453,9 @@ class RedisTraceStore(TraceStoreProtocol):
             from_status=_normalize_alert_status(payload.get("from_status")),
             to_status=_normalize_alert_status(payload.get("to_status")),
             actor=(str(payload.get("actor")).strip() if payload.get("actor") is not None else None),
-            reason=(str(payload.get("reason")).strip() if payload.get("reason") is not None else None),
+            reason=(
+                str(payload.get("reason")).strip() if payload.get("reason") is not None else None
+            ),
             changed_at=_parse_datetime(payload.get("changed_at")),
         )
 
@@ -1507,9 +1505,7 @@ class RedisTraceStore(TraceStoreProtocol):
                 else None
             ),
             resolved_at=(
-                _parse_datetime(payload.get("resolved_at"))
-                if payload.get("resolved_at")
-                else None
+                _parse_datetime(payload.get("resolved_at")) if payload.get("resolved_at") else None
             ),
             transitions=transitions,
         )
@@ -1789,7 +1785,9 @@ class RedisTraceStore(TraceStoreProtocol):
         self._write_json(self._runtime_key(job_id), self._serialize_trace(record))
         self._index_job(job_id=job_id, updated_at=record.updated_at)
 
-    def set_idempotency_pending(self, *, key: str, job_id: int, ttl_secs: int | None = None) -> None:
+    def set_idempotency_pending(
+        self, *, key: str, job_id: int, ttl_secs: int | None = None
+    ) -> None:
         now = _utcnow()
         expires_at = now + timedelta(seconds=max(60, ttl_secs or self._ttl_secs))
         self._write_json(
@@ -2360,7 +2358,9 @@ class RedisTraceStore(TraceStoreProtocol):
         key = self._dispatch_receipt_key(normalized_dispatch_type, job_id)
         now = _utcnow()
         existing = self._read_json(key)
-        created_at = _parse_datetime(existing.get("created_at")) if isinstance(existing, dict) else now
+        created_at = (
+            _parse_datetime(existing.get("created_at")) if isinstance(existing, dict) else now
+        )
         row = DispatchReceiptRecord(
             dispatch_type=normalized_dispatch_type,
             job_id=job_id,
@@ -2371,7 +2371,9 @@ class RedisTraceStore(TraceStoreProtocol):
             rubric_version=rubric_version.strip(),
             judge_policy_version=judge_policy_version.strip(),
             topic_domain=topic_domain.strip().lower() or "default",
-            retrieval_profile=(retrieval_profile.strip() if isinstance(retrieval_profile, str) else None),
+            retrieval_profile=(
+                retrieval_profile.strip() if isinstance(retrieval_profile, str) else None
+            ),
             phase_no=phase_no,
             phase_start_no=phase_start_no,
             phase_end_no=phase_end_no,
@@ -2399,7 +2401,9 @@ class RedisTraceStore(TraceStoreProtocol):
         normalized_dispatch_type = _normalize_dispatch_type(dispatch_type)
         if not normalized_dispatch_type:
             return None
-        payload = self._read_json(self._dispatch_receipt_key(normalized_dispatch_type, max(0, job_id)))
+        payload = self._read_json(
+            self._dispatch_receipt_key(normalized_dispatch_type, max(0, job_id))
+        )
         if payload is None:
             return None
         return self._deserialize_dispatch_receipt(payload)

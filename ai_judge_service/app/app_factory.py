@@ -23,6 +23,7 @@ from .settings import (
 from .style_mode import resolve_effective_style_mode
 from .trace_store import TraceQuery, TraceStoreProtocol, build_trace_store_from_settings
 from .wiring import build_v3_dispatch_callbacks
+
 LoadSettingsFn = Callable[[], Settings]
 
 
@@ -168,18 +169,22 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
             "session": request.get("session") or {},
             "topic": request.get("topic") or {},
             "messages": request.get("messages") or [],
-            "messageWindowSize": request.get("message_window_size") or request.get("messageWindowSize"),
+            "messageWindowSize": request.get("message_window_size")
+            or request.get("messageWindowSize"),
             "rubricVersion": request.get("rubric_version") or request.get("rubricVersion"),
-            "judgePolicyVersion": request.get("judge_policy_version") or request.get("judgePolicyVersion"),
+            "judgePolicyVersion": request.get("judge_policy_version")
+            or request.get("judgePolicyVersion"),
             "retrievalProfile": request.get("retrieval_profile") or request.get("retrievalProfile"),
         },
         "pipeline": {
             "agentPipeline": payload.get("agentPipeline"),
             "stageSummaries": stage_summaries,
             "winnerFirst": report_summary.get("winner_first") or report_summary.get("winnerFirst"),
-            "winnerSecond": report_summary.get("winner_second") or report_summary.get("winnerSecond"),
+            "winnerSecond": report_summary.get("winner_second")
+            or report_summary.get("winnerSecond"),
             "finalWinner": report_summary.get("winner"),
-            "needsDrawVote": report_summary.get("needs_draw_vote") or report_summary.get("needsDrawVote"),
+            "needsDrawVote": report_summary.get("needs_draw_vote")
+            or report_summary.get("needsDrawVote"),
             "rationale": report_summary.get("rationale"),
             "proSummary": report_summary.get("pro_summary") or report_summary.get("proSummary"),
             "conSummary": report_summary.get("con_summary") or report_summary.get("conSummary"),
@@ -225,8 +230,12 @@ def _build_replay_report_summary(record: Any) -> dict[str, Any]:
         "needsDrawVote": pipeline.get("needsDrawVote"),
         "provider": response.get("provider"),
         "errorCode": response.get("errorCode"),
-        "callbackStatus": callback_result.get("callbackStatus") if isinstance(callback_result, dict) else None,
-        "callbackError": callback_result.get("callbackError") if isinstance(callback_result, dict) else None,
+        "callbackStatus": callback_result.get("callbackStatus")
+        if isinstance(callback_result, dict)
+        else None,
+        "callbackError": callback_result.get("callbackError")
+        if isinstance(callback_result, dict)
+        else None,
         "auditAlertCount": len([row for row in audit_alerts if isinstance(row, dict)]),
         "replayCount": len(payload.get("replays") or []),
     }
@@ -269,7 +278,10 @@ def _validate_phase_dispatch_request(request: PhaseDispatchRequest) -> None:
     if request.message_count != len(request.messages):
         raise HTTPException(status_code=422, detail="message_count_mismatch")
     for message in request.messages:
-        if message.message_id < request.message_start_id or message.message_id > request.message_end_id:
+        if (
+            message.message_id < request.message_start_id
+            or message.message_id > request.message_end_id
+        ):
             raise HTTPException(status_code=422, detail="message_id_out_of_range")
 
 
@@ -516,7 +528,11 @@ def _build_final_report_payload(
 
     for phase_no in used_phase_nos:
         payload = phase_reports_by_no[phase_no][1]
-        agent3 = payload.get("agent3WeightedScore") if isinstance(payload.get("agent3WeightedScore"), dict) else {}
+        agent3 = (
+            payload.get("agent3WeightedScore")
+            if isinstance(payload.get("agent3WeightedScore"), dict)
+            else {}
+        )
         agent2 = payload.get("agent2Score") if isinstance(payload.get("agent2Score"), dict) else {}
 
         pro_agent3 = _clamp_score(_safe_float(agent3.get("pro"), default=50.0))
@@ -651,7 +667,9 @@ def _build_final_report_payload(
         def _avg_dim(rows: list[dict[str, float]], key: str, default: float = 50.0) -> float:
             if not rows:
                 return default
-            return sum(_safe_float(row.get(key), default=default) for row in rows) / float(len(rows))
+            return sum(_safe_float(row.get(key), default=default) for row in rows) / float(
+                len(rows)
+            )
 
         dimension_scores = {
             "logic": round(_clamp_score(_avg_dim(dims_rows, "logic")), 2),
@@ -994,9 +1012,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
-            error_text = (
-                "final_contract_violation: missing_fields="
-                + ",".join(contract_missing_fields[:12])
+            error_text = "final_contract_violation: missing_fields=" + ",".join(
+                contract_missing_fields[:12]
             )
             alert = runtime.trace_store.upsert_audit_alert(
                 job_id=request.job_id,
@@ -1232,8 +1249,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "winner": winner,
                 "callbackStatus": callback_status,
                 "traceId": trace_id,
-                "createdAfter": normalized_created_after.isoformat() if normalized_created_after else None,
-                "createdBefore": normalized_created_before.isoformat() if normalized_created_before else None,
+                "createdAfter": normalized_created_after.isoformat()
+                if normalized_created_after
+                else None,
+                "createdBefore": normalized_created_before.isoformat()
+                if normalized_created_before
+                else None,
                 "hasAuditAlert": has_audit_alert,
                 "limit": limit,
                 "includeReport": include_report,

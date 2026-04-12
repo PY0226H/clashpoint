@@ -1,0 +1,39 @@
+{
+  "include": [
+    "app/settings.py",
+    "app/runtime_policy.py",
+    "app/runtime_errors.py",
+    "app/token_budget.py",
+    "app/models.py",
+    "app/rag_profiles.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    ".cache"
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Darwin",
+  "typeCheckingMode": "off",
+  "reportMissingTypeStubs": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownParameterType": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalSubscript": "none",
+  "reportArgumentType": "none",
+  "reportCallIssue": "none",
+  "reportIndexIssue": "none",
+  "reportPrivateUsage": "none",
+  "strict": [
+    "app/settings.py",
+    "app/runtime_policy.py",
+    "app/runtime_errors.py",
+    "app/token_budget.py",
+    "app/models.py",
+    "app/rag_profiles.py"
+  ]
+}

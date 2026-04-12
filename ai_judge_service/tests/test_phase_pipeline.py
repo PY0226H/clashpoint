@@ -107,8 +107,12 @@ class PhasePipelineTests(unittest.TestCase):
 
         agent1 = payload["agent1Score"]
         self.assertIn("weights", agent1)
-        self.assertEqual(set(agent1["dimensions"]["pro"].keys()), {"logic", "evidence", "rebuttal", "expression"})
-        self.assertEqual(set(agent1["dimensions"]["con"].keys()), {"logic", "evidence", "rebuttal", "expression"})
+        self.assertEqual(
+            set(agent1["dimensions"]["pro"].keys()), {"logic", "evidence", "rebuttal", "expression"}
+        )
+        self.assertEqual(
+            set(agent1["dimensions"]["con"].keys()), {"logic", "evidence", "rebuttal", "expression"}
+        )
         for side in ("pro", "con"):
             for key in ("logic", "evidence", "rebuttal", "expression"):
                 value = float(agent1["dimensions"][side][key])
@@ -119,7 +123,9 @@ class PhasePipelineTests(unittest.TestCase):
             self.assertIn("chunkIds", refs)
         self.assertIn("balanceSignals", agent1)
 
-    def test_build_phase_report_payload_should_attach_retrieval_items_when_knowledge_available(self) -> None:
+    def test_build_phase_report_payload_should_attach_retrieval_items_when_knowledge_available(
+        self,
+    ) -> None:
         request = _build_phase_request_for_pipeline()
         with tempfile.NamedTemporaryFile("w+", suffix=".json", encoding="utf-8") as tmp:
             json.dump(
@@ -170,11 +176,15 @@ class PhasePipelineTests(unittest.TestCase):
             self.assertIn("conflict", item)
 
         self.assertEqual(set(payload["promptHashes"].keys()), {"a2", "a3", "a4", "a5", "a6", "a7"})
-        self.assertEqual(payload["judgeTrace"]["pipelineVersion"], "v3-phase-m5-agent2-bidirectional-v2")
+        self.assertEqual(
+            payload["judgeTrace"]["pipelineVersion"], "v3-phase-m5-agent2-bidirectional-v2"
+        )
         self.assertIn("retrievalDiagnostics", payload["judgeTrace"])
         self.assertIn("agent2Audit", payload["judgeTrace"])
 
-    def test_build_phase_report_payload_should_mark_conflicts_and_dedupe_after_query_fusion(self) -> None:
+    def test_build_phase_report_payload_should_mark_conflicts_and_dedupe_after_query_fusion(
+        self,
+    ) -> None:
         request = _build_phase_request_for_pipeline()
         with tempfile.NamedTemporaryFile("w+", suffix=".json", encoding="utf-8") as tmp:
             json.dump(
@@ -224,7 +234,9 @@ class PhasePipelineTests(unittest.TestCase):
             chunk_ids = [item["chunkId"] for item in items if item.get("chunkId")]
             self.assertEqual(len(chunk_ids), len(set(chunk_ids)))
 
-        merged_items = payload["proRetrievalBundle"]["items"] + payload["conRetrievalBundle"]["items"]
+        merged_items = (
+            payload["proRetrievalBundle"]["items"] + payload["conRetrievalBundle"]["items"]
+        )
         self.assertTrue(any(item.get("conflict") for item in merged_items))
         self.assertEqual(
             payload["judgeTrace"]["retrievalDiagnostics"]["pro"]["fusion"]["method"],
@@ -252,9 +264,15 @@ class PhasePipelineTests(unittest.TestCase):
                 return {"summary_text": "反方总结", "message_ids": [2, 4]}
             if "顶级辩手" in system_prompt:
                 if "source_side=pro, target_side=con" in system_prompt:
-                    return {"ideal_rebuttal": "理想反方反驳", "key_points": ["高压崩盘", "转型风险"]}
+                    return {
+                        "ideal_rebuttal": "理想反方反驳",
+                        "key_points": ["高压崩盘", "转型风险"],
+                    }
                 if "source_side=con, target_side=pro" in system_prompt:
-                    return {"ideal_rebuttal": "理想正方反驳", "key_points": ["运营细节", "经济稳定"]}
+                    return {
+                        "ideal_rebuttal": "理想正方反驳",
+                        "key_points": ["运营细节", "经济稳定"],
+                    }
             if "命中度评估器" in system_prompt:
                 if "target_side=con" in system_prompt:
                     return {
@@ -283,7 +301,9 @@ class PhasePipelineTests(unittest.TestCase):
                 }
             raise AssertionError("unexpected prompt")
 
-        with patch("app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)):
+        with patch(
+            "app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)
+        ):
             payload = asyncio.run(
                 build_phase_report_payload(
                     request=request,
@@ -297,12 +317,18 @@ class PhasePipelineTests(unittest.TestCase):
         self.assertEqual(payload["judgeTrace"]["agent2Audit"]["paths"]["con"]["source"], "llm")
         self.assertIn("dimensionScores", payload["judgeTrace"]["agent2Audit"]["paths"]["pro"])
         self.assertIn("weights", payload["judgeTrace"]["agent2Audit"])
-        self.assertFalse(payload["judgeTrace"]["agent2Audit"]["resilience"]["pro"]["usedBaselineFallback"])
-        self.assertFalse(payload["judgeTrace"]["agent2Audit"]["resilience"]["con"]["usedBaselineFallback"])
+        self.assertFalse(
+            payload["judgeTrace"]["agent2Audit"]["resilience"]["pro"]["usedBaselineFallback"]
+        )
+        self.assertFalse(
+            payload["judgeTrace"]["agent2Audit"]["resilience"]["con"]["usedBaselineFallback"]
+        )
         self.assertAlmostEqual(payload["agent3WeightedScore"]["w1"], 0.35, places=2)
         self.assertAlmostEqual(payload["agent3WeightedScore"]["w2"], 0.65, places=2)
 
-    def test_build_phase_report_payload_should_degrade_to_baseline_when_one_agent2_path_failed(self) -> None:
+    def test_build_phase_report_payload_should_degrade_to_baseline_when_one_agent2_path_failed(
+        self,
+    ) -> None:
         request = _build_phase_request_for_pipeline()
         settings = _build_settings(
             provider="openai",
@@ -335,7 +361,9 @@ class PhasePipelineTests(unittest.TestCase):
                 }
             raise AssertionError("unexpected prompt")
 
-        with patch("app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)):
+        with patch(
+            "app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)
+        ):
             payload = asyncio.run(
                 build_phase_report_payload(
                     request=request,
@@ -344,9 +372,16 @@ class PhasePipelineTests(unittest.TestCase):
             )
 
         self.assertIn("agent2_partial_degraded", payload["errorCodes"])
-        self.assertEqual(payload["judgeTrace"]["agent2Audit"]["paths"]["pro"]["pathStatus"], "failed_baseline_fallback")
-        self.assertTrue(payload["judgeTrace"]["agent2Audit"]["resilience"]["pro"]["usedBaselineFallback"])
-        self.assertFalse(payload["judgeTrace"]["agent2Audit"]["resilience"]["con"]["usedBaselineFallback"])
+        self.assertEqual(
+            payload["judgeTrace"]["agent2Audit"]["paths"]["pro"]["pathStatus"],
+            "failed_baseline_fallback",
+        )
+        self.assertTrue(
+            payload["judgeTrace"]["agent2Audit"]["resilience"]["pro"]["usedBaselineFallback"]
+        )
+        self.assertFalse(
+            payload["judgeTrace"]["agent2Audit"]["resilience"]["con"]["usedBaselineFallback"]
+        )
         self.assertAlmostEqual(payload["agent3WeightedScore"]["w1"], 0.7, places=2)
         self.assertAlmostEqual(payload["agent3WeightedScore"]["w2"], 0.3, places=2)
 
@@ -377,8 +412,12 @@ class PhasePipelineTests(unittest.TestCase):
         self.assertIn("summary_coverage_low_con", payload["errorCodes"])
         self.assertEqual(payload["proSummaryGrounded"]["messageIds"], [1, 3])
         self.assertEqual(payload["conSummaryGrounded"]["messageIds"], [2, 4])
-        self.assertEqual(payload["judgeTrace"]["summaryAudit"]["pro"]["source"], "extractive_fallback")
-        self.assertEqual(payload["judgeTrace"]["summaryAudit"]["con"]["source"], "extractive_fallback")
+        self.assertEqual(
+            payload["judgeTrace"]["summaryAudit"]["pro"]["source"], "extractive_fallback"
+        )
+        self.assertEqual(
+            payload["judgeTrace"]["summaryAudit"]["con"]["source"], "extractive_fallback"
+        )
 
     def test_build_phase_report_payload_should_track_token_usage_and_clip_audit(self) -> None:
         request = _build_phase_request_for_pipeline()
@@ -402,7 +441,10 @@ class PhasePipelineTests(unittest.TestCase):
                     return {"summary_text": "正方总结", "message_ids": [1, 3]}
                 return {"summary_text": "反方总结", "message_ids": [2, 4]}
             if "顶级辩手" in system_prompt:
-                return {"ideal_rebuttal": "理想反驳", "key_points": ["关键点1", "关键点2", "关键点3"]}
+                return {
+                    "ideal_rebuttal": "理想反驳",
+                    "key_points": ["关键点1", "关键点2", "关键点3"],
+                }
             if "命中度评估器" in system_prompt:
                 return {
                     "score": 70,
@@ -417,7 +459,9 @@ class PhasePipelineTests(unittest.TestCase):
                 }
             raise AssertionError("unexpected prompt")
 
-        with patch("app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)):
+        with patch(
+            "app.phase_pipeline.call_openai_json", new=AsyncMock(side_effect=_mock_call_openai_json)
+        ):
             payload = asyncio.run(
                 build_phase_report_payload(
                     request=request,
@@ -429,10 +473,7 @@ class PhasePipelineTests(unittest.TestCase):
         self.assertTrue(payload["tokenUsage"]["usageEstimated"])
         self.assertGreaterEqual(len(payload["judgeTrace"]["tokenClipSummary"]), 1)
         self.assertTrue(
-            any(
-                bool(item.get("clipped"))
-                for item in payload["judgeTrace"]["tokenClipSummary"]
-            )
+            any(bool(item.get("clipped")) for item in payload["judgeTrace"]["tokenClipSummary"])
         )
         self.assertIn("summary_prompt_token_clipped", payload["errorCodes"])
 

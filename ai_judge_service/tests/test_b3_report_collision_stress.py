@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 import unittest
+from datetime import datetime, timezone
 
 from app.b3_report_collision_stress import (
     CollisionStressRun,

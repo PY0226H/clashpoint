@@ -3,7 +3,6 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 
-
 PhaseSide = Literal["pro", "con"]
 VerdictWinner = Literal["pro", "con", "draw"]
 
@@ -28,7 +27,7 @@ class PhaseDispatchRequest(BaseModel):
     message_start_id: int
     message_end_id: int
     message_count: int
-    messages: list[PhaseDispatchMessage] = Field(default_factory=list)
+    messages: list[PhaseDispatchMessage] = []
     rubric_version: str
     judge_policy_version: str = "v3-default"
     topic_domain: str = "default"
@@ -56,7 +55,7 @@ class FinalDispatchRequest(BaseModel):
 
 class GroundedSummaryPayload(BaseModel):
     text: str
-    message_ids: list[int] = Field(default_factory=list)
+    message_ids: list[int] = []
 
 
 class RetrievalBundleItemPayload(BaseModel):
@@ -69,22 +68,22 @@ class RetrievalBundleItemPayload(BaseModel):
 
 
 class RetrievalBundlePayload(BaseModel):
-    queries: list[str] = Field(default_factory=list)
-    items: list[RetrievalBundleItemPayload] = Field(default_factory=list)
+    queries: list[str] = []
+    items: list[RetrievalBundleItemPayload] = []
 
 
 class PhaseAgent1ScorePayload(BaseModel):
     pro: float
     con: float
-    dimensions: dict[str, float] = Field(default_factory=dict)
+    dimensions: dict[str, float] = {}
     rationale: str
 
 
 class PhaseAgent2ScorePayload(BaseModel):
     pro: float
     con: float
-    hit_items: list[str] = Field(default_factory=list)
-    miss_items: list[str] = Field(default_factory=list)
+    hit_items: list[str] = []
+    miss_items: list[str] = []
     rationale: str
 
 
@@ -108,12 +107,12 @@ class PhaseReportInput(BaseModel):
     agent1_score: PhaseAgent1ScorePayload
     agent2_score: PhaseAgent2ScorePayload
     agent3_weighted_score: PhaseAgent3WeightedScorePayload
-    prompt_hashes: dict[str, str] = Field(default_factory=dict)
-    token_usage: dict[str, Any] = Field(default_factory=dict)
-    latency_ms: dict[str, Any] = Field(default_factory=dict)
-    error_codes: list[str] = Field(default_factory=list)
+    prompt_hashes: dict[str, str] = {}
+    token_usage: dict[str, Any] = {}
+    latency_ms: dict[str, Any] = {}
+    error_codes: list[str] = []
     degradation_level: int = 0
-    judge_trace: dict[str, Any] = Field(default_factory=dict)
+    judge_trace: dict[str, Any] = {}
 
 
 class FinalReportInput(BaseModel):
@@ -121,16 +120,16 @@ class FinalReportInput(BaseModel):
     winner: VerdictWinner
     pro_score: float
     con_score: float
-    dimension_scores: dict[str, float] = Field(default_factory=dict)
+    dimension_scores: dict[str, float] = {}
     final_rationale: str
-    verdict_evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
-    phase_rollup_summary: list[dict[str, Any]] = Field(default_factory=list)
-    retrieval_snapshot_rollup: list[dict[str, Any]] = Field(default_factory=list)
+    verdict_evidence_refs: list[dict[str, Any]] = []
+    phase_rollup_summary: list[dict[str, Any]] = []
+    retrieval_snapshot_rollup: list[dict[str, Any]] = []
     winner_first: VerdictWinner | None = None
     winner_second: VerdictWinner | None = None
     rejudge_triggered: bool = False
     needs_draw_vote: bool = False
-    judge_trace: dict[str, Any] = Field(default_factory=dict)
-    audit_alerts: list[dict[str, Any]] = Field(default_factory=list)
-    error_codes: list[str] = Field(default_factory=list)
+    judge_trace: dict[str, Any] = {}
+    audit_alerts: list[dict[str, Any]] = []
+    error_codes: list[str] = []
     degradation_level: int = 0

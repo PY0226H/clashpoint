@@ -74,6 +74,27 @@ Detailed explanations now live under `docs/harness/`.
 4. 简单赋值、普通 CRUD、显而易见的控制流不要为了“有注释”而加注释，避免制造注释噪音。
 5. 注释默认控制在 1 到 2 行，除非用户明确要求更详细的说明。
 
+### Backend / chat rule
+
+1. 修改 `chat/` Rust 主线时，优先保护事务边界、幂等语义、Redis/DB 一致性、事件/outbox 收敛和权限边界，不要只看接口表面行为。
+2. 新增或修改后端接口时，应同步检查 route、handler、model、RBAC / middleware、OpenAPI、错误语义与测试是否一起更新。
+3. 对尚未发布的能力，默认直接切主链并清理旧路径，不为“未来可能兼容”预留长期双轨逻辑。
+4. 对复杂一致性保护、补偿、时序或防重逻辑，补精简中文注释，优先解释边界和风险。
+
+### API contract & cross-layer sync rule
+
+1. 只要改动 API、DTO、错误码、分页字段、状态字段或 WS payload，就必须同步检查跨层调用方。
+2. 后端契约变更时，至少同步检查 `openapi.rs`、前端相关 domain / SDK（如 `auth-sdk`、`realtime-sdk`、`ops-domain`）、必要测试，以及需要留痕的学习或计划文档。
+3. 默认保持单一主语义字段，不为未发布能力长期保留 alias 字段、双字段并存或旧新 payload 双写。
+4. 如果一个回合内无法同步所有调用方，才允许保留短期兼容层，并在计划或注释里写清移除条件。
+
+### Frontend / journey rule
+
+1. 修改 `frontend/` 时，优先把共享业务逻辑放在 `packages/*`，应用壳 `apps/web` 与 `apps/desktop` 只保留平台装配和入口差异。
+2. 改动登录、绑手机、Lobby、Room、Wallet、Ops 等主流程时，应同时检查页面层、domain / SDK 层、路由守卫和异常提示是否一致。
+3. 已有 Web/Desktop 共用语义时，优先收敛到共享包，不要在双端重复堆逻辑。
+4. 前端主流程改动完成后，优先补 smoke 或专项运行态证据，而不只停留在静态 typecheck。
+
 ---
 
 ## Harness Docs

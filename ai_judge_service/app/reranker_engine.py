@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Protocol
@@ -100,8 +101,7 @@ class RerankResult:
 
 
 class Reranker(Protocol):
-    def rerank(self, request: RerankRequest) -> RerankResult:
-        ...
+    def rerank(self, request: RerankRequest) -> RerankResult: ...
 
 
 class HeuristicFallbackReranker:
@@ -139,7 +139,9 @@ class HeuristicFallbackReranker:
         for item in pool:
             if query_tokens:
                 doc_tokens = _tokenize(f"{item.title} {item.content}")
-                overlap = len(query_tokens.intersection(doc_tokens)) / float(max(1, len(query_tokens)))
+                overlap = len(query_tokens.intersection(doc_tokens)) / float(
+                    max(1, len(query_tokens))
+                )
             else:
                 overlap = 0.0
             base = item.score / max_base

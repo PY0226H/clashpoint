@@ -230,3 +230,81 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           body: ${{ steps.git-cliff.outputs.content }}
+
+  python-quality:
+    name: python-quality (ai_judge_service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies
+        run: |
+          cd ai_judge_service
+          uv sync --frozen --group dev --python 3.11 --no-install-project
+      - name: Ruff lint
+        run: |
+          cd ai_judge_service
+          .venv/bin/ruff check .
+      - name: Ruff format check
+        run: |
+          cd ai_judge_service
+          .venv/bin/ruff format --check .
+      - name: Pyright
+        run: |
+          cd ai_judge_service
+          .venv/bin/pyright
+      - name: Mypy
+        run: |
+          cd ai_judge_service
+          .venv/bin/mypy
+      - name: Pytest
+        run: |
+          cd ai_judge_service
+          .venv/bin/pytest -q
+      - name: requirements.txt drift check
+        run: |
+          cd ai_judge_service
+          uv export \
+            --frozen \
+            --format requirements.txt \
+            --no-dev \
+            --no-emit-project \
+            --no-header \
+            --no-annotate \
+            --no-hashes \
+            --output-file /tmp/ai_judge_requirements.txt
+          diff -u requirements.txt /tmp/ai_judge_requirements.txt
+
+  python-quality-py313-preview:
+    name: python-quality preview (3.13, non-blocking)
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies
+        run: |
+          cd ai_judge_service
+          uv sync --frozen --group dev --python 3.13 --no-install-project
+      - name: Preview checks
+        run: |
+          cd ai_judge_service
+          .venv/bin/pyright
+          .venv/bin/pytest -q

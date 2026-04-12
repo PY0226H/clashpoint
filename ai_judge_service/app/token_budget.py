@@ -4,7 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Iterable
+from typing import Iterable, Protocol, cast
 
 DEFAULT_FALLBACK_ENCODING = "o200k_base"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]")
@@ -58,11 +58,7 @@ class PackedSegmentsResult:
     estimated: bool
 
     def segment_map(self) -> dict[str, str]:
-        return {
-            row.segment_id: row.text
-            for row in self.segments
-            if row.included and row.text
-        }
+        return {row.segment_id: row.text for row in self.segments if row.included and row.text}
 
     def clip_summary(self) -> dict[str, object]:
         included_ids: list[str] = []
@@ -88,30 +84,42 @@ class PackedSegmentsResult:
         }
 
 
+class _EncodingLike(Protocol):
+    name: str
+
+    def encode(self, text: str) -> list[int]: ...
+
+    def decode(self, tokens: list[int]) -> str: ...
+
+
 def _safe_text(value: str | None) -> str:
     return str(value or "")
 
 
 @lru_cache(maxsize=64)
-def _resolve_tiktoken_encoding(model: str, fallback_encoding: str):
+def _resolve_tiktoken_encoding(model: str, fallback_encoding: str) -> _EncodingLike | None:
     try:
-        import tiktoken  # type: ignore
+        import tiktoken
     except Exception:
         return None
     model_name = str(model or "").strip()
-    fallback_name = str(fallback_encoding or DEFAULT_FALLBACK_ENCODING).strip() or DEFAULT_FALLBACK_ENCODING
+    fallback_name = (
+        str(fallback_encoding or DEFAULT_FALLBACK_ENCODING).strip() or DEFAULT_FALLBACK_ENCODING
+    )
     if model_name:
         try:
-            return tiktoken.encoding_for_model(model_name)
+            return cast(_EncodingLike, tiktoken.encoding_for_model(model_name))
         except Exception:
             pass
     try:
-        return tiktoken.get_encoding(fallback_name)
+        return cast(_EncodingLike, tiktoken.get_encoding(fallback_name))
     except Exception:
         return None
 
 
-def resolve_encoding(model: str, fallback_encoding: str = DEFAULT_FALLBACK_ENCODING) -> EncodingResolution:
+def resolve_encoding(
+    model: str, fallback_encoding: str = DEFAULT_FALLBACK_ENCODING
+) -> EncodingResolution:
     encoding = _resolve_tiktoken_encoding(model, fallback_encoding)
     if encoding is None:
         return EncodingResolution(

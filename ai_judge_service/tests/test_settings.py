@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.runtime_policy import PROVIDER_MOCK, PROVIDER_OPENAI
+from app.runtime_policy import PROVIDER_OPENAI
 from app.settings import (
     build_callback_client_config,
     build_dispatch_runtime_config,
@@ -228,7 +228,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(callback_cfg.callback_timeout_secs, settings.callback_timeout_secs)
         self.assertEqual(runtime_cfg.process_delay_ms, settings.process_delay_ms)
         self.assertEqual(runtime_cfg.judge_style_mode, settings.judge_style_mode)
-        self.assertEqual(runtime_cfg.runtime_retry_max_attempts, settings.runtime_retry_max_attempts)
+        self.assertEqual(
+            runtime_cfg.runtime_retry_max_attempts, settings.runtime_retry_max_attempts
+        )
         self.assertEqual(runtime_cfg.retry_backoff_ms, settings.runtime_retry_backoff_ms)
         self.assertEqual(runtime_cfg.compliance_block_enabled, settings.compliance_block_enabled)
 
@@ -297,7 +299,9 @@ class SettingsTests(unittest.TestCase):
             },
             clear=True,
         ):
-            with self.assertRaisesRegex(ValueError, "AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3"):
+            with self.assertRaisesRegex(
+                ValueError, "AI_JUDGE_DEGRADE_MAX_LEVEL must be between 0 and 3"
+            ):
                 load_settings()
 
     def test_load_settings_should_reject_invalid_runtime_retry_max_attempts(self) -> None:
@@ -370,7 +374,9 @@ class SettingsTests(unittest.TestCase):
             ):
                 load_settings()
 
-    def test_load_settings_should_accept_runtime_fault_injection_nodes_in_non_production(self) -> None:
+    def test_load_settings_should_accept_runtime_fault_injection_nodes_in_non_production(
+        self,
+    ) -> None:
         with patch.dict(
             os.environ,
             {
@@ -404,7 +410,9 @@ class SettingsTests(unittest.TestCase):
             },
             clear=True,
         ):
-            with self.assertRaisesRegex(ValueError, "AI_JUDGE_TOPIC_MEMORY_LIMIT must be between 1 and 20"):
+            with self.assertRaisesRegex(
+                ValueError, "AI_JUDGE_TOPIC_MEMORY_LIMIT must be between 1 and 20"
+            ):
                 load_settings()
 
     def test_load_settings_should_reject_invalid_topic_memory_quality_threshold(self) -> None:
@@ -415,7 +423,9 @@ class SettingsTests(unittest.TestCase):
             },
             clear=True,
         ):
-            with self.assertRaisesRegex(ValueError, "AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE must be between 0 and 1"):
+            with self.assertRaisesRegex(
+                ValueError, "AI_JUDGE_TOPIC_MEMORY_MIN_QUALITY_SCORE must be between 0 and 1"
+            ):
                 load_settings()
 
 

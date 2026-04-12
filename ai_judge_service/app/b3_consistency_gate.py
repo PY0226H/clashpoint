@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import secrets
 from time import perf_counter
 from typing import Any
 
@@ -75,7 +75,9 @@ def percentile(values: list[float], p: float) -> float:
     if p >= 100:
         return max(values)
     sorted_values = sorted(values)
-    rank = max(0, min(len(sorted_values) - 1, int(round((p / 100.0) * len(sorted_values) + 0.5)) - 1))
+    rank = max(
+        0, min(len(sorted_values) - 1, int(round((p / 100.0) * len(sorted_values) + 0.5)) - 1)
+    )
     return float(sorted_values[rank])
 
 
@@ -168,13 +170,16 @@ def write_report_with_collision_retry(
     raise RuntimeError("failed to allocate unique report path after collision retries")
 
 
-def _run_concurrent(total_requests: int, concurrency: int, fn: Any) -> tuple[list[Any], list[float]]:
+def _run_concurrent(
+    total_requests: int, concurrency: int, fn: Any
+) -> tuple[list[Any], list[float]]:
     if total_requests < 1:
         raise ValueError("total_requests must be >= 1")
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
     results: list[Any] = []
     latencies: list[float] = []
+
     def _measure(index: int) -> tuple[Any, float]:
         started = perf_counter()
         value = fn(index)
@@ -251,7 +256,9 @@ def run_outbox_delivery_race(
 
     def _worker(index: int) -> tuple[str, bool]:
         delivery_status = OUTBOX_DELIVERY_SENT if index % 2 == 0 else OUTBOX_DELIVERY_FAILED
-        error_message = None if delivery_status == OUTBOX_DELIVERY_SENT else "delivery_failed_for_race"
+        error_message = (
+            None if delivery_status == OUTBOX_DELIVERY_SENT else "delivery_failed_for_race"
+        )
         item = store.mark_alert_outbox_delivery(
             event_id=event_id,
             delivery_status=delivery_status,

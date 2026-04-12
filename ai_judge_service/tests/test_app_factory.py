@@ -1,11 +1,10 @@
 import unittest
 from datetime import datetime, timezone
 
-from fastapi import HTTPException
-
 from app.app_factory import create_app, create_default_app, create_runtime, require_internal_key
 from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
 from app.settings import Settings
+from fastapi import HTTPException
 
 
 def _build_settings(**overrides: object) -> Settings:
@@ -74,7 +73,9 @@ def _build_settings(**overrides: object) -> Settings:
     return Settings(**base)
 
 
-def _build_phase_request(*, job_id: int = 101, idempotency_key: str = "phase-key-101") -> PhaseDispatchRequest:
+def _build_phase_request(
+    *, job_id: int = 101, idempotency_key: str = "phase-key-101"
+) -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
     return PhaseDispatchRequest(
         job_id=job_id,
@@ -109,7 +110,9 @@ def _build_phase_request(*, job_id: int = 101, idempotency_key: str = "phase-key
     )
 
 
-def _build_final_request(*, job_id: int = 202, idempotency_key: str = "final-key-202") -> FinalDispatchRequest:
+def _build_final_request(
+    *, job_id: int = 202, idempotency_key: str = "final-key-202"
+) -> FinalDispatchRequest:
     return FinalDispatchRequest(
         job_id=job_id,
         scope_id=1,
@@ -204,14 +207,18 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(phase_callback_calls), 1)
 
         final_req = _build_final_request(job_id=2002, idempotency_key="final:2002")
-        result = await final_endpoint(request=final_req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        result = await final_endpoint(
+            request=final_req, x_ai_internal_key=runtime.settings.ai_internal_key
+        )
         self.assertTrue(result["accepted"])
         self.assertEqual(result["dispatchType"], "final")
         self.assertEqual(len(final_callback_calls), 1)
         self.assertEqual(final_callback_calls[0][0], 2002)
         self.assertIn("winner", final_callback_calls[0][1])
 
-    async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(self) -> None:
+    async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
+        self,
+    ) -> None:
         async def failing_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
             raise RuntimeError("phase-callback-down")
 

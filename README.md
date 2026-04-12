@@ -121,8 +121,8 @@ pnpm dev:desktop:tauri
 ## 可选：启动 AI 裁判服务
 
 ```bash
-./scripts/pip install -r ai_judge_service/requirements.txt
 cd ai_judge_service
+uv sync --frozen --group dev --no-install-project
 ../scripts/py -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 ```
 
@@ -155,7 +155,7 @@ AI 裁判服务测试：
 
 ```bash
 cd ai_judge_service
-../scripts/py -m unittest discover -s tests -p "test_*.py" -v
+.venv/bin/pytest -q
 ```
 
 ## 服务端口（默认）

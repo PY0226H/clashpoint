@@ -711,3 +711,16 @@
 | api078-alerts-list-offset-pagination-upgrade | 当前仍采用 `LIMIT/OFFSET`，深分页在数据增长后存在扫描成本放大风险。 | 完成 cursor 分页方案（`created_at + id`）评审与落地计划，形成兼容迁移与回滚路径。 | 输出方案文档 + 翻页一致性回归（无重复/漏项）+ 联调纪要归档。 |
 | api078-alerts-list-sql-plan-stability-evaluation | 查询仍使用 `($N IS NULL OR ...)` 可选过滤写法，复杂过滤组合下计划稳定性与索引利用率待验证。 | 完成 SQL 计划评估结论（保持现状或动态 SQL/索引优化）并固化实现策略。 | 归档 explain 对比、典型过滤场景延迟与 CPU 指标到 `docs/consistency_reports/`。 |
 | api078-alerts-list-performance-baseline-and-index-review | 尚未形成 API078 查询性能封板报告，索引优化策略未冻结。 | 完成压测基线与索引评审（是否新增复合索引）并给出 Go/No-Go 结论。 | 归档压测报告（`p95/p99`、吞吐、资源占用）与索引评审纪要到 `docs/loadtest/evidence/`。 |
+
+## AY. api079-kafka-dlq-governance 后续待办（来源：当前开发文档）
+
+整合说明（2026-04-12）：
+- `docs/dev_plan/当前开发计划.md` 与 `docs/dev_plan/当前开发文档.md` 中 API079 阶段剩余事项已并入本分组持续跟踪。
+- API079 已完成主体已并入 `docs/dev_plan/completed.md`（条目：`api079-kafka-dlq-governance-phase-closure`）。
+
+| 模块 | 当前阻塞 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|
+| api079-dlq-list-real-load-baseline-and-plan-report | 当前仅本地开发环境，缺少真实流量与压测环境；现有 EXPLAIN 基线不足以替代 `p95/p99` 压测结论。 | 形成至少 3 轮真实样本压测与计划对比报告，覆盖 `COUNT/OFFSET/CURSOR` 三路径并给出索引稳定性结论。 | 归档压测报告（`p95/p99`、吞吐、资源占用）+ `EXPLAIN ANALYZE` 对比到 `docs/loadtest/evidence/` 与 `docs/consistency_reports/`。 |
+| api079-dlq-retention-parameter-production-tuning | retention 默认值（`14d/500`）来自工程经验，缺线上数据支撑最优参数。 | 基于真实数据规模与清理窗口完成 `retention_days/cleanup_batch_size/interval` 调参结论，并给出回滚策略。 | 运行多轮 retention 观测，归档删除吞吐、锁等待、慢查询、表膨胀趋势与调参结论。 |
+| api079-dlq-replay-discard-fault-drill-and-dashboard-baseline | 功能链路已可用，但缺值班视角故障注入与告警看板封板证据。 | 完成 replay/discard 故障注入演练，建立 `dlq_list/replay/discard/retention` 指标看板与告警阈值。 | 演练脚本与日志、告警触发记录、复盘报告归档到 `docs/consistency_reports/`。 |
+| api079-kafka-readiness-replay-rate-threshold-calibration | replay-rate 门禁阈值缺稳定真实样本，当前结论偏本地实验值。 | 在真实 replay 样本基础上完成 `actions/min` 阈值校准与 Go/No-Go 冻结。 | 归档 readiness 快照对比、样本窗口统计与阈值评审纪要。 |

@@ -62,7 +62,9 @@ def percentile(values: list[float], p: float) -> float:
     if p >= 100:
         return max(values)
     sorted_values = sorted(values)
-    rank = max(0, min(len(sorted_values) - 1, int(round((p / 100.0) * len(sorted_values) + 0.5)) - 1))
+    rank = max(
+        0, min(len(sorted_values) - 1, int(round((p / 100.0) * len(sorted_values) + 0.5)) - 1)
+    )
     return float(sorted_values[rank])
 
 
@@ -225,7 +227,9 @@ async def run_inprocess_dispatch_load(
             started = perf_counter()
             try:
                 request = _build_request(job_id)
-                result = await endpoint(request=request, x_ai_internal_key=runtime.settings.ai_internal_key)
+                result = await endpoint(
+                    request=request, x_ai_internal_key=runtime.settings.ai_internal_key
+                )
                 accepted = bool(isinstance(result, dict) and result.get("accepted"))
                 if accepted:
                     succeeded += 1

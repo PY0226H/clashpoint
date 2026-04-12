@@ -16,14 +16,12 @@
 
 ```bash
 cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
-test -x .venv/bin/python
-cd /Users/panyihang/Documents/EchoIsle
-./scripts/pip install -r ai_judge_service/requirements.txt
-cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
+uv sync --frozen --group dev --no-install-project
 ../scripts/py -m uvicorn app.main:app --host 0.0.0.0 --port 8787
 ```
 
-仓库内所有 Python 安装、测试、脚本执行都应通过 `scripts/py` / `scripts/pip` 完成，不直接使用全局 `python`、`python3`、`pip`、`pip3`。
+仓库内所有 Python 解释器调用都应通过 `scripts/py` / `scripts/pip` 完成，不直接使用全局 `python`、`python3`、`pip`、`pip3`。
+依赖解析来源为 `pyproject.toml + uv.lock`；`requirements.txt` 是由 `scripts/export_requirements.sh` 导出的供应链兼容产物，禁止手工编辑。
 
 手工知识导入 Milvus（MVP 推荐）：
 
@@ -205,14 +203,35 @@ M6 phase4 告警状态机：
 
 ```bash
 cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
-../scripts/py -m unittest discover -s tests -p "test_*.py" -v
+.venv/bin/pytest -q
 ```
+
+运行静态检查与质量门禁：
+
+```bash
+cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
+./scripts/run_quality_gate.sh
+```
+
+类型检查当前采用分阶段收敛：
+
+1. `mypy` phase1 strict 覆盖：
+   - `app/settings.py`
+   - `app/runtime_policy.py`
+   - `app/runtime_errors.py`
+   - `app/token_budget.py`
+   - `app/models.py`
+   - `app/rag_profiles.py`
+   - `app/openai_judge_client.py`
+2. `pyright` phase1 strict 覆盖：`settings/runtime_policy/runtime_errors/token_budget/rag_profiles`。
+3. `trace_store/phase_pipeline/rag_retriever/runtime_rag/milvus_indexer/lexical_retriever` 以及剩余测试文件纳入后续收敛。
+4. 收敛目标：`2026-05-31` 前完成 `app/` 与 `tests/` 全量 strict，每个 PR 只增不减覆盖范围。
 
 M7 预验收（phase1）端到端场景回归：
 
 ```bash
 cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
-../scripts/py -m unittest tests/test_m7_acceptance.py -v
+.venv/bin/pytest -q tests/test_m7_acceptance_gate.py
 ```
 
 M7 预验收门禁（phase2，回归 + 负载阈值 + 报告）：
