@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from app.applications import build_final_report_payload, validate_final_report_payload_contract
-from app.models import FinalDispatchRequest
+from app.applications import (
+    build_final_report_payload,
+    build_phase_report_payload,
+    validate_final_report_payload_contract,
+)
+from app.applications.gateway_runtime import GatewayRuntime
+from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
 
 
 @dataclass
@@ -134,3 +142,60 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
     assert "sideAnalysis" in missing
     assert "verdictReason" in missing
     assert "judgeTrace" in missing
+
+
+class JudgeMainlinePhaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_build_phase_report_payload_should_delegate_with_gateways(self) -> None:
+        request = PhaseDispatchRequest(
+            job_id=9101,
+            scope_id=1,
+            session_id=401,
+            phase_no=1,
+            message_start_id=1,
+            message_end_id=2,
+            message_count=2,
+            messages=[
+                PhaseDispatchMessage(
+                    message_id=1,
+                    side="pro",
+                    content="pro message",
+                    created_at=datetime.now(timezone.utc),
+                    speaker_tag="pro_1",
+                ),
+                PhaseDispatchMessage(
+                    message_id=2,
+                    side="con",
+                    content="con message",
+                    created_at=datetime.now(timezone.utc),
+                    speaker_tag="con_1",
+                ),
+            ],
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            retrieval_profile="hybrid_v1",
+            trace_id="trace-phase-9101",
+            idempotency_key="phase:9101",
+        )
+        settings = SimpleNamespace(name="stub-settings")
+        llm = object()
+        knowledge = object()
+        gateway_runtime = GatewayRuntime(llm=llm, knowledge=knowledge)
+
+        with patch(
+            "app.applications.judge_mainline.build_phase_report_payload_v3",
+            new=AsyncMock(return_value={"winner": "pro", "phaseNo": 1}),
+        ) as mocked:
+            payload = await build_phase_report_payload(
+                request=request,
+                settings=settings,  # type: ignore[arg-type]
+                gateway_runtime=gateway_runtime,
+            )
+
+        self.assertEqual(payload["winner"], "pro")
+        mocked.assert_awaited_once()
+        called_kwargs = mocked.await_args.kwargs
+        self.assertEqual(called_kwargs["request"], request)
+        self.assertEqual(called_kwargs["settings"], settings)
+        self.assertIs(called_kwargs["llm_gateway"], llm)
+        self.assertIs(called_kwargs["knowledge_gateway"], knowledge)

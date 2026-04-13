@@ -8,7 +8,10 @@ from ..domain.judge import (
 from ..domain.judge import (
     validate_final_report_payload_contract as validate_domain_final_report_payload_contract,
 )
-from ..models import FinalDispatchRequest
+from ..models import FinalDispatchRequest, PhaseDispatchRequest
+from ..phase_pipeline import build_phase_report_payload as build_phase_report_payload_v3
+from ..settings import Settings
+from .gateway_runtime import GatewayRuntime
 
 
 def build_final_report_payload(
@@ -26,3 +29,17 @@ def build_final_report_payload(
 
 def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]:
     return validate_domain_final_report_payload_contract(payload)
+
+
+async def build_phase_report_payload(
+    *,
+    request: PhaseDispatchRequest,
+    settings: Settings,
+    gateway_runtime: GatewayRuntime,
+) -> dict[str, Any]:
+    return await build_phase_report_payload_v3(
+        request=request,
+        settings=settings,
+        llm_gateway=gateway_runtime.llm,
+        knowledge_gateway=gateway_runtime.knowledge,
+    )

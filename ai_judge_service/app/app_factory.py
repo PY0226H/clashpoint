@@ -18,6 +18,9 @@ from .applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
 )
 from .applications import (
+    build_phase_report_payload as build_phase_report_payload_v3_phase,
+)
+from .applications import (
     validate_final_report_payload_contract as validate_final_report_payload_contract_v3_final,
 )
 from .callback_client import (
@@ -37,7 +40,6 @@ from .domain.facts import (
 )
 from .domain.workflow import WORKFLOW_STATUS_QUEUED, WorkflowJob
 from .models import FinalDispatchRequest, PhaseDispatchRequest
-from .phase_pipeline import build_phase_report_payload as build_phase_report_payload_v3
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
     Settings,
@@ -1163,11 +1165,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         )
 
-        phase_report_payload = await build_phase_report_payload_v3(
+        phase_report_payload = await build_phase_report_payload_v3_phase(
             request=parsed,
             settings=runtime.settings,
-            llm_gateway=runtime.gateway_runtime.llm,
-            knowledge_gateway=runtime.gateway_runtime.knowledge,
+            gateway_runtime=runtime.gateway_runtime,
         )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
@@ -1930,11 +1931,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             except ValidationError as err:
                 raise HTTPException(status_code=409, detail=f"replay_invalid_phase_request: {err}") from err
             _validate_phase_dispatch_request(phase_request)
-            report_payload = await build_phase_report_payload_v3(
+            report_payload = await build_phase_report_payload_v3_phase(
                 request=phase_request,
                 settings=runtime.settings,
-                llm_gateway=runtime.gateway_runtime.llm,
-                knowledge_gateway=runtime.gateway_runtime.knowledge,
+                gateway_runtime=runtime.gateway_runtime,
             )
 
         winner = str(report_payload.get("winner") or "").strip().lower()
