@@ -99,13 +99,69 @@ evidence_to_json_array() {
   local first=1
   local item
   printf '['
-  while IFS=';' read -r item; do
+  while IFS= read -r item || [[ -n "$item" ]]; do
     item="$(trim "$item")"
     [[ -z "$item" ]] && continue
     printf '%s"%s"' "$([[ "$first" -eq 1 ]] && echo "" || echo ",")" "$(json_escape "$item")"
     first=0
-  done <<< "$raw"
+  done < <(printf '%s' "$raw" | tr ';' '\n')
   printf ']'
+}
+
+count_semicolon_items() {
+  local raw="${1:-}"
+  local item
+  local count=0
+  while IFS= read -r item || [[ -n "$item" ]]; do
+    item="$(trim "$item")"
+    [[ -z "$item" ]] && continue
+    count=$((count + 1))
+  done < <(printf '%s' "$raw" | tr ';' '\n')
+  printf '%s' "$count"
+}
+
+collect_latest_ai_judge_evidence() {
+  local limit="${1:-6}"
+  local root_dir="$ROOT/artifacts/harness"
+  local evidence=""
+  local picked=0
+  local file
+  local -a candidates=()
+  local -a sorted=()
+
+  [[ -d "$root_dir" ]] || {
+    printf '%s' ""
+    return
+  }
+
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    candidates+=("$file")
+  done < <(
+    find "$root_dir" -maxdepth 1 -type f \
+      \( -name "*ai-judge-*.summary.json" -o -name "*ai-judge-*.summary.md" \) \
+      -print 2>/dev/null
+  )
+
+  [[ "${#candidates[@]}" -gt 0 ]] || {
+    printf '%s' ""
+    return
+  }
+
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    sorted+=("$file")
+  done < <(ls -1t "${candidates[@]}" 2>/dev/null || true)
+
+  for file in "${sorted[@]}"; do
+    evidence="${evidence:+${evidence};}${file}"
+    picked=$((picked + 1))
+    if [[ "$picked" -ge "$limit" ]]; then
+      break
+    fi
+  done
+
+  printf '%s' "$evidence"
 }
 
 profile_known() {
@@ -285,13 +341,27 @@ build_profile_checks() {
         "cd $ROOT/frontend && TARGET_APP=web playwright test --config ./playwright.config.ts --grep \"@smoke room\""
       ;;
     judge-ops)
+      local judge_ops_evidence
+      local judge_ops_status
+      local judge_ops_note
+      local judge_ops_count
+      judge_ops_evidence="$(collect_latest_ai_judge_evidence 6)"
+      if [[ -n "$judge_ops_evidence" ]]; then
+        judge_ops_count="$(count_semicolon_items "$judge_ops_evidence")"
+        judge_ops_status="pass"
+        judge_ops_note="已扫描到 ${judge_ops_count} 份 ai_judge 模块门禁摘要，可作为 judge-ops 当前运行态证据。"
+      else
+        judge_ops_status="evidence_missing"
+        judge_ops_note="judge-ops 已接入 ai_judge 证据扫描，但当前未找到模块门禁摘要；请先运行 ai_judge 模块测试门禁。"
+      fi
       append_check \
-        "judge-ops-web-journey" \
-        "ops console 与裁判运维路径" \
-        "evidence_missing" \
-        "judge-ops profile 已注册，但具体读写与异常路径将在 P3-4 中固化。" \
-        "$ROOT/frontend/tests/e2e/auth-smoke.spec.ts" \
-        "cd $ROOT/frontend && TARGET_APP=web playwright test --config ./playwright.config.ts --grep \"@smoke ops|@auth-error ops\""
+        "judge-ops-ai-judge-evidence" \
+        "裁判与运维证据扫描（ai_judge）" \
+        "$judge_ops_status" \
+        "$judge_ops_note" \
+        "$ROOT/artifacts/harness;$ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh;$ROOT/ai_judge_service/tests" \
+        "bash $ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh --mode full" \
+        "$judge_ops_evidence"
       ;;
     release)
       append_check \

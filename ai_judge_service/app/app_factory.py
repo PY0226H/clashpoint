@@ -9,8 +9,10 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from .applications import (
+    AgentRuntime,
     GatewayRuntime,
     WorkflowRuntime,
+    build_agent_runtime,
     build_gateway_runtime,
     build_workflow_runtime,
 )
@@ -80,6 +82,7 @@ class AppRuntime:
     trace_store: TraceStoreProtocol
     workflow_runtime: WorkflowRuntime
     gateway_runtime: GatewayRuntime
+    agent_runtime: AgentRuntime
 
 
 def require_internal_key(settings: Settings, header_value: str | None) -> None:
@@ -101,6 +104,7 @@ def create_runtime(
     trace_store = build_trace_store_from_settings(settings=settings)
     workflow_runtime = build_workflow_runtime(settings=settings)
     gateway_runtime = build_gateway_runtime(settings=settings)
+    agent_runtime = build_agent_runtime(settings=settings)
     callback_cfg = build_callback_client_config(settings)
     (
         callback_phase_report_fn,
@@ -125,6 +129,7 @@ def create_runtime(
         trace_store=trace_store,
         workflow_runtime=workflow_runtime,
         gateway_runtime=gateway_runtime,
+        agent_runtime=agent_runtime,
     )
 
 

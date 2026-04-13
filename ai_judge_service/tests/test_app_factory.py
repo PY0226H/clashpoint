@@ -193,6 +193,12 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
+    async def test_create_runtime_should_include_agent_runtime_shell_profiles(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        profiles = runtime.agent_runtime.list_profiles()
+        kinds = [row.kind for row in profiles]
+        self.assertEqual(kinds, ["judge", "npc_coach", "room_qa"])
+
     async def test_phase_dispatch_should_callback_and_support_idempotent_replay(self) -> None:
         phase_callback_calls: list[tuple[int, dict]] = []
 

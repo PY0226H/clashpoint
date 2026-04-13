@@ -1,5 +1,6 @@
 """Application services for ai_judge_service."""
 
+from .agent_runtime import AgentRuntime, StaticAgentRegistry, build_agent_runtime
 from .gateway_runtime import GatewayRuntime, build_gateway_runtime
 from .judge_mainline import (
     build_final_report_payload,
@@ -16,8 +17,11 @@ from .replay_audit_ops import (
 from .workflow_runtime import WorkflowRuntime, build_workflow_runtime
 
 __all__ = [
+    "AgentRuntime",
     "GatewayRuntime",
+    "StaticAgentRegistry",
     "WorkflowRuntime",
+    "build_agent_runtime",
     "build_final_report_payload",
     "build_phase_report_payload",
     "build_replay_report_payload",

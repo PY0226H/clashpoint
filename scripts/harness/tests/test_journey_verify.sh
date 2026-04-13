@@ -67,6 +67,28 @@ expect_contains "release json records collector request" "\"logs\": true" "$RELE
 expect_contains "release json records supply chain source" "supply_chain_security_gate.sh" "$RELEASE_JSON"
 expect_contains "release markdown has collectors table" "## Collectors" "$RELEASE_MD"
 
+JUDGE_ROOT="$TMP_DIR/judge-root"
+mkdir -p "$JUDGE_ROOT/artifacts/harness"
+JUDGE_EVIDENCE="$JUDGE_ROOT/artifacts/harness/20260413T000000Z-ai-judge-runtime-verify.summary.json"
+cat >"$JUDGE_EVIDENCE" <<'JSON'
+{"module":"ai-judge-runtime-verify","status":"pass"}
+JSON
+
+JUDGE_STDOUT="$TMP_DIR/judge.stdout"
+JUDGE_JSON="$TMP_DIR/judge.summary.json"
+JUDGE_MD="$TMP_DIR/judge.summary.md"
+
+bash "$SCRIPT" \
+  --root "$JUDGE_ROOT" \
+  --profile judge-ops \
+  --emit-json "$JUDGE_JSON" \
+  --emit-md "$JUDGE_MD" >"$JUDGE_STDOUT"
+
+expect_contains "judge-ops stdout exposes pass" "journey_verify_status: pass" "$JUDGE_STDOUT"
+expect_contains "judge-ops json records profile" "\"profile\": \"judge-ops\"" "$JUDGE_JSON"
+expect_contains "judge-ops json contains evidence file" "ai-judge-runtime-verify.summary.json" "$JUDGE_JSON"
+expect_contains "judge-ops markdown has evidence scan title" "裁判与运维证据扫描（ai_judge）" "$JUDGE_MD"
+
 INVALID_STDOUT="$TMP_DIR/invalid.stdout"
 set +e
 bash "$SCRIPT" \

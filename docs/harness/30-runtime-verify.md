@@ -1,7 +1,7 @@
 # EchoIsle Runtime Verify
 
-更新时间：2026-04-06
-状态：P3-1 已完成，profile 细化待继续推进
+更新时间：2026-04-13
+状态：P3-1 已完成，judge-ops 证据扫描已接入，其他 profile 细化待继续推进
 
 ---
 
@@ -16,6 +16,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 1. 已有 `journey_verify.sh`，可分发 `auth/lobby/room/judge-ops/release`
 2. 但具体业务旅程验证仍在按 Phase 3 分阶段细化
 3. 当前运行态证据仍主要来自既有测试、smoke、release、联调脚本
+4. `judge-ops` profile 已支持扫描 `artifacts/harness/*ai-judge-*.summary.{json,md}` 作为模块运行态证据
 
 ---
 
@@ -52,6 +53,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 2. 统一 JSON/Markdown 摘要
 3. 统一记录 `evidence_missing`
 4. 统一暴露候选脚本与证据来源
+5. `judge-ops` profile 自动归集 ai_judge 模块门禁摘要证据
 
 但当前还没有负责：
 
@@ -92,10 +94,10 @@ bash scripts/harness/journey_verify.sh \
 
 当前缺少的不是“测试命令”，而是“完整主链化的运行态验证能力”：
 
-1. 具体 profile 还未全部落地
+1. `auth/lobby/room/release` 的具体 profile 还未全部落地
 2. 统一的日志/指标/trace 采集出口尚未真正实现
 3. `journey_verify.sh` 还未接入 orchestrator 主链
-4. 已有 harness 执行日志，但它不替代 runtime verify
+4. `judge-ops` 之外的 profile 仍以提示与缺口暴露为主
 
 ---
 
@@ -105,7 +107,7 @@ bash scripts/harness/journey_verify.sh \
 
 1. `auth` profile 细化
 2. `lobby` / `room` profile 细化
-3. `judge-ops` / `release` profile 细化
+3. `release` profile 细化
 4. runtime verify 主链化
 
 在那之前，当前仓库处于“已有统一入口，但验证证据仍分散”的状态。
