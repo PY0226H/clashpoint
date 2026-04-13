@@ -67,8 +67,10 @@ def parse_csv_items(value: str | None) -> tuple[str, ...]:
 class Settings:
     ai_internal_key: str
     chat_server_base_url: str
-    report_path_template: str
-    failed_path_template: str
+    phase_report_path_template: str
+    final_report_path_template: str
+    phase_failed_path_template: str
+    final_failed_path_template: str
     callback_timeout_secs: float
     process_delay_ms: int
     judge_style_mode: str
@@ -146,13 +148,21 @@ def load_settings() -> Settings:
     settings = Settings(
         ai_internal_key=os.getenv("AI_JUDGE_INTERNAL_KEY", "dev-ai-internal-key"),
         chat_server_base_url=os.getenv("CHAT_SERVER_BASE_URL", "http://127.0.0.1:6688"),
-        report_path_template=os.getenv(
-            "CHAT_SERVER_REPORT_PATH_TEMPLATE",
-            "/api/internal/ai/judge/jobs/{job_id}/report",
+        phase_report_path_template=os.getenv(
+            "CHAT_SERVER_PHASE_REPORT_PATH_TEMPLATE",
+            "/api/internal/ai/judge/v3/phase/jobs/{job_id}/report",
         ),
-        failed_path_template=os.getenv(
-            "CHAT_SERVER_FAILED_PATH_TEMPLATE",
-            "/api/internal/ai/judge/jobs/{job_id}/failed",
+        final_report_path_template=os.getenv(
+            "CHAT_SERVER_FINAL_REPORT_PATH_TEMPLATE",
+            "/api/internal/ai/judge/v3/final/jobs/{job_id}/report",
+        ),
+        phase_failed_path_template=os.getenv(
+            "CHAT_SERVER_PHASE_FAILED_PATH_TEMPLATE",
+            "/api/internal/ai/judge/v3/phase/jobs/{job_id}/failed",
+        ),
+        final_failed_path_template=os.getenv(
+            "CHAT_SERVER_FINAL_FAILED_PATH_TEMPLATE",
+            "/api/internal/ai/judge/v3/final/jobs/{job_id}/failed",
         ),
         callback_timeout_secs=float(os.getenv("CALLBACK_TIMEOUT_SECONDS", "8")),
         process_delay_ms=int(os.getenv("JUDGE_PROCESS_DELAY_MS", "0")),
@@ -391,6 +401,10 @@ def build_callback_client_config(settings: Settings) -> CallbackClientConfig:
         ai_internal_key=settings.ai_internal_key,
         chat_server_base_url=settings.chat_server_base_url,
         callback_timeout_secs=settings.callback_timeout_secs,
+        phase_report_path_template=settings.phase_report_path_template,
+        final_report_path_template=settings.final_report_path_template,
+        phase_failed_path_template=settings.phase_failed_path_template,
+        final_failed_path_template=settings.final_failed_path_template,
     )
 
 

@@ -35,8 +35,9 @@ pub use judge::{
     JudgeTraceReplayOpsItem, ListJudgeReplayActionsOpsOutput, ListJudgeReplayActionsOpsQuery,
     ListJudgeReviewOpsOutput, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsOutput,
     ListJudgeTraceReplayOpsQuery, RequestJudgeJobInput, RequestJudgeJobOutput, SubmitDrawVoteInput,
-    SubmitDrawVoteOutput, SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput,
-    SubmitJudgePhaseReportInput, SubmitJudgePhaseReportOutput,
+    SubmitDrawVoteOutput, SubmitJudgeFailedCallbackInput, SubmitJudgeFailedCallbackOutput,
+    SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput, SubmitJudgePhaseReportInput,
+    SubmitJudgePhaseReportOutput,
 };
 pub(crate) use judge_dispatch::AiJudgeDispatchMetrics;
 pub use judge_dispatch::GetJudgeDispatchMetricsOutput;

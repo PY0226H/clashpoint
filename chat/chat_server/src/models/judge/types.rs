@@ -110,7 +110,10 @@ pub struct JudgeFinalReportDetail {
     pub con_score: f64,
     #[serde(default)]
     pub dimension_scores: Value,
-    pub final_rationale: String,
+    pub debate_summary: String,
+    #[serde(default)]
+    pub side_analysis: Value,
+    pub verdict_reason: String,
     #[serde(default)]
     pub verdict_evidence_refs: Vec<Value>,
     #[serde(default)]
@@ -698,7 +701,10 @@ pub struct SubmitJudgeFinalReportInput {
     pub con_score: f64,
     #[serde(default)]
     pub dimension_scores: Value,
-    pub final_rationale: String,
+    pub debate_summary: String,
+    #[serde(default)]
+    pub side_analysis: Value,
+    pub verdict_reason: String,
     #[serde(default)]
     pub verdict_evidence_refs: Vec<Value>,
     #[serde(default)]
@@ -725,6 +731,28 @@ pub struct SubmitJudgeFinalReportInput {
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitJudgeFinalReportOutput {
+    pub session_id: u64,
+    pub status: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJudgeFailedCallbackInput {
+    pub dispatch_type: String,
+    pub trace_id: String,
+    pub error_code: String,
+    pub error_message: String,
+    #[serde(default)]
+    pub audit_alert_ids: Vec<String>,
+    #[serde(default)]
+    pub degradation_level: Option<i32>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJudgeFailedCallbackOutput {
     pub session_id: u64,
     pub status: String,
 }

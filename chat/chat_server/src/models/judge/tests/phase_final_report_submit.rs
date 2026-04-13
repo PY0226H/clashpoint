@@ -219,7 +219,12 @@ fn build_final_report_input(session_id: u64, winner: &str) -> SubmitJudgeFinalRe
             "rebuttal": 73.0,
             "clarity": 71.0
         }),
-        final_rationale: "终局结论理由".to_string(),
+        debate_summary: "终局摘要".to_string(),
+        side_analysis: json!({
+            "pro": "正方分析",
+            "con": "反方分析"
+        }),
+        verdict_reason: "终局结论理由".to_string(),
         verdict_evidence_refs: vec![json!({"messageId": 1, "side": "pro"})],
         phase_rollup_summary: vec![json!({"phaseNo": 1})],
         retrieval_snapshot_rollup: vec![json!({"chunkId": "c-1"})],
@@ -231,6 +236,17 @@ fn build_final_report_input(session_id: u64, winner: &str) -> SubmitJudgeFinalRe
         audit_alerts: vec![],
         error_codes: vec![],
         degradation_level: 0,
+    }
+}
+
+fn build_failed_callback_input(dispatch_type: &str) -> SubmitJudgeFailedCallbackInput {
+    SubmitJudgeFailedCallbackInput {
+        dispatch_type: dispatch_type.to_string(),
+        trace_id: "trace-failed-callback".to_string(),
+        error_code: "input_not_blinded".to_string(),
+        error_message: "sensitive fields detected".to_string(),
+        audit_alert_ids: vec!["alt-1".to_string()],
+        degradation_level: Some(1),
     }
 }
 
@@ -757,5 +773,67 @@ async fn submit_judge_final_report_should_reject_invalid_winner_fields() -> Resu
         other => panic!("unexpected error: {other:?}"),
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_phase_failed_callback_should_mark_job_failed() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let message_ids = seed_messages(&state, session_id, 2).await?;
+    let phase_job_id =
+        seed_dispatched_phase_job(&state, session_id, 1, message_ids[0], message_ids[1], 2).await?;
+
+    let ret = state
+        .submit_judge_phase_failed_callback(
+            phase_job_id as u64,
+            build_failed_callback_input("phase"),
+        )
+        .await?;
+    assert_eq!(ret.status, "failed");
+
+    let row: (String, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT status, error_message
+        FROM judge_phase_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(phase_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, "failed");
+    assert!(row.1.unwrap_or_default().contains("input_not_blinded"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_judge_final_failed_callback_should_mark_job_failed_and_persist_error_code(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "closed").await?;
+    let final_job_id = seed_dispatched_final_job(&state, session_id, 1, 2).await?;
+
+    let ret = state
+        .submit_judge_final_failed_callback(
+            final_job_id as u64,
+            build_failed_callback_input("final"),
+        )
+        .await?;
+    assert_eq!(ret.status, "failed");
+
+    let row: (String, Option<String>, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT status, error_code, contract_failure_type
+        FROM judge_final_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_job_id)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(row.0, "failed");
+    assert_eq!(row.1.as_deref(), Some("input_not_blinded"));
+    assert_eq!(row.2.as_deref(), Some("input_not_blinded"));
     Ok(())
 }

@@ -124,7 +124,12 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
                 "rebuttal": 73.0,
                 "clarity": 71.0,
             },
-            "final_rationale": "终局理由",
+            "debate_summary": "终局摘要",
+            "side_analysis": {
+                "pro": "正方优势",
+                "con": "反方优势",
+            },
+            "verdict_reason": "裁决理由",
             "verdict_evidence_refs": [{"messageId": 3001}],
             "phase_rollup_summary": [{"phaseNo": 1}],
             "retrieval_snapshot_rollup": [{"chunkId": "c-1"}],

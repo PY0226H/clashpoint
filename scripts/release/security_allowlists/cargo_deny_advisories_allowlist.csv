@@ -1,3 +1,70 @@
 # advisory_id,target,expires_on,owner,reason
-RUSTSEC-2023-0071,chat,2026-06-30,backend-security,waiting upstream patch for transitive dependency
-RUSTSEC-2023-0071,swiftide-pgvector,2026-06-30,backend-security,waiting upstream patch for transitive dependency
+RUSTSEC-2025-0012,chat,2026-04-26,backend-security,temporary waiver while upgrading async-openai transitive backoff chain
+RUSTSEC-2024-0421,chat,2026-04-26,backend-security,temporary waiver while upgrading idna-url chain
+RUSTSEC-2024-0384,chat,2026-04-26,backend-security,temporary waiver while upgrading instant chain
+RUSTSEC-2024-0436,chat,2026-04-26,backend-security,temporary waiver while upgrading paste chain
+RUSTSEC-2024-0370,chat,2026-04-26,backend-security,temporary waiver while upgrading proc-macro-error chain
+RUSTSEC-2025-0009,chat,2026-04-26,backend-security,temporary waiver while upgrading ring chain
+RUSTSEC-2024-0399,chat,2026-04-26,backend-security,temporary waiver while upgrading rustls chain
+RUSTSEC-2026-0044,chat,2026-04-26,backend-security,temporary waiver while upgrading aws-lc-sys certificate chain
+RUSTSEC-2026-0048,chat,2026-04-26,backend-security,temporary waiver while upgrading aws-lc-sys CRL chain
+RUSTSEC-2026-0007,chat,2026-04-26,backend-security,temporary waiver while upgrading bytes transitive chain
+RUSTSEC-2026-0041,chat,2026-04-26,backend-security,temporary waiver while upgrading lz4_flex transitive chain
+RUSTSEC-2026-0037,chat,2026-04-26,backend-security,temporary waiver while upgrading quinn-proto chain
+RUSTSEC-2023-0071,chat,2026-04-26,backend-security,temporary waiver while upgrading sqlx-mysql-rsa chain
+RUSTSEC-2026-0097,chat,2026-04-26,backend-security,temporary waiver while upgrading rand feature interaction chain
+RUSTSEC-2025-0134,chat,2026-04-26,backend-security,temporary waiver while migrating rustls-pemfile usage
+RUSTSEC-2026-0049,chat,2026-04-26,backend-security,temporary waiver while upgrading rustls-webpki transitive chain
+RUSTSEC-2025-0055,chat,2026-04-26,backend-security,temporary waiver while upgrading tracing-subscriber chain
+RUSTSEC-2025-0081,chat,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-char-property chain
+RUSTSEC-2025-0075,chat,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-char-range chain
+RUSTSEC-2025-0080,chat,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-common chain
+RUSTSEC-2025-0074,chat,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-segment chain
+RUSTSEC-2025-0104,chat,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-ucd-segment chain
+RUSTSEC-2025-0098,chat,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-ucd-version chain
+RUSTSEC-2025-0012,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading async-openai transitive backoff chain
+RUSTSEC-2024-0402,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading textwrap chain
+RUSTSEC-2024-0421,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading idna-url chain
+RUSTSEC-2024-0384,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading instant chain
+RUSTSEC-2024-0436,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading paste chain
+RUSTSEC-2025-0009,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading ring chain
+RUSTSEC-2024-0399,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading rustls chain
+RUSTSEC-2025-0023,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading tokio chain
+RUSTSEC-2026-0007,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading bytes transitive chain
+RUSTSEC-2026-0037,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading quinn-proto chain
+RUSTSEC-2023-0071,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading sqlx-mysql-rsa chain
+RUSTSEC-2025-0134,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while migrating rustls-pemfile usage
+RUSTSEC-2026-0049,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading rustls-webpki transitive chain
+RUSTSEC-2025-0055,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while upgrading tracing-subscriber chain
+RUSTSEC-2025-0081,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-char-property chain
+RUSTSEC-2025-0075,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-char-range chain
+RUSTSEC-2025-0080,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-common chain
+RUSTSEC-2025-0074,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-segment chain
+RUSTSEC-2025-0104,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-ucd-segment chain
+RUSTSEC-2025-0098,swiftide-pgvector,2026-04-26,backend-security,temporary waiver while replacing unmaintained unic-ucd-version chain
+RUSTSEC-2024-0413,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive libssh2 chain
+RUSTSEC-2024-0416,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-status chain
+RUSTSEC-2025-0024,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-hash chain
+RUSTSEC-2024-0412,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive openssl chain
+RUSTSEC-2024-0418,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-pack chain
+RUSTSEC-2024-0411,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive ncurses chain
+RUSTSEC-2024-0417,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-ref chain
+RUSTSEC-2024-0414,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-credentials chain
+RUSTSEC-2024-0415,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-worktree-state chain
+RUSTSEC-2024-0420,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-protocol chain
+RUSTSEC-2024-0419,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive gix-transport chain
+RUSTSEC-2024-0421,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive idna-url chain
+RUSTSEC-2024-0384,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive instant chain
+RUSTSEC-2024-0436,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive paste chain
+RUSTSEC-2024-0370,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive proc-macro-error chain
+RUSTSEC-2024-0320,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading tauri transitive yaml-rust chain
+RUSTSEC-2025-0056,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained adler dependency chain
+RUSTSEC-2026-0007,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading bytes transitive chain
+RUSTSEC-2026-0001,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading rust_decimal-rkyv chain
+RUSTSEC-2025-0057,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained fxhash dependency chain
+RUSTSEC-2026-0009,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while upgrading quick-xml transitive chain
+RUSTSEC-2025-0081,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained unic-char-property chain
+RUSTSEC-2025-0075,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained unic-char-range chain
+RUSTSEC-2025-0080,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained unic-common chain
+RUSTSEC-2025-0100,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained unic-ucd-ident chain
+RUSTSEC-2025-0098,frontend/apps/desktop/src-tauri,2026-04-26,desktop-security,temporary waiver while replacing unmaintained unic-ucd-version chain

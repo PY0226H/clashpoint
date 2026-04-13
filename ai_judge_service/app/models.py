@@ -1,13 +1,14 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 PhaseSide = Literal["pro", "con"]
 VerdictWinner = Literal["pro", "con", "draw"]
 
 
 class PhaseDispatchMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     message_id: int
     side: PhaseSide
     content: str
@@ -16,6 +17,7 @@ class PhaseDispatchMessage(BaseModel):
 
 
 class PhaseDispatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_id: int
     scope_id: int = Field(
         default=1,
@@ -37,6 +39,7 @@ class PhaseDispatchRequest(BaseModel):
 
 
 class FinalDispatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_id: int
     scope_id: int = Field(
         default=1,
@@ -121,7 +124,9 @@ class FinalReportInput(BaseModel):
     pro_score: float
     con_score: float
     dimension_scores: dict[str, float] = {}
-    final_rationale: str
+    debate_summary: str
+    side_analysis: dict[str, str] = {}
+    verdict_reason: str
     verdict_evidence_refs: list[dict[str, Any]] = []
     phase_rollup_summary: list[dict[str, Any]] = []
     retrieval_snapshot_rollup: list[dict[str, Any]] = []

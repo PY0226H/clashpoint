@@ -651,13 +651,13 @@ mod tests {
                 r#"
                 INSERT INTO judge_final_reports(
                     final_job_id, session_id, rejudge_run_no, winner, pro_score, con_score, dimension_scores,
-                    final_rationale, verdict_evidence_refs, phase_rollup_summary, retrieval_snapshot_rollup,
+                    debate_summary, side_analysis, verdict_reason, verdict_evidence_refs, phase_rollup_summary, retrieval_snapshot_rollup,
                     winner_first, winner_second, rejudge_triggered, needs_draw_vote,
                     judge_trace, audit_alerts, error_codes, degradation_level
                 )
                 VALUES (
                     $1, $2, 1, 'pro', 73.0, 70.0, '{"logic":72.0}'::jsonb,
-                    'ops rejudge ready', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                    'ops rejudge ready', '{"pro":"pro","con":"con"}'::jsonb, 'verdict reason', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                     'pro', 'con', false, false,
                     '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, 0
                 )
@@ -668,7 +668,9 @@ mod tests {
                     pro_score = EXCLUDED.pro_score,
                     con_score = EXCLUDED.con_score,
                     dimension_scores = EXCLUDED.dimension_scores,
-                    final_rationale = EXCLUDED.final_rationale,
+                    debate_summary = EXCLUDED.debate_summary,
+                    side_analysis = EXCLUDED.side_analysis,
+                    verdict_reason = EXCLUDED.verdict_reason,
                     verdict_evidence_refs = EXCLUDED.verdict_evidence_refs,
                     phase_rollup_summary = EXCLUDED.phase_rollup_summary,
                     retrieval_snapshot_rollup = EXCLUDED.retrieval_snapshot_rollup,

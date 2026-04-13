@@ -5,14 +5,17 @@ from app.app_factory import create_app, create_default_app, create_runtime, requ
 from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
 from app.settings import Settings
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 
 
 def _build_settings(**overrides: object) -> Settings:
     base = {
         "ai_internal_key": "k",
         "chat_server_base_url": "http://chat",
-        "report_path_template": "/r/{job_id}",
-        "failed_path_template": "/f/{job_id}",
+        "phase_report_path_template": "/r/phase/{job_id}",
+        "final_report_path_template": "/r/final/{job_id}",
+        "phase_failed_path_template": "/f/phase/{job_id}",
+        "final_failed_path_template": "/f/final/{job_id}",
         "callback_timeout_secs": 8.0,
         "process_delay_ms": 0,
         "judge_style_mode": "rational",
@@ -127,14 +130,39 @@ def _build_final_request(
     )
 
 
-def _route_endpoint(app, path: str):
-    for route in app.routes:
-        if getattr(route, "path", "") == path:
-            return route.endpoint
-    raise AssertionError(f"route not found: {path}")
-
-
 class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
+    async def _post_json(
+        self,
+        *,
+        app,
+        path: str,
+        payload: dict,
+        internal_key: str,
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                path,
+                json=payload,
+                headers={"x-ai-internal-key": internal_key},
+            )
+
+    async def _get(self, *, app, path: str, internal_key: str):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(
+                path,
+                headers={"x-ai-internal-key": internal_key},
+            )
+
+    async def _post(self, *, app, path: str, internal_key: str):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                path,
+                headers={"x-ai-internal-key": internal_key},
+            )
+
     async def test_require_internal_key_should_validate_header(self) -> None:
         settings = _build_settings(ai_internal_key="expected")
 
@@ -169,17 +197,32 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             settings=_build_settings(),
             callback_phase_report_impl=fake_phase_callback,
             callback_final_report_impl=fake_phase_callback,
+            callback_phase_failed_impl=fake_phase_callback,
+            callback_final_failed_impl=fake_phase_callback,
         )
         app = create_app(runtime)
-        endpoint = _route_endpoint(app, "/internal/judge/v3/phase/dispatch")
 
         req = _build_phase_request(job_id=1001, idempotency_key="phase:1001")
-        first = await endpoint(request=req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        first_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(first_resp.status_code, 200)
+        first = first_resp.json()
         self.assertTrue(first["accepted"])
         self.assertEqual(first["dispatchType"], "phase")
         self.assertEqual(len(phase_callback_calls), 1)
 
-        replay = await endpoint(request=req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        replay_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(replay_resp.status_code, 200)
+        replay = replay_resp.json()
         self.assertTrue(replay["idempotentReplay"])
         self.assertEqual(len(phase_callback_calls), 1)
 
@@ -197,19 +240,30 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             settings=_build_settings(),
             callback_phase_report_impl=fake_phase_callback,
             callback_final_report_impl=fake_final_callback,
+            callback_phase_failed_impl=fake_phase_callback,
+            callback_final_failed_impl=fake_final_callback,
         )
         app = create_app(runtime)
-        phase_endpoint = _route_endpoint(app, "/internal/judge/v3/phase/dispatch")
-        final_endpoint = _route_endpoint(app, "/internal/judge/v3/final/dispatch")
 
         phase_req = _build_phase_request(job_id=2001, idempotency_key="phase:2001")
-        await phase_endpoint(request=phase_req, x_ai_internal_key=runtime.settings.ai_internal_key)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
         self.assertEqual(len(phase_callback_calls), 1)
 
         final_req = _build_final_request(job_id=2002, idempotency_key="final:2002")
-        result = await final_endpoint(
-            request=final_req, x_ai_internal_key=runtime.settings.ai_internal_key
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
         )
+        self.assertEqual(final_resp.status_code, 200)
+        result = final_resp.json()
         self.assertTrue(result["accepted"])
         self.assertEqual(result["dispatchType"], "final")
         self.assertEqual(len(final_callback_calls), 1)
@@ -222,26 +276,120 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         async def failing_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
             raise RuntimeError("phase-callback-down")
 
+        async def noop_failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
         runtime = create_runtime(
             settings=_build_settings(runtime_retry_max_attempts=1),
             callback_phase_report_impl=failing_phase_callback,
             callback_final_report_impl=failing_phase_callback,
+            callback_phase_failed_impl=noop_failed_callback,
+            callback_final_failed_impl=noop_failed_callback,
         )
         app = create_app(runtime)
-        phase_endpoint = _route_endpoint(app, "/internal/judge/v3/phase/dispatch")
-        receipt_endpoint = _route_endpoint(app, "/internal/judge/v3/phase/jobs/{job_id}/receipt")
 
         req = _build_phase_request(job_id=3001, idempotency_key="phase:3001")
-        with self.assertRaises(HTTPException) as ctx:
-            await phase_endpoint(request=req, x_ai_internal_key=runtime.settings.ai_internal_key)
-        self.assertEqual(ctx.exception.status_code, 502)
-        self.assertIn("phase_callback_failed", str(ctx.exception.detail))
-
-        receipt = await receipt_endpoint(
-            job_id=3001,
-            x_ai_internal_key=runtime.settings.ai_internal_key,
+        failed_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
         )
+        self.assertEqual(failed_resp.status_code, 502)
+        self.assertIn("phase_callback_failed", failed_resp.text)
+
+        receipt_resp = await self._get(
+            app=app,
+            path="/internal/judge/v3/phase/jobs/3001/receipt",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(receipt_resp.status_code, 200)
+        receipt = receipt_resp.json()
         self.assertEqual(receipt["status"], "callback_failed")
+
+    async def test_replay_post_should_prefer_final_receipt_when_auto(self) -> None:
+        phase_calls: list[tuple[int, dict]] = []
+        final_calls: list[tuple[int, dict]] = []
+
+        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            phase_calls.append((job_id, payload))
+
+        async def final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=phase_callback,
+            callback_final_report_impl=final_callback,
+            callback_phase_failed_impl=phase_callback,
+            callback_final_failed_impl=final_callback,
+        )
+        app = create_app(runtime)
+
+        phase_req = _build_phase_request(job_id=5001, idempotency_key="phase:5001")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(job_id=5001, idempotency_key="final:5001")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+        callback_total_before_replay = len(phase_calls) + len(final_calls)
+
+        replay_resp = await self._post(
+            app=app,
+            path="/internal/judge/jobs/5001/replay?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(replay_resp.status_code, 200)
+        replay_payload = replay_resp.json()
+        self.assertEqual(replay_payload["dispatchType"], "final")
+        self.assertIn("reportPayload", replay_payload)
+        self.assertIn("debateSummary", replay_payload["reportPayload"])
+        self.assertEqual(callback_total_before_replay, len(phase_calls) + len(final_calls))
+
+    async def test_blindization_reject_should_return_422_and_trigger_failed_callback(self) -> None:
+        failed_calls: list[tuple[int, dict]] = []
+
+        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            failed_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=_build_settings(runtime_retry_max_attempts=1),
+            callback_phase_report_impl=phase_callback,
+            callback_final_report_impl=phase_callback,
+            callback_phase_failed_impl=failed_callback,
+            callback_final_failed_impl=failed_callback,
+        )
+        app = create_app(runtime)
+        bad_payload = _build_phase_request(job_id=6001, idempotency_key="phase:6001").model_dump(
+            mode="json"
+        )
+        bad_payload["messages"][0]["user_id"] = 99
+
+        bad_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=bad_payload,
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_resp.status_code, 422)
+        self.assertIn("input_not_blinded", bad_resp.text)
+        self.assertEqual(len(failed_calls), 1)
+        self.assertEqual(failed_calls[0][0], 6001)
+        self.assertEqual(failed_calls[0][1]["errorCode"], "input_not_blinded")
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)

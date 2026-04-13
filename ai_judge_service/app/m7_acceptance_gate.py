@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
+from httpx import ASGITransport, AsyncClient
+
 from .app_factory import create_app, create_runtime
 from .models import (
     PhaseDispatchMessage,
@@ -97,8 +99,10 @@ def _build_gate_settings(**overrides: object) -> Settings:
     base = {
         "ai_internal_key": "m7-gate-key",
         "chat_server_base_url": "http://chat",
-        "report_path_template": "/r/{job_id}",
-        "failed_path_template": "/f/{job_id}",
+        "phase_report_path_template": "/r/phase/{job_id}",
+        "final_report_path_template": "/r/final/{job_id}",
+        "phase_failed_path_template": "/f/phase/{job_id}",
+        "final_failed_path_template": "/f/final/{job_id}",
         "callback_timeout_secs": 8.0,
         "process_delay_ms": 0,
         "judge_style_mode": "rational",
@@ -187,13 +191,6 @@ def _build_request(job_id: int) -> PhaseDispatchRequest:
     )
 
 
-def _find_dispatch_endpoint(app: object):
-    for route in getattr(app, "routes", []):
-        if getattr(route, "path", "") == "/internal/judge/v3/phase/dispatch":
-            return route.endpoint
-    raise RuntimeError("phase dispatch endpoint not found")
-
-
 async def run_inprocess_dispatch_load(
     *,
     total_requests: int,
@@ -212,36 +209,41 @@ async def run_inprocess_dispatch_load(
         settings=settings or _build_gate_settings(),
         callback_phase_report_impl=_noop_callback_report,
         callback_final_report_impl=_noop_callback_report,
+        callback_phase_failed_impl=_noop_callback_report,
+        callback_final_failed_impl=_noop_callback_report,
     )
     app = create_app(runtime)
-    endpoint = _find_dispatch_endpoint(app)
     semaphore = asyncio.Semaphore(concurrency)
 
     latencies: list[float] = []
     succeeded = 0
     failed = 0
 
-    async def _run_one(job_id: int) -> None:
-        nonlocal succeeded, failed
-        async with semaphore:
-            started = perf_counter()
-            try:
-                request = _build_request(job_id)
-                result = await endpoint(
-                    request=request, x_ai_internal_key=runtime.settings.ai_internal_key
-                )
-                accepted = bool(isinstance(result, dict) and result.get("accepted"))
-                if accepted:
-                    succeeded += 1
-                else:
-                    failed += 1
-            except Exception:
-                failed += 1
-            finally:
-                latencies.append((perf_counter() - started) * 1000.0)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
 
-    tasks = [asyncio.create_task(_run_one(i + 1)) for i in range(total_requests)]
-    await asyncio.gather(*tasks)
+        async def _run_one(job_id: int) -> None:
+            nonlocal succeeded, failed
+            async with semaphore:
+                started = perf_counter()
+                try:
+                    payload = _build_request(job_id).model_dump(mode="json")
+                    resp = await client.post(
+                        "/internal/judge/v3/phase/dispatch",
+                        json=payload,
+                        headers={"x-ai-internal-key": runtime.settings.ai_internal_key},
+                    )
+                    if resp.status_code == 200 and bool(resp.json().get("accepted")):
+                        succeeded += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+                finally:
+                    latencies.append((perf_counter() - started) * 1000.0)
+
+        tasks = [asyncio.create_task(_run_one(i + 1)) for i in range(total_requests)]
+        await asyncio.gather(*tasks)
 
     success_rate = succeeded / float(total_requests)
     return GateLoadResult(

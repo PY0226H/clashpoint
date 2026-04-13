@@ -49,6 +49,10 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 
 - `AI_JUDGE_INTERNAL_KEY`: 与 `chat_server.ai_judge.internal_key` 保持一致
 - `CHAT_SERVER_BASE_URL`: 例如 `http://127.0.0.1:6688`
+- `CHAT_SERVER_PHASE_REPORT_PATH_TEMPLATE`: phase 成功回调路径模板，默认 `/api/internal/ai/judge/v3/phase/jobs/{job_id}/report`
+- `CHAT_SERVER_FINAL_REPORT_PATH_TEMPLATE`: final 成功回调路径模板，默认 `/api/internal/ai/judge/v3/final/jobs/{job_id}/report`
+- `CHAT_SERVER_PHASE_FAILED_PATH_TEMPLATE`: phase 失败回调路径模板，默认 `/api/internal/ai/judge/v3/phase/jobs/{job_id}/failed`
+- `CHAT_SERVER_FINAL_FAILED_PATH_TEMPLATE`: final 失败回调路径模板，默认 `/api/internal/ai/judge/v3/final/jobs/{job_id}/failed`
 - `CALLBACK_TIMEOUT_SECONDS`: 回调超时，默认 `8`
 - `JUDGE_PROCESS_DELAY_MS`: 模拟处理耗时，默认 `0`
 - `JUDGE_STYLE_MODE`: 系统级文风开关，`rational|entertaining|mixed`，默认 `rational`
@@ -135,7 +139,7 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 均要求 header：`x-ai-internal-key`
 
 - `GET /internal/judge/jobs/{job_id}/trace`：查看单任务 trace、请求快照、回调状态、回放历史
-- `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback）
+- `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback），支持 `dispatch_type=auto|final|phase`（默认 `auto`：优先 final，缺失回退 phase）
 - `GET /internal/judge/jobs/{job_id}/replay/report`：导出 job 级回放报告（输入快照、阶段输出、终局结果、callback 状态、审计字段）
 - `GET /internal/judge/jobs/replay/reports`：按筛选条件查询回放报告列表（`status/winner/callback_status/trace_id/created_after/created_before/has_audit_alert/limit`，可选 `include_report=true` 返回完整报告）
 - `GET /internal/judge/jobs/{job_id}/alerts`：查看任务审计告警（支持 `status=raised|acked|resolved`）
@@ -146,6 +150,22 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 - `GET /internal/judge/rag/diagnostics?job_id=...`：查看该任务检索诊断摘要
 - `GET /internal/judge/v3/phase/jobs/{job_id}/receipt`：查看 phase dispatch 请求落库快照（入参、状态、回执）
 - `GET /internal/judge/v3/final/jobs/{job_id}/receipt`：查看 final dispatch 请求落库快照（入参、状态、回执）
+
+## v3 回调契约
+
+- final report 主展示字段已硬切为：
+  - `debateSummary`
+  - `sideAnalysis`（必须包含 `pro` 与 `con`）
+  - `verdictReason`
+- final 关键字段缺失会阻断成功回调，并触发 failed callback。
+- phase/final failed callback payload 统一包含：
+  - `jobId`
+  - `dispatchType`
+  - `traceId`
+  - `errorCode`
+  - `errorMessage`
+  - `auditAlertIds`（可空）
+  - `degradationLevel`（可空）
 
 `dispatch` 的 `retrieval_profile`（默认 `hybrid_v1`）当前支持：
 - `hybrid_v1`

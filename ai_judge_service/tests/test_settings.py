@@ -73,8 +73,10 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_PROVIDER": "OPENAI",
                 "AI_JUDGE_INTERNAL_KEY": "k1",
                 "CHAT_SERVER_BASE_URL": "https://chat.example.com",
-                "CHAT_SERVER_REPORT_PATH_TEMPLATE": "/r/{job_id}",
-                "CHAT_SERVER_FAILED_PATH_TEMPLATE": "/f/{job_id}",
+                "CHAT_SERVER_PHASE_REPORT_PATH_TEMPLATE": "/r/phase/{job_id}",
+                "CHAT_SERVER_FINAL_REPORT_PATH_TEMPLATE": "/r/final/{job_id}",
+                "CHAT_SERVER_PHASE_FAILED_PATH_TEMPLATE": "/f/phase/{job_id}",
+                "CHAT_SERVER_FINAL_FAILED_PATH_TEMPLATE": "/f/final/{job_id}",
                 "CALLBACK_TIMEOUT_SECONDS": "15.5",
                 "JUDGE_PROCESS_DELAY_MS": "300",
                 "JUDGE_STYLE_MODE": "entertaining",
@@ -152,8 +154,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.provider, PROVIDER_OPENAI)
         self.assertEqual(settings.ai_internal_key, "k1")
         self.assertEqual(settings.chat_server_base_url, "https://chat.example.com")
-        self.assertEqual(settings.report_path_template, "/r/{job_id}")
-        self.assertEqual(settings.failed_path_template, "/f/{job_id}")
+        self.assertEqual(settings.phase_report_path_template, "/r/phase/{job_id}")
+        self.assertEqual(settings.final_report_path_template, "/r/final/{job_id}")
+        self.assertEqual(settings.phase_failed_path_template, "/f/phase/{job_id}")
+        self.assertEqual(settings.final_failed_path_template, "/f/final/{job_id}")
         self.assertEqual(settings.callback_timeout_secs, 15.5)
         self.assertEqual(settings.process_delay_ms, 300)
         self.assertEqual(settings.judge_style_mode, "entertaining")
@@ -226,6 +230,22 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(callback_cfg.ai_internal_key, settings.ai_internal_key)
         self.assertEqual(callback_cfg.chat_server_base_url, settings.chat_server_base_url)
         self.assertEqual(callback_cfg.callback_timeout_secs, settings.callback_timeout_secs)
+        self.assertEqual(
+            callback_cfg.phase_report_path_template,
+            settings.phase_report_path_template,
+        )
+        self.assertEqual(
+            callback_cfg.final_report_path_template,
+            settings.final_report_path_template,
+        )
+        self.assertEqual(
+            callback_cfg.phase_failed_path_template,
+            settings.phase_failed_path_template,
+        )
+        self.assertEqual(
+            callback_cfg.final_failed_path_template,
+            settings.final_failed_path_template,
+        )
         self.assertEqual(runtime_cfg.process_delay_ms, settings.process_delay_ms)
         self.assertEqual(runtime_cfg.judge_style_mode, settings.judge_style_mode)
         self.assertEqual(

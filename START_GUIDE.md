@@ -15,7 +15,7 @@
 在启动应用之前，请确保你的系统满足以下要求：
 
 - **Node.js**: v18 或更高版本
-- **Rust**: 最新稳定版本
+- **Rust**: 1.94.1（以仓库根目录 `rust-toolchain.toml` 为准）
 - **PostgreSQL**: 14 或更高版本
 - **pnpm**: 包管理器
 - **Cargo**: Rust 构建工具（随 Rust 一起安装）
@@ -35,6 +35,10 @@ brew services start postgresql@14
 
 # 安装 sqlx-cli (推荐)
 cargo install sqlx-cli --no-default-features --features postgres
+
+# 对齐仓库固定 Rust 版本
+rustup toolchain install 1.94.1 --profile minimal --component rustfmt,clippy,llvm-tools-preview
+rustup default 1.94.1
 ```
 
 ---
@@ -114,6 +118,14 @@ cd ..
 ```
 
 > **注意**: `start.sh` 会默认执行这一步；若你手动启动服务，请先确保迁移已回放
+
+### 4. Rust 测试前置自检（建议）
+
+```bash
+bash scripts/quality/check_rust_test_env.sh
+```
+
+> **说明**: 该脚本会检查 `nextest` 所需的 Postgres maintenance DB 连通性，避免把环境问题误判成代码回归。
 
 ---
 

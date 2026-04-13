@@ -15,7 +15,12 @@ permissions:
   contents: write
 
 env:
-  SUBDIRS: chat swiftide-pgvector chatapp/src-tauri
+  SUBDIRS: chat swiftide-pgvector frontend/apps/desktop/src-tauri
+  RUST_TOOLCHAIN: "1.94.1"
+  CARGO_LLVM_COV_VERSION: "0.6.17"
+  CARGO_NEXTEST_VERSION: "0.9.98"
+  CARGO_AUDIT_VERSION: "0.22.1"
+  CARGO_DENY_VERSION: "0.19.1"
 
 jobs:
   build-rust:
@@ -50,16 +55,26 @@ jobs:
           sudo apt-get install -y javascriptcoregtk-4.1 libsoup-3.0 webkit2gtk-4.1 pkg-config libssl-dev
           # sudo apt-get install libgtk-3-dev
           # sudo apt-get install libsoup-3.0-dev
-      - name: Install Rust
-        run: rustup toolchain install stable --component llvm-tools-preview
+      - name: Install Rust toolchain (pinned)
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --component llvm-tools-preview,rustfmt,clippy
+          rustup default "${RUST_TOOLCHAIN}"
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - name: install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
       - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
       - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@${{ env.CARGO_DENY_VERSION }}
       - name: Setup Python for pip-audit
         uses: actions/setup-python@v5
         with:
@@ -92,6 +107,8 @@ jobs:
             cargo clippy --all-targets --all-features --tests --benches -- -D warnings
             cd ..
           done
+      - name: Check Rust nextest prerequisites
+        run: bash scripts/quality/check_rust_test_env.sh
       - name: Execute rust tests
         run: |
           for dir in ${{ env.SUBDIRS }}; do

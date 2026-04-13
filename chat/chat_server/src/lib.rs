@@ -271,8 +271,16 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             post(submit_judge_phase_report_handler),
         )
         .route(
+            "/judge/v3/phase/jobs/:id/failed",
+            post(submit_judge_phase_failed_handler),
+        )
+        .route(
             "/judge/v3/final/jobs/:id/report",
             post(submit_judge_final_report_handler),
+        )
+        .route(
+            "/judge/v3/final/jobs/:id/failed",
+            post(submit_judge_final_failed_handler),
         )
         .route("/infra/redis/health", get(get_redis_health_handler))
         .route("/infra/redis/ready", get(get_redis_ready_handler))

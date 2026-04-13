@@ -4,7 +4,10 @@ use std::collections::HashSet;
 
 const MAX_PHASE_SUMMARY_TEXT_LEN: usize = 8000;
 const MAX_PHASE_RATIONALE_TEXT_LEN: usize = 8000;
-const MAX_FINAL_RATIONALE_TEXT_LEN: usize = 12000;
+const MAX_FINAL_DEBATE_SUMMARY_TEXT_LEN: usize = 12000;
+const MAX_FINAL_VERDICT_REASON_TEXT_LEN: usize = 12000;
+const MAX_FINAL_SIDE_ANALYSIS_TEXT_LEN: usize = 12000;
+const MAX_FAILED_ERROR_MESSAGE_LEN: usize = 12000;
 const MAX_ERROR_CODE_COUNT: usize = 64;
 const AGENT_WEIGHT_SUM_EPSILON: f64 = 1e-6;
 
@@ -275,7 +278,9 @@ impl AppState {
             pro_score,
             con_score,
             dimension_scores,
-            final_rationale,
+            debate_summary,
+            side_analysis,
+            verdict_reason,
             verdict_evidence_refs,
             phase_rollup_summary,
             retrieval_snapshot_rollup,
@@ -301,10 +306,16 @@ impl AppState {
         validate_percentage_score(pro_score, "pro_score")?;
         validate_percentage_score(con_score, "con_score")?;
         validate_non_empty_text(
-            &final_rationale,
-            "final_rationale",
-            MAX_FINAL_RATIONALE_TEXT_LEN,
+            &debate_summary,
+            "debate_summary",
+            MAX_FINAL_DEBATE_SUMMARY_TEXT_LEN,
         )?;
+        validate_non_empty_text(
+            &verdict_reason,
+            "verdict_reason",
+            MAX_FINAL_VERDICT_REASON_TEXT_LEN,
+        )?;
+        validate_side_analysis(&side_analysis)?;
         let error_codes = normalize_error_codes(error_codes);
 
         let mut tx = self.pool.begin().await?;
@@ -376,7 +387,9 @@ impl AppState {
                 pro_score,
                 con_score,
                 dimension_scores,
-                final_rationale,
+                debate_summary,
+                side_analysis,
+                verdict_reason,
                 verdict_evidence_refs,
                 phase_rollup_summary,
                 retrieval_snapshot_rollup,
@@ -393,9 +406,9 @@ impl AppState {
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10, $11,
-                $12, $13, $14, $15,
-                $16, $17, $18, $19,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18, $19, $20, $21,
                 NOW(), NOW()
             )
             RETURNING id
@@ -408,7 +421,9 @@ impl AppState {
         .bind(pro_score)
         .bind(con_score)
         .bind(non_null_json(dimension_scores))
-        .bind(final_rationale)
+        .bind(debate_summary)
+        .bind(non_null_json(side_analysis))
+        .bind(verdict_reason)
         .bind(json!(verdict_evidence_refs))
         .bind(json!(phase_rollup_summary))
         .bind(json!(retrieval_snapshot_rollup))
@@ -448,6 +463,154 @@ impl AppState {
         Ok(SubmitJudgeFinalReportOutput {
             session_id,
             status: "succeeded".to_string(),
+        })
+    }
+
+    pub async fn submit_judge_phase_failed_callback(
+        &self,
+        job_id: u64,
+        input: SubmitJudgeFailedCallbackInput,
+    ) -> Result<SubmitJudgeFailedCallbackOutput, AppError> {
+        validate_failed_callback_dispatch_type("phase", &input.dispatch_type)?;
+        let trace_id = validate_non_empty_text(&input.trace_id, "trace_id", 128)?;
+        let error_code = normalize_failed_error_code(&input.error_code)?;
+        let error_message = validate_non_empty_text(
+            &input.error_message,
+            "error_message",
+            MAX_FAILED_ERROR_MESSAGE_LEN,
+        )?;
+        let message = build_failed_job_error_message(
+            &error_code,
+            &error_message,
+            &trace_id,
+            input.degradation_level,
+            &input.audit_alert_ids,
+        );
+
+        let mut tx = self.pool.begin().await?;
+        let Some(job): Option<JudgePhaseJobForUpdate> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                session_id,
+                rejudge_run_no,
+                phase_no,
+                message_start_id,
+                message_end_id,
+                message_count,
+                status
+            FROM judge_phase_jobs
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(job_id as i64)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(AppError::NotFound(format!("judge phase job id {job_id}")));
+        };
+
+        if job.status == "succeeded" {
+            return Err(AppError::DebateConflict(format!(
+                "judge phase job {} is succeeded, cannot mark failed callback",
+                job_id
+            )));
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE judge_phase_jobs
+            SET status = 'failed',
+                error_message = $2,
+                dispatch_locked_until = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+              AND status IN ('queued', 'dispatched', 'failed')
+            "#,
+        )
+        .bind(job.id)
+        .bind(message)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(SubmitJudgeFailedCallbackOutput {
+            session_id: job.session_id as u64,
+            status: "failed".to_string(),
+        })
+    }
+
+    pub async fn submit_judge_final_failed_callback(
+        &self,
+        job_id: u64,
+        input: SubmitJudgeFailedCallbackInput,
+    ) -> Result<SubmitJudgeFailedCallbackOutput, AppError> {
+        validate_failed_callback_dispatch_type("final", &input.dispatch_type)?;
+        let trace_id = validate_non_empty_text(&input.trace_id, "trace_id", 128)?;
+        let error_code = normalize_failed_error_code(&input.error_code)?;
+        let error_message = validate_non_empty_text(
+            &input.error_message,
+            "error_message",
+            MAX_FAILED_ERROR_MESSAGE_LEN,
+        )?;
+        let message = build_failed_job_error_message(
+            &error_code,
+            &error_message,
+            &trace_id,
+            input.degradation_level,
+            &input.audit_alert_ids,
+        );
+
+        let mut tx = self.pool.begin().await?;
+        let Some(job): Option<JudgeFinalJobForUpdate> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                session_id,
+                rejudge_run_no,
+                status
+            FROM judge_final_jobs
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(job_id as i64)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(AppError::NotFound(format!("judge final job id {job_id}")));
+        };
+
+        if job.status == "succeeded" {
+            return Err(AppError::DebateConflict(format!(
+                "judge final job {} is succeeded, cannot mark failed callback",
+                job_id
+            )));
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE judge_final_jobs
+            SET status = 'failed',
+                error_message = $2,
+                error_code = $3,
+                contract_failure_type = $4,
+                dispatch_locked_until = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+              AND status IN ('queued', 'dispatched', 'failed')
+            "#,
+        )
+        .bind(job.id)
+        .bind(message)
+        .bind(error_code.clone())
+        .bind(error_code)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(SubmitJudgeFailedCallbackOutput {
+            session_id: job.session_id as u64,
+            status: "failed".to_string(),
         })
     }
 }
@@ -501,6 +664,80 @@ fn normalize_error_codes(raw: Vec<String>) -> Vec<String> {
         .filter(|code| seen.insert(code.clone()))
         .take(MAX_ERROR_CODE_COUNT)
         .collect()
+}
+
+fn normalize_failed_error_code(raw: &str) -> Result<String, AppError> {
+    let code = raw.trim().to_ascii_lowercase();
+    if code.is_empty() {
+        return Err(AppError::DebateError(
+            "error_code cannot be empty".to_string(),
+        ));
+    }
+    if code.len() > 128 {
+        return Err(AppError::DebateError(
+            "error_code too long, max 128 chars".to_string(),
+        ));
+    }
+    Ok(code)
+}
+
+fn validate_failed_callback_dispatch_type(expected: &str, actual: &str) -> Result<(), AppError> {
+    let value = actual.trim().to_ascii_lowercase();
+    if value != expected {
+        return Err(AppError::DebateError(format!(
+            "dispatch_type mismatch: expect {expected}, got {actual}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_side_analysis(raw: &Value) -> Result<(), AppError> {
+    let Some(obj) = raw.as_object() else {
+        return Err(AppError::DebateError(
+            "side_analysis must be object with pro/con".to_string(),
+        ));
+    };
+    for side in ["pro", "con"] {
+        let Some(value) = obj.get(side).and_then(Value::as_str) else {
+            return Err(AppError::DebateError(format!(
+                "side_analysis.{side} cannot be empty"
+            )));
+        };
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::DebateError(format!(
+                "side_analysis.{side} cannot be empty"
+            )));
+        }
+        if trimmed.chars().count() > MAX_FINAL_SIDE_ANALYSIS_TEXT_LEN {
+            return Err(AppError::DebateError(format!(
+                "side_analysis.{side} too long, max {} chars",
+                MAX_FINAL_SIDE_ANALYSIS_TEXT_LEN
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn build_failed_job_error_message(
+    error_code: &str,
+    error_message: &str,
+    trace_id: &str,
+    degradation_level: Option<i32>,
+    audit_alert_ids: &[String],
+) -> String {
+    let mut parts = vec![
+        format!("[{error_code}]"),
+        error_message.trim().to_string(),
+        format!("trace_id={trace_id}"),
+    ];
+    if let Some(level) = degradation_level {
+        parts.push(format!("degradation_level={level}"));
+    }
+    if !audit_alert_ids.is_empty() {
+        parts.push(format!("audit_alert_ids={}", audit_alert_ids.join(",")));
+    }
+    parts.join(" ")
 }
 
 fn non_null_json(v: Value) -> Value {

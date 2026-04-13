@@ -1,0 +1,26 @@
+{
+  "run_id": "20260412T075137Z-rust-engineering-gate",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "task_kind": "refactor",
+  "module": "rust-engineering-gate",
+  "summary": "Rust企业级工程化升级：修复cargo-deny兼容、统一Rust门禁路径、纳入src-tauri阻断门禁",
+  "status": "pass",
+  "dry_run": false,
+  "strict": false,
+  "started_at": "2026-04-12T07:51:37Z",
+  "finished_at": "2026-04-12T07:54:15Z",
+  "failure_count": 0,
+  "failed_steps": [],
+  "artifacts": {
+    "jsonl": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260412T075137Z-rust-engineering-gate.jsonl",
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260412T075137Z-rust-engineering-gate.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260412T075137Z-rust-engineering-gate.summary.md"
+  },
+  "steps": [
+    {"step_id":"pre-prd","description":"PRD 对齐","status":"pass","started_at":"2026-04-12T07:51:37Z","finished_at":"2026-04-12T07:51:37Z","exit_code":0,"evidence_paths":["/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md"],"command":"bash /Users/panyihang/Documents/EchoIsle/skills/pre-module-prd-goal-guard/scripts/run_prd_goal_guard.sh --root /Users/panyihang/Documents/EchoIsle --task-kind refactor --module rust-engineering-gate --summary Rust企业级工程化升级：修复cargo-deny兼容、统一Rust门禁路径、纳入src-tauri阻断门禁 --mode auto --metadata-out /var/folders/kp/gq4h2jdn1_bcrgblcmrj00p00000gn/T/tmp.gnWwdRY72y"}
+    ,{"step_id":"post-test-guard","description":"测试变更检查与测试门禁","status":"pass","started_at":"2026-04-12T07:51:37Z","finished_at":"2026-04-12T07:54:14Z","exit_code":0,"evidence_paths":[],"command":"bash /Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/scripts/test_change_guard.sh --root /Users/panyihang/Documents/EchoIsle --changes \"artifacts/harness/20260412T075137Z-rust-engineering-gate.jsonl\"; bash /Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/scripts/run_test_gate.sh --root /Users/panyihang/Documents/EchoIsle --mode full"}
+    ,{"step_id":"post-commit-message","description":"Conventional Commits 推荐","status":"pass","started_at":"2026-04-12T07:54:14Z","finished_at":"2026-04-12T07:54:14Z","exit_code":0,"evidence_paths":["/Users/panyihang/Documents/EchoIsle/skills/post-module-commit-message/SKILL.md"],"command":"post-module-commit-message recommend_commit_message.sh"}
+    ,{"step_id":"post-optimization-plan-sync","description":"同步优化计划文档","status":"pass","started_at":"2026-04-12T07:54:14Z","finished_at":"2026-04-12T07:54:15Z","exit_code":0,"evidence_paths":["/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md"],"command":"bash /Users/panyihang/Documents/EchoIsle/skills/post-optimization-plan-sync/scripts/post_optimization_plan_sync.sh --root /Users/panyihang/Documents/EchoIsle --stage rust-engineering-gate --module rust-engineering-gate --summary Rust企业级工程化升级：修复cargo-deny兼容、统一Rust门禁路径、纳入src-tauri阻断门禁 --status done"}
+    ,{"step_id":"knowledge-pack","description":"knowledge pack 决策","status":"skip","started_at":"2026-04-12T07:54:15Z","finished_at":"2026-04-12T07:54:15Z","exit_code":0,"evidence_paths":["/Users/panyihang/Documents/EchoIsle/docs/explanation","/Users/panyihang/Documents/EchoIsle/docs/interview"],"command":"knowledge_pack_mode=auto"}
+  ]
+}

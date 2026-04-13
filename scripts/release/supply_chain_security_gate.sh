@@ -271,6 +271,35 @@ cargo_allowlist_has_active_entry() {
   return "$wildcard_match"
 }
 
+collect_active_cargo_allowlist_ids() {
+  local file="$1"
+  local target="$2"
+
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    local line
+    line="$(trim "$raw_line")"
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:1}" == "#" ]] && continue
+
+    local row_advisory row_target expires_on owner reason extra
+    IFS=',' read -r row_advisory row_target expires_on owner reason extra <<<"$line"
+    row_advisory="$(strip_quotes "${row_advisory:-}")"
+    row_target="$(strip_quotes "${row_target:-}")"
+    expires_on="$(strip_quotes "${expires_on:-}")"
+
+    [[ "$row_advisory" =~ ^RUSTSEC-[0-9]{4}-[0-9]{4}$ ]] || continue
+    if is_expired_date "$expires_on"; then
+      continue
+    elif [[ "$?" -eq 2 ]]; then
+      continue
+    fi
+
+    if [[ "$row_target" == "$target" || "$row_target" == "*" ]]; then
+      printf '%s\n' "$row_advisory"
+    fi
+  done <"$file" | sort -u
+}
+
 pip_ignore_contains() {
   local needle="$1"
   local item
@@ -365,6 +394,7 @@ PIP_AUDIT_ALLOWLIST=""
 RUST_TARGETS_CSV="chat,frontend/apps/desktop/src-tauri,swiftide-pgvector"
 SKIP_RUST="false"
 SKIP_PYTHON="false"
+CARGO_AUDIT_USE_SUBCOMMAND="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -492,6 +522,12 @@ if [[ "$SKIP_RUST" == "false" ]]; then
     fi
   fi
 
+  if tool_exists "$CARGO_AUDIT_BIN"; then
+    if "$CARGO_AUDIT_BIN" audit --help >/dev/null 2>&1; then
+      CARGO_AUDIT_USE_SUBCOMMAND="true"
+    fi
+  fi
+
   IFS=',' read -r -a rust_targets <<<"$RUST_TARGETS_CSV"
   for target in "${rust_targets[@]}"; do
     target="$(trim "$target")"
@@ -525,7 +561,17 @@ if [[ "$SKIP_RUST" == "false" ]]; then
     fi
 
     if tool_exists "$CARGO_AUDIT_BIN"; then
-      if run_in_dir "$target_dir" "$CARGO_AUDIT_BIN"; then
+      cargo_audit_cmd=("$CARGO_AUDIT_BIN")
+      if [[ "$CARGO_AUDIT_USE_SUBCOMMAND" == "true" ]]; then
+        cargo_audit_cmd+=("audit")
+      fi
+      cargo_audit_cmd+=("--no-fetch")
+      while IFS= read -r allow_id; do
+        [[ -z "$allow_id" ]] && continue
+        cargo_audit_cmd+=("--ignore" "$allow_id")
+      done < <(collect_active_cargo_allowlist_ids "$CARGO_ADVISORY_ALLOWLIST" "$target")
+
+      if run_in_dir "$target_dir" "${cargo_audit_cmd[@]}"; then
         mark_pass "cargo-audit passed [$target]"
       else
         mark_fail "cargo-audit failed [$target]"

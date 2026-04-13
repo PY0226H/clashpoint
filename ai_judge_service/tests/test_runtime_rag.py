@@ -42,8 +42,10 @@ def _build_settings(**overrides: object) -> Settings:
     base = {
         "ai_internal_key": "k",
         "chat_server_base_url": "http://chat",
-        "report_path_template": "/r/{job_id}",
-        "failed_path_template": "/f/{job_id}",
+        "phase_report_path_template": "/r/phase/{job_id}",
+        "final_report_path_template": "/r/final/{job_id}",
+        "phase_failed_path_template": "/f/phase/{job_id}",
+        "final_failed_path_template": "/f/final/{job_id}",
         "callback_timeout_secs": 8.0,
         "process_delay_ms": 0,
         "judge_style_mode": "rational",

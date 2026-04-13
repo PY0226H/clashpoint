@@ -1,4 +1,7 @@
-use crate::{AppError, AppState, SubmitJudgeFinalReportInput, SubmitJudgePhaseReportInput};
+use crate::{
+    AppError, AppState, SubmitJudgeFailedCallbackInput, SubmitJudgeFinalReportInput,
+    SubmitJudgePhaseReportInput,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -111,6 +114,64 @@ pub(crate) async fn submit_judge_final_report_handler(
     Json(input): Json<SubmitJudgeFinalReportInput>,
 ) -> Result<impl IntoResponse, AppError> {
     let ret = state.submit_judge_final_report(id, input).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Internal callback for AI service to persist v3 phase failed callback.
+#[utoipa::path(
+    post,
+    path = "/api/internal/ai/judge/v3/phase/jobs/{id}/failed",
+    params(
+        ("id" = u64, Path, description = "Judge phase job id")
+    ),
+    request_body = SubmitJudgeFailedCallbackInput,
+    responses(
+        (status = 200, description = "Judge phase failed callback persisted", body = crate::SubmitJudgeFailedCallbackOutput),
+        (status = 401, description = "Missing or invalid internal key", body = ErrorOutput),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 404, description = "Judge phase job not found", body = ErrorOutput),
+        (status = 409, description = "Job state conflict", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
+    ),
+    security(
+        ("internal_key" = [])
+    )
+)]
+pub(crate) async fn submit_judge_phase_failed_handler(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(input): Json<SubmitJudgeFailedCallbackInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.submit_judge_phase_failed_callback(id, input).await?;
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Internal callback for AI service to persist v3 final failed callback.
+#[utoipa::path(
+    post,
+    path = "/api/internal/ai/judge/v3/final/jobs/{id}/failed",
+    params(
+        ("id" = u64, Path, description = "Judge final job id")
+    ),
+    request_body = SubmitJudgeFailedCallbackInput,
+    responses(
+        (status = 200, description = "Judge final failed callback persisted", body = crate::SubmitJudgeFailedCallbackOutput),
+        (status = 401, description = "Missing or invalid internal key", body = ErrorOutput),
+        (status = 400, description = "Invalid input", body = ErrorOutput),
+        (status = 404, description = "Judge final job not found", body = ErrorOutput),
+        (status = 409, description = "Job state conflict", body = ErrorOutput),
+        (status = 500, description = "Internal server error", body = ErrorOutput),
+    ),
+    security(
+        ("internal_key" = [])
+    )
+)]
+pub(crate) async fn submit_judge_final_failed_handler(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(input): Json<SubmitJudgeFailedCallbackInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let ret = state.submit_judge_final_failed_callback(id, input).await?;
     Ok((StatusCode::OK, Json(ret)))
 }
 

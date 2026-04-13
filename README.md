@@ -43,7 +43,7 @@ EchoIsle/
 
 - Node.js 18+
 - pnpm
-- Rust stable toolchain
+- Rust 1.94.1（以仓库根目录 `rust-toolchain.toml` 为准）
 - PostgreSQL 14+
 - Python 3.11+（仅在启用 AI 裁判服务时必需）
 
@@ -141,6 +141,12 @@ uv sync --frozen --group dev --no-install-project
 bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode full
 ```
 
+Rust 供应链门禁（cargo-audit + cargo-deny + allowlist 校验）：
+
+```bash
+bash scripts/release/supply_chain_security_gate.sh --root "$(pwd)"
+```
+
 前端检查与测试：
 
 ```bash
@@ -178,3 +184,9 @@ cd ai_judge_service
 - [架构代码地图](docs/architecture/README.md)
 - [Harness 规则总览](docs/harness/00-overview.md)
 - [开发计划入口](docs/dev_plan/active/README.md)
+
+## Rust 工程化契约
+
+- Rust 阻断门禁目录固定为：`chat`、`swiftide-pgvector`、`frontend/apps/desktop/src-tauri`。
+- 供应链配置优先级：`deny.toml` + `scripts/release/security_allowlists/cargo_deny_advisories_allowlist.csv` + CI `build-rust`。
+- 临时豁免必须包含 `owner/reason/expires_on`，到期后 CI 会阻断。

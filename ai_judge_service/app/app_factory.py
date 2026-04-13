@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from pydantic import ValidationError
 
 from .callback_client import (
+    callback_final_failed,
     callback_final_report,
+    callback_phase_failed,
     callback_phase_report,
 )
 from .models import FinalDispatchRequest, PhaseDispatchRequest
@@ -33,6 +36,8 @@ class AppRuntime:
     dispatch_runtime_cfg: DispatchRuntimeConfig
     callback_phase_report_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
     callback_final_report_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
+    callback_phase_failed_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
+    callback_final_failed_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
     sleep_fn: SleepFn
     trace_store: TraceStoreProtocol
 
@@ -49,23 +54,44 @@ def create_runtime(
     settings: Settings,
     callback_phase_report_impl=callback_phase_report,
     callback_final_report_impl=callback_final_report,
+    callback_phase_failed_impl=callback_phase_failed,
+    callback_final_failed_impl=callback_final_failed,
     sleep_fn: SleepFn = asyncio.sleep,
 ) -> AppRuntime:
     trace_store = build_trace_store_from_settings(settings=settings)
     callback_cfg = build_callback_client_config(settings)
-    callback_phase_report_fn, callback_final_report_fn = build_v3_dispatch_callbacks(
+    (
+        callback_phase_report_fn,
+        callback_final_report_fn,
+        callback_phase_failed_fn,
+        callback_final_failed_fn,
+    ) = build_v3_dispatch_callbacks(
         cfg=callback_cfg,
         callback_phase_report_impl=callback_phase_report_impl,
         callback_final_report_impl=callback_final_report_impl,
+        callback_phase_failed_impl=callback_phase_failed_impl,
+        callback_final_failed_impl=callback_final_failed_impl,
     )
     return AppRuntime(
         settings=settings,
         dispatch_runtime_cfg=build_dispatch_runtime_config(settings),
         callback_phase_report_fn=callback_phase_report_fn,
         callback_final_report_fn=callback_final_report_fn,
+        callback_phase_failed_fn=callback_phase_failed_fn,
+        callback_final_failed_fn=callback_final_failed_fn,
         sleep_fn=sleep_fn,
         trace_store=trace_store,
     )
+
+
+_BLIND_SENSITIVE_KEY_TOKENS = {
+    "user_id",
+    "userid",
+    "vip",
+    "balance",
+    "wallet_balance",
+    "is_vip",
+}
 
 
 def _serialize_alert_item(alert: Any) -> dict[str, Any]:
@@ -144,56 +170,41 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
     report_summary = record.report_summary if isinstance(record.report_summary, dict) else {}
     request = record.request if isinstance(record.request, dict) else {}
     response = record.response if isinstance(record.response, dict) else {}
+    payload = report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
+    winner = report_summary.get("winner") or payload.get("winner")
+    winner_text = str(winner).strip().lower() if winner is not None else None
+    if winner_text not in {"pro", "con", "draw"}:
+        winner_text = None
 
-    payload = report_summary.get("payload")
-    if not isinstance(payload, dict):
-        payload = {}
-    response_audit_alert = response.get("auditAlert")
-    payload_audit_alerts = payload.get("auditAlerts")
-    audit_alerts: list[dict[str, Any]] = []
-    if isinstance(payload_audit_alerts, list):
-        audit_alerts.extend([row for row in payload_audit_alerts if isinstance(row, dict)])
-    if isinstance(response_audit_alert, dict):
-        audit_alerts.append(response_audit_alert)
+    raw_alerts = report_summary.get("auditAlerts")
+    if not isinstance(raw_alerts, list):
+        raw_alerts = payload.get("auditAlerts")
+    audit_alerts = [row for row in (raw_alerts or []) if isinstance(row, dict)]
 
-    stage_summaries = report_summary.get("stage_summaries") or report_summary.get("stageSummaries")
-    if not isinstance(stage_summaries, list):
-        stage_summaries = []
+    callback_status = report_summary.get("callbackStatus") or record.callback_status
+    callback_error = report_summary.get("callbackError") or record.callback_error
 
     return {
         "jobId": record.job_id,
         "traceId": record.trace_id,
         "status": record.status,
-        "requestInput": {
-            "job": request.get("job") or {},
-            "session": request.get("session") or {},
-            "topic": request.get("topic") or {},
-            "messages": request.get("messages") or [],
-            "messageWindowSize": request.get("message_window_size")
-            or request.get("messageWindowSize"),
-            "rubricVersion": request.get("rubric_version") or request.get("rubricVersion"),
-            "judgePolicyVersion": request.get("judge_policy_version")
-            or request.get("judgePolicyVersion"),
-            "retrievalProfile": request.get("retrieval_profile") or request.get("retrievalProfile"),
-        },
-        "pipeline": {
-            "agentPipeline": payload.get("agentPipeline"),
-            "stageSummaries": stage_summaries,
-            "winnerFirst": report_summary.get("winner_first") or report_summary.get("winnerFirst"),
-            "winnerSecond": report_summary.get("winner_second")
-            or report_summary.get("winnerSecond"),
-            "finalWinner": report_summary.get("winner"),
-            "needsDrawVote": report_summary.get("needs_draw_vote")
-            or report_summary.get("needsDrawVote"),
-            "rationale": report_summary.get("rationale"),
-            "proSummary": report_summary.get("pro_summary") or report_summary.get("proSummary"),
-            "conSummary": report_summary.get("con_summary") or report_summary.get("conSummary"),
-        },
-        "judgeAudit": payload.get("judgeAudit"),
+        "dispatchType": report_summary.get("dispatchType"),
+        "request": request,
+        "payload": payload,
+        "winner": winner_text,
         "auditAlerts": audit_alerts,
+        "callbackStatus": callback_status,
+        "callbackError": callback_error,
+        "reportSummary": {
+            "payload": payload,
+            "winner": winner_text,
+            "auditAlerts": audit_alerts,
+            "callbackStatus": callback_status,
+            "callbackError": callback_error,
+        },
         "callbackResult": {
-            "callbackStatus": record.callback_status,
-            "callbackError": record.callback_error,
+            "callbackStatus": callback_status,
+            "callbackError": callback_error,
             "response": response,
         },
         "replays": [
@@ -210,32 +221,28 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
 
 def _build_replay_report_summary(record: Any) -> dict[str, Any]:
     payload = _build_replay_report_payload(record)
+    audit_alerts = payload.get("auditAlerts")
+    if not isinstance(audit_alerts, list):
+        audit_alerts = []
     callback_result = payload.get("callbackResult")
     response = callback_result.get("response") if isinstance(callback_result, dict) else {}
     if not isinstance(response, dict):
         response = {}
-    pipeline = payload.get("pipeline")
-    if not isinstance(pipeline, dict):
-        pipeline = {}
-    audit_alerts = payload.get("auditAlerts")
-    if not isinstance(audit_alerts, list):
-        audit_alerts = []
     return {
         "jobId": payload.get("jobId"),
         "traceId": payload.get("traceId"),
+        "dispatchType": payload.get("dispatchType"),
         "status": payload.get("status"),
         "createdAt": record.created_at.isoformat(),
         "updatedAt": record.updated_at.isoformat(),
-        "winner": pipeline.get("finalWinner"),
-        "needsDrawVote": pipeline.get("needsDrawVote"),
+        "winner": payload.get("winner"),
+        "needsDrawVote": payload.get("payload", {}).get("needsDrawVote")
+        if isinstance(payload.get("payload"), dict)
+        else None,
         "provider": response.get("provider"),
         "errorCode": response.get("errorCode"),
-        "callbackStatus": callback_result.get("callbackStatus")
-        if isinstance(callback_result, dict)
-        else None,
-        "callbackError": callback_result.get("callbackError")
-        if isinstance(callback_result, dict)
-        else None,
+        "callbackStatus": payload.get("callbackStatus"),
+        "callbackError": payload.get("callbackError"),
         "auditAlertCount": len([row for row in audit_alerts if isinstance(row, dict)]),
         "replayCount": len(payload.get("replays") or []),
     }
@@ -247,6 +254,116 @@ def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _normalize_key_token(value: Any) -> str:
+    lowered = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return lowered
+
+
+def _collect_sensitive_key_hits(
+    value: Any,
+    *,
+    path: str,
+    out: list[str],
+) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            key_token = _normalize_key_token(key_text)
+            compact = key_token.replace("_", "")
+            if key_token in _BLIND_SENSITIVE_KEY_TOKENS or compact in _BLIND_SENSITIVE_KEY_TOKENS:
+                out.append(f"{path}.{key_text}" if path else key_text)
+            next_path = f"{path}.{key_text}" if path else key_text
+            _collect_sensitive_key_hits(child, path=next_path, out=out)
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            next_path = f"{path}[{index}]" if path else f"[{index}]"
+            _collect_sensitive_key_hits(child, path=next_path, out=out)
+
+
+def _find_sensitive_key_hits(payload: Any) -> list[str]:
+    out: list[str] = []
+    _collect_sensitive_key_hits(payload, path="", out=out)
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for item in out:
+        if item in seen:
+            continue
+        seen.add(item)
+        dedup.append(item)
+    return dedup
+
+
+def _extract_raw_field(payload: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in payload:
+            return payload.get(key)
+    return None
+
+
+def _extract_optional_int(payload: dict[str, Any], *keys: str) -> int | None:
+    value = _extract_raw_field(payload, *keys)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_optional_str(payload: dict[str, Any], *keys: str) -> str | None:
+    value = _extract_raw_field(payload, *keys)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _build_failed_callback_payload(
+    *,
+    job_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    error_code: str,
+    error_message: str,
+    audit_alert_ids: list[str] | None = None,
+    degradation_level: int | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "jobId": job_id,
+        "dispatchType": dispatch_type,
+        "traceId": trace_id,
+        "errorCode": error_code,
+        "errorMessage": error_message,
+        "auditAlertIds": list(audit_alert_ids or []),
+    }
+    if degradation_level is not None:
+        payload["degradationLevel"] = int(degradation_level)
+    return payload
+
+
+def _build_trace_report_summary(
+    *,
+    dispatch_type: str,
+    payload: dict[str, Any] | None,
+    callback_status: str,
+    callback_error: str | None,
+) -> dict[str, Any]:
+    report_payload = payload if isinstance(payload, dict) else {}
+    alerts = report_payload.get("auditAlerts")
+    if not isinstance(alerts, list):
+        alerts = []
+    winner = str(report_payload.get("winner") or "").strip().lower() or None
+    return {
+        "dispatchType": dispatch_type,
+        "payload": report_payload,
+        "winner": winner,
+        "auditAlerts": [item for item in alerts if isinstance(item, dict)],
+        "callbackStatus": callback_status,
+        "callbackError": callback_error,
+    }
 
 
 def _resolve_idempotency_or_raise(
@@ -290,6 +407,60 @@ def _validate_final_dispatch_request(request: FinalDispatchRequest) -> None:
         raise HTTPException(status_code=422, detail="invalid_phase_no")
     if request.phase_start_no > request.phase_end_no:
         raise HTTPException(status_code=422, detail="invalid_phase_range")
+
+
+def _extract_dispatch_meta_from_raw(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "jobId": _extract_optional_int(payload, "job_id", "jobId"),
+        "scopeId": _extract_optional_int(payload, "scope_id", "scopeId") or 1,
+        "sessionId": _extract_optional_int(payload, "session_id", "sessionId"),
+        "traceId": _extract_optional_str(payload, "trace_id", "traceId") or "",
+        "idempotencyKey": _extract_optional_str(payload, "idempotency_key", "idempotencyKey") or "",
+        "rubricVersion": _extract_optional_str(payload, "rubric_version", "rubricVersion") or "",
+        "judgePolicyVersion": _extract_optional_str(
+            payload,
+            "judge_policy_version",
+            "judgePolicyVersion",
+        )
+        or "",
+        "topicDomain": _extract_optional_str(payload, "topic_domain", "topicDomain") or "",
+        "retrievalProfile": _extract_optional_str(
+            payload,
+            "retrieval_profile",
+            "retrievalProfile",
+        ),
+    }
+
+
+def _extract_receipt_dims_from_raw(
+    dispatch_type: str,
+    payload: dict[str, Any],
+) -> dict[str, int | None]:
+    if dispatch_type == "phase":
+        return {
+            "phaseNo": _extract_optional_int(payload, "phase_no", "phaseNo"),
+            "phaseStartNo": None,
+            "phaseEndNo": None,
+            "messageStartId": _extract_optional_int(payload, "message_start_id", "messageStartId"),
+            "messageEndId": _extract_optional_int(payload, "message_end_id", "messageEndId"),
+            "messageCount": _extract_optional_int(payload, "message_count", "messageCount"),
+        }
+    return {
+        "phaseNo": None,
+        "phaseStartNo": _extract_optional_int(payload, "phase_start_no", "phaseStartNo"),
+        "phaseEndNo": _extract_optional_int(payload, "phase_end_no", "phaseEndNo"),
+        "messageStartId": None,
+        "messageEndId": None,
+        "messageCount": None,
+    }
+
+
+def _failed_callback_fn_for_dispatch(runtime: AppRuntime, dispatch_type: str) -> CallbackReportFn:
+    return runtime.callback_phase_failed_fn if dispatch_type == "phase" else runtime.callback_final_failed_fn
+
+
+def _report_callback_fn_for_dispatch(runtime: AppRuntime, dispatch_type: str) -> CallbackReportFn:
+    return runtime.callback_phase_report_fn if dispatch_type == "phase" else runtime.callback_final_report_fn
 
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
@@ -390,35 +561,40 @@ def _build_final_display_payload(
 
     normalized = str(style_mode or "").strip().lower()
     if normalized == "entertaining":
-        headline = f"Final buzzer: {winner_label} takes the edge"
-        rationale_display = (
-            f"{headline}. Scoreboard says pro {round(_clamp_score(pro_score), 2)} vs "
-            f"con {round(_clamp_score(con_score), 2)}. Reviewed {phase_count_used}/{phase_count_expected} phase(s). "
-            f"Consistency check: first={winner_first}, second={winner_second}. "
-            f"Facts locked: {fact_sentence}."
+        debate_summary = (
+            f"Final buzzer: {winner_label} takes the edge. Scoreboard pro "
+            f"{round(_clamp_score(pro_score), 2)} vs con {round(_clamp_score(con_score), 2)}."
         )
     elif normalized == "mixed":
-        headline = f"Final call: {winner_label}"
-        rationale_display = (
-            f"{headline}. Pro {round(_clamp_score(pro_score), 2)} and con {round(_clamp_score(con_score), 2)} "
-            f"after {phase_count_used}/{phase_count_expected} phase(s). "
-            f"Consistency check first={winner_first}, second={winner_second}. "
-            f"Facts locked: {fact_sentence}."
+        debate_summary = (
+            f"Final call: {winner_label}. Pro {round(_clamp_score(pro_score), 2)} and "
+            f"con {round(_clamp_score(con_score), 2)} after {phase_count_used}/{phase_count_expected} phase(s)."
         )
     else:
         normalized = "rational"
-        headline = f"Final verdict: {winner_label}"
-        rationale_display = (
-            f"{headline}. Scores pro={round(_clamp_score(pro_score), 2)}, "
-            f"con={round(_clamp_score(con_score), 2)}. "
-            f"Used {phase_count_used}/{phase_count_expected} phase(s), missing={missing}. "
-            f"Consistency check first={winner_first}, second={winner_second}. "
-            f"Facts locked: {fact_sentence}."
+        debate_summary = (
+            f"Final verdict: {winner_label}. Scores pro={round(_clamp_score(pro_score), 2)}, "
+            f"con={round(_clamp_score(con_score), 2)}."
         )
+    side_analysis = {
+        "pro": (
+            f"Pro side average score {round(_clamp_score(pro_score), 2)}; "
+            f"phase coverage {phase_count_used}/{phase_count_expected}."
+        ),
+        "con": (
+            f"Con side average score {round(_clamp_score(con_score), 2)}; "
+            f"missing phases={missing}."
+        ),
+    }
+    verdict_reason = (
+        f"Consistency check first={winner_first}, second={winner_second}, "
+        f"rejudge={str(rejudge_triggered).lower()}. Facts locked: {fact_sentence}."
+    )
     return {
         "styleMode": normalized,
-        "headline": headline,
-        "rationaleDisplay": rationale_display,
+        "debateSummary": debate_summary,
+        "sideAnalysis": side_analysis,
+        "verdictReason": verdict_reason,
         "rationaleRaw": raw_rationale,
         "factLock": {
             "winner": winner,
@@ -445,9 +621,19 @@ def _validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str
     if not isinstance(payload.get("conScore"), (int, float)):
         missing.append("conScore")
 
-    final_rationale = str(payload.get("finalRationale") or "").strip()
-    if not final_rationale:
-        missing.append("finalRationale")
+    debate_summary = str(payload.get("debateSummary") or "").strip()
+    if not debate_summary:
+        missing.append("debateSummary")
+    verdict_reason = str(payload.get("verdictReason") or "").strip()
+    if not verdict_reason:
+        missing.append("verdictReason")
+    side_analysis = payload.get("sideAnalysis")
+    if not isinstance(side_analysis, dict):
+        missing.append("sideAnalysis")
+    else:
+        for side in ("pro", "con"):
+            if not str(side_analysis.get(side) or "").strip():
+                missing.append(f"sideAnalysis.{side}")
 
     dimension_scores = payload.get("dimensionScores")
     if not isinstance(dimension_scores, dict):
@@ -749,7 +935,11 @@ def _build_final_report_payload(
         rejudge_triggered=rejudge_triggered,
         raw_rationale=final_rationale_raw,
     )
-    final_rationale = str(display_payload.get("rationaleDisplay") or final_rationale_raw)
+    debate_summary = str(display_payload.get("debateSummary") or "").strip()
+    side_analysis = (
+        display_payload.get("sideAnalysis") if isinstance(display_payload.get("sideAnalysis"), dict) else {}
+    )
+    verdict_reason = str(display_payload.get("verdictReason") or final_rationale_raw)
 
     return {
         "sessionId": request.session_id,
@@ -757,7 +947,9 @@ def _build_final_report_payload(
         "proScore": round(_clamp_score(pro_score), 2),
         "conScore": round(_clamp_score(con_score), 2),
         "dimensionScores": dimension_scores,
-        "finalRationale": final_rationale,
+        "debateSummary": debate_summary,
+        "sideAnalysis": side_analysis,
+        "verdictReason": verdict_reason,
         "verdictEvidenceRefs": verdict_evidence_refs[:16],
         "phaseRollupSummary": phase_rollup_summary,
         "retrievalSnapshotRollup": retrieval_snapshot_rollup,
@@ -783,7 +975,8 @@ def _build_final_report_payload(
             "a9RationaleRaw": final_rationale_raw,
             "displayStyleMode": final_style_mode,
             "displayStyleModeSource": final_style_mode_source,
-            "displayHeadline": display_payload.get("headline"),
+            "displayDebateSummary": debate_summary,
+            "displayVerdictReason": verdict_reason,
             "factLock": display_payload.get("factLock"),
             "scoreEvidenceRollup": score_evidence_rollup,
         },
@@ -820,6 +1013,52 @@ async def _invoke_v3_callback_with_retry(
     ) from last_error
 
 
+def _save_dispatch_receipt(
+    *,
+    runtime: AppRuntime,
+    dispatch_type: str,
+    job_id: int,
+    scope_id: int,
+    session_id: int,
+    trace_id: str,
+    idempotency_key: str,
+    rubric_version: str,
+    judge_policy_version: str,
+    topic_domain: str,
+    retrieval_profile: str | None,
+    phase_no: int | None,
+    phase_start_no: int | None,
+    phase_end_no: int | None,
+    message_start_id: int | None,
+    message_end_id: int | None,
+    message_count: int | None,
+    status: str,
+    request_payload: dict[str, Any],
+    response_payload: dict[str, Any] | None,
+) -> None:
+    runtime.trace_store.save_dispatch_receipt(
+        dispatch_type=dispatch_type,
+        job_id=job_id,
+        scope_id=scope_id,
+        session_id=session_id,
+        trace_id=trace_id,
+        idempotency_key=idempotency_key,
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
+        topic_domain=topic_domain,
+        retrieval_profile=retrieval_profile,
+        phase_no=phase_no,
+        phase_start_no=phase_start_no,
+        phase_end_no=phase_end_no,
+        message_start_id=message_start_id,
+        message_end_id=message_end_id,
+        message_count=message_count,
+        status=status,
+        request=request_payload,
+        response=response_payload,
+    )
+
+
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
 
@@ -827,18 +1066,169 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     async def healthz() -> dict[str, bool]:
         return {"ok": True}
 
+    async def _handle_blindization_rejection(
+        *,
+        dispatch_type: str,
+        raw_payload: dict[str, Any],
+        sensitive_hits: list[str],
+    ) -> None:
+        meta = _extract_dispatch_meta_from_raw(raw_payload)
+        job_id = int(meta.get("jobId") or 0)
+        session_id = int(meta.get("sessionId") or 0)
+        trace_id = str(meta.get("traceId") or "")
+        if job_id <= 0 or session_id <= 0 or not trace_id:
+            raise HTTPException(status_code=422, detail="input_not_blinded")
+        scope_id = int(meta.get("scopeId") or 1)
+        dims = _extract_receipt_dims_from_raw(dispatch_type, raw_payload)
+        request_payload = dict(raw_payload)
+        runtime.trace_store.register_start(job_id=job_id, trace_id=trace_id, request=request_payload)
+        response = {
+            "accepted": False,
+            "dispatchType": dispatch_type,
+            "status": "callback_failed",
+            "jobId": job_id,
+            "scopeId": scope_id,
+            "sessionId": session_id,
+            "traceId": trace_id,
+        }
+        if dispatch_type == "phase":
+            response["phaseNo"] = dims.get("phaseNo")
+            response["messageCount"] = dims.get("messageCount")
+        else:
+            response["phaseStartNo"] = dims.get("phaseStartNo")
+            response["phaseEndNo"] = dims.get("phaseEndNo")
+
+        error_code = "input_not_blinded"
+        error_message = (
+            "sensitive fields detected in judge input: " + ",".join(sensitive_hits[:12])
+        )
+        failed_payload = _build_failed_callback_payload(
+            job_id=job_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            error_code=error_code,
+            error_message=error_message,
+        )
+        failed_callback_fn = _failed_callback_fn_for_dispatch(runtime, dispatch_type)
+        try:
+            failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
+                runtime=runtime,
+                callback_fn=failed_callback_fn,
+                job_id=job_id,
+                payload=failed_payload,
+            )
+        except Exception as failed_err:
+            receipt_response = {
+                **response,
+                "callbackStatus": "failed_callback_failed",
+                "callbackError": error_message,
+                "failedCallbackPayload": failed_payload,
+                "failedCallbackError": str(failed_err),
+            }
+            _save_dispatch_receipt(
+                runtime=runtime,
+                dispatch_type=dispatch_type,
+                job_id=job_id,
+                scope_id=scope_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                idempotency_key=str(meta.get("idempotencyKey") or ""),
+                rubric_version=str(meta.get("rubricVersion") or ""),
+                judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
+                topic_domain=str(meta.get("topicDomain") or ""),
+                retrieval_profile=(
+                    str(meta.get("retrievalProfile")) if meta.get("retrievalProfile") is not None else None
+                ),
+                phase_no=dims.get("phaseNo"),
+                phase_start_no=dims.get("phaseStartNo"),
+                phase_end_no=dims.get("phaseEndNo"),
+                message_start_id=dims.get("messageStartId"),
+                message_end_id=dims.get("messageEndId"),
+                message_count=dims.get("messageCount"),
+                status="callback_failed",
+                request_payload=request_payload,
+                response_payload=receipt_response,
+            )
+            runtime.trace_store.register_failure(
+                job_id=job_id,
+                response=receipt_response,
+                callback_status="failed_callback_failed",
+                callback_error=str(failed_err),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"{dispatch_type}_failed_callback_failed: {failed_err}",
+            ) from failed_err
+
+        receipt_response = {
+            **response,
+            "callbackStatus": "failed_reported",
+            "callbackError": error_message,
+            "failedCallbackPayload": failed_payload,
+            "failedCallbackAttempts": failed_attempts,
+            "failedCallbackRetries": failed_retries,
+        }
+        _save_dispatch_receipt(
+            runtime=runtime,
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+            scope_id=scope_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            idempotency_key=str(meta.get("idempotencyKey") or ""),
+            rubric_version=str(meta.get("rubricVersion") or ""),
+            judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
+            topic_domain=str(meta.get("topicDomain") or ""),
+            retrieval_profile=(
+                str(meta.get("retrievalProfile")) if meta.get("retrievalProfile") is not None else None
+            ),
+            phase_no=dims.get("phaseNo"),
+            phase_start_no=dims.get("phaseStartNo"),
+            phase_end_no=dims.get("phaseEndNo"),
+            message_start_id=dims.get("messageStartId"),
+            message_end_id=dims.get("messageEndId"),
+            message_count=dims.get("messageCount"),
+            status="callback_failed",
+            request_payload=request_payload,
+            response_payload=receipt_response,
+        )
+        runtime.trace_store.register_failure(
+            job_id=job_id,
+            response=receipt_response,
+            callback_status="failed_reported",
+            callback_error=error_message,
+        )
+        raise HTTPException(status_code=422, detail=error_code)
+
     @app.post("/internal/judge/v3/phase/dispatch")
     async def dispatch_judge_phase(
-        request: PhaseDispatchRequest,
+        request: Request,
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        _validate_phase_dispatch_request(request)
+        try:
+            raw_payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(raw_payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+        sensitive_hits = _find_sensitive_key_hits(raw_payload)
+        if sensitive_hits:
+            await _handle_blindization_rejection(
+                dispatch_type="phase",
+                raw_payload=raw_payload,
+                sensitive_hits=sensitive_hits,
+            )
+        try:
+            parsed = PhaseDispatchRequest.model_validate(raw_payload)
+        except ValidationError as err:
+            raise HTTPException(status_code=422, detail=err.errors()) from err
+        _validate_phase_dispatch_request(parsed)
 
         replayed = _resolve_idempotency_or_raise(
             runtime=runtime,
-            key=request.idempotency_key,
-            job_id=request.job_id,
+            key=parsed.idempotency_key,
+            job_id=parsed.job_id,
             conflict_detail="idempotency_conflict:phase_dispatch",
         )
         if replayed is not None:
@@ -848,108 +1238,199 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "accepted": True,
             "dispatchType": "phase",
             "status": "queued",
-            "jobId": request.job_id,
-            "scopeId": request.scope_id,
-            "sessionId": request.session_id,
-            "phaseNo": request.phase_no,
-            "messageCount": request.message_count,
-            "traceId": request.trace_id,
+            "jobId": parsed.job_id,
+            "scopeId": parsed.scope_id,
+            "sessionId": parsed.session_id,
+            "phaseNo": parsed.phase_no,
+            "messageCount": parsed.message_count,
+            "traceId": parsed.trace_id,
         }
-        request_payload = request.model_dump(mode="json")
-        runtime.trace_store.save_dispatch_receipt(
+        request_payload = parsed.model_dump(mode="json")
+        runtime.trace_store.register_start(
+            job_id=parsed.job_id,
+            trace_id=parsed.trace_id,
+            request=request_payload,
+        )
+        _save_dispatch_receipt(
+            runtime=runtime,
             dispatch_type="phase",
-            job_id=request.job_id,
-            scope_id=request.scope_id,
-            session_id=request.session_id,
-            trace_id=request.trace_id,
-            idempotency_key=request.idempotency_key,
-            rubric_version=request.rubric_version,
-            judge_policy_version=request.judge_policy_version,
-            topic_domain=request.topic_domain,
-            retrieval_profile=request.retrieval_profile,
-            phase_no=request.phase_no,
+            job_id=parsed.job_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            trace_id=parsed.trace_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
+            retrieval_profile=parsed.retrieval_profile,
+            phase_no=parsed.phase_no,
             phase_start_no=None,
             phase_end_no=None,
-            message_start_id=request.message_start_id,
-            message_end_id=request.message_end_id,
-            message_count=request.message_count,
+            message_start_id=parsed.message_start_id,
+            message_end_id=parsed.message_end_id,
+            message_count=parsed.message_count,
             status="queued",
-            request=request_payload,
-            response=response,
+            request_payload=request_payload,
+            response_payload=response,
         )
 
         phase_report_payload = await build_phase_report_payload_v3(
-            request=request,
+            request=parsed,
             settings=runtime.settings,
         )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
                 runtime=runtime,
-                callback_fn=runtime.callback_phase_report_fn,
-                job_id=request.job_id,
+                callback_fn=_report_callback_fn_for_dispatch(runtime, "phase"),
+                job_id=parsed.job_id,
                 payload=phase_report_payload,
             )
         except Exception as err:
-            runtime.trace_store.save_dispatch_receipt(
+            error_code = "phase_callback_retry_exhausted"
+            error_message = str(err)
+            failed_payload = _build_failed_callback_payload(
+                job_id=parsed.job_id,
                 dispatch_type="phase",
-                job_id=request.job_id,
-                scope_id=request.scope_id,
-                session_id=request.session_id,
-                trace_id=request.trace_id,
-                idempotency_key=request.idempotency_key,
-                rubric_version=request.rubric_version,
-                judge_policy_version=request.judge_policy_version,
-                topic_domain=request.topic_domain,
-                retrieval_profile=request.retrieval_profile,
-                phase_no=request.phase_no,
-                phase_start_no=None,
-                phase_end_no=None,
-                message_start_id=request.message_start_id,
-                message_end_id=request.message_end_id,
-                message_count=request.message_count,
-                status="callback_failed",
-                request=request_payload,
-                response={
+                trace_id=parsed.trace_id,
+                error_code=error_code,
+                error_message=error_message,
+                degradation_level=int(phase_report_payload.get("degradationLevel") or 0),
+            )
+            try:
+                failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
+                    runtime=runtime,
+                    callback_fn=_failed_callback_fn_for_dispatch(runtime, "phase"),
+                    job_id=parsed.job_id,
+                    payload=failed_payload,
+                )
+            except Exception as failed_err:
+                receipt_response = {
                     **response,
                     "status": "callback_failed",
-                    "callbackStatus": "failed",
-                    "callbackError": str(err),
+                    "callbackStatus": "failed_callback_failed",
+                    "callbackError": error_message,
                     "reportPayload": phase_report_payload,
-                },
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackError": str(failed_err),
+                }
+                _save_dispatch_receipt(
+                    runtime=runtime,
+                    dispatch_type="phase",
+                    job_id=parsed.job_id,
+                    scope_id=parsed.scope_id,
+                    session_id=parsed.session_id,
+                    trace_id=parsed.trace_id,
+                    idempotency_key=parsed.idempotency_key,
+                    rubric_version=parsed.rubric_version,
+                    judge_policy_version=parsed.judge_policy_version,
+                    topic_domain=parsed.topic_domain,
+                    retrieval_profile=parsed.retrieval_profile,
+                    phase_no=parsed.phase_no,
+                    phase_start_no=None,
+                    phase_end_no=None,
+                    message_start_id=parsed.message_start_id,
+                    message_end_id=parsed.message_end_id,
+                    message_count=parsed.message_count,
+                    status="callback_failed",
+                    request_payload=request_payload,
+                    response_payload=receipt_response,
+                )
+                runtime.trace_store.register_failure(
+                    job_id=parsed.job_id,
+                    response=receipt_response,
+                    callback_status="failed_callback_failed",
+                    callback_error=str(failed_err),
+                )
+                runtime.trace_store.clear_idempotency(parsed.idempotency_key)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"phase_failed_callback_failed: {failed_err}",
+                ) from failed_err
+
+            receipt_response = {
+                **response,
+                "status": "callback_failed",
+                "callbackStatus": "failed_reported",
+                "callbackError": error_message,
+                "reportPayload": phase_report_payload,
+                "failedCallbackPayload": failed_payload,
+                "failedCallbackAttempts": failed_attempts,
+                "failedCallbackRetries": failed_retries,
+            }
+            _save_dispatch_receipt(
+                runtime=runtime,
+                dispatch_type="phase",
+                job_id=parsed.job_id,
+                scope_id=parsed.scope_id,
+                session_id=parsed.session_id,
+                trace_id=parsed.trace_id,
+                idempotency_key=parsed.idempotency_key,
+                rubric_version=parsed.rubric_version,
+                judge_policy_version=parsed.judge_policy_version,
+                topic_domain=parsed.topic_domain,
+                retrieval_profile=parsed.retrieval_profile,
+                phase_no=parsed.phase_no,
+                phase_start_no=None,
+                phase_end_no=None,
+                message_start_id=parsed.message_start_id,
+                message_end_id=parsed.message_end_id,
+                message_count=parsed.message_count,
+                status="callback_failed",
+                request_payload=request_payload,
+                response_payload=receipt_response,
             )
-            runtime.trace_store.clear_idempotency(request.idempotency_key)
+            runtime.trace_store.register_failure(
+                job_id=parsed.job_id,
+                response=receipt_response,
+                callback_status="failed_reported",
+                callback_error=error_message,
+            )
+            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
             raise HTTPException(status_code=502, detail=f"phase_callback_failed: {err}") from err
 
-        runtime.trace_store.save_dispatch_receipt(
+        reported_response = {
+            **response,
+            "callbackStatus": "reported",
+            "callbackAttempts": callback_attempts,
+            "callbackRetries": callback_retries,
+            "reportPayload": phase_report_payload,
+        }
+        _save_dispatch_receipt(
+            runtime=runtime,
             dispatch_type="phase",
-            job_id=request.job_id,
-            scope_id=request.scope_id,
-            session_id=request.session_id,
-            trace_id=request.trace_id,
-            idempotency_key=request.idempotency_key,
-            rubric_version=request.rubric_version,
-            judge_policy_version=request.judge_policy_version,
-            topic_domain=request.topic_domain,
-            retrieval_profile=request.retrieval_profile,
-            phase_no=request.phase_no,
+            job_id=parsed.job_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            trace_id=parsed.trace_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
+            retrieval_profile=parsed.retrieval_profile,
+            phase_no=parsed.phase_no,
             phase_start_no=None,
             phase_end_no=None,
-            message_start_id=request.message_start_id,
-            message_end_id=request.message_end_id,
-            message_count=request.message_count,
+            message_start_id=parsed.message_start_id,
+            message_end_id=parsed.message_end_id,
+            message_count=parsed.message_count,
             status="reported",
-            request=request_payload,
-            response={
-                **response,
-                "callbackStatus": "reported",
-                "callbackAttempts": callback_attempts,
-                "callbackRetries": callback_retries,
-                "reportPayload": phase_report_payload,
-            },
+            request_payload=request_payload,
+            response_payload=reported_response,
+        )
+        runtime.trace_store.register_success(
+            job_id=parsed.job_id,
+            response=reported_response,
+            callback_status="reported",
+            report_summary=_build_trace_report_summary(
+                dispatch_type="phase",
+                payload=phase_report_payload,
+                callback_status="reported",
+                callback_error=None,
+            ),
         )
         runtime.trace_store.set_idempotency_success(
-            key=request.idempotency_key,
-            job_id=request.job_id,
+            key=parsed.idempotency_key,
+            job_id=parsed.job_id,
             response=response,
             ttl_secs=runtime.settings.idempotency_ttl_secs,
         )
@@ -957,16 +1438,33 @@ def create_app(runtime: AppRuntime) -> FastAPI:
 
     @app.post("/internal/judge/v3/final/dispatch")
     async def dispatch_judge_final(
-        request: FinalDispatchRequest,
+        request: Request,
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        _validate_final_dispatch_request(request)
+        try:
+            raw_payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(raw_payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+        sensitive_hits = _find_sensitive_key_hits(raw_payload)
+        if sensitive_hits:
+            await _handle_blindization_rejection(
+                dispatch_type="final",
+                raw_payload=raw_payload,
+                sensitive_hits=sensitive_hits,
+            )
+        try:
+            parsed = FinalDispatchRequest.model_validate(raw_payload)
+        except ValidationError as err:
+            raise HTTPException(status_code=422, detail=err.errors()) from err
+        _validate_final_dispatch_request(parsed)
 
         replayed = _resolve_idempotency_or_raise(
             runtime=runtime,
-            key=request.idempotency_key,
-            job_id=request.job_id,
+            key=parsed.idempotency_key,
+            job_id=parsed.job_id,
             conflict_detail="idempotency_conflict:final_dispatch",
         )
         if replayed is not None:
@@ -976,39 +1474,45 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "accepted": True,
             "dispatchType": "final",
             "status": "queued",
-            "jobId": request.job_id,
-            "scopeId": request.scope_id,
-            "sessionId": request.session_id,
-            "phaseStartNo": request.phase_start_no,
-            "phaseEndNo": request.phase_end_no,
-            "traceId": request.trace_id,
+            "jobId": parsed.job_id,
+            "scopeId": parsed.scope_id,
+            "sessionId": parsed.session_id,
+            "phaseStartNo": parsed.phase_start_no,
+            "phaseEndNo": parsed.phase_end_no,
+            "traceId": parsed.trace_id,
         }
-        request_payload = request.model_dump(mode="json")
-        runtime.trace_store.save_dispatch_receipt(
+        request_payload = parsed.model_dump(mode="json")
+        runtime.trace_store.register_start(
+            job_id=parsed.job_id,
+            trace_id=parsed.trace_id,
+            request=request_payload,
+        )
+        _save_dispatch_receipt(
+            runtime=runtime,
             dispatch_type="final",
-            job_id=request.job_id,
-            scope_id=request.scope_id,
-            session_id=request.session_id,
-            trace_id=request.trace_id,
-            idempotency_key=request.idempotency_key,
-            rubric_version=request.rubric_version,
-            judge_policy_version=request.judge_policy_version,
-            topic_domain=request.topic_domain,
+            job_id=parsed.job_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            trace_id=parsed.trace_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
             retrieval_profile=None,
             phase_no=None,
-            phase_start_no=request.phase_start_no,
-            phase_end_no=request.phase_end_no,
+            phase_start_no=parsed.phase_start_no,
+            phase_end_no=parsed.phase_end_no,
             message_start_id=None,
             message_end_id=None,
             message_count=None,
             status="queued",
-            request=request_payload,
-            response=response,
+            request_payload=request_payload,
+            response_payload=response,
         )
 
         final_report_payload = _build_final_report_payload(
             runtime=runtime,
-            request=request,
+            request=parsed,
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -1016,125 +1520,283 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 contract_missing_fields[:12]
             )
             alert = runtime.trace_store.upsert_audit_alert(
-                job_id=request.job_id,
-                scope_id=request.scope_id,
-                trace_id=request.trace_id,
+                job_id=parsed.job_id,
+                scope_id=parsed.scope_id,
+                trace_id=parsed.trace_id,
                 alert_type="final_contract_violation",
                 severity="critical",
                 title="AI Judge Final Contract Violation",
                 message=error_text,
                 details={
                     "dispatchType": "final",
-                    "sessionId": request.session_id,
+                    "sessionId": parsed.session_id,
                     "phaseRange": {
-                        "startNo": request.phase_start_no,
-                        "endNo": request.phase_end_no,
+                        "startNo": parsed.phase_start_no,
+                        "endNo": parsed.phase_end_no,
                     },
                     "missingFields": contract_missing_fields,
-                    "errorCode": "phase_artifact_incomplete",
+                    "errorCode": "final_contract_blocked",
                 },
             )
-            runtime.trace_store.save_dispatch_receipt(
+            failed_payload = _build_failed_callback_payload(
+                job_id=parsed.job_id,
                 dispatch_type="final",
-                job_id=request.job_id,
-                scope_id=request.scope_id,
-                session_id=request.session_id,
-                trace_id=request.trace_id,
-                idempotency_key=request.idempotency_key,
-                rubric_version=request.rubric_version,
-                judge_policy_version=request.judge_policy_version,
-                topic_domain=request.topic_domain,
+                trace_id=parsed.trace_id,
+                error_code="final_contract_blocked",
+                error_message=error_text,
+                audit_alert_ids=[alert.alert_id],
+                degradation_level=int(final_report_payload.get("degradationLevel") or 0),
+            )
+            try:
+                failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
+                    runtime=runtime,
+                    callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
+                    job_id=parsed.job_id,
+                    payload=failed_payload,
+                )
+            except Exception as failed_err:
+                receipt_response = {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "failed_callback_failed",
+                    "callbackError": error_text,
+                    "auditAlertIds": [alert.alert_id],
+                    "reportPayload": final_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackError": str(failed_err),
+                }
+                _save_dispatch_receipt(
+                    runtime=runtime,
+                    dispatch_type="final",
+                    job_id=parsed.job_id,
+                    scope_id=parsed.scope_id,
+                    session_id=parsed.session_id,
+                    trace_id=parsed.trace_id,
+                    idempotency_key=parsed.idempotency_key,
+                    rubric_version=parsed.rubric_version,
+                    judge_policy_version=parsed.judge_policy_version,
+                    topic_domain=parsed.topic_domain,
+                    retrieval_profile=None,
+                    phase_no=None,
+                    phase_start_no=parsed.phase_start_no,
+                    phase_end_no=parsed.phase_end_no,
+                    message_start_id=None,
+                    message_end_id=None,
+                    message_count=None,
+                    status="callback_failed",
+                    request_payload=request_payload,
+                    response_payload=receipt_response,
+                )
+                runtime.trace_store.register_failure(
+                    job_id=parsed.job_id,
+                    response=receipt_response,
+                    callback_status="failed_callback_failed",
+                    callback_error=str(failed_err),
+                )
+                runtime.trace_store.clear_idempotency(parsed.idempotency_key)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"final_failed_callback_failed: {failed_err}",
+                ) from failed_err
+
+            receipt_response = {
+                **response,
+                "status": "callback_failed",
+                "callbackStatus": "blocked_failed_reported",
+                "callbackError": error_text,
+                "auditAlertIds": [alert.alert_id],
+                "reportPayload": final_report_payload,
+                "failedCallbackPayload": failed_payload,
+                "failedCallbackAttempts": failed_attempts,
+                "failedCallbackRetries": failed_retries,
+            }
+            _save_dispatch_receipt(
+                runtime=runtime,
+                dispatch_type="final",
+                job_id=parsed.job_id,
+                scope_id=parsed.scope_id,
+                session_id=parsed.session_id,
+                trace_id=parsed.trace_id,
+                idempotency_key=parsed.idempotency_key,
+                rubric_version=parsed.rubric_version,
+                judge_policy_version=parsed.judge_policy_version,
+                topic_domain=parsed.topic_domain,
                 retrieval_profile=None,
                 phase_no=None,
-                phase_start_no=request.phase_start_no,
-                phase_end_no=request.phase_end_no,
+                phase_start_no=parsed.phase_start_no,
+                phase_end_no=parsed.phase_end_no,
                 message_start_id=None,
                 message_end_id=None,
                 message_count=None,
                 status="callback_failed",
-                request=request_payload,
-                response={
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "blocked",
-                    "callbackError": error_text,
-                    "auditAlertIds": [alert.alert_id],
-                    "reportPayload": final_report_payload,
-                },
+                request_payload=request_payload,
+                response_payload=receipt_response,
             )
-            runtime.trace_store.clear_idempotency(request.idempotency_key)
+            runtime.trace_store.register_failure(
+                job_id=parsed.job_id,
+                response=receipt_response,
+                callback_status="blocked_failed_reported",
+                callback_error=error_text,
+            )
+            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
             raise HTTPException(
                 status_code=502,
                 detail="final_contract_blocked: missing_critical_fields",
             )
+
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
                 runtime=runtime,
-                callback_fn=runtime.callback_final_report_fn,
-                job_id=request.job_id,
+                callback_fn=_report_callback_fn_for_dispatch(runtime, "final"),
+                job_id=parsed.job_id,
                 payload=final_report_payload,
             )
         except Exception as err:
-            runtime.trace_store.save_dispatch_receipt(
+            error_code = "final_callback_retry_exhausted"
+            error_message = str(err)
+            failed_payload = _build_failed_callback_payload(
+                job_id=parsed.job_id,
                 dispatch_type="final",
-                job_id=request.job_id,
-                scope_id=request.scope_id,
-                session_id=request.session_id,
-                trace_id=request.trace_id,
-                idempotency_key=request.idempotency_key,
-                rubric_version=request.rubric_version,
-                judge_policy_version=request.judge_policy_version,
-                topic_domain=request.topic_domain,
+                trace_id=parsed.trace_id,
+                error_code=error_code,
+                error_message=error_message,
+                degradation_level=int(final_report_payload.get("degradationLevel") or 0),
+            )
+            try:
+                failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
+                    runtime=runtime,
+                    callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
+                    job_id=parsed.job_id,
+                    payload=failed_payload,
+                )
+            except Exception as failed_err:
+                receipt_response = {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "failed_callback_failed",
+                    "callbackError": error_message,
+                    "reportPayload": final_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackError": str(failed_err),
+                }
+                _save_dispatch_receipt(
+                    runtime=runtime,
+                    dispatch_type="final",
+                    job_id=parsed.job_id,
+                    scope_id=parsed.scope_id,
+                    session_id=parsed.session_id,
+                    trace_id=parsed.trace_id,
+                    idempotency_key=parsed.idempotency_key,
+                    rubric_version=parsed.rubric_version,
+                    judge_policy_version=parsed.judge_policy_version,
+                    topic_domain=parsed.topic_domain,
+                    retrieval_profile=None,
+                    phase_no=None,
+                    phase_start_no=parsed.phase_start_no,
+                    phase_end_no=parsed.phase_end_no,
+                    message_start_id=None,
+                    message_end_id=None,
+                    message_count=None,
+                    status="callback_failed",
+                    request_payload=request_payload,
+                    response_payload=receipt_response,
+                )
+                runtime.trace_store.register_failure(
+                    job_id=parsed.job_id,
+                    response=receipt_response,
+                    callback_status="failed_callback_failed",
+                    callback_error=str(failed_err),
+                )
+                runtime.trace_store.clear_idempotency(parsed.idempotency_key)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"final_failed_callback_failed: {failed_err}",
+                ) from failed_err
+
+            receipt_response = {
+                **response,
+                "status": "callback_failed",
+                "callbackStatus": "failed_reported",
+                "callbackError": error_message,
+                "reportPayload": final_report_payload,
+                "failedCallbackPayload": failed_payload,
+                "failedCallbackAttempts": failed_attempts,
+                "failedCallbackRetries": failed_retries,
+            }
+            _save_dispatch_receipt(
+                runtime=runtime,
+                dispatch_type="final",
+                job_id=parsed.job_id,
+                scope_id=parsed.scope_id,
+                session_id=parsed.session_id,
+                trace_id=parsed.trace_id,
+                idempotency_key=parsed.idempotency_key,
+                rubric_version=parsed.rubric_version,
+                judge_policy_version=parsed.judge_policy_version,
+                topic_domain=parsed.topic_domain,
                 retrieval_profile=None,
                 phase_no=None,
-                phase_start_no=request.phase_start_no,
-                phase_end_no=request.phase_end_no,
+                phase_start_no=parsed.phase_start_no,
+                phase_end_no=parsed.phase_end_no,
                 message_start_id=None,
                 message_end_id=None,
                 message_count=None,
                 status="callback_failed",
-                request=request_payload,
-                response={
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed",
-                    "callbackError": str(err),
-                    "reportPayload": final_report_payload,
-                },
+                request_payload=request_payload,
+                response_payload=receipt_response,
             )
-            runtime.trace_store.clear_idempotency(request.idempotency_key)
+            runtime.trace_store.register_failure(
+                job_id=parsed.job_id,
+                response=receipt_response,
+                callback_status="failed_reported",
+                callback_error=error_message,
+            )
+            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
             raise HTTPException(status_code=502, detail=f"final_callback_failed: {err}") from err
 
-        runtime.trace_store.save_dispatch_receipt(
+        reported_response = {
+            **response,
+            "callbackStatus": "reported",
+            "callbackAttempts": callback_attempts,
+            "callbackRetries": callback_retries,
+            "reportPayload": final_report_payload,
+        }
+        _save_dispatch_receipt(
+            runtime=runtime,
             dispatch_type="final",
-            job_id=request.job_id,
-            scope_id=request.scope_id,
-            session_id=request.session_id,
-            trace_id=request.trace_id,
-            idempotency_key=request.idempotency_key,
-            rubric_version=request.rubric_version,
-            judge_policy_version=request.judge_policy_version,
-            topic_domain=request.topic_domain,
+            job_id=parsed.job_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            trace_id=parsed.trace_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
             retrieval_profile=None,
             phase_no=None,
-            phase_start_no=request.phase_start_no,
-            phase_end_no=request.phase_end_no,
+            phase_start_no=parsed.phase_start_no,
+            phase_end_no=parsed.phase_end_no,
             message_start_id=None,
             message_end_id=None,
             message_count=None,
             status="reported",
-            request=request_payload,
-            response={
-                **response,
-                "callbackStatus": "reported",
-                "callbackAttempts": callback_attempts,
-                "callbackRetries": callback_retries,
-                "reportPayload": final_report_payload,
-            },
+            request_payload=request_payload,
+            response_payload=reported_response,
+        )
+        runtime.trace_store.register_success(
+            job_id=parsed.job_id,
+            response=reported_response,
+            callback_status="reported",
+            report_summary=_build_trace_report_summary(
+                dispatch_type="final",
+                payload=final_report_payload,
+                callback_status="reported",
+                callback_error=None,
+            ),
         )
         runtime.trace_store.set_idempotency_success(
-            key=request.idempotency_key,
-            job_id=request.job_id,
+            key=parsed.idempotency_key,
+            job_id=parsed.job_id,
             response=response,
             ttl_secs=runtime.settings.idempotency_ttl_secs,
         )
@@ -1197,6 +1859,110 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 }
                 for item in record.replays
             ],
+        }
+
+    @app.post("/internal/judge/jobs/{job_id}/replay")
+    async def replay_judge_job(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        dispatch_type_normalized = str(dispatch_type or "auto").strip().lower()
+        if dispatch_type_normalized not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+
+        chosen_dispatch_type = dispatch_type_normalized
+        chosen_receipt = None
+        if dispatch_type_normalized == "auto":
+            final_receipt = runtime.trace_store.get_dispatch_receipt(
+                dispatch_type="final",
+                job_id=job_id,
+            )
+            phase_receipt = runtime.trace_store.get_dispatch_receipt(
+                dispatch_type="phase",
+                job_id=job_id,
+            )
+            chosen_receipt = final_receipt or phase_receipt
+            if chosen_receipt is None:
+                raise HTTPException(status_code=404, detail="replay_receipt_not_found")
+            chosen_dispatch_type = "final" if final_receipt is not None else "phase"
+        else:
+            chosen_receipt = runtime.trace_store.get_dispatch_receipt(
+                dispatch_type=dispatch_type_normalized,
+                job_id=job_id,
+            )
+            if chosen_receipt is None:
+                raise HTTPException(status_code=404, detail="replay_receipt_not_found")
+
+        request_snapshot = (
+            chosen_receipt.request if isinstance(chosen_receipt.request, dict) else {}
+        )
+        trace_id = str(chosen_receipt.trace_id or request_snapshot.get("traceId") or "").strip()
+        if not trace_id:
+            raise HTTPException(status_code=409, detail="replay_missing_trace_id")
+
+        report_payload: dict[str, Any]
+        if chosen_dispatch_type == "final":
+            try:
+                final_request = FinalDispatchRequest.model_validate(request_snapshot)
+            except ValidationError as err:
+                raise HTTPException(status_code=409, detail=f"replay_invalid_final_request: {err}") from err
+            _validate_final_dispatch_request(final_request)
+            report_payload = _build_final_report_payload(
+                runtime=runtime,
+                request=final_request,
+            )
+        else:
+            try:
+                phase_request = PhaseDispatchRequest.model_validate(request_snapshot)
+            except ValidationError as err:
+                raise HTTPException(status_code=409, detail=f"replay_invalid_phase_request: {err}") from err
+            _validate_phase_dispatch_request(phase_request)
+            report_payload = await build_phase_report_payload_v3(
+                request=phase_request,
+                settings=runtime.settings,
+            )
+
+        winner = str(report_payload.get("winner") or "").strip().lower()
+        if winner not in {"pro", "con", "draw"}:
+            agent3 = (
+                report_payload.get("agent3WeightedScore")
+                if isinstance(report_payload.get("agent3WeightedScore"), dict)
+                else {}
+            )
+            winner = _resolve_winner(
+                _safe_float(agent3.get("pro"), default=50.0),
+                _safe_float(agent3.get("con"), default=50.0),
+                margin=0.8,
+            )
+        needs_draw_vote = bool(report_payload.get("needsDrawVote")) if "needsDrawVote" in report_payload else winner == "draw"
+
+        if runtime.trace_store.get_trace(job_id) is None:
+            runtime.trace_store.register_start(
+                job_id=job_id,
+                trace_id=trace_id,
+                request=request_snapshot,
+            )
+        runtime.trace_store.mark_replay(
+            job_id=job_id,
+            winner=winner,
+            needs_draw_vote=needs_draw_vote,
+            provider=runtime.settings.provider,
+        )
+        trace = runtime.trace_store.get_trace(job_id)
+        replayed_at = datetime.now(timezone.utc).isoformat()
+        if trace and trace.replays:
+            replayed_at = trace.replays[-1].replayed_at.isoformat()
+
+        return {
+            "jobId": job_id,
+            "dispatchType": chosen_dispatch_type,
+            "replayedAt": replayed_at,
+            "reportPayload": report_payload,
+            "winner": winner,
+            "needsDrawVote": needs_draw_vote,
+            "traceId": trace_id,
         }
 
     @app.get("/internal/judge/jobs/{job_id}/replay/report")
