@@ -6,7 +6,7 @@ This file is the agent-facing table of contents for EchoIsle.
 
 Use it to find:
 
-1. the default module-level harness entry
+1. the task flow entry for the current request
 2. which rules are currently enforced
 3. where the detailed harness docs and project map live
 
@@ -22,12 +22,15 @@ Current status:
 
 ---
 
-## Harness Entry
+## Task Flow Entry
 
-1. For module-level development, refactor, or optimization turns, use `module-turn-harness` as the default entry.
-2. Do not manually infer the full skill chain from `AGENTS.md`; the active hook chain is owned by `/Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh`.
-3. Detailed hook rules live in `/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md` and `/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md`.
-4. Repository skills live under `/Users/panyihang/Documents/EchoIsle/skills/`; load an individual `SKILL.md` only when explicitly invoked by the user or by the harness workflow.
+1. If the task is `dev`, read `/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/dev.md`.
+2. If the task is `refactor` or optimization, read `/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/refactor.md`.
+3. If the task is `non-dev`, read `/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/non-dev.md`.
+4. If the task is stage closure, read `/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/stage-closure.md`.
+5. If no task type clearly matches, use `AGENTS.md`, the user's request, and relevant skill descriptions to decide whether a skill is needed.
+6. Do not manually infer a full pre/post skill chain from `AGENTS.md`; use the matching task flow and lifecycle stage.
+7. `module-turn-harness` is an optional wrapper tool, not the default development preflight.
 
 ---
 
@@ -50,10 +53,10 @@ Detailed explanations now live under `docs/harness/`.
 
 ### Current hook rule
 
-1. The default entry for module-level turns is now `module-turn-harness`.
-2. The underlying hook matrix is still defined in `docs/harness/10-task-classification.md` and executed according to `docs/harness/20-orchestration.md`.
-3. `module-turn-harness` now supports `--knowledge-pack auto|skip|force`; explanation/interview no longer block ordinary small turns by default.
-4. `module-turn-harness` is the current wrapper over existing skills/scripts; later phases may expand it further, but the current implementation is already active.
+1. The default entry for module-level turns is now the matching task flow under `docs/harness/task-flows/`.
+2. Pre hooks and post hooks must respect lifecycle timing: run pre hooks before coding, and run post hooks only after code or document changes are complete.
+3. `module-turn-harness` remains available as a wrapper over existing skills/scripts, but use it only when the user explicitly requests harness dry-run, a full hook-chain preview, a full wrapper run, or harness debugging.
+4. explanation/interview no longer block ordinary small turns by default; follow the matching task flow and explicit user intent.
 
 ### Pre-release compatibility rule
 
@@ -102,12 +105,13 @@ Detailed explanations now live under `docs/harness/`.
 Use these files as the detailed source of truth:
 
 1. [docs/harness/00-overview.md](/Users/panyihang/Documents/EchoIsle/docs/harness/00-overview.md): what the harness docs cover, current phase status, and where to look first
-2. [docs/harness/10-task-classification.md](/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md): task types, module-level definition, and the current hook matrix
-3. [docs/harness/20-orchestration.md](/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md): how module turns are currently orchestrated through `module-turn-harness`
-4. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
-5. [docs/harness/30-runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md): current verification model and the gap before unified runtime verify lands
-6. [docs/harness/40-doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
-7. [docs/harness/50-quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md): current quality gates, guards, and CI responsibilities
+2. [docs/harness/10-task-classification.md](/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md): task types, module-level definition, and task flow routing
+3. [docs/harness/task-flows/README.md](/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/README.md): task-specific lifecycle flows for dev/refactor/non-dev/stage-closure
+4. [docs/harness/20-orchestration.md](/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md): optional `module-turn-harness` wrapper semantics
+5. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
+6. [docs/harness/30-runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md): current verification model and the gap before unified runtime verify lands
+7. [docs/harness/40-doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
+8. [docs/harness/50-quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md): current quality gates, guards, and CI responsibilities
 
 Related planning document:
 
@@ -129,4 +133,5 @@ Use this file when you need a lightweight codebase map before opening implementa
 2. Prefer concise summaries over loading long documents wholesale.
 3. Treat `docs/harness/` as the detailed rules layer, and `AGENTS.md` as the navigation layer.
 4. Do not assume future-phase behavior is already active unless a harness doc explicitly marks it as current.
-5. 阶段收口时，`completed.md` 只记录主体完成快照，`todo.md` 只记录延后技术债；不要把活动计划正文原样复制进长期文档。
+5. Do not use `module-turn-harness` as the default pre-coding action; use it only when a task flow or the user explicitly asks for the wrapper.
+6. 阶段收口时，`completed.md` 只记录主体完成快照，`todo.md` 只记录延后技术债；不要把活动计划正文原样复制进长期文档。

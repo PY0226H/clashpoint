@@ -1,6 +1,6 @@
 # EchoIsle Harness Engineering 落地方案与开发计划 v2
 
-更新时间：2026-04-06
+更新时间：2026-04-13
 状态：执行版（v2）
 适用范围：EchoIsle 仓库内 Codex/agent 驱动的模块级开发、验证、计划回写、CI 门禁与文档治理
 参考文章：[Harness engineering: leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/)
@@ -15,6 +15,13 @@
 2. 第二部分给出完整开发计划，包含阶段拆分、任务编号、输入输出、验收标准、依赖关系与切换策略。
 
 本文档是本轮 EchoIsle Harness Engineering 升级的主计划文档。后续执行阶段，活动计划默认应通过 `.codex/plan-slots/default.txt` 指向 `docs/dev_plan/当前开发计划.md`，并在并行计划场景通过命名 slot 管理。
+
+2026-04-13 当前口径修正：
+
+1. `module-turn-harness` 不再作为普通 dev/refactor 的默认开工入口。
+2. 日常默认入口调整为 `docs/harness/task-flows/`，按任务类型和生命周期触发具体 skill。
+3. `module-turn-harness` 保留为可选包装工具，仅在用户明确要求 harness dry-run、完整 hook 链路预览、完整 wrapper run 或调试 harness 时使用。
+4. 本文档早期章节中“module-turn-harness 默认入口 / 唯一默认入口”的设计描述视为历史方案，不再代表当前执行口径。
 
 ---
 
@@ -98,7 +105,7 @@ EchoIsle 当前已经具备明显的 harness 雏形：
 同时满足以下条件时，视为升级成功：
 
 1. `AGENTS.md` 收敛为 TOC，不再承载长篇细则。
-2. 模块级开发默认由 `module-turn-harness` 单一入口编排。
+2. 模块级开发具备稳定流程入口；历史设计曾计划由 `module-turn-harness` 单一入口编排，但 2026-04-13 已修正为默认读取 `docs/harness/task-flows/`，`module-turn-harness` 仅作为可选包装工具。
 3. 运行态验证进入主链路，agent 默认能拿到旅程验证、日志、指标、trace 摘要。
 4. `docs/dev_plan` 只存计划，不再默认接收执行报告。
 5. `docs/explanation` / `docs/interview` 变成“可索引、可补写、可清理”的沉淀层。
@@ -144,7 +151,7 @@ EchoIsle 当前已经具备明显的 harness 雏形：
 4. `docs/harness/` 规则主目录
 5. `.codex/plan-slots/default.txt`
 
-模块级开发以 `module-turn-harness` 为唯一默认入口。其它 pre/post skills 保留，但退化为 leaf skills，不再要求人工记忆编排顺序。
+历史设计：模块级开发以 `module-turn-harness` 为唯一默认入口。当前已修正为：模块级开发默认先读 `docs/harness/task-flows/`，其它 pre/post skills 保留为 leaf skills，并按开发前/开发后生命周期触发。
 
 ## 4.2 当前回合的标准交付链
 
@@ -1202,7 +1209,8 @@ bash scripts/harness/journey_verify.sh \
 2. 后续执行阶段，默认活动计划入口应由 `.codex/plan-slots/default.txt` 指向 `docs/dev_plan/当前开发计划.md`；并行计划通过命名 slot 管理。
 3. 任何新增模块级 skill，若会改变交付链，必须先更新：
    - `docs/harness/20-orchestration.md`
-   - `module-turn-harness`
+   - `docs/harness/task-flows/`
+   - 必要时更新 `module-turn-harness`
    - 本计划文档中的相关阶段说明
 4. 任何新增 release/gate/evidence 脚本，默认不得把报告写入 `docs/dev_plan/`。
 5. explanation/interview 文档默认不是主阻塞链，但仍是高价值沉淀层，不能直接废弃。
@@ -1231,7 +1239,7 @@ bash scripts/harness/journey_verify.sh \
 
 | 模块 | 优先级 | 状态 | 说明 |
 |---|---|---|---|
-| module-turn-harness-bootstrap | P1 | 进行中（P2-1/P2-2 已完成） | 已完成 P2-1/P2-2：新增 module-turn-harness skill 与脚本，AGENTS 与 docs/harness 已切到统一入口说明。 |
+| module-turn-harness-bootstrap | P1 | 进行中（P2-1/P2-2 已完成，2026-04-13 已降级为可选包装工具） | 已完成 P2-1/P2-2：新增 module-turn-harness skill 与脚本；后续根据使用反馈，默认入口已从强编排 wrapper 调整为 task flow 文档，避免开发前误触发 post hooks。 |
 | plan-slot-p1-3 | P1 | 进行中（P1-3 已完成） | 已完成 P1-3：default 活动计划入口、命名 slot 解析、单计划/并行计划/收口整合规则已落地。 |
 | report-output-p1-4 | P1 | 进行中（P1-4 已完成） | 已完成 P1-4：门禁/预检/验收类默认 Markdown 报告已迁移到 docs/loadtest/evidence，并同步 build.yml 与 README。 |
 | harness-docs-lint-p1-5 | P1 | 进行中（P1-5 已完成） | 已新增 harness_docs_lint.sh、回归测试，并将 non-dev 模式接入 docs lint。 |
@@ -1243,6 +1251,7 @@ bash scripts/harness/journey_verify.sh \
 
 1. 评估后续把 knowledge pack auto 从关键词升级为模块注册表
 2. 后续为 knowledge pack 增加周期补写机制
+3. 若继续保留 `module-turn-harness`，优先评估是否增加明确 lifecycle phase，而不是恢复默认强编排
 ### 模块完成同步历史
 
 - 2026-04-06：推进 `module-turn-harness-bootstrap`；实现 module-turn-harness skill 与统一模块级入口脚本，并同步 AGENTS 与 harness 文档
@@ -1252,3 +1261,4 @@ bash scripts/harness/journey_verify.sh \
 - 2026-04-06：推进 `harness-structured-logs-p2-3`；实现 P2-3 结构化执行日志与 harness run summary
 - 2026-04-06：推进 `prd-guard-summary-first-p2-4`；实现 P2-4 PRD guard 摘要优先与高风险全文兜底
 - 2026-04-06：推进 `knowledge-pack-async-p2-5`；实现 P2-5 knowledge pack 异步化与 auto skip/force 策略
+- 2026-04-13：推进 `task-flow-lifecycle-correction`；根据使用反馈将日常默认入口从 `module-turn-harness` 强编排调整为 `docs/harness/task-flows/`，保留 `module-turn-harness` 为可选包装工具，避免开发前误触发 test guard、commit message、plan sync 等 post hooks

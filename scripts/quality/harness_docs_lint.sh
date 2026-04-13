@@ -462,11 +462,11 @@ else
 fi
 
 HARNESS_DOC_FOUND=0
-for harness_doc in "$ROOT"/docs/harness/*.md; do
+while IFS= read -r harness_doc; do
   [[ -f "$harness_doc" ]] || continue
   HARNESS_DOC_FOUND=1
   check_harness_doc "$harness_doc"
-done
+done < <(find "$ROOT/docs/harness" -type f -name '*.md' | sort)
 if [[ "$HARNESS_DOC_FOUND" -eq 0 ]]; then
   add_issue "error" "harness_docs_missing" "$ROOT/docs/harness" "未找到 docs/harness/*.md。"
 fi

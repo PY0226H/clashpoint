@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
+from .domain.gateways import KnowledgeGatewayPort, LlmGatewayPort
 from .models import (
     PhaseDispatchMessage,
     PhaseDispatchRequest,
@@ -149,6 +150,38 @@ class Agent2PathResult:
     error_codes: list[str]
     usage_records: list[dict[str, Any]]
     token_clip_summaries: list[dict[str, Any]]
+
+
+class _PhasePipelineLlmGateway(LlmGatewayPort):
+    async def call_json(
+        self,
+        *,
+        cfg: Any,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> dict[str, Any]:
+        return await call_openai_json(
+            cfg=cfg,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+
+
+class _PhasePipelineKnowledgeGateway(KnowledgeGatewayPort):
+    def retrieve_with_meta(
+        self,
+        *,
+        request: Any,
+        settings: Any,
+    ) -> Any:
+        return retrieve_runtime_contexts_with_meta(
+            request=request,
+            settings=settings,
+        )
+
+
+_DEFAULT_LLM_GATEWAY: LlmGatewayPort = _PhasePipelineLlmGateway()
+_DEFAULT_KNOWLEDGE_GATEWAY: KnowledgeGatewayPort = _PhasePipelineKnowledgeGateway()
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -416,6 +449,7 @@ async def _build_side_summary_with_guard(
     side: str,
     side_messages: list[PhaseDispatchMessage],
     settings: Settings,
+    llm_gateway: LlmGatewayPort,
 ) -> SideSummaryResult:
     fallback_summary = _build_grounded_summary(request, side=side)
     expected_ids = fallback_summary["messageIds"]
@@ -461,7 +495,7 @@ async def _build_side_summary_with_guard(
         max_retries=settings.openai_max_retries,
     )
     try:
-        raw = await call_openai_json(
+        raw = await llm_gateway.call_json(
             cfg=cfg,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -861,6 +895,7 @@ def _retrieve_side_with_query_plan(
     side_messages: list[PhaseDispatchMessage],
     queries: list[str],
     settings: Settings,
+    knowledge_gateway: KnowledgeGatewayPort,
 ) -> SideRetrievalResult:
     query_results: list[RuntimeRagResult] = []
     per_query_diagnostics: list[dict[str, Any]] = []
@@ -876,7 +911,7 @@ def _retrieve_side_with_query_plan(
             side_messages=side_messages,
             query_text=query,
         )
-        rag_result = retrieve_runtime_contexts_with_meta(
+        rag_result = knowledge_gateway.retrieve_with_meta(
             request=rag_request,
             settings=settings,
         )
@@ -1502,6 +1537,7 @@ async def _run_agent2_path(
     target_summary: dict[str, Any],
     target_messages: list[PhaseDispatchMessage],
     settings: Settings,
+    llm_gateway: LlmGatewayPort,
 ) -> Agent2PathResult:
     if not should_use_openai(settings.provider, settings.openai_api_key):
         return _build_agent2_heuristic_path(
@@ -1542,7 +1578,7 @@ async def _run_agent2_path(
         clip_error_codes.append(TOKEN_CLIP_ERROR_AGENT2)
 
     try:
-        a6_raw = await call_openai_json(
+        a6_raw = await llm_gateway.call_json(
             cfg=cfg_a6,
             system_prompt=a6_system_prompt,
             user_prompt=a6_user_prompt,
@@ -1595,7 +1631,7 @@ async def _run_agent2_path(
         if bool(a7_clip_summary.get("clipped")) and TOKEN_CLIP_ERROR_AGENT2 not in clip_error_codes:
             clip_error_codes.append(TOKEN_CLIP_ERROR_AGENT2)
 
-        a7_raw = await call_openai_json(
+        a7_raw = await llm_gateway.call_json(
             cfg=cfg_a7,
             system_prompt=a7_system_prompt,
             user_prompt=a7_user_prompt,
@@ -1714,6 +1750,7 @@ async def _build_agent2_bidirectional_score(
     con_bundle: dict[str, Any],
     baseline_agent2_score: dict[str, Any],
     settings: Settings,
+    llm_gateway: LlmGatewayPort,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -1732,6 +1769,7 @@ async def _build_agent2_bidirectional_score(
             target_summary=con_summary,
             target_messages=con_messages,
             settings=settings,
+            llm_gateway=llm_gateway,
         ),
         _run_agent2_path(
             topic_domain=topic_domain,
@@ -1743,6 +1781,7 @@ async def _build_agent2_bidirectional_score(
             target_summary=pro_summary,
             target_messages=pro_messages,
             settings=settings,
+            llm_gateway=llm_gateway,
         ),
     )
 
@@ -2143,7 +2182,11 @@ async def build_phase_report_payload(
     *,
     request: PhaseDispatchRequest,
     settings: Settings,
+    llm_gateway: LlmGatewayPort | None = None,
+    knowledge_gateway: KnowledgeGatewayPort | None = None,
 ) -> dict[str, Any]:
+    llm_gateway = llm_gateway or _DEFAULT_LLM_GATEWAY
+    knowledge_gateway = knowledge_gateway or _DEFAULT_KNOWLEDGE_GATEWAY
     started = perf_counter()
 
     summary_started = perf_counter()
@@ -2155,12 +2198,14 @@ async def build_phase_report_payload(
             side="pro",
             side_messages=pro_messages,
             settings=settings,
+            llm_gateway=llm_gateway,
         ),
         _build_side_summary_with_guard(
             request,
             side="con",
             side_messages=con_messages,
             settings=settings,
+            llm_gateway=llm_gateway,
         ),
     )
     pro_summary = pro_summary_result.summary
@@ -2183,6 +2228,7 @@ async def build_phase_report_payload(
         side_messages=pro_messages,
         queries=pro_queries,
         settings=settings,
+        knowledge_gateway=knowledge_gateway,
     )
     con_retrieval_result = _retrieve_side_with_query_plan(
         request,
@@ -2190,6 +2236,7 @@ async def build_phase_report_payload(
         side_messages=con_messages,
         queries=con_queries,
         settings=settings,
+        knowledge_gateway=knowledge_gateway,
     )
     retrieval_latency_ms = (perf_counter() - retrieval_started) * 1000.0
 
@@ -2221,6 +2268,7 @@ async def build_phase_report_payload(
         con_bundle=con_bundle,
         baseline_agent2_score=baseline_agent2_score,
         settings=settings,
+        llm_gateway=llm_gateway,
     )
     usage_records.extend(agent2_usage_records)
     token_clip_summaries.extend(agent2_token_clip_summaries)

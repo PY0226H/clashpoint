@@ -1,6 +1,6 @@
 # EchoIsle Harness Docs Overview
 
-更新时间：2026-04-06
+更新时间：2026-04-13
 状态：P1-1 / P1-2 / P1-3 / P1-4 / P1-5 / P2-1 / P2-2 / P2-3 / P2-4 / P2-5 / P3-1 已完成
 
 ---
@@ -42,18 +42,19 @@
 3. 已建立 `default` 活动计划入口与命名 `slot` 机制
 4. 新增门禁/预检/验收报告默认已迁移到 `docs/loadtest/evidence/`
 5. 已新增 `scripts/quality/harness_docs_lint.sh`，可机检 pointer、活动计划结构与 harness 文档元信息
-6. `module-turn-harness` 已经实现，并成为模块级开发默认入口
+6. `module-turn-harness` 已经实现，但当前已降级为可选包装工具
 7. `module-turn-harness` 已默认输出 `artifacts/harness/*.jsonl`、`summary.json`、`summary.md`
 8. PRD gate 已默认走 `docs/harness/product-goals.md`，高风险模块自动回读完整 PRD
 9. explanation/interview 已从默认阻塞链移出，改由 knowledge pack 策略触发
 10. 已新增 `scripts/harness/journey_verify.sh`，统一承接 runtime verify profile 分发与摘要输出
+11. 日常默认认知入口已调整为 `docs/harness/task-flows/`，按任务类型和生命周期触发 skill
 
 换句话说：
 
 现在已经完成两层变化：
 
 1. 规则组织方式与查找方式完成收敛
-2. 模块级开发回合有了统一入口
+2. 模块级开发回合有了任务类型流程入口
 3. 计划回写已支持单计划和并行计划两种使用方式
 
 但以下能力仍未完成：
@@ -70,30 +71,34 @@
 1. `10-task-classification.md`
    - 任务分类
    - module-level 判定
-   - 当前 hook matrix
+   - 当前 task flow 路由
 
 2. `20-orchestration.md`
-   - 当前模块级回合如何通过 `module-turn-harness` 编排
-   - 旧手工顺序的兼容 fallback
+   - `module-turn-harness` 的可选包装工具语义
+   - 为什么普通开发前不再默认运行完整 hook 链
 
-3. `product-goals.md`
+3. `task-flows/`
+   - dev/refactor/non-dev/stage-closure 的当前生命周期流程
+   - 开发前、开发中、开发后的 skill 触发边界
+
+4. `product-goals.md`
    - 日常模块开发默认读取的产品摘要
    - 高风险任务何时回读完整 PRD
 
-4. `30-runtime-verify.md`
+5. `30-runtime-verify.md`
    - 当前验证模型
    - 统一 runtime verify 落地前的暂行做法
 
-5. `40-doc-governance.md`
+6. `40-doc-governance.md`
    - 计划文档
    - 执行证据
    - explanation/interview 的当前职责
 
-6. `50-quality-gates.md`
+7. `50-quality-gates.md`
    - 当前质量门禁
    - CI 和局部 guard 的职责分工
 
-7. `60-usage-tutorial.md`
+8. `60-usage-tutorial.md`
    - 当前已落地 harness 的完整使用教程
    - 日常开发、并行计划、slot/plan、journey verify 的实际用法
 
@@ -111,7 +116,7 @@
 ## 5. 当前不变的事实
 
 1. 权威 PRD 仍然是 `docs/PRD/在线辩论AI裁判平台完整PRD.md`
-2. 当前默认编排已由 `module-turn-harness` 包裹既有 skill 和 hook matrix
+2. 当前默认认知入口为 `docs/harness/task-flows/`，既有 skill 按生命周期触发
 3. 当前 `build.yml` 仍然是主要 CI workflow
-4. 当前已引入统一 runtime verify 入口，但尚未接入 orchestrator 主链
+4. 当前已引入统一 runtime verify 入口，但尚未接入普通开发主链
 5. 当前已把 explanation/interview 切到 knowledge pack 策略，但还没有周期补写

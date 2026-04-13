@@ -59,7 +59,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 
 1. 真正执行业务旅程
 2. 自动收集 logs / metrics / trace
-3. 自动接入 `module-turn-harness`
+3. 自动接入普通开发主链
 
 ---
 
@@ -68,7 +68,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 当前使用时：
 
 1. 模块级开发仍以 `post-module-test-guard` 为主验证入口
-2. `journey_verify.sh` 适合单独生成运行态验证摘要，或为后续 orchestrator 主链做证据准备
+2. `journey_verify.sh` 适合单独生成运行态验证摘要，或为后续普通开发主链做证据准备
 3. 如果仓库中已经存在更贴近该模块的专项脚本，应优先复用，并通过 `journey_verify.sh` 暴露统一结论
 4. 若验证受环境限制阻塞，必须明确区分：
    - 代码逻辑失败

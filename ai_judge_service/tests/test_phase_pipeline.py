@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 from app.models import PhaseDispatchRequest
 from app.phase_pipeline import build_phase_report_payload
+from app.runtime_rag import RuntimeRagResult
+
 from tests.test_app_factory import _build_settings
 
 
@@ -60,6 +62,90 @@ def _build_phase_request_for_pipeline() -> PhaseDispatchRequest:
 
 
 class PhasePipelineTests(unittest.TestCase):
+    def test_build_phase_report_payload_should_support_injected_gateways(self) -> None:
+        request = _build_phase_request_for_pipeline()
+        settings = _build_settings(
+            provider="openai",
+            openai_api_key="test-key",
+            rag_enabled=False,
+            rag_knowledge_file="",
+            rag_source_whitelist=(),
+        )
+
+        class _FakeLlmGateway:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def call_json(
+                self,
+                *,
+                cfg: object,
+                system_prompt: str,
+                user_prompt: str,
+            ) -> dict:
+                _ = cfg
+                _ = user_prompt
+                self.calls.append(system_prompt)
+                if "阶段总结Agent" in system_prompt:
+                    if "当前阵营: pro" in system_prompt:
+                        return {"summary_text": "pro-summary", "message_ids": [1, 3]}
+                    return {"summary_text": "con-summary", "message_ids": [2, 4]}
+                if "source_side=" in system_prompt:
+                    return {
+                        "ideal_rebuttal": "ideal rebuttal",
+                        "key_points": ["point-a", "point-b"],
+                    }
+                return {
+                    "score": 70,
+                    "hit_points": ["point-a"],
+                    "miss_points": ["point-b"],
+                    "rationale": "gateway-rationale",
+                    "dimension_scores": {
+                        "coverage": 80,
+                        "depth": 75,
+                        "evidence_fit": 70,
+                        "key_point_hit_rate": 50,
+                    },
+                }
+
+        class _FakeKnowledgeGateway:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def retrieve_with_meta(self, *, request: object, settings: object) -> RuntimeRagResult:
+                _ = request
+                _ = settings
+                self.calls += 1
+                return RuntimeRagResult(
+                    retrieved_contexts=[],
+                    requested_backend="file",
+                    effective_backend="file",
+                    backend_fallback_reason=None,
+                    retrieval_diagnostics={"fromGateway": True},
+                )
+
+        llm_gateway = _FakeLlmGateway()
+        knowledge_gateway = _FakeKnowledgeGateway()
+        payload = asyncio.run(
+            build_phase_report_payload(
+                request=request,
+                settings=settings,
+                llm_gateway=llm_gateway,
+                knowledge_gateway=knowledge_gateway,
+            )
+        )
+
+        self.assertGreaterEqual(len(llm_gateway.calls), 6)
+        self.assertGreaterEqual(knowledge_gateway.calls, 2)
+        self.assertEqual(payload["proSummaryGrounded"]["text"], "pro-summary")
+        self.assertEqual(payload["conSummaryGrounded"]["text"], "con-summary")
+        self.assertEqual(
+            payload["judgeTrace"]["retrievalDiagnostics"]["pro"]["perQuery"][0]["diagnostics"][
+                "fromGateway"
+            ],
+            True,
+        )
+
     def test_build_phase_report_payload_should_keep_side_summary_complete(self) -> None:
         request = _build_phase_request_for_pipeline()
         settings = _build_settings(

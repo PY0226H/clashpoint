@@ -1,6 +1,6 @@
 # EchoIsle Task Classification
 
-更新时间：2026-04-06
+更新时间：2026-04-13
 状态：当前已生效
 
 ---
@@ -10,7 +10,7 @@
 任务分类用于回答两个问题：
 
 1. 这次任务是不是模块级任务
-2. 这次任务应该触发哪些 hooks
+2. 这次任务应该读取哪个任务流程文档
 
 ---
 
@@ -62,7 +62,7 @@
 
 ---
 
-## 3. 当前 hook matrix
+## 3. 当前任务流程入口
 
 ### 3.1 `Non-development work`
 
@@ -70,32 +70,34 @@
 
 1. 不触发模块级 pre/post hooks
 2. 仅当用户显式要求某个 skill，或任务本身直接命中 skill 语义时再执行
+3. 具体流程见 `docs/harness/task-flows/non-dev.md`
 
 ### 3.2 `Code development`
 
-当前已生效顺序：
+默认：
 
-1. 通过 `module-turn-harness` 进入模块级编排
-2. PRD gate
-3. `post-module-test-guard`
-4. `post-module-commit-message`
-5. `post-module-plan-sync`
-6. knowledge pack 决策
-7. 按策略决定是否执行 `post-module-interview-journal`
-8. 按策略决定是否执行 `post-module-explanation-journal`
+1. 先读 `docs/harness/task-flows/dev.md`
+2. 开发前只执行 pre hooks，例如 PRD/product-goals 对齐
+3. 代码实现完成后，再按流程执行 test guard、commit message、plan sync 等 post hooks
+4. 不把 `module-turn-harness --task-kind dev` 当成写代码前的默认动作
 
 ### 3.3 `Refactor/optimization`
 
-当前已生效顺序：
+默认：
 
-1. 通过 `module-turn-harness` 进入模块级编排
-2. PRD gate
-3. `post-module-test-guard`
-4. `post-module-commit-message`
-5. `post-optimization-plan-sync`
-6. knowledge pack 决策
-7. 按策略决定是否执行 `post-module-interview-journal`
-8. 按策略决定是否执行 `post-module-explanation-journal`
+1. 先读 `docs/harness/task-flows/refactor.md`
+2. 开发前只执行 pre hooks，例如 PRD/product-goals 对齐
+3. 代码实现完成后，再按流程执行 test guard、commit message、optimization plan sync 等 post hooks
+4. 不把 `module-turn-harness --task-kind refactor` 当成写代码前的默认动作
+
+### 3.4 `Stage closure`
+
+默认：
+
+1. 先读 `docs/harness/task-flows/stage-closure.md`
+2. 将主体已完成内容写入 `completed.md`
+3. 将明确延后的技术债/收口债写入 `todo.md`
+4. 清空、重置或归档活动计划
 
 ---
 
@@ -115,8 +117,8 @@
 ### 4.3 Post hooks
 
 1. 当前 explanation/interview 已从默认阻塞链移出
-2. 当前由 `module-turn-harness` 通过 `knowledge-pack auto|skip|force` 决定是否执行
-3. `force` 用于显式要求沉淀；`auto` 用于高价值回合自动补写
+2. post hooks 只在代码或文档改动完成后触发，不在写代码前触发
+3. explanation/interview 仅在高价值回合或用户明确要求时补写
 
 ---
 
@@ -127,5 +129,6 @@
 1. `journey_verify.sh` 已成为统一运行态验证入口，但尚未成为模块级默认收口动作
 2. CI 三层拆分全面生效
 3. knowledge pack 周期补写
+4. `module-turn-harness` 作为普通 dev/refactor 的默认开工动作
 
 这些属于后续阶段计划，不能提前当成当前默认行为。

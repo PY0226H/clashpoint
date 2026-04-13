@@ -1,31 +1,26 @@
 # EchoIsle Harness Engineering 使用教程
 
-更新时间：2026-04-08
-状态：基于当前已完成模块的实际使用手册
+更新时间：2026-04-13
+状态：基于 task flow 的当前使用手册
 
 ---
 
 ## 1. 这份教程解决什么问题
 
-这份文档只讲一件事：
+这份文档说明 EchoIsle 当前如何使用 Codex、skills 和 harness 文档。
 
-在 EchoIsle 当前已经落地的 Harness Engineering 状态下，你日常该如何正确使用 Codex。
+当前原则是：
 
-它不讲未来规划，不讲未落地能力，只讲当前已经能用的内容：
-
-1. `AGENTS.md` 规则入口
-2. `docs/harness/` 规则主目录
-3. `module-turn-harness` 模块级统一入口
-4. `slot` / `plan` 活动计划机制
-5. `docs lint`
-6. `journey_verify` 统一运行态验证入口
-7. 当前文档、证据、knowledge pack 的职责
+1. `AGENTS.md` 只做导航和硬规则入口
+2. `docs/harness/task-flows/` 承担具体任务流程
+3. skills 保持独立能力，由任务生命周期决定什么时候触发
+4. `module-turn-harness` 保留为可选包装工具，不再是普通开发任务的默认开工动作
 
 ---
 
-## 2. 先建立正确心智
+## 2. 正确心智
 
-当前 EchoIsle 的 harness，不是“自动替你做完所有工程管理”的平台，而是一个已经可用的轻量工程骨架。
+当前 EchoIsle harness 是“任务流程说明 + skill 工具箱 + 少量硬规则”，不是强制自动驾驶编排器。
 
 你可以把它理解成 4 层：
 
@@ -33,14 +28,17 @@
    - `AGENTS.md`
    - `docs/harness/*.md`
 
-2. 计划层
+2. 任务流程层
+   - `docs/harness/task-flows/dev.md`
+   - `docs/harness/task-flows/refactor.md`
+   - `docs/harness/task-flows/non-dev.md`
+   - `docs/harness/task-flows/stage-closure.md`
+
+3. 计划层
    - `docs/dev_plan/当前开发计划.md`
    - `docs/dev_plan/todo.md`
    - `docs/dev_plan/completed.md`
    - `.codex/plan-slots/*.txt`
-
-3. 执行层
-   - `scripts/harness/module_turn_harness.sh`
 
 4. 验证与证据层
    - `scripts/quality/harness_docs_lint.sh`
@@ -50,34 +48,44 @@
 
 一句话记忆：
 
-先看规则，明确计划，再走统一入口，最后看证据。
+先判定任务类型，再读对应 task flow，按生命周期触发 skill。
 
 ---
 
-## 3. 日常使用的最短路径
+## 3. 日常最短路径
 
-### 3.1 如果你正在和 Codex 对话
+### 3.1 和 Codex 对话时
 
 通常你不需要自己手敲脚本。
 
-你只需要把任务说清楚，Codex 应该替你完成：
+你可以直接说明任务类型和 slot：
 
-1. 识别任务类型
-2. 生成或更新活动计划
-3. 走 `module-turn-harness`
-4. 回写计划
-5. 必要时补 explanation / interview
-6. 输出测试与证据结论
+1. `这是一个 dev 任务，slot backend-signin。请先读取 dev task flow，开发前只做 PRD 对齐，不要提前触发 post hooks。代码完成后再执行测试、commit message 和计划回写。`
+2. `这是一个 refactor 任务，slot auth-session。请先读取 refactor task flow，代码完成后再做 optimization plan sync。`
+3. `这是一个 non-dev 任务，请读取 non-dev task flow，只在文档结构变更后跑 docs lint。`
+4. `这是阶段收口任务，请读取 stage-closure task flow，把完成项写入 completed，把延后技术债写入 todo，然后清空活动计划。`
 
-你可以直接这样说：
+### 3.2 什么时候手动执行脚本
 
-1. `这是一个 dev 任务，为 slot backend-signin 生成计划并执行，先 dry-run。`
-2. `这是一个 refactor 任务，模块是 auth-session-hardening，按统一入口执行。`
-3. `这是一个 non-dev 任务，先跑 docs lint。`
+手动执行脚本只在你明确需要时使用：
 
-### 3.2 如果你想自己在终端里显式执行
+1. 想跑 docs lint：
 
-最常用的命令是：
+```bash
+bash /Users/panyihang/Documents/EchoIsle/scripts/quality/harness_docs_lint.sh \
+  --root /Users/panyihang/Documents/EchoIsle
+```
+
+2. 想看运行态验证摘要：
+
+```bash
+bash /Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh \
+  --profile auth \
+  --emit-json /Users/panyihang/Documents/EchoIsle/artifacts/harness/manual-auth.summary.json \
+  --emit-md /Users/panyihang/Documents/EchoIsle/artifacts/harness/manual-auth.summary.md
+```
+
+3. 想明确预览完整 harness hook 链：
 
 ```bash
 bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh \
@@ -87,35 +95,37 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
   --dry-run
 ```
 
-和：
-
-```bash
-bash /Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh \
-  --profile auth \
-  --emit-json /Users/panyihang/Documents/EchoIsle/artifacts/harness/manual-auth.summary.json \
-  --emit-md /Users/panyihang/Documents/EchoIsle/artifacts/harness/manual-auth.summary.md
-```
+注意：第 3 类不是普通 dev/refactor 开工前默认动作。
 
 ---
 
-## 4. 什么时候用什么入口
+## 4. 什么时候看什么入口
 
 ### 4.1 `AGENTS.md`
 
 用途：
 
-1. 确认模块级任务默认入口是不是 `module-turn-harness`
-2. 看当前有哪些强制规则
-3. 找到 `docs/harness/` 和 `docs/architecture/README.md` 的详细入口
+1. 看当前硬规则
+2. 找到任务流程文档入口
+3. 找到 `docs/harness/` 和 `docs/architecture/README.md`
 
-不适合做什么：
+不适合：
 
-1. 不适合当项目目录树
+1. 不适合当完整 skill registry
 2. 不适合当详细架构文档
 3. 不适合当开发计划正文
-4. 不适合当完整 skill registry；具体 skill 链由 `module-turn-harness` 和 harness 文档管理
+4. 不适合手动推断完整 pre/post hook 链
 
-### 4.2 `docs/architecture/README.md`
+### 4.2 `docs/harness/task-flows`
+
+用途：
+
+1. `dev.md`：功能开发和行为变更
+2. `refactor.md`：结构优化和性能优化
+3. `non-dev.md`：文档、分析、评审、规划
+4. `stage-closure.md`：活动计划阶段收口
+
+### 4.3 `docs/architecture/README.md`
 
 用途：
 
@@ -123,33 +133,34 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh \
 2. 先知道该看后端、前端、AI 服务还是 harness
 3. 减少一上来就扫描整个仓库的 token 消耗
 
-### 4.3 `module-turn-harness`
+### 4.4 `module-turn-harness`
 
-适合：
+用途：
 
-1. 模块级功能开发
-2. 模块级行为修复
-3. 模块级重构/优化
-4. 文档/规则类轻量检查
+1. 用户明确要求 `module-turn-harness`
+2. 用户明确要求 `harness dry-run`
+3. 用户明确要求完整 hook 链路预览
+4. 调试 harness 自身
+5. 手动验证 hook 顺序或 artifact 输出
 
 不适合：
 
-1. 纯闲聊
-2. 纯方案脑暴
-3. 不改任何仓库内容的纯分析问答
+1. 普通 dev/refactor 写代码前的默认动作
+2. 代码尚未改完时运行 post hooks
+3. 只需要 PRD 对齐的开发前阶段
 
-### 4.4 `journey_verify`
+### 4.5 `journey_verify`
 
-适合：
+用途：
 
-1. 你想要统一的运行态验证摘要
-2. 你想按 `auth/lobby/room/judge-ops/release` 视角看当前验证结论
-3. 你想把专项脚本、smoke、证据缺口统一收束成一个结论文件
+1. 生成统一运行态验证摘要
+2. 按 `auth/lobby/room/judge-ops/release` profile 查看证据
+3. 明确区分 `pass/fail/env_blocked/evidence_missing`
 
-当前不适合期待：
+当前边界：
 
 1. 它还不会自动覆盖所有真实业务旅程
-2. 它还没有接入 `module-turn-harness` 主链
+2. 它还没有接入普通开发主链
 3. 它当前是统一入口，不是完整运行态系统
 
 ---
@@ -164,26 +175,11 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh \
 2. 行为改变的 bug fix
 3. 新接口 / 新逻辑 / 新流程
 
-当前执行链：
+生命周期：
 
-1. PRD gate
-2. test guard
-3. commit message 建议
-4. plan sync
-5. knowledge pack 决策
-6. 按策略触发 interview / explanation
-
-示例：
-
-```bash
-bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh \
-  --task-kind dev \
-  --slot "AI_module" \
-  --module "backend-ai-module" \
-  --summary "实现后端 AI 模块新判决链路" \
-  --knowledge-pack auto \
-  --dry-run
-```
+1. 开发前：读取 `task-flows/dev.md`，做 PRD/product-goals 对齐，必要时写活动计划。
+2. 开发中：实现代码，遵守注释、兼容性、API 跨层同步等硬规则。
+3. 开发后：再触发 test guard、commit message、plan sync，必要时补 knowledge pack。
 
 ### 5.2 `refactor`
 
@@ -194,14 +190,11 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 3. 性能优化
 4. 不以新增产品能力为主目标的代码整理
 
-当前执行链：
+生命周期：
 
-1. PRD gate
-2. test guard
-3. commit message 建议
-4. optimization plan sync
-5. knowledge pack 决策
-6. 按策略触发 interview / explanation
+1. 开发前：读取 `task-flows/refactor.md`，确认边界和 PRD/product-goals 对齐。
+2. 开发中：保持外部行为不变；如果行为改变，重新归类为 `dev`。
+3. 开发后：再触发 test guard、commit message、optimization plan sync，必要时补 knowledge pack。
 
 ### 5.3 `non-dev`
 
@@ -209,221 +202,78 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 
 1. 纯文档调整
 2. 规则同步
-3. harness 文档更新
-4. 轻量结构检查
+3. 分析/评审/规划
+4. prompt 草拟
 
-当前最常见用途：
+生命周期：
 
-1. 跑 `harness_docs_lint`
-2. 做 harness 文档收口
-
-示例：
-
-```bash
-bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh \
-  --task-kind non-dev \
-  --module "docs-governance-check" \
-  --summary "检查当前计划与 harness 文档结构"
-```
+1. 读取 `task-flows/non-dev.md`。
+2. 默认不触发模块级 pre/post hooks。
+3. 文档结构变更后，可运行 docs lint。
 
 ---
 
-## 6. `plan` 和 `slot` 到底怎么用
+## 6. `plan` 和 `slot` 怎么用
 
 ### 6.1 `--plan`
 
-意思是：
-
-直接指定“写这个文件”。
+意思是直接指定“写这个文件”。
 
 适合：
 
-1. 这轮你非常明确要写某一份计划文档
-2. 你不想经过 slot 解析
-3. 你在做特殊一次性文档
+1. 这轮明确要写某一份计划文档
+2. 不想经过 slot 解析
+3. 特殊一次性文档
 
 ### 6.2 `--slot`
 
-意思是：
+意思是指定“这轮属于哪个活动计划槽位”。
 
-指定“这轮属于哪个活动计划槽位”。
+`slot` 不是文档内容本身，而是一个命名工作位，最终通过 `.codex/plan-slots/<slot>.txt` 指向实际文档。
 
-`slot` 不是文档内容本身，而是一个命名工作位。
-
-例如：
+示例：
 
 1. `backend-signin`
 2. `frontend-ui`
 3. `AI_module`
 
-它最终会通过 `.codex/plan-slots/<slot>.txt` 指向某一份实际文档。
+### 6.3 单计划
 
-### 6.3 单计划怎么用
+如果当前只有一个短期计划：
 
-如果你当前只有一个短期计划：
-
-1. 默认走 `default`
+1. 默认可使用 `default`
 2. `default` 指向 `docs/dev_plan/当前开发计划.md`
 3. 通常不必显式传 `--slot`
 
-### 6.4 并行计划怎么用
+### 6.4 并行计划
 
-如果你同时推进多个计划：
+如果同时推进多个计划：
 
 1. 每个线程必须有独立 `slot`
 2. 每个线程只能写自己的活动计划
 3. 不要让多个线程共用 `default`
 
-示例：
-
-后端线程：
-
-```bash
-bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh \
-  --task-kind refactor \
-  --slot "backend-signin" \
-  --module "post-api-signin-flow-optimization" \
-  --summary "优化 POST /api/auth/v2/signin 流程与鉴权链路"
-```
-
-前端线程：
-
-```bash
-bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh \
-  --task-kind dev \
-  --slot "frontend-ui" \
-  --module "frontend-ui-polish" \
-  --summary "优化前端 UI 结构与交互表现"
-```
-
-### 6.5 阶段收口怎么用
+### 6.5 阶段收口
 
 当你觉得“这轮先到这里”时：
 
-1. 把该活动计划中已完成内容整合进 `docs/dev_plan/completed.md`
-2. 把未完成但后续要继续的内容整合进 `docs/dev_plan/todo.md`
-3. 清空、重置或归档该活动计划文档
-4. 必要时回收或重绑对应 `slot`
+1. 读取 `task-flows/stage-closure.md`
+2. 把主体已完成内容整合进 `docs/dev_plan/completed.md`
+3. 把延后技术债/收口债整合进 `docs/dev_plan/todo.md`
+4. 清空、重置或归档活动计划文档
+5. 必要时回收或重绑对应 `slot`
 
 ---
 
-## 7. 常用参数怎么理解
+## 7. 当前文档职责
 
-### 7.1 `--dry-run`
-
-作用：
-
-1. 只看会执行什么
-2. 不真正执行完整链路
-3. 非常适合开工前确认
-
-建议：
-
-1. 新任务先 `dry-run`
-2. 并行计划首次绑定 slot 时先 `dry-run`
-
-### 7.2 `--strict`
-
-作用：
-
-1. 任一步失败立即停
-2. 适合关键回合
-
-### 7.3 `--prd-mode auto|summary|full`
-
-当前默认是 `auto`。
-
-含义：
-
-1. `summary`
-   - 默认先读 `docs/harness/product-goals.md`
-
-2. `full`
-   - 强制回读完整 PRD
-
-3. `auto`
-   - 普通任务先走摘要
-   - 高风险任务自动回读完整 PRD
-
-### 7.4 `--knowledge-pack auto|skip|force`
-
-当前默认是 `auto`。
-
-含义：
-
-1. `auto`
-   - 普通小回合默认不阻塞
-   - 高价值或高风险回合自动补写 explanation/interview
-
-2. `skip`
-   - 本轮显式跳过 explanation/interview
-
-3. `force`
-   - 本轮显式强制补写 explanation/interview
-
----
-
-## 8. 执行后去哪里看结果
-
-### 8.1 `module-turn-harness`
-
-每次执行后，重点看：
-
-1. `artifacts/harness/<run>.jsonl`
-2. `artifacts/harness/<run>.summary.json`
-3. `artifacts/harness/<run>.summary.md`
-
-它们分别适合：
-
-1. `jsonl`
-   - 看每一步执行事件
-
-2. `summary.json`
-   - 机器可读
-
-3. `summary.md`
-   - 人类快速看结果
-
-### 8.2 `journey_verify`
-
-每次执行后，重点看：
-
-1. `*.journey.json`
-2. `*.journey.md`
-
-如果当前 profile 还没有真实证据，看到 `evidence_missing` 是正常的。
-它表示：
-
-1. profile 已建立
-2. 摘要已统一
-3. 但具体验证旅程还没完全落地
-
-### 8.3 报告类证据
-
-当前默认应优先去这些目录找：
-
-1. `docs/loadtest/evidence`
-2. `docs/consistency_reports`
-
-`docs/dev_plan` 不再是新增执行报告的首选默认目录。
-
----
-
-## 9. 当前文档职责怎么分
-
-### 9.1 `docs/dev_plan`
+### 7.1 `docs/dev_plan`
 
 放：
 
 1. 当前计划
 2. 长期技术债
 3. 已完成沉淀
-
-不要默认再往里面放：
-
-1. 新验收报告
-2. 新门禁报告
-3. 新预检报告
 
 当前更准确的分工是：
 
@@ -438,142 +288,128 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
    - 只放明确延后的技术债/收口债
    - 不放新需求脑暴或模糊 wishlist
 
-### 9.2 `docs/explanation`
+不要默认再往 `docs/dev_plan` 放：
+
+1. 新验收报告
+2. 新门禁报告
+3. 新预检报告
+
+### 7.2 `docs/explanation`
 
 是深入讲解沉淀层。
 
-当前不是：
+当前不是每一轮都必须生成，也不是主决策入口。
 
-1. 每一轮都必须生成
-2. 当前主决策入口
-
-### 9.3 `docs/interview`
+### 7.3 `docs/interview`
 
 是开发与排障沉淀层。
 
-当前不是：
+当前不是每个小修都必须阻塞生成。
 
-1. 每个小修都必须阻塞生成
-
-### 9.4 `docs/harness`
+### 7.4 `docs/harness`
 
 是当前 harness 规则层。
 
-如果你想知道“现在到底该怎么做”，优先看这里，而不是看历史讲解文档。
+如果你想知道“现在到底该怎么做”，优先看 task flow，而不是历史讲解文档。
 
 ---
 
-## 10. 当前推荐工作流
+## 8. 推荐工作流
 
-### 10.1 新开一个普通开发任务
+### 8.1 新开普通开发任务
 
-1. 和 Codex 说明需求
-2. 让 Codex 生成短期计划并写入活动计划文档
-3. 先 `dry-run`
-4. 确认无误后正式执行
-5. 看 `artifacts/harness/*.summary.md`
-6. 如需要，再看 `journey_verify`
+1. 和 Codex 说明需求、任务类型、slot。
+2. Codex 读取对应 task flow。
+3. 开发前只做 PRD/product-goals 对齐和计划准备。
+4. Codex 写代码。
+5. 代码完成后再跑测试、commit message、计划回写。
+6. 如需要，再看 `journey_verify`。
 
-### 10.2 同时推进两个任务
+### 8.2 同时推进两个任务
 
-1. 给两个线程分配不同 `slot`
-2. 每个线程只维护自己的活动计划文档
-3. 不要让两个线程共用 `default`
-4. 阶段结束后分别收口进 `todo.md` / `completed.md`
+1. 给两个线程分配不同 `slot`。
+2. 每个线程只维护自己的活动计划文档。
+3. 不要让两个线程共用 `default`。
+4. 阶段结束后分别收口进 `todo.md` / `completed.md`。
 
-### 10.3 阶段收口
+### 8.3 阶段收口
 
 当你觉得“这轮先到这里”时，推荐固定按下面 4 步做：
 
-1. 把当前活动计划里“主体已落地”的内容写入 `completed.md`
-2. 把当前活动计划里“明确延后”的技术债写入 `todo.md`
-3. 在 `completed.md` 中给每条完成项补 `归档来源`
-4. 清空、重置或归档活动计划文档
-
-不要这样做：
-
-1. 不要把整个活动计划原样复制进 `completed.md`
-2. 不要把所有未完成内容都扔进 `todo.md`
-3. 不要把产品 wishlist 混进技术债池
+1. 把当前活动计划里“主体已落地”的内容写入 `completed.md`。
+2. 把当前活动计划里“明确延后”的技术债写入 `todo.md`。
+3. 在 `completed.md` 中给每条完成项补 `归档来源`。
+4. 清空、重置或归档活动计划文档。
 
 可以直接这样对 Codex 说：
 
 `把当前开发计划按阶段收口规范整合：主体已完成内容写入 completed，延后收口的技术债写入 todo，然后清空当前开发计划。`
 
-### 10.4 做文档和规则治理
+### 8.4 文档和规则治理
 
-1. 直接用 `non-dev`
-2. 或直接跑 `harness_docs_lint.sh`
+1. 读取 `task-flows/non-dev.md`。
+2. 修改文档。
+3. 如涉及 harness/计划文档结构，运行 `harness_docs_lint.sh`。
 
-### 10.5 想看当前运行态验证有没有统一出口
+### 8.5 运行态验证
 
-1. 直接跑 `journey_verify.sh`
-2. 明确指定 `profile`
-3. 看 `.journey.md`
+1. 直接运行 `journey_verify.sh`。
+2. 明确指定 `profile`。
+3. 看 `.journey.md`。
 
 ---
 
-## 11. 推荐对 Codex 的说法
+## 9. 推荐对 Codex 的说法
 
-### 11.1 单计划开发
+### 9.1 单计划开发
 
-你可以这样说：
+`这是一个 dev 任务，slot default，模块是 auth-session-hardening。请先读取 dev task flow，开发前只做 PRD/product-goals 对齐并更新当前活动计划；不要提前触发 post hooks。代码完成后再执行测试、commit message 和计划回写。`
 
-`这是一个 dev 任务，模块是 auth-session-hardening，先生成计划并写入当前活动计划文档，不要写入 todo/completed，然后按统一入口 dry-run。`
+### 9.2 并行计划开发
 
-### 11.2 并行计划开发
+`为 slot AI_module 生成后端 AI 模块开发计划，写入该 slot 对应文档；后续执行和回写都只使用这个 slot。请按 dev task flow 执行。`
 
-你可以这样说：
+### 9.3 阶段收口
 
-`为 slot AI_module 生成后端 AI 模块开发计划，写入该 slot 对应文档；后续执行和回写都只使用这个 slot。`
+`把 slot AI_module 当前计划按 stage-closure task flow 收口：主体已完成内容写入 completed.md，延后收口的技术债写入 todo.md，然后清空或归档该活动计划。`
 
-### 11.3 阶段收口
+### 9.4 文档治理
 
-你可以这样说：
+`这是一个 non-dev 任务，请读取 non-dev task flow；只在文档结构变更后跑 docs lint。`
 
-`把 slot AI_module 当前计划按阶段收口规范整合：主体已完成内容写入 completed.md，延后收口的技术债写入 todo.md，然后清空或归档该活动计划。`
-
-### 11.4 文档治理
-
-你可以这样说：
-
-`这是一个 non-dev 任务，先跑 docs lint，再同步 harness 文档。`
-
-### 11.5 运行态验证
-
-你可以这样说：
+### 9.5 运行态验证
 
 `帮我用 journey_verify 跑 auth profile，并输出 JSON 和 Markdown 摘要。`
 
+### 9.6 明确要跑 harness wrapper
+
+`我明确要求使用 module-turn-harness 做一次 dry-run，预览完整 hook 链路。`
+
 ---
 
-## 12. 当前边界，不要误用
+## 10. 当前边界
 
 当前已经能用，但不要误会成这些也已经完成：
 
-1. `journey_verify` 还没有接入 `module-turn-harness` 主链
-2. `auth/lobby/room/judge-ops/release` 目前是统一入口 + 摘要框架，不是全部都已细化完成
-3. CI 三层拆分还没完成
-4. knowledge pack 周期补写还没完成
-5. docs lint 还没全量接入 CI
-
-所以当前正确认知是：
-
-1. 这套 harness 已经足够日常使用
-2. 但它仍然是“可用的工程骨架”，不是最终自动化平台
+1. `module-turn-harness` 不再是普通 dev/refactor 的默认开工动作。
+2. `journey_verify` 还没有接入普通开发主链。
+3. `auth/lobby/room/judge-ops/release` 目前是统一入口 + 摘要框架，不是全部都已细化完成。
+4. CI 三层拆分还没完成。
+5. knowledge pack 周期补写还没完成。
 
 ---
 
-## 13. 一页总结
+## 11. 一页总结
 
 日常最实用的用法只有 5 条：
 
-1. 规则先看 `AGENTS.md`，找代码先看 `docs/architecture/README.md`
-2. 模块级任务默认走 `module-turn-harness`
-3. 单计划用 `default`，并行计划用独立 `slot`
-4. 开发中回写活动计划，阶段结束再整理进 `todo.md` / `completed.md`
-5. 想要统一运行态结论时，用 `journey_verify.sh`
+1. 规则先看 `AGENTS.md`，找代码先看 `docs/architecture/README.md`。
+2. 命中任务类型后，先读 `docs/harness/task-flows/` 对应文档。
+3. 开发前只做 pre hooks，开发后才做 post hooks。
+4. 单计划用 `default`，并行计划用独立 `slot`。
+5. `module-turn-harness` 是可选包装工具，不是默认开发前置动作。
 
 如果只记一句话：
 
-先定计划槽位，再走统一入口，最后看 artifact 和验证摘要。
+先判定任务类型，再读 task flow，最后按生命周期触发 skill。
+

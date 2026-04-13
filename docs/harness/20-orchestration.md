@@ -1,177 +1,133 @@
 # EchoIsle Orchestration
 
-更新时间：2026-04-12
-状态：当前编排规则（P2-1 / P2-2 / P2-3 / P2-4 / P2-5 已落地）
+更新时间：2026-04-13
+状态：可选编排工具说明
 
 ---
 
 ## 1. 当前事实
 
-EchoIsle 现在已经有统一的模块级入口：
+EchoIsle 当前的日常默认入口已经调整为任务流程文档：
+
+1. `docs/harness/task-flows/dev.md`
+2. `docs/harness/task-flows/refactor.md`
+3. `docs/harness/task-flows/non-dev.md`
+4. `docs/harness/task-flows/stage-closure.md`
+
+`module-turn-harness` 仍然存在：
 
 1. `skills/module-turn-harness/SKILL.md`
 2. `scripts/harness/module_turn_harness.sh`
 
-这意味着：
-
-1. 模块级开发与模块级重构现在优先走 `module-turn-harness`
-2. 现有 pre/post hooks 由该入口统一串联
-3. explanation/interview 已改为 knowledge pack 策略触发
-4. hook matrix 仍然有效，但默认不再要求人工记忆顺序
-
-本文件描述“当前已生效的统一入口”，同时保留 legacy fallback 说明。
+但它现在是可选包装工具，不是普通 dev/refactor 任务写代码前的默认动作。
 
 ---
 
-## 2. 当前模块级回合编排
+## 2. 为什么降级为可选工具
 
-### 2.1 `Code development`
+`module-turn-harness` 当前会串联 pre/post hooks：
 
-默认执行顺序：
+1. PRD gate
+2. test guard
+3. commit message 推荐
+4. plan sync / optimization plan sync
+5. knowledge pack 决策
 
-1. 通过 `module-turn-harness --task-kind dev` 进入
-2. 执行 PRD gate
-3. 执行 `post-module-test-guard` 对应自动化步骤
-4. 输出 commit message 建议（正文用于终端/对话回显，不写入 summary 正文）
-5. 执行 `post-module-plan-sync`
-6. 执行 knowledge pack 决策
-7. 若策略命中，再执行 `post-module-interview-journal`
-8. 若策略命中，再执行 `post-module-explanation-journal`
+这条链路适合完整链路预览或手动收口，但不适合在代码尚未修改前默认执行。
 
-### 2.2 `Refactor/optimization`
+原因：
 
-默认执行顺序：
+1. `post-module-test-guard` 应在代码改完后执行。
+2. `post-module-commit-message` 应在有真实改动后输出。
+3. `post-module-plan-sync` / `post-optimization-plan-sync` 应在阶段结果明确后回写。
+4. explanation/interview 不应阻塞普通小回合。
 
-1. 通过 `module-turn-harness --task-kind refactor` 进入
-2. 执行 PRD gate
-3. 执行 `post-module-test-guard` 对应自动化步骤
-4. 输出 commit message 建议（正文用于终端/对话回显，不写入 summary 正文）
-5. 执行 `post-optimization-plan-sync`
-6. 执行 knowledge pack 决策
-7. 若策略命中，再执行 `post-module-interview-journal`
-8. 若策略命中，再执行 `post-module-explanation-journal`
-
-### 2.3 `Non-development work`
-
-默认：
-
-1. 可通过 `module-turn-harness --task-kind non-dev` 进入轻量模式
-2. 优先执行 `scripts/quality/harness_docs_lint.sh` 等轻量检查
-3. 不进入模块级 pre/post hook 链
-4. 仍会输出当前任务分类和建议动作
+因此日常工作应先读取 task flow，并按开发前、开发中、开发后分阶段触发 skill。
 
 ---
 
-## 3. 当前使用方式
+## 3. 什么时候使用 `module-turn-harness`
 
-当前的推荐使用方式是：
+只在以下情况默认使用：
 
-1. 先在 `AGENTS.md` 确认这是模块级任务
-2. 使用 `bash scripts/harness/module_turn_harness.sh --help` 查看参数
-3. 以 `--task-kind dev|refactor|non-dev` 进入对应模式
-4. 单计划时期使用 `default` 活动计划入口
-5. 并行计划时期显式传 `--slot`
-6. 优先使用 `--dry-run` 查看即将执行的步骤
-7. 正式执行时按需要加 `--strict`
-8. 纯文档/规则调整时，可用 `--task-kind non-dev` 先跑 docs lint
-9. 每次执行后（包含 `dry-run`），可直接查看 `artifacts/harness/` 下的 `.jsonl/.summary.json/.summary.md`
-10. 若你想强制覆盖自动判定，可显式传 `--prd-mode summary|full`
-11. 若你想控制 explanation/interview 是否补写，可显式传 `--knowledge-pack auto|skip|force`
-12. 回合结束后，agent 应在对话里直接展示 commit 推荐正文，不要只反馈 `post-commit-message` 步骤通过
+1. 用户明确要求 `module-turn-harness`
+2. 用户明确要求 `harness dry-run`
+3. 用户明确要求完整 hook 链路预览
+4. 正在调试 harness 自身
+5. 需要手动验证 hook 顺序或 artifact 输出
 
-如果你不想使用统一入口，仍可按旧方式手工执行 hook，但那已退化为兼容 fallback，不再是默认主路径。
-
-### 3.0 代码注释规范
-
-当前已生效规则：
-
-1. 默认使用精简中文注释，但只给“非自解释逻辑”补注释。
-2. 注释优先解释原因、边界和风险，不解释代码表面动作。
-3. 当本轮新增以下逻辑时，应主动补精简中文注释：
-   - 事务补偿或回滚保护
-   - Redis/DB 一致性收敛
-   - 锁、并发或时序约束
-   - 幂等、防重、重试或降级判定
-   - 不容易一眼看懂的复杂分支
-4. 普通参数搬运、明显的 CRUD、简单条件分支不要求注释。
-5. 每轮实现结束前，agent 应自查一次：“新增复杂逻辑是否已补必要的精简中文注释”。
-
-### 3.1 单计划
-
-推荐做法：
-
-1. 让 `default` slot 指向 `docs/dev_plan/当前开发计划.md`
-2. 先生成短期计划并写入该文档
-3. 后续每个开发回合都默认回写该文档
-4. 到阶段收口时，再把已完成内容整合进 `completed.md`，未完成内容整合进 `todo.md`
-
-示例：
+不要在普通 dev/refactor 开工前自动运行：
 
 ```bash
-bash scripts/harness/module_turn_harness.sh \
-  --task-kind dev \
-  --module "auth-session-hardening" \
-  --summary "加固 auth session revoke 一致性与回收链路" \
-  --dry-run
+bash scripts/harness/module_turn_harness.sh --task-kind dev ...
 ```
 
-### 3.2 并行计划
-
-推荐做法：
-
-1. 每个线程使用独立 `slot`
-2. 每个 `slot` 绑定独立活动计划文档
-3. 一个线程从“生成计划 -> 执行 -> 回写 -> 收口”始终只操作自己的 `slot`
-4. 只要存在多个活动计划，就不要依赖 `default` 自动猜测
-
-示例：
-
-```bash
-bash scripts/harness/module_turn_harness.sh \
-  --task-kind refactor \
-  --slot "backend-signin" \
-  --module "post-api-signin-flow-optimization" \
-  --summary "优化 POST /api/auth/v2/signin 流程与鉴权链路" \
-  --dry-run
-```
-
-```bash
-bash scripts/harness/module_turn_harness.sh \
-  --task-kind dev \
-  --slot "frontend-ui" \
-  --module "frontend-ui-polish" \
-  --summary "优化前端 UI 结构与交互表现" \
-  --dry-run
-```
-
-### 3.3 收口整合
-
-当某个活动计划达到“这轮先到这里”的阶段时：
-
-1. 将已完成内容整理进 `docs/dev_plan/completed.md`
-2. 将未完成但后续仍要继续的内容整理进 `docs/dev_plan/todo.md`
-3. 清空、重置或归档该活动计划文档
-4. 如果不再继续该计划，对应 `slot` 也应回收或改指向新文档
+除非用户明确要求。
 
 ---
 
-## 4. 当前限制
+## 4. 日常生命周期
 
-1. 当前 orchestrator 仍是对既有 skill/script 的薄包装，不是最终形态
-2. 已有 `journey_verify.sh` 统一入口，但它还没有接入 `module-turn-harness` 主链
-3. 当前 harness 日志记录的是“执行过程”，`journey_verify` 记录的是“运行态验证结论”，两者尚未汇合
-4. PRD guard 已有独立脚本接口，但高风险判定当前仍基于关键词与任务摘要，不是代码语义级识别
-5. knowledge pack 的 auto 判定当前仍基于关键词、摘要和 issues，不是模块注册表
+### 4.1 `dev`
+
+默认读 `docs/harness/task-flows/dev.md`。
+
+生命周期：
+
+1. 开发前：PRD/product-goals 对齐，必要时更新活动计划。
+2. 开发中：按代码地图实现，遵守硬规则。
+3. 开发后：测试门禁、commit message 推荐、计划回写、必要时 knowledge pack。
+
+### 4.2 `refactor`
+
+默认读 `docs/harness/task-flows/refactor.md`。
+
+生命周期：
+
+1. 开发前：确认重构边界、PRD/product-goals 对齐、兼容层策略。
+2. 开发中：保持外部行为不变，必要时补注释。
+3. 开发后：测试门禁、commit message 推荐、优化计划回写、必要时 knowledge pack。
+
+### 4.3 `non-dev`
+
+默认读 `docs/harness/task-flows/non-dev.md`。
+
+生命周期：
+
+1. 默认不触发模块级 pre/post hooks。
+2. 修改 harness/计划文档结构后，可运行 docs lint。
+3. 用户明确点名某个 skill 时，再按 skill 说明执行。
+
+### 4.4 `stage-closure`
+
+默认读 `docs/harness/task-flows/stage-closure.md`。
+
+生命周期：
+
+1. 已完成内容进入 `completed.md`。
+2. 延后技术债进入 `todo.md`。
+3. 活动计划清空、重置或归档。
+4. 必要时运行 docs lint。
 
 ---
 
-## 5. 后续目标形态（仅说明，不视为当前已生效）
+## 5. `slot` / `plan` 仍然保留
 
-后续仍要推进的内容是：
+`slot` / `plan` 机制仍然有效，但不再绑定 `module-turn-harness` 默认执行。
 
-1. 更完整的 PRD gate 接口
-2. runtime verify 主链化
-3. knowledge pack 周期补写
-4. 更强的证据聚合与失败恢复
+使用原则：
 
-当前入口已经生效，但仍会在后续阶段继续增强。
+1. 单计划时期可使用 `default` slot。
+2. 并行计划时期每个线程使用独立 `slot`。
+3. 开发中回写活动计划。
+4. 阶段收口时再整理进 `todo.md` / `completed.md`。
+
+---
+
+## 6. 当前限制
+
+1. `module-turn-harness` 仍会串联 pre/post hooks，因此不要把它作为普通开发前置动作。
+2. `journey_verify.sh` 已是统一运行态验证入口，但尚未接入普通开发主链。
+3. harness artifact 记录的是脚本执行过程，不替代代码评审、测试结论或 runtime verify。
+4. knowledge pack 的 auto 判定仍是启发式，不是模块注册表。
+
