@@ -352,15 +352,15 @@ build_profile_checks() {
         judge_ops_note="已扫描到 ${judge_ops_count} 份 ai_judge 模块门禁摘要，可作为 judge-ops 当前运行态证据。"
       else
         judge_ops_status="evidence_missing"
-        judge_ops_note="judge-ops 已接入 ai_judge 证据扫描，但当前未找到模块门禁摘要；请先运行 ai_judge 模块测试门禁。"
+        judge_ops_note="judge-ops 已接入 ai_judge 证据扫描，但当前未找到模块门禁摘要；请先运行 evidence-gap-remediation 与 evidence-closure。"
       fi
       append_check \
         "judge-ops-ai-judge-evidence" \
         "裁判与运维证据扫描（ai_judge）" \
         "$judge_ops_status" \
         "$judge_ops_note" \
-        "$ROOT/artifacts/harness;$ROOT/scripts/harness/ai_judge_evidence_closure.sh;$ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh;$ROOT/ai_judge_service/tests" \
-        "bash $ROOT/scripts/harness/ai_judge_evidence_closure.sh" \
+        "$ROOT/artifacts/harness;$ROOT/scripts/harness/ai_judge_evidence_gap_remediation.sh;$ROOT/scripts/harness/ai_judge_evidence_closure.sh;$ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh;$ROOT/ai_judge_service/tests" \
+        "bash $ROOT/scripts/harness/ai_judge_evidence_gap_remediation.sh && bash $ROOT/scripts/harness/ai_judge_evidence_closure.sh" \
         "$judge_ops_evidence"
       ;;
     release)

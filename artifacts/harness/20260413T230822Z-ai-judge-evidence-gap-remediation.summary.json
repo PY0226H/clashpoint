@@ -1,0 +1,25 @@
+{
+  "run_id": "20260413T230822Z-ai-judge-evidence-gap-remediation",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "artifacts_dir": "/Users/panyihang/Documents/EchoIsle/artifacts/harness",
+  "status": "pass",
+  "started_at": "2026-04-13T23:08:22Z",
+  "finished_at": "2026-04-13T23:08:22Z",
+  "counts": {
+    "target_total": 5,
+    "created_total": 4,
+    "skipped_total": 1
+  },
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation.summary.md"
+  },
+  "modules": [
+    {"module":"ai-judge-p2-judge-mainline-migration","action":"already_covered","summary_json":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T115141Z-ai-judge-p2-judge-mainline-migration.summary.json","summary_md":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T115141Z-ai-judge-p2-judge-mainline-migration.summary.md","note":"模块证据已存在"}
+    ,{"module":"ai-judge-p2-phase-mainline-migration","action":"backfilled","summary_json":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-p2-phase-mainline-migration.summary.json","summary_md":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-p2-phase-mainline-migration.summary.md","note":"已根据计划文档补齐 summary"}
+    ,{"module":"ai-judge-p3-replay-audit-ops-convergence","action":"backfilled","summary_json":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-p3-replay-audit-ops-convergence.summary.json","summary_md":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-p3-replay-audit-ops-convergence.summary.md","note":"已根据计划文档补齐 summary"}
+    ,{"module":"ai-judge-p4-agent-runtime-shell","action":"backfilled","summary_json":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-p4-agent-runtime-shell.summary.json","summary_md":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-p4-agent-runtime-shell.summary.md","note":"已根据计划文档补齐 summary"}
+    ,{"module":"ai-judge-runtime-verify-closure","action":"backfilled","summary_json":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-runtime-verify-closure.summary.json","summary_md":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T230822Z-ai-judge-evidence-gap-remediation-ai-judge-runtime-verify-closure.summary.md","note":"已根据计划文档补齐 summary"}
+  ]
+}

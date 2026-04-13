@@ -44,7 +44,9 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 2. release/preflight/supply-chain 脚本
 3. 模块专属验证脚本
 4. 手工联调与环境证据
-5. `scripts/harness/ai_judge_evidence_closure.sh`（ai_judge P2/P3/P4 证据聚合）
+5. `scripts/harness/ai_judge_evidence_gap_remediation.sh`（补齐历史模块缺失 summary）
+6. `scripts/harness/ai_judge_evidence_closure.sh`（ai_judge P2/P3/P4 证据聚合）
+7. `scripts/harness/ai_judge_calibration_prep.sh`（ai_judge P5 校准模板与待验证清单）
 
 ### 2.3 当前统一入口能力
 
@@ -61,6 +63,18 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 1. `scripts/harness/ai_judge_evidence_closure.sh`
 2. 统一校验 P2/P3/P4 关键模块证据是否齐全
 3. 输出 `pass/evidence_missing` 与统一 JSON/Markdown 摘要
+
+同时，新增历史证据缺口补齐脚本：
+
+1. `scripts/harness/ai_judge_evidence_gap_remediation.sh`
+2. 从当前开发计划历史中提取模块摘要，为缺失模块生成标准化 `summary.json/.md`
+3. 回填产物显式携带 `backfilled: true` 与来源 `plan_history`，用于和原始模块门禁结果区分
+
+同时，P5 校准准备脚本用于本地阶段“先有模板与清单，再等真实数据”：
+
+1. `scripts/harness/ai_judge_calibration_prep.sh`
+2. 自动生成/检查延迟、成本、公平、故障演练、可信证明五类校准证据模板
+3. 在缺少真实环境样本时输出 `pending_real_data`，不做假通过
 
 但当前还没有负责：
 
@@ -97,6 +111,17 @@ bash scripts/harness/journey_verify.sh \
 bash scripts/harness/ai_judge_evidence_closure.sh \
   --emit-json "artifacts/harness/manual-ai-judge-evidence.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-evidence.summary.md"
+
+bash scripts/harness/ai_judge_evidence_gap_remediation.sh \
+  --emit-json "artifacts/harness/manual-ai-judge-evidence-remediation.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-evidence-remediation.summary.md"
+
+bash scripts/harness/ai_judge_evidence_gap_remediation.sh \
+  && bash scripts/harness/ai_judge_evidence_closure.sh
+
+bash scripts/harness/ai_judge_calibration_prep.sh \
+  --emit-json "artifacts/harness/manual-ai-judge-calibration.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-calibration.summary.md"
 ```
 
 ---
