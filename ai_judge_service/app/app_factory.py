@@ -8,12 +8,14 @@ from typing import Any, Awaitable, Callable
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from pydantic import ValidationError
 
+from .applications import WorkflowRuntime, build_workflow_runtime
 from .callback_client import (
     callback_final_failed,
     callback_final_report,
     callback_phase_failed,
     callback_phase_report,
 )
+from .domain.workflow import WORKFLOW_STATUS_QUEUED, WorkflowJob
 from .models import FinalDispatchRequest, PhaseDispatchRequest
 from .phase_pipeline import build_phase_report_payload as build_phase_report_payload_v3
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
@@ -40,6 +42,7 @@ class AppRuntime:
     callback_final_failed_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
     sleep_fn: SleepFn
     trace_store: TraceStoreProtocol
+    workflow_runtime: WorkflowRuntime
 
 
 def require_internal_key(settings: Settings, header_value: str | None) -> None:
@@ -59,6 +62,7 @@ def create_runtime(
     sleep_fn: SleepFn = asyncio.sleep,
 ) -> AppRuntime:
     trace_store = build_trace_store_from_settings(settings=settings)
+    workflow_runtime = build_workflow_runtime(settings=settings)
     callback_cfg = build_callback_client_config(settings)
     (
         callback_phase_report_fn,
@@ -81,6 +85,7 @@ def create_runtime(
         callback_final_failed_fn=callback_final_failed_fn,
         sleep_fn=sleep_fn,
         trace_store=trace_store,
+        workflow_runtime=workflow_runtime,
     )
 
 
@@ -1061,6 +1066,91 @@ def _save_dispatch_receipt(
 
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
+    workflow_schema_ready = False
+    workflow_schema_lock = asyncio.Lock()
+
+    async def _ensure_workflow_schema_ready() -> None:
+        nonlocal workflow_schema_ready
+        if workflow_schema_ready or not runtime.settings.db_auto_create_schema:
+            return
+        async with workflow_schema_lock:
+            if workflow_schema_ready:
+                return
+            await runtime.workflow_runtime.db.create_schema()
+            workflow_schema_ready = True
+
+    def _build_workflow_job(
+        *,
+        dispatch_type: str,
+        job_id: int,
+        trace_id: str,
+        scope_id: int,
+        session_id: int,
+        idempotency_key: str,
+        rubric_version: str,
+        judge_policy_version: str,
+        topic_domain: str,
+        retrieval_profile: str | None,
+    ) -> WorkflowJob:
+        return WorkflowJob(
+            job_id=max(0, int(job_id)),
+            dispatch_type=str(dispatch_type or "").strip().lower(),
+            trace_id=str(trace_id or "").strip(),
+            status=WORKFLOW_STATUS_QUEUED,
+            scope_id=max(0, int(scope_id)),
+            session_id=max(0, int(session_id)),
+            idempotency_key=str(idempotency_key or "").strip(),
+            rubric_version=str(rubric_version or "").strip(),
+            judge_policy_version=str(judge_policy_version or "").strip(),
+            topic_domain=str(topic_domain or "").strip().lower() or "default",
+            retrieval_profile=(
+                str(retrieval_profile).strip()
+                if retrieval_profile is not None and str(retrieval_profile).strip()
+                else None
+            ),
+        )
+
+    async def _workflow_register_and_mark_running(
+        *,
+        job: WorkflowJob,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        payload = dict(event_payload or {})
+        await _ensure_workflow_schema_ready()
+        await runtime.workflow_runtime.orchestrator.register_job(
+            job=job,
+            event_payload=payload,
+        )
+        await runtime.workflow_runtime.orchestrator.mark_running(
+            job_id=job.job_id,
+            event_payload=payload,
+        )
+
+    async def _workflow_mark_completed(
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        await _ensure_workflow_schema_ready()
+        await runtime.workflow_runtime.orchestrator.mark_completed(
+            job_id=job_id,
+            event_payload=event_payload,
+        )
+
+    async def _workflow_mark_failed(
+        *,
+        job_id: int,
+        error_code: str,
+        error_message: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        await _ensure_workflow_schema_ready()
+        await runtime.workflow_runtime.orchestrator.mark_failed(
+            job_id=job_id,
+            error_code=error_code,
+            error_message=error_message,
+            event_payload=event_payload,
+        )
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:
@@ -1246,6 +1336,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "traceId": parsed.trace_id,
         }
         request_payload = parsed.model_dump(mode="json")
+        workflow_job = _build_workflow_job(
+            dispatch_type="phase",
+            job_id=parsed.job_id,
+            trace_id=parsed.trace_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
+            retrieval_profile=parsed.retrieval_profile,
+        )
         runtime.trace_store.register_start(
             job_id=parsed.job_id,
             trace_id=parsed.trace_id,
@@ -1272,6 +1374,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             status="queued",
             request_payload=request_payload,
             response_payload=response,
+        )
+        await _workflow_register_and_mark_running(
+            job=workflow_job,
+            event_payload={
+                "dispatchType": "phase",
+                "scopeId": parsed.scope_id,
+                "sessionId": parsed.session_id,
+                "phaseNo": parsed.phase_no,
+                "messageCount": parsed.message_count,
+                "traceId": parsed.trace_id,
+            },
         )
 
         phase_report_payload = await build_phase_report_payload_v3(
@@ -1341,6 +1454,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     callback_status="failed_callback_failed",
                     callback_error=str(failed_err),
                 )
+                await _workflow_mark_failed(
+                    job_id=parsed.job_id,
+                    error_code="phase_failed_callback_failed",
+                    error_message=str(failed_err),
+                    event_payload={
+                        "dispatchType": "phase",
+                        "phaseNo": parsed.phase_no,
+                        "callbackStatus": "failed_callback_failed",
+                    },
+                )
                 runtime.trace_store.clear_idempotency(parsed.idempotency_key)
                 raise HTTPException(
                     status_code=502,
@@ -1385,6 +1508,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_status="failed_reported",
                 callback_error=error_message,
             )
+            await _workflow_mark_failed(
+                job_id=parsed.job_id,
+                error_code=error_code,
+                error_message=error_message,
+                event_payload={
+                    "dispatchType": "phase",
+                    "phaseNo": parsed.phase_no,
+                    "callbackStatus": "failed_reported",
+                },
+            )
             runtime.trace_store.clear_idempotency(parsed.idempotency_key)
             raise HTTPException(status_code=502, detail=f"phase_callback_failed: {err}") from err
 
@@ -1427,6 +1560,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_status="reported",
                 callback_error=None,
             ),
+        )
+        await _workflow_mark_completed(
+            job_id=parsed.job_id,
+            event_payload={
+                "dispatchType": "phase",
+                "phaseNo": parsed.phase_no,
+                "callbackStatus": "reported",
+            },
         )
         runtime.trace_store.set_idempotency_success(
             key=parsed.idempotency_key,
@@ -1482,6 +1623,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "traceId": parsed.trace_id,
         }
         request_payload = parsed.model_dump(mode="json")
+        workflow_job = _build_workflow_job(
+            dispatch_type="final",
+            job_id=parsed.job_id,
+            trace_id=parsed.trace_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
+            retrieval_profile=None,
+        )
         runtime.trace_store.register_start(
             job_id=parsed.job_id,
             trace_id=parsed.trace_id,
@@ -1508,6 +1661,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             status="queued",
             request_payload=request_payload,
             response_payload=response,
+        )
+        await _workflow_register_and_mark_running(
+            job=workflow_job,
+            event_payload={
+                "dispatchType": "final",
+                "scopeId": parsed.scope_id,
+                "sessionId": parsed.session_id,
+                "phaseStartNo": parsed.phase_start_no,
+                "phaseEndNo": parsed.phase_end_no,
+                "traceId": parsed.trace_id,
+            },
         )
 
         final_report_payload = _build_final_report_payload(
@@ -1593,6 +1757,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     callback_status="failed_callback_failed",
                     callback_error=str(failed_err),
                 )
+                await _workflow_mark_failed(
+                    job_id=parsed.job_id,
+                    error_code="final_failed_callback_failed",
+                    error_message=str(failed_err),
+                    event_payload={
+                        "dispatchType": "final",
+                        "phaseStartNo": parsed.phase_start_no,
+                        "phaseEndNo": parsed.phase_end_no,
+                        "callbackStatus": "failed_callback_failed",
+                    },
+                )
                 runtime.trace_store.clear_idempotency(parsed.idempotency_key)
                 raise HTTPException(
                     status_code=502,
@@ -1637,6 +1812,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 response=receipt_response,
                 callback_status="blocked_failed_reported",
                 callback_error=error_text,
+            )
+            await _workflow_mark_failed(
+                job_id=parsed.job_id,
+                error_code="final_contract_blocked",
+                error_message=error_text,
+                event_payload={
+                    "dispatchType": "final",
+                    "phaseStartNo": parsed.phase_start_no,
+                    "phaseEndNo": parsed.phase_end_no,
+                    "callbackStatus": "blocked_failed_reported",
+                    "missingFields": contract_missing_fields[:12],
+                },
             )
             runtime.trace_store.clear_idempotency(parsed.idempotency_key)
             raise HTTPException(
@@ -1707,6 +1894,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     callback_status="failed_callback_failed",
                     callback_error=str(failed_err),
                 )
+                await _workflow_mark_failed(
+                    job_id=parsed.job_id,
+                    error_code="final_failed_callback_failed",
+                    error_message=str(failed_err),
+                    event_payload={
+                        "dispatchType": "final",
+                        "phaseStartNo": parsed.phase_start_no,
+                        "phaseEndNo": parsed.phase_end_no,
+                        "callbackStatus": "failed_callback_failed",
+                    },
+                )
                 runtime.trace_store.clear_idempotency(parsed.idempotency_key)
                 raise HTTPException(
                     status_code=502,
@@ -1751,6 +1949,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_status="failed_reported",
                 callback_error=error_message,
             )
+            await _workflow_mark_failed(
+                job_id=parsed.job_id,
+                error_code=error_code,
+                error_message=error_message,
+                event_payload={
+                    "dispatchType": "final",
+                    "phaseStartNo": parsed.phase_start_no,
+                    "phaseEndNo": parsed.phase_end_no,
+                    "callbackStatus": "failed_reported",
+                },
+            )
             runtime.trace_store.clear_idempotency(parsed.idempotency_key)
             raise HTTPException(status_code=502, detail=f"final_callback_failed: {err}") from err
 
@@ -1793,6 +2002,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_status="reported",
                 callback_error=None,
             ),
+        )
+        await _workflow_mark_completed(
+            job_id=parsed.job_id,
+            event_payload={
+                "dispatchType": "final",
+                "phaseStartNo": parsed.phase_start_no,
+                "phaseEndNo": parsed.phase_end_no,
+                "callbackStatus": "reported",
+                "winner": final_report_payload.get("winner"),
+            },
         )
         runtime.trace_store.set_idempotency_success(
             key=parsed.idempotency_key,

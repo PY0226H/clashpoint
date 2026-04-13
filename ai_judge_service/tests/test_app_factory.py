@@ -219,6 +219,16 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first["accepted"])
         self.assertEqual(first["dispatchType"], "phase")
         self.assertEqual(len(phase_callback_calls), 1)
+        phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=1001)
+        self.assertIsNotNone(phase_job)
+        assert phase_job is not None
+        self.assertEqual(phase_job.status, "completed")
+        phase_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=1001)
+        self.assertEqual(
+            [row.event_type for row in phase_events][-3:],
+            ["job_registered", "status_changed", "status_changed"],
+        )
+        self.assertEqual(phase_events[-1].payload.get("toStatus"), "completed")
 
         replay_resp = await self._post_json(
             app=app,
@@ -274,6 +284,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(final_callback_calls), 1)
         self.assertEqual(final_callback_calls[0][0], 2002)
         self.assertIn("winner", final_callback_calls[0][1])
+        phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2001)
+        final_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2002)
+        self.assertIsNotNone(phase_job)
+        self.assertIsNotNone(final_job)
+        assert phase_job is not None and final_job is not None
+        self.assertEqual(phase_job.status, "completed")
+        self.assertEqual(final_job.status, "completed")
 
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,
@@ -311,6 +328,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt_resp.status_code, 200)
         receipt = receipt_resp.json()
         self.assertEqual(receipt["status"], "callback_failed")
+        phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=3001)
+        self.assertIsNotNone(phase_job)
+        assert phase_job is not None
+        self.assertEqual(phase_job.status, "failed")
 
     async def test_replay_post_should_prefer_final_receipt_when_auto(self) -> None:
         phase_calls: list[tuple[int, dict]] = []
