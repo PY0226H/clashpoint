@@ -47,6 +47,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 5. `scripts/harness/ai_judge_evidence_gap_remediation.sh`（补齐历史模块缺失 summary）
 6. `scripts/harness/ai_judge_evidence_closure.sh`（ai_judge P2/P3/P4 证据聚合）
 7. `scripts/harness/ai_judge_calibration_prep.sh`（ai_judge P5 校准模板与待验证清单）
+8. `scripts/harness/ai_judge_p5_real_calibration_on_env.sh`（ai_judge P5 真实环境校准门禁）
 
 ### 2.3 当前统一入口能力
 
@@ -75,6 +76,12 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 1. `scripts/harness/ai_judge_calibration_prep.sh`
 2. 自动生成/检查延迟、成本、公平、故障演练、可信证明五类校准证据模板
 3. 在缺少真实环境样本时输出 `pending_real_data`，不做假通过
+
+真实环境执行阶段使用专门门禁脚本：
+
+1. `scripts/harness/ai_judge_p5_real_calibration_on_env.sh`
+2. 读取 `ai_judge_p5_real_env.env` 的 `REAL_CALIBRATION_ENV_READY` 判定环境是否就绪
+3. 环境未就绪时输出 `env_blocked`；环境就绪且五类轨道满足 real 证据键时才输出 `pass`
 
 但当前还没有负责：
 
@@ -122,6 +129,10 @@ bash scripts/harness/ai_judge_evidence_gap_remediation.sh \
 bash scripts/harness/ai_judge_calibration_prep.sh \
   --emit-json "artifacts/harness/manual-ai-judge-calibration.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-calibration.summary.md"
+
+bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh \
+  --emit-json "artifacts/harness/manual-ai-judge-p5-on-env.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-p5-on-env.summary.md"
 ```
 
 ---

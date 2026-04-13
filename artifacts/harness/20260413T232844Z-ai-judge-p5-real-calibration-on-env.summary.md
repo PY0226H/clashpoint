@@ -1,0 +1,21 @@
+# AI Judge P5 Real Calibration (On Env)
+
+- run_id: `20260413T232844Z-ai-judge-p5-real-calibration-on-env`
+- status: `env_blocked`
+- environment_ready: `false`
+- env_marker_file: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env`
+- evidence_dir: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence`
+- started_at: `2026-04-13T23:28:44Z`
+- finished_at: `2026-04-13T23:28:44Z`
+- output_json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T232844Z-ai-judge-p5-real-calibration-on-env.summary.json`
+- output_md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T232844Z-ai-judge-p5-real-calibration-on-env.summary.md`
+
+## Track Status
+
+| Track | Status | Missing Base Keys | Missing Real Keys | Note |
+|---|---|---|---|---|
+| Latency Baseline | env_blocked | WINDOW_FROM;WINDOW_TO;SAMPLE_SIZE;P95_MS;P99_MS | REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF | real environment not ready |
+| Cost Baseline | env_blocked | WINDOW_FROM;WINDOW_TO;TOKEN_INPUT_TOTAL;TOKEN_OUTPUT_TOTAL;COST_USD_TOTAL;COST_USD_PER_1K | REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF | real environment not ready |
+| Fairness Benchmark | env_blocked | WINDOW_FROM;WINDOW_TO;SAMPLE_SIZE;DRAW_RATE;SIDE_BIAS_DELTA;APPEAL_OVERTURN_RATE | REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF | real environment not ready |
+| Fault Drill | env_blocked | DRILL_RUN_AT;CALLBACK_FAILURE_RECOVERY_PASS;REPLAY_CONSISTENCY_PASS;AUDIT_ALERT_DELIVERY_PASS | REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF | real environment not ready |
+| Trust Attestation | env_blocked | TRACE_HASH_COVERAGE;COMMITMENT_COVERAGE;ATTESTATION_GAP | REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF | real environment not ready |
