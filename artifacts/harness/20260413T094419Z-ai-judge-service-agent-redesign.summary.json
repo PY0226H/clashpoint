@@ -1,0 +1,23 @@
+{
+  "run_id": "20260413T094419Z-ai-judge-service-agent-redesign",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "task_kind": "non-dev",
+  "module": "ai-judge-service-agent-redesign",
+  "summary": "基于最新 PRD 对企业级 Agent 设计文档做反向一致性检查",
+  "status": "fail",
+  "dry_run": false,
+  "strict": false,
+  "started_at": "2026-04-13T09:44:19Z",
+  "finished_at": "2026-04-13T09:44:20Z",
+  "failure_count": 1,
+  "failed_steps": ["docs-lint"],
+  "artifacts": {
+    "jsonl": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.jsonl",
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.summary.md"
+  },
+  "steps": [
+    {"step_id":"docs-lint","description":"文档结构检查","status":"fail","started_at":"2026-04-13T09:44:20Z","finished_at":"2026-04-13T09:44:20Z","exit_code":0,"evidence_paths":["/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.docs-lint.md","/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.docs-lint.json"],"command":"bash /Users/panyihang/Documents/EchoIsle/scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle --json-out /Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.docs-lint.json --md-out /Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T094419Z-ai-judge-service-agent-redesign.docs-lint.md"}
+    ,{"step_id":"post-commit-message","description":"Conventional Commits 推荐","status":"pass","started_at":"2026-04-13T09:44:20Z","finished_at":"2026-04-13T09:44:20Z","exit_code":0,"evidence_paths":["/Users/panyihang/Documents/EchoIsle/skills/post-module-commit-message/SKILL.md"],"command":"post-module-commit-message recommend_commit_message.sh"}
+  ]
+}

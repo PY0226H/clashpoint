@@ -30,6 +30,13 @@
 
 `对一场辩论进行受约束的、可解释的、可追责的 AI 仲裁。`
 
+为了和最终产品 PRD 收口，我建议在设计层直接固定以下外部语义：
+
+1. 正式公开结果集合：`pro / con / draw`
+2. 保护性处理状态：`review required / blocked failed`
+3. 北极星口径：辩论结束后 5 分钟内给出正式公开结果，或明确进入受保护复核状态
+4. 判决可用率口径：成功进入终局结果或明确进入复核状态的案件占比 `>= 99%`
+
 ## 3. 为什么它必须是 Agent 服务
 
 如果只做传统 LLM 服务，你很容易得到：
@@ -67,7 +74,7 @@
    - 解释层不能反向改写裁决层。
 
 3. `允许放弃，优于强判`
-   - 当证据不足、冲突过大、偏差风险高时，系统应允许 `draw` 或 `internal review`。
+   - 当证据不足、冲突过大、偏差风险高时，系统应允许 `draw` 或 `review required`。
 
 4. `任何重要结论都必须可回放`
    - 企业级裁判系统不能只有结果，没有证据链。
@@ -278,10 +285,10 @@ flowchart LR
 1. 汇总 Judge Panel 结果
 2. 综合 fairness report
 3. 决定最终状态：
-   - `pro_win`
-   - `con_win`
+   - `pro`
+   - `con`
    - `draw`
-   - `internal_review_required`
+   - `review_required`
 
 4. 锁定最终裁决事实
 
@@ -389,6 +396,7 @@ flowchart LR
 
 1. `最终判决`
    - 正方胜 / 反方胜 / 平局
+   - 若未终局，则明确显示复核状态与原因说明
 
 2. `总评分`
    - pro / con 两侧总分
@@ -412,7 +420,11 @@ flowchart LR
    - 关键 message 引用
    - 外部资料引用
 
-8. `裁判说明`
+8. `阶段摘要 / 争点展开`
+   - 支持分页、折叠或分层浏览
+   - 让用户能按阶段查看争点推进与回应情况
+
+9. `裁判说明`
    - 例如：“本次裁决基于盲化后的辩论文本，不考虑用户身份信息。”
 
 ### 8.2 面向高级用户的展开层
@@ -420,10 +432,13 @@ flowchart LR
 1. `争点对照表`
    - 双方在主要争点上的对抗情况
 
-2. `回应完整度`
+2. `阶段摘要时间线`
+   - 关键回合、关键回应与关键争点流转
+
+3. `回应完整度`
    - 哪些主张被回应，哪些没有
 
-3. `证据支撑图`
+4. `证据支撑图`
    - 哪些结论有直接证据，哪些证据不足
 
 ### 8.3 面向运营与内部复核的隐藏层
@@ -490,9 +505,9 @@ flowchart LR
 
 如果 decisive claim 的证据链太弱，不应强判。
 
-### 9.8 内部复核通道
+### 9.8 受保护复核通道
 
-对以下案件强制进入 internal review：
+对以下案件强制进入 `review required`：
 
 1. 分差极低
 2. panel 高分歧
@@ -548,9 +563,15 @@ queued
 
 特殊分支：
 
-1. `internal_review_required`
+1. `review_required`
 2. `draw_pending_vote`
 3. `blocked_failed`
+
+补充约束：
+
+1. 内部编排状态可以更细，但对外主语义应收敛为：处理中、已完成（`pro/con/draw`）、复核中、失败。
+2. `draw_pending_vote` 是平台侧后续流程状态，不应回写成新的 AI 裁判公开结果。
+3. 复核完成后，必须能稳定落到“维持原判 / 改判 / 转为 draw / 保留复核说明”四类对外结果之一。
 
 ### 10.3 存储建议
 
@@ -1047,7 +1068,9 @@ queued
 4. `under_internal_review`
 5. `verdict_upheld`
 6. `verdict_overturned`
-7. `challenge_closed`
+7. `draw_after_review`
+8. `review_retained`
+9. `challenge_closed`
 
 建议固定内容：
 
@@ -1055,6 +1078,11 @@ queued
 2. `supplemental_evidence_hash`
 3. `review_policy_version`
 4. `review_result_hash`
+
+建议公开结果约束：
+
+1. challenge / 复核的结束结果必须能映射回产品口径里的“维持原判 / 改判 / 转为 draw / 保留复核说明”。
+2. challenge 历史应与 `Verdict Attestation Registry` 对齐，保证结果变更链可追溯。
 
 #### 15.4.4 Judge Kernel Attestation
 

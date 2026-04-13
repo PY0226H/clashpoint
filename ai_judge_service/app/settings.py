@@ -118,6 +118,11 @@ class Settings:
     redis_url: str
     redis_pool_size: int
     redis_key_prefix: str
+    db_url: str
+    db_echo: bool
+    db_pool_size: int
+    db_max_overflow: int
+    db_auto_create_schema: bool
     topic_memory_limit: int
     topic_memory_min_evidence_refs: int
     topic_memory_min_rationale_chars: int
@@ -236,6 +241,14 @@ def load_settings() -> Settings:
         redis_url=os.getenv("AI_JUDGE_REDIS_URL", "redis://127.0.0.1:6379/0").strip(),
         redis_pool_size=int(os.getenv("AI_JUDGE_REDIS_POOL_SIZE", "20")),
         redis_key_prefix=os.getenv("AI_JUDGE_REDIS_KEY_PREFIX", "ai_judge:v2").strip(),
+        db_url=os.getenv("AI_JUDGE_DB_URL", "sqlite+aiosqlite:///./ai_judge_service.db").strip(),
+        db_echo=parse_env_bool(os.getenv("AI_JUDGE_DB_ECHO"), default=False),
+        db_pool_size=int(os.getenv("AI_JUDGE_DB_POOL_SIZE", "10")),
+        db_max_overflow=int(os.getenv("AI_JUDGE_DB_MAX_OVERFLOW", "20")),
+        db_auto_create_schema=parse_env_bool(
+            os.getenv("AI_JUDGE_DB_AUTO_CREATE_SCHEMA"),
+            default=True,
+        ),
         topic_memory_limit=int(os.getenv("AI_JUDGE_TOPIC_MEMORY_LIMIT", "5")),
         topic_memory_min_evidence_refs=int(
             os.getenv("AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS", "1")
@@ -321,6 +334,12 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_IDEMPOTENCY_TTL_SECS must be >= 60")
     if settings.redis_pool_size < 1:
         raise ValueError("AI_JUDGE_REDIS_POOL_SIZE must be >= 1")
+    if not settings.db_url.strip():
+        raise ValueError("AI_JUDGE_DB_URL cannot be empty")
+    if settings.db_pool_size < 1 or settings.db_pool_size > 200:
+        raise ValueError("AI_JUDGE_DB_POOL_SIZE must be between 1 and 200")
+    if settings.db_max_overflow < 0 or settings.db_max_overflow > 200:
+        raise ValueError("AI_JUDGE_DB_MAX_OVERFLOW must be between 0 and 200")
     if settings.topic_memory_limit < 1 or settings.topic_memory_limit > 20:
         raise ValueError("AI_JUDGE_TOPIC_MEMORY_LIMIT must be between 1 and 20")
     if settings.topic_memory_min_evidence_refs < 0 or settings.topic_memory_min_evidence_refs > 20:

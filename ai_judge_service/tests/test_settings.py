@@ -52,6 +52,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.redis_url, "redis://127.0.0.1:6379/0")
         self.assertEqual(settings.redis_pool_size, 20)
         self.assertEqual(settings.redis_key_prefix, "ai_judge:v2")
+        self.assertEqual(settings.db_url, "sqlite+aiosqlite:///./ai_judge_service.db")
+        self.assertFalse(settings.db_echo)
+        self.assertEqual(settings.db_pool_size, 10)
+        self.assertEqual(settings.db_max_overflow, 20)
+        self.assertTrue(settings.db_auto_create_schema)
         self.assertEqual(settings.topic_memory_limit, 5)
         self.assertEqual(settings.topic_memory_min_evidence_refs, 1)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 20)
@@ -133,6 +138,11 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_REDIS_URL": "redis://redis:6379/4",
                 "AI_JUDGE_REDIS_POOL_SIZE": "32",
                 "AI_JUDGE_REDIS_KEY_PREFIX": "ai_judge:v2:test",
+                "AI_JUDGE_DB_URL": "postgresql+asyncpg://judge:pwd@127.0.0.1:5432/ai_judge",
+                "AI_JUDGE_DB_ECHO": "true",
+                "AI_JUDGE_DB_POOL_SIZE": "18",
+                "AI_JUDGE_DB_MAX_OVERFLOW": "25",
+                "AI_JUDGE_DB_AUTO_CREATE_SCHEMA": "false",
                 "AI_JUDGE_TOPIC_MEMORY_LIMIT": "7",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS": "2",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS": "60",
@@ -206,6 +216,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.redis_url, "redis://redis:6379/4")
         self.assertEqual(settings.redis_pool_size, 32)
         self.assertEqual(settings.redis_key_prefix, "ai_judge:v2:test")
+        self.assertEqual(
+            settings.db_url,
+            "postgresql+asyncpg://judge:pwd@127.0.0.1:5432/ai_judge",
+        )
+        self.assertTrue(settings.db_echo)
+        self.assertEqual(settings.db_pool_size, 18)
+        self.assertEqual(settings.db_max_overflow, 25)
+        self.assertFalse(settings.db_auto_create_schema)
         self.assertEqual(settings.topic_memory_limit, 7)
         self.assertEqual(settings.topic_memory_min_evidence_refs, 2)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 60)
