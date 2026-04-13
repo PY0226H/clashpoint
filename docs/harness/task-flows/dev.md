@@ -35,18 +35,7 @@
 
 ---
 
-## 3. 开发中
-
-开发中按仓库规则实现：
-
-1. 先用 `docs/architecture/README.md` 定位代码。
-2. 修改后端、API 契约、前端主流程时，遵守 `AGENTS.md` 对应规则。
-3. 对 Redis/DB 一致性、事务补偿、并发/锁、幂等、防重、复杂分支补精简中文注释。
-4. EchoIsle 尚未上线，默认直接切主链并清理旧路径，不为未发布能力保留长期兼容层。
-
----
-
-## 4. 开发后
+## 3. 开发后
 
 代码实现完成后，再按需要触发 post hooks：
 
@@ -55,17 +44,3 @@
 3. 使用 `post-module-plan-sync` 回写当前活动计划。
 4. 仅在高价值或用户明确要求时补写 explanation/interview。
 5. 如果需要统一运行态验证，再单独使用 `journey_verify.sh`。
-
----
-
-## 5. 可选工具
-
-`module-turn-harness` 只在以下场景使用：
-
-1. 用户明确要求 `module-turn-harness`。
-2. 用户明确要求 `harness dry-run` 或完整 hook 链路预览。
-3. 正在调试 harness 自身。
-4. 需要手动验证 hook 顺序。
-
-不要把 `module-turn-harness --task-kind dev` 当成普通 dev 任务的写代码前默认动作。
-

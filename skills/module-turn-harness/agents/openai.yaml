@@ -1,4 +1,0 @@
-interface:
-  display_name: "Module Turn Harness"
-  short_description: "Single entry for module-level dev/refactor turns."
-  default_prompt: "Use module-turn-harness as the default entry for module-level work. Classify the task as dev, refactor, or non-dev, preview with dry-run when useful, and then execute the current hook chain in order."

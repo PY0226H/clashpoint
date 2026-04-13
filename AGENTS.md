@@ -10,16 +10,6 @@ Use it to find:
 2. which rules are currently enforced
 3. where the detailed harness docs and project map live
 
-Current status:
-
-1. `P1-1 AGENTS TOC 收敛` 已完成
-2. `P1-2 docs/harness 规则主目录` 已完成
-3. `P2-1 module-turn-harness skill` 已完成
-4. `P2-2 module_turn_harness.sh` 已完成
-5. `P2-3 结构化执行日志` 已完成
-6. `P2-4 PRD guard 摘要优先` 已完成
-7. `P2-5 knowledge pack 异步化` 已完成
-
 ---
 
 ## Task Flow Entry
@@ -30,7 +20,6 @@ Current status:
 4. If the task is stage closure, read `/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/stage-closure.md`.
 5. If no task type clearly matches, use `AGENTS.md`, the user's request, and relevant skill descriptions to decide whether a skill is needed.
 6. Do not manually infer a full pre/post skill chain from `AGENTS.md`; use the matching task flow and lifecycle stage.
-7. `module-turn-harness` is an optional wrapper tool, not the default development preflight.
 
 ---
 
@@ -50,13 +39,6 @@ Detailed explanations now live under `docs/harness/`.
 1. For any development or refactor/optimization turn that changes project code, architecture, or module behavior, run `pre-module-prd-goal-guard` before coding.
 2. The authority PRD remains `/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
 3. The default fast path is now `/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md`; high-risk modules must fall back to the authority PRD.
-
-### Current hook rule
-
-1. The default entry for module-level turns is now the matching task flow under `docs/harness/task-flows/`.
-2. Pre hooks and post hooks must respect lifecycle timing: run pre hooks before coding, and run post hooks only after code or document changes are complete.
-3. `module-turn-harness` remains available as a wrapper over existing skills/scripts, but use it only when the user explicitly requests harness dry-run, a full hook-chain preview, a full wrapper run, or harness debugging.
-4. explanation/interview no longer block ordinary small turns by default; follow the matching task flow and explicit user intent.
 
 ### Pre-release compatibility rule
 
@@ -107,15 +89,10 @@ Use these files as the detailed source of truth:
 1. [docs/harness/00-overview.md](/Users/panyihang/Documents/EchoIsle/docs/harness/00-overview.md): what the harness docs cover, current phase status, and where to look first
 2. [docs/harness/10-task-classification.md](/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md): task types, module-level definition, and task flow routing
 3. [docs/harness/task-flows/README.md](/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/README.md): task-specific lifecycle flows for dev/refactor/non-dev/stage-closure
-4. [docs/harness/20-orchestration.md](/Users/panyihang/Documents/EchoIsle/docs/harness/20-orchestration.md): optional `module-turn-harness` wrapper semantics
-5. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
-6. [docs/harness/30-runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md): current verification model and the gap before unified runtime verify lands
-7. [docs/harness/40-doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
-8. [docs/harness/50-quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md): current quality gates, guards, and CI responsibilities
-
-Related planning document:
-
-1. [docs/dev_plan/EchoIsle-Harness-Engineering-落地方案与开发计划-v2.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/EchoIsle-Harness-Engineering-落地方案与开发计划-v2.md)
+4. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
+5. [docs/harness/30-runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md): current verification model and the gap before unified runtime verify lands
+6. [docs/harness/40-doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
+7. [docs/harness/50-quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md): current quality gates, guards, and CI responsibilities
 
 ---
 
@@ -133,5 +110,5 @@ Use this file when you need a lightweight codebase map before opening implementa
 2. Prefer concise summaries over loading long documents wholesale.
 3. Treat `docs/harness/` as the detailed rules layer, and `AGENTS.md` as the navigation layer.
 4. Do not assume future-phase behavior is already active unless a harness doc explicitly marks it as current.
-5. Do not use `module-turn-harness` as the default pre-coding action; use it only when a task flow or the user explicitly asks for the wrapper.
+5. Do not use or recreate `module-turn-harness`; it has been retired after adding too much workflow friction.
 6. 阶段收口时，`completed.md` 只记录主体完成快照，`todo.md` 只记录延后技术债；不要把活动计划正文原样复制进长期文档。

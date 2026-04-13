@@ -14,7 +14,7 @@
 1. `AGENTS.md` 只做导航和硬规则入口
 2. `docs/harness/task-flows/` 承担具体任务流程
 3. skills 保持独立能力，由任务生命周期决定什么时候触发
-4. `module-turn-harness` 保留为可选包装工具，不再是普通开发任务的默认开工动作
+4. `module-turn-harness` 已退役并删除，不再作为入口或 wrapper
 
 ---
 
@@ -85,18 +85,6 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh \
   --emit-md /Users/panyihang/Documents/EchoIsle/artifacts/harness/manual-auth.summary.md
 ```
 
-3. 想明确预览完整 harness hook 链：
-
-```bash
-bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh \
-  --task-kind dev \
-  --module "auth-session-hardening" \
-  --summary "加固 auth session revoke 一致性与回收链路" \
-  --dry-run
-```
-
-注意：第 3 类不是普通 dev/refactor 开工前默认动作。
-
 ---
 
 ## 4. 什么时候看什么入口
@@ -107,7 +95,7 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 
 1. 看当前硬规则
 2. 找到任务流程文档入口
-3. 找到 `docs/harness/` 和 `docs/architecture/README.md`
+3. 找到 `docs/harness/` 和 Project Map 入口
 
 不适合：
 
@@ -125,31 +113,7 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 3. `non-dev.md`：文档、分析、评审、规划
 4. `stage-closure.md`：活动计划阶段收口
 
-### 4.3 `docs/architecture/README.md`
-
-用途：
-
-1. 快速定位代码
-2. 先知道该看后端、前端、AI 服务还是 harness
-3. 减少一上来就扫描整个仓库的 token 消耗
-
-### 4.4 `module-turn-harness`
-
-用途：
-
-1. 用户明确要求 `module-turn-harness`
-2. 用户明确要求 `harness dry-run`
-3. 用户明确要求完整 hook 链路预览
-4. 调试 harness 自身
-5. 手动验证 hook 顺序或 artifact 输出
-
-不适合：
-
-1. 普通 dev/refactor 写代码前的默认动作
-2. 代码尚未改完时运行 post hooks
-3. 只需要 PRD 对齐的开发前阶段
-
-### 4.5 `journey_verify`
+### 4.3 `journey_verify`
 
 用途：
 
@@ -381,17 +345,13 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 
 `帮我用 journey_verify 跑 auth profile，并输出 JSON 和 Markdown 摘要。`
 
-### 9.6 明确要跑 harness wrapper
-
-`我明确要求使用 module-turn-harness 做一次 dry-run，预览完整 hook 链路。`
-
 ---
 
 ## 10. 当前边界
 
 当前已经能用，但不要误会成这些也已经完成：
 
-1. `module-turn-harness` 不再是普通 dev/refactor 的默认开工动作。
+1. `module-turn-harness` 已退役并删除，不再作为入口或 wrapper。
 2. `journey_verify` 还没有接入普通开发主链。
 3. `auth/lobby/room/judge-ops/release` 目前是统一入口 + 摘要框架，不是全部都已细化完成。
 4. CI 三层拆分还没完成。
@@ -403,13 +363,12 @@ bash /Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh 
 
 日常最实用的用法只有 5 条：
 
-1. 规则先看 `AGENTS.md`，找代码先看 `docs/architecture/README.md`。
+1. 规则和 Project Map 入口先看 `AGENTS.md`。
 2. 命中任务类型后，先读 `docs/harness/task-flows/` 对应文档。
 3. 开发前只做 pre hooks，开发后才做 post hooks。
 4. 单计划用 `default`，并行计划用独立 `slot`。
-5. `module-turn-harness` 是可选包装工具，不是默认开发前置动作。
+5. 需要验证时直接使用具体工具，例如 docs lint、test guard、commit message 或 `journey_verify.sh`。
 
 如果只记一句话：
 
 先判定任务类型，再读 task flow，最后按生命周期触发 skill。
-

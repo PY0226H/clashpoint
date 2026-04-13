@@ -25,7 +25,7 @@ bash "$SCRIPT" \
   --root "$ROOT" \
   --task-kind dev \
   --module harness-commit-skill-integration \
-  --summary "让 module-turn-harness 复用 post-module-commit-message skill 输出 commit 推荐" >"$DEV_OUT"
+  --summary "让 post-module-commit-message skill 输出 commit 推荐" >"$DEV_OUT"
 
 expect_contains "dev output includes recommended label" "Recommended:" "$DEV_OUT"
 expect_contains "dev output includes harness scope" "(harness-commit-skill-integration):" "$DEV_OUT"

@@ -18,7 +18,7 @@ usage() {
     [--title-only]
 
 说明:
-  根据当前 Git 改动与 module-turn-harness 任务参数生成 Conventional Commits 标题建议。
+  根据当前 Git 改动与任务参数生成 Conventional Commits 标题建议。
 USAGE
 }
 

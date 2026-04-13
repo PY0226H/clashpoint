@@ -75,7 +75,7 @@ EOF_TODO
 
 | 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
 |---|---|---|---|---|---|
-| p1-3 | 已完成 | scripts/harness/module_turn_harness.sh | 本地校验通过 | 主开发计划阶段收口 | （无） |
+| p1-3 | 已完成 | scripts/quality/harness_docs_lint.sh | 本地校验通过 | 主开发计划阶段收口 | （无） |
 EOF_COMPLETED
 
   cat >"$workspace/docs/harness/00-overview.md" <<'EOF_HARNESS'

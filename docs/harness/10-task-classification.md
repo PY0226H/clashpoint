@@ -79,7 +79,6 @@
 1. 先读 `docs/harness/task-flows/dev.md`
 2. 开发前只执行 pre hooks，例如 PRD/product-goals 对齐
 3. 代码实现完成后，再按流程执行 test guard、commit message、plan sync 等 post hooks
-4. 不把 `module-turn-harness --task-kind dev` 当成写代码前的默认动作
 
 ### 3.3 `Refactor/optimization`
 
@@ -88,7 +87,6 @@
 1. 先读 `docs/harness/task-flows/refactor.md`
 2. 开发前只执行 pre hooks，例如 PRD/product-goals 对齐
 3. 代码实现完成后，再按流程执行 test guard、commit message、optimization plan sync 等 post hooks
-4. 不把 `module-turn-harness --task-kind refactor` 当成写代码前的默认动作
 
 ### 3.4 `Stage closure`
 
@@ -129,6 +127,5 @@
 1. `journey_verify.sh` 已成为统一运行态验证入口，但尚未成为模块级默认收口动作
 2. CI 三层拆分全面生效
 3. knowledge pack 周期补写
-4. `module-turn-harness` 作为普通 dev/refactor 的默认开工动作
 
 这些属于后续阶段计划，不能提前当成当前默认行为。

@@ -13,7 +13,7 @@
 
 1. 按任务类型说明 Codex 日常应该如何工作
 2. 明确开发前、开发中、开发后的 skill 触发边界
-3. 避免把 `module-turn-harness` 当成每个开发任务的默认开工动作
+3. 避免把 pre hooks 和 post hooks 混在任务开始时一次性执行
 
 它不是：
 
@@ -40,6 +40,5 @@
 
 1. 如果任务明确命中某个类型，先读对应流程文档。
 2. 如果任务没有命中任何类型，由 Codex 根据用户意图和 skill description 自行判断是否读取或使用具体 skill。
-3. `module-turn-harness` 是可选包装工具，不是普通开发任务写代码前的默认入口。
-4. 只有用户明确要求 `module-turn-harness`、`harness dry-run`、完整 hook 链路或调试 harness 时，才默认调用 `scripts/harness/module_turn_harness.sh`。
-
+3. `module-turn-harness` 已退役并删除；不要调用或重建它。
+4. 需要验证、回写、commit message 或运行态摘要时，直接使用对应的具体 skill/script。

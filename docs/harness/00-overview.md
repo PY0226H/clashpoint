@@ -1,7 +1,7 @@
 # EchoIsle Harness Docs Overview
 
 更新时间：2026-04-13
-状态：P1-1 / P1-2 / P1-3 / P1-4 / P1-5 / P2-1 / P2-2 / P2-3 / P2-4 / P2-5 / P3-1 已完成
+状态：P1-1 / P1-2 / P1-3 / P1-4 / P1-5 / P2-4 / P2-5 / P3-1 已完成；module-turn-harness 已退役
 
 ---
 
@@ -21,19 +21,22 @@
 
 ## 2. 当前阶段说明
 
-当前已完成以下十一项：
+当前仍保留并生效的已完成项：
 
 1. `P1-1 AGENTS.md TOC 收敛`
 2. `P1-2 docs/harness 规则主目录`
 3. `P1-3 活动计划入口与多计划槽位`
 4. `P1-4 计划/证据目录职责切分`
 5. `P1-5 docs lint 首版`
-6. `P2-1 module-turn-harness skill`
-7. `P2-2 module_turn_harness.sh`
-8. `P2-3 结构化执行日志`
-9. `P2-4 PRD guard 摘要优先`
-10. `P2-5 knowledge pack 异步化`
-11. `P3-1 journey_verify 统一入口`
+6. `P2-4 PRD guard 摘要优先`
+7. `P2-5 knowledge pack 异步化`
+8. `P3-1 journey_verify 统一入口`
+
+已退役内容：
+
+1. `P2-1 module-turn-harness skill`
+2. `P2-2 module_turn_harness.sh`
+3. `P2-3 module-turn-harness 结构化执行日志`
 
 这意味着：
 
@@ -42,12 +45,11 @@
 3. 已建立 `default` 活动计划入口与命名 `slot` 机制
 4. 新增门禁/预检/验收报告默认已迁移到 `docs/loadtest/evidence/`
 5. 已新增 `scripts/quality/harness_docs_lint.sh`，可机检 pointer、活动计划结构与 harness 文档元信息
-6. `module-turn-harness` 已经实现，但当前已降级为可选包装工具
-7. `module-turn-harness` 已默认输出 `artifacts/harness/*.jsonl`、`summary.json`、`summary.md`
-8. PRD gate 已默认走 `docs/harness/product-goals.md`，高风险模块自动回读完整 PRD
-9. explanation/interview 已从默认阻塞链移出，改由 knowledge pack 策略触发
-10. 已新增 `scripts/harness/journey_verify.sh`，统一承接 runtime verify profile 分发与摘要输出
-11. 日常默认认知入口已调整为 `docs/harness/task-flows/`，按任务类型和生命周期触发 skill
+6. PRD gate 已默认走 `docs/harness/product-goals.md`，高风险模块自动回读完整 PRD
+7. explanation/interview 已从默认阻塞链移出，改由 knowledge pack 策略触发
+8. 已新增 `scripts/harness/journey_verify.sh`，统一承接 runtime verify profile 分发与摘要输出
+9. 日常默认认知入口已调整为 `docs/harness/task-flows/`，按任务类型和生命周期触发 skill
+10. `module-turn-harness` 已退役并删除，不再作为入口或可选 wrapper
 
 换句话说：
 
@@ -73,32 +75,28 @@
    - module-level 判定
    - 当前 task flow 路由
 
-2. `20-orchestration.md`
-   - `module-turn-harness` 的可选包装工具语义
-   - 为什么普通开发前不再默认运行完整 hook 链
-
-3. `task-flows/`
+2. `task-flows/`
    - dev/refactor/non-dev/stage-closure 的当前生命周期流程
    - 开发前、开发中、开发后的 skill 触发边界
 
-4. `product-goals.md`
+3. `product-goals.md`
    - 日常模块开发默认读取的产品摘要
    - 高风险任务何时回读完整 PRD
 
-5. `30-runtime-verify.md`
+4. `30-runtime-verify.md`
    - 当前验证模型
    - 统一 runtime verify 落地前的暂行做法
 
-6. `40-doc-governance.md`
+5. `40-doc-governance.md`
    - 计划文档
    - 执行证据
    - explanation/interview 的当前职责
 
-7. `50-quality-gates.md`
+6. `50-quality-gates.md`
    - 当前质量门禁
    - CI 和局部 guard 的职责分工
 
-8. `60-usage-tutorial.md`
+7. `60-usage-tutorial.md`
    - 当前已落地 harness 的完整使用教程
    - 日常开发、并行计划、slot/plan、journey verify 的实际用法
 

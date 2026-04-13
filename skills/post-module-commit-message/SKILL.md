@@ -60,7 +60,7 @@ git diff --cached --name-only
 
 ## 脚本入口
 
-`module-turn-harness` 应优先复用本 skill 的脚本入口，而不是在 harness 内维护另一套 commit 推荐逻辑：
+本 skill 可直接通过脚本入口生成 commit 推荐：
 
 ```bash
 bash skills/post-module-commit-message/scripts/recommend_commit_message.sh \
@@ -89,11 +89,11 @@ Alternatives:
 
 若不需要备选，可只输出 `Recommended` 一条。
 
-## 与 `module-turn-harness` 的协作约定
+## 对话协作约定
 
-1. `module-turn-harness` 负责把本步骤记录到结构化执行日志与 summary。
-2. agent 负责将本脚本输出的推荐正文在最终对话中明确展示给用户。
-3. 默认展示 `Recommended + Alternatives`；若用户明确要求精简，展示 `--title-only` 结果。
+1. agent 负责将本脚本输出的推荐正文在最终对话中明确展示给用户。
+2. 默认展示 `Recommended + Alternatives`；若用户明确要求精简，展示 `--title-only` 结果。
+3. 不要把 commit 推荐正文写入 summary 或计划文档，除非用户明确要求。
 
 ## 示例
 

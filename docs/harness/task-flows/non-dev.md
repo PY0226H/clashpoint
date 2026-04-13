@@ -40,7 +40,5 @@
 
 ## 4. 不要做
 
-1. 不要因为用户说了 `non-dev` 就跑完整 `module-turn-harness`。
-2. 不要默认触发 dev/refactor 的 post hooks。
-3. 不要把纯分析任务写入 `todo.md` / `completed.md`，除非用户明确要求沉淀。
-
+1. 不要默认触发 dev/refactor 的 post hooks。
+2. 不要把纯分析任务写入 `todo.md` / `completed.md`，除非用户明确要求沉淀。

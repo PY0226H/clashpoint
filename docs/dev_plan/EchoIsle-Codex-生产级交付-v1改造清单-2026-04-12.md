@@ -5,6 +5,14 @@
 
 ---
 
+2026-04-13 更新：
+
+1. 本清单中依赖 `module_turn_harness.sh`、`module-turn-harness/SKILL.md`、`docs/harness/20-orchestration.md` 的条目已作废。
+2. `module-turn-harness` 已退役并删除，不再作为生产级交付改造目标。
+3. 后续若继续推进生产级交付治理，应基于 `docs/harness/task-flows/` 与具体 leaf skill/guard 重新拆分计划。
+
+---
+
 ## 1. 目标与边界
 
 目标：
@@ -31,8 +39,8 @@
 
 | ID | 必改文件/脚本 | 新增字段/参数 | 阻断失败条件（Fail-Closed） | 验收命令 |
 | --- | --- | --- | --- | --- |
-| P0-1 | `scripts/harness/module_turn_harness.sh` | 新增参数：`--risk-level <low|medium|high>`、`--runtime-verify <auto|force|skip>`、`--runtime-profile <auth|lobby|room|judge-ops|release>`、`--self-review <auto|force|skip>` | `risk-level=high` 且未执行 runtime verify；`runtime-verify=force` 且结果不是 `pass`；`self-review=force` 且未产出报告 | `bash scripts/harness/module_turn_harness.sh --task-kind dev --module smoke --summary smoke --risk-level high --runtime-verify force --runtime-profile auth --self-review force --dry-run` |
-| P0-2 | `scripts/harness/module_turn_harness.sh`（summary 输出逻辑） | 在 `artifacts/harness/*.summary.json` 增加字段：`risk_level`、`runtime_verify_mode`、`runtime_verify_profile`、`runtime_verify_status`、`runtime_verify_report`、`contract_sync_status`、`self_review_status`、`self_review_report` | summary 缺任一关键字段；字段值非法（如 `runtime_verify_status` 不在 `pass/fail/env_blocked/evidence_missing/skipped`） | 运行 harness 后检查 `summary.json` 字段完整性 |
+| P0-1 | 已作废：原目标为 `scripts/harness/module_turn_harness.sh` | `module-turn-harness` 已退役并删除 | 不再执行 | 后续基于 task flow 与具体 leaf skill 重新规划 |
+| P0-2 | 已作废：原目标为 `scripts/harness/module_turn_harness.sh` summary 输出逻辑 | `module-turn-harness` 已退役并删除 | 不再执行 | 后续基于 task flow 与具体 leaf skill 重新规划 |
 | P0-3 | `scripts/harness/journey_verify.sh` | 新增参数：`--enforce`、`--require-evidence`；在 checks 中增加 `executed`、`evidence_required`、`evidence_found` | `--enforce` 时出现 `fail/env_blocked/evidence_missing` 任一状态即退出非 0；`--require-evidence` 且证据文件不存在 | `bash scripts/harness/journey_verify.sh --profile auth --enforce --require-evidence --emit-json /tmp/journey.json --emit-md /tmp/journey.md` |
 | P0-4 | 新增：`skills/post-module-contract-sync-guard/scripts/check_contract_sync.sh` | 输入参数：`--root`、`--base-ref`、`--head-ref`、`--report-out`；输出 JSON 字段：`api_changed`、`openapi_synced`、`sdk_synced`、`tests_synced` | 变更命中 API/DTO/错误码/WS payload，但未同时命中 OpenAPI 或 SDK/domain 或测试更新；报告缺关键字段 | `bash skills/post-module-contract-sync-guard/scripts/check_contract_sync.sh --root . --base-ref origin/master --head-ref HEAD --report-out /tmp/contract-sync.json` |
 | P0-5 | 新增：`skills/post-module-self-review/scripts/generate_self_review.sh` + `check_self_review.sh` | 报告固定章节字段：`risk_assumptions`、`uncovered_scope`、`rollback_plan`、`runtime_observability`、`followups` | 缺章节、空章节、`risk-level=high` 但 `rollback_plan` 为空；未生成报告文件 | `bash skills/post-module-self-review/scripts/check_self_review.sh --risk-level high --report /tmp/self-review.md` |
@@ -47,7 +55,7 @@
 | P1-1 | 新增：`scripts/quality/python_strict_debt_guard.sh` | 基线文件：`ai_judge_service/docs/typing/strict_whitelist.baseline.txt` | strict 白名单模块数增加；新增模块未附 `owner/reason/expires_on` | `bash scripts/quality/python_strict_debt_guard.sh --root .` |
 | P1-2 | 新增：`scripts/release/supply_chain_allowlist_budget_guard.sh` | 对 `cargo_deny_advisories_allowlist.csv` 增加字段校验：`owner/reason/expires_on`（可扩展 `ticket`） | 新增豁免无 owner/reason/expires_on；到期日超 14 天；活跃豁免总量较基线上升 | `bash scripts/release/supply_chain_allowlist_budget_guard.sh --root . --max-expire-days 14` |
 | P1-3 | `skills/post-module-test-guard/scripts/run_test_gate.sh` | 统一 nextest 参数（去除与 CI 分叉）；新增 `--ci-parity` 模式 | 本地门禁与 CI 命令不一致；`--ci-parity` 模式检查失败 | `bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode full --ci-parity` |
-| P1-4 | `docs/harness/20-orchestration.md`、`skills/module-turn-harness/SKILL.md`、`AGENTS.md` | 增加强制契约文案：`No evidence, no done`，并写明高风险默认 `runtime-verify=force` | 文档与脚本行为不一致；规则未同步导致误导执行 | 文档 lint + 人工抽查 3 个回合样本 |
+| P1-4 | 已作废：原目标为 `docs/harness/20-orchestration.md`、`skills/module-turn-harness/SKILL.md`、`AGENTS.md` | `module-turn-harness` 已退役并删除 | 不再执行 | 后续基于 task flow 与具体 leaf skill 重新规划 |
 
 ---
 

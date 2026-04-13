@@ -13,11 +13,9 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 
 也就是说：
 
-1. 已有 `module-turn-harness`
-2. `module-turn-harness` 已可输出 `artifacts/harness/*.jsonl`、`summary.json`、`summary.md`
-3. 已有 `journey_verify.sh`，可分发 `auth/lobby/room/judge-ops/release`
-4. 但具体业务旅程验证仍在按 Phase 3 分阶段细化
-5. 当前运行态证据仍主要来自既有测试、smoke、release、联调脚本
+1. 已有 `journey_verify.sh`，可分发 `auth/lobby/room/judge-ops/release`
+2. 但具体业务旅程验证仍在按 Phase 3 分阶段细化
+3. 当前运行态证据仍主要来自既有测试、smoke、release、联调脚本
 
 ---
 

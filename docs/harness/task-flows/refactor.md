@@ -54,17 +54,3 @@
 2. 使用 `post-module-commit-message` 在终端/对话中输出 commit message 推荐。
 3. 使用 `post-optimization-plan-sync` 回写优化计划或优化矩阵。
 4. 仅在高价值或用户明确要求时补写 explanation/interview。
-
----
-
-## 5. 可选工具
-
-`module-turn-harness` 只在以下场景使用：
-
-1. 用户明确要求 `module-turn-harness`。
-2. 用户明确要求 `harness dry-run` 或完整 hook 链路预览。
-3. 正在调试 harness 自身。
-4. 需要手动验证 hook 顺序。
-
-不要把 `module-turn-harness --task-kind refactor` 当成普通 refactor 任务的写代码前默认动作。
-
