@@ -169,6 +169,34 @@ class JudgeFactRepositoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(invalid)
 
+    async def test_audit_alert_upsert_should_preserve_explicit_alert_id(self) -> None:
+        first = await self._repo.upsert_audit_alert(
+            alert_id="al-fixed-9001",
+            job_id=9001,
+            scope_id=2,
+            trace_id="trace-9001-a",
+            alert_type="contract_violation",
+            severity="critical",
+            title="final contract blocked",
+            message="missing fields",
+            details={"missing": ["winner"]},
+        )
+        second = await self._repo.upsert_audit_alert(
+            alert_id="al-fixed-9001",
+            job_id=9001,
+            scope_id=2,
+            trace_id="trace-9001-b",
+            alert_type="contract_violation",
+            severity="critical",
+            title="final contract blocked",
+            message="missing fields updated",
+            details={"missing": ["winner", "debateSummary"]},
+        )
+        self.assertEqual(first.alert_id, "al-fixed-9001")
+        self.assertEqual(second.alert_id, "al-fixed-9001")
+        self.assertEqual(second.trace_id, "trace-9001-b")
+        self.assertEqual(second.message, "missing fields updated")
+
 
 if __name__ == "__main__":
     unittest.main()

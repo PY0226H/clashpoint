@@ -383,6 +383,141 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("debateSummary", replay_payload["reportPayload"])
         self.assertEqual(callback_total_before_replay, len(phase_calls) + len(final_calls))
 
+    async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
+        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        req = _build_phase_request(job_id=7001, idempotency_key="phase:7001")
+        dispatch_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(dispatch_resp.status_code, 200)
+
+        fact_receipt = await runtime.workflow_runtime.facts.get_dispatch_receipt(
+            dispatch_type="phase",
+            job_id=7001,
+        )
+        self.assertIsNotNone(fact_receipt)
+        assert fact_receipt is not None
+        self.assertEqual(fact_receipt.status, "reported")
+
+        runtime.trace_store.get_dispatch_receipt = lambda **kwargs: None  # type: ignore[attr-defined]
+        receipt_resp = await self._get(
+            app=app,
+            path="/internal/judge/v3/phase/jobs/7001/receipt",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(receipt_resp.status_code, 200)
+        self.assertEqual(receipt_resp.json()["status"], "reported")
+
+    async def test_replay_post_should_persist_replay_record_to_fact_repository(self) -> None:
+        phase_calls: list[tuple[int, dict]] = []
+        final_calls: list[tuple[int, dict]] = []
+
+        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            phase_calls.append((job_id, payload))
+
+        async def final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=phase_callback,
+            callback_final_report_impl=final_callback,
+            callback_phase_failed_impl=phase_callback,
+            callback_final_failed_impl=final_callback,
+        )
+        app = create_app(runtime)
+        before_rows = await runtime.workflow_runtime.facts.list_replay_records(
+            job_id=7101,
+            limit=200,
+        )
+        before_count = len(before_rows)
+
+        phase_req = _build_phase_request(job_id=7101, idempotency_key="phase:7101")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(job_id=7101, idempotency_key="final:7101")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        replay_resp = await self._post(
+            app=app,
+            path="/internal/judge/jobs/7101/replay?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(replay_resp.status_code, 200)
+
+        replay_rows = await runtime.workflow_runtime.facts.list_replay_records(
+            job_id=7101,
+            limit=200,
+        )
+        self.assertEqual(len(replay_rows), before_count + 1)
+        self.assertEqual(replay_rows[0].dispatch_type, "final")
+        self.assertIn(replay_rows[0].winner, {"pro", "con", "draw"})
+
+    async def test_alert_ack_should_sync_status_to_fact_repository(self) -> None:
+        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        alert = runtime.trace_store.upsert_audit_alert(
+            job_id=7201,
+            scope_id=1,
+            trace_id="trace-alert-7201",
+            alert_type="test_alert",
+            severity="warning",
+            title="test",
+            message="test message",
+            details={"k": "v"},
+        )
+
+        ack_resp = await self._post(
+            app=app,
+            path=f"/internal/judge/jobs/7201/alerts/{alert.alert_id}/ack",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(ack_resp.status_code, 200)
+        self.assertEqual(ack_resp.json()["status"], "acked")
+
+        fact_alerts = await runtime.workflow_runtime.facts.list_audit_alerts(
+            job_id=7201,
+            limit=10,
+        )
+        self.assertEqual(len(fact_alerts), 1)
+        self.assertEqual(fact_alerts[0].alert_id, alert.alert_id)
+        self.assertEqual(fact_alerts[0].status, "acked")
+
     async def test_blindization_reject_should_return_422_and_trigger_failed_callback(self) -> None:
         failed_calls: list[tuple[int, dict]] = []
 

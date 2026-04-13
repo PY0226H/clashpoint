@@ -189,6 +189,7 @@ class JudgeFactRepository:
     async def upsert_audit_alert(
         self,
         *,
+        alert_id: str | None = None,
         job_id: int,
         scope_id: int,
         trace_id: str,
@@ -200,12 +201,18 @@ class JudgeFactRepository:
         now: datetime | None = None,
     ) -> AuditAlert:
         now_dt = _normalize_dt(now) if now else _utcnow()
+        normalized_alert_id = str(alert_id or "").strip()
         norm_type = _normalize_token(alert_type) or "unknown"
         norm_severity = _normalize_token(severity) or "warning"
         norm_title = str(title or "AI Judge Alert").strip() or "AI Judge Alert"
         norm_message = str(message or "ai_judge alert raised").strip() or "ai_judge alert raised"
         norm_details = dict(details or {})
 
+        by_alert_id_stmt: Select[tuple[AuditAlertModel]] | None = None
+        if normalized_alert_id:
+            by_alert_id_stmt = select(AuditAlertModel).where(
+                AuditAlertModel.alert_id == normalized_alert_id
+            )
         stmt: Select[tuple[AuditAlertModel]] = (
             select(AuditAlertModel)
             .where(AuditAlertModel.job_id == int(job_id))
@@ -214,6 +221,22 @@ class JudgeFactRepository:
         )
         async with self._session_factory() as session:
             async with session.begin():
+                row = None
+                if by_alert_id_stmt is not None:
+                    row = (await session.execute(by_alert_id_stmt)).scalars().first()
+                if row is not None:
+                    row.scope_id = max(0, int(scope_id))
+                    row.trace_id = str(trace_id or "").strip() or row.trace_id
+                    row.alert_type = norm_type
+                    row.severity = norm_severity
+                    row.title = norm_title
+                    row.message = norm_message
+                    row.details = norm_details
+                    row.updated_at = now_dt
+                    await session.flush()
+                    await session.refresh(row)
+                    return self._to_audit_alert(row)
+
                 candidates = (await session.execute(stmt)).scalars().all()
                 existing = next(
                     (
@@ -230,7 +253,7 @@ class JudgeFactRepository:
                 )
                 if existing is None:
                     row = AuditAlertModel(
-                        alert_id=f"al-{job_id}-{uuid4().hex[:12]}",
+                        alert_id=normalized_alert_id or f"al-{job_id}-{uuid4().hex[:12]}",
                         job_id=int(job_id),
                         scope_id=max(0, int(scope_id)),
                         trace_id=str(trace_id or "").strip(),

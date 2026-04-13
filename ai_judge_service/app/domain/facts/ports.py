@@ -48,6 +48,7 @@ class JudgeFactPort(Protocol):
     async def upsert_audit_alert(
         self,
         *,
+        alert_id: str | None = None,
         job_id: int,
         scope_id: int,
         trace_id: str,

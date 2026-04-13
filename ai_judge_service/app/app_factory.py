@@ -15,6 +15,15 @@ from .callback_client import (
     callback_phase_failed,
     callback_phase_report,
 )
+from .domain.facts import (
+    AuditAlert as FactAuditAlert,
+)
+from .domain.facts import (
+    DispatchReceipt as FactDispatchReceipt,
+)
+from .domain.facts import (
+    ReplayRecord as FactReplayRecord,
+)
 from .domain.workflow import WORKFLOW_STATUS_QUEUED, WorkflowJob
 from .models import FinalDispatchRequest, PhaseDispatchRequest
 from .phase_pipeline import build_phase_report_payload as build_phase_report_payload_v3
@@ -100,6 +109,9 @@ _BLIND_SENSITIVE_KEY_TOKENS = {
 
 
 def _serialize_alert_item(alert: Any) -> dict[str, Any]:
+    transitions = getattr(alert, "transitions", [])
+    if not isinstance(transitions, list):
+        transitions = []
     return {
         "alertId": alert.alert_id,
         "jobId": alert.job_id,
@@ -123,7 +135,7 @@ def _serialize_alert_item(alert: Any) -> dict[str, Any]:
                 "reason": row.reason,
                 "changedAt": row.changed_at.isoformat(),
             }
-            for row in alert.transitions
+            for row in transitions
         ],
     }
 
@@ -682,14 +694,19 @@ def _build_final_report_payload(
     *,
     runtime: AppRuntime,
     request: FinalDispatchRequest,
+    phase_receipts: list[Any] | None = None,
 ) -> dict[str, Any]:
     expected_phase_nos = list(range(request.phase_start_no, request.phase_end_no + 1))
     expected_phase_set = set(expected_phase_nos)
-    receipts = runtime.trace_store.list_dispatch_receipts(
-        dispatch_type="phase",
-        session_id=request.session_id,
-        status="reported",
-        limit=1000,
+    receipts = (
+        phase_receipts
+        if phase_receipts is not None
+        else runtime.trace_store.list_dispatch_receipts(
+            dispatch_type="phase",
+            session_id=request.session_id,
+            status="reported",
+            limit=1000,
+        )
     )
 
     phase_reports_by_no: dict[int, tuple[datetime, dict[str, Any]]] = {}
@@ -1079,6 +1096,186 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             await runtime.workflow_runtime.db.create_schema()
             workflow_schema_ready = True
 
+    async def _persist_dispatch_receipt(
+        *,
+        dispatch_type: str,
+        job_id: int,
+        scope_id: int,
+        session_id: int,
+        trace_id: str,
+        idempotency_key: str,
+        rubric_version: str,
+        judge_policy_version: str,
+        topic_domain: str,
+        retrieval_profile: str | None,
+        phase_no: int | None,
+        phase_start_no: int | None,
+        phase_end_no: int | None,
+        message_start_id: int | None,
+        message_end_id: int | None,
+        message_count: int | None,
+        status: str,
+        request_payload: dict[str, Any],
+        response_payload: dict[str, Any] | None,
+    ) -> None:
+        _save_dispatch_receipt(
+            runtime=runtime,
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+            scope_id=scope_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            idempotency_key=idempotency_key,
+            rubric_version=rubric_version,
+            judge_policy_version=judge_policy_version,
+            topic_domain=topic_domain,
+            retrieval_profile=retrieval_profile,
+            phase_no=phase_no,
+            phase_start_no=phase_start_no,
+            phase_end_no=phase_end_no,
+            message_start_id=message_start_id,
+            message_end_id=message_end_id,
+            message_count=message_count,
+            status=status,
+            request_payload=request_payload,
+            response_payload=response_payload,
+        )
+        await _ensure_workflow_schema_ready()
+        await runtime.workflow_runtime.facts.upsert_dispatch_receipt(
+            receipt=FactDispatchReceipt(
+                dispatch_type=dispatch_type,
+                job_id=max(0, int(job_id)),
+                scope_id=max(0, int(scope_id)),
+                session_id=max(0, int(session_id)),
+                trace_id=str(trace_id or "").strip(),
+                idempotency_key=str(idempotency_key or "").strip(),
+                rubric_version=str(rubric_version or "").strip(),
+                judge_policy_version=str(judge_policy_version or "").strip(),
+                topic_domain=str(topic_domain or "").strip(),
+                retrieval_profile=retrieval_profile,
+                phase_no=phase_no,
+                phase_start_no=phase_start_no,
+                phase_end_no=phase_end_no,
+                message_start_id=message_start_id,
+                message_end_id=message_end_id,
+                message_count=message_count,
+                status=str(status or "").strip(),
+                request=dict(request_payload or {}),
+                response=(dict(response_payload) if isinstance(response_payload, dict) else None),
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+
+    async def _get_dispatch_receipt(*, dispatch_type: str, job_id: int) -> Any | None:
+        await _ensure_workflow_schema_ready()
+        receipt = await runtime.workflow_runtime.facts.get_dispatch_receipt(
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+        )
+        if receipt is not None:
+            return receipt
+        return runtime.trace_store.get_dispatch_receipt(
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+        )
+
+    async def _list_dispatch_receipts(
+        *,
+        dispatch_type: str,
+        session_id: int | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[Any]:
+        await _ensure_workflow_schema_ready()
+        receipts = await runtime.workflow_runtime.facts.list_dispatch_receipts(
+            dispatch_type=dispatch_type,
+            session_id=session_id,
+            status=status,
+            limit=limit,
+        )
+        if receipts:
+            return list(receipts)
+        return list(
+            runtime.trace_store.list_dispatch_receipts(
+                dispatch_type=dispatch_type,
+                session_id=session_id,
+                status=status,
+                limit=limit,
+            )
+        )
+
+    async def _append_replay_record(
+        *,
+        dispatch_type: str,
+        job_id: int,
+        trace_id: str,
+        winner: str | None,
+        needs_draw_vote: bool | None,
+        provider: str | None,
+        report_payload: dict[str, Any] | None,
+    ) -> FactReplayRecord:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.append_replay_record(
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+            trace_id=trace_id,
+            winner=winner,
+            needs_draw_vote=needs_draw_vote,
+            provider=provider,
+            report_payload=report_payload,
+        )
+
+    async def _list_replay_records(
+        *,
+        job_id: int,
+        dispatch_type: str | None = None,
+        limit: int = 50,
+    ) -> list[FactReplayRecord]:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.list_replay_records(
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+            limit=limit,
+        )
+
+    async def _sync_audit_alert_to_facts(*, alert: Any) -> FactAuditAlert:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.upsert_audit_alert(
+            alert_id=str(alert.alert_id or "").strip() or None,
+            job_id=int(alert.job_id),
+            scope_id=int(alert.scope_id),
+            trace_id=str(alert.trace_id or "").strip(),
+            alert_type=str(alert.alert_type or "").strip(),
+            severity=str(alert.severity or "").strip(),
+            title=str(alert.title or "").strip(),
+            message=str(alert.message or "").strip(),
+            details=(dict(alert.details) if isinstance(alert.details, dict) else {}),
+            now=getattr(alert, "updated_at", None),
+        )
+
+    async def _list_audit_alerts(
+        *,
+        job_id: int,
+        status: str | None,
+        limit: int,
+    ) -> list[Any]:
+        await _ensure_workflow_schema_ready()
+        items = await runtime.workflow_runtime.facts.list_audit_alerts(
+            job_id=job_id,
+            status=status,
+            limit=limit,
+        )
+        if items:
+            return items
+        return list(
+            runtime.trace_store.list_audit_alerts(
+                job_id=job_id,
+                status=status,
+                limit=limit,
+            )
+        )
+
     def _build_workflow_job(
         *,
         dispatch_type: str,
@@ -1215,8 +1412,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "failedCallbackPayload": failed_payload,
                 "failedCallbackError": str(failed_err),
             }
-            _save_dispatch_receipt(
-                runtime=runtime,
+            await _persist_dispatch_receipt(
                 dispatch_type=dispatch_type,
                 job_id=job_id,
                 scope_id=scope_id,
@@ -1258,8 +1454,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "failedCallbackAttempts": failed_attempts,
             "failedCallbackRetries": failed_retries,
         }
-        _save_dispatch_receipt(
-            runtime=runtime,
+        await _persist_dispatch_receipt(
             dispatch_type=dispatch_type,
             job_id=job_id,
             scope_id=scope_id,
@@ -1353,8 +1548,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             trace_id=parsed.trace_id,
             request=request_payload,
         )
-        _save_dispatch_receipt(
-            runtime=runtime,
+        await _persist_dispatch_receipt(
             dispatch_type="phase",
             job_id=parsed.job_id,
             scope_id=parsed.scope_id,
@@ -1426,8 +1620,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "failedCallbackPayload": failed_payload,
                     "failedCallbackError": str(failed_err),
                 }
-                _save_dispatch_receipt(
-                    runtime=runtime,
+                await _persist_dispatch_receipt(
                     dispatch_type="phase",
                     job_id=parsed.job_id,
                     scope_id=parsed.scope_id,
@@ -1480,8 +1673,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "failedCallbackAttempts": failed_attempts,
                 "failedCallbackRetries": failed_retries,
             }
-            _save_dispatch_receipt(
-                runtime=runtime,
+            await _persist_dispatch_receipt(
                 dispatch_type="phase",
                 job_id=parsed.job_id,
                 scope_id=parsed.scope_id,
@@ -1528,8 +1720,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "callbackRetries": callback_retries,
             "reportPayload": phase_report_payload,
         }
-        _save_dispatch_receipt(
-            runtime=runtime,
+        await _persist_dispatch_receipt(
             dispatch_type="phase",
             job_id=parsed.job_id,
             scope_id=parsed.scope_id,
@@ -1640,8 +1831,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             trace_id=parsed.trace_id,
             request=request_payload,
         )
-        _save_dispatch_receipt(
-            runtime=runtime,
+        await _persist_dispatch_receipt(
             dispatch_type="final",
             job_id=parsed.job_id,
             scope_id=parsed.scope_id,
@@ -1674,9 +1864,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         )
 
+        phase_receipts = await _list_dispatch_receipts(
+            dispatch_type="phase",
+            session_id=parsed.session_id,
+            status="reported",
+            limit=1000,
+        )
         final_report_payload = _build_final_report_payload(
             runtime=runtime,
             request=parsed,
+            phase_receipts=phase_receipts,
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -1702,6 +1899,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "errorCode": "final_contract_blocked",
                 },
             )
+            await _sync_audit_alert_to_facts(alert=alert)
             failed_payload = _build_failed_callback_payload(
                 job_id=parsed.job_id,
                 dispatch_type="final",
@@ -1729,8 +1927,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "failedCallbackPayload": failed_payload,
                     "failedCallbackError": str(failed_err),
                 }
-                _save_dispatch_receipt(
-                    runtime=runtime,
+                await _persist_dispatch_receipt(
                     dispatch_type="final",
                     job_id=parsed.job_id,
                     scope_id=parsed.scope_id,
@@ -1785,8 +1982,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "failedCallbackAttempts": failed_attempts,
                 "failedCallbackRetries": failed_retries,
             }
-            _save_dispatch_receipt(
-                runtime=runtime,
+            await _persist_dispatch_receipt(
                 dispatch_type="final",
                 job_id=parsed.job_id,
                 scope_id=parsed.scope_id,
@@ -1866,8 +2062,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "failedCallbackPayload": failed_payload,
                     "failedCallbackError": str(failed_err),
                 }
-                _save_dispatch_receipt(
-                    runtime=runtime,
+                await _persist_dispatch_receipt(
                     dispatch_type="final",
                     job_id=parsed.job_id,
                     scope_id=parsed.scope_id,
@@ -1921,8 +2116,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "failedCallbackAttempts": failed_attempts,
                 "failedCallbackRetries": failed_retries,
             }
-            _save_dispatch_receipt(
-                runtime=runtime,
+            await _persist_dispatch_receipt(
                 dispatch_type="final",
                 job_id=parsed.job_id,
                 scope_id=parsed.scope_id,
@@ -1970,8 +2164,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "callbackRetries": callback_retries,
             "reportPayload": final_report_payload,
         }
-        _save_dispatch_receipt(
-            runtime=runtime,
+        await _persist_dispatch_receipt(
             dispatch_type="final",
             job_id=parsed.job_id,
             scope_id=parsed.scope_id,
@@ -2027,10 +2220,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        item = runtime.trace_store.get_dispatch_receipt(
-            dispatch_type="phase",
-            job_id=job_id,
-        )
+        item = await _get_dispatch_receipt(dispatch_type="phase", job_id=job_id)
         if item is None:
             raise HTTPException(status_code=404, detail="phase_dispatch_receipt_not_found")
         return _serialize_dispatch_receipt(item)
@@ -2041,10 +2231,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        item = runtime.trace_store.get_dispatch_receipt(
-            dispatch_type="final",
-            job_id=job_id,
-        )
+        item = await _get_dispatch_receipt(dispatch_type="final", job_id=job_id)
         if item is None:
             raise HTTPException(status_code=404, detail="final_dispatch_receipt_not_found")
         return _serialize_dispatch_receipt(item)
@@ -2058,6 +2245,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         record = runtime.trace_store.get_trace(job_id)
         if record is None:
             raise HTTPException(status_code=404, detail="judge_trace_not_found")
+        replay_records = await _list_replay_records(job_id=job_id, limit=50)
+        replay_items = (
+            [
+                {
+                    "replayedAt": item.created_at.isoformat(),
+                    "winner": item.winner,
+                    "needsDrawVote": item.needs_draw_vote,
+                    "provider": item.provider,
+                }
+                for item in replay_records
+            ]
+            if replay_records
+            else [
+                {
+                    "replayedAt": item.replayed_at.isoformat(),
+                    "winner": item.winner,
+                    "needsDrawVote": item.needs_draw_vote,
+                    "provider": item.provider,
+                }
+                for item in record.replays
+            ]
+        )
         return {
             "jobId": record.job_id,
             "traceId": record.trace_id,
@@ -2069,15 +2278,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "response": record.response,
             "request": record.request,
             "reportSummary": record.report_summary,
-            "replays": [
-                {
-                    "replayedAt": item.replayed_at.isoformat(),
-                    "winner": item.winner,
-                    "needsDrawVote": item.needs_draw_vote,
-                    "provider": item.provider,
-                }
-                for item in record.replays
-            ],
+            "replays": replay_items,
         }
 
     @app.post("/internal/judge/jobs/{job_id}/replay")
@@ -2094,11 +2295,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         chosen_dispatch_type = dispatch_type_normalized
         chosen_receipt = None
         if dispatch_type_normalized == "auto":
-            final_receipt = runtime.trace_store.get_dispatch_receipt(
+            final_receipt = await _get_dispatch_receipt(
                 dispatch_type="final",
                 job_id=job_id,
             )
-            phase_receipt = runtime.trace_store.get_dispatch_receipt(
+            phase_receipt = await _get_dispatch_receipt(
                 dispatch_type="phase",
                 job_id=job_id,
             )
@@ -2107,7 +2308,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 raise HTTPException(status_code=404, detail="replay_receipt_not_found")
             chosen_dispatch_type = "final" if final_receipt is not None else "phase"
         else:
-            chosen_receipt = runtime.trace_store.get_dispatch_receipt(
+            chosen_receipt = await _get_dispatch_receipt(
                 dispatch_type=dispatch_type_normalized,
                 job_id=job_id,
             )
@@ -2128,9 +2329,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             except ValidationError as err:
                 raise HTTPException(status_code=409, detail=f"replay_invalid_final_request: {err}") from err
             _validate_final_dispatch_request(final_request)
+            phase_receipts = await _list_dispatch_receipts(
+                dispatch_type="phase",
+                session_id=final_request.session_id,
+                status="reported",
+                limit=1000,
+            )
             report_payload = _build_final_report_payload(
                 runtime=runtime,
                 request=final_request,
+                phase_receipts=phase_receipts,
             )
         else:
             try:
@@ -2169,10 +2377,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             needs_draw_vote=needs_draw_vote,
             provider=runtime.settings.provider,
         )
-        trace = runtime.trace_store.get_trace(job_id)
-        replayed_at = datetime.now(timezone.utc).isoformat()
-        if trace and trace.replays:
-            replayed_at = trace.replays[-1].replayed_at.isoformat()
+        replay_row = await _append_replay_record(
+            dispatch_type=chosen_dispatch_type,
+            job_id=job_id,
+            trace_id=trace_id,
+            winner=winner,
+            needs_draw_vote=needs_draw_vote,
+            provider=runtime.settings.provider,
+            report_payload=report_payload,
+        )
+        replayed_at = replay_row.created_at.isoformat()
 
         return {
             "jobId": job_id,
@@ -2254,7 +2468,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        items = runtime.trace_store.list_audit_alerts(
+        items = await _list_audit_alerts(
             job_id=job_id,
             status=status,
             limit=limit,
@@ -2282,12 +2496,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if row is None:
             raise HTTPException(status_code=409, detail="invalid_alert_status_transition")
+        await _sync_audit_alert_to_facts(alert=row)
+        transitioned = await runtime.workflow_runtime.facts.transition_audit_alert(
+            alert_id=alert_id,
+            to_status=to_status,
+            now=row.updated_at,
+        )
+        if transitioned is None:
+            raise HTTPException(status_code=409, detail="invalid_alert_status_transition")
         return {
             "ok": True,
             "jobId": job_id,
             "alertId": alert_id,
-            "status": row.status,
-            "item": _serialize_alert_item(row),
+            "status": transitioned.status,
+            "item": _serialize_alert_item(transitioned),
         }
 
     @app.post("/internal/judge/jobs/{job_id}/alerts/{alert_id}/ack")
