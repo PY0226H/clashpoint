@@ -1368,7 +1368,36 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         scope_id = int(meta.get("scopeId") or 1)
         dims = _extract_receipt_dims_from_raw(dispatch_type, raw_payload)
         request_payload = dict(raw_payload)
+        workflow_job = _build_workflow_job(
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+            trace_id=trace_id,
+            scope_id=scope_id,
+            session_id=session_id,
+            idempotency_key=str(meta.get("idempotencyKey") or ""),
+            rubric_version=str(meta.get("rubricVersion") or ""),
+            judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
+            topic_domain=str(meta.get("topicDomain") or ""),
+            retrieval_profile=(
+                str(meta.get("retrievalProfile")) if meta.get("retrievalProfile") is not None else None
+            ),
+        )
         runtime.trace_store.register_start(job_id=job_id, trace_id=trace_id, request=request_payload)
+        await _workflow_register_and_mark_running(
+            job=workflow_job,
+            event_payload={
+                "dispatchType": dispatch_type,
+                "scopeId": scope_id,
+                "sessionId": session_id,
+                "phaseNo": dims.get("phaseNo"),
+                "phaseStartNo": dims.get("phaseStartNo"),
+                "phaseEndNo": dims.get("phaseEndNo"),
+                "messageCount": dims.get("messageCount"),
+                "traceId": trace_id,
+                "rejectionCode": "input_not_blinded",
+                "sensitiveHits": sensitive_hits[:12],
+            },
+        )
         response = {
             "accepted": False,
             "dispatchType": dispatch_type,
@@ -1441,6 +1470,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_status="failed_callback_failed",
                 callback_error=str(failed_err),
             )
+            await _workflow_mark_failed(
+                job_id=job_id,
+                error_code=f"{dispatch_type}_failed_callback_failed",
+                error_message=str(failed_err),
+                event_payload={
+                    "dispatchType": dispatch_type,
+                    "phaseNo": dims.get("phaseNo"),
+                    "phaseStartNo": dims.get("phaseStartNo"),
+                    "phaseEndNo": dims.get("phaseEndNo"),
+                    "callbackStatus": "failed_callback_failed",
+                    "sensitiveHits": sensitive_hits[:12],
+                },
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"{dispatch_type}_failed_callback_failed: {failed_err}",
@@ -1482,6 +1524,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             response=receipt_response,
             callback_status="failed_reported",
             callback_error=error_message,
+        )
+        await _workflow_mark_failed(
+            job_id=job_id,
+            error_code=error_code,
+            error_message=error_message,
+            event_payload={
+                "dispatchType": dispatch_type,
+                "phaseNo": dims.get("phaseNo"),
+                "phaseStartNo": dims.get("phaseStartNo"),
+                "phaseEndNo": dims.get("phaseEndNo"),
+                "callbackStatus": "failed_reported",
+                "sensitiveHits": sensitive_hits[:12],
+            },
         )
         raise HTTPException(status_code=422, detail=error_code)
 

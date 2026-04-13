@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from app.app_factory import create_app, create_default_app, create_runtime, require_internal_key
 from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
@@ -551,6 +552,101 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(failed_calls), 1)
         self.assertEqual(failed_calls[0][0], 6001)
         self.assertEqual(failed_calls[0][1]["errorCode"], "input_not_blinded")
+        workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=6001)
+        self.assertIsNotNone(workflow_job)
+        assert workflow_job is not None
+        self.assertEqual(workflow_job.status, "failed")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=6001)
+        self.assertEqual(workflow_events[-1].payload.get("errorCode"), "input_not_blinded")
+        self.assertEqual(workflow_events[-1].payload.get("callbackStatus"), "failed_reported")
+
+    async def test_blindization_reject_should_mark_workflow_failed_when_failed_callback_fails(
+        self,
+    ) -> None:
+        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def failing_failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            raise RuntimeError("failed-callback-down")
+
+        runtime = create_runtime(
+            settings=_build_settings(runtime_retry_max_attempts=1),
+            callback_phase_report_impl=phase_callback,
+            callback_final_report_impl=phase_callback,
+            callback_phase_failed_impl=failing_failed_callback,
+            callback_final_failed_impl=failing_failed_callback,
+        )
+        app = create_app(runtime)
+        bad_payload = _build_phase_request(job_id=6002, idempotency_key="phase:6002").model_dump(
+            mode="json"
+        )
+        bad_payload["messages"][0]["vip"] = True
+
+        bad_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=bad_payload,
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_resp.status_code, 502)
+        self.assertIn("phase_failed_callback_failed", bad_resp.text)
+        workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=6002)
+        self.assertIsNotNone(workflow_job)
+        assert workflow_job is not None
+        self.assertEqual(workflow_job.status, "failed")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=6002)
+        self.assertEqual(workflow_events[-1].payload.get("errorCode"), "phase_failed_callback_failed")
+        self.assertEqual(
+            workflow_events[-1].payload.get("callbackStatus"),
+            "failed_callback_failed",
+        )
+
+    async def test_final_contract_blocked_should_mark_workflow_failed_and_sync_alert(self) -> None:
+        failed_calls: list[tuple[int, dict]] = []
+
+        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def final_failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            failed_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=_build_settings(runtime_retry_max_attempts=1),
+            callback_phase_report_impl=phase_callback,
+            callback_final_report_impl=phase_callback,
+            callback_phase_failed_impl=phase_callback,
+            callback_final_failed_impl=final_failed_callback,
+        )
+        app = create_app(runtime)
+        final_req = _build_final_request(job_id=7301, idempotency_key="final:7301")
+
+        with patch(
+            "app.app_factory._build_final_report_payload",
+            return_value={"winner": "draw", "degradationLevel": 1},
+        ):
+            blocked_resp = await self._post_json(
+                app=app,
+                path="/internal/judge/v3/final/dispatch",
+                payload=final_req.model_dump(mode="json"),
+                internal_key=runtime.settings.ai_internal_key,
+            )
+        self.assertEqual(blocked_resp.status_code, 502)
+        self.assertIn("final_contract_blocked", blocked_resp.text)
+        self.assertEqual(len(failed_calls), 1)
+        self.assertEqual(failed_calls[0][0], 7301)
+        self.assertEqual(failed_calls[0][1]["errorCode"], "final_contract_blocked")
+
+        workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=7301)
+        self.assertIsNotNone(workflow_job)
+        assert workflow_job is not None
+        self.assertEqual(workflow_job.status, "failed")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7301)
+        self.assertEqual(workflow_events[-1].payload.get("errorCode"), "final_contract_blocked")
+        self.assertEqual(workflow_events[-1].payload.get("callbackStatus"), "blocked_failed_reported")
+
+        fact_alerts = await runtime.workflow_runtime.facts.list_audit_alerts(job_id=7301, limit=10)
+        self.assertGreaterEqual(len(fact_alerts), 1)
+        self.assertEqual(fact_alerts[0].alert_type, "final_contract_violation")
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)
