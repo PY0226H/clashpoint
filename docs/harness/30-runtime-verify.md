@@ -44,6 +44,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 2. release/preflight/supply-chain 脚本
 3. 模块专属验证脚本
 4. 手工联调与环境证据
+5. `scripts/harness/ai_judge_evidence_closure.sh`（ai_judge P2/P3/P4 证据聚合）
 
 ### 2.3 当前统一入口能力
 
@@ -54,6 +55,12 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 3. 统一记录 `evidence_missing`
 4. 统一暴露候选脚本与证据来源
 5. `judge-ops` profile 自动归集 ai_judge 模块门禁摘要证据
+
+另外，`ai_judge` 主线新增证据收口脚本：
+
+1. `scripts/harness/ai_judge_evidence_closure.sh`
+2. 统一校验 P2/P3/P4 关键模块证据是否齐全
+3. 输出 `pass/evidence_missing` 与统一 JSON/Markdown 摘要
 
 但当前还没有负责：
 
@@ -86,6 +93,10 @@ bash scripts/harness/journey_verify.sh \
   [--collect-logs] \
   [--collect-metrics] \
   [--collect-trace]
+
+bash scripts/harness/ai_judge_evidence_closure.sh \
+  --emit-json "artifacts/harness/manual-ai-judge-evidence.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-evidence.summary.md"
 ```
 
 ---

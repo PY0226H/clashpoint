@@ -359,8 +359,8 @@ build_profile_checks() {
         "裁判与运维证据扫描（ai_judge）" \
         "$judge_ops_status" \
         "$judge_ops_note" \
-        "$ROOT/artifacts/harness;$ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh;$ROOT/ai_judge_service/tests" \
-        "bash $ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh --mode full" \
+        "$ROOT/artifacts/harness;$ROOT/scripts/harness/ai_judge_evidence_closure.sh;$ROOT/skills/post-module-test-guard/scripts/run_test_gate.sh;$ROOT/ai_judge_service/tests" \
+        "bash $ROOT/scripts/harness/ai_judge_evidence_closure.sh" \
         "$judge_ops_evidence"
       ;;
     release)

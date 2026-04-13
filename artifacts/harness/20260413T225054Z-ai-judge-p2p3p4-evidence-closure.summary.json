@@ -1,0 +1,26 @@
+{
+  "run_id": "20260413T225054Z-ai-judge-p2p3p4-evidence-closure",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "artifacts_dir": "/Users/panyihang/Documents/EchoIsle/artifacts/harness",
+  "status": "evidence_missing",
+  "started_at": "2026-04-13T22:50:54Z",
+  "finished_at": "2026-04-13T22:50:54Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T225054Z-ai-judge-p2p3p4-evidence-closure.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T225054Z-ai-judge-p2p3p4-evidence-closure.summary.md"
+  },
+  "counts": {
+    "required_total": 5,
+    "covered_total": 1,
+    "missing_total": 4
+  },
+  "required_modules": ["ai-judge-p2-judge-mainline-migration","ai-judge-p2-phase-mainline-migration","ai-judge-p3-replay-audit-ops-convergence","ai-judge-p4-agent-runtime-shell","ai-judge-runtime-verify-closure"],
+  "modules": [
+    {"module":"ai-judge-p2-judge-mainline-migration","status":"pass","summary_json":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T115141Z-ai-judge-p2-judge-mainline-migration.summary.json","summary_md":"/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260413T115141Z-ai-judge-p2-judge-mainline-migration.summary.md","note":"模块证据已找到"}
+    ,{"module":"ai-judge-p2-phase-mainline-migration","status":"evidence_missing","summary_json":"缺少模块 summary.json 证据","summary_md":"","note":""}
+    ,{"module":"ai-judge-p3-replay-audit-ops-convergence","status":"evidence_missing","summary_json":"缺少模块 summary.json 证据","summary_md":"","note":""}
+    ,{"module":"ai-judge-p4-agent-runtime-shell","status":"evidence_missing","summary_json":"缺少模块 summary.json 证据","summary_md":"","note":""}
+    ,{"module":"ai-judge-runtime-verify-closure","status":"evidence_missing","summary_json":"缺少模块 summary.json 证据","summary_md":"","note":""}
+  ],
+  "missing_modules": ["ai-judge-p2-phase-mainline-migration","ai-judge-p3-replay-audit-ops-convergence","ai-judge-p4-agent-runtime-shell","ai-judge-runtime-verify-closure"]
+}
