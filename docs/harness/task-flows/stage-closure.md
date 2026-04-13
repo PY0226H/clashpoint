@@ -44,4 +44,4 @@
 1. 收口后可运行 `harness_docs_lint.sh` 验证长期文档结构。
 2. 用户需要提交时，可使用 `post-module-commit-message` 输出 commit message 推荐。
 3. 如果收口内容涉及运行态验证证据，可按需单独运行 `journey_verify.sh`。
-
+4. 若需要先评审草案，可先运行 `scripts/harness/ai_judge_stage_closure_draft.sh` 输出 `completed/todo` 候选项，再决定是否正式写入长期文档。
