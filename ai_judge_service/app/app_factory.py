@@ -21,6 +21,21 @@ from .applications import (
     build_phase_report_payload as build_phase_report_payload_v3_phase,
 )
 from .applications import (
+    build_replay_report_payload as build_replay_report_payload_v3,
+)
+from .applications import (
+    build_replay_report_summary as build_replay_report_summary_v3,
+)
+from .applications import (
+    serialize_alert_item as serialize_alert_item_v3,
+)
+from .applications import (
+    serialize_dispatch_receipt as serialize_dispatch_receipt_v3,
+)
+from .applications import (
+    serialize_outbox_event as serialize_outbox_event_v3,
+)
+from .applications import (
     validate_final_report_payload_contract as validate_final_report_payload_contract_v3_final,
 )
 from .callback_client import (
@@ -124,160 +139,23 @@ _BLIND_SENSITIVE_KEY_TOKENS = {
 
 
 def _serialize_alert_item(alert: Any) -> dict[str, Any]:
-    transitions = getattr(alert, "transitions", [])
-    if not isinstance(transitions, list):
-        transitions = []
-    return {
-        "alertId": alert.alert_id,
-        "jobId": alert.job_id,
-        "scopeId": alert.scope_id,
-        "traceId": alert.trace_id,
-        "type": alert.alert_type,
-        "severity": alert.severity,
-        "title": alert.title,
-        "message": alert.message,
-        "details": alert.details,
-        "status": alert.status,
-        "createdAt": alert.created_at.isoformat(),
-        "updatedAt": alert.updated_at.isoformat(),
-        "acknowledgedAt": alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
-        "resolvedAt": alert.resolved_at.isoformat() if alert.resolved_at else None,
-        "transitions": [
-            {
-                "fromStatus": row.from_status,
-                "toStatus": row.to_status,
-                "actor": row.actor,
-                "reason": row.reason,
-                "changedAt": row.changed_at.isoformat(),
-            }
-            for row in transitions
-        ],
-    }
+    return serialize_alert_item_v3(alert)
 
 
 def _serialize_outbox_event(item: Any) -> dict[str, Any]:
-    return {
-        "eventId": item.event_id,
-        "channel": item.channel,
-        "scopeId": item.scope_id,
-        "jobId": item.job_id,
-        "traceId": item.trace_id,
-        "alertId": item.alert_id,
-        "status": item.status,
-        "payload": item.payload,
-        "deliveryStatus": item.delivery_status,
-        "errorMessage": item.error_message,
-        "createdAt": item.created_at.isoformat(),
-        "updatedAt": item.updated_at.isoformat(),
-    }
+    return serialize_outbox_event_v3(item)
 
 
 def _serialize_dispatch_receipt(item: Any) -> dict[str, Any]:
-    return {
-        "dispatchType": item.dispatch_type,
-        "jobId": item.job_id,
-        "scopeId": item.scope_id,
-        "sessionId": item.session_id,
-        "traceId": item.trace_id,
-        "idempotencyKey": item.idempotency_key,
-        "rubricVersion": item.rubric_version,
-        "judgePolicyVersion": item.judge_policy_version,
-        "topicDomain": item.topic_domain,
-        "retrievalProfile": item.retrieval_profile,
-        "phaseNo": item.phase_no,
-        "phaseStartNo": item.phase_start_no,
-        "phaseEndNo": item.phase_end_no,
-        "messageStartId": item.message_start_id,
-        "messageEndId": item.message_end_id,
-        "messageCount": item.message_count,
-        "status": item.status,
-        "request": item.request,
-        "response": item.response,
-        "createdAt": item.created_at.isoformat(),
-        "updatedAt": item.updated_at.isoformat(),
-    }
+    return serialize_dispatch_receipt_v3(item)
 
 
 def _build_replay_report_payload(record: Any) -> dict[str, Any]:
-    report_summary = record.report_summary if isinstance(record.report_summary, dict) else {}
-    request = record.request if isinstance(record.request, dict) else {}
-    response = record.response if isinstance(record.response, dict) else {}
-    payload = report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
-    winner = report_summary.get("winner") or payload.get("winner")
-    winner_text = str(winner).strip().lower() if winner is not None else None
-    if winner_text not in {"pro", "con", "draw"}:
-        winner_text = None
-
-    raw_alerts = report_summary.get("auditAlerts")
-    if not isinstance(raw_alerts, list):
-        raw_alerts = payload.get("auditAlerts")
-    audit_alerts = [row for row in (raw_alerts or []) if isinstance(row, dict)]
-
-    callback_status = report_summary.get("callbackStatus") or record.callback_status
-    callback_error = report_summary.get("callbackError") or record.callback_error
-
-    return {
-        "jobId": record.job_id,
-        "traceId": record.trace_id,
-        "status": record.status,
-        "dispatchType": report_summary.get("dispatchType"),
-        "request": request,
-        "payload": payload,
-        "winner": winner_text,
-        "auditAlerts": audit_alerts,
-        "callbackStatus": callback_status,
-        "callbackError": callback_error,
-        "reportSummary": {
-            "payload": payload,
-            "winner": winner_text,
-            "auditAlerts": audit_alerts,
-            "callbackStatus": callback_status,
-            "callbackError": callback_error,
-        },
-        "callbackResult": {
-            "callbackStatus": callback_status,
-            "callbackError": callback_error,
-            "response": response,
-        },
-        "replays": [
-            {
-                "replayedAt": item.replayed_at.isoformat(),
-                "winner": item.winner,
-                "needsDrawVote": item.needs_draw_vote,
-                "provider": item.provider,
-            }
-            for item in record.replays
-        ],
-    }
+    return build_replay_report_payload_v3(record)
 
 
 def _build_replay_report_summary(record: Any) -> dict[str, Any]:
-    payload = _build_replay_report_payload(record)
-    audit_alerts = payload.get("auditAlerts")
-    if not isinstance(audit_alerts, list):
-        audit_alerts = []
-    callback_result = payload.get("callbackResult")
-    response = callback_result.get("response") if isinstance(callback_result, dict) else {}
-    if not isinstance(response, dict):
-        response = {}
-    return {
-        "jobId": payload.get("jobId"),
-        "traceId": payload.get("traceId"),
-        "dispatchType": payload.get("dispatchType"),
-        "status": payload.get("status"),
-        "createdAt": record.created_at.isoformat(),
-        "updatedAt": record.updated_at.isoformat(),
-        "winner": payload.get("winner"),
-        "needsDrawVote": payload.get("payload", {}).get("needsDrawVote")
-        if isinstance(payload.get("payload"), dict)
-        else None,
-        "provider": response.get("provider"),
-        "errorCode": response.get("errorCode"),
-        "callbackStatus": payload.get("callbackStatus"),
-        "callbackError": payload.get("callbackError"),
-        "auditAlertCount": len([row for row in audit_alerts if isinstance(row, dict)]),
-        "replayCount": len(payload.get("replays") or []),
-    }
+    return build_replay_report_summary_v3(record)
 
 
 def _normalize_query_datetime(value: datetime | None) -> datetime | None:
