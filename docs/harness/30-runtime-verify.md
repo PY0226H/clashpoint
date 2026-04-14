@@ -1,6 +1,6 @@
 # EchoIsle Runtime Verify
 
-更新时间：2026-04-13
+更新时间：2026-04-14
 状态：P3-1 已完成，judge-ops 证据扫描已接入，其他 profile 细化待继续推进
 
 ---
@@ -50,6 +50,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 8. `scripts/harness/ai_judge_p5_real_calibration_on_env.sh`（ai_judge P5 真实环境校准门禁）
 9. `scripts/harness/ai_judge_fairness_benchmark_freeze.sh`（ai_judge fairness benchmark 阈值冻结）
 10. `scripts/harness/ai_judge_real_env_evidence_closure.sh`（ai_judge real-env 证据收口清单）
+11. `scripts/harness/ai_judge_runtime_sla_freeze.sh`（ai_judge runtime SLA 阈值冻结）
 
 ### 2.3 当前统一入口能力
 
@@ -99,6 +100,13 @@ real-env 证据收口阶段使用专门脚本：
 2. 统一检查五轨道 real 必填键与 marker 就绪状态
 3. 输出 `pass/env_blocked/pending_real_evidence/evidence_missing`
 4. 产出收口清单 `docs/loadtest/evidence/ai_judge_p5_real_env_closure_checklist.md`
+
+runtime SLA 冻结阶段使用专门脚本：
+
+1. `scripts/harness/ai_judge_runtime_sla_freeze.sh`
+2. 读取 latency/fault/trust 三轨道证据与 `ai_judge_p5_real_env.env` 环境 marker
+3. 输出 `pass/local_reference_frozen/pending_data/threshold_violation/env_blocked/evidence_missing`
+4. 产出阈值工件 `docs/loadtest/evidence/ai_judge_runtime_sla_thresholds.env`
 
 但当前还没有负责：
 
@@ -164,6 +172,11 @@ bash scripts/harness/ai_judge_fairness_benchmark_freeze.sh \
 bash scripts/harness/ai_judge_real_env_evidence_closure.sh \
   --emit-json "artifacts/harness/manual-ai-judge-real-env-closure.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-real-env-closure.summary.md"
+
+bash scripts/harness/ai_judge_runtime_sla_freeze.sh \
+  --allow-local-reference \
+  --emit-json "artifacts/harness/manual-ai-judge-runtime-sla-freeze.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-runtime-sla-freeze.summary.md"
 ```
 
 ---
