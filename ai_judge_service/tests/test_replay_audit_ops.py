@@ -131,6 +131,7 @@ def test_build_replay_report_payload_and_summary_should_normalize_winner_and_cou
 
     assert payload["winner"] == "draw"
     assert payload["dispatchType"] == "final"
+    assert payload["verdictContract"]["winner"] is None
     assert payload["replays"][0]["needsDrawVote"] is True
     assert summary["auditAlertCount"] == 1
     assert summary["replayCount"] == 1

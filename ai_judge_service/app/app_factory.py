@@ -34,6 +34,9 @@ from .applications import (
     build_replay_report_summary as build_replay_report_summary_v3,
 )
 from .applications import (
+    build_verdict_contract as build_verdict_contract_v3,
+)
+from .applications import (
     serialize_alert_item as serialize_alert_item_v3,
 )
 from .applications import (
@@ -256,6 +259,10 @@ def _build_replay_report_payload(record: Any) -> dict[str, Any]:
 
 def _build_replay_report_summary(record: Any) -> dict[str, Any]:
     return build_replay_report_summary_v3(record)
+
+
+def _build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
+    return build_verdict_contract_v3(payload)
 
 
 def _normalize_query_datetime(value: datetime | None) -> datetime | None:
@@ -2141,9 +2148,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             else {}
         )
         report_payload = final_report_payload or summary_payload or phase_report_payload
+        verdict_contract = _build_verdict_contract(report_payload)
         winner_raw = (
             report_summary.get("winner")
-            or report_payload.get("winner")
+            or verdict_contract.get("winner")
             or final_response.get("winner")
             or phase_response.get("winner")
         )
@@ -2208,13 +2216,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
             "latestDispatchType": "final" if final_receipt is not None else ("phase" if phase_receipt is not None else None),
             "reportPayload": report_payload,
+            "verdictContract": verdict_contract,
             "winner": winner,
             "needsDrawVote": (
-                bool(report_payload.get("needsDrawVote"))
-                if "needsDrawVote" in report_payload
+                verdict_contract.get("needsDrawVote")
+                if verdict_contract.get("needsDrawVote") is not None
                 else (winner == "draw" if winner is not None else None)
             ),
-            "reviewRequired": bool(report_payload.get("reviewRequired")),
+            "reviewRequired": bool(verdict_contract.get("reviewRequired")),
             "callbackStatus": callback_status,
             "callbackError": callback_error,
             "judgeCore": judge_core_view,
@@ -2273,6 +2282,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "response": record.response,
             "request": record.request,
             "reportSummary": record.report_summary,
+            "verdictContract": _build_verdict_contract(
+                record.report_summary.get("payload")
+                if isinstance(record.report_summary, dict)
+                and isinstance(record.report_summary.get("payload"), dict)
+                else {}
+            ),
             "replays": replay_items,
         }
 
@@ -2350,6 +2365,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 report_payload=report_payload,
                 dispatch_type="final",
             )
+            replay_contract_missing = _validate_final_report_payload_contract(report_payload)
+            if replay_contract_missing:
+                raise HTTPException(
+                    status_code=409,
+                    detail="replay_final_contract_violation: missing_fields="
+                    + ",".join(replay_contract_missing[:12]),
+                )
         else:
             try:
                 phase_request = PhaseDispatchRequest.model_validate(request_snapshot)
@@ -2423,12 +2445,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         )
         replayed_at = replay_row.created_at.isoformat()
+        verdict_contract = _build_verdict_contract(report_payload)
 
         return {
             "caseId": case_id,
             "dispatchType": chosen_dispatch_type,
             "replayedAt": replayed_at,
             "reportPayload": report_payload,
+            "verdictContract": verdict_contract,
             "winner": winner,
             "needsDrawVote": needs_draw_vote,
             "traceId": trace_id,

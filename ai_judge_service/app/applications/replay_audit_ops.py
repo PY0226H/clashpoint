@@ -3,6 +3,82 @@ from __future__ import annotations
 from typing import Any
 
 
+def _normalize_winner(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"pro", "con", "draw"}:
+        return normalized
+    return None
+
+
+def _normalize_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _normalize_side_analysis(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {"pro": "", "con": ""}
+    return {
+        "pro": str(value.get("pro") or "").strip(),
+        "con": str(value.get("con") or "").strip(),
+    }
+
+
+def _normalize_dimension_scores(value: Any) -> dict[str, float | None]:
+    scores = value if isinstance(value, dict) else {}
+    return {
+        "logic": _normalize_float(scores.get("logic")),
+        "evidence": _normalize_float(scores.get("evidence")),
+        "rebuttal": _normalize_float(scores.get("rebuttal")),
+        "clarity": _normalize_float(scores.get("clarity")),
+    }
+
+
+def build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
+    report_payload = payload if isinstance(payload, dict) else {}
+    return {
+        "winner": _normalize_winner(report_payload.get("winner")),
+        "proScore": _normalize_float(report_payload.get("proScore")),
+        "conScore": _normalize_float(report_payload.get("conScore")),
+        "dimensionScores": _normalize_dimension_scores(report_payload.get("dimensionScores")),
+        "debateSummary": str(report_payload.get("debateSummary") or "").strip(),
+        "sideAnalysis": _normalize_side_analysis(report_payload.get("sideAnalysis")),
+        "verdictReason": str(report_payload.get("verdictReason") or "").strip(),
+        "verdictEvidenceRefs": [
+            row
+            for row in (report_payload.get("verdictEvidenceRefs") or [])
+            if isinstance(row, dict)
+        ],
+        "fairnessSummary": (
+            dict(report_payload.get("fairnessSummary"))
+            if isinstance(report_payload.get("fairnessSummary"), dict)
+            else None
+        ),
+        "auditAlerts": [
+            row for row in (report_payload.get("auditAlerts") or []) if isinstance(row, dict)
+        ],
+        "errorCodes": [
+            str(row).strip()
+            for row in (report_payload.get("errorCodes") or [])
+            if str(row).strip()
+        ],
+        "degradationLevel": (
+            int(report_payload.get("degradationLevel"))
+            if isinstance(report_payload.get("degradationLevel"), int)
+            else None
+        ),
+        "needsDrawVote": (
+            bool(report_payload.get("needsDrawVote"))
+            if "needsDrawVote" in report_payload
+            else None
+        ),
+        "reviewRequired": bool(report_payload.get("reviewRequired")),
+    }
+
+
 def serialize_alert_item(alert: Any) -> dict[str, Any]:
     transitions = getattr(alert, "transitions", [])
     if not isinstance(transitions, list):
@@ -83,10 +159,7 @@ def build_replay_report_payload(record: Any) -> dict[str, Any]:
     request = record.request if isinstance(record.request, dict) else {}
     response = record.response if isinstance(record.response, dict) else {}
     payload = report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
-    winner = report_summary.get("winner") or payload.get("winner")
-    winner_text = str(winner).strip().lower() if winner is not None else None
-    if winner_text not in {"pro", "con", "draw"}:
-        winner_text = None
+    winner_text = _normalize_winner(report_summary.get("winner") or payload.get("winner"))
 
     raw_alerts = report_summary.get("auditAlerts")
     if not isinstance(raw_alerts, list):
@@ -96,6 +169,7 @@ def build_replay_report_payload(record: Any) -> dict[str, Any]:
     callback_status = report_summary.get("callbackStatus") or record.callback_status
     callback_error = report_summary.get("callbackError") or record.callback_error
 
+    verdict_contract = build_verdict_contract(payload)
     return {
         "caseId": record.job_id,
         "traceId": record.trace_id,
@@ -119,6 +193,7 @@ def build_replay_report_payload(record: Any) -> dict[str, Any]:
             "callbackError": callback_error,
             "response": response,
         },
+        "verdictContract": verdict_contract,
         "replays": [
             {
                 "replayedAt": item.replayed_at.isoformat(),

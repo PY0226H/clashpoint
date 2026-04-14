@@ -368,6 +368,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(detail_payload["receipts"]["phase"])
         self.assertIsNotNone(detail_payload["receipts"]["final"])
         self.assertIn(detail_payload["winner"], {"pro", "con", "draw"})
+        self.assertIn("verdictContract", detail_payload)
+        self.assertEqual(
+            detail_payload["verdictContract"]["winner"],
+            detail_payload["winner"],
+        )
         self.assertIn("trustAttestation", detail_payload["reportPayload"])
         self.assertEqual(detail_payload["judgeCore"]["stage"], "reported")
         self.assertEqual(detail_payload["judgeCore"]["version"], "v1")
@@ -891,6 +896,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         replay_payload = replay_resp.json()
         self.assertEqual(replay_payload["dispatchType"], "final")
         self.assertIn("reportPayload", replay_payload)
+        self.assertIn("verdictContract", replay_payload)
         self.assertIn("debateSummary", replay_payload["reportPayload"])
         self.assertIn("trustAttestation", replay_payload["reportPayload"])
         self.assertEqual(replay_payload["judgeCoreStage"], "replay_computed")
@@ -1102,6 +1108,65 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         replay_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7101)
         self.assertEqual(replay_events[-1].event_type, "replay_marked")
         self.assertEqual(replay_events[-1].payload.get("judgeCoreStage"), "replay_computed")
+
+    async def test_replay_post_should_block_when_final_contract_missing_fields(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_req = _build_phase_request(case_id=7102, idempotency_key="phase:7102")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(case_id=7102, idempotency_key="final:7102")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+        before_replay_rows = await runtime.workflow_runtime.facts.list_replay_records(
+            job_id=7102,
+            limit=100,
+        )
+        before_replay_count = len(before_replay_rows)
+
+        broken_payload = {
+            "winner": "pro",
+            "proScore": 70.0,
+            "conScore": 62.0,
+            "dimensionScores": {"logic": 70.0},
+        }
+        with patch("app.app_factory._build_final_report_payload", return_value=broken_payload):
+            replay_resp = await self._post(
+                app=app,
+                path="/internal/judge/cases/7102/replay?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+        self.assertEqual(replay_resp.status_code, 409)
+        self.assertIn("replay_final_contract_violation", replay_resp.text)
+
+        after_replay_rows = await runtime.workflow_runtime.facts.list_replay_records(
+            job_id=7102,
+            limit=100,
+        )
+        self.assertEqual(len(after_replay_rows), before_replay_count)
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7102)
+        self.assertNotEqual(workflow_events[-1].event_type, "replay_marked")
 
     async def test_alert_ack_should_sync_status_to_fact_repository(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
