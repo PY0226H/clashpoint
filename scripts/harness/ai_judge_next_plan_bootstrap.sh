@@ -119,33 +119,38 @@ render_bootstrap_block() {
   cat >"$out_file" <<EOF_BLOCK
 $START_MARK
 
-## 2. 下一阶段执行蓝图（P5）
+## 2. 下一阶段执行蓝图（P5→P6）
 
 ### 2.1 目标与边界
 
 1. 保持“真实环境结论优先”，本机参考仅用于预校准，不替代 real-env \`pass\`。
-2. 将 P5 从“模板/阻塞态”推进到“可复核的本机参考证据 + 真实环境冻结结论”双轨闭环。
-3. 并行补强公平门禁中非环境阻塞项（Claim Graph、多法官分歧治理、Fairness Sentinel）。
+2. 将 P5 从“本机参考通过”推进到“真实环境可冻结”收口。
+3. 启动 P6：把 Agent 方案中剩余的三类主缺口变成可执行模块（fairness benchmark 冻结、Claim Graph、Policy Registry）。
 
 ### 2.2 模块编排（顺序）
 
 | 模块 | 状态 | 本轮目标 | 验证方式 |
 | --- | --- | --- | --- |
-| ai-judge-next-plan-bootstrap | 进行中（phase 已完成） | 固化下一阶段计划模板与执行顺序 | 脚本回归测试 + plan 文档差异核对 |
-| ai-judge-p5-local-reference-evidence-fill | 待开始 | 在本机补齐五类轨道的 local reference 证据字段，推动到 \`local_reference_pass\` | \`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --allow-local-reference\` |
-| ai-judge-p5-real-calibration-on-env | 进行中（local_reference_pending） | 真实环境就绪后完成五类轨道 real 证据冻结并达成 \`pass\` | \`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh\` |
-| ai-judge-fairness-gate-bootstrap | 待开始 | 收敛非环境阻塞公平门禁（swap/style/panel disagreement）到可执行计划 | 模块测试 + 计划与证据文档收口 |
+| ai-judge-next-plan-bootstrap | 已完成 | 固化下一阶段计划模板与执行顺序 | 脚本回归测试 + plan 文档差异核对 |
+| ai-judge-p5-local-reference-evidence-fill | 已完成 | 本机五轨道证据已齐备并达成 \`local_reference_pass\` | \`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --allow-local-reference\` |
+| ai-judge-p5-real-calibration-on-env | 进行中（local_reference_pass / real_pending） | 真实环境就绪后完成五类轨道 real 证据冻结并达成 \`pass\` | \`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh\` |
+| ai-judge-fairness-gate-implementation-phase2 | 已完成 | panel disagreement + review queue + manual decision 闭环 | \`pytest -q ai_judge_service/tests/test_judge_mainline.py ai_judge_service/tests/test_app_factory.py\` |
+| ai-judge-fairness-benchmark-freeze | 待开始 | 冻结 fairness benchmark 阈值与对外口径，形成可审计基线 | benchmark 脚本 + 阈值文档 + 回归 |
+| ai-judge-claim-graph-bootstrap | 待开始 | 建立 Claim Graph 最小可用主链（提取/冲突/引用） | domain 单测 + final payload 回归 |
+| ai-judge-policy-registry-bootstrap | 待开始 | Prompt/Tool/Policy Registry 最小闭环并接入 runtime | 配置/路由/回归测试 |
 
 ### 2.3 验收口径
 
 1. 本机参考口径：允许 \`local_reference_pass\`，但不得覆盖真实环境结论。
 2. 真实环境口径：仅 \`status=pass\` 视为 P5 校准完成。
-3. 文档口径：\`当前开发计划.md\`、\`todo.md\`、\`runtime-verify.md\` 的状态描述保持一致。
+3. P6 口径：每个模块必须给出可执行 DoD、验证命令和证据路径。
+4. 文档口径：\`当前开发计划.md\`、\`todo.md\`、\`runtime-verify.md\` 的状态描述保持一致。
 
 ### 2.4 风险与阻塞
 
 1. 真实环境样本不足时，统一保持 \`local_reference_*\` 或 \`pending_real_data\`，禁止伪造 real 证据。
 2. 若本机采样与真实环境方向冲突，以真实环境结论为准并回写差异说明。
+3. Claim Graph / Policy Registry 初版必须保持 hard-cut 主链，不引入长期兼容双轨。
 
 ### 2.5 参考资料
 

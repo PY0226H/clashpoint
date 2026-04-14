@@ -107,7 +107,7 @@ expect_contains "second json replaced" '"operation": "replaced"' "$SECOND_JSON"
 BLOCK_COUNT_SECOND="$(grep -F "AI_JUDGE_NEXT_PLAN_BOOTSTRAP:START" "$PLAN_DOC" | wc -l | tr -d ' ')"
 expect_equals "second marker occurrences" "1" "$BLOCK_COUNT_SECOND"
 
-BLUEPRINT_COUNT="$(grep -F "## 2. 下一阶段执行蓝图（P5）" "$PLAN_DOC" | wc -l | tr -d ' ')"
+BLUEPRINT_COUNT="$(grep -F "## 2. 下一阶段执行蓝图（P5→P6）" "$PLAN_DOC" | wc -l | tr -d ' ')"
 expect_equals "blueprint section occurrences" "1" "$BLUEPRINT_COUNT"
 
 # 场景3：存在多个 marker，脚本应 fail
