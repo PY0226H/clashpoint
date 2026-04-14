@@ -168,6 +168,20 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
                 "conflictRefs": [],
                 "stats": {"totalEntries": 0},
             },
+            "verdict_ledger": {
+                "version": "v2-panel-arbiter-opinion",
+                "scoreCard": {"proScore": 71.5, "conScore": 71.5, "dimensionScores": {"logic": 72.0}},
+                "panelDecisions": {"probeWinners": {"agent3Weighted": "pro"}},
+                "arbitration": {"winnerAfterArbitration": "draw", "reviewRequired": True},
+                "pivotalMoments": [],
+                "decisiveEvidenceRefs": [],
+            },
+            "opinion_pack": {
+                "version": "v2-opinion-pack",
+                "userReport": {"winner": "draw", "debateSummary": "终局摘要"},
+                "opsSummary": {"reviewRequired": True},
+                "internalReview": {"traceId": "trace-4"},
+            },
             "verdict_evidence_refs": [{"messageId": 3001}],
             "phase_rollup_summary": [{"phaseNo": 1}],
             "retrieval_snapshot_rollup": [{"chunkId": "c-1"}],
@@ -185,6 +199,8 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
         self.assertTrue(report.rejudge_triggered)
         self.assertIn("stats", report.claim_graph_summary)
         self.assertIn("stats", report.evidence_ledger)
+        self.assertIn("scoreCard", report.verdict_ledger)
+        self.assertIn("userReport", report.opinion_pack)
 
 
 if __name__ == "__main__":

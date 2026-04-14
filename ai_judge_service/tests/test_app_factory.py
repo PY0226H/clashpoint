@@ -381,11 +381,15 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         case_evidence = detail_payload["caseEvidence"]
         self.assertTrue(case_evidence["hasClaimGraph"])
         self.assertTrue(case_evidence["hasEvidenceLedger"])
+        self.assertTrue(case_evidence["hasVerdictLedger"])
+        self.assertTrue(case_evidence["hasOpinionPack"])
         self.assertTrue(case_evidence["hasTrustAttestation"])
         self.assertIsInstance(case_evidence["claimGraph"], dict)
         self.assertIsInstance(case_evidence["claimGraphSummary"], dict)
         self.assertIsInstance(case_evidence["evidenceLedger"], dict)
         self.assertIsInstance(case_evidence["evidenceLedger"]["entries"], list)
+        self.assertIsInstance(case_evidence["verdictLedger"], dict)
+        self.assertIsInstance(case_evidence["opinionPack"], dict)
         self.assertIsInstance(case_evidence["policySnapshot"], dict)
         self.assertTrue(str(case_evidence["policyVersion"] or "").strip())
         self.assertIsInstance(case_evidence["promptSnapshot"], dict)
@@ -816,6 +820,20 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "verdictReferencedCount": 0,
                 },
             },
+            "verdictLedger": {
+                "version": "v2-panel-arbiter-opinion",
+                "scoreCard": {"proScore": 61.0, "conScore": 60.2, "dimensionScores": {"logic": 60.0}},
+                "panelDecisions": {"probeWinners": {"agent3Weighted": "pro"}},
+                "arbitration": {"winnerAfterArbitration": "draw", "reviewRequired": True},
+                "pivotalMoments": [],
+                "decisiveEvidenceRefs": [],
+            },
+            "opinionPack": {
+                "version": "v2-opinion-pack",
+                "userReport": {"winner": "draw", "debateSummary": "summary"},
+                "opsSummary": {"reviewRequired": True},
+                "internalReview": {"traceId": "trace-final-7401"},
+            },
             "verdictEvidenceRefs": [],
             "phaseRollupSummary": [{"phaseNo": 1}],
             "retrievalSnapshotRollup": [],
@@ -922,6 +940,20 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "conflictRefCount": 0,
                     "verdictReferencedCount": 0,
                 },
+            },
+            "verdictLedger": {
+                "version": "v2-panel-arbiter-opinion",
+                "scoreCard": {"proScore": 60.8, "conScore": 60.2, "dimensionScores": {"logic": 60.5}},
+                "panelDecisions": {"probeWinners": {"agent3Weighted": "pro"}},
+                "arbitration": {"winnerAfterArbitration": "draw", "reviewRequired": True},
+                "pivotalMoments": [],
+                "decisiveEvidenceRefs": [],
+            },
+            "opinionPack": {
+                "version": "v2-opinion-pack",
+                "userReport": {"winner": "draw", "debateSummary": "summary"},
+                "opsSummary": {"reviewRequired": True},
+                "internalReview": {"traceId": "trace-final-7411"},
             },
             "verdictEvidenceRefs": [],
             "phaseRollupSummary": [{"phaseNo": 1}],

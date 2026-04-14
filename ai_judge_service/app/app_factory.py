@@ -330,6 +330,24 @@ def _build_case_evidence_view(
         if isinstance(payload.get("claimGraphSummary"), dict)
         else None
     )
+    verdict_ledger = (
+        payload.get("verdictLedger")
+        if isinstance(payload.get("verdictLedger"), dict)
+        else (
+            contract.get("verdictLedger")
+            if isinstance(contract.get("verdictLedger"), dict)
+            else None
+        )
+    )
+    opinion_pack = (
+        payload.get("opinionPack")
+        if isinstance(payload.get("opinionPack"), dict)
+        else (
+            contract.get("opinionPack")
+            if isinstance(contract.get("opinionPack"), dict)
+            else None
+        )
+    )
     evidence_ledger = (
         payload.get("evidenceLedger")
         if isinstance(payload.get("evidenceLedger"), dict)
@@ -425,6 +443,8 @@ def _build_case_evidence_view(
         "claimGraph": claim_graph,
         "claimGraphSummary": claim_graph_summary,
         "evidenceLedger": evidence_ledger,
+        "verdictLedger": verdict_ledger,
+        "opinionPack": opinion_pack,
         "policySnapshot": policy_snapshot,
         "policyVersion": policy_version,
         "promptSnapshot": prompt_snapshot,
@@ -442,6 +462,8 @@ def _build_case_evidence_view(
         },
         "hasClaimGraph": claim_graph is not None,
         "hasEvidenceLedger": evidence_ledger is not None,
+        "hasVerdictLedger": verdict_ledger is not None,
+        "hasOpinionPack": opinion_pack is not None,
         "hasTrustAttestation": trust_attestation is not None,
     }
 

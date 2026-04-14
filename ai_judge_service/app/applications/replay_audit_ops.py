@@ -52,6 +52,16 @@ def build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
             if isinstance(report_payload.get("evidenceLedger"), dict)
             else None
         ),
+        "verdictLedger": (
+            dict(report_payload.get("verdictLedger"))
+            if isinstance(report_payload.get("verdictLedger"), dict)
+            else None
+        ),
+        "opinionPack": (
+            dict(report_payload.get("opinionPack"))
+            if isinstance(report_payload.get("opinionPack"), dict)
+            else None
+        ),
         "verdictEvidenceRefs": [
             row
             for row in (report_payload.get("verdictEvidenceRefs") or [])

@@ -147,6 +147,8 @@ class FinalReportInput(BaseModel):
     claim_graph: dict[str, Any] = {}
     claim_graph_summary: dict[str, Any] = {}
     evidence_ledger: dict[str, Any] = {}
+    verdict_ledger: dict[str, Any] = {}
+    opinion_pack: dict[str, Any] = {}
     verdict_evidence_refs: list[dict[str, Any]] = []
     phase_rollup_summary: list[dict[str, Any]] = []
     retrieval_snapshot_rollup: list[dict[str, Any]] = []

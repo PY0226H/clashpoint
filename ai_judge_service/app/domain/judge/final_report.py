@@ -106,6 +106,233 @@ def _index_retrieval_items(payload: dict[str, Any], *, side: str) -> dict[str, d
     return out
 
 
+def _collect_pivotal_moments(phase_rollup_summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked: list[tuple[float, int, dict[str, Any]]] = []
+    for row in phase_rollup_summary:
+        if not isinstance(row, dict):
+            continue
+        try:
+            phase_no = int(row.get("phaseNo"))
+        except (TypeError, ValueError):
+            continue
+        pro_score = _safe_float(row.get("proScore"), default=50.0)
+        con_score = _safe_float(row.get("conScore"), default=50.0)
+        gap = round(abs(pro_score - con_score), 2)
+        ranked.append((gap, phase_no, row))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    out: list[dict[str, Any]] = []
+    for gap, _, row in ranked[:5]:
+        out.append(
+            {
+                "phaseNo": row.get("phaseNo"),
+                "winnerHint": row.get("winnerHint"),
+                "scoreGap": gap,
+                "messageStartId": row.get("messageStartId"),
+                "messageEndId": row.get("messageEndId"),
+                "messageCount": row.get("messageCount"),
+                "errorCodes": [
+                    str(item).strip()
+                    for item in (row.get("errorCodes") or [])
+                    if str(item).strip()
+                ],
+            }
+        )
+    return out
+
+
+def _build_claim_verdict(
+    *,
+    winner: str,
+    claim_graph_summary: dict[str, Any],
+) -> dict[str, Any]:
+    core_claims = (
+        claim_graph_summary.get("coreClaims")
+        if isinstance(claim_graph_summary.get("coreClaims"), dict)
+        else {}
+    )
+    pro_claims = core_claims.get("pro") if isinstance(core_claims.get("pro"), list) else []
+    con_claims = core_claims.get("con") if isinstance(core_claims.get("con"), list) else []
+
+    def _normalize_claims(rows: list[Any], *, side: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for row in rows[:6]:
+            if not isinstance(row, dict):
+                continue
+            out.append(
+                {
+                    "claimId": row.get("claimId"),
+                    "side": side,
+                    "text": row.get("text"),
+                    "phaseFirstNo": row.get("phaseFirstNo"),
+                    "supportCount": row.get("supportCount"),
+                    "evidenceRefCount": row.get("evidenceRefCount"),
+                }
+            )
+        return out
+
+    if winner == "pro":
+        accepted_claims = _normalize_claims(pro_claims, side="pro")
+        rejected_claims = _normalize_claims(con_claims, side="con")
+    elif winner == "con":
+        accepted_claims = _normalize_claims(con_claims, side="con")
+        rejected_claims = _normalize_claims(pro_claims, side="pro")
+    else:
+        # 平局场景下保留双方主张，避免强行给出“被否决”解释。
+        accepted_claims = _normalize_claims(pro_claims[:3], side="pro") + _normalize_claims(
+            con_claims[:3], side="con"
+        )
+        rejected_claims = []
+
+    unresolved = (
+        claim_graph_summary.get("unansweredClaims")
+        if isinstance(claim_graph_summary.get("unansweredClaims"), list)
+        else []
+    )
+    unresolved_claims: list[dict[str, Any]] = []
+    for row in unresolved[:8]:
+        if not isinstance(row, dict):
+            continue
+        unresolved_claims.append(
+            {
+                "claimId": row.get("claimId"),
+                "side": row.get("side"),
+                "text": row.get("text"),
+                "phaseFirstNo": row.get("phaseFirstNo"),
+            }
+        )
+    return {
+        "acceptedClaims": accepted_claims,
+        "rejectedClaims": rejected_claims,
+        "unresolvedClaims": unresolved_claims,
+    }
+
+
+def _build_verdict_ledger(
+    *,
+    winner: str,
+    pro_score: float,
+    con_score: float,
+    dimension_scores: dict[str, Any],
+    winner_first: str,
+    winner_second: str,
+    winner_third: str,
+    winner_before_fairness_gate: str,
+    review_required: bool,
+    rejudge_triggered: bool,
+    needs_draw_vote: bool,
+    fairness_summary: dict[str, Any],
+    error_codes: list[str],
+    claim_graph_summary: dict[str, Any],
+    phase_rollup_summary: list[dict[str, Any]],
+    verdict_evidence_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    panel_decisions = {
+        "probeWinners": {
+            "agent3Weighted": winner_first,
+            "agent2Path": winner_second,
+            "agent1Dimensions": winner_third,
+        },
+        "panelHighDisagreement": bool(fairness_summary.get("panelHighDisagreement")),
+        "scoreGap": _safe_float(fairness_summary.get("scoreGap"), default=0.0),
+        "phaseCountUsed": len(phase_rollup_summary),
+    }
+    arbitration = {
+        "winnerBeforeFairnessGate": winner_before_fairness_gate,
+        "winnerAfterArbitration": winner,
+        "reviewRequired": review_required,
+        "rejudgeTriggered": rejudge_triggered,
+        "needsDrawVote": needs_draw_vote,
+        "errorCodes": [str(code).strip() for code in error_codes if str(code).strip()],
+    }
+    return {
+        "version": "v2-panel-arbiter-opinion",
+        "winner": winner,
+        "scoreCard": {
+            "proScore": round(_clamp_score(pro_score), 2),
+            "conScore": round(_clamp_score(con_score), 2),
+            "dimensionScores": dict(dimension_scores),
+        },
+        "panelDecisions": panel_decisions,
+        "arbitration": arbitration,
+        "claimVerdict": _build_claim_verdict(winner=winner, claim_graph_summary=claim_graph_summary),
+        "pivotalMoments": _collect_pivotal_moments(phase_rollup_summary),
+        "decisiveEvidenceRefs": [
+            dict(row) for row in verdict_evidence_refs[:8] if isinstance(row, dict)
+        ],
+        "fairnessSummary": fairness_summary if isinstance(fairness_summary, dict) else {},
+    }
+
+
+def _build_opinion_pack(
+    *,
+    winner: str,
+    pro_score: float,
+    con_score: float,
+    debate_summary: str,
+    side_analysis: dict[str, Any],
+    verdict_reason: str,
+    verdict_ledger: dict[str, Any],
+    fairness_summary: dict[str, Any],
+    audit_alerts: list[dict[str, Any]],
+    error_codes: list[str],
+    degradation_level: int,
+    review_required: bool,
+    needs_draw_vote: bool,
+    trace_id: str,
+    claim_graph_summary: dict[str, Any],
+    evidence_ledger: dict[str, Any],
+) -> dict[str, Any]:
+    alert_types: list[str] = []
+    for row in audit_alerts:
+        if not isinstance(row, dict):
+            continue
+        token = str(row.get("type") or "").strip()
+        if token and token not in alert_types:
+            alert_types.append(token)
+    return {
+        "version": "v2-opinion-pack",
+        "userReport": {
+            "winner": winner,
+            "debateSummary": debate_summary,
+            "sideAnalysis": side_analysis if isinstance(side_analysis, dict) else {},
+            "verdictReason": verdict_reason,
+            "scoreCard": {
+                "proScore": round(_clamp_score(pro_score), 2),
+                "conScore": round(_clamp_score(con_score), 2),
+            },
+        },
+        "opsSummary": {
+            "reviewRequired": review_required,
+            "needsDrawVote": needs_draw_vote,
+            "degradationLevel": int(degradation_level),
+            "errorCodes": [str(code).strip() for code in error_codes if str(code).strip()],
+            "auditAlertTypes": alert_types,
+        },
+        "internalReview": {
+            "traceId": trace_id,
+            "fairnessSummary": fairness_summary if isinstance(fairness_summary, dict) else {},
+            "claimStats": (
+                claim_graph_summary.get("stats")
+                if isinstance(claim_graph_summary.get("stats"), dict)
+                else {}
+            ),
+            "evidenceStats": (
+                evidence_ledger.get("stats") if isinstance(evidence_ledger.get("stats"), dict) else {}
+            ),
+        },
+        "pivotalMoments": (
+            verdict_ledger.get("pivotalMoments")
+            if isinstance(verdict_ledger.get("pivotalMoments"), list)
+            else []
+        ),
+        "decisiveEvidenceRefs": (
+            verdict_ledger.get("decisiveEvidenceRefs")
+            if isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list)
+            else []
+        ),
+    }
+
+
 def _evaluate_fairness_gate(
     *,
     winner_first: str,
@@ -338,8 +565,34 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
         if not evidence_id:
             missing.append("verdictEvidenceRefs.evidenceId")
             continue
-        if evidence_ids and evidence_id not in evidence_ids:
+        if evidence_id not in evidence_ids:
             missing.append("verdictEvidenceRefs.evidenceId_not_found")
+
+    verdict_ledger = payload.get("verdictLedger")
+    if not isinstance(verdict_ledger, dict):
+        missing.append("verdictLedger")
+    else:
+        if not isinstance(verdict_ledger.get("scoreCard"), dict):
+            missing.append("verdictLedger.scoreCard")
+        if not isinstance(verdict_ledger.get("panelDecisions"), dict):
+            missing.append("verdictLedger.panelDecisions")
+        if not isinstance(verdict_ledger.get("arbitration"), dict):
+            missing.append("verdictLedger.arbitration")
+        if not isinstance(verdict_ledger.get("pivotalMoments"), list):
+            missing.append("verdictLedger.pivotalMoments")
+        if not isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list):
+            missing.append("verdictLedger.decisiveEvidenceRefs")
+
+    opinion_pack = payload.get("opinionPack")
+    if not isinstance(opinion_pack, dict):
+        missing.append("opinionPack")
+    else:
+        if not isinstance(opinion_pack.get("userReport"), dict):
+            missing.append("opinionPack.userReport")
+        if not isinstance(opinion_pack.get("opsSummary"), dict):
+            missing.append("opinionPack.opsSummary")
+        if not isinstance(opinion_pack.get("internalReview"), dict):
+            missing.append("opinionPack.internalReview")
 
     winner_first = str(payload.get("winnerFirst") or "").strip().lower()
     winner_second = str(payload.get("winnerSecond") or "").strip().lower()
@@ -696,6 +949,7 @@ def build_final_report_payload(
     for code in fairness_error_codes:
         if code not in error_codes:
             error_codes.append(code)
+    winner_before_fairness_gate = winner
     if review_required:
         if winner != "draw":
             winner = "draw"
@@ -780,6 +1034,42 @@ def build_final_report_payload(
         if isinstance(claim_graph_payload.get("claimGraphSummary"), dict)
         else {}
     )
+    verdict_ledger = _build_verdict_ledger(
+        winner=winner,
+        pro_score=pro_score,
+        con_score=con_score,
+        dimension_scores=dimension_scores,
+        winner_first=winner_first,
+        winner_second=winner_second,
+        winner_third=winner_third,
+        winner_before_fairness_gate=winner_before_fairness_gate,
+        review_required=review_required,
+        rejudge_triggered=rejudge_triggered,
+        needs_draw_vote=needs_draw_vote,
+        fairness_summary=fairness_summary,
+        error_codes=error_codes,
+        claim_graph_summary=claim_graph_summary,
+        phase_rollup_summary=phase_rollup_summary,
+        verdict_evidence_refs=verdict_evidence_refs,
+    )
+    opinion_pack = _build_opinion_pack(
+        winner=winner,
+        pro_score=pro_score,
+        con_score=con_score,
+        debate_summary=debate_summary,
+        side_analysis=side_analysis,
+        verdict_reason=verdict_reason,
+        verdict_ledger=verdict_ledger,
+        fairness_summary=fairness_summary,
+        audit_alerts=audit_alerts,
+        error_codes=error_codes,
+        degradation_level=degradation_level,
+        review_required=review_required,
+        needs_draw_vote=needs_draw_vote,
+        trace_id=request.trace_id,
+        claim_graph_summary=claim_graph_summary,
+        evidence_ledger=evidence_ledger,
+    )
 
     return {
         "sessionId": request.session_id,
@@ -793,6 +1083,8 @@ def build_final_report_payload(
         "claimGraph": claim_graph,
         "claimGraphSummary": claim_graph_summary,
         "evidenceLedger": evidence_ledger,
+        "verdictLedger": verdict_ledger,
+        "opinionPack": opinion_pack,
         "verdictEvidenceRefs": verdict_evidence_refs[:16],
         "phaseRollupSummary": phase_rollup_summary,
         "retrievalSnapshotRollup": retrieval_snapshot_rollup,
@@ -831,6 +1123,25 @@ def build_final_report_payload(
             "evidenceLedgerStats": evidence_ledger.get("stats")
             if isinstance(evidence_ledger.get("stats"), dict)
             else {},
+            "panelArbiter": {
+                "version": verdict_ledger.get("version"),
+                "panelDecisions": (
+                    verdict_ledger.get("panelDecisions")
+                    if isinstance(verdict_ledger.get("panelDecisions"), dict)
+                    else {}
+                ),
+                "arbitration": (
+                    verdict_ledger.get("arbitration")
+                    if isinstance(verdict_ledger.get("arbitration"), dict)
+                    else {}
+                ),
+                "pivotalMomentCount": len(
+                    verdict_ledger.get("pivotalMoments")
+                    if isinstance(verdict_ledger.get("pivotalMoments"), list)
+                    else []
+                ),
+            },
+            "opinionPackVersion": opinion_pack.get("version"),
             "fairnessGate": fairness_summary,
         },
         "fairnessSummary": fairness_summary,

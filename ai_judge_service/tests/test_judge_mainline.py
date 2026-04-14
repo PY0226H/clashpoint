@@ -130,6 +130,12 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["evidenceLedger"], dict)
     assert isinstance(payload["evidenceLedger"]["entries"], list)
     assert isinstance(payload["evidenceLedger"]["refsById"], dict)
+    assert isinstance(payload["verdictLedger"], dict)
+    assert isinstance(payload["verdictLedger"]["panelDecisions"], dict)
+    assert isinstance(payload["verdictLedger"]["arbitration"], dict)
+    assert isinstance(payload["opinionPack"], dict)
+    assert isinstance(payload["opinionPack"]["userReport"], dict)
+    assert isinstance(payload["opinionPack"]["opsSummary"], dict)
     assert payload["claimGraph"]["stats"]["conflictEdges"] >= 1
     assert payload["claimGraphSummary"]["stats"]["totalClaims"] >= 2
     assert all(
@@ -150,6 +156,8 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["judgeTrace"], dict)
     assert isinstance(payload["judgeTrace"]["claimGraphSummary"], dict)
     assert isinstance(payload["judgeTrace"]["evidenceLedgerStats"], dict)
+    assert isinstance(payload["judgeTrace"]["panelArbiter"], dict)
+    assert payload["judgeTrace"]["opinionPackVersion"] == "v2-opinion-pack"
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -357,6 +365,8 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
     assert "claimGraph" in missing
     assert "claimGraphSummary" in missing
     assert "evidenceLedger" in missing
+    assert "verdictLedger" in missing
+    assert "opinionPack" in missing
     assert "judgeTrace" in missing
 
 
