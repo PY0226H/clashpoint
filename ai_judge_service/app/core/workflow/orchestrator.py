@@ -6,12 +6,20 @@ from typing import Any
 from app.domain.workflow import (
     WORKFLOW_EVENT_REGISTERED,
     WORKFLOW_EVENT_STATUS_CHANGED,
+    WORKFLOW_STATUS_ARBITRATED,
+    WORKFLOW_STATUS_ARCHIVED,
+    WORKFLOW_STATUS_BLINDED,
+    WORKFLOW_STATUS_BLOCKED_FAILED,
+    WORKFLOW_STATUS_CALLBACK_REPORTED,
     WORKFLOW_STATUS_CASE_BUILT,
-    WORKFLOW_STATUS_COMPLETED,
-    WORKFLOW_STATUS_FAILED,
+    WORKFLOW_STATUS_CLAIM_GRAPH_READY,
+    WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+    WORKFLOW_STATUS_EVIDENCE_READY,
+    WORKFLOW_STATUS_FAIRNESS_CHECKED,
+    WORKFLOW_STATUS_OPINION_WRITTEN,
+    WORKFLOW_STATUS_PANEL_JUDGED,
     WORKFLOW_STATUS_QUEUED,
     WORKFLOW_STATUS_REVIEW_REQUIRED,
-    WORKFLOW_STATUS_RUNNING,
     WorkflowJob,
     WorkflowPort,
 )
@@ -20,29 +28,83 @@ from .errors import WorkflowTransitionError
 
 _ALLOWED_TRANSITIONS = {
     WORKFLOW_STATUS_QUEUED: {
+        WORKFLOW_STATUS_BLINDED,
         WORKFLOW_STATUS_CASE_BUILT,
-        WORKFLOW_STATUS_RUNNING,
         WORKFLOW_STATUS_REVIEW_REQUIRED,
-        WORKFLOW_STATUS_FAILED,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_BLINDED: {
+        WORKFLOW_STATUS_CASE_BUILT,
+        WORKFLOW_STATUS_CLAIM_GRAPH_READY,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
     },
     WORKFLOW_STATUS_CASE_BUILT: {
-        WORKFLOW_STATUS_RUNNING,
+        WORKFLOW_STATUS_CLAIM_GRAPH_READY,
         WORKFLOW_STATUS_REVIEW_REQUIRED,
-        WORKFLOW_STATUS_FAILED,
-        WORKFLOW_STATUS_COMPLETED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
     },
-    WORKFLOW_STATUS_RUNNING: {
+    WORKFLOW_STATUS_CLAIM_GRAPH_READY: {
+        WORKFLOW_STATUS_EVIDENCE_READY,
         WORKFLOW_STATUS_REVIEW_REQUIRED,
-        WORKFLOW_STATUS_FAILED,
-        WORKFLOW_STATUS_COMPLETED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_EVIDENCE_READY: {
+        WORKFLOW_STATUS_PANEL_JUDGED,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_PANEL_JUDGED: {
+        WORKFLOW_STATUS_FAIRNESS_CHECKED,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_FAIRNESS_CHECKED: {
+        WORKFLOW_STATUS_ARBITRATED,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_ARBITRATED: {
+        WORKFLOW_STATUS_OPINION_WRITTEN,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_OPINION_WRITTEN: {
+        WORKFLOW_STATUS_CALLBACK_REPORTED,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
+    },
+    WORKFLOW_STATUS_CALLBACK_REPORTED: {
+        WORKFLOW_STATUS_ARCHIVED,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+    },
+    WORKFLOW_STATUS_DRAW_PENDING_VOTE: {
+        WORKFLOW_STATUS_ARBITRATED,
+        WORKFLOW_STATUS_OPINION_WRITTEN,
+        WORKFLOW_STATUS_CALLBACK_REPORTED,
+        WORKFLOW_STATUS_ARCHIVED,
+        WORKFLOW_STATUS_REVIEW_REQUIRED,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
     },
     WORKFLOW_STATUS_REVIEW_REQUIRED: {
-        WORKFLOW_STATUS_RUNNING,
-        WORKFLOW_STATUS_FAILED,
-        WORKFLOW_STATUS_COMPLETED,
+        WORKFLOW_STATUS_ARBITRATED,
+        WORKFLOW_STATUS_OPINION_WRITTEN,
+        WORKFLOW_STATUS_CALLBACK_REPORTED,
+        WORKFLOW_STATUS_ARCHIVED,
+        WORKFLOW_STATUS_DRAW_PENDING_VOTE,
+        WORKFLOW_STATUS_BLOCKED_FAILED,
     },
-    WORKFLOW_STATUS_COMPLETED: set(),
-    WORKFLOW_STATUS_FAILED: set(),
+    WORKFLOW_STATUS_ARCHIVED: set(),
+    WORKFLOW_STATUS_BLOCKED_FAILED: set(),
 }
 
 
@@ -75,7 +137,7 @@ class WorkflowOrchestrator:
             event_payload=event_payload,
         )
 
-    async def mark_running(
+    async def mark_blinded(
         self,
         *,
         job_id: int,
@@ -83,7 +145,91 @@ class WorkflowOrchestrator:
     ) -> WorkflowJob:
         return await self._transition(
             job_id=job_id,
-            to_status=WORKFLOW_STATUS_RUNNING,
+            to_status=WORKFLOW_STATUS_BLINDED,
+            event_payload=event_payload,
+        )
+
+    async def mark_claim_graph_ready(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_CLAIM_GRAPH_READY,
+            event_payload=event_payload,
+        )
+
+    async def mark_evidence_ready(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_EVIDENCE_READY,
+            event_payload=event_payload,
+        )
+
+    async def mark_panel_judged(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_PANEL_JUDGED,
+            event_payload=event_payload,
+        )
+
+    async def mark_fairness_checked(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_FAIRNESS_CHECKED,
+            event_payload=event_payload,
+        )
+
+    async def mark_arbitrated(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_ARBITRATED,
+            event_payload=event_payload,
+        )
+
+    async def mark_opinion_written(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_OPINION_WRITTEN,
+            event_payload=event_payload,
+        )
+
+    async def mark_callback_reported(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_CALLBACK_REPORTED,
             event_payload=event_payload,
         )
 
@@ -99,7 +245,7 @@ class WorkflowOrchestrator:
             event_payload=event_payload,
         )
 
-    async def mark_completed(
+    async def mark_draw_pending_vote(
         self,
         *,
         job_id: int,
@@ -107,11 +253,23 @@ class WorkflowOrchestrator:
     ) -> WorkflowJob:
         return await self._transition(
             job_id=job_id,
-            to_status=WORKFLOW_STATUS_COMPLETED,
+            to_status=WORKFLOW_STATUS_DRAW_PENDING_VOTE,
             event_payload=event_payload,
         )
 
-    async def mark_failed(
+    async def mark_archived(
+        self,
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        return await self._transition(
+            job_id=job_id,
+            to_status=WORKFLOW_STATUS_ARCHIVED,
+            event_payload=event_payload,
+        )
+
+    async def mark_blocked_failed(
         self,
         *,
         job_id: int,
@@ -124,7 +282,7 @@ class WorkflowOrchestrator:
         payload.setdefault("errorMessage", error_message)
         return await self._transition(
             job_id=job_id,
-            to_status=WORKFLOW_STATUS_FAILED,
+            to_status=WORKFLOW_STATUS_BLOCKED_FAILED,
             event_payload=payload,
         )
 

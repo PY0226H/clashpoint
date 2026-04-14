@@ -5,8 +5,9 @@ from types import SimpleNamespace
 
 from app.core.workflow import WorkflowOrchestrator, WorkflowTransitionError
 from app.domain.workflow import (
-    WORKFLOW_STATUS_COMPLETED,
-    WORKFLOW_STATUS_FAILED,
+    WORKFLOW_STATUS_BLINDED,
+    WORKFLOW_STATUS_BLOCKED_FAILED,
+    WORKFLOW_STATUS_CALLBACK_REPORTED,
     WORKFLOW_STATUS_QUEUED,
     WORKFLOW_STATUS_REVIEW_REQUIRED,
     WorkflowJob,
@@ -54,27 +55,42 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(registered.status, WORKFLOW_STATUS_QUEUED)
 
+        blinded = await self._orchestrator.mark_blinded(
+            job_id=9001,
+            event_payload={"phase": "blind_input"},
+        )
         case_built = await self._orchestrator.mark_case_built(
             job_id=9001,
             event_payload={"phase": "build_case"},
         )
-        running = await self._orchestrator.mark_running(job_id=9001)
-        completed = await self._orchestrator.mark_completed(
+        claim_graph = await self._orchestrator.mark_claim_graph_ready(job_id=9001)
+        evidence_ready = await self._orchestrator.mark_evidence_ready(job_id=9001)
+        panel_judged = await self._orchestrator.mark_panel_judged(job_id=9001)
+        fairness_checked = await self._orchestrator.mark_fairness_checked(job_id=9001)
+        arbitrated = await self._orchestrator.mark_arbitrated(job_id=9001)
+        opinion_written = await self._orchestrator.mark_opinion_written(job_id=9001)
+        callback_reported = await self._orchestrator.mark_callback_reported(
             job_id=9001,
             event_payload={"winner": "pro"},
         )
 
+        self.assertEqual(blinded.status, WORKFLOW_STATUS_BLINDED)
         self.assertEqual(case_built.status, "case_built")
-        self.assertEqual(running.status, "running")
-        self.assertEqual(completed.status, WORKFLOW_STATUS_COMPLETED)
+        self.assertEqual(claim_graph.status, "claim_graph_ready")
+        self.assertEqual(evidence_ready.status, "evidence_ready")
+        self.assertEqual(panel_judged.status, "panel_judged")
+        self.assertEqual(fairness_checked.status, "fairness_checked")
+        self.assertEqual(arbitrated.status, "arbitrated")
+        self.assertEqual(opinion_written.status, "opinion_written")
+        self.assertEqual(callback_reported.status, WORKFLOW_STATUS_CALLBACK_REPORTED)
 
         current = await self._orchestrator.get_job(job_id=9001)
         self.assertIsNotNone(current)
         assert current is not None
-        self.assertEqual(current.status, WORKFLOW_STATUS_COMPLETED)
+        self.assertEqual(current.status, WORKFLOW_STATUS_CALLBACK_REPORTED)
 
         events = await self._orchestrator.list_events(job_id=9001)
-        self.assertEqual([row.event_seq for row in events], [1, 2, 3, 4])
+        self.assertEqual([row.event_seq for row in events], list(range(1, 11)))
         self.assertEqual(events[0].event_type, "job_registered")
         self.assertEqual(events[-1].payload.get("winner"), "pro")
 
@@ -89,14 +105,14 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(WorkflowTransitionError):
-            await self._orchestrator.mark_completed(job_id=9002)
+            await self._orchestrator.mark_callback_reported(job_id=9002)
 
-        failed = await self._orchestrator.mark_failed(
+        failed = await self._orchestrator.mark_blocked_failed(
             job_id=9002,
             error_code="provider_timeout",
             error_message="provider timeout",
         )
-        self.assertEqual(failed.status, WORKFLOW_STATUS_FAILED)
+        self.assertEqual(failed.status, WORKFLOW_STATUS_BLOCKED_FAILED)
 
         events = await self._orchestrator.list_events(job_id=9002)
         self.assertEqual(events[-1].payload.get("errorCode"), "provider_timeout")
@@ -110,7 +126,7 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 status=WORKFLOW_STATUS_QUEUED,
             )
         )
-        await self._orchestrator.mark_running(job_id=9010)
+        await self._orchestrator.mark_blinded(job_id=9010)
         await self._orchestrator.mark_review_required(
             job_id=9010,
             event_payload={"reason": "panel disagreement"},
@@ -124,8 +140,9 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 status=WORKFLOW_STATUS_QUEUED,
             )
         )
-        await self._orchestrator.mark_running(job_id=9011)
-        await self._orchestrator.mark_completed(job_id=9011)
+        await self._orchestrator.mark_blinded(job_id=9011)
+        await self._orchestrator.mark_draw_pending_vote(job_id=9011)
+        await self._orchestrator.mark_callback_reported(job_id=9011)
 
         review_jobs = await self._orchestrator.list_jobs(
             status=WORKFLOW_STATUS_REVIEW_REQUIRED,
@@ -143,7 +160,7 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 status=WORKFLOW_STATUS_QUEUED,
             )
         )
-        await self._orchestrator.mark_running(job_id=9012)
+        await self._orchestrator.mark_blinded(job_id=9012)
         await self._orchestrator.append_event(
             job_id=9012,
             event_type="replay_marked",
@@ -152,7 +169,7 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         current = await self._orchestrator.get_job(job_id=9012)
         self.assertIsNotNone(current)
         assert current is not None
-        self.assertEqual(current.status, "running")
+        self.assertEqual(current.status, "blinded")
         events = await self._orchestrator.list_events(job_id=9012)
         self.assertEqual(events[-1].event_type, "replay_marked")
         self.assertEqual(events[-1].payload.get("judgeCoreStage"), "replay_computed")

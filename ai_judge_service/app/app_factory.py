@@ -397,11 +397,19 @@ def _build_judge_core_view(
         status = str(workflow_job.status or "").strip().lower()
         fallback_by_status = {
             "queued": "queued",
+            "blinded": "blinded",
             "case_built": "case_built",
-            "running": "running",
+            "claim_graph_ready": "claim_graph_ready",
+            "evidence_ready": "evidence_ready",
+            "panel_judged": "panel_judged",
+            "fairness_checked": "fairness_checked",
+            "arbitrated": "arbitrated",
+            "opinion_written": "opinion_written",
+            "callback_reported": "callback_reported",
+            "archived": "archived",
             "review_required": "review_required",
-            "completed": "reported",
-            "failed": "failed",
+            "draw_pending_vote": "draw_pending_vote",
+            "blocked_failed": "blocked_failed",
         }
         latest_stage = fallback_by_status.get(status)
         latest_version = JUDGE_CORE_VERSION if latest_stage is not None else None
@@ -1020,13 +1028,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
         )
 
-    async def _workflow_register_and_mark_running(
+    async def _workflow_register_and_mark_blinded(
         *,
         job: WorkflowJob,
         event_payload: dict[str, Any] | None = None,
     ) -> None:
         await _ensure_workflow_schema_ready()
-        await judge_core.register_running(
+        await judge_core.register_blinded(
             job=job,
             event_payload=event_payload,
         )
@@ -1088,7 +1096,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type = str(payload.get("dispatchType") or "").strip().lower() or "unknown"
         failed_stage = str(payload.get("judgeCoreStage") or "").strip().lower()
         if not failed_stage:
-            failed_stage = "review_rejected" if error_code == "review_rejected" else "failed"
+            failed_stage = "review_rejected" if error_code == "review_rejected" else "blocked_failed"
         payload.setdefault("errorCode", error_code)
         payload.setdefault("errorMessage", error_message)
         payload["error"] = _build_error_contract(
@@ -1304,7 +1312,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
         )
         runtime.trace_store.register_start(job_id=job_id, trace_id=trace_id, request=request_payload)
-        await _workflow_register_and_mark_running(
+        await _workflow_register_and_mark_blinded(
             job=workflow_job,
             event_payload={
                 "dispatchType": dispatch_type,
@@ -1569,7 +1577,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             request_payload=request_payload,
             response_payload=response,
         )
-        await _workflow_register_and_mark_running(
+        await _workflow_register_and_mark_blinded(
             job=workflow_job,
             event_payload={
                 "dispatchType": "phase",
@@ -1890,7 +1898,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             request_payload=request_payload,
             response_payload=response,
         )
-        await _workflow_register_and_mark_running(
+        await _workflow_register_and_mark_blinded(
             job=workflow_job,
             event_payload={
                 "dispatchType": "final",

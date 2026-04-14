@@ -266,10 +266,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         assert workflow_job is not None
         self.assertEqual(workflow_job.status, "case_built")
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=case_id)
-        self.assertEqual(
-            [row.event_type for row in workflow_events][-2:],
-            ["job_registered", "status_changed"],
-        )
+        self.assertEqual(workflow_events[0].event_type, "job_registered")
+        self.assertGreaterEqual(len(workflow_events), 3)
+        self.assertTrue(all(row.event_type == "status_changed" for row in workflow_events[1:]))
         self.assertEqual(workflow_events[-1].payload.get("toStatus"), "case_built")
 
         replay_resp = await self._post_json(
@@ -363,7 +362,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail_resp.status_code, 200)
         detail_payload = detail_resp.json()
         self.assertEqual(detail_payload["caseId"], case_id)
-        self.assertEqual(detail_payload["workflow"]["status"], "completed")
+        self.assertEqual(detail_payload["workflow"]["status"], "callback_reported")
         self.assertEqual(detail_payload["latestDispatchType"], "final")
         self.assertIsNotNone(detail_payload["receipts"]["phase"])
         self.assertIsNotNone(detail_payload["receipts"]["final"])
@@ -507,13 +506,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=1001)
         self.assertIsNotNone(phase_job)
         assert phase_job is not None
-        self.assertEqual(phase_job.status, "completed")
+        self.assertEqual(phase_job.status, "callback_reported")
         phase_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=1001)
-        self.assertEqual(
-            [row.event_type for row in phase_events][-3:],
-            ["job_registered", "status_changed", "status_changed"],
-        )
-        self.assertEqual(phase_events[-1].payload.get("toStatus"), "completed")
+        self.assertGreaterEqual(len(phase_events), 8)
+        self.assertTrue(all(row.event_type == "status_changed" for row in phase_events[-8:]))
+        self.assertEqual(phase_events[-1].payload.get("toStatus"), "callback_reported")
         self.assertEqual(phase_events[-1].payload.get("judgeCoreStage"), "reported")
         self.assertEqual(phase_events[-1].payload.get("judgeCoreVersion"), "v1")
 
@@ -585,8 +582,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(phase_job)
         self.assertIsNotNone(final_job)
         assert phase_job is not None and final_job is not None
-        self.assertEqual(phase_job.status, "completed")
-        self.assertEqual(final_job.status, "completed")
+        self.assertEqual(phase_job.status, "callback_reported")
+        self.assertEqual(final_job.status, "callback_reported")
 
     async def test_final_dispatch_should_mark_workflow_review_required_when_gate_triggers(
         self,
@@ -815,12 +812,12 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision_resp.status_code, 200)
         decision_payload = decision_resp.json()
         self.assertEqual(decision_payload["decision"], "approve")
-        self.assertEqual(decision_payload["job"]["status"], "completed")
+        self.assertEqual(decision_payload["job"]["status"], "callback_reported")
 
         workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=7411)
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
-        self.assertEqual(workflow_job.status, "completed")
+        self.assertEqual(workflow_job.status, "callback_reported")
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7411)
         self.assertEqual(workflow_events[-1].payload.get("judgeCoreStage"), "review_approved")
 
@@ -879,7 +876,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=3001)
         self.assertIsNotNone(phase_job)
         assert phase_job is not None
-        self.assertEqual(phase_job.status, "failed")
+        self.assertEqual(phase_job.status, "blocked_failed")
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=3001)
         self.assertEqual(
             workflow_events[-1].payload.get("errorCode"),
@@ -1446,7 +1443,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=6001)
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
-        self.assertEqual(workflow_job.status, "failed")
+        self.assertEqual(workflow_job.status, "blocked_failed")
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=6001)
         self.assertEqual(workflow_events[-1].payload.get("errorCode"), "input_not_blinded")
         self.assertEqual(workflow_events[-1].payload.get("callbackStatus"), "failed_reported")
@@ -1488,7 +1485,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=6002)
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
-        self.assertEqual(workflow_job.status, "failed")
+        self.assertEqual(workflow_job.status, "blocked_failed")
         receipt_resp = await self._get(
             app=app,
             path="/internal/judge/v3/phase/cases/6002/receipt",
@@ -1548,7 +1545,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=7301)
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
-        self.assertEqual(workflow_job.status, "failed")
+        self.assertEqual(workflow_job.status, "blocked_failed")
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7301)
         self.assertEqual(workflow_events[-1].payload.get("errorCode"), "final_contract_blocked")
         self.assertEqual(workflow_events[-1].payload.get("callbackStatus"), "blocked_failed_reported")
