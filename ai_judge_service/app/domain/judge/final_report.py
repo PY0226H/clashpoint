@@ -104,6 +104,39 @@ def _build_style_probe_winners(*, pro_score: float, con_score: float) -> dict[st
     }
 
 
+def _score_gap(pro_score: float, con_score: float) -> float:
+    return round(abs(_clamp_score(pro_score) - _clamp_score(con_score)), 2)
+
+
+def _score_confidence(*, score_gap: float, cap: float = 12.0) -> float:
+    normalized = max(0.0, min(1.0, float(score_gap) / max(1.0, float(cap))))
+    return round(normalized, 4)
+
+
+def _build_panel_judge_item(
+    *,
+    judge_id: str,
+    name: str,
+    source: str,
+    winner: str,
+    pro_score: float,
+    con_score: float,
+    reason: str,
+) -> dict[str, Any]:
+    gap = _score_gap(pro_score, con_score)
+    return {
+        "judgeId": judge_id,
+        "name": name,
+        "source": source,
+        "winner": winner,
+        "proScore": round(_clamp_score(pro_score), 2),
+        "conScore": round(_clamp_score(con_score), 2),
+        "scoreGap": gap,
+        "confidence": _score_confidence(score_gap=gap),
+        "reason": str(reason or "").strip(),
+    }
+
+
 def _index_retrieval_items(payload: dict[str, Any], *, side: str) -> dict[str, dict[str, Any]]:
     bundle_key = "proRetrievalBundle" if side == "pro" else "conRetrievalBundle"
     bundle = payload.get(bundle_key) if isinstance(payload.get(bundle_key), dict) else {}
@@ -226,6 +259,7 @@ def _build_verdict_ledger(
     pro_score: float,
     con_score: float,
     dimension_scores: dict[str, Any],
+    panel_judges: dict[str, Any],
     winner_first: str,
     winner_second: str,
     winner_third: str,
@@ -239,14 +273,31 @@ def _build_verdict_ledger(
     phase_rollup_summary: list[dict[str, Any]],
     verdict_evidence_refs: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    panel_decisions_payload = (
+        panel_judges if isinstance(panel_judges, dict) else {}
+    )
+    panel_disagreement = {
+        "high": bool(fairness_summary.get("panelHighDisagreement")),
+        "ratio": _safe_float(fairness_summary.get("panelDisagreementRatio"), default=0.0),
+        "ratioMax": _safe_float(fairness_summary.get("panelDisagreementRatioMax"), default=0.2),
+        "majorityWinner": str(fairness_summary.get("panelMajorityWinner") or "").strip().lower()
+        or None,
+        "reasons": [
+            str(item).strip()
+            for item in (fairness_summary.get("panelDisagreementReasons") or [])
+            if str(item).strip()
+        ],
+    }
     panel_decisions = {
         "probeWinners": {
             "agent3Weighted": winner_first,
             "agent2Path": winner_second,
             "agent1Dimensions": winner_third,
         },
-        "panelHighDisagreement": bool(fairness_summary.get("panelHighDisagreement")),
-        "scoreGap": _safe_float(fairness_summary.get("scoreGap"), default=0.0),
+        "judges": panel_decisions_payload,
+        "panelDisagreement": panel_disagreement,
+        "panelHighDisagreement": panel_disagreement["high"],
+        "scoreGap": _score_gap(pro_score, con_score),
         "phaseCountUsed": len(phase_rollup_summary),
     }
     arbitration = {
@@ -258,7 +309,7 @@ def _build_verdict_ledger(
         "errorCodes": [str(code).strip() for code in error_codes if str(code).strip()],
     }
     return {
-        "version": "v2-panel-arbiter-opinion",
+        "version": "v3-panel-independence",
         "winner": winner,
         "scoreCard": {
             "proScore": round(_clamp_score(pro_score), 2),
@@ -294,6 +345,7 @@ def _build_opinion_pack(
     trace_id: str,
     claim_graph_summary: dict[str, Any],
     evidence_ledger: dict[str, Any],
+    panel_judges: dict[str, Any],
 ) -> dict[str, Any]:
     alert_types: list[str] = []
     for row in audit_alerts:
@@ -303,7 +355,7 @@ def _build_opinion_pack(
         if token and token not in alert_types:
             alert_types.append(token)
     return {
-        "version": "v2-opinion-pack",
+        "version": "v3-opinion-pack",
         "userReport": {
             "winner": winner,
             "debateSummary": debate_summary,
@@ -324,6 +376,7 @@ def _build_opinion_pack(
         "internalReview": {
             "traceId": trace_id,
             "fairnessSummary": fairness_summary if isinstance(fairness_summary, dict) else {},
+            "panelJudges": panel_judges if isinstance(panel_judges, dict) else {},
             "claimStats": (
                 claim_graph_summary.get("stats")
                 if isinstance(claim_graph_summary.get("stats"), dict)
@@ -350,7 +403,7 @@ def _evaluate_fairness_gate(
     *,
     winner_first: str,
     winner_second: str,
-    winner_third: str,
+    panel_judges: dict[str, Any],
     winner_before_gate: str,
     pro_score: float,
     con_score: float,
@@ -371,16 +424,80 @@ def _evaluate_fairness_gate(
         and winner_before_gate in {"pro", "con"}
         and len(set(style_probe_winners.values())) > 1
     )
-    score_gap = round(abs(_clamp_score(pro_score) - _clamp_score(con_score)), 2)
+    score_gap = _score_gap(pro_score, con_score)
+    normalized_panel_judges = panel_judges if isinstance(panel_judges, dict) else {}
     panel_probe_winners = {
-        "agent3Weighted": winner_first,
-        "agent2Path": winner_second,
-        "agent1Dimensions": winner_third,
+        "agent3Weighted": str(
+            (
+                normalized_panel_judges.get("judgeA", {})
+                if isinstance(normalized_panel_judges.get("judgeA"), dict)
+                else {}
+            ).get("winner")
+            or winner_first
+        ).strip().lower(),
+        "agent2Path": str(
+            (
+                normalized_panel_judges.get("judgeB", {})
+                if isinstance(normalized_panel_judges.get("judgeB"), dict)
+                else {}
+            ).get("winner")
+            or winner_second
+        ).strip().lower(),
+        "agent1Dimensions": str(
+            (
+                normalized_panel_judges.get("judgeC", {})
+                if isinstance(normalized_panel_judges.get("judgeC"), dict)
+                else {}
+            ).get("winner")
+            or "draw"
+        ).strip().lower(),
     }
-    panel_non_draw_winners = {
-        item for item in panel_probe_winners.values() if item in {"pro", "con"}
+    panel_vote_by_side = {
+        "pro": 0,
+        "con": 0,
     }
-    panel_high_disagreement = len(panel_non_draw_winners) > 1
+    for judge in normalized_panel_judges.values():
+        if not isinstance(judge, dict):
+            continue
+        vote = str(judge.get("winner") or "").strip().lower()
+        if vote in panel_vote_by_side:
+            panel_vote_by_side[vote] += 1
+    panel_vote_count = int(panel_vote_by_side["pro"] + panel_vote_by_side["con"])
+    panel_majority_votes = max(panel_vote_by_side["pro"], panel_vote_by_side["con"])
+    panel_majority_winner = (
+        "pro"
+        if panel_vote_by_side["pro"] > panel_vote_by_side["con"]
+        else ("con" if panel_vote_by_side["con"] > panel_vote_by_side["pro"] else None)
+    )
+    panel_disagreement_ratio = (
+        round(1.0 - (panel_majority_votes / float(panel_vote_count)), 4)
+        if panel_vote_count > 0
+        else 0.0
+    )
+    panel_disagreement_ratio_max = max(
+        0.0,
+        min(
+            1.0,
+            _safe_float(
+                (fairness_thresholds or {}).get("panelDisagreementRatioMax")
+                if isinstance(fairness_thresholds, dict)
+                else None,
+                default=0.2,
+            ),
+        ),
+    )
+    panel_high_disagreement = (
+        phase_count_used > 0
+        and panel_vote_count >= 2
+        and panel_disagreement_ratio >= panel_disagreement_ratio_max
+    )
+    panel_disagreement_reasons: list[str] = []
+    if panel_high_disagreement:
+        panel_disagreement_reasons.append("panel_vote_split")
+        if panel_majority_winner is None:
+            panel_disagreement_reasons.append("no_majority_winner")
+        if panel_vote_by_side["pro"] > 0 and panel_vote_by_side["con"] > 0:
+            panel_disagreement_reasons.append("cross_side_conflict")
     threshold_source = fairness_thresholds if isinstance(fairness_thresholds, dict) else {}
     evidence_min_total_refs = max(
         0,
@@ -484,6 +601,10 @@ def _evaluate_fairness_gate(
                 "message": "independent panel probes disagree on winner side",
                 "details": {
                     "panelProbeWinners": panel_probe_winners,
+                    "panelVoteBySide": panel_vote_by_side,
+                    "panelDisagreementRatio": panel_disagreement_ratio,
+                    "panelDisagreementRatioMax": panel_disagreement_ratio_max,
+                    "panelDisagreementReasons": panel_disagreement_reasons,
                 },
             }
         )
@@ -532,11 +653,18 @@ def _evaluate_fairness_gate(
         "swapInstability": swap_instability,
         "styleShiftInstability": style_shift_instability,
         "panelHighDisagreement": panel_high_disagreement,
+        "panelDisagreementRatio": panel_disagreement_ratio,
+        "panelDisagreementRatioMax": panel_disagreement_ratio_max,
+        "panelVoteBySide": panel_vote_by_side,
+        "panelVoteCount": panel_vote_count,
+        "panelMajorityWinner": panel_majority_winner,
+        "panelDisagreementReasons": panel_disagreement_reasons,
         "evidenceSufficiencyPassed": evidence_sufficiency_passed,
         "evidenceConflictRatioHigh": evidence_conflict_ratio_high,
         "scoreGap": score_gap,
         "styleProbeWinners": style_probe_winners,
         "panelProbeWinners": panel_probe_winners,
+        "panelJudges": normalized_panel_judges,
         "evidenceSufficiency": {
             "checkApplied": evidence_check_applied,
             "winnerBeforeGate": winner_before_gate,
@@ -993,6 +1121,10 @@ def build_final_report_payload(
                     break
 
     evidence_ledger = evidence_ledger_builder.build_payload()
+    second_pro = 50.0
+    second_con = 50.0
+    pro_dimension_composite = 50.0
+    con_dimension_composite = 50.0
 
     if phase_rollup_summary:
         pro_score = round(sum(pro_agent3_scores) / float(len(pro_agent3_scores)), 2)
@@ -1058,6 +1190,43 @@ def build_final_report_payload(
             "clarity": 50.0,
         }
 
+    panel_judges = {
+        "judgeA": _build_panel_judge_item(
+            judge_id="judgeA",
+            name="Weighted Score Judge",
+            source="agent3WeightedScore",
+            winner=winner_first,
+            pro_score=pro_score,
+            con_score=con_score,
+            reason=(
+                f"Aggregates phase weighted scores across {len(phase_rollup_summary)} phase(s). "
+                f"Uses margin=0.8 winner rule."
+            ),
+        ),
+        "judgeB": _build_panel_judge_item(
+            judge_id="judgeB",
+            name="Path Alignment Judge",
+            source="agent2Score",
+            winner=winner_second,
+            pro_score=second_pro,
+            con_score=second_con,
+            reason=(
+                "Uses agent2 hit/miss path alignment averages as an independent lane."
+            ),
+        ),
+        "judgeC": _build_panel_judge_item(
+            judge_id="judgeC",
+            name="Dimension Composite Judge",
+            source="agent1Dimensions",
+            winner=winner_third,
+            pro_score=pro_dimension_composite,
+            con_score=con_dimension_composite,
+            reason=(
+                "Uses agent1 logic/evidence/rebuttal/clarity composite scores as an independent lane."
+            ),
+        ),
+    }
+
     error_codes: list[str] = []
     if missing_phase_nos:
         error_codes.append("final_rollup_incomplete")
@@ -1075,7 +1244,7 @@ def build_final_report_payload(
         _evaluate_fairness_gate(
             winner_first=winner_first,
             winner_second=winner_second,
-            winner_third=winner_third,
+            panel_judges=panel_judges,
             winner_before_gate=winner,
             pro_score=pro_score,
             con_score=con_score,
@@ -1178,6 +1347,7 @@ def build_final_report_payload(
         pro_score=pro_score,
         con_score=con_score,
         dimension_scores=dimension_scores,
+        panel_judges=panel_judges,
         winner_first=winner_first,
         winner_second=winner_second,
         winner_third=winner_third,
@@ -1208,6 +1378,7 @@ def build_final_report_payload(
         trace_id=request.trace_id,
         claim_graph_summary=claim_graph_summary,
         evidence_ledger=evidence_ledger,
+        panel_judges=panel_judges,
     )
 
     return {

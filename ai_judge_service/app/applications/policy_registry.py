@@ -153,6 +153,7 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
         "drawRateMax": 0.30,
         "sideBiasDeltaMax": 0.08,
         "appealOverturnRateMax": 0.12,
+        "panelDisagreementRatioMax": 0.20,
         "evidenceMinTotalRefs": 4,
         "evidenceMinDecisiveRefs": 2,
         "evidenceMinWinnerSupportRefs": 1,

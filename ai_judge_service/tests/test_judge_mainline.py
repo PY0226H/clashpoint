@@ -157,7 +157,14 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["judgeTrace"]["claimGraphSummary"], dict)
     assert isinstance(payload["judgeTrace"]["evidenceLedgerStats"], dict)
     assert isinstance(payload["judgeTrace"]["panelArbiter"], dict)
-    assert payload["judgeTrace"]["opinionPackVersion"] == "v2-opinion-pack"
+    assert payload["judgeTrace"]["opinionPackVersion"] == "v3-opinion-pack"
+    judges = payload["verdictLedger"]["panelDecisions"]["judges"]
+    assert set(judges.keys()) == {"judgeA", "judgeB", "judgeC"}
+    for key in ("judgeA", "judgeB", "judgeC"):
+        assert judges[key]["winner"] in {"pro", "con", "draw"}
+        assert isinstance(judges[key]["proScore"], float)
+        assert isinstance(judges[key]["conScore"], float)
+        assert isinstance(judges[key]["reason"], str) and judges[key]["reason"]
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -355,6 +362,62 @@ def test_build_final_report_payload_should_trigger_panel_disagreement_gate() -> 
     assert any(
         item.get("type") == "judge_panel_high_disagreement" for item in payload["auditAlerts"]
     )
+    assert payload["fairnessSummary"]["panelDisagreementRatio"] > 0.0
+    assert payload["fairnessSummary"]["panelDisagreementReasons"]
+    assert payload["verdictLedger"]["panelDecisions"]["panelDisagreement"]["high"] is True
+
+
+def test_build_final_report_payload_should_respect_panel_disagreement_threshold() -> None:
+    request = FinalDispatchRequest(
+        case_id=9009,
+        scope_id=1,
+        session_id=309,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9009",
+        idempotency_key="final:9009",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={
+                    "reportPayload": _build_phase_payload(
+                        pro=70.0,
+                        con=62.0,
+                        msg_offset=0,
+                        agent2_pro=69.0,
+                        agent2_con=61.0,
+                        pro_dimensions={
+                            "logic": 42.0,
+                            "evidence": 41.0,
+                            "rebuttal": 40.0,
+                            "expression": 42.0,
+                        },
+                        con_dimensions={
+                            "logic": 78.0,
+                            "evidence": 79.0,
+                            "rebuttal": 80.0,
+                            "expression": 78.0,
+                        },
+                    )
+                },
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+        fairness_thresholds={"panelDisagreementRatioMax": 0.6},
+    )
+    assert payload["reviewRequired"] is False
+    assert payload["winner"] == "pro"
+    assert "judge_panel_high_disagreement" not in payload["errorCodes"]
+    assert payload["fairnessSummary"]["panelHighDisagreement"] is False
+    assert payload["fairnessSummary"]["panelDisagreementRatio"] > 0.0
 
 
 def test_build_final_report_payload_should_trigger_evidence_sufficiency_gate() -> None:
