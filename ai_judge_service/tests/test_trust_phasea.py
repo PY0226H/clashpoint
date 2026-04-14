@@ -114,6 +114,9 @@ class TrustPhaseATests(unittest.TestCase):
                 "errorCodes": ["fairness_gate_review_required", "manual_check"],
             },
         )
+        self.assertEqual(registry["version"], "trust-phaseB-challenge-review-v1")
+        self.assertEqual(registry["challengeState"], "not_challenged")
+        self.assertEqual(registry["totalChallenges"], 0)
         self.assertEqual(registry["reviewState"], "pending_review")
         self.assertEqual(registry["alertSummary"]["total"], 3)
         self.assertEqual(registry["alertSummary"]["raised"], 1)
@@ -125,6 +128,86 @@ class TrustPhaseATests(unittest.TestCase):
         self.assertIn("manual_check", registry["challengeReasons"])
         self.assertIn("style_shift_instability", registry["challengeReasons"])
         self.assertIn("registryHash", registry)
+
+    def test_challenge_review_registry_should_build_phaseb_lifecycle(self) -> None:
+        registry = build_challenge_review_registry(
+            case_id=9006,
+            trace_id="trace-9006",
+            workflow_status="callback_reported",
+            workflow_events=[
+                _event(
+                    seq=1,
+                    payload={
+                        "challengeId": "chlg-9006-1",
+                        "challengeState": "challenge_requested",
+                        "challengeReasonCode": "manual_challenge",
+                        "challengeReason": "need review",
+                        "challengeRequestedBy": "ops-a",
+                        "challengeActor": "ops-a",
+                    },
+                ),
+                _event(
+                    seq=2,
+                    payload={
+                        "challengeId": "chlg-9006-1",
+                        "challengeState": "challenge_accepted",
+                        "challengeAcceptedBy": "reviewer-a",
+                        "challengeActor": "reviewer-a",
+                    },
+                ),
+                _event(
+                    seq=3,
+                    payload={
+                        "challengeId": "chlg-9006-1",
+                        "challengeState": "under_review",
+                        "challengeActor": "reviewer-a",
+                    },
+                ),
+                _event(
+                    seq=4,
+                    payload={
+                        "challengeId": "chlg-9006-1",
+                        "challengeState": "verdict_upheld",
+                        "challengeDecision": "uphold",
+                        "challengeDecisionReason": "evidence stable",
+                        "challengeActor": "reviewer-a",
+                        "reviewDecision": "approve",
+                        "reviewActor": "reviewer-a",
+                        "reviewReason": "manual_pass",
+                    },
+                ),
+                _event(
+                    seq=5,
+                    payload={
+                        "challengeId": "chlg-9006-1",
+                        "challengeState": "challenge_closed",
+                        "challengeClosedBy": "reviewer-a",
+                        "challengeActor": "reviewer-a",
+                    },
+                ),
+            ],
+            alerts=[],
+            report_payload={
+                "reviewRequired": False,
+                "errorCodes": [],
+            },
+        )
+        self.assertEqual(registry["version"], "trust-phaseB-challenge-review-v1")
+        self.assertEqual(registry["reviewState"], "approved")
+        self.assertEqual(registry["challengeState"], "challenge_closed")
+        self.assertEqual(registry["activeChallengeId"], None)
+        self.assertEqual(registry["totalChallenges"], 1)
+        challenge = registry["challenges"][0]
+        self.assertEqual(challenge["challengeId"], "chlg-9006-1")
+        self.assertEqual(challenge["currentState"], "challenge_closed")
+        self.assertEqual(challenge["requestedBy"], "ops-a")
+        self.assertEqual(challenge["acceptedBy"], "reviewer-a")
+        self.assertEqual(challenge["decision"], "verdict_upheld")
+        self.assertEqual(challenge["decisionBy"], "reviewer-a")
+        self.assertEqual(challenge["decisionReason"], "evidence stable")
+        self.assertEqual(challenge["closedBy"], "reviewer-a")
+        self.assertEqual(len(challenge["stateHistory"]), 5)
+        self.assertEqual(len(registry["timeline"]), 5)
 
     def test_judge_kernel_registry_should_resolve_latest_core_and_registry_versions(self) -> None:
         registry = build_judge_kernel_registry(

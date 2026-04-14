@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from pydantic import ValidationError
@@ -81,6 +82,7 @@ from .core.judge_core import (
     JUDGE_CORE_VERSION,
     JudgeCoreOrchestrator,
 )
+from .core.workflow import WorkflowTransitionError
 from .domain.agents import (
     AGENT_KIND_JUDGE,
     AGENT_KIND_NPC_COACH,
@@ -197,6 +199,19 @@ _BLIND_SENSITIVE_KEY_TOKENS = {
     "wallet_balance",
     "is_vip",
 }
+
+TRUST_CHALLENGE_EVENT_TYPE = "trust_challenge_state_changed"
+TRUST_CHALLENGE_STATE_REQUESTED = "challenge_requested"
+TRUST_CHALLENGE_STATE_ACCEPTED = "challenge_accepted"
+TRUST_CHALLENGE_STATE_UNDER_REVIEW = "under_review"
+TRUST_CHALLENGE_STATE_VERDICT_UPHELD = "verdict_upheld"
+TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED = "verdict_overturned"
+TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW = "draw_after_review"
+TRUST_CHALLENGE_STATE_CLOSED = "challenge_closed"
+
+
+def _new_challenge_id(*, case_id: int) -> str:
+    return f"chlg-{max(0, int(case_id))}-{uuid4().hex[:12]}"
 
 
 def _serialize_alert_item(alert: Any) -> dict[str, Any]:
@@ -1375,6 +1390,49 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     async def _workflow_list_events(*, job_id: int):
         await _ensure_workflow_schema_ready()
         return await runtime.workflow_runtime.orchestrator.list_events(job_id=job_id)
+
+    async def _workflow_append_event(
+        *,
+        job_id: int,
+        event_type: str,
+        event_payload: dict[str, Any],
+        not_found_detail: str = "workflow_job_not_found",
+    ) -> None:
+        await _ensure_workflow_schema_ready()
+        try:
+            await runtime.workflow_runtime.orchestrator.append_event(
+                job_id=job_id,
+                event_type=event_type,
+                event_payload=event_payload,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=not_found_detail) from exc
+
+    async def _resolve_open_alerts_for_review(
+        *,
+        job_id: int,
+        actor: str,
+        reason: str,
+    ) -> list[str]:
+        resolved_alert_ids: list[str] = []
+        raised_alerts = runtime.trace_store.list_audit_alerts(
+            job_id=job_id,
+            status="raised",
+            limit=200,
+        )
+        for item in raised_alerts:
+            row = runtime.trace_store.transition_audit_alert(
+                job_id=job_id,
+                alert_id=item.alert_id,
+                to_status="resolved",
+                actor=actor,
+                reason=reason,
+            )
+            if row is None:
+                continue
+            await _sync_audit_alert_to_facts(alert=row)
+            resolved_alert_ids.append(row.alert_id)
+        return resolved_alert_ids
 
     async def _build_shared_room_context(
         *,
@@ -3510,6 +3568,309 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "item": bundle["challengeReview"],
         }
 
+    @app.post("/internal/judge/cases/{case_id}/trust/challenges/request")
+    async def request_judge_trust_challenge(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+        reason_code: str = Query(default="manual_challenge"),
+        reason: str | None = Query(default=None),
+        requested_by: str | None = Query(default=None),
+        auto_accept: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_reason_code = str(reason_code or "").strip().lower()
+        if not normalized_reason_code:
+            raise HTTPException(status_code=422, detail="invalid_challenge_reason_code")
+        actor = str(requested_by or "").strip() or "ops"
+        reason_text = str(reason or "").strip() or None
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="trust_receipt_not_found",
+            missing_report_detail="trust_report_payload_missing",
+        )
+        current_job = await _workflow_get_job(job_id=case_id)
+        if current_job is None:
+            raise HTTPException(status_code=404, detail="review_job_not_found")
+        if current_job.status in {"blocked_failed", "archived"}:
+            raise HTTPException(status_code=409, detail="challenge_request_not_allowed")
+
+        challenge_id = _new_challenge_id(case_id=case_id)
+        base_payload = {
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "challengeId": challenge_id,
+            "challengeReasonCode": normalized_reason_code,
+            "challengeReason": reason_text,
+            "challengeRequestedBy": actor,
+            "challengeActor": actor,
+        }
+        await _workflow_append_event(
+            job_id=case_id,
+            event_type=TRUST_CHALLENGE_EVENT_TYPE,
+            event_payload={
+                **base_payload,
+                "challengeState": TRUST_CHALLENGE_STATE_REQUESTED,
+            },
+            not_found_detail="review_job_not_found",
+        )
+
+        if current_job.status != "review_required":
+            # challenge 受理后强制进入 review_required 队列，避免绕过复核主状态机。
+            await _workflow_mark_review_required(
+                job_id=case_id,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                    "judgeCoreStage": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                },
+            )
+
+        if auto_accept:
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_ACCEPTED,
+                    "challengeAcceptedBy": actor,
+                },
+                not_found_detail="review_job_not_found",
+            )
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                    "challengeActor": actor,
+                },
+                not_found_detail="review_job_not_found",
+            )
+
+        alert = runtime.trace_store.upsert_audit_alert(
+            job_id=case_id,
+            scope_id=current_job.scope_id,
+            trace_id=context["traceId"],
+            alert_type="trust_challenge_requested",
+            severity="warning",
+            title="AI Judge Trust Challenge Requested",
+            message=f"challenge requested ({normalized_reason_code})",
+            details={
+                "dispatchType": context["dispatchType"],
+                "challengeId": challenge_id,
+                "reasonCode": normalized_reason_code,
+                "reason": reason_text,
+                "requestedBy": actor,
+            },
+        )
+        await _sync_audit_alert_to_facts(alert=alert)
+
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+        )
+        workflow_job = await _workflow_get_job(job_id=case_id)
+        return {
+            "ok": True,
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "challengeId": challenge_id,
+            "alertId": alert.alert_id,
+            "job": (
+                _serialize_workflow_job(workflow_job)
+                if workflow_job is not None
+                else None
+            ),
+            "item": bundle["challengeReview"],
+        }
+
+    @app.post("/internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision")
+    async def decide_judge_trust_challenge(
+        case_id: int,
+        challenge_id: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+        decision: str = Query(default="uphold"),
+        actor: str | None = Query(default=None),
+        reason: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_decision not in {"accept", "uphold", "overturn", "draw", "close"}:
+            raise HTTPException(status_code=422, detail="invalid_challenge_decision")
+        normalized_challenge_id = str(challenge_id or "").strip()
+        if not normalized_challenge_id:
+            raise HTTPException(status_code=422, detail="invalid_challenge_id")
+
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="trust_receipt_not_found",
+            missing_report_detail="trust_report_payload_missing",
+        )
+        current_job = await _workflow_get_job(job_id=case_id)
+        if current_job is None:
+            raise HTTPException(status_code=404, detail="review_job_not_found")
+        actor_text = str(actor or "").strip() or "ops"
+        reason_text = str(reason or "").strip() or None
+
+        before_bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+        )
+        challenge_item = next(
+            (
+                item
+                for item in (
+                    before_bundle["challengeReview"].get("challenges")
+                    if isinstance(before_bundle["challengeReview"].get("challenges"), list)
+                    else []
+                )
+                if str(item.get("challengeId") or "") == normalized_challenge_id
+            ),
+            None,
+        )
+        if challenge_item is None:
+            raise HTTPException(status_code=404, detail="trust_challenge_not_found")
+        if str(challenge_item.get("currentState") or "") == TRUST_CHALLENGE_STATE_CLOSED:
+            raise HTTPException(status_code=409, detail="trust_challenge_already_closed")
+
+        base_payload = {
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "challengeId": normalized_challenge_id,
+            "challengeActor": actor_text,
+            "challengeDecision": normalized_decision,
+            "challengeDecisionReason": reason_text,
+        }
+        resolved_alert_ids: list[str] = []
+        updated_job: WorkflowJob | None = current_job
+
+        if normalized_decision == "accept":
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_ACCEPTED,
+                    "challengeAcceptedBy": actor_text,
+                },
+            )
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                },
+            )
+            if current_job.status != "review_required":
+                await _workflow_mark_review_required(
+                    job_id=case_id,
+                    event_payload={
+                        **base_payload,
+                        "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                        "judgeCoreStage": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                    },
+                )
+                updated_job = await _workflow_get_job(job_id=case_id)
+        elif normalized_decision == "uphold":
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
+                    "reviewDecision": "approve",
+                    "reviewActor": actor_text,
+                    "reviewReason": reason_text or "challenge_upheld",
+                },
+            )
+            if current_job.status == "review_required":
+                await _workflow_mark_completed(
+                    job_id=case_id,
+                    event_payload={
+                        **base_payload,
+                        "reviewDecision": "approve",
+                        "reviewActor": actor_text,
+                        "reviewReason": reason_text or "challenge_upheld",
+                        "judgeCoreStage": "review_approved",
+                    },
+                )
+                resolved_alert_ids = await _resolve_open_alerts_for_review(
+                    job_id=case_id,
+                    actor=actor_text,
+                    reason=reason_text or "challenge_upheld",
+                )
+                updated_job = await _workflow_get_job(job_id=case_id)
+        elif normalized_decision in {"overturn", "draw"}:
+            overturned_state = (
+                TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED
+                if normalized_decision == "overturn"
+                else TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW
+            )
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": overturned_state,
+                },
+            )
+            draw_payload = {
+                **base_payload,
+                "challengeState": TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+                "judgeCoreStage": TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+            }
+            try:
+                await runtime.workflow_runtime.orchestrator.mark_draw_pending_vote(
+                    job_id=case_id,
+                    event_payload=draw_payload,
+                )
+                updated_job = await _workflow_get_job(job_id=case_id)
+            except WorkflowTransitionError:
+                pass
+            await _workflow_append_event(
+                job_id=case_id,
+                event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                event_payload={
+                    **base_payload,
+                    "challengeState": TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+                },
+            )
+
+        await _workflow_append_event(
+            job_id=case_id,
+            event_type=TRUST_CHALLENGE_EVENT_TYPE,
+            event_payload={
+                **base_payload,
+                "challengeState": TRUST_CHALLENGE_STATE_CLOSED,
+                "challengeClosedBy": actor_text,
+                "challengeCloseReason": reason_text,
+            },
+        )
+
+        after_bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+        )
+        if updated_job is None:
+            updated_job = await _workflow_get_job(job_id=case_id)
+        return {
+            "ok": True,
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "challengeId": normalized_challenge_id,
+            "decision": normalized_decision,
+            "resolvedAlertIds": resolved_alert_ids,
+            "job": _serialize_workflow_job(updated_job) if updated_job is not None else None,
+            "item": after_bundle["challengeReview"],
+        }
+
     @app.get("/internal/judge/cases/{case_id}/trust/kernel-version")
     async def get_judge_trust_kernel_version(
         case_id: int,
@@ -3790,23 +4151,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             transitioned = await _workflow_get_job(job_id=case_id)
             if transitioned is None:
                 raise HTTPException(status_code=404, detail="review_job_not_found")
-            raised_alerts = runtime.trace_store.list_audit_alerts(
+            resolved_alert_ids = await _resolve_open_alerts_for_review(
                 job_id=case_id,
-                status="raised",
-                limit=200,
+                actor=event_payload["reviewActor"],
+                reason=event_payload["reviewReason"] or "review_approved",
             )
-            for item in raised_alerts:
-                row = runtime.trace_store.transition_audit_alert(
-                    job_id=case_id,
-                    alert_id=item.alert_id,
-                    to_status="resolved",
-                    actor=event_payload["reviewActor"],
-                    reason=event_payload["reviewReason"] or "review_approved",
-                )
-                if row is None:
-                    continue
-                await _sync_audit_alert_to_facts(alert=row)
-                resolved_alert_ids.append(row.alert_id)
         else:
             reject_reason = event_payload["reviewReason"] or "review rejected by reviewer"
             event_payload["judgeCoreStage"] = "review_rejected"

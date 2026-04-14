@@ -25,6 +25,222 @@ def _normalize_dispatch_type(value: Any) -> str:
     return "unknown"
 
 
+CHALLENGE_STATE_NOT_CHALLENGED = "not_challenged"
+CHALLENGE_STATE_REQUESTED = "challenge_requested"
+CHALLENGE_STATE_ACCEPTED = "challenge_accepted"
+CHALLENGE_STATE_UNDER_REVIEW = "under_review"
+CHALLENGE_STATE_VERDICT_UPHELD = "verdict_upheld"
+CHALLENGE_STATE_VERDICT_OVERTURNED = "verdict_overturned"
+CHALLENGE_STATE_DRAW_AFTER_REVIEW = "draw_after_review"
+CHALLENGE_STATE_CLOSED = "challenge_closed"
+
+_CHALLENGE_OPEN_STATES = {
+    CHALLENGE_STATE_REQUESTED,
+    CHALLENGE_STATE_ACCEPTED,
+    CHALLENGE_STATE_UNDER_REVIEW,
+}
+_CHALLENGE_DECISION_STATES = {
+    CHALLENGE_STATE_VERDICT_UPHELD,
+    CHALLENGE_STATE_VERDICT_OVERTURNED,
+    CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+}
+_CHALLENGE_VALID_STATES = (
+    _CHALLENGE_OPEN_STATES
+    | _CHALLENGE_DECISION_STATES
+    | {CHALLENGE_STATE_CLOSED}
+)
+
+
+def _safe_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    iso_fn = getattr(value, "isoformat", None)
+    if callable(iso_fn):
+        try:
+            return str(iso_fn())
+        except Exception:
+            return None
+    return None
+
+
+def _extract_challenge_timeline(
+    *,
+    workflow_events: list[Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    timeline: list[dict[str, Any]] = []
+    review_decisions: list[dict[str, Any]] = []
+    for event in workflow_events:
+        payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+        event_seq = int(getattr(event, "event_seq", 0) or 0)
+        created_at = _safe_iso(getattr(event, "created_at", None))
+        challenge_id = str(payload.get("challengeId") or "").strip()
+        challenge_state = str(payload.get("challengeState") or "").strip().lower()
+        if challenge_id and challenge_state in _CHALLENGE_VALID_STATES:
+            timeline.append(
+                {
+                    "eventSeq": event_seq,
+                    "challengeId": challenge_id,
+                    "state": challenge_state,
+                    "actor": str(
+                        payload.get("challengeActor")
+                        or payload.get("challengeRequestedBy")
+                        or payload.get("challengeAcceptedBy")
+                        or payload.get("challengeDecisionBy")
+                        or payload.get("challengeClosedBy")
+                        or payload.get("reviewActor")
+                        or ""
+                    ).strip()
+                    or None,
+                    "reasonCode": str(payload.get("challengeReasonCode") or "").strip() or None,
+                    "reason": str(
+                        payload.get("challengeReason")
+                        or payload.get("challengeDecisionReason")
+                        or payload.get("challengeCloseReason")
+                        or payload.get("reviewReason")
+                        or ""
+                    ).strip()
+                    or None,
+                    "createdAt": created_at,
+                }
+            )
+
+        decision = str(payload.get("reviewDecision") or "").strip().lower()
+        if decision in {"approve", "reject"}:
+            review_decisions.append(
+                {
+                    "eventSeq": event_seq,
+                    "decision": decision,
+                    "actor": str(payload.get("reviewActor") or "").strip() or None,
+                    "reason": str(payload.get("reviewReason") or "").strip() or None,
+                    "createdAt": created_at,
+                }
+            )
+    timeline.sort(
+        key=lambda row: (
+            int(row.get("eventSeq") or 0),
+            str(row.get("createdAt") or ""),
+        )
+    )
+    return timeline, review_decisions
+
+
+def _build_challenge_entries(
+    *,
+    timeline: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None, str]:
+    entries_by_id: dict[str, dict[str, Any]] = {}
+
+    for row in timeline:
+        challenge_id = str(row.get("challengeId") or "").strip()
+        if not challenge_id:
+            continue
+        state = str(row.get("state") or "").strip().lower()
+        event_seq = int(row.get("eventSeq") or 0)
+        actor = str(row.get("actor") or "").strip() or None
+        reason_code = str(row.get("reasonCode") or "").strip() or None
+        reason = str(row.get("reason") or "").strip() or None
+        created_at = str(row.get("createdAt") or "").strip() or None
+
+        entry = entries_by_id.get(challenge_id)
+        if entry is None:
+            entry = {
+                "challengeId": challenge_id,
+                "currentState": state,
+                "reasonCode": reason_code,
+                "reason": reason,
+                "requestedBy": None,
+                "requestedAt": None,
+                "acceptedBy": None,
+                "acceptedAt": None,
+                "reviewStartedAt": None,
+                "decision": None,
+                "decisionBy": None,
+                "decisionReason": None,
+                "decisionAt": None,
+                "closedBy": None,
+                "closedAt": None,
+                "latestEventSeq": event_seq,
+                "stateHistory": [],
+            }
+            entries_by_id[challenge_id] = entry
+
+        if reason_code and not entry.get("reasonCode"):
+            entry["reasonCode"] = reason_code
+        if reason and not entry.get("reason"):
+            entry["reason"] = reason
+
+        entry["currentState"] = state
+        entry["latestEventSeq"] = max(int(entry.get("latestEventSeq") or 0), event_seq)
+        entry["stateHistory"].append(
+            {
+                "eventSeq": event_seq,
+                "state": state,
+                "actor": actor,
+                "reasonCode": reason_code,
+                "reason": reason,
+                "createdAt": created_at,
+            }
+        )
+
+        if state == CHALLENGE_STATE_REQUESTED:
+            if created_at and not entry.get("requestedAt"):
+                entry["requestedAt"] = created_at
+            if actor and not entry.get("requestedBy"):
+                entry["requestedBy"] = actor
+        elif state == CHALLENGE_STATE_ACCEPTED:
+            if created_at and not entry.get("acceptedAt"):
+                entry["acceptedAt"] = created_at
+            if actor and not entry.get("acceptedBy"):
+                entry["acceptedBy"] = actor
+        elif state == CHALLENGE_STATE_UNDER_REVIEW:
+            if created_at and not entry.get("reviewStartedAt"):
+                entry["reviewStartedAt"] = created_at
+        elif state in _CHALLENGE_DECISION_STATES:
+            entry["decision"] = state
+            if created_at:
+                entry["decisionAt"] = created_at
+            if actor:
+                entry["decisionBy"] = actor
+            if reason:
+                entry["decisionReason"] = reason
+        elif state == CHALLENGE_STATE_CLOSED:
+            if created_at:
+                entry["closedAt"] = created_at
+            if actor:
+                entry["closedBy"] = actor
+
+    entries = list(entries_by_id.values())
+    entries.sort(
+        key=lambda row: (
+            -int(row.get("latestEventSeq") or 0),
+            str(row.get("challengeId") or ""),
+        )
+    )
+
+    active_challenge_id: str | None = None
+    for row in entries:
+        if str(row.get("currentState") or "") in _CHALLENGE_OPEN_STATES:
+            active_challenge_id = str(row.get("challengeId") or "")
+            break
+
+    if active_challenge_id:
+        challenge_state = str(
+            next(
+                (
+                    item.get("currentState")
+                    for item in entries
+                    if str(item.get("challengeId") or "") == active_challenge_id
+                ),
+                CHALLENGE_STATE_NOT_CHALLENGED,
+            )
+        )
+    elif entries:
+        challenge_state = str(entries[0].get("currentState") or CHALLENGE_STATE_NOT_CHALLENGED)
+    else:
+        challenge_state = CHALLENGE_STATE_NOT_CHALLENGED
+    return entries, active_challenge_id, challenge_state
+
+
 def build_case_commitment_registry(
     *,
     case_id: int,
@@ -107,31 +323,19 @@ def build_challenge_review_registry(
     report_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     report = report_payload if isinstance(report_payload, dict) else {}
-    review_decisions: list[dict[str, Any]] = []
+    timeline, review_decisions = _extract_challenge_timeline(workflow_events=workflow_events)
+    challenge_entries, active_challenge_id, challenge_state = _build_challenge_entries(
+        timeline=timeline
+    )
+
     approved = False
     rejected = False
-    for event in workflow_events:
-        payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
-        decision = str(payload.get("reviewDecision") or "").strip().lower()
-        if decision not in {"approve", "reject"}:
-            continue
+    for row in review_decisions:
+        decision = str(row.get("decision") or "").strip().lower()
         if decision == "approve":
             approved = True
         if decision == "reject":
             rejected = True
-        review_decisions.append(
-            {
-                "eventSeq": int(getattr(event, "event_seq", 0) or 0),
-                "decision": decision,
-                "actor": str(payload.get("reviewActor") or "").strip() or None,
-                "reason": str(payload.get("reviewReason") or "").strip() or None,
-                "createdAt": (
-                    getattr(event, "created_at", None).isoformat()
-                    if getattr(event, "created_at", None) is not None
-                    else None
-                ),
-            }
-        )
     normalized_status = str(workflow_status or "").strip().lower()
     if normalized_status == "review_required":
         review_state = "pending_review"
@@ -179,9 +383,14 @@ def build_challenge_review_registry(
             challenge_reasons.append(token)
 
     registry_basis = {
-        "version": "trust-phaseA-challenge-review-v1",
+        "version": "trust-phaseB-challenge-review-v1",
         "caseId": int(case_id),
         "traceId": str(trace_id or "").strip(),
+        "challengeState": challenge_state,
+        "activeChallengeId": active_challenge_id,
+        "totalChallenges": len(challenge_entries),
+        "challenges": challenge_entries,
+        "timeline": timeline,
         "reviewState": review_state,
         "reviewRequired": bool(report.get("reviewRequired")),
         "reviewDecisions": review_decisions,
