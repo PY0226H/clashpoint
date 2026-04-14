@@ -42,7 +42,7 @@ def test_serialize_alert_item_should_map_core_fields() -> None:
     payload = serialize_alert_item(alert)
 
     assert payload["alertId"] == "alert-1"
-    assert payload["jobId"] == 11
+    assert payload["caseId"] == 11
     assert payload["severity"] == "critical"
     assert payload["status"] == "acked"
     assert payload["transitions"][0]["toStatus"] == "acked"
@@ -109,7 +109,7 @@ def test_build_replay_report_payload_and_summary_should_normalize_winner_and_cou
         job_id=701,
         trace_id="trace-701",
         status="reported",
-        request={"jobId": 701},
+        request={"caseId": 701},
         response={"provider": "mock", "errorCode": None},
         callback_status="reported",
         callback_error=None,

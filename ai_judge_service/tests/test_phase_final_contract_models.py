@@ -13,7 +13,7 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
     def test_phase_dispatch_request_should_parse_required_fields(self) -> None:
         now = datetime.now(timezone.utc)
         payload = {
-            "job_id": 1001,
+            "case_id": 1001,
             "scope_id": 1,
             "session_id": 2001,
             "phase_no": 3,
@@ -50,7 +50,7 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
 
     def test_final_dispatch_request_should_parse_required_fields(self) -> None:
         payload = {
-            "job_id": 1002,
+            "case_id": 1002,
             "scope_id": 1,
             "session_id": 2001,
             "phase_start_no": 1,

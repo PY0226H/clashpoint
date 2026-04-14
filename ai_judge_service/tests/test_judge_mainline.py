@@ -96,7 +96,7 @@ def _build_phase_payload(
 
 def test_build_final_report_payload_should_satisfy_contract() -> None:
     request = FinalDispatchRequest(
-        job_id=9001,
+        case_id=9001,
         scope_id=1,
         session_id=301,
         phase_start_no=1,
@@ -136,7 +136,7 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
 
 def test_build_final_report_payload_should_mark_incomplete_rollup() -> None:
     request = FinalDispatchRequest(
-        job_id=9002,
+        case_id=9002,
         scope_id=1,
         session_id=302,
         phase_start_no=1,
@@ -168,7 +168,7 @@ def test_build_final_report_payload_should_mark_incomplete_rollup() -> None:
 
 def test_build_final_report_payload_should_track_unanswered_claims() -> None:
     request = FinalDispatchRequest(
-        job_id=9006,
+        case_id=9006,
         scope_id=1,
         session_id=306,
         phase_start_no=1,
@@ -196,7 +196,7 @@ def test_build_final_report_payload_should_track_unanswered_claims() -> None:
 
 def test_build_final_report_payload_should_trigger_style_shift_instability_gate() -> None:
     request = FinalDispatchRequest(
-        job_id=9003,
+        case_id=9003,
         scope_id=1,
         session_id=303,
         phase_start_no=1,
@@ -237,7 +237,7 @@ def test_build_final_report_payload_should_trigger_style_shift_instability_gate(
 
 def test_build_final_report_payload_should_trigger_label_swap_instability_gate() -> None:
     request = FinalDispatchRequest(
-        job_id=9004,
+        case_id=9004,
         scope_id=1,
         session_id=304,
         phase_start_no=1,
@@ -277,7 +277,7 @@ def test_build_final_report_payload_should_trigger_label_swap_instability_gate()
 
 def test_build_final_report_payload_should_trigger_panel_disagreement_gate() -> None:
     request = FinalDispatchRequest(
-        job_id=9005,
+        case_id=9005,
         scope_id=1,
         session_id=305,
         phase_start_no=1,
@@ -343,7 +343,7 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
 class JudgeMainlinePhaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_phase_report_payload_should_delegate_with_gateways(self) -> None:
         request = PhaseDispatchRequest(
-            job_id=9101,
+            case_id=9101,
             scope_id=1,
             session_id=401,
             phase_no=1,

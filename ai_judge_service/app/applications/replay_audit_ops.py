@@ -9,7 +9,7 @@ def serialize_alert_item(alert: Any) -> dict[str, Any]:
         transitions = []
     return {
         "alertId": alert.alert_id,
-        "jobId": alert.job_id,
+        "caseId": alert.job_id,
         "scopeId": alert.scope_id,
         "traceId": alert.trace_id,
         "type": alert.alert_type,
@@ -40,7 +40,7 @@ def serialize_outbox_event(item: Any) -> dict[str, Any]:
         "eventId": item.event_id,
         "channel": item.channel,
         "scopeId": item.scope_id,
-        "jobId": item.job_id,
+        "caseId": item.job_id,
         "traceId": item.trace_id,
         "alertId": item.alert_id,
         "status": item.status,
@@ -55,7 +55,7 @@ def serialize_outbox_event(item: Any) -> dict[str, Any]:
 def serialize_dispatch_receipt(item: Any) -> dict[str, Any]:
     return {
         "dispatchType": item.dispatch_type,
-        "jobId": item.job_id,
+        "caseId": item.job_id,
         "scopeId": item.scope_id,
         "sessionId": item.session_id,
         "traceId": item.trace_id,
@@ -97,7 +97,7 @@ def build_replay_report_payload(record: Any) -> dict[str, Any]:
     callback_error = report_summary.get("callbackError") or record.callback_error
 
     return {
-        "jobId": record.job_id,
+        "caseId": record.job_id,
         "traceId": record.trace_id,
         "status": record.status,
         "dispatchType": report_summary.get("dispatchType"),
@@ -141,7 +141,7 @@ def build_replay_report_summary(record: Any) -> dict[str, Any]:
     if not isinstance(response, dict):
         response = {}
     return {
-        "jobId": payload.get("jobId"),
+        "caseId": payload.get("caseId"),
         "traceId": payload.get("traceId"),
         "dispatchType": payload.get("dispatchType"),
         "status": payload.get("status"),

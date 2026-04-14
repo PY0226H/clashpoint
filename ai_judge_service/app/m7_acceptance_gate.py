@@ -99,10 +99,10 @@ def _build_gate_settings(**overrides: object) -> Settings:
     base = {
         "ai_internal_key": "m7-gate-key",
         "chat_server_base_url": "http://chat",
-        "phase_report_path_template": "/r/phase/{job_id}",
-        "final_report_path_template": "/r/final/{job_id}",
-        "phase_failed_path_template": "/f/phase/{job_id}",
-        "final_failed_path_template": "/f/final/{job_id}",
+        "phase_report_path_template": "/r/phase/{case_id}",
+        "final_report_path_template": "/r/final/{case_id}",
+        "phase_failed_path_template": "/f/phase/{case_id}",
+        "final_failed_path_template": "/f/final/{case_id}",
         "callback_timeout_secs": 8.0,
         "process_delay_ms": 0,
         "judge_style_mode": "rational",
@@ -151,7 +151,7 @@ def _build_gate_settings(**overrides: object) -> Settings:
         "redis_url": "redis://127.0.0.1:6379/0",
         "redis_pool_size": 20,
         "redis_key_prefix": "ai_judge:v2",
-        "db_url": "sqlite+aiosqlite:///./ai_judge_service.db",
+        "db_url": "sqlite+aiosqlite:////tmp/echoisle_ai_judge_service_test.db",
         "db_echo": False,
         "db_pool_size": 10,
         "db_max_overflow": 20,
@@ -168,10 +168,10 @@ def _build_gate_settings(**overrides: object) -> Settings:
     return Settings(**base)
 
 
-def _build_request(job_id: int) -> PhaseDispatchRequest:
+def _build_request(case_id: int) -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
     return PhaseDispatchRequest(
-        job_id=job_id,
+        case_id=case_id,
         scope_id=1,
         session_id=2,
         phase_no=1,
@@ -183,7 +183,7 @@ def _build_request(job_id: int) -> PhaseDispatchRequest:
                 message_id=1,
                 speaker_tag="pro_1",
                 side="pro",
-                content=f"message-{job_id}",
+                content=f"message-{case_id}",
                 created_at=now,
             )
         ],
@@ -191,8 +191,8 @@ def _build_request(job_id: int) -> PhaseDispatchRequest:
         judge_policy_version="v3-default",
         topic_domain="default",
         retrieval_profile="hybrid_v1",
-        trace_id=f"m7-phase-{job_id}",
-        idempotency_key=f"m7:phase:{job_id}",
+        trace_id=f"m7-phase-{case_id}",
+        idempotency_key=f"m7:phase:{case_id}",
     )
 
 
@@ -207,7 +207,7 @@ async def run_inprocess_dispatch_load(
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
 
-    async def _noop_callback_report(*, cfg: object, job_id: int, payload: dict) -> None:
+    async def _noop_callback_report(*, cfg: object, case_id: int, payload: dict) -> None:
         return None
 
     runtime = create_runtime(
@@ -227,12 +227,12 @@ async def run_inprocess_dispatch_load(
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
 
-        async def _run_one(job_id: int) -> None:
+        async def _run_one(case_id: int) -> None:
             nonlocal succeeded, failed
             async with semaphore:
                 started = perf_counter()
                 try:
-                    payload = _build_request(job_id).model_dump(mode="json")
+                    payload = _build_request(case_id).model_dump(mode="json")
                     resp = await client.post(
                         "/internal/judge/v3/phase/dispatch",
                         json=payload,

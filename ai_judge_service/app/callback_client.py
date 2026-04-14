@@ -10,10 +10,10 @@ class CallbackClientConfig:
     ai_internal_key: str
     chat_server_base_url: str
     callback_timeout_secs: float
-    phase_report_path_template: str = "/api/internal/ai/judge/v3/phase/jobs/{job_id}/report"
-    final_report_path_template: str = "/api/internal/ai/judge/v3/final/jobs/{job_id}/report"
-    phase_failed_path_template: str = "/api/internal/ai/judge/v3/phase/jobs/{job_id}/failed"
-    final_failed_path_template: str = "/api/internal/ai/judge/v3/final/jobs/{job_id}/failed"
+    phase_report_path_template: str = "/api/internal/ai/judge/v3/phase/cases/{case_id}/report"
+    final_report_path_template: str = "/api/internal/ai/judge/v3/final/cases/{case_id}/report"
+    phase_failed_path_template: str = "/api/internal/ai/judge/v3/phase/cases/{case_id}/failed"
+    final_failed_path_template: str = "/api/internal/ai/judge/v3/final/cases/{case_id}/failed"
 
 
 def join_url(base: str, path: str) -> str:
@@ -23,10 +23,10 @@ def join_url(base: str, path: str) -> str:
 async def callback_phase_report(
     *,
     cfg: CallbackClientConfig,
-    job_id: int,
+    case_id: int,
     payload: dict,
 ) -> None:
-    path = cfg.phase_report_path_template.format(job_id=job_id)
+    path = cfg.phase_report_path_template.format(case_id=case_id)
     await _post_callback(
         cfg=cfg,
         path=path,
@@ -38,10 +38,10 @@ async def callback_phase_report(
 async def callback_final_report(
     *,
     cfg: CallbackClientConfig,
-    job_id: int,
+    case_id: int,
     payload: dict,
 ) -> None:
-    path = cfg.final_report_path_template.format(job_id=job_id)
+    path = cfg.final_report_path_template.format(case_id=case_id)
     await _post_callback(
         cfg=cfg,
         path=path,
@@ -53,10 +53,10 @@ async def callback_final_report(
 async def callback_phase_failed(
     *,
     cfg: CallbackClientConfig,
-    job_id: int,
+    case_id: int,
     payload: dict,
 ) -> None:
-    path = cfg.phase_failed_path_template.format(job_id=job_id)
+    path = cfg.phase_failed_path_template.format(case_id=case_id)
     await _post_callback(
         cfg=cfg,
         path=path,
@@ -68,10 +68,10 @@ async def callback_phase_failed(
 async def callback_final_failed(
     *,
     cfg: CallbackClientConfig,
-    job_id: int,
+    case_id: int,
     payload: dict,
 ) -> None:
-    path = cfg.final_failed_path_template.format(job_id=job_id)
+    path = cfg.final_failed_path_template.format(case_id=case_id)
     await _post_callback(
         cfg=cfg,
         path=path,

@@ -17,10 +17,10 @@ def bind_callback_phase_report(
     cfg: CallbackClientConfig,
     callback_phase_report_impl=callback_phase_report,
 ) -> CallbackReportFn:
-    async def _bound(job_id: int, payload: dict[str, Any]) -> None:
+    async def _bound(case_id: int, payload: dict[str, Any]) -> None:
         await callback_phase_report_impl(
             cfg=cfg,
-            job_id=job_id,
+            case_id=case_id,
             payload=payload,
         )
 
@@ -32,10 +32,10 @@ def bind_callback_final_report(
     cfg: CallbackClientConfig,
     callback_final_report_impl=callback_final_report,
 ) -> CallbackReportFn:
-    async def _bound(job_id: int, payload: dict[str, Any]) -> None:
+    async def _bound(case_id: int, payload: dict[str, Any]) -> None:
         await callback_final_report_impl(
             cfg=cfg,
-            job_id=job_id,
+            case_id=case_id,
             payload=payload,
         )
 
@@ -47,10 +47,10 @@ def bind_callback_phase_failed(
     cfg: CallbackClientConfig,
     callback_phase_failed_impl=callback_phase_failed,
 ) -> CallbackReportFn:
-    async def _bound(job_id: int, payload: dict[str, Any]) -> None:
+    async def _bound(case_id: int, payload: dict[str, Any]) -> None:
         await callback_phase_failed_impl(
             cfg=cfg,
-            job_id=job_id,
+            case_id=case_id,
             payload=payload,
         )
 
@@ -62,10 +62,10 @@ def bind_callback_final_failed(
     cfg: CallbackClientConfig,
     callback_final_failed_impl=callback_final_failed,
 ) -> CallbackReportFn:
-    async def _bound(job_id: int, payload: dict[str, Any]) -> None:
+    async def _bound(case_id: int, payload: dict[str, Any]) -> None:
         await callback_final_failed_impl(
             cfg=cfg,
-            job_id=job_id,
+            case_id=case_id,
             payload=payload,
         )
 

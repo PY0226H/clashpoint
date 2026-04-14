@@ -14,10 +14,10 @@ def _build_settings(**overrides: object) -> Settings:
     base = {
         "ai_internal_key": "k",
         "chat_server_base_url": "http://chat",
-        "phase_report_path_template": "/r/phase/{job_id}",
-        "final_report_path_template": "/r/final/{job_id}",
-        "phase_failed_path_template": "/f/phase/{job_id}",
-        "final_failed_path_template": "/f/final/{job_id}",
+        "phase_report_path_template": "/r/phase/{case_id}",
+        "final_report_path_template": "/r/final/{case_id}",
+        "phase_failed_path_template": "/f/phase/{case_id}",
+        "final_failed_path_template": "/f/final/{case_id}",
         "callback_timeout_secs": 8.0,
         "process_delay_ms": 0,
         "judge_style_mode": "rational",
@@ -66,7 +66,7 @@ def _build_settings(**overrides: object) -> Settings:
         "redis_url": "redis://127.0.0.1:6379/0",
         "redis_pool_size": 20,
         "redis_key_prefix": "ai_judge:v2",
-        "db_url": "sqlite+aiosqlite:///./ai_judge_service.db",
+        "db_url": "sqlite+aiosqlite:////tmp/echoisle_ai_judge_service_test.db",
         "db_echo": False,
         "db_pool_size": 10,
         "db_max_overflow": 20,
@@ -85,14 +85,14 @@ def _build_settings(**overrides: object) -> Settings:
 
 def _build_phase_request(
     *,
-    job_id: int = 101,
+    case_id: int = 101,
     idempotency_key: str = "phase-key-101",
     rubric_version: str = "v3",
     judge_policy_version: str = "v3-default",
 ) -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
     return PhaseDispatchRequest(
-        job_id=job_id,
+        case_id=case_id,
         scope_id=1,
         session_id=2,
         phase_no=1,
@@ -119,20 +119,20 @@ def _build_phase_request(
         judge_policy_version=judge_policy_version,
         topic_domain="tft",
         retrieval_profile="hybrid_v1",
-        trace_id=f"trace-phase-{job_id}",
+        trace_id=f"trace-phase-{case_id}",
         idempotency_key=idempotency_key,
     )
 
 
 def _build_final_request(
     *,
-    job_id: int = 202,
+    case_id: int = 202,
     idempotency_key: str = "final-key-202",
     rubric_version: str = "v3",
     judge_policy_version: str = "v3-default",
 ) -> FinalDispatchRequest:
     return FinalDispatchRequest(
-        job_id=job_id,
+        case_id=case_id,
         scope_id=1,
         session_id=2,
         phase_start_no=1,
@@ -140,7 +140,7 @@ def _build_final_request(
         rubric_version=rubric_version,
         judge_policy_version=judge_policy_version,
         topic_domain="tft",
-        trace_id=f"trace-final-{job_id}",
+        trace_id=f"trace-final-{case_id}",
         idempotency_key=idempotency_key,
     )
 
@@ -202,7 +202,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
-        self.assertIn("/internal/judge/jobs/{job_id}/attestation/verify", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_policy_routes_should_return_default_registry_profile(self) -> None:
@@ -232,7 +232,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)
         req = _build_phase_request(
-            job_id=8101,
+            case_id=8101,
             idempotency_key="phase:8101",
             judge_policy_version="v9-not-exist",
         )
@@ -250,7 +250,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)
         req = _build_final_request(
-            job_id=8102,
+            case_id=8102,
             idempotency_key="final:8102",
             rubric_version="v2",
             judge_policy_version="v3-default",
@@ -274,8 +274,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_phase_dispatch_should_callback_and_support_idempotent_replay(self) -> None:
         phase_callback_calls: list[tuple[int, dict]] = []
 
-        async def fake_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            phase_callback_calls.append((job_id, payload))
+        async def fake_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            phase_callback_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(),
@@ -286,7 +286,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        req = _build_phase_request(job_id=1001, idempotency_key="phase:1001")
+        req = _build_phase_request(case_id=1001, idempotency_key="phase:1001")
         first_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -329,11 +329,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         phase_callback_calls: list[tuple[int, dict]] = []
         final_callback_calls: list[tuple[int, dict]] = []
 
-        async def fake_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            phase_callback_calls.append((job_id, payload))
+        async def fake_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            phase_callback_calls.append((case_id, payload))
 
-        async def fake_final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_callback_calls.append((job_id, payload))
+        async def fake_final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            final_callback_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(),
@@ -344,7 +344,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        phase_req = _build_phase_request(job_id=2001, idempotency_key="phase:2001")
+        phase_req = _build_phase_request(case_id=2001, idempotency_key="phase:2001")
         phase_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -354,7 +354,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_resp.status_code, 200)
         self.assertEqual(len(phase_callback_calls), 1)
 
-        final_req = _build_final_request(job_id=2002, idempotency_key="final:2002")
+        final_req = _build_final_request(case_id=2002, idempotency_key="final:2002")
         final_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/final/dispatch",
@@ -390,11 +390,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         final_callback_calls: list[tuple[int, dict]] = []
 
-        async def noop_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
-        async def final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_callback_calls.append((job_id, payload))
+        async def final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            final_callback_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(),
@@ -404,7 +404,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=final_callback,
         )
         app = create_app(runtime)
-        final_req = _build_final_request(job_id=7401, idempotency_key="final:7401")
+        final_req = _build_final_request(case_id=7401, idempotency_key="final:7401")
         gated_payload = {
             "sessionId": 2,
             "winner": "draw",
@@ -481,10 +481,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(workflow_events[-1].payload.get("reviewRequired"))
 
     async def test_review_routes_should_list_detail_and_decide_review_job(self) -> None:
-        async def noop_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
-        async def noop_final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
         runtime = create_runtime(
@@ -495,7 +495,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=noop_final_callback,
         )
         app = create_app(runtime)
-        final_req = _build_final_request(job_id=7411, idempotency_key="final:7411")
+        final_req = _build_final_request(case_id=7411, idempotency_key="final:7411")
         gated_payload = {
             "sessionId": 2,
             "winner": "draw",
@@ -577,21 +577,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         list_resp = await self._get(
             app=app,
-            path="/internal/judge/review/jobs?status=review_required&dispatch_type=final",
+            path="/internal/judge/review/cases?status=review_required&dispatch_type=final",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(list_resp.status_code, 200)
         queue_payload = list_resp.json()
         self.assertGreaterEqual(queue_payload["count"], 1)
         target_item = next(
-            item for item in queue_payload["items"] if item["workflow"]["jobId"] == 7411
+            item for item in queue_payload["items"] if item["workflow"]["caseId"] == 7411
         )
         self.assertTrue(target_item["reviewRequired"])
         self.assertIn("judge_panel_high_disagreement", target_item["errorCodes"])
 
         detail_resp = await self._get(
             app=app,
-            path="/internal/judge/review/jobs/7411",
+            path="/internal/judge/review/cases/7411",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(detail_resp.status_code, 200)
@@ -605,7 +605,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         decision_resp = await self._post(
             app=app,
-            path="/internal/judge/review/jobs/7411/decision?decision=approve&actor=ops&reason=manual_pass",
+            path="/internal/judge/review/cases/7411/decision?decision=approve&actor=ops&reason=manual_pass",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(decision_resp.status_code, 200)
@@ -621,10 +621,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,
     ) -> None:
-        async def failing_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def failing_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             raise RuntimeError("phase-callback-down")
 
-        async def noop_failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_failed_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
         runtime = create_runtime(
@@ -636,7 +636,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        req = _build_phase_request(job_id=3001, idempotency_key="phase:3001")
+        req = _build_phase_request(case_id=3001, idempotency_key="phase:3001")
         failed_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -648,7 +648,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         receipt_resp = await self._get(
             app=app,
-            path="/internal/judge/v3/phase/jobs/3001/receipt",
+            path="/internal/judge/v3/phase/cases/3001/receipt",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(receipt_resp.status_code, 200)
@@ -663,11 +663,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         phase_calls: list[tuple[int, dict]] = []
         final_calls: list[tuple[int, dict]] = []
 
-        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            phase_calls.append((job_id, payload))
+        async def phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            phase_calls.append((case_id, payload))
 
-        async def final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_calls.append((job_id, payload))
+        async def final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            final_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(),
@@ -678,7 +678,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        phase_req = _build_phase_request(job_id=5001, idempotency_key="phase:5001")
+        phase_req = _build_phase_request(case_id=5001, idempotency_key="phase:5001")
         phase_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -687,7 +687,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(phase_resp.status_code, 200)
 
-        final_req = _build_final_request(job_id=5001, idempotency_key="final:5001")
+        final_req = _build_final_request(case_id=5001, idempotency_key="final:5001")
         final_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/final/dispatch",
@@ -699,7 +699,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         replay_resp = await self._post(
             app=app,
-            path="/internal/judge/jobs/5001/replay?dispatch_type=auto",
+            path="/internal/judge/cases/5001/replay?dispatch_type=auto",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(replay_resp.status_code, 200)
@@ -711,7 +711,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(callback_total_before_replay, len(phase_calls) + len(final_calls))
 
     async def test_attestation_verify_should_use_auto_dispatch_and_return_verified(self) -> None:
-        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
         runtime = create_runtime(
@@ -723,7 +723,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        phase_req = _build_phase_request(job_id=8103, idempotency_key="phase:8103")
+        phase_req = _build_phase_request(case_id=8103, idempotency_key="phase:8103")
         phase_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -732,7 +732,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(phase_resp.status_code, 200)
 
-        final_req = _build_final_request(job_id=8103, idempotency_key="final:8103")
+        final_req = _build_final_request(case_id=8103, idempotency_key="final:8103")
         final_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/final/dispatch",
@@ -743,7 +743,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         verify_resp = await self._post(
             app=app,
-            path="/internal/judge/jobs/8103/attestation/verify?dispatch_type=auto",
+            path="/internal/judge/cases/8103/attestation/verify?dispatch_type=auto",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(verify_resp.status_code, 200)
@@ -755,7 +755,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verify_payload["mismatchComponents"], [])
 
     async def test_attestation_verify_should_detect_tampered_report_payload(self) -> None:
-        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
         runtime = create_runtime(
@@ -767,7 +767,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        phase_req = _build_phase_request(job_id=8104, idempotency_key="phase:8104")
+        phase_req = _build_phase_request(case_id=8104, idempotency_key="phase:8104")
         phase_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -776,7 +776,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(phase_resp.status_code, 200)
 
-        final_req = _build_final_request(job_id=8104, idempotency_key="final:8104")
+        final_req = _build_final_request(case_id=8104, idempotency_key="final:8104")
         final_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/final/dispatch",
@@ -805,7 +805,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         verify_resp = await self._post(
             app=app,
-            path="/internal/judge/jobs/8104/attestation/verify?dispatch_type=final",
+            path="/internal/judge/cases/8104/attestation/verify?dispatch_type=final",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(verify_resp.status_code, 200)
@@ -815,7 +815,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("verdictHash", verify_payload["mismatchComponents"])
 
     async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
-        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
         runtime = create_runtime(
@@ -827,7 +827,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         app = create_app(runtime)
 
-        req = _build_phase_request(job_id=7001, idempotency_key="phase:7001")
+        req = _build_phase_request(case_id=7001, idempotency_key="phase:7001")
         dispatch_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -847,7 +847,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         runtime.trace_store.get_dispatch_receipt = lambda **kwargs: None  # type: ignore[attr-defined]
         receipt_resp = await self._get(
             app=app,
-            path="/internal/judge/v3/phase/jobs/7001/receipt",
+            path="/internal/judge/v3/phase/cases/7001/receipt",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(receipt_resp.status_code, 200)
@@ -857,11 +857,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         phase_calls: list[tuple[int, dict]] = []
         final_calls: list[tuple[int, dict]] = []
 
-        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            phase_calls.append((job_id, payload))
+        async def phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            phase_calls.append((case_id, payload))
 
-        async def final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            final_calls.append((job_id, payload))
+        async def final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            final_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(),
@@ -877,7 +877,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         before_count = len(before_rows)
 
-        phase_req = _build_phase_request(job_id=7101, idempotency_key="phase:7101")
+        phase_req = _build_phase_request(case_id=7101, idempotency_key="phase:7101")
         phase_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/phase/dispatch",
@@ -886,7 +886,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(phase_resp.status_code, 200)
 
-        final_req = _build_final_request(job_id=7101, idempotency_key="final:7101")
+        final_req = _build_final_request(case_id=7101, idempotency_key="final:7101")
         final_resp = await self._post_json(
             app=app,
             path="/internal/judge/v3/final/dispatch",
@@ -897,7 +897,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         replay_resp = await self._post(
             app=app,
-            path="/internal/judge/jobs/7101/replay?dispatch_type=auto",
+            path="/internal/judge/cases/7101/replay?dispatch_type=auto",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(replay_resp.status_code, 200)
@@ -911,7 +911,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(replay_rows[0].winner, {"pro", "con", "draw"})
 
     async def test_alert_ack_should_sync_status_to_fact_repository(self) -> None:
-        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
         runtime = create_runtime(
@@ -922,8 +922,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=noop_callback,
         )
         app = create_app(runtime)
-        alert = runtime.trace_store.upsert_audit_alert(
-            job_id=7201,
+        alert = runtime.trace_store.upsert_audit_alert(job_id=7201,
             scope_id=1,
             trace_id="trace-alert-7201",
             alert_type="test_alert",
@@ -935,7 +934,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         ack_resp = await self._post(
             app=app,
-            path=f"/internal/judge/jobs/7201/alerts/{alert.alert_id}/ack",
+            path=f"/internal/judge/cases/7201/alerts/{alert.alert_id}/ack",
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(ack_resp.status_code, 200)
@@ -952,11 +951,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_blindization_reject_should_return_422_and_trigger_failed_callback(self) -> None:
         failed_calls: list[tuple[int, dict]] = []
 
-        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
-        async def failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            failed_calls.append((job_id, payload))
+        async def failed_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            failed_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(runtime_retry_max_attempts=1),
@@ -966,7 +965,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=failed_callback,
         )
         app = create_app(runtime)
-        bad_payload = _build_phase_request(job_id=6001, idempotency_key="phase:6001").model_dump(
+        bad_payload = _build_phase_request(case_id=6001, idempotency_key="phase:6001").model_dump(
             mode="json"
         )
         bad_payload["messages"][0]["user_id"] = 99
@@ -993,10 +992,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_blindization_reject_should_mark_workflow_failed_when_failed_callback_fails(
         self,
     ) -> None:
-        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
-        async def failing_failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def failing_failed_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             raise RuntimeError("failed-callback-down")
 
         runtime = create_runtime(
@@ -1007,7 +1006,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=failing_failed_callback,
         )
         app = create_app(runtime)
-        bad_payload = _build_phase_request(job_id=6002, idempotency_key="phase:6002").model_dump(
+        bad_payload = _build_phase_request(case_id=6002, idempotency_key="phase:6002").model_dump(
             mode="json"
         )
         bad_payload["messages"][0]["vip"] = True
@@ -1034,11 +1033,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_contract_blocked_should_mark_workflow_failed_and_sync_alert(self) -> None:
         failed_calls: list[tuple[int, dict]] = []
 
-        async def phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+        async def phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
-        async def final_failed_callback(*, cfg: object, job_id: int, payload: dict) -> None:
-            failed_calls.append((job_id, payload))
+        async def final_failed_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            failed_calls.append((case_id, payload))
 
         runtime = create_runtime(
             settings=_build_settings(runtime_retry_max_attempts=1),
@@ -1048,7 +1047,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=final_failed_callback,
         )
         app = create_app(runtime)
-        final_req = _build_final_request(job_id=7301, idempotency_key="final:7301")
+        final_req = _build_final_request(case_id=7301, idempotency_key="final:7301")
 
         with patch(
             "app.app_factory._build_final_report_payload",

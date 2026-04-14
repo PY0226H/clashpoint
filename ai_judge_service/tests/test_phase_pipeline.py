@@ -15,7 +15,7 @@ from tests.test_app_factory import _build_settings
 def _build_phase_request_for_pipeline() -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
     return PhaseDispatchRequest(
-        job_id=301,
+        case_id=301,
         scope_id=1,
         session_id=77,
         phase_no=3,

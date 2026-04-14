@@ -18,7 +18,7 @@ class PhaseDispatchMessage(BaseModel):
 
 class PhaseDispatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    job_id: int
+    case_id: int
     scope_id: int = Field(
         default=1,
         validation_alias=AliasChoices("scope_id", "scopeId"),
@@ -40,7 +40,7 @@ class PhaseDispatchRequest(BaseModel):
 
 class FinalDispatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    job_id: int
+    case_id: int
     scope_id: int = Field(
         default=1,
         validation_alias=AliasChoices("scope_id", "scopeId"),

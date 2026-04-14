@@ -157,19 +157,19 @@ def load_settings() -> Settings:
         chat_server_base_url=os.getenv("CHAT_SERVER_BASE_URL", "http://127.0.0.1:6688"),
         phase_report_path_template=os.getenv(
             "CHAT_SERVER_PHASE_REPORT_PATH_TEMPLATE",
-            "/api/internal/ai/judge/v3/phase/jobs/{job_id}/report",
+            "/api/internal/ai/judge/v3/phase/cases/{case_id}/report",
         ),
         final_report_path_template=os.getenv(
             "CHAT_SERVER_FINAL_REPORT_PATH_TEMPLATE",
-            "/api/internal/ai/judge/v3/final/jobs/{job_id}/report",
+            "/api/internal/ai/judge/v3/final/cases/{case_id}/report",
         ),
         phase_failed_path_template=os.getenv(
             "CHAT_SERVER_PHASE_FAILED_PATH_TEMPLATE",
-            "/api/internal/ai/judge/v3/phase/jobs/{job_id}/failed",
+            "/api/internal/ai/judge/v3/phase/cases/{case_id}/failed",
         ),
         final_failed_path_template=os.getenv(
             "CHAT_SERVER_FINAL_FAILED_PATH_TEMPLATE",
-            "/api/internal/ai/judge/v3/final/jobs/{job_id}/failed",
+            "/api/internal/ai/judge/v3/final/cases/{case_id}/failed",
         ),
         callback_timeout_secs=float(os.getenv("CALLBACK_TIMEOUT_SECONDS", "8")),
         process_delay_ms=int(os.getenv("JUDGE_PROCESS_DELAY_MS", "0")),
