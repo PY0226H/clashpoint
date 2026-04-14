@@ -230,8 +230,42 @@ fn build_final_report_input(session_id: u64, winner: &str) -> SubmitJudgeFinalRe
         retrieval_snapshot_rollup: vec![json!({"chunkId": "c-1"})],
         winner_first: Some("pro".to_string()),
         winner_second: Some("con".to_string()),
+        winner_third: Some("pro".to_string()),
         rejudge_triggered: false,
         needs_draw_vote: false,
+        review_required: false,
+        claim_graph: json!({
+            "pipelineVersion": "v1-claim-graph-bootstrap",
+            "nodes": [],
+            "edges": [],
+            "unansweredClaimIds": []
+        }),
+        claim_graph_summary: json!({
+            "coreClaims": {"pro": [], "con": []},
+            "conflictPairs": [],
+            "unansweredClaims": []
+        }),
+        evidence_ledger: json!({
+            "pipelineVersion": "v2-evidence-ledger",
+            "entries": [],
+            "refsById": {}
+        }),
+        verdict_ledger: json!({
+            "version": "v2-panel-arbiter-opinion",
+            "scoreCard": {"proScore": 71.5, "conScore": 70.5}
+        }),
+        opinion_pack: json!({
+            "version": "v2-opinion-pack",
+            "userReport": {"winner": winner}
+        }),
+        fairness_summary: json!({
+            "phase": "phase2",
+            "reviewRequired": false
+        }),
+        trust_attestation: json!({
+            "version": "trust-attestation-v1",
+            "dispatchType": "final"
+        }),
         judge_trace: json!({"traceId": "trace-final-callback"}),
         audit_alerts: vec![],
         error_codes: vec![],
@@ -531,9 +565,9 @@ async fn submit_judge_final_report_should_persist_report_and_mark_job_succeeded(
         .await?;
     assert_eq!(ret.status, "succeeded");
 
-    let persisted: (String, f64, f64, i32) = sqlx::query_as(
+    let persisted: (String, f64, f64, i32, bool, Option<String>, serde_json::Value, serde_json::Value) = sqlx::query_as(
         r#"
-        SELECT winner, pro_score, con_score, degradation_level
+        SELECT winner, pro_score, con_score, degradation_level, review_required, winner_third, claim_graph, trust_attestation
         FROM judge_final_reports
         WHERE final_job_id = $1
         "#,
@@ -545,6 +579,13 @@ async fn submit_judge_final_report_should_persist_report_and_mark_job_succeeded(
     assert_eq!(persisted.1, 71.5);
     assert_eq!(persisted.2, 70.5);
     assert_eq!(persisted.3, 0);
+    assert!(!persisted.4);
+    assert_eq!(persisted.5.as_deref(), Some("pro"));
+    assert_eq!(
+        persisted.6["pipelineVersion"],
+        json!("v1-claim-graph-bootstrap")
+    );
+    assert_eq!(persisted.7["dispatchType"], json!("final"));
 
     let job_row: (String,) = sqlx::query_as(
         r#"
@@ -770,6 +811,17 @@ async fn submit_judge_final_report_should_reject_invalid_winner_fields() -> Resu
         .expect_err("invalid winner_second should be rejected");
     match err {
         AppError::DebateError(msg) => assert!(msg.contains("invalid winner_second")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut bad_third = build_final_report_input(session_id as u64, "pro");
+    bad_third.winner_third = Some("invalid".to_string());
+    let err = state
+        .submit_judge_final_report(final_job_id as u64, bad_third)
+        .await
+        .expect_err("invalid winner_third should be rejected");
+    match err {
+        AppError::DebateError(msg) => assert!(msg.contains("invalid winner_third")),
         other => panic!("unexpected error: {other:?}"),
     }
 

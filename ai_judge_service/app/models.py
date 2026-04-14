@@ -73,6 +73,29 @@ class CaseCreateRequest(BaseModel):
     idempotency_key: str
 
 
+class NpcCoachAdviceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trace_id: str
+    query: str
+    side: PhaseSide | None = None
+    case_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("case_id", "caseId"),
+        serialization_alias="caseId",
+    )
+
+
+class RoomQaAnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trace_id: str
+    question: str
+    case_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("case_id", "caseId"),
+        serialization_alias="caseId",
+    )
+
+
 class GroundedSummaryPayload(BaseModel):
     text: str
     message_ids: list[int] = []

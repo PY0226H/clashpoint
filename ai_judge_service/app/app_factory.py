@@ -81,7 +81,12 @@ from .core.judge_core import (
     JUDGE_CORE_VERSION,
     JudgeCoreOrchestrator,
 )
-from .domain.agents import AGENT_KIND_JUDGE, AgentExecutionRequest
+from .domain.agents import (
+    AGENT_KIND_JUDGE,
+    AGENT_KIND_NPC_COACH,
+    AGENT_KIND_ROOM_QA,
+    AgentExecutionRequest,
+)
 from .domain.facts import (
     AuditAlert as FactAuditAlert,
 )
@@ -92,7 +97,13 @@ from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
 from .domain.workflow import WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUSES, WorkflowJob
-from .models import CaseCreateRequest, FinalDispatchRequest, PhaseDispatchRequest
+from .models import (
+    CaseCreateRequest,
+    FinalDispatchRequest,
+    NpcCoachAdviceRequest,
+    PhaseDispatchRequest,
+    RoomQaAnswerRequest,
+)
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
     Settings,
@@ -1364,6 +1375,147 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     async def _workflow_list_events(*, job_id: int):
         await _ensure_workflow_schema_ready()
         return await runtime.workflow_runtime.orchestrator.list_events(job_id=job_id)
+
+    async def _build_shared_room_context(
+        *,
+        session_id: int,
+        case_id: int | None,
+    ) -> dict[str, Any]:
+        normalized_session_id = max(0, int(session_id))
+        requested_case_id = max(0, int(case_id)) if case_id is not None else None
+
+        phase_receipts = await _list_dispatch_receipts(
+            dispatch_type="phase",
+            session_id=normalized_session_id,
+            limit=200,
+        )
+        final_receipts = await _list_dispatch_receipts(
+            dispatch_type="final",
+            session_id=normalized_session_id,
+            limit=200,
+        )
+        if requested_case_id is not None:
+            phase_receipts = [
+                row
+                for row in phase_receipts
+                if int(getattr(row, "job_id", 0)) == requested_case_id
+            ]
+            final_receipts = [
+                row
+                for row in final_receipts
+                if int(getattr(row, "job_id", 0)) == requested_case_id
+            ]
+
+        latest_phase = phase_receipts[0] if phase_receipts else None
+        latest_final = final_receipts[0] if final_receipts else None
+        latest_receipt = latest_final or latest_phase
+
+        workflow_jobs = await _workflow_list_jobs(
+            status=None,
+            dispatch_type=None,
+            limit=300,
+        )
+        session_jobs = [
+            row
+            for row in workflow_jobs
+            if int(row.session_id or 0) == normalized_session_id
+        ]
+        if requested_case_id is not None:
+            session_jobs = [row for row in session_jobs if row.job_id == requested_case_id]
+        latest_workflow_job = session_jobs[0] if session_jobs else None
+
+        selected_case_id = (
+            int(getattr(latest_receipt, "job_id", 0))
+            if latest_receipt is not None
+            else requested_case_id
+        )
+        if selected_case_id is not None and selected_case_id <= 0:
+            selected_case_id = None
+        selected_scope_id = (
+            int(getattr(latest_receipt, "scope_id", 0))
+            if latest_receipt is not None
+            else int(getattr(latest_workflow_job, "scope_id", 0) or 0)
+        )
+        if selected_scope_id <= 0:
+            selected_scope_id = 1
+
+        report_payload: dict[str, Any] = {}
+        latest_response = (
+            latest_receipt.response
+            if latest_receipt is not None and isinstance(latest_receipt.response, dict)
+            else {}
+        )
+        if isinstance(latest_response.get("reportPayload"), dict):
+            report_payload = latest_response["reportPayload"]
+
+        verdict_contract = _build_verdict_contract(report_payload)
+        winner_raw = latest_response.get("winner") or verdict_contract.get("winner")
+        winner = str(winner_raw or "").strip().lower() or None
+        debate_summary = (
+            report_payload.get("debateSummary")
+            if isinstance(report_payload.get("debateSummary"), str)
+            else None
+        )
+        side_analysis = (
+            report_payload.get("sideAnalysis")
+            if isinstance(report_payload.get("sideAnalysis"), dict)
+            else {}
+        )
+        verdict_reason = (
+            report_payload.get("verdictReason")
+            if isinstance(report_payload.get("verdictReason"), str)
+            else None
+        )
+        updated_at = (
+            latest_receipt.updated_at.isoformat()
+            if latest_receipt is not None and getattr(latest_receipt, "updated_at", None) is not None
+            else None
+        )
+        latest_dispatch_type = (
+            "final" if latest_final is not None else ("phase" if latest_phase is not None else None)
+        )
+
+        return {
+            "source": "shared_room_context_v1",
+            "sessionId": normalized_session_id,
+            "scopeId": selected_scope_id,
+            "caseId": selected_case_id,
+            "latestDispatchType": latest_dispatch_type,
+            "workflowStatus": latest_workflow_job.status if latest_workflow_job is not None else None,
+            "winnerHint": winner,
+            "reviewRequired": bool(verdict_contract.get("reviewRequired")),
+            "needsDrawVote": bool(verdict_contract.get("needsDrawVote")),
+            "phaseReceiptCount": len(phase_receipts),
+            "finalReceiptCount": len(final_receipts),
+            "debateSummary": debate_summary,
+            "sideAnalysis": side_analysis,
+            "verdictReason": verdict_reason,
+            "updatedAt": updated_at,
+        }
+
+    def _build_assistant_agent_response(
+        *,
+        agent_kind: str,
+        session_id: int,
+        shared_context: dict[str, Any],
+        execution_result: Any,
+    ) -> dict[str, Any]:
+        output = (
+            dict(execution_result.output)
+            if isinstance(execution_result.output, dict)
+            else {}
+        )
+        return {
+            "agentKind": agent_kind,
+            "sessionId": session_id,
+            "caseId": shared_context.get("caseId"),
+            "status": execution_result.status,
+            "accepted": bool(output.get("accepted")),
+            "errorCode": execution_result.error_code,
+            "errorMessage": execution_result.error_message,
+            "sharedContext": shared_context,
+            "output": output,
+        }
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:
@@ -2825,6 +2977,89 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "alerts": [_serialize_alert_item(item) for item in alerts],
             "replays": replay_items,
         }
+
+    @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
+    async def request_npc_coach_advice(
+        session_id: int,
+        payload: NpcCoachAdviceRequest,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_session_id = max(0, int(session_id))
+        if normalized_session_id <= 0:
+            raise HTTPException(status_code=422, detail="invalid_session_id")
+
+        shared_context = await _build_shared_room_context(
+            session_id=normalized_session_id,
+            case_id=payload.case_id,
+        )
+        scope_id = max(1, int(shared_context.get("scopeId") or 1))
+        execution_result = await runtime.agent_runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_NPC_COACH,
+                input_payload={
+                    "sessionId": normalized_session_id,
+                    "caseId": shared_context.get("caseId"),
+                    "query": payload.query,
+                    "side": payload.side,
+                    "sharedContext": shared_context,
+                },
+                trace_id=payload.trace_id,
+                session_id=normalized_session_id,
+                scope_id=scope_id,
+                metadata={
+                    "app": "npc_coach",
+                    "entrypoint": "npc_coach_advice",
+                },
+            )
+        )
+        return _build_assistant_agent_response(
+            agent_kind=AGENT_KIND_NPC_COACH,
+            session_id=normalized_session_id,
+            shared_context=shared_context,
+            execution_result=execution_result,
+        )
+
+    @app.post("/internal/judge/apps/room-qa/sessions/{session_id}/answer")
+    async def request_room_qa_answer(
+        session_id: int,
+        payload: RoomQaAnswerRequest,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_session_id = max(0, int(session_id))
+        if normalized_session_id <= 0:
+            raise HTTPException(status_code=422, detail="invalid_session_id")
+
+        shared_context = await _build_shared_room_context(
+            session_id=normalized_session_id,
+            case_id=payload.case_id,
+        )
+        scope_id = max(1, int(shared_context.get("scopeId") or 1))
+        execution_result = await runtime.agent_runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_ROOM_QA,
+                input_payload={
+                    "sessionId": normalized_session_id,
+                    "caseId": shared_context.get("caseId"),
+                    "question": payload.question,
+                    "sharedContext": shared_context,
+                },
+                trace_id=payload.trace_id,
+                session_id=normalized_session_id,
+                scope_id=scope_id,
+                metadata={
+                    "app": "room_qa",
+                    "entrypoint": "room_qa_answer",
+                },
+            )
+        )
+        return _build_assistant_agent_response(
+            agent_kind=AGENT_KIND_ROOM_QA,
+            session_id=normalized_session_id,
+            shared_context=shared_context,
+            execution_result=execution_result,
+        )
 
     @app.get("/internal/judge/cases/{case_id}/trace")
     async def get_judge_job_trace(

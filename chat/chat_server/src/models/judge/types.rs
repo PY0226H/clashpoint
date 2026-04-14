@@ -122,8 +122,24 @@ pub struct JudgeFinalReportDetail {
     pub retrieval_snapshot_rollup: Vec<Value>,
     pub winner_first: Option<String>,
     pub winner_second: Option<String>,
+    pub winner_third: Option<String>,
     pub rejudge_triggered: bool,
     pub needs_draw_vote: bool,
+    pub review_required: bool,
+    #[serde(default)]
+    pub claim_graph: Value,
+    #[serde(default)]
+    pub claim_graph_summary: Value,
+    #[serde(default)]
+    pub evidence_ledger: Value,
+    #[serde(default)]
+    pub verdict_ledger: Value,
+    #[serde(default)]
+    pub opinion_pack: Value,
+    #[serde(default)]
+    pub fairness_summary: Value,
+    #[serde(default)]
+    pub trust_attestation: Value,
     #[serde(default)]
     pub judge_trace: Value,
     #[serde(default)]
@@ -226,6 +242,7 @@ pub struct JudgeFinalReportSummary {
     pub con_score: f64,
     pub rejudge_triggered: bool,
     pub needs_draw_vote: bool,
+    pub review_required: bool,
     pub degradation_level: i32,
     pub created_at: DateTime<Utc>,
 }
@@ -444,12 +461,14 @@ pub struct JudgeReviewOpsItem {
     pub winner: String,
     pub winner_first: Option<String>,
     pub winner_second: Option<String>,
+    pub winner_third: Option<String>,
     pub pro_score: i32,
     pub con_score: i32,
     pub score_gap: i32,
     pub style_mode: String,
     pub rubric_version: String,
     pub needs_draw_vote: bool,
+    pub review_required: bool,
     pub rejudge_triggered: bool,
     pub has_verdict_evidence: bool,
     pub verdict_evidence_count: u32,
@@ -713,10 +732,27 @@ pub struct SubmitJudgeFinalReportInput {
     pub retrieval_snapshot_rollup: Vec<Value>,
     pub winner_first: Option<String>,
     pub winner_second: Option<String>,
+    pub winner_third: Option<String>,
     #[serde(default)]
     pub rejudge_triggered: bool,
     #[serde(default)]
     pub needs_draw_vote: bool,
+    #[serde(default)]
+    pub review_required: bool,
+    #[serde(default)]
+    pub claim_graph: Value,
+    #[serde(default)]
+    pub claim_graph_summary: Value,
+    #[serde(default)]
+    pub evidence_ledger: Value,
+    #[serde(default)]
+    pub verdict_ledger: Value,
+    #[serde(default)]
+    pub opinion_pack: Value,
+    #[serde(default)]
+    pub fairness_summary: Value,
+    #[serde(default)]
+    pub trust_attestation: Value,
     #[serde(default)]
     pub judge_trace: Value,
     #[serde(default)]

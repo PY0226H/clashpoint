@@ -39,8 +39,11 @@ const JUDGE_REPORT_STATUS_PENDING: &str = "pending";
 const JUDGE_REPORT_STATUS_BLOCKED: &str = "blocked";
 const JUDGE_REPORT_STATUS_DEGRADED: &str = "degraded";
 const JUDGE_REPORT_STATUS_ABSENT: &str = "absent";
+const JUDGE_REPORT_STATUS_REVIEW_REQUIRED: &str = "review_required";
 
 const JUDGE_REPORT_REASON_FINAL_REPORT_READY: &str = "final_report_ready";
+const JUDGE_REPORT_REASON_FINAL_REPORT_REVIEW_REQUIRED: &str = "final_report_review_required";
+const JUDGE_REPORT_REASON_DRAW_PENDING_VOTE: &str = "draw_pending_vote";
 const JUDGE_REPORT_REASON_FINAL_JOB_IN_PROGRESS: &str = "final_job_in_progress";
 const JUDGE_REPORT_REASON_FINAL_DISPATCH_FAILED: &str = "final_dispatch_failed";
 const JUDGE_REPORT_REASON_FINAL_REPORT_MISSING: &str = "final_report_missing_after_dispatch";
@@ -282,6 +285,9 @@ fn detect_ops_review_abnormal_flags(item: &JudgeReviewOpsItem) -> Vec<String> {
     }
     if item.winner != "draw" && item.score_gap <= 3 {
         flags.push("narrow_score_gap".to_string());
+    }
+    if item.review_required {
+        flags.push("review_required_pending_decision".to_string());
     }
     if item.winner == "draw" && !item.needs_draw_vote {
         flags.push("draw_without_vote_flow".to_string());
@@ -531,6 +537,7 @@ fn map_final_report_summary(v: &JudgeFinalReportDetail) -> JudgeFinalReportSumma
         con_score: v.con_score,
         rejudge_triggered: v.rejudge_triggered,
         needs_draw_vote: v.needs_draw_vote,
+        review_required: v.review_required,
         degradation_level: v.degradation_level,
         created_at: v.created_at,
     }
@@ -539,8 +546,21 @@ fn map_final_report_summary(v: &JudgeFinalReportDetail) -> JudgeFinalReportSumma
 fn resolve_judge_report_status(
     latest_final_job: Option<&JudgeFinalJobSnapshotRow>,
     progress: &JudgeReportProgress,
+    final_report: Option<&JudgeFinalReportDetail>,
 ) -> (String, String) {
-    if progress.has_final_report {
+    if let Some(report) = final_report {
+        if report.review_required {
+            return (
+                JUDGE_REPORT_STATUS_REVIEW_REQUIRED.to_string(),
+                JUDGE_REPORT_REASON_FINAL_REPORT_REVIEW_REQUIRED.to_string(),
+            );
+        }
+        if report.winner == "draw" && report.needs_draw_vote {
+            return (
+                JUDGE_REPORT_STATUS_READY.to_string(),
+                JUDGE_REPORT_REASON_DRAW_PENDING_VOTE.to_string(),
+            );
+        }
         return (
             JUDGE_REPORT_STATUS_READY.to_string(),
             JUDGE_REPORT_REASON_FINAL_REPORT_READY.to_string(),
@@ -711,11 +731,13 @@ impl AppState {
                 r.winner,
                 r.winner_first,
                 r.winner_second,
+                r.winner_third,
                 ROUND(r.pro_score)::int AS pro_score,
                 ROUND(r.con_score)::int AS con_score,
                 'v3'::varchar AS style_mode,
                 f.rubric_version,
                 r.needs_draw_vote,
+                r.review_required,
                 r.rejudge_triggered,
                 CASE
                     WHEN jsonb_typeof(r.verdict_evidence_refs) = 'array'
@@ -768,12 +790,14 @@ impl AppState {
                 winner: row.winner,
                 winner_first: row.winner_first,
                 winner_second: row.winner_second,
+                winner_third: row.winner_third,
                 pro_score: row.pro_score,
                 con_score: row.con_score,
                 score_gap,
                 style_mode: row.style_mode,
                 rubric_version: row.rubric_version,
                 needs_draw_vote: row.needs_draw_vote,
+                review_required: row.review_required,
                 rejudge_triggered: row.rejudge_triggered,
                 has_verdict_evidence: verdict_evidence_count > 0,
                 verdict_evidence_count,
@@ -1884,8 +1908,17 @@ impl AppState {
                 retrieval_snapshot_rollup,
                 winner_first,
                 winner_second,
+                winner_third,
                 rejudge_triggered,
                 needs_draw_vote,
+                review_required,
+                claim_graph,
+                claim_graph_summary,
+                evidence_ledger,
+                verdict_ledger,
+                opinion_pack,
+                fairness_summary,
+                trust_attestation,
                 judge_trace,
                 audit_alerts,
                 error_codes,
@@ -1935,8 +1968,11 @@ impl AppState {
                     count: 1,
                 }],
             });
-        let (status, status_reason) =
-            resolve_judge_report_status(latest_final_job.as_ref(), &progress);
+        let (status, status_reason) = resolve_judge_report_status(
+            latest_final_job.as_ref(),
+            &progress,
+            final_report.as_ref(),
+        );
 
         Ok(GetJudgeReportOutput {
             session_id,
@@ -2020,8 +2056,17 @@ impl AppState {
                 retrieval_snapshot_rollup,
                 winner_first,
                 winner_second,
+                winner_third,
                 rejudge_triggered,
                 needs_draw_vote,
+                review_required,
+                claim_graph,
+                claim_graph_summary,
+                evidence_ledger,
+                verdict_ledger,
+                opinion_pack,
+                fairness_summary,
+                trust_attestation,
                 judge_trace,
                 audit_alerts,
                 error_codes,

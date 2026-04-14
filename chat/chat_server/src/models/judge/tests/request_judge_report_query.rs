@@ -672,6 +672,7 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
         .expect("final report summary should exist");
     assert_eq!(summary.final_report_id, final_report_id as u64);
     assert_eq!(summary.winner, "pro");
+    assert!(!summary.review_required);
 
     let detail = state
         .get_latest_judge_final_report(session_id as u64, &participant, None)
@@ -684,6 +685,56 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
     assert_eq!(final_report.final_job_id, final_job_id as u64);
     assert_eq!(final_report.winner, "pro");
     assert_eq!(final_report.dimension_scores, json!({"logic": 72.0}));
+    assert!(!final_report.review_required);
+    assert_eq!(final_report.claim_graph, json!({}));
+    assert_eq!(final_report.verdict_ledger, json!({}));
+    assert_eq!(final_report.trust_attestation, json!({}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn judge_report_overview_should_return_review_required_status_when_final_report_requires_review(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let final_report_id = upsert_final_report(&state, session_id, final_job_id, "draw").await?;
+    sqlx::query(
+        r#"
+        UPDATE judge_final_reports
+        SET review_required = true,
+            needs_draw_vote = true,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(final_report_id)
+    .execute(&state.pool)
+    .await?;
+
+    let overview = state
+        .get_latest_judge_report(session_id as u64, &participant, None)
+        .await?;
+    assert_eq!(overview.status, "review_required");
+    assert_eq!(overview.status_reason, "final_report_review_required");
+    assert!(overview.progress.has_final_report);
+    let summary = overview
+        .final_report_summary
+        .as_ref()
+        .expect("final report summary should exist");
+    assert!(summary.review_required);
+
+    let detail = state
+        .get_latest_judge_final_report(session_id as u64, &participant, None)
+        .await?;
+    let final_report = detail
+        .final_report
+        .as_ref()
+        .expect("final report detail should exist");
+    assert!(final_report.review_required);
+    assert!(final_report.needs_draw_vote);
     Ok(())
 }
 

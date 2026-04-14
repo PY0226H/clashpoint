@@ -50,6 +50,7 @@ struct JudgeReportReadMetrics {
     status_blocked_total: AtomicU64,
     status_degraded_total: AtomicU64,
     status_absent_total: AtomicU64,
+    status_review_required_total: AtomicU64,
 }
 
 impl JudgeReportReadMetrics {
@@ -78,6 +79,10 @@ impl JudgeReportReadMetrics {
             }
             "absent" => {
                 self.status_absent_total.fetch_add(1, Ordering::Relaxed);
+            }
+            "review_required" => {
+                self.status_review_required_total
+                    .fetch_add(1, Ordering::Relaxed);
             }
             _ => {}
         }

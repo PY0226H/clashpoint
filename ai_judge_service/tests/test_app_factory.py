@@ -566,6 +566,118 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         kinds = [row.kind for row in profiles]
         self.assertEqual(kinds, ["judge", "npc_coach", "room_qa"])
 
+    async def test_npc_coach_shell_route_should_return_not_ready_with_shared_context(
+        self,
+    ) -> None:
+        async def _noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=_noop_callback,
+            callback_final_report_impl=_noop_callback,
+            callback_phase_failed_impl=_noop_callback,
+            callback_final_failed_impl=_noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_case_id = _unique_case_id(9301)
+        phase_req = _build_phase_request(
+            case_id=phase_case_id,
+            idempotency_key=f"phase:{phase_case_id}",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        npc_resp = await self._post_json(
+            app=app,
+            path=f"/internal/judge/apps/npc-coach/sessions/{phase_req.session_id}/advice",
+            payload={
+                "trace_id": f"trace-npc-{phase_case_id}",
+                "query": "请给我当前阶段的论点补强建议",
+                "side": "pro",
+                "caseId": phase_case_id,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(npc_resp.status_code, 200)
+        body = npc_resp.json()
+        self.assertEqual(body["agentKind"], "npc_coach")
+        self.assertEqual(body["status"], "not_ready")
+        self.assertEqual(body["errorCode"], "agent_not_enabled")
+        self.assertFalse(body["accepted"])
+        self.assertEqual(body["sharedContext"]["sessionId"], phase_req.session_id)
+        self.assertEqual(body["sharedContext"]["caseId"], phase_case_id)
+        self.assertEqual(body["sharedContext"]["latestDispatchType"], "phase")
+        self.assertGreaterEqual(body["sharedContext"]["phaseReceiptCount"], 1)
+
+    async def test_room_qa_shell_route_should_return_not_ready_with_final_context(
+        self,
+    ) -> None:
+        async def _noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=_noop_callback,
+            callback_final_report_impl=_noop_callback,
+            callback_phase_failed_impl=_noop_callback,
+            callback_final_failed_impl=_noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_case_id = _unique_case_id(9401)
+        phase_req = _build_phase_request(
+            case_id=phase_case_id,
+            idempotency_key=f"phase:{phase_case_id}",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_case_id = _unique_case_id(9402)
+        final_req = _build_final_request(
+            case_id=final_case_id,
+            idempotency_key=f"final:{final_case_id}",
+        )
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        room_qa_resp = await self._post_json(
+            app=app,
+            path=f"/internal/judge/apps/room-qa/sessions/{final_req.session_id}/answer",
+            payload={
+                "trace_id": f"trace-room-qa-{final_case_id}",
+                "question": "当前辩论进行到什么程度，哪一方更有优势？",
+                "caseId": final_case_id,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(room_qa_resp.status_code, 200)
+        body = room_qa_resp.json()
+        self.assertEqual(body["agentKind"], "room_qa")
+        self.assertEqual(body["status"], "not_ready")
+        self.assertEqual(body["errorCode"], "agent_not_enabled")
+        self.assertFalse(body["accepted"])
+        self.assertEqual(body["sharedContext"]["sessionId"], final_req.session_id)
+        self.assertEqual(body["sharedContext"]["caseId"], final_case_id)
+        self.assertEqual(body["sharedContext"]["latestDispatchType"], "final")
+        self.assertGreaterEqual(body["sharedContext"]["finalReceiptCount"], 1)
+
     async def test_phase_dispatch_should_callback_and_support_idempotent_replay(self) -> None:
         phase_callback_calls: list[tuple[int, dict]] = []
 

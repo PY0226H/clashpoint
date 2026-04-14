@@ -1470,6 +1470,7 @@ mod tests {
             .header("Authorization", format!("Bearer {}", token))
             .header("If-Match", "empty")
             .header("x-request-id", request_id)
+            .header("x-test-rate-limit-key", request_id)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_admin"}"#))?;
         let res = app.oneshot(req).await?;
@@ -2070,6 +2071,7 @@ mod tests {
         let token =
             issue_token_for_user(&state, owner.id, "ops-rbac-upsert-local-fallback-sid").await?;
         let app = get_router(state.clone()).await?;
+        let rate_limit_key = "ops-rbac-upsert-local-fallback-key";
 
         for _ in 0..30 {
             let revision = current_rbac_revision(&state).await?;
@@ -2078,6 +2080,7 @@ mod tests {
                 .uri("/api/debate/ops/rbac/roles/2")
                 .header("Authorization", format!("Bearer {}", token))
                 .header("If-Match", revision)
+                .header("x-test-rate-limit-key", rate_limit_key)
                 .header("Content-Type", "application/json")
                 .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
             let res = app.clone().oneshot(req).await?;
@@ -2088,6 +2091,7 @@ mod tests {
             .method(Method::PUT)
             .uri("/api/debate/ops/rbac/roles/2")
             .header("Authorization", format!("Bearer {}", token))
+            .header("x-test-rate-limit-key", rate_limit_key)
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"role":"ops_reviewer"}"#))?;
         let res = app.oneshot(req).await?;
@@ -2644,6 +2648,7 @@ mod tests {
             .header("Authorization", format!("Bearer {}", token))
             .header("If-Match", "empty")
             .header("x-request-id", request_id)
+            .header("x-test-rate-limit-key", request_id)
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::CONFLICT);

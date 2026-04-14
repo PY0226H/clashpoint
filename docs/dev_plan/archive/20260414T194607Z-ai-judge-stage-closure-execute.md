@@ -1,0 +1,185 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-14  
+当前主线：`AI_Judge 下一阶段开发计划（P8）：Courtroom Agent 主链 + Runtime Registry + Trust Phase A`  
+当前状态：进行中（`ai-judge-real-env-window-pass-closure` 已完成 `local_reference_ready`，进入 `ai-judge-stage-closure-execute-p8`）
+
+---
+
+## 1. 阶段摘要
+
+1. 本阶段目标：在已完成 P7（cases 硬切 + judge core 收敛 + 收口脚本体系）的基础上，把 `ai_judge_service` 从“可用裁判服务”升级为“企业级 Courtroom Agent 主链”。
+2. 设计依据：
+   - `docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - 当前仓库代码与收口状态（2026-04-14 已完成 `ai-judge-stage-closure-execute`）
+3. 执行策略：继续按“未上线硬切”原则推进，不保留长期兼容层，不做灰度双轨。
+
+---
+
+## 2. 当前基线（P8 启动前）
+
+1. 主链已完成：`case` 语义硬切、`JudgeCoreOrchestrator`、`trace/replay/failed callback`、`review queue`、`verdictContract`。
+2. 证据与公平基础已完成：`claim graph bootstrap`、`policy registry bootstrap`、`trust attestation v1`、`fairness gate`、`runtime ops pack + stage closure evidence + real_env_window_closure`。
+3. 跨层同步已完成一轮：`chat_server` 已切到 `case_id/caseId` 主语义。
+4. 阶段收口已完成：计划重置、归档落地、长期文档回填完成。
+5. 当前代码状态：工作区干净，可直接进入下一阶段开发。
+
+---
+
+## 3. 本阶段目标与边界
+
+### 3.1 P8 必达目标
+
+1. 建立 Courtroom Agent 主状态机（`blinded -> case_built -> claim_graph_ready -> evidence_ready -> panel_judged -> fairness_checked -> arbitrated -> opinion_written -> callback_reported -> archived`）。
+2. 落地 Agent Runtime 三大注册中心：`Prompt Registry`、`Tool Registry`、`Policy Registry`。
+3. 将判决主链从“pipeline 拼接”升级为“角色化 Agent 编排”：
+   - `Clerk / Recorder / Claim Graph / Evidence / Judge Panel / Fairness Sentinel / Chief Arbiter / Opinion Writer`
+4. 将 verdict 生成从模板驱动升级为 ledger 驱动（`Case Dossier + Claim Graph + Evidence Ledger + Verdict Ledger + Fairness Report + Opinion Pack`）。
+5. 完成 Trust Layer Phase A（不碰链）：`Case Commitment Registry`、`Verdict Attestation Registry`、`Challenge & Review Registry`、`Judge Kernel Versioning`、`Audit Anchor Export`。
+6. 预留未来能力入口：`NPC Coach App` 与 `Room QA App` 空壳接入 shared context，不污染 Judge 主链。
+
+### 3.2 本阶段非目标
+
+1. 不做微服务拆分（仍保持模块化单体）。
+2. 不做链上落地与钱包门槛（只做可验证承诺的链下版本）。
+3. 不把 `topic_memory` 直接放入主裁决胜负计算。
+4. 不将 LangChain/LangGraph 作为主架构骨架。
+5. 不在没有真实环境窗口时强行给出 real-env `pass` 结论。
+
+---
+
+## 4. 架构落地硬决策（本阶段执行约束）
+
+1. 技术栈保持：`Python 3.11 + FastAPI + Pydantic v2`。
+2. 存储分层保持：`PostgreSQL 事实源`、`Redis 仅做加速/协调`、`Object Store 承载审计包`。
+3. 客户端边界保持：客户端永远通过 `chat_server`，不直连 `ai_judge_service`。
+4. 语义边界保持：对外主语义仍收敛为“处理中 / 已完成（pro/con/draw） / 复核中 / 失败”。
+5. 预发布策略保持：默认硬切，不留长期 alias、adapter shim、双字段双写。
+
+---
+
+## 5. 模块拆解（P8）
+
+| 模块 | 优先级 | 目标 | DoD（完成定义） | 主要验证 |
+| --- | --- | --- | --- | --- |
+| `ai-judge-next-iteration-planning` | P0 | 形成 P8 完整计划并冻结执行顺序 | 当前计划文档完成更新，模块矩阵/里程碑/验收门禁齐备 | 文档自检 + `harness_docs_lint` |
+| `ai-judge-state-machine-v2-hard-cut` | P0 | Judge 主链接入 Courtroom 状态机 | workflow 事件与状态新增并贯通，`review_required/draw_pending_vote/blocked_failed` 分支稳定 | `pytest -q tests/test_judge_core.py tests/test_workflow_orchestrator.py` |
+| `ai-judge-agent-role-runtime-mvp` | P0 | 角色化 Agent 编排主链落地 | 8 个角色执行入口与责任边界落地，主链不再依赖旧 phase 拼接路径 | `pytest -q tests/test_judge_mainline.py tests/test_phase_pipeline.py` |
+| `ai-judge-registry-runtime` | P0 | Prompt/Tool/Policy Registry 落库与读取 | 三类 registry 模型、版本化读取、回放可追溯版本字段 | `pytest -q tests/test_settings.py tests/test_app_factory.py` |
+| `ai-judge-claim-evidence-ledger-v2` | P1 | Claim Graph + Evidence Ledger 结构化升级 | claim/evidence 写入与引用路径稳定，`verdictEvidenceRefs` 可定位到 ledger 实体 | `pytest -q tests/test_runtime_rag.py tests/test_rag_retriever.py` |
+| `ai-judge-panel-arbiter-opinion-v2` | P1 | Panel + Chief + Opinion Pack 升级 | final 报告由 ledger 驱动生成，`debateSummary/sideAnalysis/verdictReason` 质量提升且字段不变 | `pytest -q tests/test_phase_final_contract_models.py tests/test_app_factory.py` |
+| `ai-judge-fairness-sentinel-v2` | P1 | 公平门禁工程化强化 | `label swap/style perturbation/panel disagreement/evidence sufficiency` 全部进入判定与复核触发链 | `pytest -q tests/test_fairness.py tests/test_app_factory.py` |
+| `ai-judge-trust-layer-phaseA` | P1 | 可验证信任层（链下）落地 | Case/Verdict/Challenge/Kernel/Audit 五类 registry 与导出接口可用 | `pytest -q tests/test_replay_audit_ops.py tests/test_trace_store.py` |
+| `ai-judge-cross-layer-sync-v2` | P1 | `chat_server` 二次同步到 P8 输出语义 | callback/report/ops 消费方同步新字段与状态，不保留旧依赖 | `cargo test -p chat-server` |
+| `ai-judge-npc-qa-shell-bootstrap` | P2 | 未来 Agent 扩展空壳落地 | `NPC Coach App`、`Room QA App` 空壳接口与 shared context 接入完成，不影响 judge 主链 | `pytest -q tests/test_app_factory.py` |
+| `ai-judge-real-env-window-pass-closure` | P2 | 真实环境窗口收口（补齐 pass） | 在本机窗口完成 `local_reference_ready` 收口并输出证据；真实环境窗口再补 `pass` | `bash scripts/harness/ai_judge_real_env_window_closure.sh --root ... --allow-local-reference` |
+| `ai-judge-stage-closure-execute-p8` | P2 | P8 阶段收口归档 | completed/todo/plan/archive 同步，阶段结论可追溯 | `bash scripts/harness/ai_judge_stage_closure_execute.sh --root ...` |
+
+---
+
+## 6. 实施顺序（严格执行）
+
+1. 先做 `state-machine-v2-hard-cut`，先把“法院时序骨架”稳定。
+2. 再做 `agent-role-runtime-mvp + registry-runtime`，让角色编排可配置、可追溯。
+3. 然后做 `claim-evidence-ledger-v2 + panel-arbiter-opinion-v2`，把 rich report 建立在结构化事实上。
+4. 接着做 `fairness-sentinel-v2 + trust-layer-phaseA`，把公平和可信从“能力”升级为“制度”。
+5. 再做 `cross-layer-sync-v2`，一次性同步调用方语义。
+6. 最后做 `npc-qa-shell-bootstrap` 与 `real-env-window-pass-closure`，并执行 P8 收口。
+
+---
+
+## 7. 验收清单（P8）
+
+### 7.1 功能验收
+
+1. `POST /internal/judge/cases` 到 final report 的内部状态链可映射到 Courtroom 状态机。
+2. `GET /internal/judge/cases/{case_id}` 可返回结构化 `Case Dossier + Claim/Evidence/Verdict/Fairness/Opinion` 视图。
+3. `POST /internal/judge/cases/{case_id}/replay` 可复现 registry 版本（prompt/tool/policy）与裁决过程。
+4. Fairness Sentinel 触发复核时，系统稳定进入 `review_required`，人工决策后状态可收敛。
+
+### 7.2 契约验收
+
+1. 终局展示字段保持主合同：`debateSummary`、`sideAnalysis`、`verdictReason`。
+2. 主裁决合同保持：`winner/proScore/conScore/dimensionScores/verdictEvidenceRefs/auditAlerts/errorCodes/degradationLevel`。
+3. 关键失败语义保持统一：`trace + workflow + receipt + failed callback` 一致可追踪。
+
+### 7.3 质量门禁
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q`
+2. `cd ai_judge_service && ../scripts/py -m ruff check app tests`
+3. `cd chat && cargo test -p chat-server`
+4. `bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`
+5. `bash scripts/harness/tests/test_ai_judge_real_env_window_closure.sh`
+6. `bash scripts/quality/harness_docs_lint.sh`
+
+---
+
+## 8. 风险与应对
+
+1. 风险：角色化 Agent 编排改动面大，容易引入隐性回归。  
+   应对：先冻结状态机与合同，再分层迁移执行器，旧路径迁移完成即删除。
+
+2. 风险：registry 引入后版本漂移导致 replay 不一致。  
+   应对：request/receipt/replay 强制写入 `promptVersion/toolsetVersion/policyVersion`。
+
+3. 风险：公平门禁增强后 `review_required` 占比上升影响体验。  
+   应对：同时建设 fairness dashboard，分 topic 观察阈值并做策略校准。
+
+4. 风险：可信层设计过度工程化。  
+   应对：P8 只做 Phase A 链下承诺，不做链上与 ZKML 重工程实现。
+
+---
+
+## 9. 里程碑
+
+| 里程碑 | 状态 | 说明 |
+| --- | --- | --- |
+| M0：P8 计划冻结 | 已完成 | 本文档已写入并作为本轮唯一执行计划 |
+| M1：Courtroom 状态机硬切 | 已完成 | workflow/judge-core 已切为 Courtroom 状态机，`review_required/draw_pending_vote/blocked_failed` 分支可用 |
+| M2：Agent Runtime MVP | 已完成 | Judge runtime + Prompt/Tool/Policy registry runtime 已接入，phase/final/replay 写入 `judgeTrace` 版本快照 |
+| M3：Ledger 驱动裁决与公平强化 | 已完成 | `claim/evidence ledger v2`、`panel/arbiter/opinion v2`、`fairness-sentinel v2` 已全部完成 |
+| M4：Trust Layer Phase A | 已完成 | `trust_phasea` 五类 registry 构建器 + 5 条 trust 路由已落地，review 联动与导出链路可验证 |
+| M5：跨层同步与阶段收口 | 进行中 | `chat_server` 二次同步与 `NPC/Room QA` 空壳已完成，待 real-env pass 收口与阶段归档 |
+
+---
+
+### 已完成/未完成矩阵
+
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-next-iteration-planning` | 生成 P8 完整开发计划 | 已完成 | 已根据架构决策方案、企业级 Agent 方案与当前代码状态写入本计划 |
+| `ai-judge-state-machine-v2-hard-cut` | Courtroom 状态机硬切 | 已完成 | Workflow 状态升级为 `queued/blinded/case_built/.../archived + review_required/draw_pending_vote/blocked_failed`，JudgeCore 与 AppFactory 已接入 |
+| `ai-judge-agent-role-runtime-mvp` | 角色化 Agent 主链 | 已完成 | Judge executor 已升级为可执行角色运行时，phase/final/replay 主链已写入角色追踪 |
+| `ai-judge-registry-runtime` | Prompt/Tool/Policy Registry | 已完成 | Prompt/Tool runtime + Policy 引用版本已打通，replay/callback 可追溯 `policy/prompt/tool` 三类版本 |
+| `ai-judge-claim-evidence-ledger-v2` | Claim/Evidence Ledger 升级 | 已完成 | final payload 新增 `evidenceLedger`，`verdictEvidenceRefs` 强制携带 `evidenceId`，claim graph 新增 `evidenceRefIds`，case detail 可直接反查 ledger 实体 |
+| `ai-judge-panel-arbiter-opinion-v2` | Panel/Chief/Opinion 升级 | 已完成 | final payload 新增 `verdictLedger/opinionPack`，合同校验要求结构化 panel/arbitration/opinion 字段，case detail 同步可见 `hasVerdictLedger/hasOpinionPack` |
+| `ai-judge-fairness-sentinel-v2` | 公平门禁工程化强化 | 已完成 | fairness gate 新增 `evidence_support_too_low` 与冲突比门禁，接入 policy 阈值驱动并写入 `fairnessSummary.evidenceSufficiency` |
+| `ai-judge-trust-layer-phaseA` | 可验证信任层 Phase A | 已完成 | 新增 `Case/Verdict/Challenge/Kernel/Audit` 五类 registry 构建器、5 条 trust 查询路由、统一 `report context` 解析器与 review 联动校验，测试与门禁全通过 |
+| `ai-judge-cross-layer-sync-v2` | 跨层二次同步 | 已完成 | `chat_server` 已同步 `winner_third/review_required/claim_graph/evidence_ledger/verdict_ledger/opinion_pack/fairness_summary/trust_attestation`，并完成 `review_required` 状态透传与回归 |
+| `ai-judge-npc-qa-shell-bootstrap` | NPC/QA 扩展空壳 | 已完成 | 新增 `NPC Coach/Room QA` 空壳接口与 shared room context 接入，保持与 Judge 主链隔离 |
+| `ai-judge-real-env-window-pass-closure` | 真实环境窗口 pass 收口 | 已完成（local_reference_ready） | 已执行 real-env-window closure，总控状态 `local_reference_ready`，证据已归档 |
+| `ai-judge-stage-closure-execute-p8` | P8 阶段收口执行 | 进行中 | 阶段尾执行中 |
+
+---
+
+### 下一开发模块建议
+
+1. `ai-judge-stage-closure-execute-p8`
+
+---
+
+### 模块完成同步历史
+
+- 2026-04-14：完成 `ai-judge-next-iteration-planning`，生成并落地 P8 完整开发计划（本文件）。
+- 2026-04-14：完成 `ai-judge-state-machine-v2-hard-cut`，Courtroom 状态机已硬切并通过 `pytest -q tests/test_workflow_orchestrator.py tests/test_judge_core.py tests/test_app_factory.py`、`pytest -q`、`ruff check app tests`。
+- 2026-04-14：推进 `ai-judge-agent-role-runtime-mvp`，Judge runtime 从 reserved shell 升级为 Courtroom Role MVP，phase/final/replay 回调载荷写入 `judgeTrace.agentRuntime + judgeTrace.courtroomRoles`，并通过 `pytest -q tests/test_agent_runtime.py tests/test_judge_mainline.py tests/test_app_factory.py`、`pytest -q`、`ruff check app tests`。
+- 2026-04-14：完成 `ai-judge-registry-runtime`，新增 Prompt/Tool registry runtime 与查询路由，Policy 增加 `promptRegistryVersion/toolRegistryVersion`，并在 phase/final/replay 的 `judgeTrace` 中固定写入 `policy/prompt/tool` 版本快照；通过 `pytest -q tests/test_registry_runtime.py tests/test_policy_registry_runtime.py tests/test_settings.py tests/test_app_factory.py`、`pytest -q`、`ruff check app tests`。
+- 2026-04-14：完成 `ai-judge-claim-evidence-ledger-v2`，final payload 新增 `evidenceLedger`，`verdictEvidenceRefs` 全量落 `evidenceId` 并在合同校验中强制“可定位到 ledger 实体”，claim graph 节点新增 `evidenceRefIds`，case detail 同步输出 `hasEvidenceLedger/evidenceLedger`；通过 `pytest -q tests/test_evidence_ledger.py tests/test_judge_mainline.py tests/test_phase_final_contract_models.py tests/test_trust_attestation.py tests/test_app_factory.py tests/test_replay_audit_ops.py`、`pytest -q`、`ruff check app tests`。
+- 2026-04-14：完成 `ai-judge-panel-arbiter-opinion-v2`，final payload 新增 `verdictLedger/opinionPack`，Panel/Arbiter 决策与 Opinion 结构写入 `judgeTrace.panelArbiter`，final 合同新增 `verdictLedger/opinionPack` 必填校验，case detail 输出 `hasVerdictLedger/hasOpinionPack`；通过 `pytest -q tests/test_judge_mainline.py tests/test_phase_final_contract_models.py tests/test_app_factory.py tests/test_replay_audit_ops.py tests/test_trust_attestation.py`、`pytest -q`、`ruff check app tests`。
+- 2026-04-14：完成 `ai-judge-fairness-sentinel-v2`，fairness gate 新增 `evidence_support_too_low/evidence_conflict_ratio_high`，并将 `evidenceMin*` 阈值接入 policy registry 驱动；final/replay 重算路径均应用 policy fairness thresholds，`fairnessSummary.evidenceSufficiency` 与 `judgeTrace.policyRegistry.fairnessThresholds` 可追踪；通过 `pytest -q tests/test_judge_mainline.py tests/test_policy_registry_runtime.py tests/test_app_factory.py tests/test_phase_final_contract_models.py tests/test_replay_audit_ops.py tests/test_trust_attestation.py`、`pytest -q`、`ruff check app tests`。
+- 2026-04-14：完成 `ai-judge-trust-layer-phaseA`，新增 `app/applications/trust_phasea.py`（`case commitment / verdict attestation / challenge review / kernel version / audit anchor` 五类构建器）、`/internal/judge/cases/{case_id}/trust/*` 五条查询路由，并将 attestation 校验改为统一 `report context` 解析；review 决策前后的 challenge 状态可追踪；通过 `pytest -q tests/test_trust_phasea.py tests/test_app_factory.py`、`pytest -q`、`ruff check app tests`、`harness_docs_lint`、`post-module-test-guard --mode full`。
+- 2026-04-14：完成 `ai-judge-cross-layer-sync-v2`，`chat_server` 最终报告与 ops 消费模型新增 `winner_third/review_required/claim_graph/claim_graph_summary/evidence_ledger/verdict_ledger/opinion_pack/fairness_summary/trust_attestation`，并将 `review_required` 纳入报告状态语义；补齐迁移与测试后 `cargo test -p chat-server` 全绿（`608 passed`）。
+- 2026-04-14：完成 `ai-judge-npc-qa-shell-bootstrap`，新增 `POST /internal/judge/apps/npc-coach/sessions/{session_id}/advice` 与 `POST /internal/judge/apps/room-qa/sessions/{session_id}/answer`，接入 shared room context 构建与 Agent Runtime 空壳执行；通过 `pytest -q` 与 `ruff check app tests`。
+- 2026-04-14：完成 `ai-judge-real-env-window-pass-closure`（本机窗口），执行 `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`，收口状态 `local_reference_ready`，并生成 `artifacts/harness/20260414T194525Z-ai-judge-real-env-window-closure.summary.{json,md}` 与 `docs/loadtest/evidence/ai_judge_real_env_window_closure.{env,md}`。

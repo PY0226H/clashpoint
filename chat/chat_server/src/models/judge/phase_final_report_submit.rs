@@ -286,8 +286,17 @@ impl AppState {
             retrieval_snapshot_rollup,
             winner_first,
             winner_second,
+            winner_third,
             rejudge_triggered,
             needs_draw_vote,
+            review_required,
+            claim_graph,
+            claim_graph_summary,
+            evidence_ledger,
+            verdict_ledger,
+            opinion_pack,
+            fairness_summary,
+            trust_attestation,
             judge_trace,
             audit_alerts,
             error_codes,
@@ -301,6 +310,10 @@ impl AppState {
         };
         let winner_second = match winner_second.as_deref() {
             Some(v) => Some(normalize_winner(v, "winner_second")?),
+            None => None,
+        };
+        let winner_third = match winner_third.as_deref() {
+            Some(v) => Some(normalize_winner(v, "winner_third")?),
             None => None,
         };
         validate_percentage_score(pro_score, "pro_score")?;
@@ -395,8 +408,17 @@ impl AppState {
                 retrieval_snapshot_rollup,
                 winner_first,
                 winner_second,
+                winner_third,
                 rejudge_triggered,
                 needs_draw_vote,
+                review_required,
+                claim_graph,
+                claim_graph_summary,
+                evidence_ledger,
+                verdict_ledger,
+                opinion_pack,
+                fairness_summary,
+                trust_attestation,
                 judge_trace,
                 audit_alerts,
                 error_codes,
@@ -408,7 +430,8 @@ impl AppState {
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9, $10, $11, $12,
                 $13, $14, $15, $16, $17,
-                $18, $19, $20, $21,
+                $18, $19, $20, $21, $22,
+                $23, $24, $25, $26, $27, $28, $29, $30,
                 NOW(), NOW()
             )
             RETURNING id
@@ -429,8 +452,17 @@ impl AppState {
         .bind(json!(retrieval_snapshot_rollup))
         .bind(winner_first)
         .bind(winner_second)
+        .bind(winner_third)
         .bind(rejudge_triggered)
         .bind(needs_draw_vote)
+        .bind(review_required)
+        .bind(non_null_json(claim_graph))
+        .bind(non_null_json(claim_graph_summary))
+        .bind(non_null_json(evidence_ledger))
+        .bind(non_null_json(verdict_ledger))
+        .bind(non_null_json(opinion_pack))
+        .bind(non_null_json(fairness_summary))
+        .bind(non_null_json(trust_attestation))
         .bind(non_null_json(judge_trace))
         .bind(json!(audit_alerts))
         .bind(json!(error_codes))

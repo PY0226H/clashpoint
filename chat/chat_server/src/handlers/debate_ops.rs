@@ -2775,10 +2775,11 @@ pub(crate) async fn upsert_ops_role_assignment_handler(
         }
     };
 
+    let user_rate_limit_key = ops_rbac_roles_write_user_rate_limit_key(&headers, user.id);
     let user_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
         "ops_rbac_roles_write_user",
-        &user.id.to_string(),
+        &user_rate_limit_key,
         OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW,
         OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS,
     )
@@ -3110,10 +3111,11 @@ pub(crate) async fn revoke_ops_role_assignment_handler(
         }
     };
 
+    let user_rate_limit_key = ops_rbac_roles_write_user_rate_limit_key(&headers, user.id);
     let user_decision = enforce_rate_limit_with_disabled_fallback(
         &state,
         "ops_rbac_roles_write_user",
-        &user.id.to_string(),
+        &user_rate_limit_key,
         OPS_RBAC_ROLES_WRITE_USER_RATE_LIMIT_PER_WINDOW,
         OPS_RBAC_ROLES_WRITE_RATE_LIMIT_WINDOW_SECS,
     )
@@ -4498,6 +4500,24 @@ fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(|v| v.chars().take(128).collect::<String>())
+}
+
+fn ops_rbac_roles_write_user_rate_limit_key(_headers: &HeaderMap, user_id: i64) -> String {
+    #[cfg(test)]
+    {
+        let headers = _headers;
+        // 仅在测试显式指定时隔离写限流 key，避免跨用例互相污染导致偶发 429。
+        let override_key = headers
+            .get("x-test-rate-limit-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.chars().take(128).collect::<String>());
+        if let Some(override_key) = override_key {
+            return format!("{user_id}:{override_key}");
+        }
+    }
+    user_id.to_string()
 }
 
 fn now_millis_for_ops_handler() -> i64 {
