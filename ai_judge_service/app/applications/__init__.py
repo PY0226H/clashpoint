@@ -33,6 +33,13 @@ from .trust_attestation import (
     build_report_attestation,
     verify_report_attestation,
 )
+from .trust_phasea import (
+    build_audit_anchor_export,
+    build_case_commitment_registry,
+    build_challenge_review_registry,
+    build_judge_kernel_registry,
+    build_verdict_attestation_registry,
+)
 from .workflow_runtime import WorkflowRuntime, build_workflow_runtime
 
 __all__ = [
@@ -61,6 +68,11 @@ __all__ = [
     "validate_final_report_payload_contract",
     "verify_report_attestation",
     "build_workflow_runtime",
+    "build_case_commitment_registry",
+    "build_verdict_attestation_registry",
+    "build_challenge_review_registry",
+    "build_judge_kernel_registry",
+    "build_audit_anchor_export",
     "serialize_alert_item",
     "serialize_dispatch_receipt",
     "serialize_outbox_event",

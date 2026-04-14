@@ -26,7 +26,19 @@ from .applications import (
     attach_report_attestation as attach_report_attestation_v3,
 )
 from .applications import (
+    build_audit_anchor_export as build_audit_anchor_export_v3,
+)
+from .applications import (
+    build_case_commitment_registry as build_case_commitment_registry_v3,
+)
+from .applications import (
+    build_challenge_review_registry as build_challenge_review_registry_v3,
+)
+from .applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
+)
+from .applications import (
+    build_judge_kernel_registry as build_judge_kernel_registry_v3,
 )
 from .applications import (
     build_phase_report_payload as build_phase_report_payload_v3_phase,
@@ -36,6 +48,9 @@ from .applications import (
 )
 from .applications import (
     build_replay_report_summary as build_replay_report_summary_v3,
+)
+from .applications import (
+    build_verdict_attestation_registry as build_verdict_attestation_registry_v3,
 )
 from .applications import (
     build_verdict_contract as build_verdict_contract_v3,
@@ -3073,13 +3088,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "judgeCoreVersion": JUDGE_CORE_VERSION,
         }
 
-    @app.post("/internal/judge/cases/{case_id}/attestation/verify")
-    async def verify_judge_report_attestation(
+    async def _resolve_report_context_for_case(
+        *,
         case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-        dispatch_type: str = Query(default="auto"),
+        dispatch_type: str,
+        not_found_detail: str,
+        missing_report_detail: str,
     ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
         dispatch_type_normalized = str(dispatch_type or "auto").strip().lower()
         if dispatch_type_normalized not in {"auto", "phase", "final"}:
             raise HTTPException(status_code=422, detail="invalid_dispatch_type")
@@ -3097,7 +3112,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
             chosen_receipt = final_receipt or phase_receipt
             if chosen_receipt is None:
-                raise HTTPException(status_code=404, detail="attestation_receipt_not_found")
+                raise HTTPException(status_code=404, detail=not_found_detail)
             chosen_dispatch_type = "final" if final_receipt is not None else "phase"
         else:
             chosen_receipt = await _get_dispatch_receipt(
@@ -3105,10 +3120,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 job_id=case_id,
             )
             if chosen_receipt is None:
-                raise HTTPException(status_code=404, detail="attestation_receipt_not_found")
+                raise HTTPException(status_code=404, detail=not_found_detail)
 
         response_payload = (
             chosen_receipt.response if isinstance(chosen_receipt.response, dict) else {}
+        )
+        request_snapshot = (
+            chosen_receipt.request if isinstance(chosen_receipt.request, dict) else {}
         )
         report_payload = (
             response_payload.get("reportPayload")
@@ -3116,17 +3134,217 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             else None
         )
         if report_payload is None:
-            raise HTTPException(status_code=409, detail="attestation_report_payload_missing")
+            raise HTTPException(status_code=409, detail=missing_report_detail)
+        judge_trace = (
+            report_payload.get("judgeTrace")
+            if isinstance(report_payload.get("judgeTrace"), dict)
+            else {}
+        )
+        trace_id = str(
+            chosen_receipt.trace_id
+            or response_payload.get("traceId")
+            or request_snapshot.get("traceId")
+            or judge_trace.get("traceId")
+            or ""
+        ).strip()
+        return {
+            "dispatchType": chosen_dispatch_type,
+            "receipt": chosen_receipt,
+            "traceId": trace_id,
+            "requestSnapshot": request_snapshot,
+            "responsePayload": response_payload,
+            "reportPayload": report_payload,
+        }
 
-        trace_id = str(chosen_receipt.trace_id or response_payload.get("traceId") or "").strip()
+    async def _build_trust_phasea_bundle(
+        *,
+        case_id: int,
+        dispatch_type: str,
+    ) -> dict[str, Any]:
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="trust_receipt_not_found",
+            missing_report_detail="trust_report_payload_missing",
+        )
+        workflow_job = await _workflow_get_job(job_id=case_id)
+        workflow_events = list(await _workflow_list_events(job_id=case_id))
+        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
         verify_result = _verify_report_attestation(
-            report_payload=report_payload,
-            dispatch_type=chosen_dispatch_type,
+            report_payload=context["reportPayload"],
+            dispatch_type=context["dispatchType"],
+        )
+        commitment = build_case_commitment_registry_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            request_snapshot=context["requestSnapshot"],
+            workflow_snapshot=(
+                _serialize_workflow_job(workflow_job)
+                if workflow_job is not None
+                else None
+            ),
+            report_payload=context["reportPayload"],
+        )
+        verdict_attestation = build_verdict_attestation_registry_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            report_payload=context["reportPayload"],
+            verify_result=verify_result,
+        )
+        challenge_review = build_challenge_review_registry_v3(
+            case_id=case_id,
+            trace_id=context["traceId"],
+            workflow_status=workflow_job.status if workflow_job is not None else None,
+            workflow_events=workflow_events,
+            alerts=alerts,
+            report_payload=context["reportPayload"],
+        )
+        kernel_version = build_judge_kernel_registry_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            report_payload=context["reportPayload"],
+            workflow_events=workflow_events,
+            provider=runtime.settings.provider,
+        )
+        return {
+            "context": context,
+            "verifyResult": verify_result,
+            "commitment": commitment,
+            "verdictAttestation": verdict_attestation,
+            "challengeReview": challenge_review,
+            "kernelVersion": kernel_version,
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/trust/commitment")
+    async def get_judge_trust_case_commitment(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+        context = bundle["context"]
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "item": bundle["commitment"],
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/trust/verdict-attestation")
+    async def get_judge_trust_verdict_attestation(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+        context = bundle["context"]
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "item": bundle["verdictAttestation"],
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/trust/challenges")
+    async def get_judge_trust_challenge_review(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+        context = bundle["context"]
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "item": bundle["challengeReview"],
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/trust/kernel-version")
+    async def get_judge_trust_kernel_version(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+        context = bundle["context"]
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "item": bundle["kernelVersion"],
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/trust/audit-anchor")
+    async def get_judge_trust_audit_anchor(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+        include_payload: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+        context = bundle["context"]
+        anchor = build_audit_anchor_export_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            case_commitment=bundle["commitment"],
+            verdict_attestation=bundle["verdictAttestation"],
+            challenge_review=bundle["challengeReview"],
+            kernel_version=bundle["kernelVersion"],
+            include_payload=include_payload,
         )
         return {
             "caseId": case_id,
-            "dispatchType": chosen_dispatch_type,
-            "traceId": trace_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "item": anchor,
+        }
+
+    @app.post("/internal/judge/cases/{case_id}/attestation/verify")
+    async def verify_judge_report_attestation(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="attestation_receipt_not_found",
+            missing_report_detail="attestation_report_payload_missing",
+        )
+        verify_result = _verify_report_attestation(
+            report_payload=context["reportPayload"],
+            dispatch_type=context["dispatchType"],
+        )
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
             **verify_result,
         }
 

@@ -239,6 +239,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/tools", paths)
         self.assertIn("/internal/judge/registries/tools/{toolset_version}", paths)
         self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/trust/commitment", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/trust/verdict-attestation", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/trust/challenges", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/trust/kernel-version", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/trust/audit-anchor", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_case_create_should_mark_case_built_and_support_idempotent_replay(
@@ -1020,6 +1025,16 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             True,
         )
 
+        pending_challenge_resp = await self._get(
+            app=app,
+            path="/internal/judge/cases/7411/trust/challenges?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(pending_challenge_resp.status_code, 200)
+        pending_challenge_item = pending_challenge_resp.json()["item"]
+        self.assertEqual(pending_challenge_item["reviewState"], "pending_review")
+        self.assertIn("judge_panel_high_disagreement", pending_challenge_item["challengeReasons"])
+
         decision_resp = await self._post(
             app=app,
             path="/internal/judge/review/cases/7411/decision?decision=approve&actor=ops&reason=manual_pass",
@@ -1036,6 +1051,16 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(workflow_job.status, "callback_reported")
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7411)
         self.assertEqual(workflow_events[-1].payload.get("judgeCoreStage"), "review_approved")
+
+        approved_challenge_resp = await self._get(
+            app=app,
+            path="/internal/judge/cases/7411/trust/challenges?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(approved_challenge_resp.status_code, 200)
+        approved_challenge_item = approved_challenge_resp.json()["item"]
+        self.assertEqual(approved_challenge_item["reviewState"], "approved")
+        self.assertEqual(approved_challenge_item["openAlertIds"], [])
 
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,
@@ -1422,6 +1447,113 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(verify_payload["verified"])
         self.assertEqual(verify_payload["reason"], "trust_attestation_mismatch")
         self.assertIn("verdictHash", verify_payload["mismatchComponents"])
+
+    async def test_trust_routes_should_return_phasea_registry_bundle(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(8105)
+        phase_req = _build_phase_request(case_id=case_id, idempotency_key=f"phase:{case_id}")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(case_id=case_id, idempotency_key=f"final:{case_id}")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        commitment_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/commitment?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(commitment_resp.status_code, 200)
+        commitment_payload = commitment_resp.json()
+        commitment_item = commitment_payload["item"]
+        self.assertEqual(commitment_payload["dispatchType"], "final")
+        self.assertEqual(commitment_payload["traceId"], f"trace-final-{case_id}")
+        self.assertEqual(commitment_item["version"], "trust-phaseA-case-commitment-v1")
+        self.assertIn("commitmentHash", commitment_item)
+
+        attestation_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/verdict-attestation?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(attestation_resp.status_code, 200)
+        attestation_item = attestation_resp.json()["item"]
+        self.assertEqual(attestation_item["version"], "trust-phaseA-verdict-attestation-v1")
+        self.assertTrue(attestation_item["verified"])
+        self.assertEqual(attestation_item["reason"], "ok")
+        self.assertIn("registryHash", attestation_item)
+
+        challenge_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/challenges?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(challenge_resp.status_code, 200)
+        challenge_item = challenge_resp.json()["item"]
+        self.assertEqual(challenge_item["version"], "trust-phaseA-challenge-review-v1")
+        self.assertEqual(challenge_item["reviewState"], "approved")
+        self.assertIn("registryHash", challenge_item)
+
+        kernel_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/kernel-version?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(kernel_resp.status_code, 200)
+        kernel_item = kernel_resp.json()["item"]
+        self.assertEqual(kernel_item["version"], "trust-phaseA-kernel-version-v1")
+        self.assertIn("kernelVector", kernel_item)
+        self.assertIn("kernelHash", kernel_item)
+        self.assertIn("registryHash", kernel_item)
+
+        anchor_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/audit-anchor?dispatch_type=auto&include_payload=true",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(anchor_resp.status_code, 200)
+        anchor_item = anchor_resp.json()["item"]
+        self.assertEqual(anchor_item["version"], "trust-phaseA-audit-anchor-v1")
+        self.assertIn("anchorHash", anchor_item)
+        self.assertIn("payload", anchor_item)
+        self.assertEqual(
+            anchor_item["componentHashes"]["caseCommitmentHash"],
+            commitment_item["commitmentHash"],
+        )
+        self.assertEqual(
+            anchor_item["componentHashes"]["verdictAttestationHash"],
+            attestation_item["registryHash"],
+        )
+        self.assertEqual(
+            anchor_item["componentHashes"]["challengeReviewHash"],
+            challenge_item["registryHash"],
+        )
+        self.assertEqual(
+            anchor_item["componentHashes"]["kernelVersionHash"],
+            kernel_item["registryHash"],
+        )
 
     async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
