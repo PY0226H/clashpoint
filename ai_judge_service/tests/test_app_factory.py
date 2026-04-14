@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -201,6 +202,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
+        self.assertIn("/internal/judge/jobs/{job_id}/attestation/verify", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_policy_routes_should_return_default_registry_profile(self) -> None:
@@ -296,6 +298,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first["accepted"])
         self.assertEqual(first["dispatchType"], "phase")
         self.assertEqual(len(phase_callback_calls), 1)
+        self.assertIn("trustAttestation", phase_callback_calls[0][1])
+        self.assertEqual(
+            phase_callback_calls[0][1]["trustAttestation"]["dispatchType"],
+            "phase",
+        )
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=1001)
         self.assertIsNotNone(phase_job)
         assert phase_job is not None
@@ -361,6 +368,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(final_callback_calls), 1)
         self.assertEqual(final_callback_calls[0][0], 2002)
         self.assertIn("winner", final_callback_calls[0][1])
+        self.assertIn("trustAttestation", final_callback_calls[0][1])
+        self.assertEqual(
+            final_callback_calls[0][1]["trustAttestation"]["dispatchType"],
+            "final",
+        )
         self.assertEqual(
             final_callback_calls[0][1]["judgeTrace"]["policyRegistry"]["version"],
             "v3-default",
@@ -695,7 +707,112 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay_payload["dispatchType"], "final")
         self.assertIn("reportPayload", replay_payload)
         self.assertIn("debateSummary", replay_payload["reportPayload"])
+        self.assertIn("trustAttestation", replay_payload["reportPayload"])
         self.assertEqual(callback_total_before_replay, len(phase_calls) + len(final_calls))
+
+    async def test_attestation_verify_should_use_auto_dispatch_and_return_verified(self) -> None:
+        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_req = _build_phase_request(job_id=8103, idempotency_key="phase:8103")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(job_id=8103, idempotency_key="final:8103")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        verify_resp = await self._post(
+            app=app,
+            path="/internal/judge/jobs/8103/attestation/verify?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(verify_resp.status_code, 200)
+        verify_payload = verify_resp.json()
+        self.assertEqual(verify_payload["dispatchType"], "final")
+        self.assertEqual(verify_payload["traceId"], "trace-final-8103")
+        self.assertTrue(verify_payload["verified"])
+        self.assertEqual(verify_payload["reason"], "ok")
+        self.assertEqual(verify_payload["mismatchComponents"], [])
+
+    async def test_attestation_verify_should_detect_tampered_report_payload(self) -> None:
+        async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_req = _build_phase_request(job_id=8104, idempotency_key="phase:8104")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(job_id=8104, idempotency_key="final:8104")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        fact_receipt = await runtime.workflow_runtime.facts.get_dispatch_receipt(
+            dispatch_type="final",
+            job_id=8104,
+        )
+        self.assertIsNotNone(fact_receipt)
+        assert fact_receipt is not None
+        response_payload = dict(fact_receipt.response or {})
+        report_payload = (
+            dict(response_payload.get("reportPayload"))
+            if isinstance(response_payload.get("reportPayload"), dict)
+            else {}
+        )
+        report_payload["winner"] = "draw" if report_payload.get("winner") != "draw" else "pro"
+        response_payload["reportPayload"] = report_payload
+        await runtime.workflow_runtime.facts.upsert_dispatch_receipt(
+            receipt=replace(fact_receipt, response=response_payload),
+        )
+
+        verify_resp = await self._post(
+            app=app,
+            path="/internal/judge/jobs/8104/attestation/verify?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(verify_resp.status_code, 200)
+        verify_payload = verify_resp.json()
+        self.assertFalse(verify_payload["verified"])
+        self.assertEqual(verify_payload["reason"], "trust_attestation_mismatch")
+        self.assertIn("verdictHash", verify_payload["mismatchComponents"])
 
     async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
         async def noop_callback(*, cfg: object, job_id: int, payload: dict) -> None:

@@ -28,7 +28,7 @@
 | 12. 企业级可靠性要求 | 可靠性/安全/观测/变更安全 | 部分落地 | [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py), [trace_store.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/trace_store.py), [tests/](/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests) | 幂等、failed callback、trace/replay 已落地；shadow/canary/benchmark gate 未完成 |
 | 13. 对外接口模型 | cases/trace/replay/fairness/review/policies | 部分落地 | [app_factory.py routes](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 已有 phase/final + trace/replay/alerts + review queue/decision + policies 查询接口；cases/challenge/policy rollout 未齐 |
 | 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地（文档+实现一致） | [completed B17](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md), [todo C17](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) | 当前执行轨迹基本按该章演进 |
-| 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 未落地（设计态） | [方案第15章](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md) | 当前仓库未见对应主链实现 |
+| 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地 | [trust_attestation.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_attestation.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py), [test_trust_attestation.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_trust_attestation.py) | commitment/attestation/verify 最小主链已落地；challenge/protocol 层仍未实现 |
 | 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 部分落地 | [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py), [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py) | 已避免部分反模式，但仍需在公平门禁层继续强化 |
 | 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地 | [completed B17](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md), [todo C17](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) | Phase1 主体已推进；Phase2/3 大量能力仍在后续 |
 | 18. 最后产品判断 | 企业级裁判系统目标态 | 部分落地 | 同上 | 方向正确，但还未到“完整目标态” |
@@ -57,4 +57,4 @@
 ## 5. 下一步优先级（建议）
 
 1. 优先推进 `ai-judge-p5-real-calibration-on-env`（环境就绪即执行），完成 real 证据冻结并达成 `pass`。
-2. 下一轮主攻 `ai-judge-trust-attestation-mvp`，补齐 commitment/attestation 最小主链。
+2. 下一轮主攻 `ai-judge-runtime-sla-freeze`，固化 runtime 时延与稳定性阈值。

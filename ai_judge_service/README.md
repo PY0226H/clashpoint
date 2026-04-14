@@ -140,6 +140,7 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
 
 - `GET /internal/judge/jobs/{job_id}/trace`：查看单任务 trace、请求快照、回调状态、回放历史
 - `POST /internal/judge/jobs/{job_id}/replay`：按历史请求快照执行一次无副作用重放（不触发 callback），支持 `dispatch_type=auto|final|phase`（默认 `auto`：优先 final，缺失回退 phase）
+- `POST /internal/judge/jobs/{job_id}/attestation/verify`：校验指定 job 的报告承诺（`dispatch_type=auto|final|phase`，默认 `auto`）
 - `GET /internal/judge/jobs/{job_id}/replay/report`：导出 job 级回放报告（输入快照、阶段输出、终局结果、callback 状态、审计字段）
 - `GET /internal/judge/jobs/replay/reports`：按筛选条件查询回放报告列表（`status/winner/callback_status/trace_id/created_after/created_before/has_audit_alert/limit`，可选 `include_report=true` 返回完整报告）
 - `GET /internal/judge/jobs/{job_id}/alerts`：查看任务审计告警（支持 `status=raised|acked|resolved`）
@@ -166,6 +167,12 @@ cd /Users/panyihang/Documents/EchoIsle/ai_judge_service
   - `errorMessage`
   - `auditAlertIds`（可空）
   - `degradationLevel`（可空）
+- phase/final/replay report payload 会写入 `trustAttestation`：
+  - `version`（当前 `trust-attestation-v1`）
+  - `dispatchType`（`phase|final`）
+  - `algorithm`（当前 `sha256`）
+  - `componentHashes`（按 dispatch 类型拆分组件 hash）
+  - `commitmentHash`（组件哈希集合的总承诺）
 
 `dispatch` 的 `retrieval_profile`（默认 `hybrid_v1`）当前支持：
 - `hybrid_v1`

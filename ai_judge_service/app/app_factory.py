@@ -19,6 +19,9 @@ from .applications import (
     build_workflow_runtime,
 )
 from .applications import (
+    attach_report_attestation as attach_report_attestation_v3,
+)
+from .applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
 )
 from .applications import (
@@ -41,6 +44,9 @@ from .applications import (
 )
 from .applications import (
     validate_final_report_payload_contract as validate_final_report_payload_contract_v3_final,
+)
+from .applications import (
+    verify_report_attestation as verify_report_attestation_v3,
 )
 from .callback_client import (
     callback_final_failed,
@@ -215,6 +221,28 @@ def _attach_policy_trace_snapshot(
         judge_trace = {}
         report_payload["judgeTrace"] = judge_trace
     judge_trace["policyRegistry"] = runtime.policy_registry_runtime.build_trace_snapshot(profile)
+
+
+def _attach_report_attestation(
+    *,
+    report_payload: dict[str, Any],
+    dispatch_type: str,
+) -> dict[str, Any]:
+    return attach_report_attestation_v3(
+        report_payload=report_payload,
+        dispatch_type=dispatch_type,
+    )
+
+
+def _verify_report_attestation(
+    *,
+    report_payload: dict[str, Any],
+    dispatch_type: str,
+) -> dict[str, Any]:
+    return verify_report_attestation_v3(
+        report_payload=report_payload,
+        dispatch_type=dispatch_type,
+    )
 
 
 def _build_replay_report_payload(record: Any) -> dict[str, Any]:
@@ -1196,6 +1224,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             report_payload=phase_report_payload,
             profile=policy_profile,
         )
+        _attach_report_attestation(
+            report_payload=phase_report_payload,
+            dispatch_type="phase",
+        )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
                 runtime=runtime,
@@ -1497,6 +1529,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             report_payload=final_report_payload,
             profile=policy_profile,
+        )
+        _attach_report_attestation(
+            report_payload=final_report_payload,
+            dispatch_type="final",
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -1988,6 +2024,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 report_payload=report_payload,
                 profile=policy_profile,
             )
+            _attach_report_attestation(
+                report_payload=report_payload,
+                dispatch_type="final",
+            )
         else:
             try:
                 phase_request = PhaseDispatchRequest.model_validate(request_snapshot)
@@ -2009,6 +2049,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 runtime=runtime,
                 report_payload=report_payload,
                 profile=policy_profile,
+            )
+            _attach_report_attestation(
+                report_payload=report_payload,
+                dispatch_type="phase",
             )
 
         winner = str(report_payload.get("winner") or "").strip().lower()
@@ -2056,6 +2100,63 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "winner": winner,
             "needsDrawVote": needs_draw_vote,
             "traceId": trace_id,
+        }
+
+    @app.post("/internal/judge/jobs/{job_id}/attestation/verify")
+    async def verify_judge_report_attestation(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        dispatch_type_normalized = str(dispatch_type or "auto").strip().lower()
+        if dispatch_type_normalized not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+
+        chosen_dispatch_type = dispatch_type_normalized
+        chosen_receipt = None
+        if dispatch_type_normalized == "auto":
+            final_receipt = await _get_dispatch_receipt(
+                dispatch_type="final",
+                job_id=job_id,
+            )
+            phase_receipt = await _get_dispatch_receipt(
+                dispatch_type="phase",
+                job_id=job_id,
+            )
+            chosen_receipt = final_receipt or phase_receipt
+            if chosen_receipt is None:
+                raise HTTPException(status_code=404, detail="attestation_receipt_not_found")
+            chosen_dispatch_type = "final" if final_receipt is not None else "phase"
+        else:
+            chosen_receipt = await _get_dispatch_receipt(
+                dispatch_type=dispatch_type_normalized,
+                job_id=job_id,
+            )
+            if chosen_receipt is None:
+                raise HTTPException(status_code=404, detail="attestation_receipt_not_found")
+
+        response_payload = (
+            chosen_receipt.response if isinstance(chosen_receipt.response, dict) else {}
+        )
+        report_payload = (
+            response_payload.get("reportPayload")
+            if isinstance(response_payload.get("reportPayload"), dict)
+            else None
+        )
+        if report_payload is None:
+            raise HTTPException(status_code=409, detail="attestation_report_payload_missing")
+
+        trace_id = str(chosen_receipt.trace_id or response_payload.get("traceId") or "").strip()
+        verify_result = _verify_report_attestation(
+            report_payload=report_payload,
+            dispatch_type=chosen_dispatch_type,
+        )
+        return {
+            "jobId": job_id,
+            "dispatchType": chosen_dispatch_type,
+            "traceId": trace_id,
+            **verify_result,
         }
 
     @app.get("/internal/judge/jobs/{job_id}/replay/report")
