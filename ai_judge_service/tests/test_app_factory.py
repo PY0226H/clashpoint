@@ -844,10 +844,194 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt_resp.status_code, 200)
         receipt = receipt_resp.json()
         self.assertEqual(receipt["status"], "callback_failed")
+        self.assertEqual(
+            receipt["response"].get("errorCode"),
+            "phase_callback_retry_exhausted",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("code"),
+            "phase_callback_retry_exhausted",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("dispatchType"),
+            "phase",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("category"),
+            "callback_delivery",
+        )
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=3001)
         self.assertIsNotNone(phase_job)
         assert phase_job is not None
         self.assertEqual(phase_job.status, "failed")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=3001)
+        self.assertEqual(
+            workflow_events[-1].payload.get("errorCode"),
+            "phase_callback_retry_exhausted",
+        )
+        self.assertEqual(
+            workflow_events[-1].payload.get("error", {}).get("code"),
+            "phase_callback_retry_exhausted",
+        )
+
+    async def test_final_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
+        self,
+    ) -> None:
+        case_id = _unique_case_id(8301)
+
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        async def failing_final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            raise RuntimeError("final-callback-down")
+
+        runtime = create_runtime(
+            settings=_build_settings(runtime_retry_max_attempts=1),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=failing_final_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_req = _build_phase_request(
+            case_id=case_id,
+            idempotency_key=f"phase:{case_id}",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(
+            case_id=case_id,
+            idempotency_key=f"final:{case_id}",
+        )
+        failed_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(failed_resp.status_code, 502)
+        self.assertIn("final_callback_failed", failed_resp.text)
+
+        receipt_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/v3/final/cases/{case_id}/receipt",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(receipt_resp.status_code, 200)
+        receipt = receipt_resp.json()
+        self.assertEqual(receipt["status"], "callback_failed")
+        self.assertEqual(
+            receipt["response"].get("errorCode"),
+            "final_callback_retry_exhausted",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("code"),
+            "final_callback_retry_exhausted",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("dispatchType"),
+            "final",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("category"),
+            "callback_delivery",
+        )
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=case_id)
+        self.assertEqual(
+            workflow_events[-1].payload.get("errorCode"),
+            "final_callback_retry_exhausted",
+        )
+        self.assertEqual(
+            workflow_events[-1].payload.get("error", {}).get("code"),
+            "final_callback_retry_exhausted",
+        )
+
+    async def test_final_dispatch_should_mark_failed_when_failed_callback_fails(self) -> None:
+        case_id = _unique_case_id(8302)
+
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        async def failing_final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            raise RuntimeError("final-callback-down")
+
+        async def failing_failed_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            raise RuntimeError("final-failed-callback-down")
+
+        runtime = create_runtime(
+            settings=_build_settings(runtime_retry_max_attempts=1),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=failing_final_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=failing_failed_callback,
+        )
+        app = create_app(runtime)
+
+        phase_req = _build_phase_request(
+            case_id=case_id,
+            idempotency_key=f"phase:{case_id}",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(
+            case_id=case_id,
+            idempotency_key=f"final:{case_id}",
+        )
+        failed_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(failed_resp.status_code, 502)
+        self.assertIn("final_failed_callback_failed", failed_resp.text)
+
+        receipt_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/v3/final/cases/{case_id}/receipt",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(receipt_resp.status_code, 200)
+        receipt = receipt_resp.json()
+        self.assertEqual(receipt["status"], "callback_failed")
+        self.assertEqual(
+            receipt["response"].get("errorCode"),
+            "final_failed_callback_failed",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("code"),
+            "final_failed_callback_failed",
+        )
+        self.assertEqual(
+            receipt["response"].get("error", {}).get("dispatchType"),
+            "final",
+        )
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=case_id)
+        self.assertEqual(
+            workflow_events[-1].payload.get("errorCode"),
+            "final_failed_callback_failed",
+        )
+        self.assertEqual(
+            workflow_events[-1].payload.get("callbackStatus"),
+            "failed_callback_failed",
+        )
+        self.assertEqual(
+            workflow_events[-1].payload.get("error", {}).get("code"),
+            "final_failed_callback_failed",
+        )
 
     async def test_replay_post_should_prefer_final_receipt_when_auto(self) -> None:
         phase_calls: list[tuple[int, dict]] = []
@@ -1239,6 +1423,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(failed_calls), 1)
         self.assertEqual(failed_calls[0][0], 6001)
         self.assertEqual(failed_calls[0][1]["errorCode"], "input_not_blinded")
+        self.assertEqual(
+            failed_calls[0][1].get("error", {}).get("code"),
+            "input_not_blinded",
+        )
         workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=6001)
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
@@ -1246,6 +1434,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=6001)
         self.assertEqual(workflow_events[-1].payload.get("errorCode"), "input_not_blinded")
         self.assertEqual(workflow_events[-1].payload.get("callbackStatus"), "failed_reported")
+        self.assertEqual(
+            workflow_events[-1].payload.get("error", {}).get("code"),
+            "input_not_blinded",
+        )
 
     async def test_blindization_reject_should_mark_workflow_failed_when_failed_callback_fails(
         self,
@@ -1281,11 +1473,25 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
         self.assertEqual(workflow_job.status, "failed")
+        receipt_resp = await self._get(
+            app=app,
+            path="/internal/judge/v3/phase/cases/6002/receipt",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(receipt_resp.status_code, 200)
+        self.assertEqual(
+            receipt_resp.json()["response"].get("errorCode"),
+            "phase_failed_callback_failed",
+        )
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=6002)
         self.assertEqual(workflow_events[-1].payload.get("errorCode"), "phase_failed_callback_failed")
         self.assertEqual(
             workflow_events[-1].payload.get("callbackStatus"),
             "failed_callback_failed",
+        )
+        self.assertEqual(
+            workflow_events[-1].payload.get("error", {}).get("code"),
+            "phase_failed_callback_failed",
         )
 
     async def test_final_contract_blocked_should_mark_workflow_failed_and_sync_alert(self) -> None:
@@ -1330,6 +1536,25 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7301)
         self.assertEqual(workflow_events[-1].payload.get("errorCode"), "final_contract_blocked")
         self.assertEqual(workflow_events[-1].payload.get("callbackStatus"), "blocked_failed_reported")
+        self.assertEqual(
+            workflow_events[-1].payload.get("error", {}).get("code"),
+            "final_contract_blocked",
+        )
+
+        receipt_resp = await self._get(
+            app=app,
+            path="/internal/judge/v3/final/cases/7301/receipt",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(receipt_resp.status_code, 200)
+        self.assertEqual(
+            receipt_resp.json()["response"].get("errorCode"),
+            "final_contract_blocked",
+        )
+        self.assertEqual(
+            receipt_resp.json()["response"].get("error", {}).get("category"),
+            "contract_blocked",
+        )
 
         fact_alerts = await runtime.workflow_runtime.facts.list_audit_alerts(job_id=7301, limit=10)
         self.assertGreaterEqual(len(fact_alerts), 1)

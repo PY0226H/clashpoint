@@ -405,7 +405,62 @@ def _build_failed_callback_payload(
     }
     if degradation_level is not None:
         payload["degradationLevel"] = int(degradation_level)
+    payload["error"] = _build_error_contract(
+        error_code=error_code,
+        error_message=error_message,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        retryable=False,
+        category="failed_callback",
+    )
     return payload
+
+
+def _build_error_contract(
+    *,
+    error_code: str,
+    error_message: str,
+    dispatch_type: str,
+    trace_id: str,
+    retryable: bool,
+    category: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": str(error_code or "").strip(),
+        "message": str(error_message or "").strip(),
+        "dispatchType": str(dispatch_type or "").strip().lower(),
+        "traceId": str(trace_id or "").strip(),
+        "retryable": bool(retryable),
+        "category": str(category or "").strip().lower(),
+        "details": dict(details or {}),
+    }
+
+
+def _with_error_contract(
+    payload: dict[str, Any],
+    *,
+    error_code: str,
+    error_message: str,
+    dispatch_type: str,
+    trace_id: str,
+    retryable: bool,
+    category: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out = dict(payload)
+    out["errorCode"] = str(error_code or "").strip()
+    out["errorMessage"] = str(error_message or "").strip()
+    out["error"] = _build_error_contract(
+        error_code=error_code,
+        error_message=error_message,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        retryable=retryable,
+        category=category,
+        details=details,
+    )
+    return out
 
 
 def _build_trace_report_summary(
@@ -940,6 +995,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         failed_stage = str(payload.get("judgeCoreStage") or "").strip().lower()
         if not failed_stage:
             failed_stage = "review_rejected" if error_code == "review_rejected" else "failed"
+        payload.setdefault("errorCode", error_code)
+        payload.setdefault("errorMessage", error_message)
+        payload["error"] = _build_error_contract(
+            error_code=error_code,
+            error_message=error_message,
+            dispatch_type=dispatch_type,
+            trace_id=str(payload.get("traceId") or ""),
+            retryable=False,
+            category="workflow_failed",
+            details={
+                "judgeCoreStage": failed_stage,
+                "callbackStatus": payload.get("callbackStatus"),
+            },
+        )
         await judge_core.mark_failed(
             job_id=job_id,
             dispatch_type=dispatch_type,
@@ -1192,13 +1261,22 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 payload=failed_payload,
             )
         except Exception as failed_err:
-            receipt_response = {
-                **response,
-                "callbackStatus": "failed_callback_failed",
-                "callbackError": error_message,
-                "failedCallbackPayload": failed_payload,
-                "failedCallbackError": str(failed_err),
-            }
+            receipt_response = _with_error_contract(
+                {
+                    **response,
+                    "callbackStatus": "failed_callback_failed",
+                    "callbackError": error_message,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackError": str(failed_err),
+                },
+                error_code=f"{dispatch_type}_failed_callback_failed",
+                error_message=str(failed_err),
+                dispatch_type=dispatch_type,
+                trace_id=trace_id,
+                retryable=False,
+                category="blindization_rejection",
+                details={"sensitiveHits": sensitive_hits[:12]},
+            )
             await _persist_dispatch_receipt(
                 dispatch_type=dispatch_type,
                 job_id=job_id,
@@ -1246,14 +1324,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 detail=f"{dispatch_type}_failed_callback_failed: {failed_err}",
             ) from failed_err
 
-        receipt_response = {
-            **response,
-            "callbackStatus": "failed_reported",
-            "callbackError": error_message,
-            "failedCallbackPayload": failed_payload,
-            "failedCallbackAttempts": failed_attempts,
-            "failedCallbackRetries": failed_retries,
-        }
+        receipt_response = _with_error_contract(
+            {
+                **response,
+                "callbackStatus": "failed_reported",
+                "callbackError": error_message,
+                "failedCallbackPayload": failed_payload,
+                "failedCallbackAttempts": failed_attempts,
+                "failedCallbackRetries": failed_retries,
+            },
+            error_code=error_code,
+            error_message=error_message,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            retryable=False,
+            category="blindization_rejection",
+            details={"sensitiveHits": sensitive_hits[:12]},
+        )
         await _persist_dispatch_receipt(
             dispatch_type=dispatch_type,
             job_id=job_id,
@@ -1441,15 +1528,24 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     payload=failed_payload,
                 )
             except Exception as failed_err:
-                receipt_response = {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_callback_failed",
-                    "callbackError": error_message,
-                    "reportPayload": phase_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackError": str(failed_err),
-                }
+                receipt_response = _with_error_contract(
+                    {
+                        **response,
+                        "status": "callback_failed",
+                        "callbackStatus": "failed_callback_failed",
+                        "callbackError": error_message,
+                        "reportPayload": phase_report_payload,
+                        "failedCallbackPayload": failed_payload,
+                        "failedCallbackError": str(failed_err),
+                    },
+                    error_code="phase_failed_callback_failed",
+                    error_message=str(failed_err),
+                    dispatch_type="phase",
+                    trace_id=parsed.trace_id,
+                    retryable=False,
+                    category="callback_delivery",
+                    details={"reportError": error_message},
+                )
                 await _persist_dispatch_receipt(
                     dispatch_type="phase",
                     job_id=parsed.case_id,
@@ -1493,16 +1589,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     detail=f"phase_failed_callback_failed: {failed_err}",
                 ) from failed_err
 
-            receipt_response = {
-                **response,
-                "status": "callback_failed",
-                "callbackStatus": "failed_reported",
-                "callbackError": error_message,
-                "reportPayload": phase_report_payload,
-                "failedCallbackPayload": failed_payload,
-                "failedCallbackAttempts": failed_attempts,
-                "failedCallbackRetries": failed_retries,
-            }
+            receipt_response = _with_error_contract(
+                {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "failed_reported",
+                    "callbackError": error_message,
+                    "reportPayload": phase_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackAttempts": failed_attempts,
+                    "failedCallbackRetries": failed_retries,
+                },
+                error_code=error_code,
+                error_message=error_message,
+                dispatch_type="phase",
+                trace_id=parsed.trace_id,
+                retryable=False,
+                category="callback_delivery",
+                details={
+                    "failedCallbackAttempts": failed_attempts,
+                    "failedCallbackRetries": failed_retries,
+                },
+            )
             await _persist_dispatch_receipt(
                 dispatch_type="phase",
                 job_id=parsed.case_id,
@@ -1763,16 +1871,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     payload=failed_payload,
                 )
             except Exception as failed_err:
-                receipt_response = {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_callback_failed",
-                    "callbackError": error_text,
-                    "auditAlertIds": [alert.alert_id],
-                    "reportPayload": final_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackError": str(failed_err),
-                }
+                receipt_response = _with_error_contract(
+                    {
+                        **response,
+                        "status": "callback_failed",
+                        "callbackStatus": "failed_callback_failed",
+                        "callbackError": error_text,
+                        "auditAlertIds": [alert.alert_id],
+                        "reportPayload": final_report_payload,
+                        "failedCallbackPayload": failed_payload,
+                        "failedCallbackError": str(failed_err),
+                    },
+                    error_code="final_failed_callback_failed",
+                    error_message=str(failed_err),
+                    dispatch_type="final",
+                    trace_id=parsed.trace_id,
+                    retryable=False,
+                    category="contract_blocked",
+                    details={
+                        "auditAlertId": alert.alert_id,
+                        "blockedReason": error_text,
+                    },
+                )
                 await _persist_dispatch_receipt(
                     dispatch_type="final",
                     job_id=parsed.case_id,
@@ -1817,17 +1937,31 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     detail=f"final_failed_callback_failed: {failed_err}",
                 ) from failed_err
 
-            receipt_response = {
-                **response,
-                "status": "callback_failed",
-                "callbackStatus": "blocked_failed_reported",
-                "callbackError": error_text,
-                "auditAlertIds": [alert.alert_id],
-                "reportPayload": final_report_payload,
-                "failedCallbackPayload": failed_payload,
-                "failedCallbackAttempts": failed_attempts,
-                "failedCallbackRetries": failed_retries,
-            }
+            receipt_response = _with_error_contract(
+                {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "blocked_failed_reported",
+                    "callbackError": error_text,
+                    "auditAlertIds": [alert.alert_id],
+                    "reportPayload": final_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackAttempts": failed_attempts,
+                    "failedCallbackRetries": failed_retries,
+                },
+                error_code="final_contract_blocked",
+                error_message=error_text,
+                dispatch_type="final",
+                trace_id=parsed.trace_id,
+                retryable=False,
+                category="contract_blocked",
+                details={
+                    "auditAlertId": alert.alert_id,
+                    "failedCallbackAttempts": failed_attempts,
+                    "failedCallbackRetries": failed_retries,
+                    "missingFields": contract_missing_fields[:12],
+                },
+            )
             await _persist_dispatch_receipt(
                 dispatch_type="final",
                 job_id=parsed.case_id,
@@ -1899,15 +2033,24 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     payload=failed_payload,
                 )
             except Exception as failed_err:
-                receipt_response = {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_callback_failed",
-                    "callbackError": error_message,
-                    "reportPayload": final_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackError": str(failed_err),
-                }
+                receipt_response = _with_error_contract(
+                    {
+                        **response,
+                        "status": "callback_failed",
+                        "callbackStatus": "failed_callback_failed",
+                        "callbackError": error_message,
+                        "reportPayload": final_report_payload,
+                        "failedCallbackPayload": failed_payload,
+                        "failedCallbackError": str(failed_err),
+                    },
+                    error_code="final_failed_callback_failed",
+                    error_message=str(failed_err),
+                    dispatch_type="final",
+                    trace_id=parsed.trace_id,
+                    retryable=False,
+                    category="callback_delivery",
+                    details={"reportError": error_message},
+                )
                 await _persist_dispatch_receipt(
                     dispatch_type="final",
                     job_id=parsed.case_id,
@@ -1952,16 +2095,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     detail=f"final_failed_callback_failed: {failed_err}",
                 ) from failed_err
 
-            receipt_response = {
-                **response,
-                "status": "callback_failed",
-                "callbackStatus": "failed_reported",
-                "callbackError": error_message,
-                "reportPayload": final_report_payload,
-                "failedCallbackPayload": failed_payload,
-                "failedCallbackAttempts": failed_attempts,
-                "failedCallbackRetries": failed_retries,
-            }
+            receipt_response = _with_error_contract(
+                {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "failed_reported",
+                    "callbackError": error_message,
+                    "reportPayload": final_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackAttempts": failed_attempts,
+                    "failedCallbackRetries": failed_retries,
+                },
+                error_code=error_code,
+                error_message=error_message,
+                dispatch_type="final",
+                trace_id=parsed.trace_id,
+                retryable=False,
+                category="callback_delivery",
+                details={
+                    "failedCallbackAttempts": failed_attempts,
+                    "failedCallbackRetries": failed_retries,
+                },
+            )
             await _persist_dispatch_receipt(
                 dispatch_type="final",
                 job_id=parsed.case_id,
