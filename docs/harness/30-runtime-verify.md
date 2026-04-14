@@ -82,6 +82,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 1. `scripts/harness/ai_judge_p5_real_calibration_on_env.sh`
 2. 读取 `ai_judge_p5_real_env.env` 的 `REAL_CALIBRATION_ENV_READY` 判定环境是否就绪
 3. 环境未就绪时输出 `env_blocked`；环境就绪且五类轨道满足 real 证据键时才输出 `pass`
+4. 若明确允许本机参考（`--allow-local-reference`）且 marker 标记 `LOCAL_REFERENCE_ENV_READY=true`，会输出 `local_reference_pass/local_reference_pending`，用于本地设备参考，不替代真实环境 `pass`
 
 但当前还没有负责：
 
@@ -133,6 +134,11 @@ bash scripts/harness/ai_judge_calibration_prep.sh \
 bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh \
   --emit-json "artifacts/harness/manual-ai-judge-p5-on-env.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-p5-on-env.summary.md"
+
+bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh \
+  --allow-local-reference \
+  --emit-json "artifacts/harness/manual-ai-judge-p5-local-reference.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-p5-local-reference.summary.md"
 ```
 
 ---

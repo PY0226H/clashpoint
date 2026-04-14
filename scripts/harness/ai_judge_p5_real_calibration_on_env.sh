@@ -11,6 +11,8 @@ STARTED_AT=""
 FINISHED_AT=""
 STATUS="pass"
 ENV_READY="false"
+ENV_MODE="blocked"
+ALLOW_LOCAL_REFERENCE="${AI_JUDGE_ALLOW_LOCAL_REFERENCE:-false}"
 
 # 与 calibration_prep 保持一致的五类轨道。
 declare -a TRACK_IDS=(
@@ -28,6 +30,7 @@ usage() {
     [--root <repo-root>] \
     [--evidence-dir <path>] \
     [--env-marker <path>] \
+    [--allow-local-reference] \
     [--emit-json <path>] \
     [--emit-md <path>]
 
@@ -35,6 +38,8 @@ usage() {
   - 执行 P5 真实环境校准门禁检查。
   - 若真实环境未就绪，返回 env_blocked；
   - 仅当环境就绪且五类轨道均满足 real calibration 证据键时返回 pass。
+  - 开启 --allow-local-reference 后，若 env marker 标记本机参考环境就绪，
+    则输出 local_reference_pass/local_reference_pending（不会冒充真实环境 pass）。
 USAGE
 }
 
@@ -135,6 +140,10 @@ track_real_required_keys() {
   printf '%s' "REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF"
 }
 
+track_local_required_keys() {
+  printf '%s' "LOCAL_ENV_EVIDENCE;LOCAL_ENV_PROFILE;CALIBRATED_AT;CALIBRATED_BY"
+}
+
 read_env_value() {
   local file="$1"
   local key="$2"
@@ -173,15 +182,31 @@ collect_missing_keys() {
 resolve_environment_ready() {
   if [[ ! -f "$ENV_MARKER_FILE" ]]; then
     ENV_READY="false"
+    ENV_MODE="blocked"
     return
   fi
 
-  local value
-  value="$(trim "$(read_env_value "$ENV_MARKER_FILE" "REAL_CALIBRATION_ENV_READY")")"
-  if is_truthy "$value"; then
+  local real_ready
+  real_ready="$(trim "$(read_env_value "$ENV_MARKER_FILE" "REAL_CALIBRATION_ENV_READY")")"
+  if is_truthy "$real_ready"; then
     ENV_READY="true"
+    ENV_MODE="real"
+    return
+  fi
+
+  local local_ready local_mode_marker
+  local_ready="$(trim "$(read_env_value "$ENV_MARKER_FILE" "LOCAL_REFERENCE_ENV_READY")")"
+  local_mode_marker="$(trim "$(read_env_value "$ENV_MARKER_FILE" "CALIBRATION_ENV_MODE")")"
+  if [[ "$local_mode_marker" == "local_reference" || "$local_mode_marker" == "local" ]]; then
+    local_ready="true"
+  fi
+
+  if [[ "$ALLOW_LOCAL_REFERENCE" == "true" ]] && is_truthy "$local_ready"; then
+    ENV_READY="true"
+    ENV_MODE="local_reference"
   else
     ENV_READY="false"
+    ENV_MODE="blocked"
   fi
 }
 
@@ -191,14 +216,17 @@ collect_track_result() {
   local file="$3"
   local required="$4"
   local real_required="$5"
-  local out_file="$6"
+  local local_required="$6"
+  local out_file="$7"
 
   local status="pass"
   local note="validated"
   local missing_base=""
   local missing_real=""
+  local missing_local=""
   local missing_base_out="（无）"
   local missing_real_out="（无）"
+  local missing_local_out="（无）"
 
   if [[ ! -f "$file" ]]; then
     status="evidence_missing"
@@ -209,35 +237,54 @@ collect_track_result() {
 
     missing_base="$(collect_missing_keys "$file" "$required")"
     missing_real="$(collect_missing_keys "$file" "$real_required")"
+    missing_local="$(collect_missing_keys "$file" "$local_required")"
 
-    if [[ "$ENV_READY" != "true" ]]; then
+    if [[ "$ENV_MODE" == "blocked" ]]; then
       status="env_blocked"
       note="real environment not ready"
     elif [[ "$calibration_status" == "blocked" ]]; then
       status="env_blocked"
       note="calibration explicitly blocked"
-    elif [[ "$calibration_status" != "validated" ]]; then
-      status="pending_real_data"
-      note="calibration_status is ${calibration_status:-missing}"
-    elif [[ -n "$missing_base" || -n "$missing_real" ]]; then
-      status="pending_real_data"
-      note="missing keys: ${missing_base}${missing_base:+;}${missing_real}"
+    elif [[ "$ENV_MODE" == "real" ]]; then
+      if [[ "$calibration_status" != "validated" ]]; then
+        status="pending_real_data"
+        note="calibration_status is ${calibration_status:-missing}"
+      elif [[ -n "$missing_base" || -n "$missing_real" ]]; then
+        status="pending_real_data"
+        note="missing keys: ${missing_base}${missing_base:+;}${missing_real}"
+      else
+        status="pass"
+        note="validated with real env evidence"
+      fi
+    elif [[ "$ENV_MODE" == "local_reference" ]]; then
+      if [[ "$calibration_status" != "validated" ]]; then
+        status="local_reference_pending"
+        note="local reference pending: calibration_status is ${calibration_status:-missing}"
+      elif [[ -n "$missing_base" || -n "$missing_local" ]]; then
+        status="local_reference_pending"
+        note="missing local keys: ${missing_base}${missing_base:+;}${missing_local}"
+      else
+        status="local_reference_pass"
+        note="validated with local reference evidence"
+      fi
     else
-      status="pass"
-      note="validated with real env evidence"
+      status="env_blocked"
+      note="environment mode unresolved"
     fi
   fi
 
   missing_base_out="${missing_base:-（无）}"
   missing_real_out="${missing_real:-（无）}"
+  missing_local_out="${missing_local:-（无）}"
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$track_id" \
     "$title" \
     "$status" \
     "$file" \
     "$missing_base_out" \
     "$missing_real_out" \
+    "$missing_local_out" \
     "$note" >>"$out_file"
 }
 
@@ -245,10 +292,12 @@ update_overall_status() {
   local records="$1"
   local line track_status
 
-  if [[ "$ENV_READY" != "true" ]]; then
-    STATUS="env_blocked"
-  else
+  if [[ "$ENV_MODE" == "real" ]]; then
     STATUS="pass"
+  elif [[ "$ENV_MODE" == "local_reference" ]]; then
+    STATUS="local_reference_pass"
+  else
+    STATUS="env_blocked"
   fi
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -265,8 +314,15 @@ update_overall_status() {
           STATUS="env_blocked"
         fi
         ;;
+      local_reference_pending)
+        if [[ "$STATUS" != "fail" && "$STATUS" != "evidence_missing" ]]; then
+          STATUS="local_reference_pending"
+        fi
+        ;;
+      local_reference_pass)
+        ;;
       evidence_missing)
-        if [[ "$STATUS" == "pass" || "$STATUS" == "pending_real_data" ]]; then
+        if [[ "$STATUS" == "pass" || "$STATUS" == "pending_real_data" || "$STATUS" == "local_reference_pass" || "$STATUS" == "local_reference_pending" ]]; then
           STATUS="evidence_missing"
         fi
         ;;
@@ -290,6 +346,8 @@ write_json() {
   local missing_total=0
   local blocked_total=0
   local fail_total=0
+  local local_pass_total=0
+  local local_pending_total=0
   local line track_status
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -302,6 +360,8 @@ write_json() {
       evidence_missing) missing_total=$((missing_total + 1)) ;;
       env_blocked) blocked_total=$((blocked_total + 1)) ;;
       fail) fail_total=$((fail_total + 1)) ;;
+      local_reference_pass) local_pass_total=$((local_pass_total + 1)) ;;
+      local_reference_pending) local_pending_total=$((local_pending_total + 1)) ;;
       *) ;;
     esac
   done <"$records"
@@ -312,6 +372,8 @@ write_json() {
     printf '  "root": "%s",\n' "$(json_escape "$ROOT")"
     printf '  "status": "%s",\n' "$(json_escape "$STATUS")"
     printf '  "environment_ready": %s,\n' "$([[ "$ENV_READY" == "true" ]] && echo true || echo false)"
+    printf '  "environment_mode": "%s",\n' "$(json_escape "$ENV_MODE")"
+    printf '  "local_reference_enabled": %s,\n' "$([[ "$ALLOW_LOCAL_REFERENCE" == "true" ]] && echo true || echo false)"
     printf '  "env_marker_file": "%s",\n' "$(json_escape "$ENV_MARKER_FILE")"
     printf '  "evidence_dir": "%s",\n' "$(json_escape "$EVIDENCE_DIR")"
     printf '  "started_at": "%s",\n' "$(json_escape "$STARTED_AT")"
@@ -324,6 +386,8 @@ write_json() {
     printf '    "total": %s,\n' "$total"
     printf '    "pass_total": %s,\n' "$pass_total"
     printf '    "pending_real_data_total": %s,\n' "$pending_total"
+    printf '    "local_reference_pass_total": %s,\n' "$local_pass_total"
+    printf '    "local_reference_pending_total": %s,\n' "$local_pending_total"
     printf '    "evidence_missing_total": %s,\n' "$missing_total"
     printf '    "env_blocked_total": %s,\n' "$blocked_total"
     printf '    "fail_total": %s\n' "$fail_total"
@@ -331,10 +395,10 @@ write_json() {
     printf '  "tracks": [\n'
 
     local first=1
-    local track_id title status file missing_base missing_real note
-    while IFS=$'\t' read -r track_id title status file missing_base missing_real note; do
+    local track_id title status file missing_base missing_real missing_local note
+    while IFS=$'\t' read -r track_id title status file missing_base missing_real missing_local note; do
       [[ -z "${track_id:-}" ]] && continue
-      printf '    %s{"track_id":"%s","title":"%s","status":"%s","evidence_file":"%s","missing_base_keys":"%s","missing_real_keys":"%s","note":"%s"}\n' \
+      printf '    %s{"track_id":"%s","title":"%s","status":"%s","evidence_file":"%s","missing_base_keys":"%s","missing_real_keys":"%s","missing_local_keys":"%s","note":"%s"}\n' \
         "$([[ "$first" -eq 1 ]] && echo "" || echo ",")" \
         "$(json_escape "$track_id")" \
         "$(json_escape "$title")" \
@@ -342,6 +406,7 @@ write_json() {
         "$(json_escape "$file")" \
         "$(json_escape "$missing_base")" \
         "$(json_escape "$missing_real")" \
+        "$(json_escape "$missing_local")" \
         "$(json_escape "$note")"
       first=0
     done <"$records"
@@ -359,6 +424,8 @@ write_markdown() {
     printf -- '- run_id: `%s`\n' "$RUN_ID"
     printf -- '- status: `%s`\n' "$STATUS"
     printf -- '- environment_ready: `%s`\n' "$ENV_READY"
+    printf -- '- environment_mode: `%s`\n' "$ENV_MODE"
+    printf -- '- local_reference_enabled: `%s`\n' "$ALLOW_LOCAL_REFERENCE"
     printf -- '- env_marker_file: `%s`\n' "$ENV_MARKER_FILE"
     printf -- '- evidence_dir: `%s`\n' "$EVIDENCE_DIR"
     printf -- '- started_at: `%s`\n' "$STARTED_AT"
@@ -367,13 +434,13 @@ write_markdown() {
     printf -- '- output_md: `%s`\n' "$EMIT_MD"
 
     printf '\n## Track Status\n\n'
-    printf '| Track | Status | Missing Base Keys | Missing Real Keys | Note |\n'
-    printf '|---|---|---|---|---|\n'
+    printf '| Track | Status | Missing Base Keys | Missing Real Keys | Missing Local Keys | Note |\n'
+    printf '|---|---|---|---|---|---|\n'
 
-    local track_id title status file missing_base missing_real note
-    while IFS=$'\t' read -r track_id title status file missing_base missing_real note; do
+    local track_id title status file missing_base missing_real missing_local note
+    while IFS=$'\t' read -r track_id title status file missing_base missing_real missing_local note; do
       [[ -z "${track_id:-}" ]] && continue
-      printf '| %s | %s | %s | %s | %s |\n' "$title" "$status" "${missing_base:-（无）}" "${missing_real:-（无）}" "$note"
+      printf '| %s | %s | %s | %s | %s | %s |\n' "$title" "$status" "${missing_base:-（无）}" "${missing_real:-（无）}" "${missing_local:-（无）}" "$note"
     done <"$records"
   } >"$EMIT_MD"
 }
@@ -391,6 +458,10 @@ while [[ $# -gt 0 ]]; do
     --env-marker)
       ENV_MARKER_FILE="${2:-}"
       shift 2
+      ;;
+    --allow-local-reference)
+      ALLOW_LOCAL_REFERENCE="true"
+      shift 1
       ;;
     --emit-json)
       EMIT_JSON="${2:-}"
@@ -413,6 +484,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 resolve_root
+
+if is_truthy "$ALLOW_LOCAL_REFERENCE"; then
+  ALLOW_LOCAL_REFERENCE="true"
+else
+  ALLOW_LOCAL_REFERENCE="false"
+fi
 
 if [[ -z "$EVIDENCE_DIR" ]]; then
   EVIDENCE_DIR="$ROOT/docs/loadtest/evidence"
@@ -451,7 +528,8 @@ for track_id in "${TRACK_IDS[@]}"; do
   file="$EVIDENCE_DIR/$(track_file_name "$track_id")"
   required="$(track_required_keys "$track_id")"
   real_required="$(track_real_required_keys)"
-  collect_track_result "$track_id" "$title" "$file" "$required" "$real_required" "$records_file"
+  local_required="$(track_local_required_keys)"
+  collect_track_result "$track_id" "$title" "$file" "$required" "$real_required" "$local_required" "$records_file"
 done
 
 update_overall_status "$records_file"
@@ -464,5 +542,7 @@ printf 'ai_judge_p5_real_calibration_status: %s\n' "$STATUS"
 printf 'ai_judge_p5_real_calibration_json: %s\n' "$EMIT_JSON"
 printf 'ai_judge_p5_real_calibration_md: %s\n' "$EMIT_MD"
 printf 'environment_ready: %s\n' "$ENV_READY"
+printf 'environment_mode: %s\n' "$ENV_MODE"
+printf 'local_reference_enabled: %s\n' "$ALLOW_LOCAL_REFERENCE"
 
 rm -f "$records_file"

@@ -724,3 +724,14 @@
 | api079-dlq-retention-parameter-production-tuning | retention 默认值（`14d/500`）来自工程经验，缺线上数据支撑最优参数。 | 基于真实数据规模与清理窗口完成 `retention_days/cleanup_batch_size/interval` 调参结论，并给出回滚策略。 | 运行多轮 retention 观测，归档删除吞吐、锁等待、慢查询、表膨胀趋势与调参结论。 |
 | api079-dlq-replay-discard-fault-drill-and-dashboard-baseline | 功能链路已可用，但缺值班视角故障注入与告警看板封板证据。 | 完成 replay/discard 故障注入演练，建立 `dlq_list/replay/discard/retention` 指标看板与告警阈值。 | 演练脚本与日志、告警触发记录、复盘报告归档到 `docs/consistency_reports/`。 |
 | api079-kafka-readiness-replay-rate-threshold-calibration | replay-rate 门禁阈值缺稳定真实样本，当前结论偏本地实验值。 | 在真实 replay 样本基础上完成 `actions/min` 阈值校准与 Go/No-Go 冻结。 | 归档 readiness 快照对比、样本窗口统计与阈值评审纪要。 |
+
+### C17. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| ai-judge-stage-closure-deferred-01 | ai-judge-stage-closure-execute | 环境依赖 | 真实线上压测数据驱动的容量规划 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
+| ai-judge-stage-closure-deferred-02 | ai-judge-stage-closure-execute | 环境依赖 | 真实请求延迟分布驱动的 SLA 阈值冻结 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
+| ai-judge-stage-closure-deferred-03 | ai-judge-stage-closure-execute | 环境依赖 | 真实用户语料驱动的公平 benchmark 冻结 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
+| ai-judge-stage-closure-deferred-04 | ai-judge-stage-closure-execute | 环境依赖 | 基于真实成本账单的缓存/模型路由优化 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
+| ai-judge-stage-closure-deferred-05 | ai-judge-stage-closure-execute | 环境依赖 | `Temporal` 是否优于自建 orchestrator 的真实运维评估 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
+| ai-judge-stage-closure-deferred-06 | ai-judge-stage-closure-execute | 环境依赖 | `Milvus` 与其他向量后端的真实规模对比评估 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
+| ai-judge-p5-real-calibration-on-env | ai-judge-p5-real-calibration-on-env | 环境依赖 | 当前执行结果为 env_blocked，真实环境未就绪 | REAL_CALIBRATION_ENV_READY=true 且可访问真实样本环境后 | 五类轨道均达到 pass，产出真实校准摘要并更新阈值结论 | bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --root /Users/panyihang/Documents/EchoIsle |
