@@ -12,6 +12,8 @@ RUN_ID=""
 STARTED_AT=""
 FINISHED_AT=""
 STATUS="pass"
+ENV_MODE="blocked"
+ALLOW_LOCAL_REFERENCE="${AI_JUDGE_ALLOW_LOCAL_REFERENCE:-false}"
 
 declare -a TRACK_IDS=(
   "latency_baseline"
@@ -19,6 +21,7 @@ declare -a TRACK_IDS=(
   "fairness_benchmark"
   "fault_drill"
   "trust_attestation"
+  "runtime_sla_freeze"
 )
 
 usage() {
@@ -28,15 +31,16 @@ usage() {
     [--root <repo-root>] \
     [--evidence-dir <path>] \
     [--env-marker <path>] \
+    [--allow-local-reference] \
     [--output-doc <path>] \
     [--output-env <path>] \
     [--emit-json <path>] \
     [--emit-md <path>]
 
 说明:
-  - 对 ai_judge P5 五轨道执行 real-env 证据收口检查。
+  - 对 ai_judge P5/P6 六轨道执行 real-env 证据收口检查。
   - 输出 real-env 缺口清单（按轨道列出缺失键）与统一状态：
-    pass/env_blocked/pending_real_evidence/evidence_missing。
+    pass/local_reference_ready/local_reference_pending/env_blocked/pending_real_evidence/evidence_missing。
 USAGE
 }
 
@@ -105,6 +109,7 @@ track_title() {
     fairness_benchmark) printf '%s' "Fairness Benchmark" ;;
     fault_drill) printf '%s' "Fault Drill" ;;
     trust_attestation) printf '%s' "Trust Attestation" ;;
+    runtime_sla_freeze) printf '%s' "Runtime SLA Freeze" ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -116,6 +121,7 @@ track_file_name() {
     fairness_benchmark) printf '%s' "ai_judge_p5_fairness_benchmark.env" ;;
     fault_drill) printf '%s' "ai_judge_p5_fault_drill.env" ;;
     trust_attestation) printf '%s' "ai_judge_p5_trust_attestation.env" ;;
+    runtime_sla_freeze) printf '%s' "ai_judge_runtime_sla_thresholds.env" ;;
     *) printf '%s' "ai_judge_p5_${1}.env" ;;
   esac
 }
@@ -137,6 +143,9 @@ track_required_keys() {
     trust_attestation)
       printf '%s' "CALIBRATION_STATUS;TRACE_HASH_COVERAGE;COMMITMENT_COVERAGE;ATTESTATION_GAP"
       ;;
+    runtime_sla_freeze)
+      printf '%s' "RUNTIME_SLA_FREEZE_STATUS;THRESHOLD_DECISION;OBS_P95_MS;OBS_P99_MS;COMPLIANCE_P95_MS;COMPLIANCE_P99_MS;COMPLIANCE_FAULT_DRILL;COMPLIANCE_TRACE_HASH_COVERAGE;COMPLIANCE_COMMITMENT_COVERAGE;COMPLIANCE_ATTESTATION_GAP"
+      ;;
     *)
       printf '%s' "CALIBRATION_STATUS"
       ;;
@@ -144,7 +153,46 @@ track_required_keys() {
 }
 
 track_real_required_keys() {
-  printf '%s' "REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF"
+  case "$1" in
+    runtime_sla_freeze)
+      printf '%s' "RUNTIME_SLA_EVIDENCE;FREEZE_UPDATED_AT;FREEZE_DATASET_REF"
+      ;;
+    *)
+      printf '%s' "REAL_ENV_EVIDENCE;CALIBRATED_AT;CALIBRATED_BY;DATASET_REF"
+      ;;
+  esac
+}
+
+track_local_required_keys() {
+  case "$1" in
+    runtime_sla_freeze)
+      printf '%s' "RUNTIME_SLA_EVIDENCE;FREEZE_UPDATED_AT;FREEZE_DATASET_REF;FREEZE_ENV_MODE"
+      ;;
+    *)
+      printf '%s' "LOCAL_ENV_EVIDENCE;LOCAL_ENV_PROFILE;CALIBRATED_AT;CALIBRATED_BY"
+      ;;
+  esac
+}
+
+track_calibration_key() {
+  case "$1" in
+    runtime_sla_freeze) printf '%s' "RUNTIME_SLA_FREEZE_STATUS" ;;
+    *) printf '%s' "CALIBRATION_STATUS" ;;
+  esac
+}
+
+track_ready_value() {
+  case "$1" in
+    runtime_sla_freeze) printf '%s' "pass" ;;
+    *) printf '%s' "validated" ;;
+  esac
+}
+
+track_local_ready_value() {
+  case "$1" in
+    runtime_sla_freeze) printf '%s' "local_reference_frozen" ;;
+    *) printf '%s' "validated" ;;
+  esac
 }
 
 read_env_value() {
@@ -176,6 +224,33 @@ collect_missing_keys() {
   printf '%s' "$missing"
 }
 
+resolve_environment_mode() {
+  if [[ ! -f "$ENV_MARKER_FILE" ]]; then
+    ENV_MODE="blocked"
+    return
+  fi
+
+  local real_ready
+  real_ready="$(trim "$(read_env_value "$ENV_MARKER_FILE" "REAL_CALIBRATION_ENV_READY")")"
+  if is_truthy "$real_ready"; then
+    ENV_MODE="real"
+    return
+  fi
+
+  local local_ready local_mode_marker
+  local_ready="$(trim "$(read_env_value "$ENV_MARKER_FILE" "LOCAL_REFERENCE_ENV_READY")")"
+  local_mode_marker="$(trim "$(read_env_value "$ENV_MARKER_FILE" "CALIBRATION_ENV_MODE")")"
+  if [[ "$local_mode_marker" == "local_reference" || "$local_mode_marker" == "local" ]]; then
+    local_ready="true"
+  fi
+
+  if [[ "$ALLOW_LOCAL_REFERENCE" == "true" ]] && is_truthy "$local_ready"; then
+    ENV_MODE="local_reference"
+  else
+    ENV_MODE="blocked"
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -190,6 +265,10 @@ parse_args() {
       --env-marker)
         ENV_MARKER_FILE="${2:-}"
         shift 2
+        ;;
+      --allow-local-reference)
+        ALLOW_LOCAL_REFERENCE="true"
+        shift 1
         ;;
       --output-doc)
         OUTPUT_DOC="${2:-}"
@@ -235,6 +314,8 @@ write_json_summary() {
     printf '  "root": "%s",\n' "$(json_escape "$ROOT")"
     printf '  "evidence_dir": "%s",\n' "$(json_escape "$EVIDENCE_DIR")"
     printf '  "env_marker_file": "%s",\n' "$(json_escape "$ENV_MARKER_FILE")"
+    printf '  "environment_mode": "%s",\n' "$(json_escape "$ENV_MODE")"
+    printf '  "local_reference_enabled": "%s",\n' "$(json_escape "$ALLOW_LOCAL_REFERENCE")"
     printf '  "started_at": "%s",\n' "$(json_escape "$STARTED_AT")"
     printf '  "finished_at": "%s",\n' "$(json_escape "$FINISHED_AT")"
     printf '  "counts": {\n'
@@ -246,13 +327,13 @@ write_json_summary() {
     printf '  },\n'
     printf '  "tracks": [\n'
     local first=1
-    while IFS=$'\t' read -r track_id title track_status file calibration_status missing_base missing_real note; do
+    while IFS=$'\t' read -r track_id title track_status file calibration_status missing_base missing_real missing_local note; do
       [[ -z "$track_id" ]] && continue
       if [[ $first -eq 0 ]]; then
         printf ',\n'
       fi
       first=0
-      printf '    {"track_id":"%s","title":"%s","status":"%s","evidence_file":"%s","calibration_status":"%s","missing_base_keys":"%s","missing_real_keys":"%s","note":"%s"}' \
+      printf '    {"track_id":"%s","title":"%s","status":"%s","evidence_file":"%s","calibration_status":"%s","missing_base_keys":"%s","missing_real_keys":"%s","missing_local_keys":"%s","note":"%s"}' \
         "$(json_escape "$track_id")" \
         "$(json_escape "$title")" \
         "$(json_escape "$track_status")" \
@@ -260,6 +341,7 @@ write_json_summary() {
         "$(json_escape "$calibration_status")" \
         "$(json_escape "$missing_base")" \
         "$(json_escape "$missing_real")" \
+        "$(json_escape "$missing_local")" \
         "$(json_escape "$note")"
     done <"$details_file"
     printf '\n  ],\n'
@@ -287,6 +369,8 @@ write_md_summary() {
     printf -- '- status: `%s`\n' "$STATUS"
     printf -- '- env_marker_file: `%s`\n' "$ENV_MARKER_FILE"
     printf -- '- evidence_dir: `%s`\n' "$EVIDENCE_DIR"
+    printf -- '- environment_mode: `%s`\n' "$ENV_MODE"
+    printf -- '- local_reference_enabled: `%s`\n' "$ALLOW_LOCAL_REFERENCE"
     printf -- '- started_at: `%s`\n' "$STARTED_AT"
     printf -- '- finished_at: `%s`\n' "$FINISHED_AT"
     printf '\n## Counts\n\n'
@@ -296,11 +380,11 @@ write_md_summary() {
     printf '4. pending_total: %s\n' "$pending_total"
     printf '5. evidence_missing_total: %s\n' "$missing_total"
     printf '\n## Tracks\n\n'
-    printf '| Track | Status | Missing Base Keys | Missing Real Keys | Note |\n'
-    printf '| --- | --- | --- | --- | --- |\n'
-    while IFS=$'\t' read -r _track_id title track_status _file _calibration_status missing_base missing_real note; do
+    printf '| Track | Status | Missing Base Keys | Missing Real Keys | Missing Local Keys | Note |\n'
+    printf '| --- | --- | --- | --- | --- | --- |\n'
+    while IFS=$'\t' read -r _track_id title track_status _file _calibration_status missing_base missing_real missing_local note; do
       [[ -z "$title" ]] && continue
-      printf '| %s | %s | %s | %s | %s |\n' "$title" "$track_status" "$missing_base" "$missing_real" "$note"
+      printf '| %s | %s | %s | %s | %s | %s |\n' "$title" "$track_status" "$missing_base" "$missing_real" "$missing_local" "$note"
     done <"$details_file"
   } >"$EMIT_MD"
 }
@@ -308,6 +392,21 @@ write_md_summary() {
 write_output_doc() {
   local marker_ready="$1"
   local details_file="$2"
+  local closure_rule
+  local local_rule
+
+  if [[ "$ENV_MODE" == "real" ]]; then
+    closure_rule='收口原则：`REAL_CALIBRATION_ENV_READY=true` 且六轨道 real 键齐备，判定 `pass`。'
+  elif [[ "$ENV_MODE" == "local_reference" ]]; then
+    closure_rule='收口原则：本机参考模式启用，六轨道满足 local 预检后判定 `local_reference_ready`（不替代 real pass）。'
+  else
+    closure_rule='收口原则：默认只接受 real 环境；若未启用本机参考，结果保持 `env_blocked`。'
+  fi
+  if [[ "$ALLOW_LOCAL_REFERENCE" == "true" ]]; then
+    local_rule='本机参考开关：已启用（`--allow-local-reference`）。'
+  else
+    local_rule='本机参考开关：未启用（可使用 `--allow-local-reference` 进行本机预检）。'
+  fi
 
   {
     printf '# AI Judge P5 Real Env 证据收口清单\n\n'
@@ -317,24 +416,30 @@ write_output_doc() {
     printf '1. marker_ready: `%s`\n' "$marker_ready"
     printf '2. env_marker: `%s`\n' "$ENV_MARKER_FILE"
     printf '3. evidence_dir: `%s`\n' "$EVIDENCE_DIR"
-    printf '4. 收口原则：只有 `REAL_CALIBRATION_ENV_READY=true` 且五轨道 real 键齐备，才可判定 `pass`。\n'
+    printf '4. environment_mode: `%s`\n' "$ENV_MODE"
+    printf '5. %s\n' "$local_rule"
+    printf '6. %s\n' "$closure_rule"
     printf '\n## 2. 轨道缺口明细\n\n'
-    printf '| 轨道 | 状态 | 校准状态 | 缺失基础键 | 缺失 real 键 | 说明 |\n'
-    printf '| --- | --- | --- | --- | --- | --- |\n'
-    while IFS=$'\t' read -r _track_id title track_status _file calibration_status missing_base missing_real note; do
+    printf '| 轨道 | 状态 | 校准状态 | 缺失基础键 | 缺失 real 键 | 缺失 local 键 | 说明 |\n'
+    printf '| --- | --- | --- | --- | --- | --- | --- |\n'
+    while IFS=$'\t' read -r _track_id title track_status _file calibration_status missing_base missing_real missing_local note; do
       [[ -z "$title" ]] && continue
-      printf '| %s | %s | %s | %s | %s | %s |\n' \
+      printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
         "$title" \
         "$track_status" \
         "$calibration_status" \
         "$missing_base" \
         "$missing_real" \
+        "$missing_local" \
         "$note"
     done <"$details_file"
     printf '\n## 3. 执行建议\n\n'
-    printf '1. 先设置 marker：`REAL_CALIBRATION_ENV_READY=true`。\n'
-    printf '2. 为每个 `ai_judge_p5_*.env` 补齐 real 必填键：`REAL_ENV_EVIDENCE`、`CALIBRATED_AT`、`CALIBRATED_BY`、`DATASET_REF`。\n'
-    printf '3. 复跑：`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh`，确认返回 `status=pass`。\n'
+    printf '1. 真实环境收口：先设置 marker `REAL_CALIBRATION_ENV_READY=true`。\n'
+    printf '2. P5 轨道补齐 real 键：`REAL_ENV_EVIDENCE`、`CALIBRATED_AT`、`CALIBRATED_BY`、`DATASET_REF`。\n'
+    printf '3. Runtime SLA 补齐 real 键：`RUNTIME_SLA_EVIDENCE`、`FREEZE_UPDATED_AT`、`FREEZE_DATASET_REF`，且 `RUNTIME_SLA_FREEZE_STATUS=pass`。\n'
+    printf '4. 若仅做本机预检：启用 `--allow-local-reference`，并补齐 local 键（`LOCAL_ENV_EVIDENCE`、`LOCAL_ENV_PROFILE` 等），Runtime SLA 需 `RUNTIME_SLA_FREEZE_STATUS=local_reference_frozen`。\n'
+    printf '5. 复跑：`bash scripts/harness/ai_judge_runtime_sla_freeze.sh`（real）或 `bash scripts/harness/ai_judge_runtime_sla_freeze.sh --allow-local-reference`（local）。\n'
+    printf '6. 复跑：`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh`（real）或 `bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --allow-local-reference`（local）。\n'
   } >"$OUTPUT_DOC"
 }
 
@@ -350,6 +455,8 @@ write_output_env() {
 AI_JUDGE_REAL_ENV_CLOSURE_STATUS=$STATUS
 UPDATED_AT=$FINISHED_AT
 REAL_ENV_MARKER_READY=$marker_ready
+ENVIRONMENT_MODE=$ENV_MODE
+LOCAL_REFERENCE_ENABLED=$ALLOW_LOCAL_REFERENCE
 TOTAL_TRACKS=$total
 READY_TRACKS=$ready_total
 BLOCKED_TRACKS=$blocked_total
@@ -411,57 +518,83 @@ main() {
   else
     marker_ready="false"
   fi
+  resolve_environment_mode
 
   local details_file
   details_file="$(mktemp)"
 
   local total=0 ready_total=0 blocked_total=0 pending_total=0 missing_total=0
 
-  local track_id title file required_base required_real missing_base missing_real calibration_status track_status note
+  local track_id title file required_base required_real required_local missing_base missing_real missing_local calibration_status track_status note calibration_key ready_value local_ready_value
   for track_id in "${TRACK_IDS[@]}"; do
     total=$((total + 1))
     title="$(track_title "$track_id")"
     file="$EVIDENCE_DIR/$(track_file_name "$track_id")"
     required_base="$(track_required_keys "$track_id")"
-    required_real="$(track_real_required_keys)"
+    required_real="$(track_real_required_keys "$track_id")"
+    required_local="$(track_local_required_keys "$track_id")"
+    calibration_key="$(track_calibration_key "$track_id")"
+    ready_value="$(track_ready_value "$track_id")"
+    local_ready_value="$(track_local_ready_value "$track_id")"
 
     if [[ ! -f "$file" ]]; then
       track_status="evidence_missing"
       calibration_status="missing"
       missing_base="(file_missing)"
       missing_real="(file_missing)"
+      missing_local="(file_missing)"
       note="evidence file missing"
       missing_total=$((missing_total + 1))
-    elif [[ "$marker_ready" != "true" ]]; then
+    elif [[ "$ENV_MODE" == "blocked" ]]; then
       track_status="env_blocked"
-      calibration_status="$(trim "$(read_env_value "$file" "CALIBRATION_STATUS")")"
+      calibration_status="$(trim "$(read_env_value "$file" "$calibration_key")")"
       missing_base="$(collect_missing_keys "$file" "$required_base")"
       missing_real="$(collect_missing_keys "$file" "$required_real")"
-      note="real env marker not ready"
+      missing_local="$(collect_missing_keys "$file" "$required_local")"
+      note="environment blocked (real marker not ready)"
       blocked_total=$((blocked_total + 1))
     else
-      calibration_status="$(trim "$(read_env_value "$file" "CALIBRATION_STATUS")")"
+      calibration_status="$(trim "$(read_env_value "$file" "$calibration_key")")"
       missing_base="$(collect_missing_keys "$file" "$required_base")"
       missing_real="$(collect_missing_keys "$file" "$required_real")"
-      if [[ "$calibration_status" != "validated" ]]; then
-        track_status="pending_real_evidence"
-        note="calibration_status is ${calibration_status:-missing}"
-        pending_total=$((pending_total + 1))
-      elif [[ -n "$missing_base" || -n "$missing_real" ]]; then
-        track_status="pending_real_evidence"
-        note="missing required keys"
-        pending_total=$((pending_total + 1))
+      missing_local="$(collect_missing_keys "$file" "$required_local")"
+
+      if [[ "$ENV_MODE" == "real" ]]; then
+        if [[ "$calibration_status" != "$ready_value" ]]; then
+          track_status="pending_real_evidence"
+          note="${calibration_key} is ${calibration_status:-missing}"
+          pending_total=$((pending_total + 1))
+        elif [[ -n "$missing_base" || -n "$missing_real" ]]; then
+          track_status="pending_real_evidence"
+          note="missing required real keys"
+          pending_total=$((pending_total + 1))
+        else
+          track_status="ready"
+          note="real env evidence ready"
+          ready_total=$((ready_total + 1))
+        fi
       else
-        track_status="ready"
-        note="real env evidence ready"
-        ready_total=$((ready_total + 1))
+        if [[ "$calibration_status" != "$local_ready_value" ]]; then
+          track_status="local_reference_pending"
+          note="${calibration_key} is ${calibration_status:-missing}"
+          pending_total=$((pending_total + 1))
+        elif [[ -n "$missing_base" || -n "$missing_local" ]]; then
+          track_status="local_reference_pending"
+          note="missing required local keys"
+          pending_total=$((pending_total + 1))
+        else
+          track_status="local_reference_ready"
+          note="local reference evidence ready (not real pass)"
+          ready_total=$((ready_total + 1))
+        fi
       fi
     fi
 
     [[ -z "$missing_base" ]] && missing_base="（无）"
     [[ -z "$missing_real" ]] && missing_real="（无）"
+    [[ -z "$missing_local" ]] && missing_local="（无）"
     [[ -z "$calibration_status" ]] && calibration_status="missing"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$track_id" \
       "$title" \
       "$track_status" \
@@ -469,17 +602,26 @@ main() {
       "$calibration_status" \
       "$missing_base" \
       "$missing_real" \
+      "$missing_local" \
       "$note" >>"$details_file"
   done
 
   if [[ "$missing_total" -gt 0 ]]; then
     STATUS="evidence_missing"
-  elif [[ "$marker_ready" != "true" ]]; then
+  elif [[ "$ENV_MODE" == "blocked" ]]; then
     STATUS="env_blocked"
   elif [[ "$pending_total" -gt 0 ]]; then
-    STATUS="pending_real_evidence"
+    if [[ "$ENV_MODE" == "real" ]]; then
+      STATUS="pending_real_evidence"
+    else
+      STATUS="local_reference_pending"
+    fi
   else
-    STATUS="pass"
+    if [[ "$ENV_MODE" == "real" ]]; then
+      STATUS="pass"
+    else
+      STATUS="local_reference_ready"
+    fi
   fi
 
   FINISHED_AT="$(iso_now)"
@@ -492,6 +634,8 @@ main() {
 
   echo "ai_judge_real_env_evidence_closure_status: $STATUS"
   echo "real_env_marker_ready: $marker_ready"
+  echo "environment_mode: $ENV_MODE"
+  echo "local_reference_enabled: $ALLOW_LOCAL_REFERENCE"
   echo "output_doc: $OUTPUT_DOC"
   echo "output_env: $OUTPUT_ENV"
   echo "summary_json: $EMIT_JSON"

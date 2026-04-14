@@ -97,9 +97,10 @@ fairness benchmark 冻结阶段使用专门脚本：
 real-env 证据收口阶段使用专门脚本：
 
 1. `scripts/harness/ai_judge_real_env_evidence_closure.sh`
-2. 统一检查五轨道 real 必填键与 marker 就绪状态
-3. 输出 `pass/env_blocked/pending_real_evidence/evidence_missing`
-4. 产出收口清单 `docs/loadtest/evidence/ai_judge_p5_real_env_closure_checklist.md`
+2. 统一检查六轨道 real 必填键与 marker 就绪状态（含 `runtime_sla_freeze`）
+3. 默认输出 `pass/env_blocked/pending_real_evidence/evidence_missing`
+4. 开启 `--allow-local-reference` 时可输出 `local_reference_ready/local_reference_pending`（仅本机预检，不替代 real pass）
+5. 产出收口清单 `docs/loadtest/evidence/ai_judge_p5_real_env_closure_checklist.md`
 
 runtime SLA 冻结阶段使用专门脚本：
 
@@ -172,6 +173,11 @@ bash scripts/harness/ai_judge_fairness_benchmark_freeze.sh \
 bash scripts/harness/ai_judge_real_env_evidence_closure.sh \
   --emit-json "artifacts/harness/manual-ai-judge-real-env-closure.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-real-env-closure.summary.md"
+
+bash scripts/harness/ai_judge_real_env_evidence_closure.sh \
+  --allow-local-reference \
+  --emit-json "artifacts/harness/manual-ai-judge-real-env-closure-local.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-real-env-closure-local.summary.md"
 
 bash scripts/harness/ai_judge_runtime_sla_freeze.sh \
   --allow-local-reference \
