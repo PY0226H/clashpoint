@@ -5,6 +5,7 @@ from typing import Any
 
 from ...models import FinalDispatchRequest
 from ...style_mode import resolve_effective_style_mode
+from .claim_graph import build_claim_graph_payload
 
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
@@ -303,6 +304,26 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
         missing.append("errorCodes")
     if not isinstance(payload.get("degradationLevel"), int):
         missing.append("degradationLevel")
+
+    claim_graph = payload.get("claimGraph")
+    if not isinstance(claim_graph, dict):
+        missing.append("claimGraph")
+    else:
+        if not isinstance(claim_graph.get("nodes"), list):
+            missing.append("claimGraph.nodes")
+        if not isinstance(claim_graph.get("edges"), list):
+            missing.append("claimGraph.edges")
+        if not isinstance(claim_graph.get("stats"), dict):
+            missing.append("claimGraph.stats")
+
+    claim_graph_summary = payload.get("claimGraphSummary")
+    if not isinstance(claim_graph_summary, dict):
+        missing.append("claimGraphSummary")
+    else:
+        if not isinstance(claim_graph_summary.get("coreClaims"), dict):
+            missing.append("claimGraphSummary.coreClaims")
+        if not isinstance(claim_graph_summary.get("stats"), dict):
+            missing.append("claimGraphSummary.stats")
 
     judge_trace = payload.get("judgeTrace")
     if not isinstance(judge_trace, dict):
@@ -628,6 +649,20 @@ def build_final_report_payload(
         else {}
     )
     verdict_reason = str(display_payload.get("verdictReason") or final_rationale_raw)
+    claim_graph_payload = build_claim_graph_payload(
+        phase_payloads=[(phase_no, phase_reports_by_no[phase_no][1]) for phase_no in used_phase_nos],
+        verdict_evidence_refs=verdict_evidence_refs,
+    )
+    claim_graph = (
+        claim_graph_payload.get("claimGraph")
+        if isinstance(claim_graph_payload.get("claimGraph"), dict)
+        else {}
+    )
+    claim_graph_summary = (
+        claim_graph_payload.get("claimGraphSummary")
+        if isinstance(claim_graph_payload.get("claimGraphSummary"), dict)
+        else {}
+    )
 
     return {
         "sessionId": request.session_id,
@@ -638,6 +673,8 @@ def build_final_report_payload(
         "debateSummary": debate_summary,
         "sideAnalysis": side_analysis,
         "verdictReason": verdict_reason,
+        "claimGraph": claim_graph,
+        "claimGraphSummary": claim_graph_summary,
         "verdictEvidenceRefs": verdict_evidence_refs[:16],
         "phaseRollupSummary": phase_rollup_summary,
         "retrievalSnapshotRollup": retrieval_snapshot_rollup,
@@ -670,6 +707,8 @@ def build_final_report_payload(
             "displayVerdictReason": verdict_reason,
             "factLock": display_payload.get("factLock"),
             "scoreEvidenceRollup": score_evidence_rollup,
+            "claimGraphSummary": claim_graph_summary,
+            "claimGraphStats": claim_graph.get("stats") if isinstance(claim_graph, dict) else {},
             "fairnessGate": fairness_summary,
         },
         "fairnessSummary": fairness_summary,

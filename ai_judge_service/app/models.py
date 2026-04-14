@@ -127,6 +127,8 @@ class FinalReportInput(BaseModel):
     debate_summary: str
     side_analysis: dict[str, str] = {}
     verdict_reason: str
+    claim_graph: dict[str, Any] = {}
+    claim_graph_summary: dict[str, Any] = {}
     verdict_evidence_refs: list[dict[str, Any]] = []
     phase_rollup_summary: list[dict[str, Any]] = []
     retrieval_snapshot_rollup: list[dict[str, Any]] = []

@@ -130,6 +130,17 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
                 "con": "反方优势",
             },
             "verdict_reason": "裁决理由",
+            "claim_graph": {
+                "pipelineVersion": "v1-claim-graph-bootstrap",
+                "nodes": [],
+                "edges": [],
+                "unansweredClaimIds": [],
+                "stats": {"totalClaims": 0},
+            },
+            "claim_graph_summary": {
+                "coreClaims": {"pro": [], "con": []},
+                "stats": {"totalClaims": 0},
+            },
             "verdict_evidence_refs": [{"messageId": 3001}],
             "phase_rollup_summary": [{"phaseNo": 1}],
             "retrieval_snapshot_rollup": [{"chunkId": "c-1"}],
@@ -145,6 +156,7 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
         report = FinalReportInput.model_validate(payload)
         self.assertEqual(report.winner, "draw")
         self.assertTrue(report.rejudge_triggered)
+        self.assertIn("stats", report.claim_graph_summary)
 
 
 if __name__ == "__main__":

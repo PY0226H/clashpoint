@@ -125,7 +125,12 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["debateSummary"], str) and payload["debateSummary"]
     assert isinstance(payload["fairnessSummary"], dict)
     assert isinstance(payload["sideAnalysis"], dict)
+    assert isinstance(payload["claimGraph"], dict)
+    assert isinstance(payload["claimGraphSummary"], dict)
+    assert payload["claimGraph"]["stats"]["conflictEdges"] >= 1
+    assert payload["claimGraphSummary"]["stats"]["totalClaims"] >= 2
     assert isinstance(payload["judgeTrace"], dict)
+    assert isinstance(payload["judgeTrace"]["claimGraphSummary"], dict)
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -159,6 +164,34 @@ def test_build_final_report_payload_should_mark_incomplete_rollup() -> None:
     assert payload["degradationLevel"] == 1
     assert len(payload["auditAlerts"]) == 1
     assert payload["auditAlerts"][0]["type"] == "final_rollup_incomplete"
+
+
+def test_build_final_report_payload_should_track_unanswered_claims() -> None:
+    request = FinalDispatchRequest(
+        job_id=9006,
+        scope_id=1,
+        session_id=306,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9006",
+        idempotency_key="final:9006",
+    )
+    now = datetime.now(timezone.utc)
+    payload = _build_phase_payload(pro=68.0, con=60.0, msg_offset=0)
+    payload["agent2Score"]["hitItems"] = ["pro:isolated-claim"]
+    payload["agent2Score"]["missItems"] = []
+
+    result = build_final_report_payload(
+        request=request,
+        phase_receipts=[_ReceiptRow(phase_no=1, response={"reportPayload": payload}, updated_at=now)],
+        judge_style_mode="rational",
+    )
+
+    assert result["claimGraph"]["stats"]["unansweredClaims"] >= 1
+    assert len(result["claimGraph"]["unansweredClaimIds"]) >= 1
 
 
 def test_build_final_report_payload_should_trigger_style_shift_instability_gate() -> None:
@@ -302,6 +335,8 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
     assert "debateSummary" in missing
     assert "sideAnalysis" in missing
     assert "verdictReason" in missing
+    assert "claimGraph" in missing
+    assert "claimGraphSummary" in missing
     assert "judgeTrace" in missing
 
 
