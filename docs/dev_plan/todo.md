@@ -735,3 +735,8 @@
 | ai-judge-stage-closure-deferred-05 | ai-judge-stage-closure-execute | 环境依赖 | `Temporal` 是否优于自建 orchestrator 的真实运维评估 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
 | ai-judge-stage-closure-deferred-06 | ai-judge-stage-closure-execute | 环境依赖 | `Milvus` 与其他向量后端的真实规模对比评估 | 获得真实环境或上线前收口 | 将该延后项转为可执行模块并产出证据 | 对应脚本或报告工件归档 |
 | ai-judge-p5-real-calibration-on-env | ai-judge-p5-real-calibration-on-env | 环境依赖 | 当前执行结果为 env_blocked，真实环境未就绪 | REAL_CALIBRATION_ENV_READY=true 且可访问真实样本环境后 | 五类轨道均达到 pass，产出真实校准摘要并更新阈值结论 | bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --root /Users/panyihang/Documents/EchoIsle |
+
+### C18. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| `ai-judge-real-env-window-closure`（真实环境窗口补齐时复跑并更新最终结论） | ai-judge-stage-closure-execute | 环境依赖 | 当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口 | REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后 | 完成该模块并产出 real-env 证据工件，状态达到 pass | 执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence |

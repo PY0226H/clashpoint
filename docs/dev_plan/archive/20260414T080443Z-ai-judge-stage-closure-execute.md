@@ -1,0 +1,376 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-14  
+当前主线：`AI_Judge 下一阶段开发计划（P7）：cases 硬切 + Judge Core 完整化`  
+当前状态：进行中（`ai-judge-cases-hard-cut` 已完成，`ai-judge-judge-core-unification` 已完成，`ai-judge-contract-hardening` phase1+phase2 已完成，`ai-judge-cross-layer-sync` phase1+phase2 已完成，`ai-judge-case-evidence-view` phase1 已完成，`ai-judge-runtime-ops-pack` phase1+phase2 已完成，`ai-judge-doc-governance-refresh` 已完成，`ai-judge-stage-closure-evidence` phase1 已完成，`ai-judge-real-env-window-closure` phase1 已完成）
+
+---
+
+## 1. 计划摘要
+
+1. 本阶段目标是把 `AI_judge_service` 从“多入口拼接能力”收敛成“以 case 为中心的单一主链”。
+2. 按产品未上线策略执行硬切：不保留旧兼容层、不做双轨、不中间灰度。
+3. 在一个阶段内闭环三件事：`cases 主合同`、`Judge Core 编排内核`、`可验证公平与可追踪运行证据`。
+
+---
+
+## 2. 范围与非范围
+
+### 2.1 范围（P7 必做）
+
+1. `cases` 作为唯一主实体：创建、推进、裁决、回放、复核全部围绕 `case_id`。
+2. 统一 Judge Core：把 phase/final/replay/review 的编排逻辑收敛到一个核心执行管线。
+3. 契约硬切：final 输出、fairness 输出、trace 输出全部使用单一字段语义。
+4. 打通证据链：claim graph、policy registry、trust attestation、runtime/fairness 指标进入同一 case 视图。
+5. 完成跨层同步：`chat_server` 与内部调用方切到新 contract。
+
+### 2.2 非范围（本阶段不做）
+
+1. 不做线上真实流量压测结论；仅保留本机基线与脚本化收口入口。
+2. 不引入长期兼容 alias、adapter shim、双写通道。
+3. 不扩展 P8+ 新产品能力（NPC 辅助教练、房间问答 Agent 的完整落地）。
+
+---
+
+## 3. 基线快照（进入 P7 前）
+
+1. 已有能力：final 展示字段硬切、trace/replay、failed callback、输入盲化拒绝。
+2. 已有能力：fairness gate（swap/style/panel）+ review queue + manual decision。
+3. 已有能力：claim graph/bootstrap、policy registry/bootstrap、trust attestation MVP、runtime SLA freeze（local reference）。
+4. 当前缺口：主链语义仍偏“job/dispatch 维度”，需要硬切为“case first + core first”。
+
+---
+
+## 4. 模块拆解（P7）
+
+| 模块 | 优先级 | 目标 | DoD（完成定义） | 主要验证 |
+| --- | --- | --- | --- | --- |
+| `ai-judge-cases-hard-cut` | P0 | cases 成为唯一主链实体 | 新增/收敛 case store 与 case router；旧 job 语义仅保留内部技术字段，不再作为产品主语义 | `pytest -q tests/test_case_* tests/test_app_factory.py` |
+| `ai-judge-judge-core-unification` | P0 | phase/final/replay/review 进入统一编排核心 | `JudgeCore` 提供单入口执行、统一 stage 状态机、统一错误模型与审计事件 | `pytest -q tests/test_judge_core.py tests/test_judge_mainline.py` |
+| `ai-judge-contract-hardening` | P0 | contract 单语义硬切 | final/fairness/trace/replay payload 完成字段对齐；缺失字段阻断 + failed callback | `pytest -q tests/test_phase_final_contract_models.py tests/test_app_factory.py` |
+| `ai-judge-case-evidence-view` | P1 | case 聚合证据视图 | 在 case 详情聚合 claimGraph、policySnapshot、trustAttestation、audit/fairness summary | `pytest -q tests/test_case_evidence_view.py` |
+| `ai-judge-cross-layer-sync` | P1 | chat_server 与 SDK 同步 | chat_server 消费模型切新字段；旧字段依赖清零；OpenAPI/文档同步 | `cargo test -p chat-server` + 相关集成测试 |
+| `ai-judge-runtime-ops-pack` | P1 | 本机可执行收口包 | real-env closure/fairness/runtime 脚本形成一键入口；摘要工件路径固定 | `bash scripts/harness/...` 全量回归 |
+| `ai-judge-doc-governance-refresh` | P2 | 文档与证据一致 | `当前开发计划.md`、`todo/completed`、`runtime-verify`、设计方案映射保持一致 | `bash scripts/quality/harness_docs_lint.sh` |
+
+---
+
+### 已完成/未完成矩阵
+
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-cases-hard-cut` | 外部 `job` 语义硬切为 `case` | 已完成（phase1 + phase2） | 请求/回调/路由/响应主键硬切完成，`POST /internal/judge/cases` 与 `GET /internal/judge/cases/{case_id}` 已落地并通过全量回归 |
+| `ai-judge-judge-core-unification` | 单核编排与状态机收敛 | 已完成（phase1 + phase2） | `JudgeCoreOrchestrator` 已接管 case/phase/final/review/replay 主链，统一 stage/event 语义并通过回归 |
+| `ai-judge-contract-hardening` | 合同硬切与阻断语义一致 | 已完成（phase1 + phase2） | 已完成 `verdictContract` 同构输出、replay-final 合同阻断、失败链路错误契约统一（receipt/trace/workflow） |
+| `ai-judge-cross-layer-sync` | chat_server 与上层调用方同步 | 已完成（phase1 + phase2） | 已完成 callback/dispatch/replay/ops 全链路 `job_id/jobId -> case_id/caseId` 硬切，相关 handler/model/tests 已同步 |
+| `ai-judge-case-evidence-view` | case 证据聚合视图 | 已完成（phase1） | `GET /internal/judge/cases/{case_id}` 已新增 `caseEvidence` 聚合（claimGraph/policySnapshot/trustAttestation/fairness/audit summary）并通过回归 |
+| `ai-judge-runtime-ops-pack` | 本机可执行收口包 | 已完成（phase1 + phase2） | 已串联 fairness/runtime/real-env/stage-closure-evidence 四阶段，支持收口证据联动自动回填 |
+| `ai-judge-doc-governance-refresh` | 文档与证据一致 | 已完成（phase1） | 已完成阶段收口脚本去 `p5 on-env` 硬编码、章节映射文档更新、计划文档同步 |
+| `ai-judge-stage-closure-evidence` | 阶段收口证据草案化 | 已完成（phase1） | 新增 `ai_judge_stage_closure_evidence.sh`，收口草案候选统计与 runtime ops pack 关联状态统一出证 |
+| `ai-judge-real-env-window-closure` | 真实环境窗口收口总控 | 已完成（phase1） | 新增 `ai_judge_real_env_window_closure.sh`，串联 P5 + runtime ops pack 四阶段并统一输出 real-env/local-reference 收口状态 |
+
+### 下一开发模块建议
+
+1. `ai-judge-stage-closure-execute`（阶段结束时执行正式收口）
+2. `ai-judge-next-iteration-planning`（进入下一迭代规划）
+3. `ai-judge-real-env-window-closure`（真实环境窗口补齐时复跑并更新最终结论）
+
+### 模块完成同步历史
+
+- 2026-04-14：推进 `ai-judge-cases-hard-cut`；完成 phase1 外部契约硬切：`job_id/jobId/jobs` 主语义改为 `case_id/caseId/cases`，并通过 `pytest -q` 与 `ruff check app tests` 全量验证。
+
+---
+
+## 5. 实施顺序（严格执行）
+
+1. **先切主链实体**：完成 `cases` 主合同与 route/store，避免后续核心编排反复返工。
+2. **再做 Judge Core**：把 phase/final/replay/review 接入统一执行内核与状态机。
+3. **然后做 contract hardening**：统一回执、错误语义、failed callback 与 trace 事件。
+4. **再做跨层同步**：`chat_server`、OpenAPI、测试一次性切齐。
+5. **最后做文档与收口包**：脚本、证据、计划文档、完成度映射同步更新。
+
+---
+
+## 6. 验收清单
+
+### 6.1 功能验收
+
+1. `POST /internal/judge/cases` 创建 case 成功，并可驱动完整裁决链路。
+2. `GET /internal/judge/cases/{case_id}` 返回统一聚合视图（verdict + fairness + evidence + trust）。
+3. `POST /internal/judge/cases/{case_id}/replay` 无副作用重算，且 trace 历史可追踪。
+4. fairness 触发复核时，case 状态进入 `review_required`，人工决策后状态收敛。
+
+### 6.2 契约验收
+
+1. final 展示字段仅保留主语义字段：`debateSummary/sideAnalysis/verdictReason`。
+2. case 视图包含：`winner/proScore/conScore/dimensionScores/verdictEvidenceRefs/auditAlerts/errorCodes/degradationLevel`。
+3. 缺失关键字段时：阻断主流程 + 记录 trace failure + 触发 failed callback。
+
+### 6.3 质量门禁
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q`
+2. `cd ai_judge_service && ../scripts/py -m ruff check app tests`
+3. `bash scripts/harness/tests/test_ai_judge_real_env_evidence_closure.sh`
+4. `bash scripts/harness/tests/test_ai_judge_runtime_sla_freeze.sh`
+
+---
+
+## 7. 风险与决策
+
+1. **硬切风险**：调用方若未同步会直接失败。  
+决策：先完成跨层清单并同回合改完，不留兼容层。
+
+2. **核心收敛风险**：Judge Core 改造影响路径广。  
+决策：先建核心测试桩，再逐模块迁移，迁移完成即删除旧入口。
+
+3. **真实环境缺口风险**：本机只能给参考口径。  
+决策：保留 `local_reference_*`，并维持严格 real-env `pass` 判定不放宽。
+
+---
+
+## 8. 里程碑与进度记录
+
+| 里程碑 | 状态 | 说明 |
+| --- | --- | --- |
+| M1：cases 硬切完成 | 已完成 | 外部契约与路由 `job -> case` 硬切完成，新增 `POST /internal/judge/cases` 与 `GET /internal/judge/cases/{case_id}` 聚合视图并通过回归 |
+| M2：Judge Core 完整化 | 已完成 | `JudgeCoreOrchestrator` 已接管核心状态推进，replay 语义已统一并写入 workflow 事件 |
+| M3：Contract Hardening | 已完成 | `case/trace/replay` 已统一 `verdictContract`，replay-final 合同阻断与失败链路错误契约统一已完成 |
+| M4：收口与证据归档 | 进行中 | 已完成 runtime ops pack phase1+phase2 + doc governance refresh + stage closure evidence phase1 + real env window closure phase1；待完成阶段执行归档 |
+
+---
+
+## 9. 下一步（执行入口）
+
+1. 阶段结束时执行 `ai-judge-stage-closure-execute`，完成长期文档回填与活动计划归档。
+2. 启动 `ai-judge-next-iteration-planning`，定义下一阶段目标与模块顺序。
+3. 在真实环境窗口补齐时，复跑 `ai_judge_real_env_window_closure.sh` 以产出 `pass` 级收口证据。
+4. 每完成一个模块，同步更新本文件“里程碑状态 + 验证命令结果”。
+
+---
+
+## 10. 执行增量
+
+### 2026-04-14 | ai-judge-cases-hard-cut（执行增量-1）
+
+1. 外部契约硬切为 `case` 语义：
+   - phase/final dispatch 请求字段从 `job_id` 切换到 `case_id`。
+   - 服务返回主键字段从 `jobId` 切换到 `caseId`（dispatch/trace/replay/review/alerts/failed payload）。
+2. 路由主链硬切为 `cases`：
+   - `.../jobs/{...}` 统一切为 `.../cases/{...}`。
+   - review 路由从 `review/jobs` 切为 `review/cases`。
+3. 回调与配置同步切换：
+   - callback path template 从 `{job_id}` 切到 `{case_id}`。
+   - 默认回调路径从 `/.../jobs/...` 切到 `/.../cases/...`。
+4. 应用序列化同步：
+   - replay/audit/receipt 序列化主键字段统一改为 `caseId`。
+5. 验证结果：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q` 通过。
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-cases-hard-cut（执行增量-2）
+
+1. 新增 case 主入口：
+   - `POST /internal/judge/cases`：创建 case、校验 policy、workflow 进入 `case_built`、支持 `idempotentReplay`。
+   - `GET /internal/judge/cases/{case_id}`：聚合 workflow/trace/receipt/replay/alerts/event 的单 case 视图。
+2. 补齐模型与契约测试：
+   - 新增 `CaseCreateRequest` 合同解析测试。
+   - 新增 case 创建幂等、case 已存在冲突、case 详情聚合、case 缺失 404 的路由测试。
+3. 验证结果：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_phase_final_contract_models.py` 通过。
+   - `cd ai_judge_service && ../scripts/py -m pytest -q` 通过。
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-judge-core-unification（执行增量-1）
+
+1. 新增统一编排核心：
+   - 新增 `JudgeCoreOrchestrator`，统一 `case_built/running/reported/review_required/failed` 状态推进与事件字段。
+   - 统一注入 `judgeCoreStage/judgeCoreVersion` 到 workflow 事件，形成稳定 stage 语义。
+2. 服务接入改造：
+   - `app_factory` 中 case 创建、phase/final dispatch、review decision 的状态推进统一接入 `JudgeCoreOrchestrator`。
+   - review approve/reject 进入显式 stage：`review_approved/review_rejected`。
+3. 测试补齐：
+   - 新增 `tests/test_judge_core.py` 覆盖 Judge Core 主流程状态机行为。
+   - 在 `tests/test_app_factory.py` 增加 `judgeCoreStage` 贯通断言。
+4. 验证结果：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_core.py tests/test_app_factory.py` 通过。
+   - `cd ai_judge_service && ../scripts/py -m pytest -q` 通过。
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-judge-core-unification（执行增量-2）
+
+1. workflow 事件能力补齐：
+   - 为 workflow 增加“追加事件但不改状态”的通道（`append_event`），用于非状态跃迁语义留痕。
+   - replay 事件新增标准事件类型：`replay_marked`。
+2. Judge Core replay 语义统一：
+   - `JudgeCoreOrchestrator` 新增 replay 编排入口，统一写入 `judgeCoreStage=replay_computed` 与 `judgeCoreVersion=v1`。
+   - `/internal/judge/cases/{case_id}/replay` 接入该入口，完成 replay 历史与 workflow 事件双留痕。
+3. case 详情展示增强：
+   - `/internal/judge/cases/{case_id}` 新增 `judgeCore` 视图（`stage/version/eventSeq`），统一对外展示核心编排阶段。
+4. 测试补齐：
+   - `tests/test_judge_core.py` 新增 replay 事件语义测试。
+   - `tests/test_workflow_orchestrator.py` 新增 append_event 行为测试。
+   - `tests/test_app_factory.py` 新增 replay 事件与 `judgeCore` 展示断言。
+5. 验证结果：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_core.py tests/test_app_factory.py tests/test_workflow_orchestrator.py` 通过。
+   - `cd ai_judge_service && ../scripts/py -m pytest -q` 通过。
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-contract-hardening（执行增量-1）
+
+1. verdict contract 同构输出：
+   - 新增 `build_verdict_contract` 统一抽取 `winner/proScore/conScore/dimensionScores/debateSummary/sideAnalysis/verdictReason/verdictEvidenceRefs/fairnessSummary/auditAlerts/errorCodes/degradationLevel/needsDrawVote/reviewRequired`。
+   - `GET /internal/judge/cases/{case_id}`、`GET /internal/judge/cases/{case_id}/trace`、`POST /internal/judge/cases/{case_id}/replay` 增加 `verdictContract` 输出，降低跨接口字段歧义。
+2. replay 合同阻断语义补齐：
+   - replay `dispatch_type=final` 重算后执行 final 合同校验；
+   - 缺失关键字段时返回 `409 replay_final_contract_violation`，并阻断 replay 记录落库与 replay 事件追加。
+3. 测试补齐：
+   - `tests/test_app_factory.py` 增加 `verdictContract` 字段断言与 replay-final 合同阻断测试。
+   - `tests/test_replay_audit_ops.py` 增加 `verdictContract` 构建断言。
+4. 验证结果：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_replay_audit_ops.py` 通过。
+   - `cd ai_judge_service && ../scripts/py -m pytest -q` 通过。
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-contract-hardening（执行增量-2）
+
+1. 失败链路错误契约统一：
+   - phase/final callback 失败与 failed callback 失败分支统一改为 `_with_error_contract(...)`。
+   - receipt 统一输出 `errorCode/errorMessage/error{code,message,dispatchType,traceId,retryable,category,details}`。
+2. trace/workflow 失败语义补齐：
+   - workflow failed 事件统一注入 `error` 契约对象，与 receipt/trace 失败口径一致。
+3. 测试补齐：
+   - 扩展 `tests/test_app_factory.py`，覆盖 phase/final callback 失败、final failed callback 失败、blindization 拒绝、final contract blocked 的 `error` 字段断言。
+4. 验证结果：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py` 通过。
+   - `cd ai_judge_service && ../scripts/py -m pytest -q` 通过。
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-cross-layer-sync（执行增量-1）
+
+1. callback 路由与 OpenAPI 硬切为 `cases`：
+   - `chat_server` internal ai callback route 从 `/judge/v3/{phase|final}/jobs/:id/{report|failed}` 切为 `/judge/v3/{phase|final}/cases/:id/{report|failed}`。
+   - `handlers/ai_internal.rs` 对应 `utoipa` path 同步切换到 `/api/internal/ai/judge/v3/{phase|final}/cases/{id}/{report|failed}`。
+2. dispatch 契约同步到 case 语义：
+   - `AiJudgePhaseDispatchRequest/AiJudgeFinalDispatchRequest` 字段从 `job_id` 硬切到 `case_id`。
+   - dispatch 响应解析字段从 `jobId` 硬切到 `caseId`，并按 `case_id` 校验响应一致性。
+3. 验证结果：
+   - `cd chat && cargo test -p chat-server` 通过。
+   - `cd chat && cargo test -p chat-server --no-run` 通过。
+   - `cd chat && cargo test -p chat-server judge_dispatch -- --nocapture` 通过。
+   - `cd chat && cargo test -p chat-server ai_internal -- --nocapture` 通过。
+
+### 2026-04-14 | ai-judge-cross-layer-sync（执行增量-2）
+
+1. ops/replay 契约硬切为 `case`：
+   - replay/ops 相关 DTO 从 `job_id/jobId` 统一切为 `case_id/caseId`（preview/execute/actions/trace-replay item）。
+   - replay 推荐语义从 `replay_phase_job/replay_final_job` 切为 `replay_phase_case/replay_final_case`。
+2. 错误与文案语义同步：
+   - out-of-range 错误码从 `*_job_id_out_of_range` 统一切为 `*_case_id_out_of_range`。
+   - replay NotFound 文案从 `judge {phase|final} job id ...` 切为 `judge {phase|final} case id ...`。
+   - final failure 统计断言同步 `response_job_id_mismatch -> response_case_id_mismatch`。
+3. handler 与测试同步：
+   - `handlers/debate_ops.rs` replay 查询/日志字段统一到 `case_id`。
+   - `handlers/debate.rs` replay 路由测试入参/断言统一到 `caseId/case_id`。
+   - `models/judge/tests/request_judge_report_query.rs` replay/failure-stats/trace-replay 断言同步完成。
+4. 验证结果：
+   - `cd chat && cargo test -p chat-server --no-run` 通过。
+   - `cd chat && cargo test -p chat-server judge_replay -- --nocapture` 通过。
+   - `cd chat && cargo test -p chat-server request_judge_report_query -- --nocapture` 通过。
+   - `cd chat && cargo test -p chat-server` 通过。
+   - `bash /Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/scripts/run_test_gate.sh --root /Users/panyihang/Documents/EchoIsle --mode full` 通过（需本机数据库连通）。
+   - `bash scripts/quality/harness_docs_lint.sh` 通过。
+
+### 2026-04-14 | ai-judge-case-evidence-view（执行增量-1）
+
+1. case 详情新增证据聚合视图：
+   - `GET /internal/judge/cases/{case_id}` 新增 `caseEvidence` 字段。
+   - 聚合输出包含 `claimGraph`、`claimGraphSummary`、`policySnapshot`、`policyVersion`、`trustAttestation`、`fairnessSummary`、`verdictEvidenceRefs`、`auditSummary`。
+   - `auditSummary` 统一输出 `alertCount/auditAlerts/errorCodes/degradationLevel`，并增加 `hasClaimGraph/hasTrustAttestation` 快速布尔标记。
+2. 用例补齐：
+   - `tests/test_app_factory.py` 的 case 详情主链用例新增 `caseEvidence` 断言，覆盖 policy/trust/fairness/audit 聚合结果。
+3. 验证结果：
+   - `cd ai_judge_service && /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_app_factory.py` 通过。
+   - `cd ai_judge_service && /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q` 通过。
+   - `cd ai_judge_service && /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m ruff check app tests` 通过。
+
+### 2026-04-14 | ai-judge-runtime-ops-pack（执行增量-1）
+
+1. 新增一键 runtime 收口包脚本：
+   - 新增 `scripts/harness/ai_judge_runtime_ops_pack.sh`，按顺序串联：
+     1) `ai_judge_fairness_benchmark_freeze.sh`
+     2) `ai_judge_runtime_sla_freeze.sh`
+     3) `ai_judge_real_env_evidence_closure.sh`
+   - 统一输出 pack 状态：`pass/local_reference_ready/threshold_violation/pending_data/env_blocked/evidence_missing/stage_failed/mixed`。
+2. 固定摘要工件路径：
+   - 默认写入 `docs/loadtest/evidence/ai_judge_runtime_ops_pack.env` 与 `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`。
+   - 同时输出 run-summary 到 `artifacts/harness/*-ai-judge-runtime-ops-pack.summary.{json,md}`。
+3. 新增脚本测试覆盖四类关键状态：
+   - 新增 `scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`。
+   - 覆盖 `env_blocked`、`local_reference_ready`、`pass`、`threshold_violation` 场景。
+4. 验证结果：
+   - `bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh` 通过。
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` 通过（当前本机结果：`local_reference_ready`）。
+
+### 2026-04-14 | ai-judge-doc-governance-refresh（执行增量-1）
+
+1. 阶段收口脚本去旧硬编码：
+   - `scripts/harness/ai_judge_stage_closure_execute.sh` 新增“下一开发模块建议”提取逻辑，不再强绑定 `ai-judge-p5-real-calibration-on-env`。
+   - `todo` 写入改为动态识别 `on-env/real-env` 模块，统一追加环境阻塞项。
+   - 收口后计划模板主线改为 `AI_judge_service 下一阶段（待规划）`，默认建议切到 `ai-judge-next-iteration-planning`。
+2. 收口草案脚本同步通用化：
+   - `scripts/harness/ai_judge_stage_closure_draft.sh` 的环境阻塞候选改为通用文案与通用来源模块，不再写死 `p5` 语义。
+3. 映射文档同步更新：
+   - 更新 `AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md` 的主链完成结论与下一步优先级，改为与 P7 当前轨迹一致。
+4. 测试与校验结果：
+   - `bash scripts/harness/tests/test_ai_judge_stage_closure_draft.sh` 通过。
+   - `bash scripts/harness/tests/test_ai_judge_stage_closure_execute.sh` 通过。
+   - `bash scripts/quality/harness_docs_lint.sh` 通过。
+
+### 2026-04-14 | ai-judge-stage-closure-evidence（执行增量-1）
+
+1. 新增阶段收口证据脚本：
+   - 新增 `scripts/harness/ai_judge_stage_closure_evidence.sh`。
+   - 脚本执行 `ai_judge_stage_closure_draft.sh` 产出候选统计，并统一关联 `ai_judge_runtime_ops_pack` 证据状态。
+   - 统一输出状态：`pass/pending_data/evidence_missing/stage_failed`。
+2. 固定证据输出路径：
+   - 默认写入 `docs/loadtest/evidence/ai_judge_stage_closure_evidence.env` 与 `docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`。
+   - 同步输出 run-summary 到 `artifacts/harness/*-ai-judge-stage-closure-evidence.summary.{json,md}`。
+3. 新增脚本测试：
+   - 新增 `scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh`。
+   - 覆盖 `pass`（runtime pack 已关联）、`pending_data`（runtime pack 缺失）、`evidence_missing`（收口候选为空）三类场景。
+4. 验证结果：
+   - `bash scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh` 通过。
+
+### 2026-04-14 | ai-judge-runtime-ops-pack（执行增量-2）
+
+1. runtime ops pack 接入收口证据联动：
+   - `scripts/harness/ai_judge_runtime_ops_pack.sh` 新增第四阶段 `stage_closure_evidence`。
+   - pack 在前三阶段完成后先产出预回执，再调用 `ai_judge_stage_closure_evidence.sh`，最终回写统一状态与工件。
+2. pack 契约扩展：
+   - 新增参数 `--stage-closure-evidence-script`、`--stage-closure-plan-doc`、`--stage-closure-draft-script`。
+   - pack 输出新增 `STAGE_CLOSURE_EVIDENCE_STATUS/EXIT_CODE`，并同步到 env/doc/json/md 摘要。
+3. 用例补齐：
+   - `scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh` 新增 stage closure evidence 联动断言，覆盖 `env_blocked/local_reference_ready/pass/threshold_violation` 四类场景下的联动结果。
+4. 验证结果：
+   - `bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh` 通过。
+   - `bash scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh` 通过。
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` 通过（当前本机结果：`local_reference_ready`，且 `stage_closure_evidence_status=pass`）。
+
+### 2026-04-14 | ai-judge-real-env-window-closure（执行增量-1）
+
+1. 新增真实环境窗口总控脚本：
+   - 新增 `scripts/harness/ai_judge_real_env_window_closure.sh`。
+   - 统一串联 `ai_judge_p5_real_calibration_on_env.sh` 与 `ai_judge_runtime_ops_pack.sh`，并输出统一收口状态：
+     `pass/local_reference_ready/threshold_violation/pending_real_evidence/env_blocked/evidence_missing/stage_failed/mixed`。
+2. 完整透传 runtime ops 依赖脚本：
+   - 总控新增并透传 `--fairness-script`、`--runtime-sla-script`、`--real-env-closure-script`、`--stage-closure-evidence-script`，避免临时 root 场景下脚本路径解析失败。
+   - 修复后 `runtime_ops_pack` 在 blocked/local/pass/violation 场景均可正确给出 pack 状态，不再出现 `stage_failed(127)` 假失败。
+3. 新增总控测试脚本：
+   - 新增 `scripts/harness/tests/test_ai_judge_real_env_window_closure.sh`。
+   - 覆盖 `env_blocked/pass/threshold_violation/pending_real_evidence/local_reference_ready` 五类场景，并断言 stdout/json/md 核心输出。
+4. 验证结果：
+   - `bash scripts/harness/tests/test_ai_judge_real_env_window_closure.sh` 通过。
+   - `bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh` 通过。
+   - `bash scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh` 通过。
+   - `bash scripts/quality/harness_docs_lint.sh` 通过。

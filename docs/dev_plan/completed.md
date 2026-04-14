@@ -253,3 +253,16 @@
 | ai-judge-p5-calibration-prep | AI judge 平台化重构阶段主体已完成（进行中（prep 已完成）） | artifacts/harness/*-ai-judge-p5-calibration-prep.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-13） | ai-judge-p5-real-calibration-on-env |
 | ai-judge-evidence-gap-remediation | AI judge 平台化重构阶段主体已完成（进行中（phase 已完成）） | artifacts/harness/*-ai-judge-evidence-gap-remediation.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-13） | （无） |
 | ai-judge-stage-closure-draft | AI judge 平台化重构阶段主体已完成（进行中（phase 已完成）） | artifacts/harness/*-ai-judge-stage-closure-draft.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-13） | （无） |
+
+### B18. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| ai-judge-cases-hard-cut | AI judge 平台化重构阶段主体已完成（已完成（phase1 + phase2）） | artifacts/harness/*-ai-judge-cases-hard-cut.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-judge-core-unification | AI judge 平台化重构阶段主体已完成（已完成（phase1 + phase2）） | artifacts/harness/*-ai-judge-judge-core-unification.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-contract-hardening | AI judge 平台化重构阶段主体已完成（已完成（phase1 + phase2）） | artifacts/harness/*-ai-judge-contract-hardening.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-cross-layer-sync | AI judge 平台化重构阶段主体已完成（已完成（phase1 + phase2）） | artifacts/harness/*-ai-judge-cross-layer-sync.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-case-evidence-view | AI judge 平台化重构阶段主体已完成（已完成（phase1）） | artifacts/harness/*-ai-judge-case-evidence-view.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-runtime-ops-pack | AI judge 平台化重构阶段主体已完成（已完成（phase1 + phase2）） | artifacts/harness/*-ai-judge-runtime-ops-pack.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-doc-governance-refresh | AI judge 平台化重构阶段主体已完成（已完成（phase1）） | artifacts/harness/*-ai-judge-doc-governance-refresh.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-stage-closure-evidence | AI judge 平台化重构阶段主体已完成（已完成（phase1）） | artifacts/harness/*-ai-judge-stage-closure-evidence.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+| ai-judge-real-env-window-closure | AI judge 平台化重构阶段主体已完成（已完成（phase1）） | artifacts/harness/*-ai-judge-real-env-window-closure.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
