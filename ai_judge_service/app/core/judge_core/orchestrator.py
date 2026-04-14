@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.workflow import WorkflowOrchestrator
-from app.domain.workflow import WorkflowJob
+from app.domain.workflow import WORKFLOW_EVENT_REPLAY_MARKED, WorkflowJob
 
 JUDGE_CORE_VERSION = "v1"
 JUDGE_CORE_STAGE_CASE_BUILT = "case_built"
@@ -13,6 +13,7 @@ JUDGE_CORE_STAGE_REVIEW_REQUIRED = "review_required"
 JUDGE_CORE_STAGE_FAILED = "failed"
 JUDGE_CORE_STAGE_REVIEW_APPROVED = "review_approved"
 JUDGE_CORE_STAGE_REVIEW_REJECTED = "review_rejected"
+JUDGE_CORE_STAGE_REPLAY_COMPUTED = "replay_computed"
 
 
 class JudgeCoreOrchestrator:
@@ -110,6 +111,24 @@ class JudgeCoreOrchestrator:
             job_id=job_id,
             error_code=error_code,
             error_message=error_message,
+            event_payload=payload,
+        )
+
+    async def mark_replay(
+        self,
+        *,
+        job_id: int,
+        dispatch_type: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        payload = self._build_event_payload(
+            dispatch_type=dispatch_type,
+            stage=JUDGE_CORE_STAGE_REPLAY_COMPUTED,
+            event_payload=event_payload,
+        )
+        await self._workflow_orchestrator.append_event(
+            job_id=job_id,
+            event_type=WORKFLOW_EVENT_REPLAY_MARKED,
             event_payload=payload,
         )
 

@@ -98,6 +98,29 @@ class PostgresWorkflowStore(WorkflowPort):
                 )
             return self._to_job(row)
 
+    async def append_event(
+        self,
+        *,
+        job_id: int,
+        event_type: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowEvent:
+        now = _utcnow()
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(JudgeJobModel, job_id)
+                if row is None:
+                    raise LookupError(f"workflow job not found: job_id={job_id}")
+                row.updated_at = now
+                event_row = await self._append_event_locked(
+                    session=session,
+                    job_id=job_id,
+                    event_type=event_type,
+                    event_payload=event_payload,
+                    created_at=now,
+                )
+            return self._to_event(event_row)
+
     async def get_job(self, *, job_id: int) -> WorkflowJob | None:
         async with self._session_factory() as session:
             row = await session.get(JudgeJobModel, job_id)
@@ -140,7 +163,7 @@ class PostgresWorkflowStore(WorkflowPort):
         event_type: str,
         event_payload: dict[str, Any] | None,
         created_at: datetime,
-    ) -> None:
+    ) -> JudgeJobEventModel:
         next_seq_stmt = select(func.max(JudgeJobEventModel.event_seq)).where(
             JudgeJobEventModel.job_id == job_id
         )
@@ -153,6 +176,8 @@ class PostgresWorkflowStore(WorkflowPort):
             created_at=created_at,
         )
         session.add(row)
+        await session.flush()
+        return row
 
     def _to_job(self, row: JudgeJobModel) -> WorkflowJob:
         return WorkflowJob(

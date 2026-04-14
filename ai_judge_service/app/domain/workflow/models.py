@@ -22,6 +22,7 @@ WORKFLOW_STATUSES = {
 
 WORKFLOW_EVENT_REGISTERED = "job_registered"
 WORKFLOW_EVENT_STATUS_CHANGED = "status_changed"
+WORKFLOW_EVENT_REPLAY_MARKED = "replay_marked"
 
 
 def utcnow() -> datetime:

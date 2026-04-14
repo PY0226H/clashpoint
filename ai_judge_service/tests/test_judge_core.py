@@ -136,6 +136,40 @@ class JudgeCoreOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1].payload.get("errorCode"), "phase_callback_failed")
         self.assertEqual(events[-1].payload.get("callbackStatus"), "failed_reported")
 
+    async def test_judge_core_should_append_replay_event_without_status_transition(self) -> None:
+        await self._judge_core.register_running(
+            job=WorkflowJob(
+                job_id=9205,
+                dispatch_type="final",
+                trace_id="trace-9205",
+                status=WORKFLOW_STATUS_QUEUED,
+            ),
+            event_payload={"source": "unit-test"},
+        )
+        completed = await self._judge_core.mark_reported(
+            job_id=9205,
+            dispatch_type="final",
+            review_required=False,
+            event_payload={"winner": "pro"},
+        )
+        self.assertEqual(completed.status, WORKFLOW_STATUS_COMPLETED)
+
+        await self._judge_core.mark_replay(
+            job_id=9205,
+            dispatch_type="final",
+            event_payload={"winner": "draw", "traceId": "trace-9205"},
+        )
+
+        current = await self._workflow_orchestrator.get_job(job_id=9205)
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(current.status, WORKFLOW_STATUS_COMPLETED)
+        events = await self._workflow_orchestrator.list_events(job_id=9205)
+        self.assertEqual(events[-1].event_type, "replay_marked")
+        self.assertEqual(events[-1].payload.get("judgeCoreStage"), "replay_computed")
+        self.assertEqual(events[-1].payload.get("dispatchType"), "final")
+        self.assertEqual(events[-1].payload.get("winner"), "draw")
+
 
 if __name__ == "__main__":
     unittest.main()

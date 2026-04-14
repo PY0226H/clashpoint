@@ -23,6 +23,14 @@ class WorkflowPort(Protocol):
         event_payload: dict[str, Any] | None = None,
     ) -> WorkflowJob: ...
 
+    async def append_event(
+        self,
+        *,
+        job_id: int,
+        event_type: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowEvent: ...
+
     async def get_job(self, *, job_id: int) -> WorkflowJob | None: ...
 
     async def list_jobs(

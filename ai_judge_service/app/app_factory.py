@@ -54,7 +54,11 @@ from .callback_client import (
     callback_phase_failed,
     callback_phase_report,
 )
-from .core.judge_core import JudgeCoreOrchestrator
+from .core.judge_core import (
+    JUDGE_CORE_STAGE_REPLAY_COMPUTED,
+    JUDGE_CORE_VERSION,
+    JudgeCoreOrchestrator,
+)
 from .domain.facts import (
     AuditAlert as FactAuditAlert,
 )
@@ -269,6 +273,44 @@ def _normalize_workflow_status(status: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _build_judge_core_view(
+    *,
+    workflow_job: WorkflowJob | None,
+    workflow_events: list[Any],
+) -> dict[str, Any] | None:
+    latest_stage: str | None = None
+    latest_version: str | None = None
+    latest_event_seq: int | None = None
+    for event in reversed(workflow_events):
+        payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+        stage = str(payload.get("judgeCoreStage") or "").strip().lower()
+        if not stage:
+            continue
+        latest_stage = stage
+        latest_version = str(payload.get("judgeCoreVersion") or "").strip() or None
+        latest_event_seq = int(getattr(event, "event_seq", 0) or 0)
+        break
+    if latest_stage is None and workflow_job is not None:
+        status = str(workflow_job.status or "").strip().lower()
+        fallback_by_status = {
+            "queued": "queued",
+            "case_built": "case_built",
+            "running": "running",
+            "review_required": "review_required",
+            "completed": "reported",
+            "failed": "failed",
+        }
+        latest_stage = fallback_by_status.get(status)
+        latest_version = JUDGE_CORE_VERSION if latest_stage is not None else None
+    if latest_stage is None:
+        return None
+    return {
+        "stage": latest_stage,
+        "version": latest_version or JUDGE_CORE_VERSION,
+        "eventSeq": latest_event_seq,
+    }
 
 
 def _normalize_key_token(value: Any) -> str:
@@ -899,6 +941,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             stage=failed_stage,
             event_payload=payload,
         )
+
+    async def _workflow_mark_replay(
+        *,
+        job_id: int,
+        dispatch_type: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        await _ensure_workflow_schema_ready()
+        payload = dict(event_payload or {})
+        try:
+            await judge_core.mark_replay(
+                job_id=job_id,
+                dispatch_type=dispatch_type,
+                event_payload=payload,
+            )
+        except LookupError:
+            return
 
     async def _workflow_get_job(*, job_id: int) -> WorkflowJob | None:
         await _ensure_workflow_schema_ready()
@@ -2101,6 +2160,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             or final_response.get("callbackError")
             or phase_response.get("callbackError")
         )
+        judge_core_view = _build_judge_core_view(
+            workflow_job=workflow_job,
+            workflow_events=workflow_events,
+        )
         if replay_records:
             replay_items = [
                 {
@@ -2154,6 +2217,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "reviewRequired": bool(report_payload.get("reviewRequired")),
             "callbackStatus": callback_status,
             "callbackError": callback_error,
+            "judgeCore": judge_core_view,
             "events": [
                 {
                     "eventSeq": item.event_seq,
@@ -2348,6 +2412,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             provider=runtime.settings.provider,
             report_payload=report_payload,
         )
+        await _workflow_mark_replay(
+            job_id=case_id,
+            dispatch_type=chosen_dispatch_type,
+            event_payload={
+                "traceId": trace_id,
+                "winner": winner,
+                "needsDrawVote": needs_draw_vote,
+                "dispatchType": chosen_dispatch_type,
+            },
+        )
         replayed_at = replay_row.created_at.isoformat()
 
         return {
@@ -2358,6 +2432,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "winner": winner,
             "needsDrawVote": needs_draw_vote,
             "traceId": trace_id,
+            "judgeCoreStage": JUDGE_CORE_STAGE_REPLAY_COMPUTED,
+            "judgeCoreVersion": JUDGE_CORE_VERSION,
         }
 
     @app.post("/internal/judge/cases/{case_id}/attestation/verify")

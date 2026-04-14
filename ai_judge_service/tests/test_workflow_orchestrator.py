@@ -133,3 +133,26 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             limit=20,
         )
         self.assertEqual([item.job_id for item in review_jobs], [9010])
+
+    async def test_orchestrator_should_append_event_without_changing_status(self) -> None:
+        await self._orchestrator.register_job(
+            job=WorkflowJob(
+                job_id=9012,
+                dispatch_type="final",
+                trace_id="trace-9012",
+                status=WORKFLOW_STATUS_QUEUED,
+            )
+        )
+        await self._orchestrator.mark_running(job_id=9012)
+        await self._orchestrator.append_event(
+            job_id=9012,
+            event_type="replay_marked",
+            event_payload={"judgeCoreStage": "replay_computed"},
+        )
+        current = await self._orchestrator.get_job(job_id=9012)
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(current.status, "running")
+        events = await self._orchestrator.list_events(job_id=9012)
+        self.assertEqual(events[-1].event_type, "replay_marked")
+        self.assertEqual(events[-1].payload.get("judgeCoreStage"), "replay_computed")

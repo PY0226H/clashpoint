@@ -369,6 +369,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(detail_payload["receipts"]["final"])
         self.assertIn(detail_payload["winner"], {"pro", "con", "draw"})
         self.assertIn("trustAttestation", detail_payload["reportPayload"])
+        self.assertEqual(detail_payload["judgeCore"]["stage"], "reported")
+        self.assertEqual(detail_payload["judgeCore"]["version"], "v1")
         self.assertGreaterEqual(len(detail_payload["events"]), 2)
 
     async def test_case_detail_route_should_return_404_when_case_missing(self) -> None:
@@ -891,7 +893,12 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("reportPayload", replay_payload)
         self.assertIn("debateSummary", replay_payload["reportPayload"])
         self.assertIn("trustAttestation", replay_payload["reportPayload"])
+        self.assertEqual(replay_payload["judgeCoreStage"], "replay_computed")
+        self.assertEqual(replay_payload["judgeCoreVersion"], "v1")
         self.assertEqual(callback_total_before_replay, len(phase_calls) + len(final_calls))
+        replay_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=5001)
+        self.assertEqual(replay_events[-1].event_type, "replay_marked")
+        self.assertEqual(replay_events[-1].payload.get("judgeCoreStage"), "replay_computed")
 
     async def test_attestation_verify_should_use_auto_dispatch_and_return_verified(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -1092,6 +1099,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(replay_rows), before_count + 1)
         self.assertEqual(replay_rows[0].dispatch_type, "final")
         self.assertIn(replay_rows[0].winner, {"pro", "con", "draw"})
+        replay_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7101)
+        self.assertEqual(replay_events[-1].event_type, "replay_marked")
+        self.assertEqual(replay_events[-1].payload.get("judgeCoreStage"), "replay_computed")
 
     async def test_alert_ack_should_sync_status_to_fact_repository(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:

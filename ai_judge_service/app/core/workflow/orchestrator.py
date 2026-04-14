@@ -147,6 +147,19 @@ class WorkflowOrchestrator:
     async def list_events(self, *, job_id: int):
         return await self._workflow_port.list_events(job_id=job_id)
 
+    async def append_event(
+        self,
+        *,
+        job_id: int,
+        event_type: str,
+        event_payload: dict[str, Any] | None = None,
+    ):
+        return await self._workflow_port.append_event(
+            job_id=job_id,
+            event_type=event_type,
+            event_payload=event_payload,
+        )
+
     async def _transition(
         self,
         *,
