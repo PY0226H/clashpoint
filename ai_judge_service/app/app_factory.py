@@ -64,7 +64,7 @@ from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
 from .domain.workflow import WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUSES, WorkflowJob
-from .models import FinalDispatchRequest, PhaseDispatchRequest
+from .models import CaseCreateRequest, FinalDispatchRequest, PhaseDispatchRequest
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
     Settings,
@@ -834,6 +834,22 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             event_payload=payload,
         )
 
+    async def _workflow_register_and_mark_case_built(
+        *,
+        job: WorkflowJob,
+        event_payload: dict[str, Any] | None = None,
+    ) -> WorkflowJob:
+        payload = dict(event_payload or {})
+        await _ensure_workflow_schema_ready()
+        await runtime.workflow_runtime.orchestrator.register_job(
+            job=job,
+            event_payload=payload,
+        )
+        return await runtime.workflow_runtime.orchestrator.mark_case_built(
+            job_id=job.job_id,
+            event_payload=payload,
+        )
+
     async def _workflow_mark_completed(
         *,
         job_id: int,
@@ -923,6 +939,98 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return {
             "item": _serialize_policy_profile(runtime, profile=profile),
         }
+
+    @app.post("/internal/judge/cases")
+    async def create_judge_case(
+        request: Request,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        try:
+            raw_payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(raw_payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+        try:
+            parsed = CaseCreateRequest.model_validate(raw_payload)
+        except ValidationError as err:
+            raise HTTPException(status_code=422, detail=err.errors()) from err
+        replayed = _resolve_idempotency_or_raise(
+            runtime=runtime,
+            key=parsed.idempotency_key,
+            job_id=parsed.case_id,
+            conflict_detail="idempotency_conflict:case_create",
+        )
+        if replayed is not None:
+            return replayed
+        policy_profile = _resolve_policy_profile_or_raise(
+            runtime=runtime,
+            judge_policy_version=parsed.judge_policy_version,
+            rubric_version=parsed.rubric_version,
+            topic_domain=parsed.topic_domain,
+        )
+        existing_job = await _workflow_get_job(job_id=parsed.case_id)
+        if existing_job is not None:
+            raise HTTPException(status_code=409, detail="case_already_exists")
+
+        request_payload = parsed.model_dump(mode="json")
+        workflow_job = _build_workflow_job(
+            dispatch_type="phase",
+            job_id=parsed.case_id,
+            trace_id=parsed.trace_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            idempotency_key=parsed.idempotency_key,
+            rubric_version=parsed.rubric_version,
+            judge_policy_version=parsed.judge_policy_version,
+            topic_domain=parsed.topic_domain,
+            retrieval_profile=parsed.retrieval_profile,
+        )
+        transitioned_job = await _workflow_register_and_mark_case_built(
+            job=workflow_job,
+            event_payload={
+                "dispatchType": "case",
+                "scopeId": parsed.scope_id,
+                "sessionId": parsed.session_id,
+                "traceId": parsed.trace_id,
+                "policyVersion": policy_profile.version,
+                "caseStatus": "case_built",
+            },
+        )
+        response = {
+            "accepted": True,
+            "status": "case_built",
+            "caseId": parsed.case_id,
+            "scopeId": parsed.scope_id,
+            "sessionId": parsed.session_id,
+            "traceId": parsed.trace_id,
+            "idempotencyKey": parsed.idempotency_key,
+            "workflow": _serialize_workflow_job(transitioned_job),
+        }
+        runtime.trace_store.register_start(
+            job_id=parsed.case_id,
+            trace_id=parsed.trace_id,
+            request=request_payload,
+        )
+        runtime.trace_store.register_success(
+            job_id=parsed.case_id,
+            response=response,
+            callback_status="case_built",
+            report_summary=_build_trace_report_summary(
+                dispatch_type="case",
+                payload={},
+                callback_status="case_built",
+                callback_error=None,
+            ),
+        )
+        runtime.trace_store.set_idempotency_success(
+            key=parsed.idempotency_key,
+            job_id=parsed.case_id,
+            response=response,
+            ttl_secs=runtime.settings.idempotency_ttl_secs,
+        )
+        return response
 
     async def _handle_blindization_rejection(
         *,
@@ -1908,6 +2016,143 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         if item is None:
             raise HTTPException(status_code=404, detail="final_dispatch_receipt_not_found")
         return _serialize_dispatch_receipt(item)
+
+    @app.get("/internal/judge/cases/{case_id}")
+    async def get_judge_case(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        workflow_job = await _workflow_get_job(job_id=case_id)
+        workflow_events = (
+            await _workflow_list_events(job_id=case_id)
+            if workflow_job is not None
+            else []
+        )
+        final_receipt = await _get_dispatch_receipt(dispatch_type="final", job_id=case_id)
+        phase_receipt = await _get_dispatch_receipt(dispatch_type="phase", job_id=case_id)
+        trace = runtime.trace_store.get_trace(case_id)
+        replay_records = await _list_replay_records(job_id=case_id, limit=50)
+        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
+        if (
+            workflow_job is None
+            and final_receipt is None
+            and phase_receipt is None
+            and trace is None
+            and not replay_records
+            and not alerts
+        ):
+            raise HTTPException(status_code=404, detail="case_not_found")
+
+        report_summary = (
+            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+        )
+        final_response = (
+            final_receipt.response if final_receipt and isinstance(final_receipt.response, dict) else {}
+        )
+        phase_response = (
+            phase_receipt.response if phase_receipt and isinstance(phase_receipt.response, dict) else {}
+        )
+        summary_payload = (
+            report_summary.get("payload")
+            if isinstance(report_summary.get("payload"), dict)
+            else {}
+        )
+        final_report_payload = (
+            final_response.get("reportPayload")
+            if isinstance(final_response.get("reportPayload"), dict)
+            else {}
+        )
+        phase_report_payload = (
+            phase_response.get("reportPayload")
+            if isinstance(phase_response.get("reportPayload"), dict)
+            else {}
+        )
+        report_payload = final_report_payload or summary_payload or phase_report_payload
+        winner_raw = (
+            report_summary.get("winner")
+            or report_payload.get("winner")
+            or final_response.get("winner")
+            or phase_response.get("winner")
+        )
+        winner = str(winner_raw or "").strip().lower() or None
+        callback_status = (
+            report_summary.get("callbackStatus")
+            or (trace.callback_status if trace is not None else None)
+            or final_response.get("callbackStatus")
+            or phase_response.get("callbackStatus")
+        )
+        callback_error = (
+            report_summary.get("callbackError")
+            or (trace.callback_error if trace is not None else None)
+            or final_response.get("callbackError")
+            or phase_response.get("callbackError")
+        )
+        if replay_records:
+            replay_items = [
+                {
+                    "dispatchType": item.dispatch_type,
+                    "traceId": item.trace_id,
+                    "replayedAt": item.created_at.isoformat(),
+                    "winner": item.winner,
+                    "needsDrawVote": item.needs_draw_vote,
+                    "provider": item.provider,
+                }
+                for item in replay_records
+            ]
+        else:
+            replay_items = [
+                {
+                    "dispatchType": None,
+                    "traceId": trace.trace_id if trace is not None else None,
+                    "replayedAt": item.replayed_at.isoformat(),
+                    "winner": item.winner,
+                    "needsDrawVote": item.needs_draw_vote,
+                    "provider": item.provider,
+                }
+                for item in (trace.replays if trace is not None else [])
+            ]
+
+        return {
+            "caseId": case_id,
+            "workflow": _serialize_workflow_job(workflow_job) if workflow_job else None,
+            "trace": (
+                {
+                    "traceId": trace.trace_id,
+                    "status": trace.status,
+                    "createdAt": trace.created_at.isoformat(),
+                    "updatedAt": trace.updated_at.isoformat(),
+                }
+                if trace is not None
+                else None
+            ),
+            "receipts": {
+                "phase": _serialize_dispatch_receipt(phase_receipt) if phase_receipt else None,
+                "final": _serialize_dispatch_receipt(final_receipt) if final_receipt else None,
+            },
+            "latestDispatchType": "final" if final_receipt is not None else ("phase" if phase_receipt is not None else None),
+            "reportPayload": report_payload,
+            "winner": winner,
+            "needsDrawVote": (
+                bool(report_payload.get("needsDrawVote"))
+                if "needsDrawVote" in report_payload
+                else (winner == "draw" if winner is not None else None)
+            ),
+            "reviewRequired": bool(report_payload.get("reviewRequired")),
+            "callbackStatus": callback_status,
+            "callbackError": callback_error,
+            "events": [
+                {
+                    "eventSeq": item.event_seq,
+                    "eventType": item.event_type,
+                    "payload": item.payload,
+                    "createdAt": item.created_at.isoformat(),
+                }
+                for item in workflow_events
+            ],
+            "alerts": [_serialize_alert_item(item) for item in alerts],
+            "replays": replay_items,
+        }
 
     @app.get("/internal/judge/cases/{case_id}/trace")
     async def get_judge_job_trace(

@@ -56,6 +56,23 @@ class FinalDispatchRequest(BaseModel):
     idempotency_key: str
 
 
+class CaseCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    case_id: int
+    scope_id: int = Field(
+        default=1,
+        validation_alias=AliasChoices("scope_id", "scopeId"),
+        serialization_alias="scopeId",
+    )
+    session_id: int
+    rubric_version: str
+    judge_policy_version: str = "v3-default"
+    topic_domain: str = "default"
+    retrieval_profile: str = "hybrid_v1"
+    trace_id: str
+    idempotency_key: str
+
+
 class GroundedSummaryPayload(BaseModel):
     text: str
     message_ids: list[int] = []

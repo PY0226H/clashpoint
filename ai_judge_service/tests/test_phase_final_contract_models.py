@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models import (
+    CaseCreateRequest,
     FinalDispatchRequest,
     FinalReportInput,
     PhaseDispatchRequest,
@@ -10,6 +11,23 @@ from app.models import (
 
 
 class PhaseFinalContractModelsTests(unittest.TestCase):
+    def test_case_create_request_should_parse_required_fields(self) -> None:
+        payload = {
+            "case_id": 1201,
+            "scope_id": 1,
+            "session_id": 2001,
+            "rubric_version": "v3",
+            "judge_policy_version": "v3-default",
+            "topic_domain": "tft",
+            "retrieval_profile": "hybrid_v1",
+            "trace_id": "trace-case-1201",
+            "idempotency_key": "judge_case:1201",
+        }
+        req = CaseCreateRequest.model_validate(payload)
+        self.assertEqual(req.case_id, 1201)
+        self.assertEqual(req.scope_id, 1)
+        self.assertEqual(req.trace_id, "trace-case-1201")
+
     def test_phase_dispatch_request_should_parse_required_fields(self) -> None:
         now = datetime.now(timezone.utc)
         payload = {

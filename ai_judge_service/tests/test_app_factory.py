@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.app_factory import create_app, create_default_app, create_runtime, require_internal_key
-from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
+from app.models import (
+    CaseCreateRequest,
+    FinalDispatchRequest,
+    PhaseDispatchMessage,
+    PhaseDispatchRequest,
+)
 from app.settings import Settings
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
@@ -145,6 +150,31 @@ def _build_final_request(
     )
 
 
+def _build_case_create_request(
+    *,
+    case_id: int = 901,
+    idempotency_key: str = "case-key-901",
+    rubric_version: str = "v3",
+    judge_policy_version: str = "v3-default",
+) -> CaseCreateRequest:
+    return CaseCreateRequest(
+        case_id=case_id,
+        scope_id=1,
+        session_id=2,
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
+        topic_domain="tft",
+        retrieval_profile="hybrid_v1",
+        trace_id=f"trace-case-{case_id}",
+        idempotency_key=idempotency_key,
+    )
+
+
+def _unique_case_id(seed: int) -> int:
+    # 使用时间戳生成本地唯一 case_id，避免 sqlite 测试库跨命令复用导致冲突。
+    return int(datetime.now(timezone.utc).timestamp() * 1_000_000) + seed
+
+
 class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
     async def _post_json(
         self,
@@ -200,10 +230,158 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/internal/judge/v3/phase/dispatch", paths)
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
+        self.assertIn("/internal/judge/cases", paths)
+        self.assertIn("/internal/judge/cases/{case_id}", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
         self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
+
+    async def test_case_create_should_mark_case_built_and_support_idempotent_replay(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(11)
+        req = _build_case_create_request(
+            case_id=case_id,
+            idempotency_key=f"case:{case_id}",
+        )
+        first_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/cases",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(first_resp.status_code, 200)
+        first_payload = first_resp.json()
+        self.assertTrue(first_payload["accepted"])
+        self.assertEqual(first_payload["status"], "case_built")
+        self.assertEqual(first_payload["caseId"], case_id)
+        self.assertEqual(first_payload["workflow"]["status"], "case_built")
+
+        workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=case_id)
+        self.assertIsNotNone(workflow_job)
+        assert workflow_job is not None
+        self.assertEqual(workflow_job.status, "case_built")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=case_id)
+        self.assertEqual(
+            [row.event_type for row in workflow_events][-2:],
+            ["job_registered", "status_changed"],
+        )
+        self.assertEqual(workflow_events[-1].payload.get("toStatus"), "case_built")
+
+        replay_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/cases",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(replay_resp.status_code, 200)
+        self.assertTrue(replay_resp.json()["idempotentReplay"])
+
+    async def test_case_create_should_reject_existing_case_with_new_idempotency_key(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(22)
+        first_req = _build_case_create_request(
+            case_id=case_id,
+            idempotency_key=f"case:{case_id}:first",
+        )
+        first_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/cases",
+            payload=first_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(first_resp.status_code, 200)
+
+        second_req = _build_case_create_request(
+            case_id=case_id,
+            idempotency_key=f"case:{case_id}:second",
+        )
+        second_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/cases",
+            payload=second_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(second_resp.status_code, 409)
+        self.assertIn("case_already_exists", second_resp.text)
+
+    async def test_case_detail_route_should_aggregate_case_snapshot(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(33)
+        case_req = _build_case_create_request(
+            case_id=case_id,
+            idempotency_key=f"case:{case_id}",
+        )
+        case_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/cases",
+            payload=case_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(case_resp.status_code, 200)
+
+        phase_req = _build_phase_request(case_id=case_id, idempotency_key=f"phase:{case_id}")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(case_id=case_id, idempotency_key=f"final:{case_id}")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        detail_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(detail_resp.status_code, 200)
+        detail_payload = detail_resp.json()
+        self.assertEqual(detail_payload["caseId"], case_id)
+        self.assertEqual(detail_payload["workflow"]["status"], "completed")
+        self.assertEqual(detail_payload["latestDispatchType"], "final")
+        self.assertIsNotNone(detail_payload["receipts"]["phase"])
+        self.assertIsNotNone(detail_payload["receipts"]["final"])
+        self.assertIn(detail_payload["winner"], {"pro", "con", "draw"})
+        self.assertIn("trustAttestation", detail_payload["reportPayload"])
+        self.assertGreaterEqual(len(detail_payload["events"]), 2)
+
+    async def test_case_detail_route_should_return_404_when_case_missing(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        missing_resp = await self._get(
+            app=app,
+            path="/internal/judge/cases/999901",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(missing_resp.status_code, 404)
+        self.assertIn("case_not_found", missing_resp.text)
 
     async def test_policy_routes_should_return_default_registry_profile(self) -> None:
         runtime = create_runtime(settings=_build_settings())
