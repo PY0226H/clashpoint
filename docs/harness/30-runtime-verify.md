@@ -114,9 +114,10 @@ runtime SLA 冻结阶段使用专门脚本：
 runtime ops pack 阶段使用一键聚合脚本：
 
 1. `scripts/harness/ai_judge_runtime_ops_pack.sh`
-2. 串联执行 `fairness_benchmark_freeze`、`runtime_sla_freeze`、`real_env_evidence_closure`
+2. 串联执行 `fairness_benchmark_freeze`、`runtime_sla_freeze`、`real_env_evidence_closure`、`stage_closure_evidence`
 3. 统一输出 pack 状态：`pass/local_reference_ready/threshold_violation/pending_data/env_blocked/evidence_missing/stage_failed/mixed`
-4. 产出固定工件：
+4. 自动联动 `stage_closure_evidence`：把收口草案候选统计与 runtime pack 状态做同轮回填
+5. 产出固定工件：
    - `docs/loadtest/evidence/ai_judge_runtime_ops_pack.env`
    - `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
 
@@ -209,6 +210,12 @@ bash scripts/harness/ai_judge_runtime_ops_pack.sh \
   --allow-local-reference \
   --emit-json "artifacts/harness/manual-ai-judge-runtime-ops-pack.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-runtime-ops-pack.summary.md"
+
+bash scripts/harness/ai_judge_runtime_ops_pack.sh \
+  --stage-closure-plan-doc "docs/dev_plan/当前开发计划.md" \
+  --stage-closure-draft-script "scripts/harness/ai_judge_stage_closure_draft.sh" \
+  --emit-json "artifacts/harness/manual-ai-judge-runtime-ops-pack-phase2.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-runtime-ops-pack-phase2.summary.md"
 
 bash scripts/harness/ai_judge_stage_closure_evidence.sh \
   --emit-json "artifacts/harness/manual-ai-judge-stage-closure-evidence.summary.json" \

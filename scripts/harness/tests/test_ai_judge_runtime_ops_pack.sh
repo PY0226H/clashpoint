@@ -6,8 +6,10 @@ SCRIPT="$ROOT/scripts/harness/ai_judge_runtime_ops_pack.sh"
 FAIRNESS_SCRIPT="$ROOT/scripts/harness/ai_judge_fairness_benchmark_freeze.sh"
 RUNTIME_SLA_SCRIPT="$ROOT/scripts/harness/ai_judge_runtime_sla_freeze.sh"
 REAL_CLOSURE_SCRIPT="$ROOT/scripts/harness/ai_judge_real_env_evidence_closure.sh"
+STAGE_CLOSURE_SCRIPT="$ROOT/scripts/harness/ai_judge_stage_closure_evidence.sh"
+STAGE_CLOSURE_DRAFT_SCRIPT="$ROOT/scripts/harness/ai_judge_stage_closure_draft.sh"
 
-for path in "$SCRIPT" "$FAIRNESS_SCRIPT" "$RUNTIME_SLA_SCRIPT" "$REAL_CLOSURE_SCRIPT"; do
+for path in "$SCRIPT" "$FAIRNESS_SCRIPT" "$RUNTIME_SLA_SCRIPT" "$REAL_CLOSURE_SCRIPT" "$STAGE_CLOSURE_SCRIPT" "$STAGE_CLOSURE_DRAFT_SCRIPT"; do
   if [[ ! -x "$path" ]]; then
     chmod +x "$path"
   fi
@@ -145,14 +147,40 @@ seed_tracks_local() {
     "ATTESTATION_GAP=0"
 }
 
+seed_stage_closure_plan() {
+  local file="$1"
+  cat >"$file" <<'EOF_PLAN'
+# 当前开发计划
+
+### 已完成/未完成矩阵
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| ai-judge-runtime-ops-pack | P1 | 进行中（phase 已完成） | done |
+
+## 5. 延后事项（不阻塞当前阶段）
+
+1. 真实环境窗口校准待完成
+
+### 下一开发模块建议
+
+1. ai-judge-real-env-window-closure
+EOF_PLAN
+}
+
 run_pack() {
   local work="$1"
+  local plan_doc="$work/plan-stage-closure.md"
+  mkdir -p "$work"
+  seed_stage_closure_plan "$plan_doc"
   shift
   bash "$SCRIPT" \
     --root "$work" \
     --fairness-script "$FAIRNESS_SCRIPT" \
     --runtime-sla-script "$RUNTIME_SLA_SCRIPT" \
     --real-env-closure-script "$REAL_CLOSURE_SCRIPT" \
+    --stage-closure-evidence-script "$STAGE_CLOSURE_SCRIPT" \
+    --stage-closure-plan-doc "$plan_doc" \
+    --stage-closure-draft-script "$STAGE_CLOSURE_DRAFT_SCRIPT" \
     "$@"
 }
 
@@ -171,6 +199,7 @@ expect_contains "blocked status" "ai_judge_runtime_ops_pack_status: env_blocked"
 expect_contains "blocked fairness" "fairness_status: env_blocked" "$BLOCKED_STDOUT"
 expect_contains "blocked runtime" "runtime_sla_status: env_blocked" "$BLOCKED_STDOUT"
 expect_contains "blocked closure" "real_env_closure_status: env_blocked" "$BLOCKED_STDOUT"
+expect_contains "blocked stage closure" "stage_closure_evidence_status: pass" "$BLOCKED_STDOUT"
 
 # 场景2：local reference -> local_reference_ready
 WORK_LOCAL="$TMP_DIR/local"
@@ -189,6 +218,7 @@ expect_contains "local status" "ai_judge_runtime_ops_pack_status: local_referenc
 expect_contains "local fairness" "fairness_status: local_reference_frozen" "$LOCAL_STDOUT"
 expect_contains "local runtime" "runtime_sla_status: local_reference_frozen" "$LOCAL_STDOUT"
 expect_contains "local closure" "real_env_closure_status: local_reference_ready" "$LOCAL_STDOUT"
+expect_contains "local stage closure" "stage_closure_evidence_status: pass" "$LOCAL_STDOUT"
 
 # 场景3：real pass -> pass
 WORK_PASS="$TMP_DIR/pass"
@@ -205,6 +235,7 @@ expect_contains "pass status" "ai_judge_runtime_ops_pack_status: pass" "$PASS_ST
 expect_contains "pass fairness" "fairness_status: pass" "$PASS_STDOUT"
 expect_contains "pass runtime" "runtime_sla_status: pass" "$PASS_STDOUT"
 expect_contains "pass closure" "real_env_closure_status: pass" "$PASS_STDOUT"
+expect_contains "pass stage closure" "stage_closure_evidence_status: pass" "$PASS_STDOUT"
 
 # 场景4：real threshold violation -> threshold_violation
 WORK_VIOLATION="$TMP_DIR/violation"
@@ -220,5 +251,6 @@ run_pack "$WORK_VIOLATION" >"$VIOLATION_STDOUT"
 expect_contains "violation status" "ai_judge_runtime_ops_pack_status: threshold_violation" "$VIOLATION_STDOUT"
 expect_contains "violation fairness" "fairness_status: threshold_violation" "$VIOLATION_STDOUT"
 expect_contains "violation runtime" "runtime_sla_status: threshold_violation" "$VIOLATION_STDOUT"
+expect_contains "violation stage closure" "stage_closure_evidence_status: pass" "$VIOLATION_STDOUT"
 
 echo "all ai-judge runtime ops pack tests passed"

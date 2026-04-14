@@ -17,14 +17,19 @@ ALLOW_LOCAL_REFERENCE="${AI_JUDGE_ALLOW_LOCAL_REFERENCE:-false}"
 FAIRNESS_SCRIPT=""
 RUNTIME_SLA_SCRIPT=""
 REAL_ENV_CLOSURE_SCRIPT=""
+STAGE_CLOSURE_EVIDENCE_SCRIPT=""
+STAGE_CLOSURE_PLAN_DOC=""
+STAGE_CLOSURE_DRAFT_SCRIPT=""
 
 FAIRNESS_EXIT_CODE=0
 RUNTIME_SLA_EXIT_CODE=0
 REAL_ENV_CLOSURE_EXIT_CODE=0
+STAGE_CLOSURE_EVIDENCE_EXIT_CODE=0
 
 FAIRNESS_STATUS=""
 RUNTIME_SLA_STATUS=""
 REAL_ENV_CLOSURE_STATUS=""
+STAGE_CLOSURE_EVIDENCE_STATUS=""
 
 FAIRNESS_THRESHOLD_DECISION=""
 RUNTIME_SLA_THRESHOLD_DECISION=""
@@ -40,6 +45,9 @@ usage() {
     [--fairness-script <path>] \
     [--runtime-sla-script <path>] \
     [--real-env-closure-script <path>] \
+    [--stage-closure-evidence-script <path>] \
+    [--stage-closure-plan-doc <path>] \
+    [--stage-closure-draft-script <path>] \
     [--output-doc <path>] \
     [--output-env <path>] \
     [--emit-json <path>] \
@@ -50,6 +58,7 @@ usage() {
     1) fairness benchmark freeze
     2) runtime SLA freeze
     3) real-env evidence closure
+    4) stage closure evidence（草案联动）
   - 产出统一 pack 摘要，固定输出到 docs/loadtest/evidence（可覆盖）。
   - 输出状态：
     pass/local_reference_ready/threshold_violation/pending_data/env_blocked/evidence_missing/stage_failed/mixed。
@@ -157,6 +166,18 @@ parse_args() {
         REAL_ENV_CLOSURE_SCRIPT="${2:-}"
         shift 2
         ;;
+      --stage-closure-evidence-script)
+        STAGE_CLOSURE_EVIDENCE_SCRIPT="${2:-}"
+        shift 2
+        ;;
+      --stage-closure-plan-doc)
+        STAGE_CLOSURE_PLAN_DOC="${2:-}"
+        shift 2
+        ;;
+      --stage-closure-draft-script)
+        STAGE_CLOSURE_DRAFT_SCRIPT="${2:-}"
+        shift 2
+        ;;
       --output-doc)
         OUTPUT_DOC="${2:-}"
         shift 2
@@ -199,7 +220,10 @@ run_stage() {
   if [[ "$stage" == "real_env_closure" ]]; then
     cmd+=(--evidence-dir "$EVIDENCE_DIR")
   fi
-  if [[ "$ALLOW_LOCAL_REFERENCE" == "true" ]]; then
+  if [[ "$stage" == "stage_closure_evidence" ]]; then
+    cmd+=(--evidence-dir "$EVIDENCE_DIR" --plan-doc "$STAGE_CLOSURE_PLAN_DOC" --draft-script "$STAGE_CLOSURE_DRAFT_SCRIPT" --runtime-ops-env "$OUTPUT_ENV" --runtime-ops-doc "$OUTPUT_DOC")
+  fi
+  if [[ "$ALLOW_LOCAL_REFERENCE" == "true" && "$stage" != "stage_closure_evidence" ]]; then
     cmd+=(--allow-local-reference)
   fi
 
@@ -224,13 +248,13 @@ is_in_set() {
 }
 
 derive_pack_status() {
-  if [[ "$FAIRNESS_EXIT_CODE" != "0" || "$RUNTIME_SLA_EXIT_CODE" != "0" || "$REAL_ENV_CLOSURE_EXIT_CODE" != "0" ]]; then
+  if [[ "$FAIRNESS_EXIT_CODE" != "0" || "$RUNTIME_SLA_EXIT_CODE" != "0" || "$REAL_ENV_CLOSURE_EXIT_CODE" != "0" || "$STAGE_CLOSURE_EVIDENCE_EXIT_CODE" != "0" ]]; then
     STATUS="stage_failed"
     return
   fi
 
   local -a statuses
-  statuses=("$FAIRNESS_STATUS" "$RUNTIME_SLA_STATUS" "$REAL_ENV_CLOSURE_STATUS")
+  statuses=("$FAIRNESS_STATUS" "$RUNTIME_SLA_STATUS" "$REAL_ENV_CLOSURE_STATUS" "$STAGE_CLOSURE_EVIDENCE_STATUS")
 
   local status
   for status in "${statuses[@]}"; do
@@ -323,11 +347,13 @@ LOCAL_REFERENCE_ENV_READY=$local_ready
 FAIRNESS_STATUS=$FAIRNESS_STATUS
 RUNTIME_SLA_STATUS=$RUNTIME_SLA_STATUS
 REAL_ENV_CLOSURE_STATUS=$REAL_ENV_CLOSURE_STATUS
+STAGE_CLOSURE_EVIDENCE_STATUS=$STAGE_CLOSURE_EVIDENCE_STATUS
 FAIRNESS_THRESHOLD_DECISION=$FAIRNESS_THRESHOLD_DECISION
 RUNTIME_SLA_THRESHOLD_DECISION=$RUNTIME_SLA_THRESHOLD_DECISION
 FAIRNESS_EXIT_CODE=$FAIRNESS_EXIT_CODE
 RUNTIME_SLA_EXIT_CODE=$RUNTIME_SLA_EXIT_CODE
 REAL_ENV_CLOSURE_EXIT_CODE=$REAL_ENV_CLOSURE_EXIT_CODE
+STAGE_CLOSURE_EVIDENCE_EXIT_CODE=$STAGE_CLOSURE_EVIDENCE_EXIT_CODE
 EOF_ENV
 }
 
@@ -348,6 +374,7 @@ write_output_doc() {
 | fairness benchmark freeze | \`$FAIRNESS_STATUS\` | \`$FAIRNESS_THRESHOLD_DECISION\` | \`$FAIRNESS_EXIT_CODE\` |
 | runtime SLA freeze | \`$RUNTIME_SLA_STATUS\` | \`$RUNTIME_SLA_THRESHOLD_DECISION\` | \`$RUNTIME_SLA_EXIT_CODE\` |
 | real-env evidence closure | \`$REAL_ENV_CLOSURE_STATUS\` | \`-\` | \`$REAL_ENV_CLOSURE_EXIT_CODE\` |
+| stage closure evidence | \`$STAGE_CLOSURE_EVIDENCE_STATUS\` | \`-\` | \`$STAGE_CLOSURE_EVIDENCE_EXIT_CODE\` |
 
 ## 输出工件
 
@@ -386,6 +413,12 @@ write_json_summary() {
       "status": "$(json_escape "$REAL_ENV_CLOSURE_STATUS")",
       "threshold_decision": "",
       "exit_code": $REAL_ENV_CLOSURE_EXIT_CODE
+    },
+    {
+      "stage": "stage_closure_evidence",
+      "status": "$(json_escape "$STAGE_CLOSURE_EVIDENCE_STATUS")",
+      "threshold_decision": "",
+      "exit_code": $STAGE_CLOSURE_EVIDENCE_EXIT_CODE
     }
   ]
 }
@@ -408,6 +441,7 @@ write_md_summary() {
 1. fairness_benchmark_freeze: \`$FAIRNESS_STATUS\` (threshold=\`$FAIRNESS_THRESHOLD_DECISION\`, exit=\`$FAIRNESS_EXIT_CODE\`)
 2. runtime_sla_freeze: \`$RUNTIME_SLA_STATUS\` (threshold=\`$RUNTIME_SLA_THRESHOLD_DECISION\`, exit=\`$RUNTIME_SLA_EXIT_CODE\`)
 3. real_env_evidence_closure: \`$REAL_ENV_CLOSURE_STATUS\` (exit=\`$REAL_ENV_CLOSURE_EXIT_CODE\`)
+4. stage_closure_evidence: \`$STAGE_CLOSURE_EVIDENCE_STATUS\` (exit=\`$STAGE_CLOSURE_EVIDENCE_EXIT_CODE\`)
 EOF_MD
 }
 
@@ -450,6 +484,21 @@ main() {
     REAL_ENV_CLOSURE_SCRIPT="$ROOT/scripts/harness/ai_judge_real_env_evidence_closure.sh"
   else
     REAL_ENV_CLOSURE_SCRIPT="$(abs_path "$REAL_ENV_CLOSURE_SCRIPT")"
+  fi
+  if [[ -z "$STAGE_CLOSURE_EVIDENCE_SCRIPT" ]]; then
+    STAGE_CLOSURE_EVIDENCE_SCRIPT="$ROOT/scripts/harness/ai_judge_stage_closure_evidence.sh"
+  else
+    STAGE_CLOSURE_EVIDENCE_SCRIPT="$(abs_path "$STAGE_CLOSURE_EVIDENCE_SCRIPT")"
+  fi
+  if [[ -z "$STAGE_CLOSURE_PLAN_DOC" ]]; then
+    STAGE_CLOSURE_PLAN_DOC="$ROOT/docs/dev_plan/当前开发计划.md"
+  else
+    STAGE_CLOSURE_PLAN_DOC="$(abs_path "$STAGE_CLOSURE_PLAN_DOC")"
+  fi
+  if [[ -z "$STAGE_CLOSURE_DRAFT_SCRIPT" ]]; then
+    STAGE_CLOSURE_DRAFT_SCRIPT="$ROOT/scripts/harness/ai_judge_stage_closure_draft.sh"
+  else
+    STAGE_CLOSURE_DRAFT_SCRIPT="$(abs_path "$STAGE_CLOSURE_DRAFT_SCRIPT")"
   fi
 
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-ai-judge-runtime-ops-pack"
@@ -512,9 +561,44 @@ main() {
   FAIRNESS_THRESHOLD_DECISION="$(trim "$(read_env_value "$fairness_env" "THRESHOLD_DECISION")")"
   RUNTIME_SLA_THRESHOLD_DECISION="$(trim "$(read_env_value "$runtime_env" "THRESHOLD_DECISION")")"
 
-  [[ -z "$FAIRNESS_STATUS" ]] && FAIRNESS_STATUS="unknown"
-  [[ -z "$RUNTIME_SLA_STATUS" ]] && RUNTIME_SLA_STATUS="unknown"
-  [[ -z "$REAL_ENV_CLOSURE_STATUS" ]] && REAL_ENV_CLOSURE_STATUS="unknown"
+  if [[ -z "$FAIRNESS_STATUS" ]]; then
+    FAIRNESS_STATUS="unknown"
+  fi
+  if [[ -z "$RUNTIME_SLA_STATUS" ]]; then
+    RUNTIME_SLA_STATUS="unknown"
+  fi
+  if [[ -z "$REAL_ENV_CLOSURE_STATUS" ]]; then
+    REAL_ENV_CLOSURE_STATUS="unknown"
+  fi
+
+  # 先基于前三阶段生成 pack 快照，供 stage closure evidence 回读关联。
+  STAGE_CLOSURE_EVIDENCE_STATUS="pass"
+  STAGE_CLOSURE_EVIDENCE_EXIT_CODE=0
+  derive_pack_status
+  FINISHED_AT="$(iso_now)"
+  write_output_env
+  write_output_doc
+
+  local stage_closure_stdout
+  stage_closure_stdout="$run_dir/stage_closure_evidence.stdout.log"
+  run_stage \
+    "stage_closure_evidence" \
+    "$STAGE_CLOSURE_EVIDENCE_SCRIPT" \
+    "$run_dir/stage_closure_evidence.summary.json" \
+    "$run_dir/stage_closure_evidence.summary.md" \
+    "$stage_closure_stdout" \
+    "STAGE_CLOSURE_EVIDENCE_EXIT_CODE"
+
+  local stage_closure_env
+  stage_closure_env="$EVIDENCE_DIR/ai_judge_stage_closure_evidence.env"
+  STAGE_CLOSURE_EVIDENCE_STATUS="$(trim "$(read_env_value "$stage_closure_env" "AI_JUDGE_STAGE_CLOSURE_EVIDENCE_STATUS")")"
+  if [[ -z "$STAGE_CLOSURE_EVIDENCE_STATUS" ]]; then
+    if [[ "$STAGE_CLOSURE_EVIDENCE_EXIT_CODE" == "0" ]]; then
+      STAGE_CLOSURE_EVIDENCE_STATUS="pass"
+    else
+      STAGE_CLOSURE_EVIDENCE_STATUS="stage_failed"
+    fi
+  fi
 
   derive_pack_status
   FINISHED_AT="$(iso_now)"
@@ -527,6 +611,7 @@ main() {
   echo "fairness_status: $FAIRNESS_STATUS (exit=$FAIRNESS_EXIT_CODE)"
   echo "runtime_sla_status: $RUNTIME_SLA_STATUS (exit=$RUNTIME_SLA_EXIT_CODE)"
   echo "real_env_closure_status: $REAL_ENV_CLOSURE_STATUS (exit=$REAL_ENV_CLOSURE_EXIT_CODE)"
+  echo "stage_closure_evidence_status: $STAGE_CLOSURE_EVIDENCE_STATUS (exit=$STAGE_CLOSURE_EVIDENCE_EXIT_CODE)"
   echo "allow_local_reference: $ALLOW_LOCAL_REFERENCE"
   echo "output_env: $OUTPUT_ENV"
   echo "output_doc: $OUTPUT_DOC"
