@@ -25,4 +25,12 @@ class WorkflowPort(Protocol):
 
     async def get_job(self, *, job_id: int) -> WorkflowJob | None: ...
 
+    async def list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        dispatch_type: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkflowJob]: ...
+
     async def list_events(self, *, job_id: int) -> list[WorkflowEvent]: ...

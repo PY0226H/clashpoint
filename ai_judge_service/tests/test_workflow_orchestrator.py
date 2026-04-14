@@ -8,6 +8,7 @@ from app.domain.workflow import (
     WORKFLOW_STATUS_COMPLETED,
     WORKFLOW_STATUS_FAILED,
     WORKFLOW_STATUS_QUEUED,
+    WORKFLOW_STATUS_REVIEW_REQUIRED,
     WorkflowJob,
 )
 from app.infra.db.runtime import build_database_runtime
@@ -99,3 +100,36 @@ class WorkflowOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         events = await self._orchestrator.list_events(job_id=9002)
         self.assertEqual(events[-1].payload.get("errorCode"), "provider_timeout")
+
+    async def test_orchestrator_should_list_jobs_by_status(self) -> None:
+        await self._orchestrator.register_job(
+            job=WorkflowJob(
+                job_id=9010,
+                dispatch_type="final",
+                trace_id="trace-9010",
+                status=WORKFLOW_STATUS_QUEUED,
+            )
+        )
+        await self._orchestrator.mark_running(job_id=9010)
+        await self._orchestrator.mark_review_required(
+            job_id=9010,
+            event_payload={"reason": "panel disagreement"},
+        )
+
+        await self._orchestrator.register_job(
+            job=WorkflowJob(
+                job_id=9011,
+                dispatch_type="phase",
+                trace_id="trace-9011",
+                status=WORKFLOW_STATUS_QUEUED,
+            )
+        )
+        await self._orchestrator.mark_running(job_id=9011)
+        await self._orchestrator.mark_completed(job_id=9011)
+
+        review_jobs = await self._orchestrator.list_jobs(
+            status=WORKFLOW_STATUS_REVIEW_REQUIRED,
+            dispatch_type="final",
+            limit=20,
+        )
+        self.assertEqual([item.job_id for item in review_jobs], [9010])

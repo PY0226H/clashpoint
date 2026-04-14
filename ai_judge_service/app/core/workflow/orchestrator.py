@@ -131,6 +131,19 @@ class WorkflowOrchestrator:
     async def get_job(self, *, job_id: int) -> WorkflowJob | None:
         return await self._workflow_port.get_job(job_id=job_id)
 
+    async def list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        dispatch_type: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkflowJob]:
+        return await self._workflow_port.list_jobs(
+            status=status,
+            dispatch_type=dispatch_type,
+            limit=limit,
+        )
+
     async def list_events(self, *, job_id: int):
         return await self._workflow_port.list_events(job_id=job_id)
 

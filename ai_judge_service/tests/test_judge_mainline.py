@@ -22,22 +22,45 @@ class _ReceiptRow:
     updated_at: datetime
 
 
-def _build_phase_payload(*, pro: float, con: float, msg_offset: int) -> dict:
+def _build_phase_payload(
+    *,
+    pro: float,
+    con: float,
+    msg_offset: int,
+    agent2_pro: float | None = None,
+    agent2_con: float | None = None,
+    pro_dimensions: dict[str, float] | None = None,
+    con_dimensions: dict[str, float] | None = None,
+) -> dict:
+    effective_agent2_pro = agent2_pro if agent2_pro is not None else pro - 3
+    effective_agent2_con = agent2_con if agent2_con is not None else con - 3
+    effective_pro_dimensions = pro_dimensions or {
+        "logic": pro,
+        "evidence": pro - 1,
+        "rebuttal": pro - 2,
+        "expression": pro - 3,
+    }
+    effective_con_dimensions = con_dimensions or {
+        "logic": con,
+        "evidence": con - 1,
+        "rebuttal": con - 2,
+        "expression": con - 3,
+    }
     return {
         "messageStartId": msg_offset + 1,
         "messageEndId": msg_offset + 2,
         "messageCount": 2,
         "agent3WeightedScore": {"pro": pro, "con": con},
         "agent2Score": {
-            "pro": pro - 3,
-            "con": con - 3,
+            "pro": effective_agent2_pro,
+            "con": effective_agent2_con,
             "hitItems": [f"pro:claim-{msg_offset}"],
             "missItems": [f"con:claim-{msg_offset}"],
         },
         "agent1Score": {
             "dimensions": {
-                "pro": {"logic": pro, "evidence": pro - 1, "rebuttal": pro - 2, "expression": pro - 3},
-                "con": {"logic": con, "evidence": con - 1, "rebuttal": con - 2, "expression": con - 3},
+                "pro": effective_pro_dimensions,
+                "con": effective_con_dimensions,
             },
             "evidenceRefs": {
                 "pro": {"messageIds": [msg_offset + 1], "chunkIds": [f"chunk-pro-{msg_offset}"]},
@@ -98,7 +121,9 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
 
     assert payload["winner"] == "pro"
     assert payload["degradationLevel"] == 0
+    assert payload["reviewRequired"] is False
     assert isinstance(payload["debateSummary"], str) and payload["debateSummary"]
+    assert isinstance(payload["fairnessSummary"], dict)
     assert isinstance(payload["sideAnalysis"], dict)
     assert isinstance(payload["judgeTrace"], dict)
     assert validate_final_report_payload_contract(payload) == []
@@ -134,6 +159,142 @@ def test_build_final_report_payload_should_mark_incomplete_rollup() -> None:
     assert payload["degradationLevel"] == 1
     assert len(payload["auditAlerts"]) == 1
     assert payload["auditAlerts"][0]["type"] == "final_rollup_incomplete"
+
+
+def test_build_final_report_payload_should_trigger_style_shift_instability_gate() -> None:
+    request = FinalDispatchRequest(
+        job_id=9003,
+        scope_id=1,
+        session_id=303,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9003",
+        idempotency_key="final:9003",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={
+                    "reportPayload": _build_phase_payload(
+                        pro=60.9,
+                        con=60.0,
+                        msg_offset=0,
+                        agent2_pro=60.9,
+                        agent2_con=60.0,
+                    )
+                },
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+    )
+
+    assert payload["reviewRequired"] is True
+    assert payload["winner"] == "draw"
+    assert "style_shift_instability" in payload["errorCodes"]
+    assert "fairness_gate_review_required" in payload["errorCodes"]
+    assert any(item.get("type") == "style_shift_instability" for item in payload["auditAlerts"])
+
+
+def test_build_final_report_payload_should_trigger_label_swap_instability_gate() -> None:
+    request = FinalDispatchRequest(
+        job_id=9004,
+        scope_id=1,
+        session_id=304,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9004",
+        idempotency_key="final:9004",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={
+                    "reportPayload": _build_phase_payload(
+                        pro=66.0,
+                        con=58.0,
+                        msg_offset=0,
+                        agent2_pro=56.0,
+                        agent2_con=64.0,
+                    )
+                },
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="mixed",
+    )
+
+    assert payload["reviewRequired"] is True
+    assert payload["winner"] == "draw"
+    assert "label_swap_instability" in payload["errorCodes"]
+    assert any(item.get("type") == "label_swap_instability" for item in payload["auditAlerts"])
+
+
+def test_build_final_report_payload_should_trigger_panel_disagreement_gate() -> None:
+    request = FinalDispatchRequest(
+        job_id=9005,
+        scope_id=1,
+        session_id=305,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9005",
+        idempotency_key="final:9005",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={
+                    "reportPayload": _build_phase_payload(
+                        pro=70.0,
+                        con=62.0,
+                        msg_offset=0,
+                        agent2_pro=69.0,
+                        agent2_con=61.0,
+                        pro_dimensions={
+                            "logic": 42.0,
+                            "evidence": 41.0,
+                            "rebuttal": 40.0,
+                            "expression": 42.0,
+                        },
+                        con_dimensions={
+                            "logic": 78.0,
+                            "evidence": 79.0,
+                            "rebuttal": 80.0,
+                            "expression": 78.0,
+                        },
+                    )
+                },
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+    )
+
+    assert payload["reviewRequired"] is True
+    assert payload["winner"] == "draw"
+    assert payload["winnerThird"] == "con"
+    assert "judge_panel_high_disagreement" in payload["errorCodes"]
+    assert any(
+        item.get("type") == "judge_panel_high_disagreement" for item in payload["auditAlerts"]
+    )
 
 
 def test_validate_final_report_payload_contract_should_report_missing_items() -> None:

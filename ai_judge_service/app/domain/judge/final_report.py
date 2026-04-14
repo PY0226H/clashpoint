@@ -81,6 +81,103 @@ def _winner_label(winner: str) -> str:
     return mapping.get(str(winner or "").strip().lower(), "unknown")
 
 
+def _build_style_probe_winners(*, pro_score: float, con_score: float) -> dict[str, str]:
+    return {
+        "rational": _resolve_winner(pro_score, con_score, margin=0.8),
+        "neutral": _resolve_winner(pro_score, con_score, margin=1.0),
+        "strict": _resolve_winner(pro_score, con_score, margin=1.3),
+    }
+
+
+def _evaluate_fairness_gate(
+    *,
+    winner_first: str,
+    winner_second: str,
+    winner_third: str,
+    winner_before_gate: str,
+    pro_score: float,
+    con_score: float,
+    phase_count_used: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], bool]:
+    # phase2 继续复用轻量探针：双路裁决 + 风格探针 + 第三路 panel 分歧检查，保持实现可解释且可回放。
+    swap_instability = (
+        winner_first in {"pro", "con"}
+        and winner_second in {"pro", "con"}
+        and winner_first != winner_second
+    )
+    style_probe_winners = _build_style_probe_winners(pro_score=pro_score, con_score=con_score)
+    style_shift_instability = (
+        phase_count_used > 0
+        and winner_before_gate in {"pro", "con"}
+        and len(set(style_probe_winners.values())) > 1
+    )
+    score_gap = round(abs(_clamp_score(pro_score) - _clamp_score(con_score)), 2)
+    panel_probe_winners = {
+        "agent3Weighted": winner_first,
+        "agent2Path": winner_second,
+        "agent1Dimensions": winner_third,
+    }
+    panel_non_draw_winners = {
+        item for item in panel_probe_winners.values() if item in {"pro", "con"}
+    }
+    panel_high_disagreement = len(panel_non_draw_winners) > 1
+
+    alerts: list[dict[str, Any]] = []
+    error_codes: list[str] = []
+
+    if swap_instability:
+        error_codes.append("label_swap_instability")
+        alerts.append(
+            {
+                "type": "label_swap_instability",
+                "severity": "critical",
+                "message": "first/second winner mismatch indicates potential label sensitivity",
+                "details": {
+                    "winnerFirst": winner_first,
+                    "winnerSecond": winner_second,
+                },
+            }
+        )
+    if style_shift_instability:
+        error_codes.append("style_shift_instability")
+        alerts.append(
+            {
+                "type": "style_shift_instability",
+                "severity": "warning",
+                "message": "winner changes across style probes near score boundary",
+                "details": {
+                    "scoreGap": score_gap,
+                    "styleProbeWinners": style_probe_winners,
+                },
+            }
+        )
+    if panel_high_disagreement:
+        error_codes.append("judge_panel_high_disagreement")
+        alerts.append(
+            {
+                "type": "judge_panel_high_disagreement",
+                "severity": "critical",
+                "message": "independent panel probes disagree on winner side",
+                "details": {
+                    "panelProbeWinners": panel_probe_winners,
+                },
+            }
+        )
+
+    review_required = bool(error_codes)
+    summary = {
+        "phase": "phase2",
+        "swapInstability": swap_instability,
+        "styleShiftInstability": style_shift_instability,
+        "panelHighDisagreement": panel_high_disagreement,
+        "scoreGap": score_gap,
+        "styleProbeWinners": style_probe_winners,
+        "panelProbeWinners": panel_probe_winners,
+        "reviewRequired": review_required,
+    }
+    return summary, alerts, error_codes, review_required
+
+
 def _build_final_display_payload(
     *,
     style_mode: str,
@@ -386,18 +483,42 @@ def build_final_report_payload(
         second_con = sum(con_agent2_scores) / float(max(1, len(con_agent2_scores)))
         winner_second = _resolve_winner(second_pro, second_con, margin=0.8)
 
-        if winner_first in {"pro", "con"}:
-            winner_side = winner_first
-            dims_rows = pro_dimensions_rows if winner_side == "pro" else con_dimensions_rows
-        else:
-            dims_rows = pro_dimensions_rows + con_dimensions_rows
-
         def _avg_dim(rows: list[dict[str, float]], key: str, default: float = 50.0) -> float:
             if not rows:
                 return default
             return sum(_safe_float(row.get(key), default=default) for row in rows) / float(
                 len(rows)
             )
+
+        pro_dimension_composite = _clamp_score(
+            (
+                _avg_dim(pro_dimensions_rows, "logic")
+                + _avg_dim(pro_dimensions_rows, "evidence")
+                + _avg_dim(pro_dimensions_rows, "rebuttal")
+                + _avg_dim(pro_dimensions_rows, "clarity")
+            )
+            / 4.0
+        )
+        con_dimension_composite = _clamp_score(
+            (
+                _avg_dim(con_dimensions_rows, "logic")
+                + _avg_dim(con_dimensions_rows, "evidence")
+                + _avg_dim(con_dimensions_rows, "rebuttal")
+                + _avg_dim(con_dimensions_rows, "clarity")
+            )
+            / 4.0
+        )
+        winner_third = _resolve_winner(
+            pro_dimension_composite,
+            con_dimension_composite,
+            margin=0.8,
+        )
+
+        if winner_first in {"pro", "con"}:
+            winner_side = winner_first
+            dims_rows = pro_dimensions_rows if winner_side == "pro" else con_dimensions_rows
+        else:
+            dims_rows = pro_dimensions_rows + con_dimensions_rows
 
         dimension_scores = {
             "logic": round(_clamp_score(_avg_dim(dims_rows, "logic")), 2),
@@ -410,6 +531,7 @@ def build_final_report_payload(
         con_score = 50.0
         winner_first = "draw"
         winner_second = "draw"
+        winner_third = "draw"
         dimension_scores = {
             "logic": 50.0,
             "evidence": 50.0,
@@ -429,6 +551,27 @@ def build_final_report_payload(
         winner = "draw"
         rejudge_triggered = True
         error_codes.append("consistency_conflict")
+
+    fairness_summary, fairness_alerts, fairness_error_codes, review_required = (
+        _evaluate_fairness_gate(
+            winner_first=winner_first,
+            winner_second=winner_second,
+            winner_third=winner_third,
+            winner_before_gate=winner,
+            pro_score=pro_score,
+            con_score=con_score,
+            phase_count_used=len(phase_rollup_summary),
+        )
+    )
+    for code in fairness_error_codes:
+        if code not in error_codes:
+            error_codes.append(code)
+    if review_required:
+        if winner != "draw":
+            winner = "draw"
+            rejudge_triggered = True
+        if "fairness_gate_review_required" not in error_codes:
+            error_codes.append("fairness_gate_review_required")
 
     needs_draw_vote = winner == "draw"
     if not error_codes:
@@ -459,6 +602,7 @@ def build_final_report_payload(
                 "message": f"missing phase payloads: {missing_phase_nos}",
             }
         )
+    audit_alerts.extend(fairness_alerts)
 
     final_style_mode, final_style_mode_source = resolve_effective_style_mode(
         "rational",
@@ -499,8 +643,10 @@ def build_final_report_payload(
         "retrievalSnapshotRollup": retrieval_snapshot_rollup,
         "winnerFirst": winner_first,
         "winnerSecond": winner_second,
+        "winnerThird": winner_third,
         "rejudgeTriggered": rejudge_triggered,
         "needsDrawVote": needs_draw_vote,
+        "reviewRequired": review_required,
         "judgeTrace": {
             "traceId": request.trace_id,
             "pipelineVersion": "v3-final-a9a10-rollup-v2",
@@ -515,6 +661,7 @@ def build_final_report_payload(
             "missingPhaseNos": missing_phase_nos,
             "winnerFirst": winner_first,
             "winnerSecond": winner_second,
+            "winnerThird": winner_third,
             "source": "phase_receipt_report_payload",
             "a9RationaleRaw": final_rationale_raw,
             "displayStyleMode": final_style_mode,
@@ -523,7 +670,9 @@ def build_final_report_payload(
             "displayVerdictReason": verdict_reason,
             "factLock": display_payload.get("factLock"),
             "scoreEvidenceRollup": score_evidence_rollup,
+            "fairnessGate": fairness_summary,
         },
+        "fairnessSummary": fairness_summary,
         "auditAlerts": audit_alerts,
         "errorCodes": error_codes,
         "degradationLevel": degradation_level,

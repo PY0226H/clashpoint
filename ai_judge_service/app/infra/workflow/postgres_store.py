@@ -105,6 +105,23 @@ class PostgresWorkflowStore(WorkflowPort):
                 return None
             return self._to_job(row)
 
+    async def list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        dispatch_type: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkflowJob]:
+        stmt: Select[tuple[JudgeJobModel]] = select(JudgeJobModel)
+        if status:
+            stmt = stmt.where(JudgeJobModel.status == status)
+        if dispatch_type:
+            stmt = stmt.where(JudgeJobModel.dispatch_type == dispatch_type)
+        stmt = stmt.order_by(JudgeJobModel.updated_at.desc()).limit(max(1, int(limit)))
+        async with self._session_factory() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._to_job(item) for item in rows]
+
     async def list_events(self, *, job_id: int) -> list[WorkflowEvent]:
         stmt: Select[tuple[JudgeJobEventModel]] = (
             select(JudgeJobEventModel)

@@ -299,6 +299,181 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(phase_job.status, "completed")
         self.assertEqual(final_job.status, "completed")
 
+    async def test_final_dispatch_should_mark_workflow_review_required_when_gate_triggers(
+        self,
+    ) -> None:
+        final_callback_calls: list[tuple[int, dict]] = []
+
+        async def noop_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            final_callback_calls.append((job_id, payload))
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_phase_callback,
+            callback_final_report_impl=final_callback,
+            callback_phase_failed_impl=noop_phase_callback,
+            callback_final_failed_impl=final_callback,
+        )
+        app = create_app(runtime)
+        final_req = _build_final_request(job_id=7401, idempotency_key="final:7401")
+        gated_payload = {
+            "sessionId": 2,
+            "winner": "draw",
+            "proScore": 61.0,
+            "conScore": 60.2,
+            "dimensionScores": {
+                "logic": 60.0,
+                "evidence": 61.0,
+                "rebuttal": 59.5,
+                "clarity": 60.4,
+            },
+            "debateSummary": "summary",
+            "sideAnalysis": {"pro": "pro", "con": "con"},
+            "verdictReason": "reason",
+            "verdictEvidenceRefs": [],
+            "phaseRollupSummary": [{"phaseNo": 1}],
+            "retrievalSnapshotRollup": [],
+            "winnerFirst": "pro",
+            "winnerSecond": "pro",
+            "rejudgeTriggered": True,
+            "needsDrawVote": True,
+            "reviewRequired": True,
+            "judgeTrace": {"traceId": "trace-final-7401"},
+            "auditAlerts": [{"type": "style_shift_instability"}],
+            "errorCodes": ["style_shift_instability", "fairness_gate_review_required"],
+            "degradationLevel": 1,
+        }
+
+        with patch("app.app_factory._build_final_report_payload", return_value=gated_payload):
+            final_resp = await self._post_json(
+                app=app,
+                path="/internal/judge/v3/final/dispatch",
+                payload=final_req.model_dump(mode="json"),
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(final_resp.status_code, 200)
+        self.assertEqual(len(final_callback_calls), 1)
+        workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=7401)
+        self.assertIsNotNone(workflow_job)
+        assert workflow_job is not None
+        self.assertEqual(workflow_job.status, "review_required")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7401)
+        self.assertEqual(workflow_events[-1].payload.get("toStatus"), "review_required")
+        self.assertTrue(workflow_events[-1].payload.get("reviewRequired"))
+
+    async def test_review_routes_should_list_detail_and_decide_review_job(self) -> None:
+        async def noop_phase_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        async def noop_final_callback(*, cfg: object, job_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_phase_callback,
+            callback_final_report_impl=noop_final_callback,
+            callback_phase_failed_impl=noop_phase_callback,
+            callback_final_failed_impl=noop_final_callback,
+        )
+        app = create_app(runtime)
+        final_req = _build_final_request(job_id=7411, idempotency_key="final:7411")
+        gated_payload = {
+            "sessionId": 2,
+            "winner": "draw",
+            "proScore": 60.8,
+            "conScore": 60.2,
+            "dimensionScores": {
+                "logic": 60.5,
+                "evidence": 60.2,
+                "rebuttal": 59.9,
+                "clarity": 60.1,
+            },
+            "debateSummary": "summary",
+            "sideAnalysis": {"pro": "pro", "con": "con"},
+            "verdictReason": "reason",
+            "verdictEvidenceRefs": [],
+            "phaseRollupSummary": [{"phaseNo": 1}],
+            "retrievalSnapshotRollup": [],
+            "winnerFirst": "pro",
+            "winnerSecond": "pro",
+            "winnerThird": "con",
+            "rejudgeTriggered": True,
+            "needsDrawVote": True,
+            "reviewRequired": True,
+            "judgeTrace": {
+                "traceId": "trace-final-7411",
+                "fairnessGate": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": True,
+                    "reviewRequired": True,
+                },
+            },
+            "fairnessSummary": {
+                "phase": "phase2",
+                "panelHighDisagreement": True,
+                "reviewRequired": True,
+            },
+            "auditAlerts": [{"type": "judge_panel_high_disagreement"}],
+            "errorCodes": ["judge_panel_high_disagreement", "fairness_gate_review_required"],
+            "degradationLevel": 1,
+        }
+
+        with patch("app.app_factory._build_final_report_payload", return_value=gated_payload):
+            final_resp = await self._post_json(
+                app=app,
+                path="/internal/judge/v3/final/dispatch",
+                payload=final_req.model_dump(mode="json"),
+                internal_key=runtime.settings.ai_internal_key,
+            )
+        self.assertEqual(final_resp.status_code, 200)
+
+        list_resp = await self._get(
+            app=app,
+            path="/internal/judge/review/jobs?status=review_required&dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        queue_payload = list_resp.json()
+        self.assertGreaterEqual(queue_payload["count"], 1)
+        target_item = next(
+            item for item in queue_payload["items"] if item["workflow"]["jobId"] == 7411
+        )
+        self.assertTrue(target_item["reviewRequired"])
+        self.assertIn("judge_panel_high_disagreement", target_item["errorCodes"])
+
+        detail_resp = await self._get(
+            app=app,
+            path="/internal/judge/review/jobs/7411",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(detail_resp.status_code, 200)
+        detail_payload = detail_resp.json()
+        self.assertEqual(detail_payload["job"]["status"], "review_required")
+        self.assertTrue(detail_payload["reviewRequired"])
+        self.assertEqual(
+            detail_payload["reportPayload"]["fairnessSummary"]["panelHighDisagreement"],
+            True,
+        )
+
+        decision_resp = await self._post(
+            app=app,
+            path="/internal/judge/review/jobs/7411/decision?decision=approve&actor=ops&reason=manual_pass",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(decision_resp.status_code, 200)
+        decision_payload = decision_resp.json()
+        self.assertEqual(decision_payload["decision"], "approve")
+        self.assertEqual(decision_payload["job"]["status"], "completed")
+
+        workflow_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=7411)
+        self.assertIsNotNone(workflow_job)
+        assert workflow_job is not None
+        self.assertEqual(workflow_job.status, "completed")
+
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,
     ) -> None:

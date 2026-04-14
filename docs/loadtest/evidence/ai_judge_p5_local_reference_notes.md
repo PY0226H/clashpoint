@@ -24,3 +24,15 @@
 
 1. 所有数值仅用于本机参考门禁推进，不作为生产 SLA/成本冻结依据。
 2. 真实环境样本与账单接入后，必须由 `REAL_CALIBRATION_ENV_READY=true` + real 证据键覆盖本文件。
+
+## 4. 最新本机复跑记录
+
+1. 复跑时间：2026-04-14T01:08:51Z
+2. 执行命令：`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --allow-local-reference`
+3. 结果：`local_reference_pass`（5/5 轨道为 `local_reference_pass`）
+4. 摘要工件：
+   - `artifacts/harness/20260414T010851Z-ai-judge-p5-real-calibration-on-env.summary.json`
+   - `artifacts/harness/20260414T010851Z-ai-judge-p5-real-calibration-on-env.summary.md`
+5. 仍待真实环境补齐：
+   - `REAL_CALIBRATION_ENV_READY=true`
+   - 五轨道 real 证据键：`REAL_ENV_EVIDENCE`、`DATASET_REF`

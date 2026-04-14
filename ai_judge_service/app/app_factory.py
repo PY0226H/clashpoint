@@ -55,7 +55,7 @@ from .domain.facts import (
 from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
-from .domain.workflow import WORKFLOW_STATUS_QUEUED, WorkflowJob
+from .domain.workflow import WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUSES, WorkflowJob
 from .models import FinalDispatchRequest, PhaseDispatchRequest
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
@@ -155,6 +155,24 @@ def _serialize_dispatch_receipt(item: Any) -> dict[str, Any]:
     return serialize_dispatch_receipt_v3(item)
 
 
+def _serialize_workflow_job(item: WorkflowJob) -> dict[str, Any]:
+    return {
+        "jobId": item.job_id,
+        "dispatchType": item.dispatch_type,
+        "traceId": item.trace_id,
+        "status": item.status,
+        "scopeId": item.scope_id,
+        "sessionId": item.session_id,
+        "idempotencyKey": item.idempotency_key,
+        "rubricVersion": item.rubric_version,
+        "judgePolicyVersion": item.judge_policy_version,
+        "topicDomain": item.topic_domain,
+        "retrievalProfile": item.retrieval_profile,
+        "createdAt": item.created_at.isoformat() if item.created_at else None,
+        "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
 def _build_replay_report_payload(record: Any) -> dict[str, Any]:
     return build_replay_report_payload_v3(record)
 
@@ -169,6 +187,15 @@ def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _normalize_workflow_status(status: str | None) -> str | None:
+    if status is None:
+        return None
+    normalized = str(status).strip().lower()
+    if not normalized:
+        return None
+    return normalized
 
 
 def _normalize_key_token(value: Any) -> str:
@@ -746,6 +773,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             event_payload=event_payload,
         )
 
+    async def _workflow_mark_review_required(
+        *,
+        job_id: int,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        await _ensure_workflow_schema_ready()
+        await runtime.workflow_runtime.orchestrator.mark_review_required(
+            job_id=job_id,
+            event_payload=event_payload,
+        )
+
     async def _workflow_mark_failed(
         *,
         job_id: int,
@@ -760,6 +798,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             error_message=error_message,
             event_payload=event_payload,
         )
+
+    async def _workflow_get_job(*, job_id: int) -> WorkflowJob | None:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.orchestrator.get_job(job_id=job_id)
+
+    async def _workflow_list_jobs(
+        *,
+        status: str | None,
+        dispatch_type: str | None,
+        limit: int,
+    ) -> list[WorkflowJob]:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.orchestrator.list_jobs(
+            status=status,
+            dispatch_type=dispatch_type,
+            limit=limit,
+        )
+
+    async def _workflow_list_events(*, job_id: int):
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.orchestrator.list_events(job_id=job_id)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:
@@ -1664,16 +1723,30 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 callback_error=None,
             ),
         )
-        await _workflow_mark_completed(
-            job_id=parsed.job_id,
-            event_payload={
-                "dispatchType": "final",
-                "phaseStartNo": parsed.phase_start_no,
-                "phaseEndNo": parsed.phase_end_no,
-                "callbackStatus": "reported",
-                "winner": final_report_payload.get("winner"),
-            },
-        )
+        review_required = bool(final_report_payload.get("reviewRequired"))
+        workflow_event_payload = {
+            "dispatchType": "final",
+            "phaseStartNo": parsed.phase_start_no,
+            "phaseEndNo": parsed.phase_end_no,
+            "callbackStatus": "reported",
+            "winner": final_report_payload.get("winner"),
+            "reviewRequired": review_required,
+            "errorCodes": (
+                final_report_payload.get("errorCodes")
+                if isinstance(final_report_payload.get("errorCodes"), list)
+                else []
+            ),
+        }
+        if review_required:
+            await _workflow_mark_review_required(
+                job_id=parsed.job_id,
+                event_payload=workflow_event_payload,
+            )
+        else:
+            await _workflow_mark_completed(
+                job_id=parsed.job_id,
+                event_payload=workflow_event_payload,
+            )
         runtime.trace_store.set_idempotency_success(
             key=parsed.idempotency_key,
             job_id=parsed.job_id,
@@ -1927,6 +2000,179 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "limit": limit,
                 "includeReport": include_report,
             },
+        }
+
+    @app.get("/internal/judge/review/jobs")
+    async def list_judge_review_jobs(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str = Query(default="review_required"),
+        dispatch_type: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_status = _normalize_workflow_status(status)
+        if normalized_status is None or normalized_status not in WORKFLOW_STATUSES:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+        normalized_dispatch_type = (
+            str(dispatch_type or "").strip().lower() or None
+        )
+        if normalized_dispatch_type not in {None, "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+
+        jobs = await _workflow_list_jobs(
+            status=normalized_status,
+            dispatch_type=normalized_dispatch_type,
+            limit=limit,
+        )
+        items: list[dict[str, Any]] = []
+        for job in jobs:
+            trace = runtime.trace_store.get_trace(job.job_id)
+            report_summary = (
+                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+            )
+            report_payload = (
+                report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
+            )
+            error_codes = report_payload.get("errorCodes")
+            audit_alerts = report_summary.get("auditAlerts")
+            items.append(
+                {
+                    "workflow": _serialize_workflow_job(job),
+                    "winner": report_summary.get("winner"),
+                    "reviewRequired": bool(report_payload.get("reviewRequired")),
+                    "fairnessSummary": (
+                        report_payload.get("fairnessSummary")
+                        if isinstance(report_payload.get("fairnessSummary"), dict)
+                        else None
+                    ),
+                    "errorCodes": error_codes if isinstance(error_codes, list) else [],
+                    "auditAlertCount": (
+                        len(audit_alerts)
+                        if isinstance(audit_alerts, list)
+                        else 0
+                    ),
+                    "callbackStatus": report_summary.get("callbackStatus"),
+                }
+            )
+        return {
+            "count": len(items),
+            "items": items,
+            "filters": {
+                "status": normalized_status,
+                "dispatchType": normalized_dispatch_type,
+                "limit": limit,
+            },
+        }
+
+    @app.get("/internal/judge/review/jobs/{job_id}")
+    async def get_judge_review_job(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        workflow_job = await _workflow_get_job(job_id=job_id)
+        if workflow_job is None:
+            raise HTTPException(status_code=404, detail="review_job_not_found")
+        workflow_events = await _workflow_list_events(job_id=job_id)
+        alerts = await _list_audit_alerts(job_id=job_id, status=None, limit=200)
+        trace = runtime.trace_store.get_trace(job_id)
+        report_summary = (
+            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+        )
+        report_payload = (
+            report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
+        )
+        return {
+            "job": _serialize_workflow_job(workflow_job),
+            "reportPayload": report_payload,
+            "winner": report_summary.get("winner"),
+            "reviewRequired": bool(report_payload.get("reviewRequired")),
+            "callbackStatus": report_summary.get("callbackStatus"),
+            "callbackError": report_summary.get("callbackError"),
+            "trace": (
+                {
+                    "traceId": trace.trace_id,
+                    "status": trace.status,
+                    "createdAt": trace.created_at.isoformat(),
+                    "updatedAt": trace.updated_at.isoformat(),
+                }
+                if trace is not None
+                else None
+            ),
+            "events": [
+                {
+                    "eventSeq": item.event_seq,
+                    "eventType": item.event_type,
+                    "payload": item.payload,
+                    "createdAt": item.created_at.isoformat(),
+                }
+                for item in workflow_events
+            ],
+            "alerts": [_serialize_alert_item(item) for item in alerts],
+        }
+
+    @app.post("/internal/judge/review/jobs/{job_id}/decision")
+    async def decide_judge_review_job(
+        job_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        decision: str = Query(default="approve"),
+        actor: str | None = Query(default=None),
+        reason: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_decision not in {"approve", "reject"}:
+            raise HTTPException(status_code=422, detail="invalid_review_decision")
+
+        current_job = await _workflow_get_job(job_id=job_id)
+        if current_job is None:
+            raise HTTPException(status_code=404, detail="review_job_not_found")
+        # 复核决策只允许消费 review_required 队列，避免绕过主状态机直接改裁决状态。
+        if current_job.status != "review_required":
+            raise HTTPException(status_code=409, detail="review_job_not_pending")
+
+        event_payload = {
+            "reviewDecision": normalized_decision,
+            "reviewActor": str(actor or "").strip() or "system",
+            "reviewReason": str(reason or "").strip() or None,
+        }
+        resolved_alert_ids: list[str] = []
+        if normalized_decision == "approve":
+            transitioned = await runtime.workflow_runtime.orchestrator.mark_completed(
+                job_id=job_id,
+                event_payload=event_payload,
+            )
+            raised_alerts = runtime.trace_store.list_audit_alerts(
+                job_id=job_id,
+                status="raised",
+                limit=200,
+            )
+            for item in raised_alerts:
+                row = runtime.trace_store.transition_audit_alert(
+                    job_id=job_id,
+                    alert_id=item.alert_id,
+                    to_status="resolved",
+                    actor=event_payload["reviewActor"],
+                    reason=event_payload["reviewReason"] or "review_approved",
+                )
+                if row is None:
+                    continue
+                await _sync_audit_alert_to_facts(alert=row)
+                resolved_alert_ids.append(row.alert_id)
+        else:
+            reject_reason = event_payload["reviewReason"] or "review rejected by reviewer"
+            transitioned = await runtime.workflow_runtime.orchestrator.mark_failed(
+                job_id=job_id,
+                error_code="review_rejected",
+                error_message=reject_reason,
+                event_payload=event_payload,
+            )
+
+        return {
+            "ok": True,
+            "job": _serialize_workflow_job(transitioned),
+            "decision": normalized_decision,
+            "resolvedAlertIds": resolved_alert_ids,
         }
 
     @app.get("/internal/judge/jobs/{job_id}/alerts")
