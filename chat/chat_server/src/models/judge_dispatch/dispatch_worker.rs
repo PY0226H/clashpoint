@@ -474,7 +474,7 @@ impl AppState {
         }
 
         Ok(AiJudgePhaseDispatchRequest {
-            job_id: job.id as u64,
+            case_id: job.id as u64,
             scope_id: PHASE_DISPATCH_SCOPE_ID,
             session_id: job.session_id as u64,
             phase_no: job.phase_no,
@@ -502,7 +502,7 @@ impl AppState {
             )));
         }
         Ok(AiJudgeFinalDispatchRequest {
-            job_id: job.id as u64,
+            case_id: job.id as u64,
             scope_id: FINAL_DISPATCH_SCOPE_ID,
             session_id: job.session_id as u64,
             phase_start_no: job.phase_start_no,
@@ -551,7 +551,7 @@ impl AppState {
 
         if resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            if let Err(err) = validate_dispatch_response(&body, payload.job_id) {
+            if let Err(err) = validate_dispatch_response(&body, payload.case_id) {
                 let (code, msg) = match err {
                     DispatchResponseViolation::InvalidPayload => (
                         DispatchFailureCode::ResponseAcceptedFalse,
@@ -635,7 +635,7 @@ impl AppState {
 
         if resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            if let Err(err) = validate_dispatch_response(&body, payload.job_id) {
+            if let Err(err) = validate_dispatch_response(&body, payload.case_id) {
                 let (code, msg) = match err {
                     DispatchResponseViolation::InvalidPayload => (
                         DispatchFailureCode::ResponseAcceptedFalse,

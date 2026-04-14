@@ -346,7 +346,7 @@ struct SessionMessageRow {
 
 #[derive(Debug, Clone, Serialize)]
 struct AiJudgePhaseDispatchRequest {
-    job_id: u64,
+    case_id: u64,
     scope_id: u64,
     session_id: u64,
     phase_no: i32,
@@ -364,7 +364,7 @@ struct AiJudgePhaseDispatchRequest {
 
 #[derive(Debug, Clone, Serialize)]
 struct AiJudgeFinalDispatchRequest {
-    job_id: u64,
+    case_id: u64,
     scope_id: u64,
     session_id: u64,
     phase_start_no: i32,
@@ -389,7 +389,7 @@ struct AiJudgeDispatchMessage {
 #[serde(rename_all = "camelCase")]
 struct AiJudgeDispatchResponse {
     accepted: Option<bool>,
-    job_id: Option<u64>,
+    case_id: Option<u64>,
     status: Option<String>,
 }
 
@@ -554,7 +554,7 @@ fn calc_retry_lock_secs(
 
 fn validate_dispatch_response(
     body: &str,
-    expected_job_id: u64,
+    expected_case_id: u64,
 ) -> Result<(), DispatchResponseViolation> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
@@ -570,11 +570,11 @@ fn validate_dispatch_response(
         });
     }
 
-    if let Some(job_id) = parsed.job_id {
-        if job_id != expected_job_id {
+    if let Some(case_id) = parsed.case_id {
+        if case_id != expected_case_id {
             return Err(DispatchResponseViolation::JobIdMismatch {
-                expected: expected_job_id,
-                got: job_id,
+                expected: expected_case_id,
+                got: case_id,
             });
         }
     }

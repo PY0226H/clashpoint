@@ -267,19 +267,19 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route("/wallet/ledger", get(list_wallet_ledger_handler));
     let internal_ai = Router::new()
         .route(
-            "/judge/v3/phase/jobs/:id/report",
+            "/judge/v3/phase/cases/:id/report",
             post(submit_judge_phase_report_handler),
         )
         .route(
-            "/judge/v3/phase/jobs/:id/failed",
+            "/judge/v3/phase/cases/:id/failed",
             post(submit_judge_phase_failed_handler),
         )
         .route(
-            "/judge/v3/final/jobs/:id/report",
+            "/judge/v3/final/cases/:id/report",
             post(submit_judge_final_report_handler),
         )
         .route(
-            "/judge/v3/final/jobs/:id/failed",
+            "/judge/v3/final/cases/:id/failed",
             post(submit_judge_final_failed_handler),
         )
         .route("/infra/redis/health", get(get_redis_health_handler))

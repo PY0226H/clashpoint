@@ -62,9 +62,9 @@ static REDIS_HEALTH_PROBE_METRICS: LazyLock<RedisHealthProbeMetrics> =
 /// Internal callback for AI service to persist v3 phase report.
 #[utoipa::path(
     post,
-    path = "/api/internal/ai/judge/v3/phase/jobs/{id}/report",
+    path = "/api/internal/ai/judge/v3/phase/cases/{id}/report",
     params(
-        ("id" = u64, Path, description = "Judge phase job id")
+        ("id" = u64, Path, description = "Judge phase case id")
     ),
     request_body = SubmitJudgePhaseReportInput,
     responses(
@@ -91,9 +91,9 @@ pub(crate) async fn submit_judge_phase_report_handler(
 /// Internal callback for AI service to persist v3 final report.
 #[utoipa::path(
     post,
-    path = "/api/internal/ai/judge/v3/final/jobs/{id}/report",
+    path = "/api/internal/ai/judge/v3/final/cases/{id}/report",
     params(
-        ("id" = u64, Path, description = "Judge final job id")
+        ("id" = u64, Path, description = "Judge final case id")
     ),
     request_body = SubmitJudgeFinalReportInput,
     responses(
@@ -120,9 +120,9 @@ pub(crate) async fn submit_judge_final_report_handler(
 /// Internal callback for AI service to persist v3 phase failed callback.
 #[utoipa::path(
     post,
-    path = "/api/internal/ai/judge/v3/phase/jobs/{id}/failed",
+    path = "/api/internal/ai/judge/v3/phase/cases/{id}/failed",
     params(
-        ("id" = u64, Path, description = "Judge phase job id")
+        ("id" = u64, Path, description = "Judge phase case id")
     ),
     request_body = SubmitJudgeFailedCallbackInput,
     responses(
@@ -149,9 +149,9 @@ pub(crate) async fn submit_judge_phase_failed_handler(
 /// Internal callback for AI service to persist v3 final failed callback.
 #[utoipa::path(
     post,
-    path = "/api/internal/ai/judge/v3/final/jobs/{id}/failed",
+    path = "/api/internal/ai/judge/v3/final/cases/{id}/failed",
     params(
-        ("id" = u64, Path, description = "Judge final job id")
+        ("id" = u64, Path, description = "Judge final case id")
     ),
     request_body = SubmitJudgeFailedCallbackInput,
     responses(
