@@ -243,7 +243,7 @@ fn default_replay_actions_query() -> ListJudgeReplayActionsOpsQuery {
         to: None,
         scope: None,
         session_id: None,
-        job_id: None,
+        case_id: None,
         requested_by: None,
         previous_status: None,
         new_status: None,
@@ -254,21 +254,21 @@ fn default_replay_actions_query() -> ListJudgeReplayActionsOpsQuery {
     }
 }
 
-fn replay_preview_query(scope: &str, job_id: u64) -> GetJudgeReplayPreviewOpsQuery {
+fn replay_preview_query(scope: &str, case_id: u64) -> GetJudgeReplayPreviewOpsQuery {
     GetJudgeReplayPreviewOpsQuery {
         scope: scope.to_string(),
-        job_id,
+        case_id,
     }
 }
 
 fn replay_execute_input(
     scope: &str,
-    job_id: u64,
+    case_id: u64,
     reason: Option<String>,
 ) -> ExecuteJudgeReplayOpsInput {
     ExecuteJudgeReplayOpsInput {
         scope: scope.to_string(),
-        job_id,
+        case_id,
         reason,
     }
 }
@@ -911,7 +911,7 @@ async fn get_judge_final_dispatch_failure_stats_by_owner_should_prefer_structure
     seed_failed_final_job_for_stats(
         &state,
         now - Duration::seconds(2),
-        Some("[response_job_id_mismatch] job_id mismatch"),
+        Some("[response_case_id_mismatch] case_id mismatch"),
         None,
         None,
     )
@@ -939,14 +939,14 @@ async fn get_judge_final_dispatch_failure_stats_by_owner_should_prefer_structure
         .map(|item| item.failure_type.as_str())
         .collect::<Vec<_>>();
     assert!(types.contains(&"final_contract_blocked"));
-    assert!(types.contains(&"response_job_id_mismatch"));
+    assert!(types.contains(&"response_case_id_mismatch"));
     assert!(types.contains(&"unknown_contract_failure"));
     // 所有分组 count 都为 1 时，应该按 failure_type 字典序稳定排序。
     assert_eq!(
         types,
         vec![
             "final_contract_blocked",
-            "response_job_id_mismatch",
+            "response_case_id_mismatch",
             "unknown_contract_failure"
         ]
     );
@@ -1081,7 +1081,7 @@ async fn list_judge_trace_replay_by_owner_should_aggregate_counts_and_replay_eli
     assert!(phase_item.replay_eligible);
     assert_eq!(
         phase_item.replay_recommendation.as_deref(),
-        Some("replay_phase_job")
+        Some("replay_phase_case")
     );
     let final_item = out
         .items
@@ -1104,7 +1104,7 @@ async fn list_judge_trace_replay_by_owner_should_prefer_structured_fields_and_ma
         now,
         "failed",
         Some("[response_accepted_false] accepted=false"),
-        Some("response_job_id_mismatch"),
+        Some("response_case_id_mismatch"),
         Some("final_contract_blocked"),
     )
     .await?;
@@ -1140,7 +1140,10 @@ async fn list_judge_trace_replay_by_owner_should_prefer_structured_fields_and_ma
     assert_eq!(out.returned_count, 1);
     let item = out.items.first().expect("one item should exist");
     assert_eq!(item.scope, "final");
-    assert_eq!(item.error_code.as_deref(), Some("response_job_id_mismatch"));
+    assert_eq!(
+        item.error_code.as_deref(),
+        Some("response_case_id_mismatch")
+    );
     assert_eq!(
         item.contract_failure_type.as_deref(),
         Some("final_contract_blocked")
@@ -1197,7 +1200,7 @@ async fn list_judge_trace_replay_by_owner_should_keep_stable_order_when_created_
         &state,
         tie_time,
         "failed",
-        Some("[response_job_id_mismatch] job_id mismatch"),
+        Some("[response_case_id_mismatch] case_id mismatch"),
         None,
         None,
     )
@@ -1225,7 +1228,7 @@ async fn list_judge_trace_replay_by_owner_should_keep_stable_order_when_created_
     let observed = out
         .items
         .iter()
-        .map(|item| (item.created_at, item.job_id, item.scope.clone()))
+        .map(|item| (item.created_at, item.case_id, item.scope.clone()))
         .collect::<Vec<_>>();
     let mut expected = observed.clone();
     expected.sort_by(|a, b| {
@@ -1305,15 +1308,15 @@ async fn list_judge_replay_actions_by_owner_should_reject_out_of_range_filters()
         .list_judge_replay_actions_by_owner(
             &owner,
             ListJudgeReplayActionsOpsQuery {
-                job_id: Some(overflow_u64),
+                case_id: Some(overflow_u64),
                 ..default_replay_actions_query()
             },
         )
         .await
-        .expect_err("overflow job_id should fail");
+        .expect_err("overflow case_id should fail");
     match job_err {
         AppError::DebateError(msg) => {
-            assert_eq!(msg, "ops_judge_replay_actions_job_id_out_of_range")
+            assert_eq!(msg, "ops_judge_replay_actions_case_id_out_of_range")
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -1391,7 +1394,7 @@ async fn list_judge_replay_actions_by_owner_should_apply_filters_and_keep_stable
             ListJudgeReplayActionsOpsQuery {
                 scope: Some("phase".to_string()),
                 session_id: Some(phase_session_id as u64),
-                job_id: Some(phase_job_id as u64),
+                case_id: Some(phase_job_id as u64),
                 requested_by: Some(1),
                 previous_status: Some("FAILED".to_string()),
                 new_status: Some("queued".to_string()),
@@ -1409,7 +1412,7 @@ async fn list_judge_replay_actions_by_owner_should_apply_filters_and_keep_stable
     assert!(output.items[0].created_at >= output.items[1].created_at);
     assert_eq!(output.items[0].scope, "phase");
     assert_eq!(output.items[0].session_id, phase_session_id as u64);
-    assert_eq!(output.items[0].job_id, phase_job_id as u64);
+    assert_eq!(output.items[0].case_id, phase_job_id as u64);
     assert_eq!(output.items[0].requested_by, 1);
     assert_eq!(output.items[0].previous_status, "failed");
     assert_eq!(output.items[0].new_status, "queued");
@@ -1549,7 +1552,7 @@ async fn get_judge_replay_preview_by_owner_should_return_not_found_for_missing_j
         .await
         .expect_err("missing phase job should be rejected");
     match phase_err {
-        AppError::NotFound(msg) => assert!(msg.contains("judge phase job id 999999")),
+        AppError::NotFound(msg) => assert!(msg.contains("judge phase case id 999999")),
         other => panic!("unexpected error: {other}"),
     }
 
@@ -1558,7 +1561,7 @@ async fn get_judge_replay_preview_by_owner_should_return_not_found_for_missing_j
         .await
         .expect_err("missing final job should be rejected");
     match final_err {
-        AppError::NotFound(msg) => assert!(msg.contains("judge final job id 999999")),
+        AppError::NotFound(msg) => assert!(msg.contains("judge final case id 999999")),
         other => panic!("unexpected error: {other}"),
     }
     Ok(())
@@ -1646,7 +1649,7 @@ async fn get_judge_replay_preview_by_owner_should_mark_replay_block_reason_for_n
         )
         .await?;
     assert_eq!(out.meta.scope, "final");
-    assert_eq!(out.meta.job_id, final_job_id as u64);
+    assert_eq!(out.meta.case_id, final_job_id as u64);
     assert!(!out.meta.replay_eligible);
     assert_eq!(
         out.meta.replay_block_reason.as_deref(),
@@ -1656,7 +1659,7 @@ async fn get_judge_replay_preview_by_owner_should_mark_replay_block_reason_for_n
 }
 
 #[tokio::test]
-async fn get_judge_replay_preview_by_owner_should_reject_out_of_range_job_id() -> Result<()> {
+async fn get_judge_replay_preview_by_owner_should_reject_out_of_range_case_id() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let owner = find_user(&state, 1).await?;
     let overflow_job_id = (i64::MAX as u64).saturating_add(1);
@@ -1664,10 +1667,10 @@ async fn get_judge_replay_preview_by_owner_should_reject_out_of_range_job_id() -
     let err = state
         .get_judge_replay_preview_by_owner(&owner, replay_preview_query("phase", overflow_job_id))
         .await
-        .expect_err("overflow job id should fail");
+        .expect_err("overflow case id should fail");
     match err {
         AppError::DebateError(msg) => {
-            assert_eq!(msg, "ops_judge_replay_preview_job_id_out_of_range")
+            assert_eq!(msg, "ops_judge_replay_preview_case_id_out_of_range")
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -1737,7 +1740,7 @@ async fn execute_judge_replay_by_owner_should_return_not_found_for_missing_jobs(
         .await
         .expect_err("missing phase job should fail");
     match phase_err {
-        AppError::NotFound(msg) => assert!(msg.contains("judge phase job id 999999")),
+        AppError::NotFound(msg) => assert!(msg.contains("judge phase case id 999999")),
         other => panic!("unexpected error: {other}"),
     }
 
@@ -1746,7 +1749,7 @@ async fn execute_judge_replay_by_owner_should_return_not_found_for_missing_jobs(
         .await
         .expect_err("missing final job should fail");
     match final_err {
-        AppError::NotFound(msg) => assert!(msg.contains("judge final job id 999999")),
+        AppError::NotFound(msg) => assert!(msg.contains("judge final case id 999999")),
         other => panic!("unexpected error: {other}"),
     }
     Ok(())
@@ -1844,7 +1847,7 @@ async fn execute_judge_replay_by_owner_should_reject_when_final_report_exists() 
 }
 
 #[tokio::test]
-async fn execute_judge_replay_by_owner_should_reject_out_of_range_job_id() -> Result<()> {
+async fn execute_judge_replay_by_owner_should_reject_out_of_range_case_id() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let owner = find_user(&state, 1).await?;
     let overflow_job_id = (i64::MAX as u64).saturating_add(1);
@@ -1852,10 +1855,10 @@ async fn execute_judge_replay_by_owner_should_reject_out_of_range_job_id() -> Re
     let err = state
         .execute_judge_replay_by_owner(&owner, replay_execute_input("phase", overflow_job_id, None))
         .await
-        .expect_err("overflow job id should fail");
+        .expect_err("overflow case id should fail");
     match err {
         AppError::DebateError(msg) => {
-            assert_eq!(msg, "ops_judge_replay_execute_job_id_out_of_range")
+            assert_eq!(msg, "ops_judge_replay_execute_case_id_out_of_range")
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -1881,7 +1884,7 @@ async fn execute_judge_replay_by_owner_should_reset_phase_and_final_jobs_and_wri
         )
         .await?;
     assert_eq!(phase_out.scope, "phase");
-    assert_eq!(phase_out.job_id, phase_job_id as u64);
+    assert_eq!(phase_out.case_id, phase_job_id as u64);
     assert_eq!(phase_out.previous_status, "failed");
     assert_eq!(phase_out.new_status, "queued");
     assert!(phase_out.new_trace_id.starts_with("judge-replay-phase-"));
@@ -1941,7 +1944,7 @@ async fn execute_judge_replay_by_owner_should_reset_phase_and_final_jobs_and_wri
         )
         .await?;
     assert_eq!(final_out.scope, "final");
-    assert_eq!(final_out.job_id, final_job_id as u64);
+    assert_eq!(final_out.case_id, final_job_id as u64);
     assert_eq!(final_out.previous_status, "failed");
     assert_eq!(final_out.new_status, "queued");
     assert!(final_out.new_trace_id.starts_with("judge-replay-final-"));

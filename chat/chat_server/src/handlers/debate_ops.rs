@@ -3546,7 +3546,7 @@ pub(crate) async fn list_judge_trace_replay_ops_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
-/// Preview replay dispatch payload by scope/job id (no side effects).
+/// Preview replay dispatch payload by scope/case id (no side effects).
 #[utoipa::path(
     get,
     path = "/api/debate/ops/judge-replay/preview",
@@ -3575,7 +3575,7 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
     let started_at = Instant::now();
     let request_id = request_id_from_headers(&headers);
     let query_scope = input.scope.clone();
-    let query_job_id = input.job_id;
+    let query_case_id = input.case_id;
     let ret = match state.get_judge_replay_preview_by_owner(&user, input).await {
         Ok(value) => value,
         Err(err) => {
@@ -3584,7 +3584,7 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
                 user_id = user.id,
                 request_id = request_id.as_deref().unwrap_or_default(),
                 scope = query_scope.as_str(),
-                job_id = query_job_id,
+                case_id = query_case_id,
                 latency_ms,
                 decision = "failed",
                 "get ops judge replay preview failed: {}",
@@ -3601,7 +3601,7 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
         user_id = user.id,
         request_id = request_id.as_deref().unwrap_or_default(),
         scope = ret.meta.scope.as_str(),
-        job_id = ret.meta.job_id,
+        case_id = ret.meta.case_id,
         status = ret.meta.status.as_str(),
         replay_eligible = ret.meta.replay_eligible,
         message_count = ret.meta.message_count.unwrap_or_default(),
@@ -3614,7 +3614,7 @@ pub(crate) async fn get_judge_replay_preview_ops_handler(
     Ok((StatusCode::OK, Json(ret)))
 }
 
-/// Execute replay for a failed phase/final dispatch job.
+/// Execute replay for a failed phase/final dispatch case.
 #[utoipa::path(
     post,
     path = "/api/debate/ops/judge-replay/execute",
@@ -3663,7 +3663,7 @@ pub(crate) async fn execute_judge_replay_ops_handler(
     };
 
     let request_scope = input.scope.clone();
-    let request_job_id = input.job_id;
+    let request_case_id = input.case_id;
     let ret = match state.execute_judge_replay_by_owner(&user, input).await {
         Ok(value) => value,
         Err(err) => {
@@ -3672,7 +3672,7 @@ pub(crate) async fn execute_judge_replay_ops_handler(
                 user_id = user.id,
                 request_id = request_id.as_deref().unwrap_or_default(),
                 scope = request_scope.as_str(),
-                job_id = request_job_id,
+                case_id = request_case_id,
                 latency_ms,
                 decision = "failed",
                 result = classify_ops_judge_replay_execute_failure(&err),
@@ -3688,7 +3688,7 @@ pub(crate) async fn execute_judge_replay_ops_handler(
         user_id = user.id,
         request_id = request_id.as_deref().unwrap_or_default(),
         scope = ret.scope.as_str(),
-        job_id = ret.job_id,
+        case_id = ret.case_id,
         audit_id = ret.audit_id,
         previous_status = ret.previous_status.as_str(),
         new_status = ret.new_status.as_str(),
@@ -3731,7 +3731,7 @@ pub(crate) async fn list_judge_replay_actions_ops_handler(
     let window_to = input.to;
     let query_scope = input.scope.clone().unwrap_or_default();
     let query_session_id = input.session_id.unwrap_or_default();
-    let query_job_id = input.job_id.unwrap_or_default();
+    let query_case_id = input.case_id.unwrap_or_default();
     let query_requested_by = input.requested_by.unwrap_or_default();
     let query_previous_status = input.previous_status.clone().unwrap_or_default();
     let query_new_status = input.new_status.clone().unwrap_or_default();
@@ -3758,7 +3758,7 @@ pub(crate) async fn list_judge_replay_actions_ops_handler(
                 window_to = ?window_to,
                 scope = query_scope.as_str(),
                 session_id = query_session_id,
-                job_id = query_job_id,
+                case_id = query_case_id,
                 requested_by = query_requested_by,
                 previous_status = query_previous_status.as_str(),
                 new_status = query_new_status.as_str(),
@@ -3783,7 +3783,7 @@ pub(crate) async fn list_judge_replay_actions_ops_handler(
         window_to = ?window_to,
         scope = query_scope.as_str(),
         session_id = query_session_id,
-        job_id = query_job_id,
+        case_id = query_case_id,
         requested_by = query_requested_by,
         previous_status = query_previous_status.as_str(),
         new_status = query_new_status.as_str(),

@@ -8,7 +8,7 @@ use uuid::Uuid;
 const CONTRACT_FAILURE_FINAL_BLOCKED: &str = "final_contract_blocked";
 const CONTRACT_FAILURE_PHASE_INCOMPLETE: &str = "phase_artifact_incomplete";
 const CONTRACT_FAILURE_ACCEPTED_FALSE: &str = "response_accepted_false";
-const CONTRACT_FAILURE_JOB_ID_MISMATCH: &str = "response_job_id_mismatch";
+const CONTRACT_FAILURE_CASE_ID_MISMATCH: &str = "response_case_id_mismatch";
 const CONTRACT_FAILURE_UNKNOWN: &str = "unknown_contract_failure";
 const DEFAULT_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 500;
 const MAX_OPS_FAILURE_STATS_SCAN_LIMIT: u32 = 5000;
@@ -21,14 +21,14 @@ const MAX_REPLAY_REASON_LEN: usize = 500;
 const MAX_OPS_REPLAY_ACTIONS_KEYWORD_LEN: usize = 100;
 const MAX_OPS_REPLAY_ACTIONS_STATUS_LEN: usize = 32;
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
-const OPS_JUDGE_REPLAY_PREVIEW_JOB_ID_OUT_OF_RANGE: &str =
-    "ops_judge_replay_preview_job_id_out_of_range";
-const OPS_JUDGE_REPLAY_EXECUTE_JOB_ID_OUT_OF_RANGE: &str =
-    "ops_judge_replay_execute_job_id_out_of_range";
+const OPS_JUDGE_REPLAY_PREVIEW_CASE_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_preview_case_id_out_of_range";
+const OPS_JUDGE_REPLAY_EXECUTE_CASE_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_execute_case_id_out_of_range";
 const OPS_JUDGE_REPLAY_ACTIONS_SESSION_ID_OUT_OF_RANGE: &str =
     "ops_judge_replay_actions_session_id_out_of_range";
-const OPS_JUDGE_REPLAY_ACTIONS_JOB_ID_OUT_OF_RANGE: &str =
-    "ops_judge_replay_actions_job_id_out_of_range";
+const OPS_JUDGE_REPLAY_ACTIONS_CASE_ID_OUT_OF_RANGE: &str =
+    "ops_judge_replay_actions_case_id_out_of_range";
 const OPS_JUDGE_REPLAY_ACTIONS_REQUESTED_BY_OUT_OF_RANGE: &str =
     "ops_judge_replay_actions_requested_by_out_of_range";
 const JUDGE_REPORT_RUN_NO_OUT_OF_RANGE: &str = "judge_report_run_no_out_of_range";
@@ -241,12 +241,12 @@ fn normalize_optional_replay_reason(reason: Option<String>) -> Result<Option<Str
     Ok(Some(trimmed.to_string()))
 }
 
-fn build_replay_trace_id(scope: &str, job_id: u64) -> String {
-    format!("judge-replay-{scope}-{job_id}-{}", Uuid::now_v7())
+fn build_replay_trace_id(scope: &str, case_id: u64) -> String {
+    format!("judge-replay-{scope}-{case_id}-{}", Uuid::now_v7())
 }
 
-fn build_replay_idempotency_key(scope: &str, job_id: u64) -> String {
-    format!("judge-replay:{scope}:{job_id}:{}", Uuid::now_v7())
+fn build_replay_idempotency_key(scope: &str, case_id: u64) -> String {
+    format!("judge-replay:{scope}:{case_id}:{}", Uuid::now_v7())
 }
 
 fn normalize_optional_winner_filter(winner: Option<String>) -> Result<Option<String>, AppError> {
@@ -326,8 +326,8 @@ fn infer_contract_failure_type(
     if code == CONTRACT_FAILURE_ACCEPTED_FALSE {
         return Some(CONTRACT_FAILURE_ACCEPTED_FALSE.to_string());
     }
-    if code == CONTRACT_FAILURE_JOB_ID_MISMATCH {
-        return Some(CONTRACT_FAILURE_JOB_ID_MISMATCH.to_string());
+    if code == CONTRACT_FAILURE_CASE_ID_MISMATCH {
+        return Some(CONTRACT_FAILURE_CASE_ID_MISMATCH.to_string());
     }
 
     let normalized = error_message
@@ -348,8 +348,8 @@ fn infer_contract_failure_type(
     if normalized.contains("accepted=false") {
         return Some(CONTRACT_FAILURE_ACCEPTED_FALSE.to_string());
     }
-    if normalized.contains("job_id mismatch") {
-        return Some(CONTRACT_FAILURE_JOB_ID_MISMATCH.to_string());
+    if normalized.contains("case_id mismatch") {
+        return Some(CONTRACT_FAILURE_CASE_ID_MISMATCH.to_string());
     }
     None
 }
@@ -380,8 +380,8 @@ fn resolve_contract_failure_hint_and_action(
             Some("AI 服务返回 accepted=false，请检查请求参数或服务可用性后重试。".to_string()),
             Some("check_ai_judge_acceptance_then_retry".to_string()),
         ),
-        Some(CONTRACT_FAILURE_JOB_ID_MISMATCH) => (
-            Some("AI 服务返回 job_id 不一致，请核对 dispatch 契约版本。".to_string()),
+        Some(CONTRACT_FAILURE_CASE_ID_MISMATCH) => (
+            Some("AI 服务返回 case_id 不一致，请核对 dispatch 契约版本。".to_string()),
             Some("check_dispatch_contract_alignment".to_string()),
         ),
         Some(CONTRACT_FAILURE_UNKNOWN) => (
@@ -589,7 +589,7 @@ fn resolve_judge_report_status(
 }
 
 fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceReplayOpsItem {
-    let job_id = row
+    let case_id = row
         .phase_job_id
         .or(row.final_job_id)
         .and_then(|v| u64::try_from(v).ok())
@@ -625,9 +625,9 @@ fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceRep
     let replay_eligible = matches!(status.as_str(), "failed" | "succeeded");
     let replay_recommendation = if replay_eligible {
         if scope == "phase" {
-            Some("replay_phase_job".to_string())
+            Some("replay_phase_case".to_string())
         } else {
-            Some("replay_final_job".to_string())
+            Some("replay_final_case".to_string())
         }
     } else {
         None
@@ -645,14 +645,14 @@ fn map_judge_trace_replay_ops_item(row: JudgeTraceReplayOpsRow) -> JudgeTraceRep
         error_message,
         error_code,
         contract_failure_type,
-        phase_job_id: row.phase_job_id.map(|v| v as u64),
-        final_job_id: row.final_job_id.map(|v| v as u64),
+        phase_case_id: row.phase_job_id.map(|v| v as u64),
+        final_case_id: row.final_job_id.map(|v| v as u64),
         phase_no: row.phase_no,
         phase_start_no: row.phase_start_no,
         phase_end_no: row.phase_end_no,
         phase_report_id: row.phase_report_id.map(|v| v as u64),
         final_report_id: row.final_report_id.map(|v| v as u64),
-        job_id,
+        case_id,
         report_id,
         replay_action_count,
         latest_replay_action_id: row.latest_replay_action_id.map(|v| v as u64),
@@ -666,7 +666,7 @@ fn map_judge_replay_action_ops_item(row: JudgeReplayActionOpsRow) -> JudgeReplay
     JudgeReplayActionOpsItem {
         audit_id: row.audit_id as u64,
         scope: row.scope,
-        job_id: row.job_id as u64,
+        case_id: row.job_id as u64,
         session_id: row.session_id as u64,
         requested_by: row.requested_by as u64,
         reason: row.reason,
@@ -1062,8 +1062,8 @@ impl AppState {
         self.ensure_ops_permission(user, OpsPermission::JudgeReview)
             .await?;
         let scope = normalize_replay_scope(query.scope.as_str())?;
-        let job_id_i64 =
-            checked_u64_to_i64(query.job_id, OPS_JUDGE_REPLAY_PREVIEW_JOB_ID_OUT_OF_RANGE)?;
+        let case_id_i64 =
+            checked_u64_to_i64(query.case_id, OPS_JUDGE_REPLAY_PREVIEW_CASE_ID_OUT_OF_RANGE)?;
         if scope == "phase" {
             let job: JudgePhaseReplayJobRow = sqlx::query_as(
                 r#"
@@ -1091,10 +1091,10 @@ impl AppState {
                 LIMIT 1
                 "#,
             )
-            .bind(job_id_i64)
+            .bind(case_id_i64)
             .fetch_optional(&self.pool)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("judge phase job id {}", query.job_id)))?;
+            .ok_or_else(|| AppError::NotFound(format!("judge phase case id {}", query.case_id)))?;
 
             let messages: Vec<(i64, i64, String, String, DateTime<Utc>)> = sqlx::query_as(
                 r#"
@@ -1141,7 +1141,7 @@ impl AppState {
             }
 
             let request_snapshot = serde_json::json!({
-                "job_id": job.id as u64,
+                "case_id": job.id as u64,
                 "scope_id": 1_u64,
                 "session_id": job.session_id as u64,
                 "phase_no": job.phase_no,
@@ -1165,7 +1165,7 @@ impl AppState {
                 snapshot_hash,
                 meta: JudgeReplayPreviewMeta {
                     scope: "phase".to_string(),
-                    job_id: job.id as u64,
+                    case_id: job.id as u64,
                     session_id: job.session_id as u64,
                     status,
                     trace_id: job.trace_id,
@@ -1218,10 +1218,10 @@ impl AppState {
             LIMIT 1
             "#,
         )
-        .bind(job_id_i64)
+        .bind(case_id_i64)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("judge final job id {}", query.job_id)))?;
+        .ok_or_else(|| AppError::NotFound(format!("judge final case id {}", query.case_id)))?;
         if job.phase_end_no < job.phase_start_no {
             return Err(AppError::DebateError(format!(
                 "final replay preview phase range invalid, start={}, end={}",
@@ -1230,7 +1230,7 @@ impl AppState {
         }
 
         let request_snapshot = serde_json::json!({
-            "job_id": job.id as u64,
+            "case_id": job.id as u64,
             "scope_id": 1_u64,
             "session_id": job.session_id as u64,
             "phase_start_no": job.phase_start_no,
@@ -1250,7 +1250,7 @@ impl AppState {
             snapshot_hash,
             meta: JudgeReplayPreviewMeta {
                 scope: "final".to_string(),
-                job_id: job.id as u64,
+                case_id: job.id as u64,
                 session_id: job.session_id as u64,
                 status,
                 trace_id: job.trace_id,
@@ -1289,8 +1289,9 @@ impl AppState {
             .await?;
         let scope = normalize_replay_scope(input.scope.as_str())?;
         let reason = normalize_optional_replay_reason(input.reason)?;
-        let job_id = input.job_id;
-        let job_id_i64 = checked_u64_to_i64(job_id, OPS_JUDGE_REPLAY_EXECUTE_JOB_ID_OUT_OF_RANGE)?;
+        let case_id = input.case_id;
+        let case_id_i64 =
+            checked_u64_to_i64(case_id, OPS_JUDGE_REPLAY_EXECUTE_CASE_ID_OUT_OF_RANGE)?;
         let new_status = "queued".to_string();
 
         if scope == "phase" {
@@ -1321,10 +1322,10 @@ impl AppState {
                 FOR UPDATE
                 "#,
             )
-            .bind(job_id_i64)
+            .bind(case_id_i64)
             .fetch_optional(&mut *tx)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("judge phase job id {}", job_id)))?;
+            .ok_or_else(|| AppError::NotFound(format!("judge phase case id {}", case_id)))?;
 
             let previous_status = job.status.to_ascii_lowercase();
             if previous_status != "failed" {
@@ -1351,8 +1352,8 @@ impl AppState {
                 )));
             }
 
-            let new_trace_id = build_replay_trace_id("phase", job_id);
-            let new_idempotency_key = build_replay_idempotency_key("phase", job_id);
+            let new_trace_id = build_replay_trace_id("phase", case_id);
+            let new_idempotency_key = build_replay_idempotency_key("phase", case_id);
             sqlx::query(
                 r#"
                 UPDATE judge_phase_jobs
@@ -1426,7 +1427,7 @@ impl AppState {
             return Ok(ExecuteJudgeReplayOpsOutput {
                 audit_id: audit.id as u64,
                 scope: "phase".to_string(),
-                job_id: job.id as u64,
+                case_id: job.id as u64,
                 session_id: job.session_id as u64,
                 previous_status,
                 new_status,
@@ -1462,10 +1463,10 @@ impl AppState {
             FOR UPDATE
             "#,
         )
-        .bind(job_id_i64)
+        .bind(case_id_i64)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("judge final job id {}", job_id)))?;
+        .ok_or_else(|| AppError::NotFound(format!("judge final case id {}", case_id)))?;
 
         let previous_status = job.status.to_ascii_lowercase();
         if previous_status != "failed" {
@@ -1492,8 +1493,8 @@ impl AppState {
             )));
         }
 
-        let new_trace_id = build_replay_trace_id("final", job_id);
-        let new_idempotency_key = build_replay_idempotency_key("final", job_id);
+        let new_trace_id = build_replay_trace_id("final", case_id);
+        let new_idempotency_key = build_replay_idempotency_key("final", case_id);
         sqlx::query(
             r#"
             UPDATE judge_final_jobs
@@ -1569,7 +1570,7 @@ impl AppState {
         Ok(ExecuteJudgeReplayOpsOutput {
             audit_id: audit.id as u64,
             scope: "final".to_string(),
-            job_id: job.id as u64,
+            case_id: job.id as u64,
             session_id: job.session_id as u64,
             previous_status,
             new_status,
@@ -1601,9 +1602,9 @@ impl AppState {
                 checked_u64_to_i64(value, OPS_JUDGE_REPLAY_ACTIONS_SESSION_ID_OUT_OF_RANGE)
             })
             .transpose()?;
-        let job_id_filter = query
-            .job_id
-            .map(|value| checked_u64_to_i64(value, OPS_JUDGE_REPLAY_ACTIONS_JOB_ID_OUT_OF_RANGE))
+        let case_id_filter = query
+            .case_id
+            .map(|value| checked_u64_to_i64(value, OPS_JUDGE_REPLAY_ACTIONS_CASE_ID_OUT_OF_RANGE))
             .transpose()?;
         let requested_by_filter = query
             .requested_by
@@ -1654,7 +1655,7 @@ impl AppState {
         .bind(query.to)
         .bind(scope_filter.as_deref())
         .bind(session_id_filter)
-        .bind(job_id_filter)
+        .bind(case_id_filter)
         .bind(requested_by_filter)
         .bind(previous_status_filter.as_deref())
         .bind(new_status_filter.as_deref())
@@ -1702,7 +1703,7 @@ impl AppState {
         .bind(query.to)
         .bind(scope_filter.as_deref())
         .bind(session_id_filter)
-        .bind(job_id_filter)
+        .bind(case_id_filter)
         .bind(requested_by_filter)
         .bind(previous_status_filter.as_deref())
         .bind(new_status_filter.as_deref())

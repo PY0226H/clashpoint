@@ -374,6 +374,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             detail_payload["winner"],
         )
         self.assertIn("trustAttestation", detail_payload["reportPayload"])
+        self.assertIn("caseEvidence", detail_payload)
+        case_evidence = detail_payload["caseEvidence"]
+        self.assertTrue(case_evidence["hasClaimGraph"])
+        self.assertTrue(case_evidence["hasTrustAttestation"])
+        self.assertIsInstance(case_evidence["claimGraph"], dict)
+        self.assertIsInstance(case_evidence["claimGraphSummary"], dict)
+        self.assertIsInstance(case_evidence["policySnapshot"], dict)
+        self.assertTrue(str(case_evidence["policyVersion"] or "").strip())
+        self.assertEqual(case_evidence["trustAttestation"]["dispatchType"], "final")
+        self.assertIsInstance(case_evidence["fairnessSummary"], dict)
+        self.assertIsInstance(case_evidence["verdictEvidenceRefs"], list)
+        self.assertIn("auditSummary", case_evidence)
+        self.assertEqual(
+            case_evidence["auditSummary"]["alertCount"],
+            len(case_evidence["auditSummary"]["auditAlerts"]),
+        )
         self.assertEqual(detail_payload["judgeCore"]["stage"], "reported")
         self.assertEqual(detail_payload["judgeCore"]["version"], "v1")
         self.assertGreaterEqual(len(detail_payload["events"]), 2)

@@ -6245,7 +6245,7 @@ mod tests {
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=1")
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&caseId=1")
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
@@ -6270,7 +6270,7 @@ mod tests {
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=1")
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&caseId=1")
             .header("Authorization", format!("Bearer {}", token))
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
@@ -6297,7 +6297,7 @@ mod tests {
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=1")
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&caseId=1")
             .header("Authorization", format!("Bearer {}", token))
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
@@ -6334,7 +6334,7 @@ mod tests {
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/api/debate/ops/judge-replay/preview?scope=invalid&jobId=1")
+            .uri("/api/debate/ops/judge-replay/preview?scope=invalid&caseId=1")
             .header("Authorization", format!("Bearer {}", token))
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
@@ -6346,7 +6346,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_ops_judge_replay_preview_route_should_return_404_for_missing_job() -> Result<()> {
+    async fn get_ops_judge_replay_preview_route_should_return_404_for_missing_case() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let (ops_viewer, token) = create_bound_user_and_token(
@@ -6370,14 +6370,14 @@ mod tests {
 
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/api/debate/ops/judge-replay/preview?scope=phase&jobId=999999")
+            .uri("/api/debate/ops/judge-replay/preview?scope=phase&caseId=999999")
             .header("Authorization", format!("Bearer {}", token))
             .body(Body::empty())?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
-        assert!(error.error.contains("judge phase job id 999999"));
+        assert!(error.error.contains("judge phase case id 999999"));
         Ok(())
     }
 
@@ -6410,7 +6410,7 @@ mod tests {
         let phase_req = Request::builder()
             .method(Method::GET)
             .uri(format!(
-                "/api/debate/ops/judge-replay/preview?scope=phase&jobId={phase_job_id}"
+                "/api/debate/ops/judge-replay/preview?scope=phase&caseId={phase_job_id}"
             ))
             .header("Authorization", format!("Bearer {}", token))
             .body(Body::empty())?;
@@ -6420,7 +6420,7 @@ mod tests {
         let phase_out: GetJudgeReplayPreviewOpsOutput = serde_json::from_slice(&phase_body)?;
         assert!(phase_out.side_effect_free);
         assert_eq!(phase_out.meta.scope, "phase");
-        assert_eq!(phase_out.meta.job_id, phase_job_id as u64);
+        assert_eq!(phase_out.meta.case_id, phase_job_id as u64);
         assert!(phase_out.meta.replay_eligible);
         assert_eq!(phase_out.meta.message_count, Some(2));
         let phase_messages = phase_out
@@ -6433,7 +6433,7 @@ mod tests {
         let final_req = Request::builder()
             .method(Method::GET)
             .uri(format!(
-                "/api/debate/ops/judge-replay/preview?scope=final&jobId={final_job_id}"
+                "/api/debate/ops/judge-replay/preview?scope=final&caseId={final_job_id}"
             ))
             .header("Authorization", format!("Bearer {}", token))
             .body(Body::empty())?;
@@ -6443,7 +6443,7 @@ mod tests {
         let final_out: GetJudgeReplayPreviewOpsOutput = serde_json::from_slice(&final_body)?;
         assert!(final_out.side_effect_free);
         assert_eq!(final_out.meta.scope, "final");
-        assert_eq!(final_out.meta.job_id, final_job_id as u64);
+        assert_eq!(final_out.meta.case_id, final_job_id as u64);
         assert!(!final_out.meta.replay_eligible);
         assert_eq!(
             final_out.meta.replay_block_reason.as_deref(),
@@ -6465,7 +6465,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "phase",
-            "jobId": 1_u64
+            "caseId": 1_u64
         });
 
         let req = Request::builder()
@@ -6496,7 +6496,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "phase",
-            "jobId": 1_u64
+            "caseId": 1_u64
         });
 
         let req = Request::builder()
@@ -6528,7 +6528,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "phase",
-            "jobId": 1_u64
+            "caseId": 1_u64
         });
 
         let req = Request::builder()
@@ -6570,7 +6570,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "invalid",
-            "jobId": 1_u64
+            "caseId": 1_u64
         });
 
         let req = Request::builder()
@@ -6612,7 +6612,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "phase",
-            "jobId": 1_u64,
+            "caseId": 1_u64,
             "reason": "r".repeat(501)
         });
 
@@ -6631,7 +6631,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_ops_judge_replay_execute_route_should_return_404_for_missing_job() -> Result<()> {
+    async fn post_ops_judge_replay_execute_route_should_return_404_for_missing_case() -> Result<()>
+    {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let (ops_reviewer, token) = create_bound_user_and_token(
@@ -6654,7 +6655,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "phase",
-            "jobId": 999_999_u64
+            "caseId": 999_999_u64
         });
 
         let req = Request::builder()
@@ -6667,7 +6668,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
-        assert!(error.error.contains("judge phase job id 999999"));
+        assert!(error.error.contains("judge phase case id 999999"));
         Ok(())
     }
 
@@ -6700,7 +6701,7 @@ mod tests {
             .uri("/api/debate/ops/judge-replay/execute")
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "text/plain")
-            .body(Body::from("{\"scope\":\"phase\",\"jobId\":1}"))?;
+            .body(Body::from("{\"scope\":\"phase\",\"caseId\":1}"))?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         let body = res.into_body().collect().await?.to_bytes();
@@ -6738,7 +6739,7 @@ mod tests {
             .uri("/api/debate/ops/judge-replay/execute")
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
-            .body(Body::from("{\"scope\":\"phase\",\"jobId\":1"))?;
+            .body(Body::from("{\"scope\":\"phase\",\"caseId\":1"))?;
         let res = app.oneshot(req).await?;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = res.into_body().collect().await?.to_bytes();
@@ -6748,16 +6749,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_ops_judge_replay_execute_route_should_return_400_for_out_of_range_job_id(
+    async fn post_ops_judge_replay_execute_route_should_return_400_for_out_of_range_case_id(
     ) -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let owner = state.find_user_by_id(1).await?.expect("owner should exist");
         let (ops_reviewer, token) = create_bound_user_and_token(
             &state,
-            "Ops Replay Execute Overflow Job Id",
-            "ops-replay-execute-overflow-job-id@acme.org",
+            "Ops Replay Execute Overflow Case Id",
+            "ops-replay-execute-overflow-case-id@acme.org",
             "+8613810007797",
-            "ops-replay-execute-overflow-job-id-sid",
+            "ops-replay-execute-overflow-case-id-sid",
         )
         .await?;
         state
@@ -6772,7 +6773,7 @@ mod tests {
         let app = get_router(state).await?;
         let payload = serde_json::json!({
             "scope": "phase",
-            "jobId": (i64::MAX as u64).saturating_add(1)
+            "caseId": (i64::MAX as u64).saturating_add(1)
         });
 
         let req = Request::builder()
@@ -6787,7 +6788,7 @@ mod tests {
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert!(error
             .error
-            .contains("ops_judge_replay_execute_job_id_out_of_range"));
+            .contains("ops_judge_replay_execute_case_id_out_of_range"));
         Ok(())
     }
 
@@ -6819,7 +6820,7 @@ mod tests {
 
         let phase_payload = serde_json::json!({
             "scope": "phase",
-            "jobId": phase_job_id as u64,
+            "caseId": phase_job_id as u64,
             "reason": "manual replay for phase"
         });
         let phase_req = Request::builder()
@@ -6833,13 +6834,13 @@ mod tests {
         let phase_body = phase_res.into_body().collect().await?.to_bytes();
         let phase_out: ExecuteJudgeReplayOpsOutput = serde_json::from_slice(&phase_body)?;
         assert_eq!(phase_out.scope, "phase");
-        assert_eq!(phase_out.job_id, phase_job_id as u64);
+        assert_eq!(phase_out.case_id, phase_job_id as u64);
         assert_eq!(phase_out.previous_status, "failed");
         assert_eq!(phase_out.new_status, "queued");
 
         let final_payload = serde_json::json!({
             "scope": "final",
-            "jobId": final_job_id as u64,
+            "caseId": final_job_id as u64,
             "reason": "manual replay for final"
         });
         let final_req = Request::builder()
@@ -6853,7 +6854,7 @@ mod tests {
         let final_body = final_res.into_body().collect().await?.to_bytes();
         let final_out: ExecuteJudgeReplayOpsOutput = serde_json::from_slice(&final_body)?;
         assert_eq!(final_out.scope, "final");
-        assert_eq!(final_out.job_id, final_job_id as u64);
+        assert_eq!(final_out.case_id, final_job_id as u64);
         assert_eq!(final_out.previous_status, "failed");
         assert_eq!(final_out.new_status, "queued");
         Ok(())

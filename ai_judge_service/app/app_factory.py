@@ -265,6 +265,100 @@ def _build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
     return build_verdict_contract_v3(payload)
 
 
+def _build_case_evidence_view(
+    *,
+    report_payload: dict[str, Any] | None,
+    verdict_contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = report_payload if isinstance(report_payload, dict) else {}
+    contract = verdict_contract if isinstance(verdict_contract, dict) else {}
+    judge_trace = payload.get("judgeTrace") if isinstance(payload.get("judgeTrace"), dict) else {}
+
+    claim_graph = payload.get("claimGraph") if isinstance(payload.get("claimGraph"), dict) else None
+    claim_graph_summary = (
+        payload.get("claimGraphSummary")
+        if isinstance(payload.get("claimGraphSummary"), dict)
+        else None
+    )
+    policy_snapshot = (
+        judge_trace.get("policyRegistry")
+        if isinstance(judge_trace.get("policyRegistry"), dict)
+        else None
+    )
+    trust_attestation = (
+        payload.get("trustAttestation")
+        if isinstance(payload.get("trustAttestation"), dict)
+        else None
+    )
+    fairness_summary = (
+        payload.get("fairnessSummary")
+        if isinstance(payload.get("fairnessSummary"), dict)
+        else (
+            contract.get("fairnessSummary")
+            if isinstance(contract.get("fairnessSummary"), dict)
+            else None
+        )
+    )
+
+    raw_audit_alerts = payload.get("auditAlerts")
+    if not isinstance(raw_audit_alerts, list):
+        raw_audit_alerts = contract.get("auditAlerts")
+    audit_alerts = [item for item in (raw_audit_alerts or []) if isinstance(item, dict)]
+
+    raw_error_codes = payload.get("errorCodes")
+    if not isinstance(raw_error_codes, list):
+        raw_error_codes = contract.get("errorCodes")
+    error_codes = [
+        str(item).strip()
+        for item in (raw_error_codes or [])
+        if str(item).strip()
+    ]
+
+    raw_verdict_refs = payload.get("verdictEvidenceRefs")
+    if not isinstance(raw_verdict_refs, list):
+        raw_verdict_refs = contract.get("verdictEvidenceRefs")
+    verdict_evidence_refs = [
+        str(item).strip()
+        for item in (raw_verdict_refs or [])
+        if str(item).strip()
+    ]
+
+    degradation_level = (
+        int(payload.get("degradationLevel"))
+        if isinstance(payload.get("degradationLevel"), int)
+        else (
+            int(contract.get("degradationLevel"))
+            if isinstance(contract.get("degradationLevel"), int)
+            else None
+        )
+    )
+
+    policy_version = (
+        str(policy_snapshot.get("version")).strip()
+        if isinstance(policy_snapshot, dict)
+        and str(policy_snapshot.get("version") or "").strip()
+        else None
+    )
+
+    return {
+        "claimGraph": claim_graph,
+        "claimGraphSummary": claim_graph_summary,
+        "policySnapshot": policy_snapshot,
+        "policyVersion": policy_version,
+        "trustAttestation": trust_attestation,
+        "fairnessSummary": fairness_summary,
+        "verdictEvidenceRefs": verdict_evidence_refs,
+        "auditSummary": {
+            "alertCount": len(audit_alerts),
+            "auditAlerts": audit_alerts,
+            "errorCodes": error_codes,
+            "degradationLevel": degradation_level,
+        },
+        "hasClaimGraph": claim_graph is not None,
+        "hasTrustAttestation": trust_attestation is not None,
+    }
+
+
 def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -2304,6 +2398,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         report_payload = final_report_payload or summary_payload or phase_report_payload
         verdict_contract = _build_verdict_contract(report_payload)
+        case_evidence = _build_case_evidence_view(
+            report_payload=report_payload,
+            verdict_contract=verdict_contract,
+        )
         winner_raw = (
             report_summary.get("winner")
             or verdict_contract.get("winner")
@@ -2372,6 +2470,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "latestDispatchType": "final" if final_receipt is not None else ("phase" if phase_receipt is not None else None),
             "reportPayload": report_payload,
             "verdictContract": verdict_contract,
+            "caseEvidence": case_evidence,
             "winner": winner,
             "needsDrawVote": (
                 verdict_contract.get("needsDrawVote")
