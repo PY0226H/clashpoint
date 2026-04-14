@@ -86,6 +86,8 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         self.assertEqual(profile.prompt_registry_version, "promptset-v3-default")
         self.assertEqual(profile.tool_registry_version, "toolset-v3-default")
         self.assertEqual(profile.prompt_versions["claimGraphVersion"], "v1-claim-graph-bootstrap")
+        self.assertIn("evidenceMinTotalRefs", profile.fairness_thresholds)
+        self.assertIn("evidenceMinDecisiveRefs", profile.fairness_thresholds)
 
     def test_build_policy_registry_runtime_should_parse_custom_registry_json(self) -> None:
         runtime = build_policy_registry_runtime(

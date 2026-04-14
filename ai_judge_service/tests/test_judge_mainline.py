@@ -357,6 +357,101 @@ def test_build_final_report_payload_should_trigger_panel_disagreement_gate() -> 
     )
 
 
+def test_build_final_report_payload_should_trigger_evidence_sufficiency_gate() -> None:
+    request = FinalDispatchRequest(
+        case_id=9007,
+        scope_id=1,
+        session_id=307,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9007",
+        idempotency_key="final:9007",
+    )
+    now = datetime.now(timezone.utc)
+    phase_payload = _build_phase_payload(
+        pro=66.0,
+        con=59.0,
+        msg_offset=0,
+        agent2_pro=65.0,
+        agent2_con=58.0,
+    )
+    phase_payload["agent1Score"]["evidenceRefs"] = {
+        "pro": {"messageIds": [], "chunkIds": []},
+        "con": {"messageIds": [], "chunkIds": []},
+    }
+    phase_payload["agent2Score"]["hitItems"] = []
+    phase_payload["agent2Score"]["missItems"] = []
+    phase_payload["proRetrievalBundle"]["items"] = []
+    phase_payload["conRetrievalBundle"]["items"] = []
+
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={"reportPayload": phase_payload},
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+    )
+    assert payload["reviewRequired"] is True
+    assert payload["winner"] == "draw"
+    assert "evidence_support_too_low" in payload["errorCodes"]
+    assert "fairness_gate_review_required" in payload["errorCodes"]
+    assert any(item.get("type") == "evidence_support_too_low" for item in payload["auditAlerts"])
+    assert payload["fairnessSummary"]["evidenceSufficiencyPassed"] is False
+
+
+def test_build_final_report_payload_should_apply_policy_fairness_thresholds() -> None:
+    request = FinalDispatchRequest(
+        case_id=9008,
+        scope_id=1,
+        session_id=308,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9008",
+        idempotency_key="final:9008",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={
+                    "reportPayload": _build_phase_payload(
+                        pro=68.0,
+                        con=60.0,
+                        msg_offset=0,
+                        agent2_pro=67.0,
+                        agent2_con=59.0,
+                    )
+                },
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+        fairness_thresholds={
+            "evidenceMinTotalRefs": 32,
+            "evidenceMinDecisiveRefs": 32,
+            "evidenceMinWinnerSupportRefs": 16,
+        },
+    )
+    assert payload["reviewRequired"] is True
+    assert "evidence_support_too_low" in payload["errorCodes"]
+    evidence_summary = payload["fairnessSummary"]["evidenceSufficiency"]
+    assert evidence_summary["thresholds"]["minTotalRefs"] == 32
+    assert evidence_summary["thresholds"]["minDecisiveRefs"] == 32
+    assert evidence_summary["thresholds"]["minWinnerSupportRefs"] == 16
+
+
 def test_validate_final_report_payload_contract_should_report_missing_items() -> None:
     missing = validate_final_report_payload_contract({"winner": "draw"})
     assert "debateSummary" in missing

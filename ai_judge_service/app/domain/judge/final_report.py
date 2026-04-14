@@ -16,6 +16,19 @@ def _safe_float(value: Any, *, default: float = 0.0) -> float:
         return default
 
 
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _clamp_score(value: float) -> float:
     return max(0.0, min(100.0, float(value)))
 
@@ -342,6 +355,9 @@ def _evaluate_fairness_gate(
     pro_score: float,
     con_score: float,
     phase_count_used: int,
+    verdict_evidence_refs: list[dict[str, Any]],
+    evidence_ledger: dict[str, Any],
+    fairness_thresholds: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], bool]:
     # phase2 继续复用轻量探针：双路裁决 + 风格探针 + 第三路 panel 分歧检查，保持实现可解释且可回放。
     swap_instability = (
@@ -365,6 +381,70 @@ def _evaluate_fairness_gate(
         item for item in panel_probe_winners.values() if item in {"pro", "con"}
     }
     panel_high_disagreement = len(panel_non_draw_winners) > 1
+    threshold_source = fairness_thresholds if isinstance(fairness_thresholds, dict) else {}
+    evidence_min_total_refs = max(
+        0,
+        _safe_int(threshold_source.get("evidenceMinTotalRefs"), default=4),
+    )
+    evidence_min_decisive_refs = max(
+        0,
+        _safe_int(threshold_source.get("evidenceMinDecisiveRefs"), default=2),
+    )
+    evidence_min_winner_refs = max(
+        0,
+        _safe_int(threshold_source.get("evidenceMinWinnerSupportRefs"), default=1),
+    )
+    evidence_conflict_ratio_max = max(
+        0.0,
+        min(
+            1.0,
+            _safe_float(threshold_source.get("evidenceConflictRatioMax"), default=0.65),
+        ),
+    )
+    evidence_stats = (
+        evidence_ledger.get("stats") if isinstance(evidence_ledger.get("stats"), dict) else {}
+    )
+    evidence_total_entries = _safe_int(
+        evidence_stats.get("totalEntries"),
+        default=len(
+            evidence_ledger.get("entries")
+            if isinstance(evidence_ledger.get("entries"), list)
+            else []
+        ),
+    )
+    evidence_conflict_refs = _safe_int(evidence_stats.get("conflictRefCount"), default=0)
+    decisive_ref_count = len([row for row in verdict_evidence_refs if isinstance(row, dict)])
+    winner_support_ref_count = len(
+        [
+            row
+            for row in verdict_evidence_refs
+            if isinstance(row, dict)
+            and str(row.get("side") or "").strip().lower() == str(winner_before_gate or "").strip().lower()
+        ]
+    )
+    evidence_conflict_ratio = (
+        round(evidence_conflict_refs / float(max(1, evidence_total_entries)), 4)
+        if evidence_total_entries > 0
+        else 0.0
+    )
+    evidence_check_applied = phase_count_used > 0
+    evidence_sufficiency_passed = (
+        (not evidence_check_applied)
+        or (
+            evidence_total_entries >= evidence_min_total_refs
+            and decisive_ref_count >= evidence_min_decisive_refs
+            and (
+                winner_before_gate not in {"pro", "con"}
+                or winner_support_ref_count >= evidence_min_winner_refs
+            )
+            and evidence_conflict_ratio <= evidence_conflict_ratio_max
+        )
+    )
+    evidence_conflict_ratio_high = (
+        evidence_check_applied
+        and evidence_total_entries > 0
+        and evidence_conflict_ratio > evidence_conflict_ratio_max
+    )
 
     alerts: list[dict[str, Any]] = []
     error_codes: list[str] = []
@@ -407,6 +487,44 @@ def _evaluate_fairness_gate(
                 },
             }
         )
+    if not evidence_sufficiency_passed:
+        error_codes.append("evidence_support_too_low")
+        alerts.append(
+            {
+                "type": "evidence_support_too_low",
+                "severity": "critical",
+                "message": "evidence support is insufficient for reliable auto verdict",
+                "details": {
+                    "winnerBeforeGate": winner_before_gate,
+                    "totalEntries": evidence_total_entries,
+                    "decisiveRefCount": decisive_ref_count,
+                    "winnerSupportRefCount": winner_support_ref_count,
+                    "conflictRefCount": evidence_conflict_refs,
+                    "conflictRatio": evidence_conflict_ratio,
+                    "thresholds": {
+                        "minTotalRefs": evidence_min_total_refs,
+                        "minDecisiveRefs": evidence_min_decisive_refs,
+                        "minWinnerSupportRefs": evidence_min_winner_refs,
+                        "maxConflictRatio": evidence_conflict_ratio_max,
+                    },
+                },
+            }
+        )
+    if evidence_conflict_ratio_high:
+        error_codes.append("evidence_conflict_ratio_high")
+        alerts.append(
+            {
+                "type": "evidence_conflict_ratio_high",
+                "severity": "warning",
+                "message": "conflicting evidence ratio exceeds configured threshold",
+                "details": {
+                    "conflictRatio": evidence_conflict_ratio,
+                    "maxConflictRatio": evidence_conflict_ratio_max,
+                    "conflictRefCount": evidence_conflict_refs,
+                    "totalEntries": evidence_total_entries,
+                },
+            }
+        )
 
     review_required = bool(error_codes)
     summary = {
@@ -414,9 +532,26 @@ def _evaluate_fairness_gate(
         "swapInstability": swap_instability,
         "styleShiftInstability": style_shift_instability,
         "panelHighDisagreement": panel_high_disagreement,
+        "evidenceSufficiencyPassed": evidence_sufficiency_passed,
+        "evidenceConflictRatioHigh": evidence_conflict_ratio_high,
         "scoreGap": score_gap,
         "styleProbeWinners": style_probe_winners,
         "panelProbeWinners": panel_probe_winners,
+        "evidenceSufficiency": {
+            "checkApplied": evidence_check_applied,
+            "winnerBeforeGate": winner_before_gate,
+            "totalEntries": evidence_total_entries,
+            "decisiveRefCount": decisive_ref_count,
+            "winnerSupportRefCount": winner_support_ref_count,
+            "conflictRefCount": evidence_conflict_refs,
+            "conflictRatio": evidence_conflict_ratio,
+            "thresholds": {
+                "minTotalRefs": evidence_min_total_refs,
+                "minDecisiveRefs": evidence_min_decisive_refs,
+                "minWinnerSupportRefs": evidence_min_winner_refs,
+                "maxConflictRatio": evidence_conflict_ratio_max,
+            },
+        },
         "reviewRequired": review_required,
     }
     return summary, alerts, error_codes, review_required
@@ -645,6 +780,7 @@ def build_final_report_payload(
     request: FinalDispatchRequest,
     phase_receipts: list[Any],
     judge_style_mode: str,
+    fairness_thresholds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     expected_phase_nos = list(range(request.phase_start_no, request.phase_end_no + 1))
     expected_phase_set = set(expected_phase_nos)
@@ -944,6 +1080,9 @@ def build_final_report_payload(
             pro_score=pro_score,
             con_score=con_score,
             phase_count_used=len(phase_rollup_summary),
+            verdict_evidence_refs=verdict_evidence_refs,
+            evidence_ledger=evidence_ledger,
+            fairness_thresholds=fairness_thresholds,
         )
     )
     for code in fairness_error_codes:

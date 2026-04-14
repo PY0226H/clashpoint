@@ -898,6 +898,7 @@ def _build_final_report_payload(
     runtime: AppRuntime,
     request: FinalDispatchRequest,
     phase_receipts: list[Any] | None = None,
+    fairness_thresholds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     receipts = (
         phase_receipts
@@ -913,6 +914,7 @@ def _build_final_report_payload(
         request=request,
         phase_receipts=list(receipts),
         judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+        fairness_thresholds=fairness_thresholds,
     )
 
 
@@ -2214,6 +2216,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             request=parsed,
             phase_receipts=phase_receipts,
+            fairness_thresholds=policy_profile.fairness_thresholds,
         )
         await _attach_judge_agent_runtime_trace(
             runtime=runtime,
@@ -2931,6 +2934,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 runtime=runtime,
                 request=final_request,
                 phase_receipts=phase_receipts,
+                fairness_thresholds=policy_profile.fairness_thresholds,
             )
             await _attach_judge_agent_runtime_trace(
                 runtime=runtime,

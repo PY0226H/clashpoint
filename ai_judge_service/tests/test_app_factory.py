@@ -442,6 +442,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["items"][0]["promptRegistryVersion"], "promptset-v3-default")
         self.assertEqual(payload["items"][0]["toolRegistryVersion"], "toolset-v3-default")
         self.assertEqual(payload["items"][0]["promptVersions"]["claimGraphVersion"], "v1-claim-graph-bootstrap")
+        self.assertIn("evidenceMinTotalRefs", payload["items"][0]["fairnessThresholds"])
 
         detail_resp = await self._get(
             app=app,

@@ -101,6 +101,7 @@ class PolicyRegistryRuntime:
             "toolRegistryVersion": profile.tool_registry_version,
             "promptVersions": dict(profile.prompt_versions),
             "toolIds": list(profile.tool_ids),
+            "fairnessThresholds": dict(profile.fairness_thresholds),
         }
 
 
@@ -152,6 +153,10 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
         "drawRateMax": 0.30,
         "sideBiasDeltaMax": 0.08,
         "appealOverturnRateMax": 0.12,
+        "evidenceMinTotalRefs": 4,
+        "evidenceMinDecisiveRefs": 2,
+        "evidenceMinWinnerSupportRefs": 1,
+        "evidenceConflictRatioMax": 0.65,
     }
     fallback = [
         JudgePolicyProfile(
