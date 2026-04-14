@@ -52,6 +52,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 10. `scripts/harness/ai_judge_real_env_evidence_closure.sh`（ai_judge real-env 证据收口清单）
 11. `scripts/harness/ai_judge_runtime_sla_freeze.sh`（ai_judge runtime SLA 阈值冻结）
 12. `scripts/harness/ai_judge_runtime_ops_pack.sh`（ai_judge 一键收口包，聚合 fairness/runtime/closure）
+13. `scripts/harness/ai_judge_stage_closure_evidence.sh`（ai_judge 阶段收口草案证据聚合）
 
 ### 2.3 当前统一入口能力
 
@@ -118,6 +119,16 @@ runtime ops pack 阶段使用一键聚合脚本：
 4. 产出固定工件：
    - `docs/loadtest/evidence/ai_judge_runtime_ops_pack.env`
    - `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
+
+stage closure evidence 阶段使用专门脚本：
+
+1. `scripts/harness/ai_judge_stage_closure_evidence.sh`
+2. 串联执行 `ai_judge_stage_closure_draft.sh`，提取 completed/todo 候选统计
+3. 关联检查 `ai_judge_runtime_ops_pack` 证据是否已就绪
+4. 输出 `pass/pending_data/evidence_missing/stage_failed`
+5. 产出固定工件：
+   - `docs/loadtest/evidence/ai_judge_stage_closure_evidence.env`
+   - `docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`
 
 但当前还没有负责：
 
@@ -198,6 +209,10 @@ bash scripts/harness/ai_judge_runtime_ops_pack.sh \
   --allow-local-reference \
   --emit-json "artifacts/harness/manual-ai-judge-runtime-ops-pack.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-runtime-ops-pack.summary.md"
+
+bash scripts/harness/ai_judge_stage_closure_evidence.sh \
+  --emit-json "artifacts/harness/manual-ai-judge-stage-closure-evidence.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-stage-closure-evidence.summary.md"
 ```
 
 ---

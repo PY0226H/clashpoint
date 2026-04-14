@@ -1,0 +1,28 @@
+{
+  "run_id": "20260414T073247Z-ai-judge-stage-closure-draft",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "status": "pass",
+  "started_at": "2026-04-14T07:32:47Z",
+  "finished_at": "2026-04-14T07:32:48Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260414T073247Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260414T073247Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md"
+  },
+  "counts": {
+    "completed_candidates_total": 8,
+    "todo_candidates_total": 0
+  },
+  "completed_candidates": [
+    {"module":"ai-judge-cases-hard-cut","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1 + phase2））","code_evidence":"artifacts/harness/*-ai-judge-cases-hard-cut.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-judge-core-unification","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1 + phase2））","code_evidence":"artifacts/harness/*-ai-judge-judge-core-unification.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-contract-hardening","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1 + phase2））","code_evidence":"artifacts/harness/*-ai-judge-contract-hardening.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-cross-layer-sync","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1 + phase2））","code_evidence":"artifacts/harness/*-ai-judge-cross-layer-sync.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-case-evidence-view","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1））","code_evidence":"artifacts/harness/*-ai-judge-case-evidence-view.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-runtime-ops-pack","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1））","code_evidence":"artifacts/harness/*-ai-judge-runtime-ops-pack.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-doc-governance-refresh","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1））","code_evidence":"artifacts/harness/*-ai-judge-doc-governance-refresh.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-stage-closure-evidence","conclusion":"阶段收口草案：模块主体已完成（已完成（phase1））","code_evidence":"artifacts/harness/*-ai-judge-stage-closure-evidence.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260414T073247Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+  ],
+  "todo_candidates": [
+  ]
+}
