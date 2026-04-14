@@ -51,6 +51,7 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 9. `scripts/harness/ai_judge_fairness_benchmark_freeze.sh`（ai_judge fairness benchmark 阈值冻结）
 10. `scripts/harness/ai_judge_real_env_evidence_closure.sh`（ai_judge real-env 证据收口清单）
 11. `scripts/harness/ai_judge_runtime_sla_freeze.sh`（ai_judge runtime SLA 阈值冻结）
+12. `scripts/harness/ai_judge_runtime_ops_pack.sh`（ai_judge 一键收口包，聚合 fairness/runtime/closure）
 
 ### 2.3 当前统一入口能力
 
@@ -108,6 +109,15 @@ runtime SLA 冻结阶段使用专门脚本：
 2. 读取 latency/fault/trust 三轨道证据与 `ai_judge_p5_real_env.env` 环境 marker
 3. 输出 `pass/local_reference_frozen/pending_data/threshold_violation/env_blocked/evidence_missing`
 4. 产出阈值工件 `docs/loadtest/evidence/ai_judge_runtime_sla_thresholds.env`
+
+runtime ops pack 阶段使用一键聚合脚本：
+
+1. `scripts/harness/ai_judge_runtime_ops_pack.sh`
+2. 串联执行 `fairness_benchmark_freeze`、`runtime_sla_freeze`、`real_env_evidence_closure`
+3. 统一输出 pack 状态：`pass/local_reference_ready/threshold_violation/pending_data/env_blocked/evidence_missing/stage_failed/mixed`
+4. 产出固定工件：
+   - `docs/loadtest/evidence/ai_judge_runtime_ops_pack.env`
+   - `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
 
 但当前还没有负责：
 
@@ -183,6 +193,11 @@ bash scripts/harness/ai_judge_runtime_sla_freeze.sh \
   --allow-local-reference \
   --emit-json "artifacts/harness/manual-ai-judge-runtime-sla-freeze.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-runtime-sla-freeze.summary.md"
+
+bash scripts/harness/ai_judge_runtime_ops_pack.sh \
+  --allow-local-reference \
+  --emit-json "artifacts/harness/manual-ai-judge-runtime-ops-pack.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-runtime-ops-pack.summary.md"
 ```
 
 ---
