@@ -62,6 +62,7 @@ from .core.judge_core import (
     JUDGE_CORE_VERSION,
     JudgeCoreOrchestrator,
 )
+from .domain.agents import AGENT_KIND_JUDGE, AgentExecutionRequest
 from .domain.facts import (
     AuditAlert as FactAuditAlert,
 )
@@ -682,6 +683,87 @@ def _failed_callback_fn_for_dispatch(runtime: AppRuntime, dispatch_type: str) ->
 
 def _report_callback_fn_for_dispatch(runtime: AppRuntime, dispatch_type: str) -> CallbackReportFn:
     return runtime.callback_phase_report_fn if dispatch_type == "phase" else runtime.callback_final_report_fn
+
+
+async def _attach_judge_agent_runtime_trace(
+    *,
+    runtime: AppRuntime,
+    report_payload: dict[str, Any],
+    dispatch_type: str,
+    case_id: int,
+    scope_id: int,
+    session_id: int,
+    trace_id: str,
+    phase_no: int | None = None,
+    phase_start_no: int | None = None,
+    phase_end_no: int | None = None,
+) -> None:
+    if not isinstance(report_payload, dict):
+        return
+
+    judge_trace = report_payload.get("judgeTrace")
+    if not isinstance(judge_trace, dict):
+        judge_trace = {}
+        report_payload["judgeTrace"] = judge_trace
+
+    request_metadata: dict[str, Any] = {"dispatchType": dispatch_type}
+    if phase_no is not None:
+        request_metadata["phaseNo"] = phase_no
+    if phase_start_no is not None:
+        request_metadata["phaseStartNo"] = phase_start_no
+    if phase_end_no is not None:
+        request_metadata["phaseEndNo"] = phase_end_no
+
+    request_payload: dict[str, Any] = {
+        "dispatchType": dispatch_type,
+        "caseId": case_id,
+        "scopeId": scope_id,
+        "sessionId": session_id,
+    }
+    if phase_no is not None:
+        request_payload["phaseNo"] = phase_no
+    if phase_start_no is not None:
+        request_payload["phaseStartNo"] = phase_start_no
+    if phase_end_no is not None:
+        request_payload["phaseEndNo"] = phase_end_no
+
+    try:
+        judge_runtime_result = await runtime.agent_runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_JUDGE,
+                input_payload=request_payload,
+                trace_id=trace_id,
+                session_id=session_id,
+                scope_id=scope_id,
+                metadata=request_metadata,
+            )
+        )
+    except Exception as err:
+        judge_trace["agentRuntime"] = {
+            "kind": AGENT_KIND_JUDGE,
+            "status": "error",
+            "dispatchType": dispatch_type,
+            "errorCode": "agent_runtime_exception",
+            "errorMessage": str(err),
+        }
+        return
+
+    runtime_output = judge_runtime_result.output if isinstance(judge_runtime_result.output, dict) else {}
+    judge_trace["agentRuntime"] = {
+        "kind": AGENT_KIND_JUDGE,
+        "status": judge_runtime_result.status,
+        "dispatchType": dispatch_type,
+        "errorCode": judge_runtime_result.error_code,
+        "errorMessage": judge_runtime_result.error_message,
+        "runtimeVersion": runtime_output.get("runtimeVersion"),
+        "activeRoles": runtime_output.get("activeRoles"),
+    }
+    roles = runtime_output.get("roles")
+    if isinstance(roles, list):
+        judge_trace["courtroomRoles"] = [item for item in roles if isinstance(item, dict)]
+    role_order = runtime_output.get("roleOrder")
+    if isinstance(role_order, list):
+        judge_trace["courtroomRoleOrder"] = [str(item) for item in role_order if str(item).strip()]
 
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
@@ -1595,6 +1677,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             settings=runtime.settings,
             gateway_runtime=runtime.gateway_runtime,
         )
+        await _attach_judge_agent_runtime_trace(
+            runtime=runtime,
+            report_payload=phase_report_payload,
+            dispatch_type="phase",
+            case_id=parsed.case_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            trace_id=parsed.trace_id,
+            phase_no=parsed.phase_no,
+        )
         _attach_policy_trace_snapshot(
             runtime=runtime,
             report_payload=phase_report_payload,
@@ -1921,6 +2013,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             request=parsed,
             phase_receipts=phase_receipts,
+        )
+        await _attach_judge_agent_runtime_trace(
+            runtime=runtime,
+            report_payload=final_report_payload,
+            dispatch_type="final",
+            case_id=parsed.case_id,
+            scope_id=parsed.scope_id,
+            session_id=parsed.session_id,
+            trace_id=parsed.trace_id,
+            phase_start_no=parsed.phase_start_no,
+            phase_end_no=parsed.phase_end_no,
         )
         _attach_policy_trace_snapshot(
             runtime=runtime,
@@ -2618,6 +2721,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 request=final_request,
                 phase_receipts=phase_receipts,
             )
+            await _attach_judge_agent_runtime_trace(
+                runtime=runtime,
+                report_payload=report_payload,
+                dispatch_type="final",
+                case_id=final_request.case_id,
+                scope_id=final_request.scope_id,
+                session_id=final_request.session_id,
+                trace_id=final_request.trace_id,
+                phase_start_no=final_request.phase_start_no,
+                phase_end_no=final_request.phase_end_no,
+            )
             _attach_policy_trace_snapshot(
                 runtime=runtime,
                 report_payload=report_payload,
@@ -2650,6 +2764,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 request=phase_request,
                 settings=runtime.settings,
                 gateway_runtime=runtime.gateway_runtime,
+            )
+            await _attach_judge_agent_runtime_trace(
+                runtime=runtime,
+                report_payload=report_payload,
+                dispatch_type="phase",
+                case_id=phase_request.case_id,
+                scope_id=phase_request.scope_id,
+                session_id=phase_request.session_id,
+                trace_id=phase_request.trace_id,
+                phase_no=phase_request.phase_no,
             )
             _attach_policy_trace_snapshot(
                 runtime=runtime,

@@ -503,6 +503,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             phase_callback_calls[0][1]["trustAttestation"]["dispatchType"],
             "phase",
         )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["status"],
+            "ok",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["dispatchType"],
+            "phase",
+        )
+        self.assertEqual(
+            len(phase_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
+            8,
+        )
+        self.assertEqual(
+            len(phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["activeRoles"]),
+            5,
+        )
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=1001)
         self.assertIsNotNone(phase_job)
         assert phase_job is not None
@@ -576,6 +592,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             final_callback_calls[0][1]["judgeTrace"]["policyRegistry"]["version"],
             "v3-default",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["status"],
+            "ok",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["dispatchType"],
+            "final",
+        )
+        self.assertEqual(
+            len(final_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
+            8,
+        )
+        self.assertEqual(
+            len(final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["activeRoles"]),
+            8,
         )
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2001)
         final_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2002)

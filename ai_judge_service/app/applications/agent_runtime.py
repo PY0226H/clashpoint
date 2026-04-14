@@ -7,6 +7,15 @@ from ..domain.agents import (
     AGENT_KIND_JUDGE,
     AGENT_KIND_NPC_COACH,
     AGENT_KIND_ROOM_QA,
+    JUDGE_COURTROOM_ROLE_ORDER,
+    ROLE_CHIEF_ARBITER,
+    ROLE_CLAIM_GRAPH,
+    ROLE_CLERK,
+    ROLE_EVIDENCE,
+    ROLE_FAIRNESS_SENTINEL,
+    ROLE_JUDGE_PANEL,
+    ROLE_OPINION_WRITER,
+    ROLE_RECORDER,
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentExecutorPort,
@@ -32,6 +41,115 @@ class _ReservedAgentExecutor(AgentExecutorPort):
             },
             error_code="agent_not_enabled",
             error_message=self._reason,
+        )
+
+
+class _JudgeCourtroomExecutor(AgentExecutorPort):
+    _ROLE_STAGE_HINTS = {
+        ROLE_CLERK: "blinded",
+        ROLE_RECORDER: "case_built",
+        ROLE_CLAIM_GRAPH: "claim_graph_ready",
+        ROLE_EVIDENCE: "evidence_ready",
+        ROLE_JUDGE_PANEL: "panel_judged",
+        ROLE_FAIRNESS_SENTINEL: "fairness_checked",
+        ROLE_CHIEF_ARBITER: "arbitrated",
+        ROLE_OPINION_WRITER: "opinion_written",
+    }
+    _ROLE_RESPONSIBILITIES = {
+        ROLE_CLERK: "Freeze blinded case input and runtime boundaries.",
+        ROLE_RECORDER: "Normalize case dossier and timeline evidence index.",
+        ROLE_CLAIM_GRAPH: "Build structured claim graph from debate messages.",
+        ROLE_EVIDENCE: "Assemble retrieval and message evidence ledger.",
+        ROLE_JUDGE_PANEL: "Run multi-perspective scoring and winner hints.",
+        ROLE_FAIRNESS_SENTINEL: "Evaluate fairness instability and review gates.",
+        ROLE_CHIEF_ARBITER: "Apply arbitration policy and winner settlement.",
+        ROLE_OPINION_WRITER: "Compose user-facing verdict narrative fields.",
+    }
+    _PHASE_ACTIVE_ROLE_SET = {
+        ROLE_CLERK,
+        ROLE_RECORDER,
+        ROLE_CLAIM_GRAPH,
+        ROLE_EVIDENCE,
+        ROLE_JUDGE_PANEL,
+    }
+
+    @staticmethod
+    def _normalize_dispatch_type(request: AgentExecutionRequest) -> str:
+        raw_value = (
+            request.metadata.get("dispatchType")
+            if isinstance(request.metadata, dict)
+            else None
+        )
+        if raw_value is None and isinstance(request.input_payload, dict):
+            raw_value = (
+                request.input_payload.get("dispatchType")
+                or request.input_payload.get("dispatch_type")
+            )
+        normalized = str(raw_value or "phase").strip().lower()
+        if normalized not in {"phase", "final"}:
+            return "phase"
+        return normalized
+
+    def _build_role_rows(self, *, dispatch_type: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for index, role in enumerate(JUDGE_COURTROOM_ROLE_ORDER, start=1):
+            active = (
+                role in self._PHASE_ACTIVE_ROLE_SET
+                if dispatch_type == "phase"
+                else True
+            )
+            rows.append(
+                {
+                    "sequence": index,
+                    "role": role,
+                    "active": active,
+                    "targetStatus": self._ROLE_STAGE_HINTS[role],
+                    "responsibility": self._ROLE_RESPONSIBILITIES[role],
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _collect_context(request: AgentExecutionRequest) -> dict[str, Any]:
+        payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        context: dict[str, Any] = {
+            "traceId": request.trace_id,
+            "sessionId": request.session_id
+            if request.session_id is not None
+            else payload.get("sessionId"),
+            "scopeId": request.scope_id if request.scope_id is not None else payload.get("scopeId"),
+            "caseId": payload.get("caseId"),
+            "phaseNo": metadata.get("phaseNo") if metadata.get("phaseNo") is not None else payload.get("phaseNo"),
+            "phaseStartNo": (
+                metadata.get("phaseStartNo")
+                if metadata.get("phaseStartNo") is not None
+                else payload.get("phaseStartNo")
+            ),
+            "phaseEndNo": (
+                metadata.get("phaseEndNo")
+                if metadata.get("phaseEndNo") is not None
+                else payload.get("phaseEndNo")
+            ),
+        }
+        return context
+
+    async def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+        dispatch_type = self._normalize_dispatch_type(request)
+        roles = self._build_role_rows(dispatch_type=dispatch_type)
+        context = self._collect_context(request)
+        return AgentExecutionResult(
+            status="ok",
+            output={
+                "kind": AGENT_KIND_JUDGE,
+                "accepted": True,
+                "dispatchType": dispatch_type,
+                "runtimeVersion": "courtroom_agent_runtime_mvp_v1",
+                "roleOrder": list(JUDGE_COURTROOM_ROLE_ORDER),
+                "activeRoles": [item["role"] for item in roles if item["active"]],
+                "roles": roles,
+                "context": context,
+            },
         )
 
 
@@ -113,10 +231,7 @@ def build_agent_runtime(*, settings: Any) -> AgentRuntime:
         ),
     ]
     executors: dict[AgentKind, AgentExecutorPort] = {
-        AGENT_KIND_JUDGE: _ReservedAgentExecutor(
-            kind=AGENT_KIND_JUDGE,
-            reason="judge_mainline is served by /internal/judge/v3/{phase|final}/dispatch",
-        ),
+        AGENT_KIND_JUDGE: _JudgeCourtroomExecutor(),
         AGENT_KIND_NPC_COACH: _ReservedAgentExecutor(
             kind=AGENT_KIND_NPC_COACH,
             reason="npc_coach runtime shell is reserved for future rollout",

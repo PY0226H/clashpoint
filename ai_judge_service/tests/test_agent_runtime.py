@@ -8,6 +8,14 @@ from app.domain.agents import (
     AGENT_KIND_JUDGE,
     AGENT_KIND_NPC_COACH,
     AGENT_KIND_ROOM_QA,
+    ROLE_CHIEF_ARBITER,
+    ROLE_CLAIM_GRAPH,
+    ROLE_CLERK,
+    ROLE_EVIDENCE,
+    ROLE_FAIRNESS_SENTINEL,
+    ROLE_JUDGE_PANEL,
+    ROLE_OPINION_WRITER,
+    ROLE_RECORDER,
     AgentExecutionRequest,
 )
 
@@ -23,14 +31,17 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(runtime.get_profile(AGENT_KIND_NPC_COACH).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_ROOM_QA).enabled)  # type: ignore[union-attr]
 
-    async def test_execute_should_return_not_ready_for_reserved_shells(self) -> None:
+    async def test_execute_should_enable_judge_courtroom_runtime(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))
 
         judge_result = await runtime.execute(
             AgentExecutionRequest(
                 kind=AGENT_KIND_JUDGE,
-                input_payload={"jobId": 101},
+                input_payload={"caseId": 101, "phaseNo": 3},
                 trace_id="trace-101",
+                session_id=11,
+                scope_id=1,
+                metadata={"dispatchType": "phase"},
             )
         )
         npc_result = await runtime.execute(
@@ -41,9 +52,36 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual(judge_result.status, "not_ready")
-        self.assertEqual(judge_result.error_code, "agent_not_enabled")
-        self.assertEqual(judge_result.output.get("accepted"), False)
+        self.assertEqual(judge_result.status, "ok")
+        self.assertIsNone(judge_result.error_code)
+        self.assertEqual(judge_result.output.get("accepted"), True)
+        self.assertEqual(judge_result.output.get("dispatchType"), "phase")
+        self.assertEqual(judge_result.output.get("runtimeVersion"), "courtroom_agent_runtime_mvp_v1")
+        self.assertEqual(
+            judge_result.output.get("roleOrder"),
+            [
+                ROLE_CLERK,
+                ROLE_RECORDER,
+                ROLE_CLAIM_GRAPH,
+                ROLE_EVIDENCE,
+                ROLE_JUDGE_PANEL,
+                ROLE_FAIRNESS_SENTINEL,
+                ROLE_CHIEF_ARBITER,
+                ROLE_OPINION_WRITER,
+            ],
+        )
+        self.assertEqual(
+            judge_result.output.get("activeRoles"),
+            [
+                ROLE_CLERK,
+                ROLE_RECORDER,
+                ROLE_CLAIM_GRAPH,
+                ROLE_EVIDENCE,
+                ROLE_JUDGE_PANEL,
+            ],
+        )
+        role_rows = judge_result.output.get("roles")
+        self.assertTrue(isinstance(role_rows, list) and len(role_rows) == 8)
 
         self.assertEqual(npc_result.status, "not_ready")
         self.assertEqual(npc_result.error_code, "agent_not_enabled")
