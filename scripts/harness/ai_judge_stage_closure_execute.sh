@@ -173,6 +173,33 @@ collect_delayed_items() {
   ' "$plan_file" >"$out_file"
 }
 
+collect_next_step_items() {
+  local plan_file="$1"
+  local out_file="$2"
+
+  awk '
+    BEGIN {
+      in_section = 0
+    }
+    /^### 下一开发模块建议/ {
+      in_section = 1
+      next
+    }
+    in_section == 1 && /^### / {
+      in_section = 0
+    }
+    in_section == 1 && /^## / {
+      in_section = 0
+    }
+    in_section == 1 && /^[0-9]+\. / {
+      line = $0
+      sub(/^[0-9]+\.[[:space:]]*/, "", line)
+      gsub(/[[:space:]]+$/, "", line)
+      print line
+    }
+  ' "$plan_file" >"$out_file"
+}
+
 contains_completed_module() {
   local module="$1"
   grep -Fq -- "| ${module} |" "$COMPLETED_DOC"
@@ -207,10 +234,7 @@ append_completed_section() {
         continue
       fi
 
-      linked_todo="（无）"
-      if [[ "$module" == "ai-judge-p5-calibration-prep" ]]; then
-        linked_todo="ai-judge-p5-real-calibration-on-env"
-      fi
+      linked_todo="（待收口映射）"
 
       printf '| %s | %s | %s | %s | %s | %s |\n' \
         "$module" \
@@ -234,8 +258,9 @@ append_completed_section() {
 
 append_todo_section() {
   local delayed_file="$1"
-  local section_idx="$2"
-  local out_file="$3"
+  local next_steps_file="$2"
+  local section_idx="$3"
+  local out_file="$4"
 
   local appended=0
   local skipped=0
@@ -271,21 +296,28 @@ append_todo_section() {
       appended=$((appended + 1))
     done <"$delayed_file"
 
-    local p5_debt="ai-judge-p5-real-calibration-on-env"
-    if contains_todo_debt "$p5_debt"; then
-      skipped=$((skipped + 1))
-    else
+    while IFS= read -r item || [[ -n "$item" ]]; do
+      item="$(trim "$item")"
+      [[ -z "$item" ]] && continue
+      if [[ "$item" != *"on-env"* && "$item" != *"real-env"* ]]; then
+        continue
+      fi
+      debt="$item"
+      if contains_todo_debt "$debt"; then
+        skipped=$((skipped + 1))
+        continue
+      fi
       printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
-        "$p5_debt" \
-        "ai-judge-p5-real-calibration-on-env" \
+        "$debt" \
+        "ai-judge-stage-closure-execute" \
         "环境依赖" \
-        "当前执行结果为 env_blocked，真实环境未就绪" \
-        "REAL_CALIBRATION_ENV_READY=true 且可访问真实样本环境后" \
-        "五类轨道均达到 pass，产出真实校准摘要并更新阈值结论" \
-        "bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --root /Users/panyihang/Documents/EchoIsle"
-      printf '%s\t%s\n' "$p5_debt" "appended" >>"$out_file"
+        "当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口" \
+        "REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后" \
+        "完成该模块并产出 real-env 证据工件，状态达到 pass" \
+        "执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence"
+      printf '%s\t%s\n' "$debt" "appended" >>"$out_file"
       appended=$((appended + 1))
-    fi
+    done <"$next_steps_file"
 
     if [[ "$appended" -eq 0 ]]; then
       printf '| （无新增） | 当前延后项已写入技术债池 | （无） | （无） | （无） | （无） | （无） |\n'
@@ -303,7 +335,7 @@ reset_plan_doc() {
 
 关联 slot：\`default\`  
 更新时间：$(date_cn)  
-当前主线：\`AI_judge_service 下一阶段（真实环境校准）\`  
+当前主线：\`AI_judge_service 下一阶段（待规划）\`  
 当前状态：阶段收口后待下一轮
 
 ---
@@ -324,8 +356,8 @@ reset_plan_doc() {
 
 ### 下一开发模块建议
 
-1. ai-judge-p5-real-calibration-on-env（真实环境就绪后重跑）
-2. ai-judge-next-plan-bootstrap
+1. ai-judge-next-iteration-planning
+2. ai-judge-runtime-ops-pack（phase2：与 stage closure 联动自动回填）
 
 ### 模块完成同步历史
 
@@ -400,7 +432,7 @@ write_markdown() {
     printf -- '- todo_skipped_existing: `%s`\n' "$todo_skipped"
     printf '\n## Summary\n\n'
     printf -- '1. 已将 AI judge 完成态模块追加到 `completed.md`。\n'
-    printf -- '2. 已将阶段延后项与 on-env 阻塞项追加到 `todo.md`。\n'
+    printf -- '2. 已将阶段延后项与环境阻塞项追加到 `todo.md`。\n'
     printf -- '3. 已归档并重置活动计划文档。\n'
   } >"$EMIT_MD"
 }
@@ -499,21 +531,23 @@ main() {
   archive_path="$ARCHIVE_DIR/${RUN_ID}.md"
   cp "$PLAN_DOC" "$archive_path"
 
-  local rows_file delayed_file completed_meta todo_meta
+  local rows_file delayed_file next_steps_file completed_meta todo_meta
   rows_file="$(mktemp)"
   delayed_file="$(mktemp)"
+  next_steps_file="$(mktemp)"
   completed_meta="$(mktemp)"
   todo_meta="$(mktemp)"
 
   collect_ai_judge_rows "$PLAN_DOC" "$rows_file"
   collect_delayed_items "$PLAN_DOC" "$delayed_file"
+  collect_next_step_items "$PLAN_DOC" "$next_steps_file"
 
   local completed_section_idx todo_section_idx
   completed_section_idx="$(next_section_index "$COMPLETED_DOC" "B")"
   todo_section_idx="$(next_section_index "$TODO_DOC" "C")"
 
   append_completed_section "$rows_file" "$completed_section_idx" "$completed_meta"
-  append_todo_section "$delayed_file" "$todo_section_idx" "$todo_meta"
+  append_todo_section "$delayed_file" "$next_steps_file" "$todo_section_idx" "$todo_meta"
 
   reset_plan_doc "$archive_path"
 
@@ -531,7 +565,7 @@ main() {
   echo "summary_md: $EMIT_MD"
   echo "archive_path: $archive_path"
 
-  rm -f "$rows_file" "$delayed_file" "$completed_meta" "$todo_meta"
+  rm -f "$rows_file" "$delayed_file" "$next_steps_file" "$completed_meta" "$todo_meta"
 }
 
 main "$@"

@@ -183,9 +183,6 @@ build_completed_candidates() {
       continue
     fi
     linked_todo="（待收口映射）"
-    if [[ "$module" == "ai-judge-p5-calibration-prep" ]]; then
-      linked_todo="ai-judge-p5-real-calibration-on-env"
-    fi
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$module" \
@@ -227,12 +224,12 @@ build_todo_candidates() {
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$item" \
-      "ai-judge-p5-calibration-prep" \
+      "ai-judge-stage-closure-draft" \
       "环境依赖" \
-      "本地 prep 已完成，但真实环境数据校准未执行" \
-      "拿到可用压测/真实样本环境后" \
-      "完成真实校准并产出基线报告、阈值与告警建议" \
-      "执行对应校准脚本并归档 evidence" >>"$out_file"
+      "当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口" \
+      "REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后" \
+      "完成该模块并产出 real-env 证据工件，状态达到 pass" \
+      "执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence" >>"$out_file"
   done <"$next_steps_file"
 }
 

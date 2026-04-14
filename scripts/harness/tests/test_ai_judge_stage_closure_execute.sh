@@ -109,8 +109,9 @@ expect_contains "todo deferred01" "| ai-judge-stage-closure-deferred-01 |" "$TOD
 expect_contains "todo deferred02" "| ai-judge-stage-closure-deferred-02 |" "$TODO_DOC"
 expect_contains "todo p5 debt" "| ai-judge-p5-real-calibration-on-env |" "$TODO_DOC"
 
-expect_contains "plan reset mainline" "当前主线：\`AI_judge_service 下一阶段（真实环境校准）\`" "$PLAN_DOC"
+expect_contains "plan reset mainline" "当前主线：\`AI_judge_service 下一阶段（待规划）\`" "$PLAN_DOC"
 expect_contains "plan reset module" "| \`ai-judge-stage-closure-execute\` | AI judge 当前阶段收口执行 | 已完成 |" "$PLAN_DOC"
+expect_contains "plan reset next iteration" "1. ai-judge-next-iteration-planning" "$PLAN_DOC"
 
 expect_contains "json completed count" '"completed_appended": 2' "$OUT_JSON"
 expect_contains "json todo count" '"todo_appended": 3' "$OUT_JSON"
