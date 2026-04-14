@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 
 
 def _build_settings(**overrides: object) -> Settings:
+    unique_db_suffix = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
     base = {
         "ai_internal_key": "k",
         "chat_server_base_url": "http://chat",
@@ -71,7 +72,7 @@ def _build_settings(**overrides: object) -> Settings:
         "redis_url": "redis://127.0.0.1:6379/0",
         "redis_pool_size": 20,
         "redis_key_prefix": "ai_judge:v2",
-        "db_url": "sqlite+aiosqlite:////tmp/echoisle_ai_judge_service_test.db",
+        "db_url": f"sqlite+aiosqlite:////tmp/echoisle_ai_judge_service_test_{unique_db_suffix}.db",
         "db_echo": False,
         "db_pool_size": 10,
         "db_max_overflow": 20,
@@ -232,12 +233,17 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
         self.assertIn("/internal/judge/cases", paths)
         self.assertIn("/internal/judge/cases/{case_id}", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/claim-ledger", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
         self.assertIn("/internal/judge/registries/prompts", paths)
         self.assertIn("/internal/judge/registries/prompts/{prompt_version}", paths)
         self.assertIn("/internal/judge/registries/tools", paths)
         self.assertIn("/internal/judge/registries/tools/{toolset_version}", paths)
+        self.assertIn("/internal/judge/registries/{registry_type}/publish", paths)
+        self.assertIn("/internal/judge/registries/{registry_type}/{version}/activate", paths)
+        self.assertIn("/internal/judge/registries/{registry_type}/rollback", paths)
+        self.assertIn("/internal/judge/registries/{registry_type}/audits", paths)
         self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/commitment", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/verdict-attestation", paths)
@@ -417,9 +423,59 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             case_evidence["auditSummary"]["alertCount"],
             len(case_evidence["auditSummary"]["auditAlerts"]),
         )
+        self.assertTrue(case_evidence["hasClaimLedger"])
+        self.assertEqual(case_evidence["claimLedger"]["dispatchType"], "final")
         self.assertEqual(detail_payload["judgeCore"]["stage"], "reported")
         self.assertEqual(detail_payload["judgeCore"]["version"], "v1")
         self.assertGreaterEqual(len(detail_payload["events"]), 2)
+
+    async def test_claim_ledger_route_should_return_persisted_claim_graph(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(9120)
+        phase_req = _build_phase_request(case_id=case_id, idempotency_key=f"phase:{case_id}")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(case_id=case_id, idempotency_key=f"final:{case_id}")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        ledger_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/claim-ledger?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(ledger_resp.status_code, 200)
+        ledger_body = ledger_resp.json()
+        self.assertEqual(ledger_body["dispatchType"], "final")
+        self.assertGreaterEqual(ledger_body["count"], 1)
+        self.assertIsInstance(ledger_body["item"]["claimGraph"], dict)
+        self.assertIsInstance(ledger_body["item"]["claimGraph"]["nodes"], list)
+        self.assertIsInstance(ledger_body["item"]["claimGraph"]["edges"], list)
+        self.assertIsInstance(ledger_body["item"]["claimGraphSummary"], dict)
+        self.assertIsInstance(ledger_body["item"]["evidenceLedger"], dict)
+        self.assertIsInstance(ledger_body["item"]["verdictEvidenceRefs"], list)
 
     async def test_case_detail_route_should_return_404_when_case_missing(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -519,19 +575,28 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("unknown_judge_policy_version", bad_resp.text)
 
     async def test_phase_dispatch_should_reject_unknown_prompt_registry_version(self) -> None:
-        runtime = create_runtime(
-            settings=_build_settings(
-                policy_registry_json=(
-                    '{"defaultVersion":"v3-default","profiles":[{"version":"v3-default","rubricVersion":"v3",'
-                    '"topicDomain":"tft","promptRegistryVersion":"promptset-missing"}]}'
-                )
-            )
-        )
+        runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)
+        policy_version = f"policy-missing-{_unique_case_id(8105)}"
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": policy_version,
+                "activate": True,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-missing",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
         req = _build_phase_request(
             case_id=8105,
             idempotency_key="phase:8105",
-            judge_policy_version="v3-default",
+            judge_policy_version=policy_version,
         )
 
         bad_resp = await self._post_json(
@@ -542,6 +607,96 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bad_resp.status_code, 422)
         self.assertIn("unknown_prompt_registry_version", bad_resp.text)
+
+    async def test_registry_routes_should_support_publish_activate_rollback_and_audit(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9201)
+        version = f"promptset-p8-{suffix}"
+        actor = f"actor-{suffix}"
+
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/prompt/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "actor": actor,
+                "reason": "test_publish",
+                "profile": {
+                    "promptVersions": {
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                    "metadata": {
+                        "status": "candidate",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+        publish_item = publish_resp.json()["item"]
+        self.assertEqual(publish_item["version"], version)
+        self.assertFalse(publish_item["isActive"])
+
+        activate_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/prompt/{version}/activate"
+                f"?actor={actor}&reason=test_activate"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 200)
+        activate_item = activate_resp.json()["item"]
+        self.assertEqual(activate_item["version"], version)
+        self.assertTrue(activate_item["isActive"])
+
+        prompt_list_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/prompts",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_list_resp.status_code, 200)
+        self.assertEqual(prompt_list_resp.json()["defaultVersion"], version)
+
+        rollback_resp = await self._post(
+            app=app,
+            path=f"/internal/judge/registries/prompt/rollback?actor={actor}&reason=test_rollback",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(rollback_resp.status_code, 200)
+        rollback_item = rollback_resp.json()["item"]
+        self.assertNotEqual(rollback_item["version"], version)
+
+        prompt_list_after_rollback = await self._get(
+            app=app,
+            path="/internal/judge/registries/prompts",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_list_after_rollback.status_code, 200)
+        self.assertEqual(
+            prompt_list_after_rollback.json()["defaultVersion"],
+            rollback_item["version"],
+        )
+
+        audits_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/prompt/audits?limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(audits_resp.status_code, 200)
+        audit_items = audits_resp.json()["items"]
+        actor_actions = [
+            str(item.get("action") or "")
+            for item in audit_items
+            if str(item.get("actor") or "") == actor
+        ]
+        self.assertIn("publish", actor_actions)
+        self.assertIn("activate", actor_actions)
+        self.assertIn("rollback", actor_actions)
 
     async def test_final_dispatch_should_reject_policy_rubric_mismatch(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -1816,6 +1971,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=final_callback,
         )
         app = create_app(runtime)
+        await runtime.workflow_runtime.db.create_schema()
         before_rows = await runtime.workflow_runtime.facts.list_replay_records(
             job_id=7101,
             limit=200,

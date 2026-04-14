@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from .models import AuditAlert, DispatchReceipt, ReplayRecord
+from .models import AuditAlert, ClaimLedgerRecord, DispatchReceipt, ReplayRecord
 
 
 class JudgeFactPort(Protocol):
@@ -44,6 +44,32 @@ class JudgeFactPort(Protocol):
         job_id: int | None = None,
         limit: int = 100,
     ) -> list[ReplayRecord]: ...
+
+    async def upsert_claim_ledger_record(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str,
+        trace_id: str,
+        claim_graph: dict[str, Any] | None,
+        claim_graph_summary: dict[str, Any] | None,
+        evidence_ledger: dict[str, Any] | None,
+        verdict_evidence_refs: list[dict[str, Any]] | None,
+    ) -> ClaimLedgerRecord: ...
+
+    async def get_claim_ledger_record(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str | None = None,
+    ) -> ClaimLedgerRecord | None: ...
+
+    async def list_claim_ledger_records(
+        self,
+        *,
+        case_id: int,
+        limit: int = 20,
+    ) -> list[ClaimLedgerRecord]: ...
 
     async def upsert_audit_alert(
         self,

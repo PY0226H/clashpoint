@@ -113,6 +113,26 @@ class ReplayRecordModel(Base):
     )
 
 
+class ClaimLedgerRecordModel(Base):
+    __tablename__ = "claim_ledger_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dispatch_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    claim_graph: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    claim_graph_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    evidence_ledger: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    verdict_evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("case_id", "dispatch_type", name="uq_claim_ledger_case_dispatch"),
+        Index("ix_claim_ledger_case_updated", "case_id", "updated_at"),
+    )
+
+
 class AuditAlertModel(Base):
     __tablename__ = "audit_alerts"
 
@@ -136,4 +156,43 @@ class AuditAlertModel(Base):
         UniqueConstraint("alert_id", name="uq_audit_alerts_alert_id"),
         Index("ix_audit_alerts_job_status", "job_id", "status"),
         Index("ix_audit_alerts_updated_at", "updated_at"),
+    )
+
+
+class JudgeRegistryReleaseModel(Base):
+    __tablename__ = "judge_registry_releases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    registry_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="published")
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    activated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("registry_type", "version", name="uq_judge_registry_release_type_version"),
+        Index("ix_judge_registry_release_type_active", "registry_type", "is_active"),
+        Index("ix_judge_registry_release_type_updated", "registry_type", "updated_at"),
+    )
+
+
+class JudgeRegistryAuditModel(Base):
+    __tablename__ = "judge_registry_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    registry_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
+    reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_judge_registry_audits_type_created", "registry_type", "created_at"),
     )

@@ -6,6 +6,7 @@ from .models import (
     ALERT_STATUS_RESOLVED,
     ALERT_STATUS_VALUES,
     AuditAlert,
+    ClaimLedgerRecord,
     DispatchReceipt,
     ReplayRecord,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "ALERT_STATUS_RESOLVED",
     "ALERT_STATUS_VALUES",
     "AuditAlert",
+    "ClaimLedgerRecord",
     "DispatchReceipt",
     "ReplayRecord",
     "JudgeFactPort",

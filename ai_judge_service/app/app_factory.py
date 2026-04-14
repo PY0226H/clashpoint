@@ -12,15 +12,14 @@ from pydantic import ValidationError
 from .applications import (
     AgentRuntime,
     GatewayRuntime,
-    PolicyRegistryRuntime,
-    PromptRegistryRuntime,
-    ToolRegistryRuntime,
+    MutablePolicyRegistryRuntime,
+    MutablePromptRegistryRuntime,
+    MutableToolRegistryRuntime,
+    RegistryProductRuntime,
     WorkflowRuntime,
     build_agent_runtime,
     build_gateway_runtime,
-    build_policy_registry_runtime,
-    build_prompt_registry_runtime,
-    build_tool_registry_runtime,
+    build_registry_product_runtime,
     build_workflow_runtime,
 )
 from .applications import (
@@ -93,6 +92,9 @@ from .domain.facts import (
     AuditAlert as FactAuditAlert,
 )
 from .domain.facts import (
+    ClaimLedgerRecord as FactClaimLedgerRecord,
+)
+from .domain.facts import (
     DispatchReceipt as FactDispatchReceipt,
 )
 from .domain.facts import (
@@ -131,10 +133,11 @@ class AppRuntime:
     trace_store: TraceStoreProtocol
     workflow_runtime: WorkflowRuntime
     gateway_runtime: GatewayRuntime
+    registry_product_runtime: RegistryProductRuntime
     agent_runtime: AgentRuntime
-    policy_registry_runtime: PolicyRegistryRuntime
-    prompt_registry_runtime: PromptRegistryRuntime
-    tool_registry_runtime: ToolRegistryRuntime
+    policy_registry_runtime: MutablePolicyRegistryRuntime
+    prompt_registry_runtime: MutablePromptRegistryRuntime
+    tool_registry_runtime: MutableToolRegistryRuntime
 
 
 def require_internal_key(settings: Settings, header_value: str | None) -> None:
@@ -157,9 +160,10 @@ def create_runtime(
     workflow_runtime = build_workflow_runtime(settings=settings)
     gateway_runtime = build_gateway_runtime(settings=settings)
     agent_runtime = build_agent_runtime(settings=settings)
-    policy_registry_runtime = build_policy_registry_runtime(settings=settings)
-    prompt_registry_runtime = build_prompt_registry_runtime(settings=settings)
-    tool_registry_runtime = build_tool_registry_runtime(settings=settings)
+    registry_product_runtime = build_registry_product_runtime(
+        session_factory=workflow_runtime.db.session_factory,
+        settings=settings,
+    )
     callback_cfg = build_callback_client_config(settings)
     (
         callback_phase_report_fn,
@@ -184,10 +188,11 @@ def create_runtime(
         trace_store=trace_store,
         workflow_runtime=workflow_runtime,
         gateway_runtime=gateway_runtime,
+        registry_product_runtime=registry_product_runtime,
         agent_runtime=agent_runtime,
-        policy_registry_runtime=policy_registry_runtime,
-        prompt_registry_runtime=prompt_registry_runtime,
-        tool_registry_runtime=tool_registry_runtime,
+        policy_registry_runtime=registry_product_runtime.policy_runtime,
+        prompt_registry_runtime=registry_product_runtime.prompt_runtime,
+        tool_registry_runtime=registry_product_runtime.tool_runtime,
     )
 
 
@@ -254,6 +259,10 @@ def _serialize_prompt_profile(runtime: AppRuntime, *, profile: Any) -> dict[str,
 
 def _serialize_tool_profile(runtime: AppRuntime, *, profile: Any) -> dict[str, Any]:
     return runtime.tool_registry_runtime.serialize_profile(profile)
+
+
+async def _ensure_registry_runtime_loaded(*, runtime: AppRuntime) -> None:
+    await runtime.registry_product_runtime.ensure_loaded()
 
 
 def _resolve_policy_profile_or_raise(
@@ -360,16 +369,41 @@ def _build_case_evidence_view(
     *,
     report_payload: dict[str, Any] | None,
     verdict_contract: dict[str, Any] | None,
+    claim_ledger_record: FactClaimLedgerRecord | None = None,
 ) -> dict[str, Any]:
     payload = report_payload if isinstance(report_payload, dict) else {}
     contract = verdict_contract if isinstance(verdict_contract, dict) else {}
     judge_trace = payload.get("judgeTrace") if isinstance(payload.get("judgeTrace"), dict) else {}
+    ledger_claim_graph = (
+        claim_ledger_record.claim_graph
+        if claim_ledger_record is not None and isinstance(claim_ledger_record.claim_graph, dict)
+        else None
+    )
+    ledger_claim_summary = (
+        claim_ledger_record.claim_graph_summary
+        if claim_ledger_record is not None and isinstance(claim_ledger_record.claim_graph_summary, dict)
+        else None
+    )
+    ledger_evidence_ledger = (
+        claim_ledger_record.evidence_ledger
+        if claim_ledger_record is not None and isinstance(claim_ledger_record.evidence_ledger, dict)
+        else None
+    )
+    ledger_verdict_refs = (
+        claim_ledger_record.verdict_evidence_refs
+        if claim_ledger_record is not None and isinstance(claim_ledger_record.verdict_evidence_refs, list)
+        else []
+    )
 
-    claim_graph = payload.get("claimGraph") if isinstance(payload.get("claimGraph"), dict) else None
+    claim_graph = (
+        payload.get("claimGraph")
+        if isinstance(payload.get("claimGraph"), dict)
+        else ledger_claim_graph
+    )
     claim_graph_summary = (
         payload.get("claimGraphSummary")
         if isinstance(payload.get("claimGraphSummary"), dict)
-        else None
+        else ledger_claim_summary
     )
     verdict_ledger = (
         payload.get("verdictLedger")
@@ -395,7 +429,7 @@ def _build_case_evidence_view(
         else (
             contract.get("evidenceLedger")
             if isinstance(contract.get("evidenceLedger"), dict)
-            else None
+            else ledger_evidence_ledger
         )
     )
     policy_snapshot = (
@@ -447,7 +481,7 @@ def _build_case_evidence_view(
         raw_verdict_refs = contract.get("verdictEvidenceRefs")
     verdict_evidence_refs = [
         dict(item)
-        for item in (raw_verdict_refs or [])
+        for item in ((raw_verdict_refs or ledger_verdict_refs) or [])
         if isinstance(item, dict)
     ]
 
@@ -501,12 +535,43 @@ def _build_case_evidence_view(
             "errorCodes": error_codes,
             "degradationLevel": degradation_level,
         },
+        "claimLedger": (
+            {
+                "dispatchType": claim_ledger_record.dispatch_type,
+                "traceId": claim_ledger_record.trace_id,
+                "createdAt": claim_ledger_record.created_at.isoformat(),
+                "updatedAt": claim_ledger_record.updated_at.isoformat(),
+            }
+            if claim_ledger_record is not None
+            else None
+        ),
         "hasClaimGraph": claim_graph is not None,
+        "hasClaimLedger": claim_ledger_record is not None,
         "hasEvidenceLedger": evidence_ledger is not None,
         "hasVerdictLedger": verdict_ledger is not None,
         "hasOpinionPack": opinion_pack is not None,
         "hasTrustAttestation": trust_attestation is not None,
     }
+
+
+def _serialize_claim_ledger_record(
+    record: FactClaimLedgerRecord,
+    *,
+    include_payload: bool = True,
+) -> dict[str, Any]:
+    item = {
+        "caseId": record.case_id,
+        "dispatchType": record.dispatch_type,
+        "traceId": record.trace_id,
+        "createdAt": record.created_at.isoformat(),
+        "updatedAt": record.updated_at.isoformat(),
+    }
+    if include_payload:
+        item["claimGraph"] = dict(record.claim_graph)
+        item["claimGraphSummary"] = dict(record.claim_graph_summary)
+        item["evidenceLedger"] = dict(record.evidence_ledger)
+        item["verdictEvidenceRefs"] = [dict(row) for row in record.verdict_evidence_refs]
+    return item
 
 
 def _normalize_query_datetime(value: datetime | None) -> datetime | None:
@@ -1050,6 +1115,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             await runtime.workflow_runtime.db.create_schema()
             workflow_schema_ready = True
 
+    async def _ensure_registry_runtime_ready() -> None:
+        await _ensure_workflow_schema_ready()
+        await _ensure_registry_runtime_loaded(runtime=runtime)
+
     async def _persist_dispatch_receipt(
         *,
         dispatch_type: str,
@@ -1190,6 +1259,77 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return await runtime.workflow_runtime.facts.list_replay_records(
             dispatch_type=dispatch_type,
             job_id=job_id,
+            limit=limit,
+        )
+
+    async def _upsert_claim_ledger_record(
+        *,
+        case_id: int,
+        dispatch_type: str,
+        trace_id: str,
+        report_payload: dict[str, Any] | None,
+    ) -> FactClaimLedgerRecord | None:
+        payload = report_payload if isinstance(report_payload, dict) else {}
+        if not payload:
+            return None
+        verdict_contract = _build_verdict_contract(payload)
+        evidence_view = _build_case_evidence_view(
+            report_payload=payload,
+            verdict_contract=verdict_contract,
+            claim_ledger_record=None,
+        )
+        claim_graph = (
+            evidence_view.get("claimGraph")
+            if isinstance(evidence_view.get("claimGraph"), dict)
+            else None
+        )
+        claim_graph_summary = (
+            evidence_view.get("claimGraphSummary")
+            if isinstance(evidence_view.get("claimGraphSummary"), dict)
+            else None
+        )
+        evidence_ledger = (
+            evidence_view.get("evidenceLedger")
+            if isinstance(evidence_view.get("evidenceLedger"), dict)
+            else None
+        )
+        verdict_evidence_refs = [
+            dict(item)
+            for item in (evidence_view.get("verdictEvidenceRefs") or [])
+            if isinstance(item, dict)
+        ]
+        if claim_graph is None and claim_graph_summary is None and not verdict_evidence_refs:
+            return None
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.upsert_claim_ledger_record(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            claim_graph=claim_graph,
+            claim_graph_summary=claim_graph_summary,
+            evidence_ledger=evidence_ledger,
+            verdict_evidence_refs=verdict_evidence_refs,
+        )
+
+    async def _get_claim_ledger_record(
+        *,
+        case_id: int,
+        dispatch_type: str | None = None,
+    ) -> FactClaimLedgerRecord | None:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.get_claim_ledger_record(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+
+    async def _list_claim_ledger_records(
+        *,
+        case_id: int,
+        limit: int = 20,
+    ) -> list[FactClaimLedgerRecord]:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.list_claim_ledger_records(
+            case_id=case_id,
             limit=limit,
         )
 
@@ -1584,6 +1724,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
         profiles = runtime.policy_registry_runtime.list_profiles()
         return {
             "defaultVersion": runtime.policy_registry_runtime.default_version,
@@ -1600,6 +1741,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
         profile = runtime.policy_registry_runtime.get_profile(policy_version)
         if profile is None:
             raise HTTPException(status_code=404, detail="judge_policy_not_found")
@@ -1612,6 +1754,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
         profiles = runtime.prompt_registry_runtime.list_profiles()
         return {
             "defaultVersion": runtime.prompt_registry_runtime.default_version,
@@ -1628,6 +1771,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
         profile = runtime.prompt_registry_runtime.get_profile(prompt_version)
         if profile is None:
             raise HTTPException(status_code=404, detail="prompt_registry_not_found")
@@ -1640,6 +1784,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
         profiles = runtime.tool_registry_runtime.list_profiles()
         return {
             "defaultVersion": runtime.tool_registry_runtime.default_version,
@@ -1656,11 +1801,150 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
         profile = runtime.tool_registry_runtime.get_profile(toolset_version)
         if profile is None:
             raise HTTPException(status_code=404, detail="tool_registry_not_found")
         return {
             "item": _serialize_tool_profile(runtime, profile=profile),
+        }
+
+    @app.post("/internal/judge/registries/{registry_type}/publish")
+    async def publish_registry_release(
+        registry_type: str,
+        request: Request,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        try:
+            payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+        version = str(payload.get("version") or "").strip()
+        profile_payload = payload.get("profile")
+        if not isinstance(profile_payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_registry_profile")
+        activate = bool(payload.get("activate"))
+        actor = str(payload.get("actor") or "").strip() or None
+        reason = str(payload.get("reason") or "").strip() or None
+
+        await _ensure_registry_runtime_ready()
+        try:
+            item = await runtime.registry_product_runtime.publish_release(
+                registry_type=registry_type,
+                version=version,
+                profile_payload=profile_payload,
+                actor=actor,
+                reason=reason,
+                activate=activate,
+            )
+        except LookupError as err:
+            raise HTTPException(status_code=404, detail=str(err)) from err
+        except ValueError as err:
+            code = str(err)
+            if code == "registry_version_already_exists":
+                raise HTTPException(status_code=409, detail=code) from err
+            if code in {
+                "invalid_registry_type",
+                "invalid_registry_version",
+                "invalid_policy_profile",
+                "invalid_prompt_profile",
+                "invalid_tool_profile",
+            }:
+                raise HTTPException(status_code=422, detail=code) from err
+            raise HTTPException(status_code=422, detail="registry_publish_invalid") from err
+        return {
+            "ok": True,
+            "item": item,
+        }
+
+    @app.post("/internal/judge/registries/{registry_type}/{version}/activate")
+    async def activate_registry_release(
+        registry_type: str,
+        version: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        actor: str | None = Query(default=None),
+        reason: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        try:
+            item = await runtime.registry_product_runtime.activate_release(
+                registry_type=registry_type,
+                version=version,
+                actor=actor,
+                reason=reason,
+            )
+        except LookupError as err:
+            raise HTTPException(status_code=404, detail="registry_version_not_found") from err
+        except ValueError as err:
+            code = str(err)
+            if code in {"invalid_registry_type", "invalid_registry_version"}:
+                raise HTTPException(status_code=422, detail=code) from err
+            raise HTTPException(status_code=422, detail="registry_activate_invalid") from err
+        return {
+            "ok": True,
+            "item": item,
+        }
+
+    @app.post("/internal/judge/registries/{registry_type}/rollback")
+    async def rollback_registry_release(
+        registry_type: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        target_version: str | None = Query(default=None),
+        actor: str | None = Query(default=None),
+        reason: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        try:
+            item = await runtime.registry_product_runtime.rollback_release(
+                registry_type=registry_type,
+                target_version=target_version,
+                actor=actor,
+                reason=reason,
+            )
+        except LookupError as err:
+            raise HTTPException(status_code=404, detail="registry_version_not_found") from err
+        except ValueError as err:
+            code = str(err)
+            if code in {
+                "invalid_registry_type",
+                "invalid_registry_version",
+                "registry_rollback_target_not_found",
+            }:
+                raise HTTPException(status_code=409 if code == "registry_rollback_target_not_found" else 422, detail=code) from err
+            raise HTTPException(status_code=422, detail="registry_rollback_invalid") from err
+        return {
+            "ok": True,
+            "item": item,
+        }
+
+    @app.get("/internal/judge/registries/{registry_type}/audits")
+    async def list_registry_audits(
+        registry_type: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        try:
+            items = await runtime.registry_product_runtime.list_audits(
+                registry_type=registry_type,
+                limit=limit,
+            )
+        except ValueError as err:
+            code = str(err)
+            if code == "invalid_registry_type":
+                raise HTTPException(status_code=422, detail=code) from err
+            raise HTTPException(status_code=422, detail="registry_audit_query_invalid") from err
+        return {
+            "registryType": str(registry_type or "").strip().lower(),
+            "count": len(items),
+            "items": items,
+            "limit": limit,
         }
 
     @app.post("/internal/judge/cases")
@@ -1687,6 +1971,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if replayed is not None:
             return replayed
+        await _ensure_registry_runtime_ready()
         policy_profile = _resolve_policy_profile_or_raise(
             runtime=runtime,
             judge_policy_version=parsed.judge_policy_version,
@@ -2008,6 +2293,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if replayed is not None:
             return replayed
+        await _ensure_registry_runtime_ready()
         policy_profile = _resolve_policy_profile_or_raise(
             runtime=runtime,
             judge_policy_version=parsed.judge_policy_version,
@@ -2113,6 +2399,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         _attach_report_attestation(
             report_payload=phase_report_payload,
             dispatch_type="phase",
+        )
+        await _upsert_claim_ledger_record(
+            case_id=parsed.case_id,
+            dispatch_type="phase",
+            trace_id=parsed.trace_id,
+            report_payload=phase_report_payload,
         )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
@@ -2351,6 +2643,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if replayed is not None:
             return replayed
+        await _ensure_registry_runtime_ready()
         policy_profile = _resolve_policy_profile_or_raise(
             runtime=runtime,
             judge_policy_version=parsed.judge_policy_version,
@@ -2464,6 +2757,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         _attach_report_attestation(
             report_payload=final_report_payload,
             dispatch_type="final",
+        )
+        await _upsert_claim_ledger_record(
+            case_id=parsed.case_id,
+            dispatch_type="final",
+            trace_id=parsed.trace_id,
+            report_payload=final_report_payload,
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -2904,6 +3203,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         trace = runtime.trace_store.get_trace(case_id)
         replay_records = await _list_replay_records(job_id=case_id, limit=50)
         alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
+        claim_ledger_record = await _get_claim_ledger_record(
+            case_id=case_id,
+            dispatch_type=None,
+        )
         if (
             workflow_job is None
             and final_receipt is None
@@ -2911,6 +3214,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             and trace is None
             and not replay_records
             and not alerts
+            and claim_ledger_record is None
         ):
             raise HTTPException(status_code=404, detail="case_not_found")
 
@@ -2943,6 +3247,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         case_evidence = _build_case_evidence_view(
             report_payload=report_payload,
             verdict_contract=verdict_contract,
+            claim_ledger_record=claim_ledger_record,
         )
         winner_raw = (
             report_summary.get("winner")
@@ -3034,6 +3339,44 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ],
             "alerts": [_serialize_alert_item(item) for item in alerts],
             "replays": replay_items,
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/claim-ledger")
+    async def get_judge_case_claim_ledger(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+        limit: int = Query(default=20, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+        if normalized_dispatch_type not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+
+        if normalized_dispatch_type == "auto":
+            records = await _list_claim_ledger_records(case_id=case_id, limit=limit)
+            if not records:
+                raise HTTPException(status_code=404, detail="claim_ledger_not_found")
+            primary = records[0]
+        else:
+            primary = await _get_claim_ledger_record(
+                case_id=case_id,
+                dispatch_type=normalized_dispatch_type,
+            )
+            if primary is None:
+                raise HTTPException(status_code=404, detail="claim_ledger_not_found")
+            records = [primary]
+
+        return {
+            "caseId": case_id,
+            "dispatchType": primary.dispatch_type,
+            "traceId": primary.trace_id,
+            "count": len(records),
+            "item": _serialize_claim_ledger_record(primary, include_payload=True),
+            "items": [
+                _serialize_claim_ledger_record(row, include_payload=False)
+                for row in records
+            ],
         }
 
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
@@ -3210,6 +3553,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         trace_id = str(chosen_receipt.trace_id or request_snapshot.get("traceId") or "").strip()
         if not trace_id:
             raise HTTPException(status_code=409, detail="replay_missing_trace_id")
+        await _ensure_registry_runtime_ready()
 
         report_payload: dict[str, Any]
         if chosen_dispatch_type == "final":
@@ -3320,6 +3664,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 dispatch_type="phase",
             )
 
+        await _upsert_claim_ledger_record(
+            case_id=case_id,
+            dispatch_type=chosen_dispatch_type,
+            trace_id=trace_id,
+            report_payload=report_payload,
+        )
         winner = str(report_payload.get("winner") or "").strip().lower()
         if winner not in {"pro", "con", "draw"}:
             agent3 = (
@@ -3953,7 +4303,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         record = runtime.trace_store.get_trace(case_id)
         if record is None:
             raise HTTPException(status_code=404, detail="judge_trace_not_found")
-        return _build_replay_report_payload(record)
+        payload = _build_replay_report_payload(record)
+        claim_ledger_record = await _get_claim_ledger_record(case_id=case_id, dispatch_type=None)
+        if claim_ledger_record is not None:
+            payload["claimLedger"] = _serialize_claim_ledger_record(
+                claim_ledger_record,
+                include_payload=True,
+            )
+        return payload
 
     @app.get("/internal/judge/cases/replay/reports")
     async def list_judge_replay_reports(

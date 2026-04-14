@@ -12,6 +12,13 @@ from .policy_registry import (
     PolicyRegistryRuntime,
     build_policy_registry_runtime,
 )
+from .registry_product_runtime import (
+    MutablePolicyRegistryRuntime,
+    MutablePromptRegistryRuntime,
+    MutableToolRegistryRuntime,
+    RegistryProductRuntime,
+    build_registry_product_runtime,
+)
 from .registry_runtime import (
     PromptRegistryRuntime,
     PromptSetProfile,
@@ -50,9 +57,13 @@ __all__ = [
     "PromptRegistryRuntime",
     "PromptSetProfile",
     "PolicyRegistryRuntime",
+    "RegistryProductRuntime",
     "ToolRegistryRuntime",
     "ToolsetProfile",
     "WorkflowRuntime",
+    "MutablePolicyRegistryRuntime",
+    "MutablePromptRegistryRuntime",
+    "MutableToolRegistryRuntime",
     "build_agent_runtime",
     "build_final_report_payload",
     "build_phase_report_payload",
@@ -63,6 +74,7 @@ __all__ = [
     "build_replay_report_payload",
     "build_replay_report_summary",
     "build_tool_registry_runtime",
+    "build_registry_product_runtime",
     "build_gateway_runtime",
     "attach_report_attestation",
     "validate_final_report_payload_contract",

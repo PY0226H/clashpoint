@@ -13,10 +13,16 @@ from app.domain.facts import (
     ALERT_STATUS_RESOLVED,
     ALERT_STATUS_VALUES,
     AuditAlert,
+    ClaimLedgerRecord,
     DispatchReceipt,
     ReplayRecord,
 )
-from app.infra.db.models import AuditAlertModel, DispatchReceiptModel, ReplayRecordModel
+from app.infra.db.models import (
+    AuditAlertModel,
+    ClaimLedgerRecordModel,
+    DispatchReceiptModel,
+    ReplayRecordModel,
+)
 
 
 def _utcnow() -> datetime:
@@ -185,6 +191,87 @@ class JudgeFactRepository:
         async with self._session_factory() as session:
             rows = (await session.execute(stmt)).scalars().all()
             return [self._to_replay_record(row) for row in rows]
+
+    async def upsert_claim_ledger_record(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str,
+        trace_id: str,
+        claim_graph: dict[str, Any] | None,
+        claim_graph_summary: dict[str, Any] | None,
+        evidence_ledger: dict[str, Any] | None,
+        verdict_evidence_refs: list[dict[str, Any]] | None,
+    ) -> ClaimLedgerRecord:
+        now = _utcnow()
+        normalized_dispatch_type = _normalize_token(dispatch_type) or "unknown"
+        stmt: Select[tuple[ClaimLedgerRecordModel]] = select(ClaimLedgerRecordModel).where(
+            and_(
+                ClaimLedgerRecordModel.case_id == int(case_id),
+                ClaimLedgerRecordModel.dispatch_type == normalized_dispatch_type,
+            )
+        )
+        refs = [
+            dict(item)
+            for item in (verdict_evidence_refs or [])
+            if isinstance(item, dict)
+        ]
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(stmt)).scalars().first()
+                if row is None:
+                    row = ClaimLedgerRecordModel(
+                        case_id=int(case_id),
+                        dispatch_type=normalized_dispatch_type,
+                        created_at=now,
+                    )
+                    session.add(row)
+                row.trace_id = str(trace_id or "").strip()
+                row.claim_graph = dict(claim_graph or {})
+                row.claim_graph_summary = dict(claim_graph_summary or {})
+                row.evidence_ledger = dict(evidence_ledger or {})
+                row.verdict_evidence_refs = refs
+                row.updated_at = now
+            await session.refresh(row)
+            return self._to_claim_ledger_record(row)
+
+    async def get_claim_ledger_record(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str | None = None,
+    ) -> ClaimLedgerRecord | None:
+        stmt: Select[tuple[ClaimLedgerRecordModel]] = select(ClaimLedgerRecordModel).where(
+            ClaimLedgerRecordModel.case_id == int(case_id)
+        )
+        if dispatch_type is not None:
+            stmt = stmt.where(
+                ClaimLedgerRecordModel.dispatch_type == (_normalize_token(dispatch_type) or "unknown")
+            )
+        else:
+            stmt = stmt.order_by(ClaimLedgerRecordModel.updated_at.desc(), ClaimLedgerRecordModel.id.desc())
+
+        async with self._session_factory() as session:
+            row = (await session.execute(stmt)).scalars().first()
+            if row is None:
+                return None
+            return self._to_claim_ledger_record(row)
+
+    async def list_claim_ledger_records(
+        self,
+        *,
+        case_id: int,
+        limit: int = 20,
+    ) -> list[ClaimLedgerRecord]:
+        stmt: Select[tuple[ClaimLedgerRecordModel]] = (
+            select(ClaimLedgerRecordModel)
+            .where(ClaimLedgerRecordModel.case_id == int(case_id))
+            .order_by(ClaimLedgerRecordModel.updated_at.desc(), ClaimLedgerRecordModel.id.desc())
+            .limit(max(1, min(200, int(limit))))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._to_claim_ledger_record(row) for row in rows]
 
     async def upsert_audit_alert(
         self,
@@ -377,4 +464,25 @@ class JudgeFactRepository:
             updated_at=_normalize_dt(row.updated_at),
             acknowledged_at=_normalize_dt(row.acknowledged_at) if row.acknowledged_at else None,
             resolved_at=_normalize_dt(row.resolved_at) if row.resolved_at else None,
+        )
+
+    def _to_claim_ledger_record(self, row: ClaimLedgerRecordModel) -> ClaimLedgerRecord:
+        return ClaimLedgerRecord(
+            case_id=row.case_id,
+            dispatch_type=row.dispatch_type,
+            trace_id=row.trace_id,
+            claim_graph=row.claim_graph if isinstance(row.claim_graph, dict) else {},
+            claim_graph_summary=(
+                row.claim_graph_summary
+                if isinstance(row.claim_graph_summary, dict)
+                else {}
+            ),
+            evidence_ledger=row.evidence_ledger if isinstance(row.evidence_ledger, dict) else {},
+            verdict_evidence_refs=[
+                dict(item)
+                for item in (row.verdict_evidence_refs or [])
+                if isinstance(item, dict)
+            ],
+            created_at=_normalize_dt(row.created_at),
+            updated_at=_normalize_dt(row.updated_at),
         )
