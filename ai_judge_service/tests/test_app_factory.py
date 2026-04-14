@@ -491,6 +491,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             ["job_registered", "status_changed", "status_changed"],
         )
         self.assertEqual(phase_events[-1].payload.get("toStatus"), "completed")
+        self.assertEqual(phase_events[-1].payload.get("judgeCoreStage"), "reported")
+        self.assertEqual(phase_events[-1].payload.get("judgeCoreVersion"), "v1")
 
         replay_resp = await self._post_json(
             app=app,
@@ -657,6 +659,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7401)
         self.assertEqual(workflow_events[-1].payload.get("toStatus"), "review_required")
         self.assertTrue(workflow_events[-1].payload.get("reviewRequired"))
+        self.assertEqual(workflow_events[-1].payload.get("judgeCoreStage"), "review_required")
 
     async def test_review_routes_should_list_detail_and_decide_review_job(self) -> None:
         async def noop_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -795,6 +798,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(workflow_job)
         assert workflow_job is not None
         self.assertEqual(workflow_job.status, "completed")
+        workflow_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=7411)
+        self.assertEqual(workflow_events[-1].payload.get("judgeCoreStage"), "review_approved")
 
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,

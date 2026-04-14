@@ -54,6 +54,7 @@ from .callback_client import (
     callback_phase_failed,
     callback_phase_report,
 )
+from .core.judge_core import JudgeCoreOrchestrator
 from .domain.facts import (
     AuditAlert as FactAuditAlert,
 )
@@ -594,6 +595,9 @@ def _save_dispatch_receipt(
 
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
+    judge_core = JudgeCoreOrchestrator(
+        workflow_orchestrator=runtime.workflow_runtime.orchestrator
+    )
     workflow_schema_ready = False
     workflow_schema_lock = asyncio.Lock()
 
@@ -823,15 +827,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         job: WorkflowJob,
         event_payload: dict[str, Any] | None = None,
     ) -> None:
-        payload = dict(event_payload or {})
         await _ensure_workflow_schema_ready()
-        await runtime.workflow_runtime.orchestrator.register_job(
+        await judge_core.register_running(
             job=job,
-            event_payload=payload,
-        )
-        await runtime.workflow_runtime.orchestrator.mark_running(
-            job_id=job.job_id,
-            event_payload=payload,
+            event_payload=event_payload,
         )
 
     async def _workflow_register_and_mark_case_built(
@@ -839,15 +838,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         job: WorkflowJob,
         event_payload: dict[str, Any] | None = None,
     ) -> WorkflowJob:
-        payload = dict(event_payload or {})
         await _ensure_workflow_schema_ready()
-        await runtime.workflow_runtime.orchestrator.register_job(
+        return await judge_core.register_case_built(
             job=job,
-            event_payload=payload,
-        )
-        return await runtime.workflow_runtime.orchestrator.mark_case_built(
-            job_id=job.job_id,
-            event_payload=payload,
+            event_payload=event_payload,
         )
 
     async def _workflow_mark_completed(
@@ -856,9 +850,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         event_payload: dict[str, Any] | None = None,
     ) -> None:
         await _ensure_workflow_schema_ready()
-        await runtime.workflow_runtime.orchestrator.mark_completed(
+        payload = dict(event_payload or {})
+        dispatch_type = str(payload.get("dispatchType") or "").strip().lower() or "unknown"
+        completed_stage = str(payload.get("judgeCoreStage") or "").strip().lower()
+        if not completed_stage:
+            completed_stage = "review_approved" if payload.get("reviewDecision") else "reported"
+        await judge_core.mark_reported(
             job_id=job_id,
-            event_payload=event_payload,
+            dispatch_type=dispatch_type,
+            review_required=False,
+            completed_stage=completed_stage,
+            event_payload=payload,
         )
 
     async def _workflow_mark_review_required(
@@ -867,9 +869,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         event_payload: dict[str, Any] | None = None,
     ) -> None:
         await _ensure_workflow_schema_ready()
-        await runtime.workflow_runtime.orchestrator.mark_review_required(
+        payload = dict(event_payload or {})
+        dispatch_type = str(payload.get("dispatchType") or "").strip().lower() or "unknown"
+        await judge_core.mark_reported(
             job_id=job_id,
-            event_payload=event_payload,
+            dispatch_type=dispatch_type,
+            review_required=True,
+            event_payload=payload,
         )
 
     async def _workflow_mark_failed(
@@ -880,11 +886,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         event_payload: dict[str, Any] | None = None,
     ) -> None:
         await _ensure_workflow_schema_ready()
-        await runtime.workflow_runtime.orchestrator.mark_failed(
+        payload = dict(event_payload or {})
+        dispatch_type = str(payload.get("dispatchType") or "").strip().lower() or "unknown"
+        failed_stage = str(payload.get("judgeCoreStage") or "").strip().lower()
+        if not failed_stage:
+            failed_stage = "review_rejected" if error_code == "review_rejected" else "failed"
+        await judge_core.mark_failed(
             job_id=job_id,
+            dispatch_type=dispatch_type,
             error_code=error_code,
             error_message=error_message,
-            event_payload=event_payload,
+            stage=failed_stage,
+            event_payload=payload,
         )
 
     async def _workflow_get_job(*, job_id: int) -> WorkflowJob | None:
@@ -2596,16 +2609,21 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             raise HTTPException(status_code=409, detail="review_job_not_pending")
 
         event_payload = {
+            "dispatchType": current_job.dispatch_type,
             "reviewDecision": normalized_decision,
             "reviewActor": str(actor or "").strip() or "system",
             "reviewReason": str(reason or "").strip() or None,
         }
         resolved_alert_ids: list[str] = []
         if normalized_decision == "approve":
-            transitioned = await runtime.workflow_runtime.orchestrator.mark_completed(
+            event_payload["judgeCoreStage"] = "review_approved"
+            await _workflow_mark_completed(
                 job_id=case_id,
                 event_payload=event_payload,
             )
+            transitioned = await _workflow_get_job(job_id=case_id)
+            if transitioned is None:
+                raise HTTPException(status_code=404, detail="review_job_not_found")
             raised_alerts = runtime.trace_store.list_audit_alerts(
                 job_id=case_id,
                 status="raised",
@@ -2625,12 +2643,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 resolved_alert_ids.append(row.alert_id)
         else:
             reject_reason = event_payload["reviewReason"] or "review rejected by reviewer"
-            transitioned = await runtime.workflow_runtime.orchestrator.mark_failed(
+            event_payload["judgeCoreStage"] = "review_rejected"
+            await _workflow_mark_failed(
                 job_id=case_id,
                 error_code="review_rejected",
                 error_message=reject_reason,
                 event_payload=event_payload,
             )
+            transitioned = await _workflow_get_job(job_id=case_id)
+            if transitioned is None:
+                raise HTTPException(status_code=404, detail="review_job_not_found")
 
         return {
             "ok": True,
