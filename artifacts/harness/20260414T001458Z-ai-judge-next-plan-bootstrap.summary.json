@@ -1,0 +1,15 @@
+{
+  "run_id": "20260414T001458Z-ai-judge-next-plan-bootstrap",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "mapping_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md",
+  "operation": "replaced",
+  "bootstrap_marker_count": 1,
+  "started_at": "2026-04-14T00:14:58Z",
+  "finished_at": "2026-04-14T00:14:58Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260414T001458Z-ai-judge-next-plan-bootstrap.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260414T001458Z-ai-judge-next-plan-bootstrap.summary.md"
+  }
+}
