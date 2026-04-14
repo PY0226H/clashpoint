@@ -4,12 +4,21 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .registry_runtime import (
+    DEFAULT_PROMPT_REGISTRY_VERSION,
+    DEFAULT_PROMPT_VERSIONS,
+    DEFAULT_TOOL_IDS,
+    DEFAULT_TOOL_REGISTRY_VERSION,
+)
+
 
 @dataclass(frozen=True)
 class JudgePolicyProfile:
     version: str
     rubric_version: str
     topic_domain: str
+    prompt_registry_version: str
+    tool_registry_version: str
     prompt_versions: dict[str, str]
     tool_ids: tuple[str, ...]
     fairness_thresholds: dict[str, Any]
@@ -74,6 +83,8 @@ class PolicyRegistryRuntime:
             "version": profile.version,
             "rubricVersion": profile.rubric_version,
             "topicDomain": profile.topic_domain,
+            "promptRegistryVersion": profile.prompt_registry_version,
+            "toolRegistryVersion": profile.tool_registry_version,
             "promptVersions": dict(profile.prompt_versions),
             "toolIds": list(profile.tool_ids),
             "fairnessThresholds": dict(profile.fairness_thresholds),
@@ -86,6 +97,8 @@ class PolicyRegistryRuntime:
             "version": profile.version,
             "rubricVersion": profile.rubric_version,
             "topicDomain": profile.topic_domain,
+            "promptRegistryVersion": profile.prompt_registry_version,
+            "toolRegistryVersion": profile.tool_registry_version,
             "promptVersions": dict(profile.prompt_versions),
             "toolIds": list(profile.tool_ids),
         }
@@ -135,20 +148,6 @@ def _normalize_tool_ids(raw: Any, defaults: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[JudgePolicyProfile]:
-    default_prompt_versions = {
-        "summaryPromptVersion": "v3.a2a3.summary.v1",
-        "agent2PromptVersion": "v3.a6a7.bidirectional.v2",
-        "finalPipelineVersion": "v3-final-a9a10-rollup-v2",
-        "claimGraphVersion": "v1-claim-graph-bootstrap",
-    }
-    default_tools = (
-        "transcript_reader",
-        "summary_guard",
-        "evidence_retriever",
-        "agent2_bidirectional_path",
-        "fairness_gate_phase2",
-        "claim_graph_builder",
-    )
     default_thresholds = {
         "drawRateMax": 0.30,
         "sideBiasDeltaMax": 0.08,
@@ -159,8 +158,10 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
             version=default_version,
             rubric_version="v3",
             topic_domain="*",
-            prompt_versions=default_prompt_versions,
-            tool_ids=default_tools,
+            prompt_registry_version=DEFAULT_PROMPT_REGISTRY_VERSION,
+            tool_registry_version=DEFAULT_TOOL_REGISTRY_VERSION,
+            prompt_versions=dict(DEFAULT_PROMPT_VERSIONS),
+            tool_ids=DEFAULT_TOOL_IDS,
             fairness_thresholds=default_thresholds,
             metadata={"status": "active", "source": "builtin"},
         )
@@ -183,13 +184,23 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
         topic_domain = str(
             row.get("topicDomain") or row.get("topic_domain") or "*"
         ).strip() or "*"
+        prompt_registry_version = str(
+            row.get("promptRegistryVersion")
+            or row.get("prompt_registry_version")
+            or DEFAULT_PROMPT_REGISTRY_VERSION
+        ).strip() or DEFAULT_PROMPT_REGISTRY_VERSION
+        tool_registry_version = str(
+            row.get("toolRegistryVersion")
+            or row.get("tool_registry_version")
+            or DEFAULT_TOOL_REGISTRY_VERSION
+        ).strip() or DEFAULT_TOOL_REGISTRY_VERSION
         prompt_versions = _normalize_prompt_versions(
             row.get("promptVersions") or row.get("prompt_versions"),
-            defaults=default_prompt_versions,
+            defaults=DEFAULT_PROMPT_VERSIONS,
         )
         tool_ids = _normalize_tool_ids(
             row.get("toolIds") or row.get("tool_ids"),
-            defaults=default_tools,
+            defaults=DEFAULT_TOOL_IDS,
         )
         fairness_thresholds = (
             dict(row.get("fairnessThresholds"))
@@ -204,6 +215,8 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
                 version=version,
                 rubric_version=rubric_version,
                 topic_domain=topic_domain,
+                prompt_registry_version=prompt_registry_version,
+                tool_registry_version=tool_registry_version,
                 prompt_versions=prompt_versions,
                 tool_ids=tool_ids,
                 fairness_thresholds=fairness_thresholds,

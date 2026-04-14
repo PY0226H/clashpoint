@@ -6,6 +6,7 @@ from typing import Any
 from ...models import FinalDispatchRequest
 from ...style_mode import resolve_effective_style_mode
 from .claim_graph import build_claim_graph_payload
+from .evidence_ledger import EvidenceLedgerBuilder
 
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
@@ -88,6 +89,21 @@ def _build_style_probe_winners(*, pro_score: float, con_score: float) -> dict[st
         "neutral": _resolve_winner(pro_score, con_score, margin=1.0),
         "strict": _resolve_winner(pro_score, con_score, margin=1.3),
     }
+
+
+def _index_retrieval_items(payload: dict[str, Any], *, side: str) -> dict[str, dict[str, Any]]:
+    bundle_key = "proRetrievalBundle" if side == "pro" else "conRetrievalBundle"
+    bundle = payload.get(bundle_key) if isinstance(payload.get(bundle_key), dict) else {}
+    rows = bundle.get("items") if isinstance(bundle.get("items"), list) else []
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        chunk_id = str(row.get("chunkId") or row.get("chunk_id") or "").strip()
+        if not chunk_id or chunk_id in out:
+            continue
+        out[chunk_id] = row
+    return out
 
 
 def _evaluate_fairness_gate(
@@ -285,9 +301,45 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             if not isinstance(dimension_scores.get(key), (int, float)):
                 missing.append(f"dimensionScores.{key}")
 
-    for key in ("verdictEvidenceRefs", "phaseRollupSummary", "retrievalSnapshotRollup"):
+    verdict_refs = payload.get("verdictEvidenceRefs")
+    if not isinstance(verdict_refs, list):
+        missing.append("verdictEvidenceRefs")
+        verdict_refs = []
+    for key in ("phaseRollupSummary", "retrievalSnapshotRollup"):
         if not isinstance(payload.get(key), list):
             missing.append(key)
+
+    evidence_ledger = payload.get("evidenceLedger")
+    evidence_ids: set[str] = set()
+    if not isinstance(evidence_ledger, dict):
+        missing.append("evidenceLedger")
+    else:
+        entries = evidence_ledger.get("entries")
+        if not isinstance(entries, list):
+            missing.append("evidenceLedger.entries")
+            entries = []
+        refs_by_id = evidence_ledger.get("refsById")
+        if not isinstance(refs_by_id, dict):
+            missing.append("evidenceLedger.refsById")
+        stats = evidence_ledger.get("stats")
+        if not isinstance(stats, dict):
+            missing.append("evidenceLedger.stats")
+        for row in entries:
+            if not isinstance(row, dict):
+                continue
+            evidence_id = str(row.get("evidenceId") or "").strip()
+            if evidence_id:
+                evidence_ids.add(evidence_id)
+    for row in verdict_refs:
+        if not isinstance(row, dict):
+            missing.append("verdictEvidenceRefs[]")
+            continue
+        evidence_id = str(row.get("evidenceId") or "").strip()
+        if not evidence_id:
+            missing.append("verdictEvidenceRefs.evidenceId")
+            continue
+        if evidence_ids and evidence_id not in evidence_ids:
+            missing.append("verdictEvidenceRefs.evidenceId_not_found")
 
     winner_first = str(payload.get("winnerFirst") or "").strip().lower()
     winner_second = str(payload.get("winnerSecond") or "").strip().lower()
@@ -371,6 +423,7 @@ def build_final_report_payload(
     con_dimensions_rows: list[dict[str, float]] = []
     verdict_evidence_refs: list[dict[str, Any]] = []
     score_evidence_rollup: list[dict[str, Any]] = []
+    evidence_ledger_builder = EvidenceLedgerBuilder()
 
     for phase_no in used_phase_nos:
         payload = phase_reports_by_no[phase_no][1]
@@ -425,13 +478,27 @@ def build_final_report_payload(
 
         agent1 = payload.get("agent1Score") if isinstance(payload.get("agent1Score"), dict) else {}
         refs = agent1.get("evidenceRefs") if isinstance(agent1.get("evidenceRefs"), dict) else {}
+        retrieval_lookup = {
+            "pro": _index_retrieval_items(payload, side="pro"),
+            "con": _index_retrieval_items(payload, side="con"),
+        }
         for side in ("pro", "con"):
             ref = refs.get(side) if isinstance(refs.get(side), dict) else {}
             for message_id in ref.get("messageIds") or []:
                 if len(verdict_evidence_refs) >= 16:
                     break
+                evidence_id = evidence_ledger_builder.register_message_ref(
+                    phase_no=phase_no,
+                    side=side,
+                    message_id=message_id,
+                    reason="agent1_evidence_ref",
+                )
+                if evidence_id is None:
+                    continue
+                evidence_ledger_builder.mark_verdict_referenced(evidence_id)
                 verdict_evidence_refs.append(
                     {
+                        "evidenceId": evidence_id,
                         "phaseNo": phase_no,
                         "side": side,
                         "type": "message",
@@ -442,8 +509,27 @@ def build_final_report_payload(
             for chunk_id in ref.get("chunkIds") or []:
                 if len(verdict_evidence_refs) >= 16:
                     break
+                chunk_meta = retrieval_lookup.get(side, {}).get(str(chunk_id))
+                evidence_id = evidence_ledger_builder.register_retrieval_chunk(
+                    phase_no=phase_no,
+                    side=side,
+                    chunk_id=chunk_id,
+                    reason="agent1_retrieval_ref",
+                    source_url=(
+                        chunk_meta.get("sourceUrl") or chunk_meta.get("source_url")
+                        if isinstance(chunk_meta, dict)
+                        else None
+                    ),
+                    title=chunk_meta.get("title") if isinstance(chunk_meta, dict) else None,
+                    score=chunk_meta.get("score") if isinstance(chunk_meta, dict) else None,
+                    conflict=chunk_meta.get("conflict") if isinstance(chunk_meta, dict) else False,
+                )
+                if evidence_id is None:
+                    continue
+                evidence_ledger_builder.mark_verdict_referenced(evidence_id)
                 verdict_evidence_refs.append(
                     {
+                        "evidenceId": evidence_id,
                         "phaseNo": phase_no,
                         "side": side,
                         "type": "retrieval_chunk",
@@ -461,8 +547,19 @@ def build_final_report_payload(
                 side, content = _parse_agent2_ref_item(raw)
                 if not content:
                     continue
+                evidence_id = evidence_ledger_builder.register_agent2_path_item(
+                    phase_no=phase_no,
+                    side=side,
+                    path_type=ref_type,
+                    item=content,
+                    reason="agent2_path_alignment",
+                )
+                if evidence_id is None:
+                    continue
+                evidence_ledger_builder.mark_verdict_referenced(evidence_id)
                 verdict_evidence_refs.append(
                     {
+                        "evidenceId": evidence_id,
                         "phaseNo": phase_no,
                         "side": side,
                         "type": ref_type,
@@ -481,6 +578,16 @@ def build_final_report_payload(
                 if dedupe_key in retrieval_seen:
                     continue
                 retrieval_seen.add(dedupe_key)
+                evidence_ledger_builder.register_retrieval_chunk(
+                    phase_no=phase_no,
+                    side=side,
+                    chunk_id=chunk_id,
+                    reason="retrieval_snapshot",
+                    source_url=item.get("sourceUrl") or item.get("source_url"),
+                    title=item.get("title"),
+                    score=item.get("score"),
+                    conflict=item.get("conflict"),
+                )
                 retrieval_snapshot_rollup.append(
                     {
                         "phaseNo": phase_no,
@@ -495,6 +602,8 @@ def build_final_report_payload(
                 )
                 if len(retrieval_snapshot_rollup) >= 120:
                     break
+
+    evidence_ledger = evidence_ledger_builder.build_payload()
 
     if phase_rollup_summary:
         pro_score = round(sum(pro_agent3_scores) / float(len(pro_agent3_scores)), 2)
@@ -652,6 +761,14 @@ def build_final_report_payload(
     claim_graph_payload = build_claim_graph_payload(
         phase_payloads=[(phase_no, phase_reports_by_no[phase_no][1]) for phase_no in used_phase_nos],
         verdict_evidence_refs=verdict_evidence_refs,
+        evidence_ref_resolver=lambda phase_no, side, message_ids, chunk_ids: (
+            evidence_ledger_builder.resolve_reference_ids(
+                phase_no=phase_no,
+                side=side,
+                message_ids=message_ids,
+                chunk_ids=chunk_ids,
+            )
+        ),
     )
     claim_graph = (
         claim_graph_payload.get("claimGraph")
@@ -675,6 +792,7 @@ def build_final_report_payload(
         "verdictReason": verdict_reason,
         "claimGraph": claim_graph,
         "claimGraphSummary": claim_graph_summary,
+        "evidenceLedger": evidence_ledger,
         "verdictEvidenceRefs": verdict_evidence_refs[:16],
         "phaseRollupSummary": phase_rollup_summary,
         "retrievalSnapshotRollup": retrieval_snapshot_rollup,
@@ -709,6 +827,10 @@ def build_final_report_payload(
             "scoreEvidenceRollup": score_evidence_rollup,
             "claimGraphSummary": claim_graph_summary,
             "claimGraphStats": claim_graph.get("stats") if isinstance(claim_graph, dict) else {},
+            "evidenceLedgerVersion": evidence_ledger.get("pipelineVersion"),
+            "evidenceLedgerStats": evidence_ledger.get("stats")
+            if isinstance(evidence_ledger.get("stats"), dict)
+            else {},
             "fairnessGate": fairness_summary,
         },
         "fairnessSummary": fairness_summary,

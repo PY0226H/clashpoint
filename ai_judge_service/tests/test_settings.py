@@ -72,6 +72,10 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.compliance_block_enabled)
         self.assertEqual(settings.policy_registry_default_version, "v3-default")
         self.assertEqual(settings.policy_registry_json, "")
+        self.assertEqual(settings.prompt_registry_default_version, "promptset-v3-default")
+        self.assertEqual(settings.prompt_registry_json, "")
+        self.assertEqual(settings.tool_registry_default_version, "toolset-v3-default")
+        self.assertEqual(settings.tool_registry_json, "")
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -160,6 +164,10 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_COMPLIANCE_BLOCK_ENABLED": "false",
                 "AI_JUDGE_POLICY_REGISTRY_DEFAULT_VERSION": "v4-pro",
                 "AI_JUDGE_POLICY_REGISTRY_JSON": '{"profiles":[]}',
+                "AI_JUDGE_PROMPT_REGISTRY_DEFAULT_VERSION": "promptset-v4-pro",
+                "AI_JUDGE_PROMPT_REGISTRY_JSON": '{"profiles":[]}',
+                "AI_JUDGE_TOOL_REGISTRY_DEFAULT_VERSION": "toolset-v4-pro",
+                "AI_JUDGE_TOOL_REGISTRY_JSON": '{"profiles":[]}',
             },
             clear=True,
         ):
@@ -243,6 +251,10 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(settings.compliance_block_enabled)
         self.assertEqual(settings.policy_registry_default_version, "v4-pro")
         self.assertEqual(settings.policy_registry_json, '{"profiles":[]}')
+        self.assertEqual(settings.prompt_registry_default_version, "promptset-v4-pro")
+        self.assertEqual(settings.prompt_registry_json, '{"profiles":[]}')
+        self.assertEqual(settings.tool_registry_default_version, "toolset-v4-pro")
+        self.assertEqual(settings.tool_registry_json, '{"profiles":[]}')
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

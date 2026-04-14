@@ -12,10 +12,14 @@ from .applications import (
     AgentRuntime,
     GatewayRuntime,
     PolicyRegistryRuntime,
+    PromptRegistryRuntime,
+    ToolRegistryRuntime,
     WorkflowRuntime,
     build_agent_runtime,
     build_gateway_runtime,
     build_policy_registry_runtime,
+    build_prompt_registry_runtime,
+    build_tool_registry_runtime,
     build_workflow_runtime,
 )
 from .applications import (
@@ -101,6 +105,8 @@ class AppRuntime:
     gateway_runtime: GatewayRuntime
     agent_runtime: AgentRuntime
     policy_registry_runtime: PolicyRegistryRuntime
+    prompt_registry_runtime: PromptRegistryRuntime
+    tool_registry_runtime: ToolRegistryRuntime
 
 
 def require_internal_key(settings: Settings, header_value: str | None) -> None:
@@ -124,6 +130,8 @@ def create_runtime(
     gateway_runtime = build_gateway_runtime(settings=settings)
     agent_runtime = build_agent_runtime(settings=settings)
     policy_registry_runtime = build_policy_registry_runtime(settings=settings)
+    prompt_registry_runtime = build_prompt_registry_runtime(settings=settings)
+    tool_registry_runtime = build_tool_registry_runtime(settings=settings)
     callback_cfg = build_callback_client_config(settings)
     (
         callback_phase_report_fn,
@@ -150,6 +158,8 @@ def create_runtime(
         gateway_runtime=gateway_runtime,
         agent_runtime=agent_runtime,
         policy_registry_runtime=policy_registry_runtime,
+        prompt_registry_runtime=prompt_registry_runtime,
+        tool_registry_runtime=tool_registry_runtime,
     )
 
 
@@ -197,6 +207,14 @@ def _serialize_policy_profile(runtime: AppRuntime, *, profile: Any) -> dict[str,
     return runtime.policy_registry_runtime.serialize_profile(profile)
 
 
+def _serialize_prompt_profile(runtime: AppRuntime, *, profile: Any) -> dict[str, Any]:
+    return runtime.prompt_registry_runtime.serialize_profile(profile)
+
+
+def _serialize_tool_profile(runtime: AppRuntime, *, profile: Any) -> dict[str, Any]:
+    return runtime.tool_registry_runtime.serialize_profile(profile)
+
+
 def _resolve_policy_profile_or_raise(
     *,
     runtime: AppRuntime,
@@ -217,11 +235,35 @@ def _resolve_policy_profile_or_raise(
     )
 
 
+def _resolve_prompt_profile_or_raise(
+    *,
+    runtime: AppRuntime,
+    prompt_registry_version: str,
+) -> Any:
+    profile = runtime.prompt_registry_runtime.get_profile(prompt_registry_version)
+    if profile is not None:
+        return profile
+    raise HTTPException(status_code=422, detail="unknown_prompt_registry_version")
+
+
+def _resolve_tool_profile_or_raise(
+    *,
+    runtime: AppRuntime,
+    tool_registry_version: str,
+) -> Any:
+    profile = runtime.tool_registry_runtime.get_profile(tool_registry_version)
+    if profile is not None:
+        return profile
+    raise HTTPException(status_code=422, detail="unknown_tool_registry_version")
+
+
 def _attach_policy_trace_snapshot(
     *,
     runtime: AppRuntime,
     report_payload: dict[str, Any],
     profile: Any,
+    prompt_profile: Any,
+    tool_profile: Any,
 ) -> None:
     if not isinstance(report_payload, dict):
         return
@@ -230,6 +272,13 @@ def _attach_policy_trace_snapshot(
         judge_trace = {}
         report_payload["judgeTrace"] = judge_trace
     judge_trace["policyRegistry"] = runtime.policy_registry_runtime.build_trace_snapshot(profile)
+    judge_trace["promptRegistry"] = runtime.prompt_registry_runtime.build_trace_snapshot(prompt_profile)
+    judge_trace["toolRegistry"] = runtime.tool_registry_runtime.build_trace_snapshot(tool_profile)
+    judge_trace["registryVersions"] = {
+        "policyVersion": str(getattr(profile, "version", "") or "").strip(),
+        "promptVersion": str(getattr(prompt_profile, "version", "") or "").strip(),
+        "toolsetVersion": str(getattr(tool_profile, "version", "") or "").strip(),
+    }
 
 
 def _attach_report_attestation(
@@ -281,9 +330,28 @@ def _build_case_evidence_view(
         if isinstance(payload.get("claimGraphSummary"), dict)
         else None
     )
+    evidence_ledger = (
+        payload.get("evidenceLedger")
+        if isinstance(payload.get("evidenceLedger"), dict)
+        else (
+            contract.get("evidenceLedger")
+            if isinstance(contract.get("evidenceLedger"), dict)
+            else None
+        )
+    )
     policy_snapshot = (
         judge_trace.get("policyRegistry")
         if isinstance(judge_trace.get("policyRegistry"), dict)
+        else None
+    )
+    prompt_snapshot = (
+        judge_trace.get("promptRegistry")
+        if isinstance(judge_trace.get("promptRegistry"), dict)
+        else None
+    )
+    tool_snapshot = (
+        judge_trace.get("toolRegistry")
+        if isinstance(judge_trace.get("toolRegistry"), dict)
         else None
     )
     trust_attestation = (
@@ -319,9 +387,9 @@ def _build_case_evidence_view(
     if not isinstance(raw_verdict_refs, list):
         raw_verdict_refs = contract.get("verdictEvidenceRefs")
     verdict_evidence_refs = [
-        str(item).strip()
+        dict(item)
         for item in (raw_verdict_refs or [])
-        if str(item).strip()
+        if isinstance(item, dict)
     ]
 
     degradation_level = (
@@ -340,12 +408,29 @@ def _build_case_evidence_view(
         and str(policy_snapshot.get("version") or "").strip()
         else None
     )
+    prompt_version = (
+        str(prompt_snapshot.get("version")).strip()
+        if isinstance(prompt_snapshot, dict)
+        and str(prompt_snapshot.get("version") or "").strip()
+        else None
+    )
+    toolset_version = (
+        str(tool_snapshot.get("version")).strip()
+        if isinstance(tool_snapshot, dict)
+        and str(tool_snapshot.get("version") or "").strip()
+        else None
+    )
 
     return {
         "claimGraph": claim_graph,
         "claimGraphSummary": claim_graph_summary,
+        "evidenceLedger": evidence_ledger,
         "policySnapshot": policy_snapshot,
         "policyVersion": policy_version,
+        "promptSnapshot": prompt_snapshot,
+        "promptVersion": prompt_version,
+        "toolSnapshot": tool_snapshot,
+        "toolsetVersion": toolset_version,
         "trustAttestation": trust_attestation,
         "fairnessSummary": fairness_summary,
         "verdictEvidenceRefs": verdict_evidence_refs,
@@ -356,6 +441,7 @@ def _build_case_evidence_view(
             "degradationLevel": degradation_level,
         },
         "hasClaimGraph": claim_graph is not None,
+        "hasEvidenceLedger": evidence_ledger is not None,
         "hasTrustAttestation": trust_attestation is not None,
     }
 
@@ -1272,6 +1358,62 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "item": _serialize_policy_profile(runtime, profile=profile),
         }
 
+    @app.get("/internal/judge/registries/prompts")
+    async def list_prompt_registries(
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        profiles = runtime.prompt_registry_runtime.list_profiles()
+        return {
+            "defaultVersion": runtime.prompt_registry_runtime.default_version,
+            "count": len(profiles),
+            "items": [
+                _serialize_prompt_profile(runtime, profile=item)
+                for item in profiles
+            ],
+        }
+
+    @app.get("/internal/judge/registries/prompts/{prompt_version}")
+    async def get_prompt_registry(
+        prompt_version: str,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        profile = runtime.prompt_registry_runtime.get_profile(prompt_version)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="prompt_registry_not_found")
+        return {
+            "item": _serialize_prompt_profile(runtime, profile=profile),
+        }
+
+    @app.get("/internal/judge/registries/tools")
+    async def list_tool_registries(
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        profiles = runtime.tool_registry_runtime.list_profiles()
+        return {
+            "defaultVersion": runtime.tool_registry_runtime.default_version,
+            "count": len(profiles),
+            "items": [
+                _serialize_tool_profile(runtime, profile=item)
+                for item in profiles
+            ],
+        }
+
+    @app.get("/internal/judge/registries/tools/{toolset_version}")
+    async def get_tool_registry(
+        toolset_version: str,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        profile = runtime.tool_registry_runtime.get_profile(toolset_version)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="tool_registry_not_found")
+        return {
+            "item": _serialize_tool_profile(runtime, profile=profile),
+        }
+
     @app.post("/internal/judge/cases")
     async def create_judge_case(
         request: Request,
@@ -1302,6 +1444,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             rubric_version=parsed.rubric_version,
             topic_domain=parsed.topic_domain,
         )
+        prompt_profile = _resolve_prompt_profile_or_raise(
+            runtime=runtime,
+            prompt_registry_version=policy_profile.prompt_registry_version,
+        )
+        tool_profile = _resolve_tool_profile_or_raise(
+            runtime=runtime,
+            tool_registry_version=policy_profile.tool_registry_version,
+        )
         existing_job = await _workflow_get_job(job_id=parsed.case_id)
         if existing_job is not None:
             raise HTTPException(status_code=409, detail="case_already_exists")
@@ -1327,6 +1477,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "sessionId": parsed.session_id,
                 "traceId": parsed.trace_id,
                 "policyVersion": policy_profile.version,
+                "promptVersion": prompt_profile.version,
+                "toolsetVersion": tool_profile.version,
                 "caseStatus": "case_built",
             },
         )
@@ -1338,6 +1490,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "sessionId": parsed.session_id,
             "traceId": parsed.trace_id,
             "idempotencyKey": parsed.idempotency_key,
+            "registryVersions": {
+                "policyVersion": policy_profile.version,
+                "promptVersion": prompt_profile.version,
+                "toolsetVersion": tool_profile.version,
+            },
             "workflow": _serialize_workflow_job(transitioned_job),
         }
         runtime.trace_store.register_start(
@@ -1608,6 +1765,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             rubric_version=parsed.rubric_version,
             topic_domain=parsed.topic_domain,
         )
+        prompt_profile = _resolve_prompt_profile_or_raise(
+            runtime=runtime,
+            prompt_registry_version=policy_profile.prompt_registry_version,
+        )
+        tool_profile = _resolve_tool_profile_or_raise(
+            runtime=runtime,
+            tool_registry_version=policy_profile.tool_registry_version,
+        )
 
         response = {
             "accepted": True,
@@ -1669,6 +1834,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "messageCount": parsed.message_count,
                 "traceId": parsed.trace_id,
                 "policyVersion": policy_profile.version,
+                "promptVersion": prompt_profile.version,
+                "toolsetVersion": tool_profile.version,
             },
         )
 
@@ -1691,6 +1858,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             report_payload=phase_report_payload,
             profile=policy_profile,
+            prompt_profile=prompt_profile,
+            tool_profile=tool_profile,
         )
         _attach_report_attestation(
             report_payload=phase_report_payload,
@@ -1939,6 +2108,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             rubric_version=parsed.rubric_version,
             topic_domain=parsed.topic_domain,
         )
+        prompt_profile = _resolve_prompt_profile_or_raise(
+            runtime=runtime,
+            prompt_registry_version=policy_profile.prompt_registry_version,
+        )
+        tool_profile = _resolve_tool_profile_or_raise(
+            runtime=runtime,
+            tool_registry_version=policy_profile.tool_registry_version,
+        )
 
         response = {
             "accepted": True,
@@ -2000,6 +2177,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "phaseEndNo": parsed.phase_end_no,
                 "traceId": parsed.trace_id,
                 "policyVersion": policy_profile.version,
+                "promptVersion": prompt_profile.version,
+                "toolsetVersion": tool_profile.version,
             },
         )
 
@@ -2029,6 +2208,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             report_payload=final_report_payload,
             profile=policy_profile,
+            prompt_profile=prompt_profile,
+            tool_profile=tool_profile,
         )
         _attach_report_attestation(
             report_payload=final_report_payload,
@@ -2710,6 +2891,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 rubric_version=final_request.rubric_version,
                 topic_domain=final_request.topic_domain,
             )
+            prompt_profile = _resolve_prompt_profile_or_raise(
+                runtime=runtime,
+                prompt_registry_version=policy_profile.prompt_registry_version,
+            )
+            tool_profile = _resolve_tool_profile_or_raise(
+                runtime=runtime,
+                tool_registry_version=policy_profile.tool_registry_version,
+            )
             phase_receipts = await _list_dispatch_receipts(
                 dispatch_type="phase",
                 session_id=final_request.session_id,
@@ -2736,6 +2925,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 runtime=runtime,
                 report_payload=report_payload,
                 profile=policy_profile,
+                prompt_profile=prompt_profile,
+                tool_profile=tool_profile,
             )
             _attach_report_attestation(
                 report_payload=report_payload,
@@ -2760,6 +2951,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 rubric_version=phase_request.rubric_version,
                 topic_domain=phase_request.topic_domain,
             )
+            prompt_profile = _resolve_prompt_profile_or_raise(
+                runtime=runtime,
+                prompt_registry_version=policy_profile.prompt_registry_version,
+            )
+            tool_profile = _resolve_tool_profile_or_raise(
+                runtime=runtime,
+                tool_registry_version=policy_profile.tool_registry_version,
+            )
             report_payload = await build_phase_report_payload_v3_phase(
                 request=phase_request,
                 settings=runtime.settings,
@@ -2779,6 +2978,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 runtime=runtime,
                 report_payload=report_payload,
                 profile=policy_profile,
+                prompt_profile=prompt_profile,
+                tool_profile=tool_profile,
             )
             _attach_report_attestation(
                 report_payload=report_payload,

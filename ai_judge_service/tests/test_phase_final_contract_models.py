@@ -159,6 +159,15 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
                 "coreClaims": {"pro": [], "con": []},
                 "stats": {"totalClaims": 0},
             },
+            "evidence_ledger": {
+                "pipelineVersion": "v2-evidence-ledger",
+                "entries": [],
+                "refsById": {},
+                "messageRefs": [],
+                "citationRefs": [],
+                "conflictRefs": [],
+                "stats": {"totalEntries": 0},
+            },
             "verdict_evidence_refs": [{"messageId": 3001}],
             "phase_rollup_summary": [{"phaseNo": 1}],
             "retrieval_snapshot_rollup": [{"chunkId": "c-1"}],
@@ -175,6 +184,7 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
         self.assertEqual(report.winner, "draw")
         self.assertTrue(report.rejudge_triggered)
         self.assertIn("stats", report.claim_graph_summary)
+        self.assertIn("stats", report.evidence_ledger)
 
 
 if __name__ == "__main__":

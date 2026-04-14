@@ -148,6 +148,10 @@ class Settings:
     rag_rerank_device: str = "cpu"
     policy_registry_default_version: str = "v3-default"
     policy_registry_json: str = ""
+    prompt_registry_default_version: str = "promptset-v3-default"
+    prompt_registry_json: str = ""
+    tool_registry_default_version: str = "toolset-v3-default"
+    tool_registry_json: str = ""
 
 
 def load_settings() -> Settings:
@@ -308,6 +312,22 @@ def load_settings() -> Settings:
             or "v3-default"
         ),
         policy_registry_json=os.getenv("AI_JUDGE_POLICY_REGISTRY_JSON", "").strip(),
+        prompt_registry_default_version=(
+            os.getenv(
+                "AI_JUDGE_PROMPT_REGISTRY_DEFAULT_VERSION",
+                "promptset-v3-default",
+            ).strip()
+            or "promptset-v3-default"
+        ),
+        prompt_registry_json=os.getenv("AI_JUDGE_PROMPT_REGISTRY_JSON", "").strip(),
+        tool_registry_default_version=(
+            os.getenv(
+                "AI_JUDGE_TOOL_REGISTRY_DEFAULT_VERSION",
+                "toolset-v3-default",
+            ).strip()
+            or "toolset-v3-default"
+        ),
+        tool_registry_json=os.getenv("AI_JUDGE_TOOL_REGISTRY_JSON", "").strip(),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings
@@ -399,6 +419,12 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError(
             "AI_JUDGE_RAG_RERANK_DEVICE must be one of " + ",".join(sorted(VALID_RERANK_DEVICES))
         )
+    if not settings.policy_registry_default_version.strip():
+        raise ValueError("AI_JUDGE_POLICY_REGISTRY_DEFAULT_VERSION cannot be empty")
+    if not settings.prompt_registry_default_version.strip():
+        raise ValueError("AI_JUDGE_PROMPT_REGISTRY_DEFAULT_VERSION cannot be empty")
+    if not settings.tool_registry_default_version.strip():
+        raise ValueError("AI_JUDGE_TOOL_REGISTRY_DEFAULT_VERSION cannot be empty")
     if settings.redis_enabled:
         if not settings.redis_url:
             raise ValueError("AI_JUDGE_REDIS_URL cannot be empty when AI_JUDGE_REDIS_ENABLED=true")

@@ -33,6 +33,21 @@ class TrustAttestationTests(unittest.TestCase):
             "sessionId": 2,
             "phaseRollupSummary": [{"phaseNo": 1}],
             "verdictEvidenceRefs": [{"evidenceId": "ev1"}],
+            "evidenceLedger": {
+                "pipelineVersion": "v2-evidence-ledger",
+                "entries": [{"evidenceId": "ev1", "kind": "message_ref", "phaseNo": 1, "side": "pro"}],
+                "refsById": {"ev1": {"index": 0, "kind": "message_ref", "phaseNo": 1, "side": "pro"}},
+                "messageRefs": [{"evidenceId": "ev1", "messageId": 1}],
+                "citationRefs": [],
+                "conflictRefs": [],
+                "stats": {
+                    "totalEntries": 1,
+                    "messageRefCount": 1,
+                    "citationRefCount": 0,
+                    "conflictRefCount": 0,
+                    "verdictReferencedCount": 1,
+                },
+            },
             "retrievalSnapshotRollup": [{"phaseNo": 1, "sources": 1}],
             "claimGraph": {
                 "pipelineVersion": "v1-claim-graph-bootstrap",

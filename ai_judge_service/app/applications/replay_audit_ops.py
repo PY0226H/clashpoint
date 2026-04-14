@@ -47,6 +47,11 @@ def build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
         "debateSummary": str(report_payload.get("debateSummary") or "").strip(),
         "sideAnalysis": _normalize_side_analysis(report_payload.get("sideAnalysis")),
         "verdictReason": str(report_payload.get("verdictReason") or "").strip(),
+        "evidenceLedger": (
+            dict(report_payload.get("evidenceLedger"))
+            if isinstance(report_payload.get("evidenceLedger"), dict)
+            else None
+        ),
         "verdictEvidenceRefs": [
             row
             for row in (report_payload.get("verdictEvidenceRefs") or [])

@@ -127,10 +127,29 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["sideAnalysis"], dict)
     assert isinstance(payload["claimGraph"], dict)
     assert isinstance(payload["claimGraphSummary"], dict)
+    assert isinstance(payload["evidenceLedger"], dict)
+    assert isinstance(payload["evidenceLedger"]["entries"], list)
+    assert isinstance(payload["evidenceLedger"]["refsById"], dict)
     assert payload["claimGraph"]["stats"]["conflictEdges"] >= 1
     assert payload["claimGraphSummary"]["stats"]["totalClaims"] >= 2
+    assert all(
+        str(ref.get("evidenceId") or "").strip()
+        for ref in payload["verdictEvidenceRefs"]
+        if isinstance(ref, dict)
+    )
+    ledger_ids = {
+        str(item.get("evidenceId") or "").strip()
+        for item in payload["evidenceLedger"]["entries"]
+        if isinstance(item, dict)
+    }
+    assert all(
+        str(ref.get("evidenceId") or "").strip() in ledger_ids
+        for ref in payload["verdictEvidenceRefs"]
+        if isinstance(ref, dict)
+    )
     assert isinstance(payload["judgeTrace"], dict)
     assert isinstance(payload["judgeTrace"]["claimGraphSummary"], dict)
+    assert isinstance(payload["judgeTrace"]["evidenceLedgerStats"], dict)
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -337,6 +356,7 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
     assert "verdictReason" in missing
     assert "claimGraph" in missing
     assert "claimGraphSummary" in missing
+    assert "evidenceLedger" in missing
     assert "judgeTrace" in missing
 
 

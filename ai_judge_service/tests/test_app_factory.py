@@ -234,6 +234,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
+        self.assertIn("/internal/judge/registries/prompts", paths)
+        self.assertIn("/internal/judge/registries/prompts/{prompt_version}", paths)
+        self.assertIn("/internal/judge/registries/tools", paths)
+        self.assertIn("/internal/judge/registries/tools/{toolset_version}", paths)
         self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
@@ -376,14 +380,27 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("caseEvidence", detail_payload)
         case_evidence = detail_payload["caseEvidence"]
         self.assertTrue(case_evidence["hasClaimGraph"])
+        self.assertTrue(case_evidence["hasEvidenceLedger"])
         self.assertTrue(case_evidence["hasTrustAttestation"])
         self.assertIsInstance(case_evidence["claimGraph"], dict)
         self.assertIsInstance(case_evidence["claimGraphSummary"], dict)
+        self.assertIsInstance(case_evidence["evidenceLedger"], dict)
+        self.assertIsInstance(case_evidence["evidenceLedger"]["entries"], list)
         self.assertIsInstance(case_evidence["policySnapshot"], dict)
         self.assertTrue(str(case_evidence["policyVersion"] or "").strip())
+        self.assertIsInstance(case_evidence["promptSnapshot"], dict)
+        self.assertTrue(str(case_evidence["promptVersion"] or "").strip())
+        self.assertIsInstance(case_evidence["toolSnapshot"], dict)
+        self.assertTrue(str(case_evidence["toolsetVersion"] or "").strip())
         self.assertEqual(case_evidence["trustAttestation"]["dispatchType"], "final")
         self.assertIsInstance(case_evidence["fairnessSummary"], dict)
         self.assertIsInstance(case_evidence["verdictEvidenceRefs"], list)
+        self.assertTrue(
+            all(
+                isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+                for item in case_evidence["verdictEvidenceRefs"]
+            )
+        )
         self.assertIn("auditSummary", case_evidence)
         self.assertEqual(
             case_evidence["auditSummary"]["alertCount"],
@@ -418,6 +435,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         payload = list_resp.json()
         self.assertEqual(payload["defaultVersion"], "v3-default")
         self.assertGreaterEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["promptRegistryVersion"], "promptset-v3-default")
+        self.assertEqual(payload["items"][0]["toolRegistryVersion"], "toolset-v3-default")
         self.assertEqual(payload["items"][0]["promptVersions"]["claimGraphVersion"], "v1-claim-graph-bootstrap")
 
         detail_resp = await self._get(
@@ -427,6 +446,47 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(detail_resp.status_code, 200)
         self.assertEqual(detail_resp.json()["item"]["version"], "v3-default")
+
+        prompt_list_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/prompts",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_list_resp.status_code, 200)
+        prompt_list_payload = prompt_list_resp.json()
+        self.assertEqual(prompt_list_payload["defaultVersion"], "promptset-v3-default")
+        self.assertGreaterEqual(prompt_list_payload["count"], 1)
+        self.assertEqual(
+            prompt_list_payload["items"][0]["promptVersions"]["claimGraphVersion"],
+            "v1-claim-graph-bootstrap",
+        )
+
+        prompt_detail_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/prompts/promptset-v3-default",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_detail_resp.status_code, 200)
+        self.assertEqual(prompt_detail_resp.json()["item"]["version"], "promptset-v3-default")
+
+        tool_list_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/tools",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(tool_list_resp.status_code, 200)
+        tool_list_payload = tool_list_resp.json()
+        self.assertEqual(tool_list_payload["defaultVersion"], "toolset-v3-default")
+        self.assertGreaterEqual(tool_list_payload["count"], 1)
+        self.assertIn("claim_graph_builder", tool_list_payload["items"][0]["toolIds"])
+
+        tool_detail_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/tools/toolset-v3-default",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(tool_detail_resp.status_code, 200)
+        self.assertEqual(tool_detail_resp.json()["item"]["version"], "toolset-v3-default")
 
     async def test_phase_dispatch_should_reject_unknown_policy_version(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -445,6 +505,31 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bad_resp.status_code, 422)
         self.assertIn("unknown_judge_policy_version", bad_resp.text)
+
+    async def test_phase_dispatch_should_reject_unknown_prompt_registry_version(self) -> None:
+        runtime = create_runtime(
+            settings=_build_settings(
+                policy_registry_json=(
+                    '{"defaultVersion":"v3-default","profiles":[{"version":"v3-default","rubricVersion":"v3",'
+                    '"topicDomain":"tft","promptRegistryVersion":"promptset-missing"}]}'
+                )
+            )
+        )
+        app = create_app(runtime)
+        req = _build_phase_request(
+            case_id=8105,
+            idempotency_key="phase:8105",
+            judge_policy_version="v3-default",
+        )
+
+        bad_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_resp.status_code, 422)
+        self.assertIn("unknown_prompt_registry_version", bad_resp.text)
 
     async def test_final_dispatch_should_reject_policy_rubric_mismatch(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -510,6 +595,26 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["dispatchType"],
             "phase",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["policyRegistry"]["version"],
+            "v3-default",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["promptRegistry"]["version"],
+            "promptset-v3-default",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["toolRegistry"]["version"],
+            "toolset-v3-default",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["registryVersions"]["promptVersion"],
+            "promptset-v3-default",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["registryVersions"]["toolsetVersion"],
+            "toolset-v3-default",
         )
         self.assertEqual(
             len(phase_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
@@ -602,6 +707,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "final",
         )
         self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["promptRegistry"]["version"],
+            "promptset-v3-default",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["toolRegistry"]["version"],
+            "toolset-v3-default",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["registryVersions"]["promptVersion"],
+            "promptset-v3-default",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["registryVersions"]["toolsetVersion"],
+            "toolset-v3-default",
+        )
+        self.assertEqual(
             len(final_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
             8,
         )
@@ -678,6 +799,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "unansweredClaims": 0,
                     "weakSupportedClaims": 0,
                     "verdictReferencedClaims": 0,
+                },
+            },
+            "evidenceLedger": {
+                "pipelineVersion": "v2-evidence-ledger",
+                "entries": [],
+                "refsById": {},
+                "messageRefs": [],
+                "citationRefs": [],
+                "conflictRefs": [],
+                "stats": {
+                    "totalEntries": 0,
+                    "messageRefCount": 0,
+                    "citationRefCount": 0,
+                    "conflictRefCount": 0,
+                    "verdictReferencedCount": 0,
                 },
             },
             "verdictEvidenceRefs": [],
@@ -770,6 +906,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "unansweredClaims": 0,
                     "weakSupportedClaims": 0,
                     "verdictReferencedClaims": 0,
+                },
+            },
+            "evidenceLedger": {
+                "pipelineVersion": "v2-evidence-ledger",
+                "entries": [],
+                "refsById": {},
+                "messageRefs": [],
+                "citationRefs": [],
+                "conflictRefs": [],
+                "stats": {
+                    "totalEntries": 0,
+                    "messageRefCount": 0,
+                    "citationRefCount": 0,
+                    "conflictRefCount": 0,
+                    "verdictReferencedCount": 0,
                 },
             },
             "verdictEvidenceRefs": [],

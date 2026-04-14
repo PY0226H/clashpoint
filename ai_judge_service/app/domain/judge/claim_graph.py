@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 _CLAIM_TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 _SIDE_PREFIX_RE = re.compile(r"^(pro|con)\s*:\s*", re.IGNORECASE)
@@ -266,6 +266,7 @@ def build_claim_graph_payload(
     *,
     phase_payloads: list[tuple[int, dict[str, Any]]],
     verdict_evidence_refs: list[dict[str, Any]],
+    evidence_ref_resolver: Callable[[int, str, list[int], list[str]], list[str]] | None = None,
 ) -> dict[str, Any]:
     node_index_by_key: dict[tuple[str, str], int] = {}
     nodes: list[dict[str, Any]] = []
@@ -279,6 +280,11 @@ def build_claim_graph_payload(
             if not candidates:
                 continue
             message_ids, chunk_ids = _collect_side_evidence_refs(payload, side=side)
+            evidence_ref_ids = (
+                evidence_ref_resolver(int(phase_no), side, message_ids, chunk_ids)
+                if evidence_ref_resolver is not None
+                else []
+            )
             verdict_referenced = _is_claim_referenced_by_verdict(
                 verdict_evidence_refs=verdict_evidence_refs,
                 side=side,
@@ -308,6 +314,7 @@ def build_claim_graph_payload(
                             "messageIds": list(message_ids),
                             "chunkIds": list(chunk_ids),
                         },
+                        "evidenceRefIds": list(evidence_ref_ids),
                         "evidenceRefCount": len(message_ids) + len(chunk_ids),
                         "verdictReferenced": verdict_referenced,
                         "addressed": False,
@@ -336,6 +343,15 @@ def build_claim_graph_payload(
                 refs["chunkIds"] = existing_chunk_ids[:12]
                 node["evidenceRefs"] = refs
                 node["evidenceRefCount"] = len(existing_message_ids) + len(existing_chunk_ids)
+                existing_ref_ids = (
+                    node.get("evidenceRefIds") if isinstance(node.get("evidenceRefIds"), list) else []
+                )
+                for evidence_ref_id in evidence_ref_ids:
+                    token = str(evidence_ref_id or "").strip()
+                    if not token or token in existing_ref_ids:
+                        continue
+                    existing_ref_ids.append(token)
+                node["evidenceRefIds"] = existing_ref_ids[:24]
                 if verdict_referenced:
                     node["verdictReferenced"] = True
 
@@ -412,6 +428,13 @@ def build_claim_graph_payload(
                 "sources": list(row.get("sources") or []),
                 "supportCount": int(row.get("supportCount") or 0),
                 "evidenceRefs": row.get("evidenceRefs") if isinstance(row.get("evidenceRefs"), dict) else {"messageIds": [], "chunkIds": []},
+                "evidenceRefIds": [
+                    str(item).strip()
+                    for item in (
+                        row.get("evidenceRefIds") if isinstance(row.get("evidenceRefIds"), list) else []
+                    )
+                    if str(item).strip()
+                ][:24],
                 "evidenceRefCount": int(row.get("evidenceRefCount") or 0),
                 "verdictReferenced": bool(row.get("verdictReferenced")),
                 "addressed": bool(row.get("addressed")),

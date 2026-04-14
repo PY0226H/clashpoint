@@ -83,6 +83,8 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         profile = runtime.get_profile("v3-default")
         self.assertIsNotNone(profile)
         assert profile is not None
+        self.assertEqual(profile.prompt_registry_version, "promptset-v3-default")
+        self.assertEqual(profile.tool_registry_version, "toolset-v3-default")
         self.assertEqual(profile.prompt_versions["claimGraphVersion"], "v1-claim-graph-bootstrap")
 
     def test_build_policy_registry_runtime_should_parse_custom_registry_json(self) -> None:
@@ -90,7 +92,8 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
             settings=_build_settings(
                 policy_registry_json=(
                     '{"defaultVersion":"v4-pro","profiles":[{"version":"v4-pro","rubricVersion":"v4",'
-                    '"topicDomain":"tft","promptVersions":{"claimGraphVersion":"v2"},"toolIds":["x"],'
+                    '"topicDomain":"tft","promptRegistryVersion":"promptset-v4","toolRegistryVersion":"toolset-v4",'
+                    '"promptVersions":{"claimGraphVersion":"v2"},"toolIds":["x"],'
                     '"fairnessThresholds":{"drawRateMax":0.22},"metadata":{"status":"active"}}]}'
                 )
             )
@@ -101,6 +104,8 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         assert profile is not None
         self.assertEqual(profile.rubric_version, "v4")
         self.assertEqual(profile.topic_domain, "tft")
+        self.assertEqual(profile.prompt_registry_version, "promptset-v4")
+        self.assertEqual(profile.tool_registry_version, "toolset-v4")
         self.assertEqual(profile.prompt_versions["claimGraphVersion"], "v2")
         self.assertEqual(profile.tool_ids, ("x",))
 

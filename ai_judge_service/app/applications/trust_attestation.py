@@ -45,6 +45,16 @@ def _build_phase_component_hashes(report_payload: dict[str, Any]) -> dict[str, s
             if isinstance(report_payload.get("judgeTrace"), dict)
             else None
         ),
+        "promptRegistry": (
+            report_payload.get("judgeTrace", {}).get("promptRegistry")
+            if isinstance(report_payload.get("judgeTrace"), dict)
+            else None
+        ),
+        "toolRegistry": (
+            report_payload.get("judgeTrace", {}).get("toolRegistry")
+            if isinstance(report_payload.get("judgeTrace"), dict)
+            else None
+        ),
     }
     return {
         "transcriptHash": _sha256_hex(transcript_basis),
@@ -60,6 +70,7 @@ def _build_final_component_hashes(report_payload: dict[str, Any]) -> dict[str, s
         "phaseRollupSummary": report_payload.get("phaseRollupSummary"),
     }
     evidence_basis = {
+        "evidenceLedger": report_payload.get("evidenceLedger"),
         "verdictEvidenceRefs": report_payload.get("verdictEvidenceRefs"),
         "retrievalSnapshotRollup": report_payload.get("retrievalSnapshotRollup"),
     }
@@ -89,6 +100,16 @@ def _build_final_component_hashes(report_payload: dict[str, Any]) -> dict[str, s
         "rubricVersion": report_payload.get("rubricVersion"),
         "policyRegistry": (
             report_payload.get("judgeTrace", {}).get("policyRegistry")
+            if isinstance(report_payload.get("judgeTrace"), dict)
+            else None
+        ),
+        "promptRegistry": (
+            report_payload.get("judgeTrace", {}).get("promptRegistry")
+            if isinstance(report_payload.get("judgeTrace"), dict)
+            else None
+        ),
+        "toolRegistry": (
+            report_payload.get("judgeTrace", {}).get("toolRegistry")
             if isinstance(report_payload.get("judgeTrace"), dict)
             else None
         ),
