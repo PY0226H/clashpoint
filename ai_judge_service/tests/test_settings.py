@@ -70,6 +70,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.runtime_retry_max_attempts, 2)
         self.assertEqual(settings.runtime_retry_backoff_ms, 200)
         self.assertTrue(settings.compliance_block_enabled)
+        self.assertEqual(settings.policy_registry_default_version, "v3-default")
+        self.assertEqual(settings.policy_registry_json, "")
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -156,6 +158,8 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_RUNTIME_RETRY_MAX_ATTEMPTS": "4",
                 "AI_JUDGE_RUNTIME_RETRY_BACKOFF_MS": "500",
                 "AI_JUDGE_COMPLIANCE_BLOCK_ENABLED": "false",
+                "AI_JUDGE_POLICY_REGISTRY_DEFAULT_VERSION": "v4-pro",
+                "AI_JUDGE_POLICY_REGISTRY_JSON": '{"profiles":[]}',
             },
             clear=True,
         ):
@@ -237,6 +241,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.runtime_retry_max_attempts, 4)
         self.assertEqual(settings.runtime_retry_backoff_ms, 500)
         self.assertFalse(settings.compliance_block_enabled)
+        self.assertEqual(settings.policy_registry_default_version, "v4-pro")
+        self.assertEqual(settings.policy_registry_json, '{"profiles":[]}')
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

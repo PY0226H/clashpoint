@@ -146,6 +146,8 @@ class Settings:
     rag_rerank_candidate_cap: int = 50
     rag_rerank_timeout_ms: int = 12000
     rag_rerank_device: str = "cpu"
+    policy_registry_default_version: str = "v3-default"
+    policy_registry_json: str = ""
 
 
 def load_settings() -> Settings:
@@ -301,6 +303,11 @@ def load_settings() -> Settings:
         rag_rerank_candidate_cap=int(os.getenv("AI_JUDGE_RAG_RERANK_CANDIDATE_CAP", "50")),
         rag_rerank_timeout_ms=int(os.getenv("AI_JUDGE_RAG_RERANK_TIMEOUT_MS", "12000")),
         rag_rerank_device=normalize_rerank_device(os.getenv("AI_JUDGE_RAG_RERANK_DEVICE", "cpu")),
+        policy_registry_default_version=(
+            os.getenv("AI_JUDGE_POLICY_REGISTRY_DEFAULT_VERSION", "v3-default").strip()
+            or "v3-default"
+        ),
+        policy_registry_json=os.getenv("AI_JUDGE_POLICY_REGISTRY_JSON", "").strip(),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings

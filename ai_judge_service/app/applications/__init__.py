@@ -7,6 +7,11 @@ from .judge_mainline import (
     build_phase_report_payload,
     validate_final_report_payload_contract,
 )
+from .policy_registry import (
+    JudgePolicyProfile,
+    PolicyRegistryRuntime,
+    build_policy_registry_runtime,
+)
 from .replay_audit_ops import (
     build_replay_report_payload,
     build_replay_report_summary,
@@ -20,10 +25,13 @@ __all__ = [
     "AgentRuntime",
     "GatewayRuntime",
     "StaticAgentRegistry",
+    "JudgePolicyProfile",
+    "PolicyRegistryRuntime",
     "WorkflowRuntime",
     "build_agent_runtime",
     "build_final_report_payload",
     "build_phase_report_payload",
+    "build_policy_registry_runtime",
     "build_replay_report_payload",
     "build_replay_report_summary",
     "build_gateway_runtime",

@@ -11,9 +11,11 @@ from pydantic import ValidationError
 from .applications import (
     AgentRuntime,
     GatewayRuntime,
+    PolicyRegistryRuntime,
     WorkflowRuntime,
     build_agent_runtime,
     build_gateway_runtime,
+    build_policy_registry_runtime,
     build_workflow_runtime,
 )
 from .applications import (
@@ -83,6 +85,7 @@ class AppRuntime:
     workflow_runtime: WorkflowRuntime
     gateway_runtime: GatewayRuntime
     agent_runtime: AgentRuntime
+    policy_registry_runtime: PolicyRegistryRuntime
 
 
 def require_internal_key(settings: Settings, header_value: str | None) -> None:
@@ -105,6 +108,7 @@ def create_runtime(
     workflow_runtime = build_workflow_runtime(settings=settings)
     gateway_runtime = build_gateway_runtime(settings=settings)
     agent_runtime = build_agent_runtime(settings=settings)
+    policy_registry_runtime = build_policy_registry_runtime(settings=settings)
     callback_cfg = build_callback_client_config(settings)
     (
         callback_phase_report_fn,
@@ -130,6 +134,7 @@ def create_runtime(
         workflow_runtime=workflow_runtime,
         gateway_runtime=gateway_runtime,
         agent_runtime=agent_runtime,
+        policy_registry_runtime=policy_registry_runtime,
     )
 
 
@@ -171,6 +176,45 @@ def _serialize_workflow_job(item: WorkflowJob) -> dict[str, Any]:
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+def _serialize_policy_profile(runtime: AppRuntime, *, profile: Any) -> dict[str, Any]:
+    return runtime.policy_registry_runtime.serialize_profile(profile)
+
+
+def _resolve_policy_profile_or_raise(
+    *,
+    runtime: AppRuntime,
+    judge_policy_version: str,
+    rubric_version: str,
+    topic_domain: str,
+) -> Any:
+    outcome = runtime.policy_registry_runtime.resolve(
+        requested_version=judge_policy_version,
+        rubric_version=rubric_version,
+        topic_domain=topic_domain,
+    )
+    if outcome.profile is not None:
+        return outcome.profile
+    raise HTTPException(
+        status_code=422,
+        detail=outcome.error_code or "judge_policy_invalid",
+    )
+
+
+def _attach_policy_trace_snapshot(
+    *,
+    runtime: AppRuntime,
+    report_payload: dict[str, Any],
+    profile: Any,
+) -> None:
+    if not isinstance(report_payload, dict):
+        return
+    judge_trace = report_payload.get("judgeTrace")
+    if not isinstance(judge_trace, dict):
+        judge_trace = {}
+        report_payload["judgeTrace"] = judge_trace
+    judge_trace["policyRegistry"] = runtime.policy_registry_runtime.build_trace_snapshot(profile)
 
 
 def _build_replay_report_payload(record: Any) -> dict[str, Any]:
@@ -824,6 +868,34 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     async def healthz() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.get("/internal/judge/policies")
+    async def list_judge_policies(
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        profiles = runtime.policy_registry_runtime.list_profiles()
+        return {
+            "defaultVersion": runtime.policy_registry_runtime.default_version,
+            "count": len(profiles),
+            "items": [
+                _serialize_policy_profile(runtime, profile=item)
+                for item in profiles
+            ],
+        }
+
+    @app.get("/internal/judge/policies/{policy_version}")
+    async def get_judge_policy(
+        policy_version: str,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        profile = runtime.policy_registry_runtime.get_profile(policy_version)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="judge_policy_not_found")
+        return {
+            "item": _serialize_policy_profile(runtime, profile=profile),
+        }
+
     async def _handle_blindization_rejection(
         *,
         dispatch_type: str,
@@ -1044,6 +1116,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if replayed is not None:
             return replayed
+        policy_profile = _resolve_policy_profile_or_raise(
+            runtime=runtime,
+            judge_policy_version=parsed.judge_policy_version,
+            rubric_version=parsed.rubric_version,
+            topic_domain=parsed.topic_domain,
+        )
 
         response = {
             "accepted": True,
@@ -1104,6 +1182,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "phaseNo": parsed.phase_no,
                 "messageCount": parsed.message_count,
                 "traceId": parsed.trace_id,
+                "policyVersion": policy_profile.version,
             },
         )
 
@@ -1111,6 +1190,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             request=parsed,
             settings=runtime.settings,
             gateway_runtime=runtime.gateway_runtime,
+        )
+        _attach_policy_trace_snapshot(
+            runtime=runtime,
+            report_payload=phase_report_payload,
+            profile=policy_profile,
         )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
@@ -1328,6 +1412,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if replayed is not None:
             return replayed
+        policy_profile = _resolve_policy_profile_or_raise(
+            runtime=runtime,
+            judge_policy_version=parsed.judge_policy_version,
+            rubric_version=parsed.rubric_version,
+            topic_domain=parsed.topic_domain,
+        )
 
         response = {
             "accepted": True,
@@ -1388,6 +1478,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "phaseStartNo": parsed.phase_start_no,
                 "phaseEndNo": parsed.phase_end_no,
                 "traceId": parsed.trace_id,
+                "policyVersion": policy_profile.version,
             },
         )
 
@@ -1401,6 +1492,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             request=parsed,
             phase_receipts=phase_receipts,
+        )
+        _attach_policy_trace_snapshot(
+            runtime=runtime,
+            report_payload=final_report_payload,
+            profile=policy_profile,
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -1870,6 +1966,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             except ValidationError as err:
                 raise HTTPException(status_code=409, detail=f"replay_invalid_final_request: {err}") from err
             _validate_final_dispatch_request(final_request)
+            policy_profile = _resolve_policy_profile_or_raise(
+                runtime=runtime,
+                judge_policy_version=final_request.judge_policy_version,
+                rubric_version=final_request.rubric_version,
+                topic_domain=final_request.topic_domain,
+            )
             phase_receipts = await _list_dispatch_receipts(
                 dispatch_type="phase",
                 session_id=final_request.session_id,
@@ -1881,16 +1983,32 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 request=final_request,
                 phase_receipts=phase_receipts,
             )
+            _attach_policy_trace_snapshot(
+                runtime=runtime,
+                report_payload=report_payload,
+                profile=policy_profile,
+            )
         else:
             try:
                 phase_request = PhaseDispatchRequest.model_validate(request_snapshot)
             except ValidationError as err:
                 raise HTTPException(status_code=409, detail=f"replay_invalid_phase_request: {err}") from err
             _validate_phase_dispatch_request(phase_request)
+            policy_profile = _resolve_policy_profile_or_raise(
+                runtime=runtime,
+                judge_policy_version=phase_request.judge_policy_version,
+                rubric_version=phase_request.rubric_version,
+                topic_domain=phase_request.topic_domain,
+            )
             report_payload = await build_phase_report_payload_v3_phase(
                 request=phase_request,
                 settings=runtime.settings,
                 gateway_runtime=runtime.gateway_runtime,
+            )
+            _attach_policy_trace_snapshot(
+                runtime=runtime,
+                report_payload=report_payload,
+                profile=policy_profile,
             )
 
         winner = str(report_payload.get("winner") or "").strip().lower()

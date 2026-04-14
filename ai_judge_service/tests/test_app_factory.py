@@ -83,7 +83,11 @@ def _build_settings(**overrides: object) -> Settings:
 
 
 def _build_phase_request(
-    *, job_id: int = 101, idempotency_key: str = "phase-key-101"
+    *,
+    job_id: int = 101,
+    idempotency_key: str = "phase-key-101",
+    rubric_version: str = "v3",
+    judge_policy_version: str = "v3-default",
 ) -> PhaseDispatchRequest:
     now = datetime.now(timezone.utc)
     return PhaseDispatchRequest(
@@ -110,8 +114,8 @@ def _build_phase_request(
                 speaker_tag="con_1",
             ),
         ],
-        rubric_version="v3",
-        judge_policy_version="v3-default",
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
         topic_domain="tft",
         retrieval_profile="hybrid_v1",
         trace_id=f"trace-phase-{job_id}",
@@ -120,7 +124,11 @@ def _build_phase_request(
 
 
 def _build_final_request(
-    *, job_id: int = 202, idempotency_key: str = "final-key-202"
+    *,
+    job_id: int = 202,
+    idempotency_key: str = "final-key-202",
+    rubric_version: str = "v3",
+    judge_policy_version: str = "v3-default",
 ) -> FinalDispatchRequest:
     return FinalDispatchRequest(
         job_id=job_id,
@@ -128,8 +136,8 @@ def _build_final_request(
         session_id=2,
         phase_start_no=1,
         phase_end_no=1,
-        rubric_version="v3",
-        judge_policy_version="v3-default",
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
         topic_domain="tft",
         trace_id=f"trace-final-{job_id}",
         idempotency_key=idempotency_key,
@@ -191,7 +199,69 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/internal/judge/v3/phase/dispatch", paths)
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
+        self.assertIn("/internal/judge/policies", paths)
+        self.assertIn("/internal/judge/policies/{policy_version}", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
+
+    async def test_policy_routes_should_return_default_registry_profile(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        list_resp = await self._get(
+            app=app,
+            path="/internal/judge/policies",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        payload = list_resp.json()
+        self.assertEqual(payload["defaultVersion"], "v3-default")
+        self.assertGreaterEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["promptVersions"]["claimGraphVersion"], "v1-claim-graph-bootstrap")
+
+        detail_resp = await self._get(
+            app=app,
+            path="/internal/judge/policies/v3-default",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.json()["item"]["version"], "v3-default")
+
+    async def test_phase_dispatch_should_reject_unknown_policy_version(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        req = _build_phase_request(
+            job_id=8101,
+            idempotency_key="phase:8101",
+            judge_policy_version="v9-not-exist",
+        )
+
+        bad_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_resp.status_code, 422)
+        self.assertIn("unknown_judge_policy_version", bad_resp.text)
+
+    async def test_final_dispatch_should_reject_policy_rubric_mismatch(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        req = _build_final_request(
+            job_id=8102,
+            idempotency_key="final:8102",
+            rubric_version="v2",
+            judge_policy_version="v3-default",
+        )
+
+        bad_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_resp.status_code, 422)
+        self.assertIn("judge_policy_rubric_mismatch", bad_resp.text)
 
     async def test_create_runtime_should_include_agent_runtime_shell_profiles(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -291,6 +361,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(final_callback_calls), 1)
         self.assertEqual(final_callback_calls[0][0], 2002)
         self.assertIn("winner", final_callback_calls[0][1])
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["policyRegistry"]["version"],
+            "v3-default",
+        )
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2001)
         final_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2002)
         self.assertIsNotNone(phase_job)
