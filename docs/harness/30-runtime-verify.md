@@ -48,6 +48,8 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 6. `scripts/harness/ai_judge_evidence_closure.sh`（ai_judge P2/P3/P4 证据聚合）
 7. `scripts/harness/ai_judge_calibration_prep.sh`（ai_judge P5 校准模板与待验证清单）
 8. `scripts/harness/ai_judge_p5_real_calibration_on_env.sh`（ai_judge P5 真实环境校准门禁）
+9. `scripts/harness/ai_judge_fairness_benchmark_freeze.sh`（ai_judge fairness benchmark 阈值冻结）
+10. `scripts/harness/ai_judge_real_env_evidence_closure.sh`（ai_judge real-env 证据收口清单）
 
 ### 2.3 当前统一入口能力
 
@@ -83,6 +85,20 @@ EchoIsle 当前已经有统一的 `runtime verify` 入口：
 2. 读取 `ai_judge_p5_real_env.env` 的 `REAL_CALIBRATION_ENV_READY` 判定环境是否就绪
 3. 环境未就绪时输出 `env_blocked`；环境就绪且五类轨道满足 real 证据键时才输出 `pass`
 4. 若明确允许本机参考（`--allow-local-reference`）且 marker 标记 `LOCAL_REFERENCE_ENV_READY=true`，会输出 `local_reference_pass/local_reference_pending`，用于本地设备参考，不替代真实环境 `pass`
+
+fairness benchmark 冻结阶段使用专门脚本：
+
+1. `scripts/harness/ai_judge_fairness_benchmark_freeze.sh`
+2. 读取 `ai_judge_p5_fairness_benchmark.env` 与 `ai_judge_p5_real_env.env` 生成阈值冻结工件
+3. 输出 `pass/local_reference_frozen/pending_data/threshold_violation/env_blocked`
+4. 产出冻结阈值文件 `docs/loadtest/evidence/ai_judge_fairness_benchmark_thresholds.env`
+
+real-env 证据收口阶段使用专门脚本：
+
+1. `scripts/harness/ai_judge_real_env_evidence_closure.sh`
+2. 统一检查五轨道 real 必填键与 marker 就绪状态
+3. 输出 `pass/env_blocked/pending_real_evidence/evidence_missing`
+4. 产出收口清单 `docs/loadtest/evidence/ai_judge_p5_real_env_closure_checklist.md`
 
 但当前还没有负责：
 
@@ -139,6 +155,15 @@ bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh \
   --allow-local-reference \
   --emit-json "artifacts/harness/manual-ai-judge-p5-local-reference.summary.json" \
   --emit-md "artifacts/harness/manual-ai-judge-p5-local-reference.summary.md"
+
+bash scripts/harness/ai_judge_fairness_benchmark_freeze.sh \
+  --allow-local-reference \
+  --emit-json "artifacts/harness/manual-ai-judge-fairness-benchmark-freeze.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-fairness-benchmark-freeze.summary.md"
+
+bash scripts/harness/ai_judge_real_env_evidence_closure.sh \
+  --emit-json "artifacts/harness/manual-ai-judge-real-env-closure.summary.json" \
+  --emit-md "artifacts/harness/manual-ai-judge-real-env-closure.summary.md"
 ```
 
 ---
