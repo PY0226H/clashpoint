@@ -249,6 +249,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/{registry_type}/releases/{version}", paths)
         self.assertIn("/internal/judge/fairness/cases", paths)
         self.assertIn("/internal/judge/fairness/cases/{case_id}", paths)
+        self.assertIn("/internal/judge/panels/runtime/profiles", paths)
         self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/commitment", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/verdict-attestation", paths)
@@ -1768,9 +1769,17 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "not_ready")
         self.assertEqual(body["errorCode"], "agent_not_enabled")
         self.assertFalse(body["accepted"])
+        self.assertEqual(body["capabilityBoundary"]["mode"], "advisory_only")
+        self.assertFalse(bool(body["capabilityBoundary"]["officialVerdictAuthority"]))
         self.assertEqual(body["sharedContext"]["sessionId"], phase_req.session_id)
         self.assertEqual(body["sharedContext"]["caseId"], phase_case_id)
         self.assertEqual(body["sharedContext"]["latestDispatchType"], "phase")
+        self.assertEqual(body["sharedContext"]["rubricVersion"], phase_req.rubric_version)
+        self.assertEqual(
+            body["sharedContext"]["judgePolicyVersion"],
+            phase_req.judge_policy_version,
+        )
+        self.assertEqual(body["sharedContext"]["ruleVersion"], phase_req.judge_policy_version)
         self.assertGreaterEqual(body["sharedContext"]["phaseReceiptCount"], 1)
 
     async def test_room_qa_shell_route_should_return_not_ready_with_final_context(
@@ -1830,9 +1839,17 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "not_ready")
         self.assertEqual(body["errorCode"], "agent_not_enabled")
         self.assertFalse(body["accepted"])
+        self.assertEqual(body["capabilityBoundary"]["mode"], "advisory_only")
+        self.assertFalse(bool(body["capabilityBoundary"]["officialVerdictAuthority"]))
         self.assertEqual(body["sharedContext"]["sessionId"], final_req.session_id)
         self.assertEqual(body["sharedContext"]["caseId"], final_case_id)
         self.assertEqual(body["sharedContext"]["latestDispatchType"], "final")
+        self.assertEqual(body["sharedContext"]["rubricVersion"], final_req.rubric_version)
+        self.assertEqual(
+            body["sharedContext"]["judgePolicyVersion"],
+            final_req.judge_policy_version,
+        )
+        self.assertEqual(body["sharedContext"]["ruleVersion"], final_req.judge_policy_version)
         self.assertGreaterEqual(body["sharedContext"]["finalReceiptCount"], 1)
 
     async def test_phase_dispatch_should_callback_and_support_idempotent_replay(self) -> None:
@@ -3777,6 +3794,165 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(invalid_sort_order_resp.status_code, 422)
         self.assertIn("invalid_sort_order", invalid_sort_order_resp.text)
+
+    async def test_panel_runtime_profile_ops_view_should_support_filters_and_aggregations(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(7821)
+
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        run_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": f"run-{_unique_case_id(7822)}",
+                "policy_version": "v3-default",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.03,
+                    "appeal_overturn_rate": 0.06,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(run_resp.status_code, 200)
+
+        list_resp = await self._get(
+            app=app,
+            path="/internal/judge/panels/runtime/profiles?dispatch_type=final&limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        payload = list_resp.json()
+        self.assertGreaterEqual(payload["count"], 3)
+        self.assertGreaterEqual(payload["returned"], 3)
+        self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeA"], 1)
+        self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeB"], 1)
+        self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeC"], 1)
+        self.assertGreaterEqual(
+            payload["aggregations"]["byModelStrategy"]["deterministic_path_alignment"],
+            1,
+        )
+        self.assertGreaterEqual(
+            payload["aggregations"]["byProfileSource"]["builtin_default"],
+            1,
+        )
+        self.assertTrue(any(row["caseId"] == case_id for row in payload["items"]))
+
+        judge_a_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/panels/runtime/profiles"
+                "?dispatch_type=final&judge_id=judgeA"
+                "&profile_id=panel-judgeA-weighted-v1&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(judge_a_resp.status_code, 200)
+        judge_a_payload = judge_a_resp.json()
+        self.assertGreaterEqual(judge_a_payload["count"], 1)
+        self.assertEqual(judge_a_payload["filters"]["judgeId"], "judgeA")
+        self.assertEqual(
+            judge_a_payload["filters"]["profileId"],
+            "panel-judgeA-weighted-v1",
+        )
+        self.assertTrue(
+            all(
+                row["judgeId"] == "judgeA"
+                and row["profileId"] == "panel-judgeA-weighted-v1"
+                for row in judge_a_payload["items"]
+            )
+        )
+
+        judge_b_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/panels/runtime/profiles"
+                "?dispatch_type=final&judge_id=judgeB"
+                "&model_strategy=deterministic_path_alignment&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(judge_b_resp.status_code, 200)
+        judge_b_payload = judge_b_resp.json()
+        self.assertGreaterEqual(judge_b_payload["count"], 1)
+        self.assertTrue(
+            all(
+                row["judgeId"] == "judgeB"
+                and row["modelStrategy"] == "deterministic_path_alignment"
+                for row in judge_b_payload["items"]
+            )
+        )
+
+        bad_judge_resp = await self._get(
+            app=app,
+            path="/internal/judge/panels/runtime/profiles?judge_id=judgeX",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_judge_resp.status_code, 422)
+        self.assertIn("invalid_panel_judge_id", bad_judge_resp.text)
+
+        bad_source_resp = await self._get(
+            app=app,
+            path="/internal/judge/panels/runtime/profiles?profile_source=invalid",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_source_resp.status_code, 422)
+        self.assertIn("invalid_panel_profile_source", bad_source_resp.text)
+
+        bad_sort_by_resp = await self._get(
+            app=app,
+            path="/internal/judge/panels/runtime/profiles?sort_by=unknown",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_sort_by_resp.status_code, 422)
+        self.assertIn("invalid_panel_runtime_sort_by", bad_sort_by_resp.text)
+
+        bad_sort_order_resp = await self._get(
+            app=app,
+            path="/internal/judge/panels/runtime/profiles?sort_order=unknown",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_sort_order_resp.status_code, 422)
+        self.assertIn("invalid_panel_runtime_sort_order", bad_sort_order_resp.text)
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)

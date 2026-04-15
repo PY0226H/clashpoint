@@ -86,6 +86,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(npc_result.status, "not_ready")
         self.assertEqual(npc_result.error_code, "agent_not_enabled")
         self.assertEqual(npc_result.output.get("kind"), AGENT_KIND_NPC_COACH)
+        self.assertEqual(npc_result.output.get("mode"), "advisory_only")
+        self.assertFalse(bool(npc_result.output.get("officialVerdictAuthority")))
 
     async def test_execute_should_report_error_for_unknown_agent_kind(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))

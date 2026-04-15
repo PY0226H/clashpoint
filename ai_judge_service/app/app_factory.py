@@ -285,6 +285,19 @@ CASE_FAIRNESS_SORT_FIELDS = {
     "gate_conclusion",
     "case_id",
 }
+PANEL_RUNTIME_PROFILE_SOURCE_VALUES = {
+    "policy_metadata",
+    "builtin_default",
+    "unknown",
+}
+PANEL_RUNTIME_PROFILE_SORT_FIELDS = {
+    "updated_at",
+    "panel_disagreement_ratio",
+    "case_id",
+    "judge_id",
+    "profile_id",
+    "model_strategy",
+}
 
 
 def _new_challenge_id(*, case_id: int) -> str:
@@ -897,6 +910,233 @@ def _build_case_fairness_aggregations(items: list[dict[str, Any]]) -> dict[str, 
         "winnerCounts": winner_counts,
         "challengeStateCounts": dict(sorted(challenge_state_counts.items(), key=lambda kv: kv[0])),
         "policyVersionCounts": dict(sorted(policy_version_counts.items(), key=lambda kv: kv[0])),
+    }
+
+
+def _normalize_panel_runtime_profile_source(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_panel_runtime_profile_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def _normalize_panel_runtime_profile_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def _build_panel_runtime_profile_item(
+    *,
+    case_item: dict[str, Any],
+    judge_id: str,
+    runtime_profile: dict[str, Any],
+) -> dict[str, Any]:
+    panel = (
+        case_item.get("panelDisagreement")
+        if isinstance(case_item.get("panelDisagreement"), dict)
+        else {}
+    )
+    challenge_link = (
+        case_item.get("challengeLink")
+        if isinstance(case_item.get("challengeLink"), dict)
+        else {}
+    )
+    latest_challenge = (
+        challenge_link.get("latest")
+        if isinstance(challenge_link.get("latest"), dict)
+        else {}
+    )
+    drift_summary = (
+        case_item.get("driftSummary")
+        if isinstance(case_item.get("driftSummary"), dict)
+        else {}
+    )
+
+    profile_source = (
+        str(runtime_profile.get("profileSource") or "").strip().lower() or "unknown"
+    )
+    profile_id = str(runtime_profile.get("profileId") or "").strip() or None
+    model_strategy = str(runtime_profile.get("modelStrategy") or "").strip() or None
+    score_source = str(runtime_profile.get("scoreSource") or "").strip() or None
+    prompt_version = str(runtime_profile.get("promptVersion") or "").strip() or None
+    toolset_version = str(runtime_profile.get("toolsetVersion") or "").strip() or None
+    policy_version = (
+        str(runtime_profile.get("policyVersion") or "").strip()
+        or str(drift_summary.get("policyVersion") or "").strip()
+        or None
+    )
+
+    return {
+        "caseId": int(case_item.get("caseId") or 0),
+        "traceId": str(case_item.get("traceId") or "").strip() or None,
+        "dispatchType": str(case_item.get("dispatchType") or "").strip() or None,
+        "workflowStatus": str(case_item.get("workflowStatus") or "").strip() or None,
+        "updatedAt": str(case_item.get("updatedAt") or "").strip() or None,
+        "winner": str(case_item.get("winner") or "").strip().lower() or None,
+        "gateConclusion": str(case_item.get("gateConclusion") or "").strip().lower() or None,
+        "reviewRequired": bool(case_item.get("reviewRequired")),
+        "hasOpenReview": bool(challenge_link.get("hasOpenReview")),
+        "challengeState": str(latest_challenge.get("state") or "").strip() or None,
+        "panelDisagreement": {
+            "high": bool(panel.get("high")),
+            "ratio": _safe_float(panel.get("ratio"), default=0.0),
+            "ratioMax": _safe_float(panel.get("ratioMax"), default=0.0),
+            "reasons": [
+                str(item).strip()
+                for item in (panel.get("reasons") or [])
+                if str(item).strip()
+            ],
+            "majorityWinner": str(panel.get("majorityWinner") or "").strip().lower() or None,
+            "voteBySide": (
+                panel.get("voteBySide")
+                if isinstance(panel.get("voteBySide"), dict)
+                else {}
+            ),
+        },
+        "judgeId": judge_id,
+        "profileId": profile_id,
+        "profileSource": profile_source,
+        "modelStrategy": model_strategy,
+        "scoreSource": score_source,
+        "decisionMargin": _safe_float(runtime_profile.get("decisionMargin"), default=0.0),
+        "promptVersion": prompt_version,
+        "toolsetVersion": toolset_version,
+        "policyVersion": policy_version,
+        "runtimeProfile": dict(runtime_profile),
+    }
+
+
+def _build_panel_runtime_profile_sort_key(
+    *,
+    item: dict[str, Any],
+    sort_by: str,
+) -> tuple[Any, ...]:
+    if sort_by == "panel_disagreement_ratio":
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        return (
+            _safe_float(panel.get("ratio"), default=0.0),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "case_id":
+        return (
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "judge_id":
+        return (
+            str(item.get("judgeId") or ""),
+            int(item.get("caseId") or 0),
+        )
+    if sort_by == "profile_id":
+        return (
+            str(item.get("profileId") or ""),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "model_strategy":
+        return (
+            str(item.get("modelStrategy") or ""),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    return (
+        str(item.get("updatedAt") or "").strip(),
+        int(item.get("caseId") or 0),
+        str(item.get("judgeId") or ""),
+    )
+
+
+def _build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dict[str, Any]:
+    judge_counts: dict[str, int] = {}
+    profile_id_counts: dict[str, int] = {"unknown": 0}
+    model_strategy_counts: dict[str, int] = {"unknown": 0}
+    profile_source_counts: dict[str, int] = {"unknown": 0}
+    policy_version_counts: dict[str, int] = {"unknown": 0}
+    winner_counts: dict[str, int] = {
+        "pro": 0,
+        "con": 0,
+        "draw": 0,
+        "unknown": 0,
+    }
+    review_required_count = 0
+    open_review_count = 0
+    panel_high_disagreement_count = 0
+    disagreement_ratio_sum = 0.0
+
+    for item in items:
+        judge_id = str(item.get("judgeId") or "").strip() or "unknown"
+        judge_counts[judge_id] = judge_counts.get(judge_id, 0) + 1
+
+        profile_id = str(item.get("profileId") or "").strip()
+        if profile_id:
+            profile_id_counts[profile_id] = profile_id_counts.get(profile_id, 0) + 1
+        else:
+            profile_id_counts["unknown"] += 1
+
+        model_strategy = str(item.get("modelStrategy") or "").strip()
+        if model_strategy:
+            model_strategy_counts[model_strategy] = model_strategy_counts.get(model_strategy, 0) + 1
+        else:
+            model_strategy_counts["unknown"] += 1
+
+        profile_source = str(item.get("profileSource") or "").strip().lower()
+        if profile_source:
+            profile_source_counts[profile_source] = profile_source_counts.get(profile_source, 0) + 1
+        else:
+            profile_source_counts["unknown"] += 1
+
+        policy_version = str(item.get("policyVersion") or "").strip()
+        if policy_version:
+            policy_version_counts[policy_version] = policy_version_counts.get(policy_version, 0) + 1
+        else:
+            policy_version_counts["unknown"] += 1
+
+        winner = str(item.get("winner") or "").strip().lower()
+        if winner in winner_counts:
+            winner_counts[winner] += 1
+        else:
+            winner_counts["unknown"] += 1
+
+        if bool(item.get("reviewRequired")):
+            review_required_count += 1
+        if bool(item.get("hasOpenReview")):
+            open_review_count += 1
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        if bool(panel.get("high")):
+            panel_high_disagreement_count += 1
+        disagreement_ratio_sum += _safe_float(panel.get("ratio"), default=0.0)
+
+    total_matched = len(items)
+    return {
+        "totalMatched": total_matched,
+        "reviewRequiredCount": review_required_count,
+        "openReviewCount": open_review_count,
+        "panelHighDisagreementCount": panel_high_disagreement_count,
+        "avgPanelDisagreementRatio": (
+            disagreement_ratio_sum / total_matched if total_matched > 0 else 0.0
+        ),
+        "byJudgeId": dict(sorted(judge_counts.items(), key=lambda kv: kv[0])),
+        "byProfileId": dict(sorted(profile_id_counts.items(), key=lambda kv: kv[0])),
+        "byModelStrategy": dict(sorted(model_strategy_counts.items(), key=lambda kv: kv[0])),
+        "byProfileSource": dict(sorted(profile_source_counts.items(), key=lambda kv: kv[0])),
+        "byPolicyVersion": dict(sorted(policy_version_counts.items(), key=lambda kv: kv[0])),
+        "winnerCounts": winner_counts,
     }
 
 
@@ -3607,6 +3847,41 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if isinstance(latest_response.get("reportPayload"), dict):
             report_payload = latest_response["reportPayload"]
+        judge_trace_payload = (
+            latest_response.get("judgeTrace")
+            if isinstance(latest_response.get("judgeTrace"), dict)
+            else {}
+        )
+        policy_registry_payload = (
+            judge_trace_payload.get("policyRegistry")
+            if isinstance(judge_trace_payload.get("policyRegistry"), dict)
+            else {}
+        )
+        rubric_version = (
+            str(getattr(latest_receipt, "rubric_version", "") or "").strip()
+            if latest_receipt is not None
+            else ""
+        )
+        judge_policy_version = (
+            str(getattr(latest_receipt, "judge_policy_version", "") or "").strip()
+            if latest_receipt is not None
+            else ""
+        )
+        topic_domain = (
+            str(getattr(latest_receipt, "topic_domain", "") or "").strip()
+            if latest_receipt is not None
+            else ""
+        )
+        retrieval_profile = (
+            str(getattr(latest_receipt, "retrieval_profile", "") or "").strip()
+            if latest_receipt is not None
+            else ""
+        )
+        rule_version = (
+            str(policy_registry_payload.get("version") or "").strip()
+            or judge_policy_version
+            or None
+        )
 
         verdict_contract = _build_verdict_contract(report_payload)
         winner_raw = latest_response.get("winner") or verdict_contract.get("winner")
@@ -3645,6 +3920,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "winnerHint": winner,
             "reviewRequired": bool(verdict_contract.get("reviewRequired")),
             "needsDrawVote": bool(verdict_contract.get("needsDrawVote")),
+            "ruleVersion": rule_version,
+            "rubricVersion": rubric_version or None,
+            "judgePolicyVersion": judge_policy_version or None,
+            "topicDomain": topic_domain or None,
+            "retrievalProfile": retrieval_profile or None,
             "phaseReceiptCount": len(phase_receipts),
             "finalReceiptCount": len(final_receipts),
             "debateSummary": debate_summary,
@@ -3665,6 +3945,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if isinstance(execution_result.output, dict)
             else {}
         )
+        # NPC/Room QA 仅能产出建议，不得进入官方裁决主链。
+        capability_boundary = {
+            "mode": "advisory_only",
+            "officialVerdictAuthority": False,
+            "writesVerdictLedger": False,
+            "writesJudgeTrace": False,
+        }
         return {
             "agentKind": agent_kind,
             "sessionId": session_id,
@@ -3673,6 +3960,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "accepted": bool(output.get("accepted")),
             "errorCode": execution_result.error_code,
             "errorMessage": execution_result.error_message,
+            "capabilityBoundary": capability_boundary,
             "sharedContext": shared_context,
             "output": output,
         }
@@ -7373,6 +7661,158 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "sortOrder": normalized_sort_order,
                 "reviewRequired": review_required,
                 "panelHighDisagreement": panel_high_disagreement,
+                "offset": offset,
+                "limit": limit,
+            },
+        }
+
+    @app.get("/internal/judge/panels/runtime/profiles")
+    async def list_panel_runtime_profiles(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str | None = Query(default=None),
+        winner: str | None = Query(default=None),
+        policy_version: str | None = Query(default=None),
+        has_open_review: bool | None = Query(default=None),
+        gate_conclusion: str | None = Query(default=None),
+        challenge_state: str | None = Query(default=None),
+        review_required: bool | None = Query(default=None),
+        panel_high_disagreement: bool | None = Query(default=None),
+        judge_id: str | None = Query(default=None),
+        profile_source: str | None = Query(default=None),
+        profile_id: str | None = Query(default=None),
+        model_strategy: str | None = Query(default=None),
+        sort_by: str = Query(default="updated_at"),
+        sort_order: str = Query(default="desc"),
+        offset: int = Query(default=0, ge=0, le=5000),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_judge_id = str(judge_id or "").strip() or None
+        if normalized_judge_id is not None and normalized_judge_id not in PANEL_JUDGE_IDS:
+            raise HTTPException(status_code=422, detail="invalid_panel_judge_id")
+        normalized_profile_source = _normalize_panel_runtime_profile_source(profile_source)
+        if (
+            normalized_profile_source is not None
+            and normalized_profile_source not in PANEL_RUNTIME_PROFILE_SOURCE_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_panel_profile_source")
+        normalized_profile_id = str(profile_id or "").strip() or None
+        normalized_model_strategy = str(model_strategy or "").strip() or None
+        normalized_sort_by = _normalize_panel_runtime_profile_sort_by(sort_by)
+        if normalized_sort_by not in PANEL_RUNTIME_PROFILE_SORT_FIELDS:
+            raise HTTPException(status_code=422, detail="invalid_panel_runtime_sort_by")
+        normalized_sort_order = _normalize_panel_runtime_profile_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=422, detail="invalid_panel_runtime_sort_order")
+
+        fairness_case_items: list[dict[str, Any]] = []
+        fairness_offset = 0
+        while True:
+            fairness_page = await list_judge_case_fairness(
+                x_ai_internal_key=x_ai_internal_key,
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                policy_version=policy_version,
+                has_drift_breach=None,
+                has_threshold_breach=None,
+                has_open_review=has_open_review,
+                gate_conclusion=gate_conclusion,
+                challenge_state=challenge_state,
+                sort_by="updated_at",
+                sort_order="desc",
+                review_required=review_required,
+                panel_high_disagreement=panel_high_disagreement,
+                offset=fairness_offset,
+                limit=200,
+            )
+            page_items = (
+                fairness_page.get("items")
+                if isinstance(fairness_page.get("items"), list)
+                else []
+            )
+            if not page_items:
+                break
+            fairness_case_items.extend(page_items)
+            if len(page_items) < 200:
+                break
+            fairness_offset += 200
+
+        items: list[dict[str, Any]] = []
+        for case_item in fairness_case_items:
+            panel = (
+                case_item.get("panelDisagreement")
+                if isinstance(case_item.get("panelDisagreement"), dict)
+                else {}
+            )
+            runtime_profiles = (
+                panel.get("runtimeProfiles")
+                if isinstance(panel.get("runtimeProfiles"), dict)
+                else {}
+            )
+            for judge in PANEL_JUDGE_IDS:
+                runtime_profile = (
+                    runtime_profiles.get(judge)
+                    if isinstance(runtime_profiles.get(judge), dict)
+                    else {}
+                )
+                item = _build_panel_runtime_profile_item(
+                    case_item=case_item,
+                    judge_id=judge,
+                    runtime_profile=runtime_profile,
+                )
+                if normalized_judge_id is not None and item.get("judgeId") != normalized_judge_id:
+                    continue
+                if (
+                    normalized_profile_source is not None
+                    and str(item.get("profileSource") or "").strip().lower()
+                    != normalized_profile_source
+                ):
+                    continue
+                if (
+                    normalized_profile_id is not None
+                    and str(item.get("profileId") or "").strip() != normalized_profile_id
+                ):
+                    continue
+                if (
+                    normalized_model_strategy is not None
+                    and str(item.get("modelStrategy") or "").strip() != normalized_model_strategy
+                ):
+                    continue
+                items.append(item)
+
+        items.sort(
+            key=lambda row: _build_panel_runtime_profile_sort_key(
+                item=row,
+                sort_by=normalized_sort_by,
+            ),
+            reverse=(normalized_sort_order == "desc"),
+        )
+        total_count = len(items)
+        aggregations = _build_panel_runtime_profile_aggregations(items)
+        page_items = items[offset : offset + limit]
+        return {
+            "count": total_count,
+            "returned": len(page_items),
+            "items": page_items,
+            "aggregations": aggregations,
+            "filters": {
+                "status": _normalize_workflow_status(status),
+                "dispatchType": str(dispatch_type or "").strip().lower() or None,
+                "winner": str(winner or "").strip().lower() or None,
+                "policyVersion": str(policy_version or "").strip() or None,
+                "hasOpenReview": has_open_review,
+                "gateConclusion": _normalize_case_fairness_gate_conclusion(gate_conclusion),
+                "challengeState": _normalize_case_fairness_challenge_state(challenge_state),
+                "reviewRequired": review_required,
+                "panelHighDisagreement": panel_high_disagreement,
+                "judgeId": normalized_judge_id,
+                "profileSource": normalized_profile_source,
+                "profileId": normalized_profile_id,
+                "modelStrategy": normalized_model_strategy,
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
                 "offset": offset,
                 "limit": limit,
             },

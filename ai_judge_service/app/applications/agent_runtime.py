@@ -38,6 +38,8 @@ class _ReservedAgentExecutor(AgentExecutorPort):
                 "accepted": False,
                 "reason": self._reason,
                 "traceId": request.trace_id,
+                "mode": "advisory_only",
+                "officialVerdictAuthority": False,
             },
             error_code="agent_not_enabled",
             error_message=self._reason,
