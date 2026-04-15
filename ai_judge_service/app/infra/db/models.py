@@ -133,6 +133,37 @@ class ClaimLedgerRecordModel(Base):
     )
 
 
+class FairnessBenchmarkRunModel(Base):
+    __tablename__ = "fairness_benchmark_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="fairness-benchmark-v1")
+    environment_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="blocked")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_data")
+    threshold_decision: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    needs_real_env_reconfirm: Mapped[bool] = mapped_column(nullable=False, default=False)
+    needs_remediation: Mapped[bool] = mapped_column(nullable=False, default=False)
+    sample_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    draw_rate: Mapped[float | None] = mapped_column(nullable=True)
+    side_bias_delta: Mapped[float | None] = mapped_column(nullable=True)
+    appeal_overturn_rate: Mapped[float | None] = mapped_column(nullable=True)
+    thresholds: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    reported_by: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_fairness_benchmark_runs_run_id"),
+        Index("ix_fairness_benchmark_runs_policy_reported", "policy_version", "reported_at"),
+        Index("ix_fairness_benchmark_runs_status_reported", "status", "reported_at"),
+    )
+
+
 class AuditAlertModel(Base):
     __tablename__ = "audit_alerts"
 

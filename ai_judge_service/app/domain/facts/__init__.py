@@ -8,6 +8,7 @@ from .models import (
     AuditAlert,
     ClaimLedgerRecord,
     DispatchReceipt,
+    FairnessBenchmarkRun,
     ReplayRecord,
 )
 from .ports import JudgeFactPort
@@ -20,6 +21,7 @@ __all__ = [
     "AuditAlert",
     "ClaimLedgerRecord",
     "DispatchReceipt",
+    "FairnessBenchmarkRun",
     "ReplayRecord",
     "JudgeFactPort",
 ]

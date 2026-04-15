@@ -76,3 +76,26 @@ class ClaimLedgerRecord:
     verdict_evidence_refs: list[dict[str, Any]]
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class FairnessBenchmarkRun:
+    run_id: str
+    policy_version: str
+    environment_mode: str
+    status: str
+    threshold_decision: str
+    needs_real_env_reconfirm: bool
+    needs_remediation: bool
+    sample_size: int | None
+    draw_rate: float | None
+    side_bias_delta: float | None
+    appeal_overturn_rate: float | None
+    thresholds: dict[str, Any]
+    metrics: dict[str, Any]
+    summary: dict[str, Any]
+    source: str
+    reported_by: str
+    reported_at: datetime
+    created_at: datetime
+    updated_at: datetime

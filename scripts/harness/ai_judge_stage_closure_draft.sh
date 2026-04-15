@@ -89,20 +89,7 @@ collect_ai_judge_rows() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
       return s
     }
-    BEGIN {
-      in_matrix = 0
-    }
-    /^### 已完成\/未完成矩阵/ {
-      in_matrix = 1
-      next
-    }
-    in_matrix == 1 && /^### / {
-      in_matrix = 0
-    }
-    in_matrix == 1 && /^## / {
-      in_matrix = 0
-    }
-    in_matrix == 1 && /^\|/ {
+    /^\|/ {
       line = $0
       n = split(line, parts, "|")
       if (n < 5) next
@@ -110,7 +97,7 @@ collect_ai_judge_rows() {
       c2 = trim(parts[3])
       c3 = trim(parts[4])
       c4 = trim(parts[5])
-      if (c1 == "阶段" || c1 == "---" || c1 == "") next
+      if (c1 == "阶段" || c1 == "模块" || c1 == "---" || c1 == "") next
       gsub(/^`|`$/, "", c1)
       if (c1 !~ /^ai-judge-/) next
       print c1 "\t" c2 "\t" c3 "\t" c4

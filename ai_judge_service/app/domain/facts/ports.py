@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from .models import AuditAlert, ClaimLedgerRecord, DispatchReceipt, ReplayRecord
+from .models import (
+    AuditAlert,
+    ClaimLedgerRecord,
+    DispatchReceipt,
+    FairnessBenchmarkRun,
+    ReplayRecord,
+)
 
 
 class JudgeFactPort(Protocol):
@@ -70,6 +76,37 @@ class JudgeFactPort(Protocol):
         case_id: int,
         limit: int = 20,
     ) -> list[ClaimLedgerRecord]: ...
+
+    async def upsert_fairness_benchmark_run(
+        self,
+        *,
+        run_id: str,
+        policy_version: str,
+        environment_mode: str,
+        status: str,
+        threshold_decision: str,
+        needs_real_env_reconfirm: bool,
+        needs_remediation: bool,
+        sample_size: int | None,
+        draw_rate: float | None,
+        side_bias_delta: float | None,
+        appeal_overturn_rate: float | None,
+        thresholds: dict[str, Any] | None,
+        metrics: dict[str, Any] | None,
+        summary: dict[str, Any] | None,
+        source: str | None,
+        reported_by: str | None,
+        reported_at: datetime | None = None,
+    ) -> FairnessBenchmarkRun: ...
+
+    async def list_fairness_benchmark_runs(
+        self,
+        *,
+        policy_version: str | None = None,
+        environment_mode: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[FairnessBenchmarkRun]: ...
 
     async def upsert_audit_alert(
         self,

@@ -122,6 +122,61 @@ class JudgeFactRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(phase_rows), 1)
         self.assertEqual(phase_rows[0].winner, "pro")
 
+    async def test_fairness_benchmark_runs_should_upsert_and_filter(self) -> None:
+        first = await self._repo.upsert_fairness_benchmark_run(
+            run_id="fairness-run-1",
+            policy_version="fairness-benchmark-v1",
+            environment_mode="local_reference",
+            status="local_reference_frozen",
+            threshold_decision="accepted",
+            needs_real_env_reconfirm=True,
+            needs_remediation=False,
+            sample_size=384,
+            draw_rate=0.2,
+            side_bias_delta=0.04,
+            appeal_overturn_rate=0.07,
+            thresholds={"drawRateMax": 0.3},
+            metrics={"drawRate": 0.2},
+            summary={"note": "baseline"},
+            source="harness",
+            reported_by="ci",
+        )
+        second = await self._repo.upsert_fairness_benchmark_run(
+            run_id="fairness-run-2",
+            policy_version="fairness-benchmark-v1",
+            environment_mode="local_reference",
+            status="threshold_violation",
+            threshold_decision="violated",
+            needs_real_env_reconfirm=True,
+            needs_remediation=True,
+            sample_size=384,
+            draw_rate=0.41,
+            side_bias_delta=0.04,
+            appeal_overturn_rate=0.07,
+            thresholds={"drawRateMax": 0.3},
+            metrics={"drawRate": 0.41},
+            summary={"note": "breached"},
+            source="harness",
+            reported_by="ci",
+        )
+        self.assertEqual(first.run_id, "fairness-run-1")
+        self.assertEqual(second.status, "threshold_violation")
+
+        all_rows = await self._repo.list_fairness_benchmark_runs(
+            policy_version="fairness-benchmark-v1",
+            limit=10,
+        )
+        self.assertEqual(len(all_rows), 2)
+        self.assertEqual(all_rows[0].run_id, "fairness-run-2")
+
+        violated_rows = await self._repo.list_fairness_benchmark_runs(
+            policy_version="fairness-benchmark-v1",
+            status="threshold_violation",
+            limit=10,
+        )
+        self.assertEqual(len(violated_rows), 1)
+        self.assertEqual(violated_rows[0].run_id, "fairness-run-2")
+
     async def test_audit_alert_should_dedupe_and_transition_status(self) -> None:
         alert = await self._repo.upsert_audit_alert(
             job_id=8301,

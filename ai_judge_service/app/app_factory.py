@@ -98,6 +98,9 @@ from .domain.facts import (
     DispatchReceipt as FactDispatchReceipt,
 )
 from .domain.facts import (
+    FairnessBenchmarkRun as FactFairnessBenchmarkRun,
+)
+from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
 from .domain.workflow import WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUSES, WorkflowJob
@@ -574,6 +577,30 @@ def _serialize_claim_ledger_record(
     return item
 
 
+def _serialize_fairness_benchmark_run(record: FactFairnessBenchmarkRun) -> dict[str, Any]:
+    return {
+        "runId": record.run_id,
+        "policyVersion": record.policy_version,
+        "environmentMode": record.environment_mode,
+        "status": record.status,
+        "thresholdDecision": record.threshold_decision,
+        "needsRealEnvReconfirm": bool(record.needs_real_env_reconfirm),
+        "needsRemediation": bool(record.needs_remediation),
+        "sampleSize": record.sample_size,
+        "drawRate": record.draw_rate,
+        "sideBiasDelta": record.side_bias_delta,
+        "appealOverturnRate": record.appeal_overturn_rate,
+        "thresholds": dict(record.thresholds),
+        "metrics": dict(record.metrics),
+        "summary": dict(record.summary),
+        "source": record.source,
+        "reportedBy": record.reported_by,
+        "reportedAt": record.reported_at.isoformat(),
+        "createdAt": record.created_at.isoformat(),
+        "updatedAt": record.updated_at.isoformat(),
+    }
+
+
 def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -694,12 +721,56 @@ def _extract_optional_int(payload: dict[str, Any], *keys: str) -> int | None:
         return None
 
 
+def _extract_optional_float(payload: dict[str, Any], *keys: str) -> float | None:
+    value = _extract_raw_field(payload, *keys)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_optional_str(payload: dict[str, Any], *keys: str) -> str | None:
     value = _extract_raw_field(payload, *keys)
     if value is None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _extract_optional_bool(payload: dict[str, Any], *keys: str) -> bool | None:
+    value = _extract_raw_field(payload, *keys)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _extract_optional_datetime(payload: dict[str, Any], *keys: str) -> datetime | None:
+    value = _extract_raw_field(payload, *keys)
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _normalize_query_datetime(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return _normalize_query_datetime(parsed)
 
 
 def _build_failed_callback_payload(
@@ -1330,6 +1401,62 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         await _ensure_workflow_schema_ready()
         return await runtime.workflow_runtime.facts.list_claim_ledger_records(
             case_id=case_id,
+            limit=limit,
+        )
+
+    async def _upsert_fairness_benchmark_run(
+        *,
+        run_id: str,
+        policy_version: str,
+        environment_mode: str,
+        status: str,
+        threshold_decision: str,
+        needs_real_env_reconfirm: bool,
+        needs_remediation: bool,
+        sample_size: int | None,
+        draw_rate: float | None,
+        side_bias_delta: float | None,
+        appeal_overturn_rate: float | None,
+        thresholds: dict[str, Any] | None,
+        metrics: dict[str, Any] | None,
+        summary: dict[str, Any] | None,
+        source: str | None,
+        reported_by: str | None,
+        reported_at: datetime | None = None,
+    ) -> FactFairnessBenchmarkRun:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.upsert_fairness_benchmark_run(
+            run_id=run_id,
+            policy_version=policy_version,
+            environment_mode=environment_mode,
+            status=status,
+            threshold_decision=threshold_decision,
+            needs_real_env_reconfirm=needs_real_env_reconfirm,
+            needs_remediation=needs_remediation,
+            sample_size=sample_size,
+            draw_rate=draw_rate,
+            side_bias_delta=side_bias_delta,
+            appeal_overturn_rate=appeal_overturn_rate,
+            thresholds=thresholds,
+            metrics=metrics,
+            summary=summary,
+            source=source,
+            reported_by=reported_by,
+            reported_at=reported_at,
+        )
+
+    async def _list_fairness_benchmark_runs(
+        *,
+        policy_version: str | None = None,
+        environment_mode: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[FactFairnessBenchmarkRun]:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.list_fairness_benchmark_runs(
+            policy_version=policy_version,
+            environment_mode=environment_mode,
+            status=status,
             limit=limit,
         )
 
@@ -4360,6 +4487,431 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "hasAuditAlert": has_audit_alert,
                 "limit": limit,
                 "includeReport": include_report,
+            },
+        }
+
+    def _normalize_fairness_environment_mode(
+        value: str | None,
+        *,
+        strict: bool = False,
+    ) -> str | None:
+        token = str(value or "").strip().lower()
+        if not token:
+            return None if strict else "blocked"
+        if token in {"real", "local_reference", "blocked"}:
+            return token
+        return None if strict else "blocked"
+
+    def _normalize_fairness_status(
+        value: str | None,
+        *,
+        strict: bool = False,
+    ) -> str | None:
+        token = str(value or "").strip().lower()
+        if not token:
+            return None if strict else "pending_data"
+        if token in {
+            "pass",
+            "local_reference_frozen",
+            "pending_data",
+            "threshold_violation",
+            "env_blocked",
+            "evidence_missing",
+        }:
+            return token
+        return None if strict else "pending_data"
+
+    def _normalize_fairness_threshold_decision(value: str | None) -> str:
+        token = str(value or "").strip().lower()
+        if token in {"accepted", "violated", "pending"}:
+            return token
+        return "pending"
+
+    def _metric_delta(current: float | None, baseline: float | None) -> float | None:
+        if current is None or baseline is None:
+            return None
+        return round(current - baseline, 8)
+
+    @app.post("/internal/judge/fairness/benchmark-runs")
+    async def upsert_judge_fairness_benchmark_run(
+        request: Request,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        try:
+            raw_payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(raw_payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+
+        run_id = _extract_optional_str(raw_payload, "run_id", "runId")
+        if run_id is None:
+            raise HTTPException(status_code=422, detail="invalid_fairness_run_id")
+        policy_version = (
+            _extract_optional_str(raw_payload, "policy_version", "policyVersion")
+            or "fairness-benchmark-v1"
+        )
+        environment_mode = _normalize_fairness_environment_mode(
+            _extract_optional_str(raw_payload, "environment_mode", "environmentMode"),
+            strict=False,
+        )
+        assert environment_mode is not None
+        status = _normalize_fairness_status(
+            _extract_optional_str(raw_payload, "status"),
+            strict=False,
+        )
+        assert status is not None
+        threshold_decision = _normalize_fairness_threshold_decision(
+            _extract_optional_str(raw_payload, "threshold_decision", "thresholdDecision")
+        )
+
+        thresholds_payload = (
+            raw_payload.get("thresholds")
+            if isinstance(raw_payload.get("thresholds"), dict)
+            else {}
+        )
+        metrics_payload = (
+            raw_payload.get("metrics")
+            if isinstance(raw_payload.get("metrics"), dict)
+            else {}
+        )
+        summary_payload = (
+            raw_payload.get("summary")
+            if isinstance(raw_payload.get("summary"), dict)
+            else {}
+        )
+        note = (
+            _extract_optional_str(raw_payload, "note")
+            or _extract_optional_str(summary_payload, "note")
+            or ""
+        )
+
+        sample_size = _extract_optional_int(raw_payload, "sample_size", "sampleSize")
+        if sample_size is None:
+            sample_size = _extract_optional_int(metrics_payload, "sample_size", "sampleSize")
+        draw_rate = _extract_optional_float(raw_payload, "draw_rate", "drawRate")
+        if draw_rate is None:
+            draw_rate = _extract_optional_float(metrics_payload, "draw_rate", "drawRate")
+        side_bias_delta = _extract_optional_float(
+            raw_payload,
+            "side_bias_delta",
+            "sideBiasDelta",
+        )
+        if side_bias_delta is None:
+            side_bias_delta = _extract_optional_float(
+                metrics_payload,
+                "side_bias_delta",
+                "sideBiasDelta",
+            )
+        appeal_overturn_rate = _extract_optional_float(
+            raw_payload,
+            "appeal_overturn_rate",
+            "appealOverturnRate",
+        )
+        if appeal_overturn_rate is None:
+            appeal_overturn_rate = _extract_optional_float(
+                metrics_payload,
+                "appeal_overturn_rate",
+                "appealOverturnRate",
+            )
+
+        draw_rate_max = _extract_optional_float(raw_payload, "draw_rate_max", "drawRateMax")
+        if draw_rate_max is None:
+            draw_rate_max = _extract_optional_float(
+                thresholds_payload,
+                "draw_rate_max",
+                "drawRateMax",
+            )
+        side_bias_delta_max = _extract_optional_float(
+            raw_payload,
+            "side_bias_delta_max",
+            "sideBiasDeltaMax",
+        )
+        if side_bias_delta_max is None:
+            side_bias_delta_max = _extract_optional_float(
+                thresholds_payload,
+                "side_bias_delta_max",
+                "sideBiasDeltaMax",
+            )
+        appeal_overturn_rate_max = _extract_optional_float(
+            raw_payload,
+            "appeal_overturn_rate_max",
+            "appealOverturnRateMax",
+        )
+        if appeal_overturn_rate_max is None:
+            appeal_overturn_rate_max = _extract_optional_float(
+                thresholds_payload,
+                "appeal_overturn_rate_max",
+                "appealOverturnRateMax",
+            )
+
+        draw_rate_drift_max = _extract_optional_float(
+            raw_payload,
+            "draw_rate_drift_max",
+            "drawRateDriftMax",
+        )
+        if draw_rate_drift_max is None:
+            draw_rate_drift_max = _extract_optional_float(
+                thresholds_payload,
+                "draw_rate_drift_max",
+                "drawRateDriftMax",
+            )
+        side_bias_delta_drift_max = _extract_optional_float(
+            raw_payload,
+            "side_bias_delta_drift_max",
+            "sideBiasDeltaDriftMax",
+        )
+        if side_bias_delta_drift_max is None:
+            side_bias_delta_drift_max = _extract_optional_float(
+                thresholds_payload,
+                "side_bias_delta_drift_max",
+                "sideBiasDeltaDriftMax",
+            )
+        appeal_overturn_rate_drift_max = _extract_optional_float(
+            raw_payload,
+            "appeal_overturn_rate_drift_max",
+            "appealOverturnRateDriftMax",
+        )
+        if appeal_overturn_rate_drift_max is None:
+            appeal_overturn_rate_drift_max = _extract_optional_float(
+                thresholds_payload,
+                "appeal_overturn_rate_drift_max",
+                "appealOverturnRateDriftMax",
+            )
+
+        runs = await _list_fairness_benchmark_runs(
+            policy_version=policy_version,
+            limit=200,
+        )
+        baseline_run = next(
+            (
+                row
+                for row in runs
+                if row.run_id != run_id
+                and row.threshold_decision == "accepted"
+                and row.status in {"pass", "local_reference_frozen"}
+            ),
+            None,
+        )
+        baseline_draw_rate = baseline_run.draw_rate if baseline_run is not None else None
+        baseline_side_bias_delta = baseline_run.side_bias_delta if baseline_run is not None else None
+        baseline_appeal_overturn_rate = (
+            baseline_run.appeal_overturn_rate if baseline_run is not None else None
+        )
+
+        draw_rate_delta = _metric_delta(draw_rate, baseline_draw_rate)
+        side_bias_delta_delta = _metric_delta(side_bias_delta, baseline_side_bias_delta)
+        appeal_overturn_rate_delta = _metric_delta(
+            appeal_overturn_rate,
+            baseline_appeal_overturn_rate,
+        )
+        draw_rate_delta_abs = abs(draw_rate_delta) if draw_rate_delta is not None else None
+        side_bias_delta_delta_abs = (
+            abs(side_bias_delta_delta) if side_bias_delta_delta is not None else None
+        )
+        appeal_overturn_rate_delta_abs = (
+            abs(appeal_overturn_rate_delta)
+            if appeal_overturn_rate_delta is not None
+            else None
+        )
+
+        threshold_breaches: list[str] = []
+        if draw_rate_max is not None and draw_rate is not None and draw_rate > draw_rate_max:
+            threshold_breaches.append("draw_rate")
+        if (
+            side_bias_delta_max is not None
+            and side_bias_delta is not None
+            and side_bias_delta > side_bias_delta_max
+        ):
+            threshold_breaches.append("side_bias_delta")
+        if (
+            appeal_overturn_rate_max is not None
+            and appeal_overturn_rate is not None
+            and appeal_overturn_rate > appeal_overturn_rate_max
+        ):
+            threshold_breaches.append("appeal_overturn_rate")
+
+        drift_breaches: list[str] = []
+        if (
+            draw_rate_drift_max is not None
+            and draw_rate_delta_abs is not None
+            and draw_rate_delta_abs > draw_rate_drift_max
+        ):
+            drift_breaches.append("draw_rate")
+        if (
+            side_bias_delta_drift_max is not None
+            and side_bias_delta_delta_abs is not None
+            and side_bias_delta_delta_abs > side_bias_delta_drift_max
+        ):
+            drift_breaches.append("side_bias_delta")
+        if (
+            appeal_overturn_rate_drift_max is not None
+            and appeal_overturn_rate_delta_abs is not None
+            and appeal_overturn_rate_delta_abs > appeal_overturn_rate_drift_max
+        ):
+            drift_breaches.append("appeal_overturn_rate")
+
+        has_threshold_breach = bool(threshold_breaches) or status == "threshold_violation"
+        has_drift_breach = bool(drift_breaches)
+        needs_remediation = bool(
+            _extract_optional_bool(raw_payload, "needs_remediation", "needsRemediation")
+        ) or has_threshold_breach or has_drift_breach or threshold_decision == "violated"
+        needs_real_env_reconfirm_override = _extract_optional_bool(
+            raw_payload,
+            "needs_real_env_reconfirm",
+            "needsRealEnvReconfirm",
+        )
+        needs_real_env_reconfirm = (
+            bool(needs_real_env_reconfirm_override)
+            if needs_real_env_reconfirm_override is not None
+            else environment_mode != "real"
+        )
+        reported_at = _extract_optional_datetime(raw_payload, "reported_at", "reportedAt")
+        source = _extract_optional_str(raw_payload, "source") or "manual"
+        reported_by = _extract_optional_str(raw_payload, "reported_by", "reportedBy") or "system"
+
+        normalized_thresholds = dict(thresholds_payload)
+        normalized_thresholds["drawRateMax"] = draw_rate_max
+        normalized_thresholds["sideBiasDeltaMax"] = side_bias_delta_max
+        normalized_thresholds["appealOverturnRateMax"] = appeal_overturn_rate_max
+        normalized_thresholds["drawRateDriftMax"] = draw_rate_drift_max
+        normalized_thresholds["sideBiasDeltaDriftMax"] = side_bias_delta_drift_max
+        normalized_thresholds["appealOverturnRateDriftMax"] = appeal_overturn_rate_drift_max
+        normalized_thresholds = {
+            key: value for key, value in normalized_thresholds.items() if value is not None
+        }
+
+        normalized_metrics = dict(metrics_payload)
+        normalized_metrics["sampleSize"] = sample_size
+        normalized_metrics["drawRate"] = draw_rate
+        normalized_metrics["sideBiasDelta"] = side_bias_delta
+        normalized_metrics["appealOverturnRate"] = appeal_overturn_rate
+        normalized_metrics["drawRateDelta"] = draw_rate_delta
+        normalized_metrics["sideBiasDeltaDelta"] = side_bias_delta_delta
+        normalized_metrics["appealOverturnRateDelta"] = appeal_overturn_rate_delta
+        normalized_metrics = {
+            key: value for key, value in normalized_metrics.items() if value is not None
+        }
+
+        drift_summary = {
+            "baselineRunId": baseline_run.run_id if baseline_run is not None else None,
+            "baselineReportedAt": (
+                baseline_run.reported_at.isoformat() if baseline_run is not None else None
+            ),
+            "drawRateDelta": draw_rate_delta,
+            "sideBiasDeltaDelta": side_bias_delta_delta,
+            "appealOverturnRateDelta": appeal_overturn_rate_delta,
+            "thresholdBreaches": threshold_breaches,
+            "driftBreaches": drift_breaches,
+            "hasThresholdBreach": has_threshold_breach,
+            "hasDriftBreach": has_drift_breach,
+        }
+        normalized_summary = dict(summary_payload)
+        if note:
+            normalized_summary["note"] = note
+        normalized_summary["drift"] = drift_summary
+
+        row = await _upsert_fairness_benchmark_run(
+            run_id=run_id,
+            policy_version=policy_version,
+            environment_mode=environment_mode,
+            status=status,
+            threshold_decision=threshold_decision,
+            needs_real_env_reconfirm=needs_real_env_reconfirm,
+            needs_remediation=needs_remediation,
+            sample_size=sample_size,
+            draw_rate=draw_rate,
+            side_bias_delta=side_bias_delta,
+            appeal_overturn_rate=appeal_overturn_rate,
+            thresholds=normalized_thresholds,
+            metrics=normalized_metrics,
+            summary=normalized_summary,
+            source=source,
+            reported_by=reported_by,
+            reported_at=reported_at,
+        )
+
+        alert_item: dict[str, Any] | None = None
+        if has_threshold_breach or has_drift_breach:
+            alert_type = (
+                "fairness_benchmark_threshold_violation"
+                if has_threshold_breach
+                else "fairness_benchmark_drift_violation"
+            )
+            severity = "critical" if has_threshold_breach else "warning"
+            breached_items = threshold_breaches if has_threshold_breach else drift_breaches
+            message = (
+                f"fairness benchmark run breached: run_id={run_id}; "
+                f"breaches={','.join(breached_items)}"
+            )
+            alert = runtime.trace_store.upsert_audit_alert(
+                job_id=0,
+                scope_id=1,
+                trace_id=f"fairness-benchmark:{run_id}",
+                alert_type=alert_type,
+                severity=severity,
+                title="AI Judge Fairness Benchmark Drift",
+                message=message,
+                details={
+                    "runId": run_id,
+                    "policyVersion": policy_version,
+                    "environmentMode": environment_mode,
+                    "status": status,
+                    "thresholdDecision": threshold_decision,
+                    "metrics": normalized_metrics,
+                    "thresholds": normalized_thresholds,
+                    "drift": drift_summary,
+                },
+            )
+            await _sync_audit_alert_to_facts(alert=alert)
+            alert_item = _serialize_alert_item(alert)
+
+        return {
+            "ok": True,
+            "item": _serialize_fairness_benchmark_run(row),
+            "drift": drift_summary,
+            "alert": alert_item,
+        }
+
+    @app.get("/internal/judge/fairness/benchmark-runs")
+    async def list_judge_fairness_benchmark_runs(
+        x_ai_internal_key: str | None = Header(default=None),
+        policy_version: str | None = Query(default=None),
+        environment_mode: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_policy_version = (
+            str(policy_version or "").strip() if policy_version is not None else None
+        )
+        if normalized_policy_version == "":
+            normalized_policy_version = None
+        normalized_environment_mode = _normalize_fairness_environment_mode(
+            environment_mode,
+            strict=True,
+        )
+        if environment_mode is not None and normalized_environment_mode is None:
+            raise HTTPException(status_code=422, detail="invalid_environment_mode")
+        normalized_status = _normalize_fairness_status(status, strict=True)
+        if status is not None and normalized_status is None:
+            raise HTTPException(status_code=422, detail="invalid_fairness_status")
+
+        rows = await _list_fairness_benchmark_runs(
+            policy_version=normalized_policy_version,
+            environment_mode=normalized_environment_mode,
+            status=normalized_status,
+            limit=limit,
+        )
+        return {
+            "count": len(rows),
+            "items": [_serialize_fairness_benchmark_run(row) for row in rows],
+            "filters": {
+                "policyVersion": normalized_policy_version,
+                "environmentMode": normalized_environment_mode,
+                "status": normalized_status,
+                "limit": limit,
             },
         }
 

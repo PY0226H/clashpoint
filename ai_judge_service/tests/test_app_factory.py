@@ -252,6 +252,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/kernel-version", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/audit-anchor", paths)
+        self.assertIn("/internal/judge/fairness/benchmark-runs", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_case_create_should_mark_case_built_and_support_idempotent_replay(
@@ -2280,6 +2281,156 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         fact_alerts = await runtime.workflow_runtime.facts.list_audit_alerts(job_id=7301, limit=10)
         self.assertGreaterEqual(len(fact_alerts), 1)
         self.assertEqual(fact_alerts[0].alert_type, "final_contract_violation")
+
+    async def test_fairness_benchmark_routes_should_persist_and_list_runs(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        run_id = f"run-{_unique_case_id(7601)}"
+
+        post_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "needs_real_env_reconfirm": True,
+                "needs_remediation": False,
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.04,
+                    "appeal_overturn_rate": 0.07,
+                },
+                "thresholds": {
+                    "draw_rate_max": 0.3,
+                    "side_bias_delta_max": 0.08,
+                    "appeal_overturn_rate_max": 0.12,
+                },
+                "summary": {
+                    "note": "local reference frozen",
+                },
+                "source": "harness_freeze_script",
+                "reported_by": "ci",
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(post_resp.status_code, 200)
+        post_payload = post_resp.json()
+        self.assertTrue(post_payload["ok"])
+        self.assertEqual(post_payload["item"]["runId"], run_id)
+        self.assertEqual(post_payload["item"]["status"], "local_reference_frozen")
+        self.assertIsNone(post_payload["alert"])
+        self.assertEqual(post_payload["drift"]["baselineRunId"], None)
+
+        list_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs?policy_version=fairness-benchmark-v1",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        list_payload = list_resp.json()
+        self.assertGreaterEqual(list_payload["count"], 1)
+        self.assertTrue(any(item["runId"] == run_id for item in list_payload["items"]))
+
+        fact_runs = await runtime.workflow_runtime.facts.list_fairness_benchmark_runs(
+            policy_version="fairness-benchmark-v1",
+            limit=20,
+        )
+        self.assertTrue(any(item.run_id == run_id for item in fact_runs))
+
+    async def test_fairness_benchmark_threshold_breach_should_raise_alert_outbox(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        baseline_run_id = f"run-{_unique_case_id(7611)}"
+        breached_run_id = f"run-{_unique_case_id(7612)}"
+
+        baseline_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": baseline_run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.04,
+                    "appeal_overturn_rate": 0.07,
+                },
+                "thresholds": {
+                    "draw_rate_max": 0.3,
+                    "side_bias_delta_max": 0.08,
+                    "appeal_overturn_rate_max": 0.12,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(baseline_resp.status_code, 200)
+
+        breached_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": breached_run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.41,
+                    "side_bias_delta": 0.04,
+                    "appeal_overturn_rate": 0.07,
+                },
+                "thresholds": {
+                    "draw_rate_max": 0.3,
+                    "side_bias_delta_max": 0.08,
+                    "appeal_overturn_rate_max": 0.12,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(breached_resp.status_code, 200)
+        breached_payload = breached_resp.json()
+        self.assertTrue(breached_payload["drift"]["hasThresholdBreach"])
+        self.assertIn("draw_rate", breached_payload["drift"]["thresholdBreaches"])
+        self.assertIsNotNone(breached_payload["alert"])
+        self.assertEqual(
+            breached_payload["alert"]["type"],
+            "fairness_benchmark_threshold_violation",
+        )
+        self.assertEqual(
+            breached_payload["drift"]["baselineRunId"],
+            baseline_run_id,
+        )
+
+        outbox_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/outbox",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(outbox_resp.status_code, 200)
+        outbox_items = outbox_resp.json()["items"]
+        self.assertTrue(
+            any(
+                item.get("payload", {}).get("alertType")
+                == "fairness_benchmark_threshold_violation"
+                for item in outbox_items
+            )
+        )
+
+        fact_alerts = await runtime.workflow_runtime.facts.list_audit_alerts(
+            job_id=0,
+            limit=20,
+        )
+        self.assertTrue(
+            any(item.alert_type == "fairness_benchmark_threshold_violation" for item in fact_alerts)
+        )
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)
