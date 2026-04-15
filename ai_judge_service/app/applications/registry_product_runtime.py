@@ -533,6 +533,54 @@ class RegistryProductRuntime:
             return None
         return self._serialize_release_row(row)
 
+    async def evaluate_policy_dependency_health(
+        self,
+        *,
+        policy_version: str,
+        profile_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_loaded()
+        normalized_version = _normalize_version(policy_version)
+        source = "runtime"
+        if profile_payload is not None:
+            profile = self._build_policy_profile_from_payload(
+                version=normalized_version,
+                payload=profile_payload,
+            )
+            source = "payload"
+        else:
+            profile = self.policy_runtime.get_profile(normalized_version)
+            if profile is None:
+                return {
+                    "ok": False,
+                    "code": "policy_registry_not_found",
+                    "source": source,
+                    "policyVersion": normalized_version,
+                    "issues": [
+                        {
+                            "code": "policy_registry_not_found",
+                            "message": f"policy registry version '{normalized_version}' is not found",
+                        }
+                    ],
+                    "checks": {
+                        "promptRegistryExists": False,
+                        "toolRegistryExists": False,
+                        "promptKeysPresent": False,
+                        "promptVersionsAligned": False,
+                        "toolIdsCovered": False,
+                    },
+                    "missingPromptKeys": [],
+                    "mismatchedPromptVersions": [],
+                    "missingToolIds": [],
+                    "policyProfile": None,
+                    "promptRegistrySnapshot": None,
+                    "toolRegistrySnapshot": None,
+                }
+        return self._build_policy_dependency_health(
+            policy_profile=profile,
+            source=source,
+        )
+
     async def _seed_builtins_if_needed(self, *, session: AsyncSession) -> None:
         now = _utcnow()
         for registry_type in (
@@ -719,6 +767,158 @@ class RegistryProductRuntime:
                 tool_registry_json=json_text,
             )
         )
+
+    def _build_policy_profile_from_payload(
+        self,
+        *,
+        version: str,
+        payload: dict[str, Any],
+    ) -> JudgePolicyProfile:
+        serialized = self._normalize_profile_payload(
+            registry_type=REGISTRY_TYPE_POLICY,
+            version=version,
+            payload=payload,
+        )
+        runtime = build_policy_registry_runtime(
+            settings=SimpleNamespace(
+                policy_registry_default_version=version,
+                policy_registry_json=json.dumps(
+                    {"defaultVersion": version, "profiles": [serialized]},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        profile = runtime.get_profile(version)
+        if profile is None:
+            raise ValueError("invalid_policy_profile")
+        return profile
+
+    def _build_policy_dependency_health(
+        self,
+        *,
+        policy_profile: JudgePolicyProfile,
+        source: str,
+    ) -> dict[str, Any]:
+        prompt_registry_version = str(policy_profile.prompt_registry_version or "").strip()
+        tool_registry_version = str(policy_profile.tool_registry_version or "").strip()
+        prompt_profile = self.prompt_runtime.get_profile(prompt_registry_version)
+        tool_profile = self.tool_runtime.get_profile(tool_registry_version)
+
+        issues: list[dict[str, Any]] = []
+        missing_prompt_keys: list[str] = []
+        mismatched_prompt_versions: list[dict[str, Any]] = []
+        missing_tool_ids: list[str] = []
+
+        if prompt_profile is None:
+            issues.append(
+                {
+                    "code": "prompt_registry_version_not_found",
+                    "field": "promptRegistryVersion",
+                    "version": prompt_registry_version,
+                    "message": (
+                        f"prompt registry version '{prompt_registry_version}' is not found"
+                    ),
+                }
+            )
+        else:
+            for key in sorted(policy_profile.prompt_versions.keys()):
+                policy_prompt_version = str(
+                    policy_profile.prompt_versions.get(key) or ""
+                ).strip()
+                prompt_registry_prompt_version = str(
+                    prompt_profile.prompt_versions.get(key) or ""
+                ).strip()
+                if not prompt_registry_prompt_version:
+                    missing_prompt_keys.append(key)
+                    continue
+                if prompt_registry_prompt_version != policy_prompt_version:
+                    mismatched_prompt_versions.append(
+                        {
+                            "key": key,
+                            "policyPromptVersion": policy_prompt_version,
+                            "promptRegistryPromptVersion": prompt_registry_prompt_version,
+                        }
+                    )
+            if missing_prompt_keys:
+                issues.append(
+                    {
+                        "code": "policy_prompt_keys_missing",
+                        "field": "promptVersions",
+                        "keys": list(missing_prompt_keys),
+                        "message": "policy promptVersions contains keys missing in prompt registry",
+                    }
+                )
+            if mismatched_prompt_versions:
+                issues.append(
+                    {
+                        "code": "policy_prompt_versions_mismatch",
+                        "field": "promptVersions",
+                        "items": list(mismatched_prompt_versions),
+                        "message": (
+                            "policy promptVersions mismatches prompt registry promptVersions"
+                        ),
+                    }
+                )
+
+        if tool_profile is None:
+            issues.append(
+                {
+                    "code": "tool_registry_version_not_found",
+                    "field": "toolRegistryVersion",
+                    "version": tool_registry_version,
+                    "message": f"tool registry version '{tool_registry_version}' is not found",
+                }
+            )
+        else:
+            tool_pool = {str(item or "").strip() for item in tool_profile.tool_ids}
+            seen_missing: set[str] = set()
+            for tool_id in policy_profile.tool_ids:
+                token = str(tool_id or "").strip()
+                if not token or token in tool_pool or token in seen_missing:
+                    continue
+                seen_missing.add(token)
+                missing_tool_ids.append(token)
+            if missing_tool_ids:
+                issues.append(
+                    {
+                        "code": "policy_tool_ids_not_in_tool_registry",
+                        "field": "toolIds",
+                        "toolIds": list(missing_tool_ids),
+                        "message": "policy toolIds contains entries missing in tool registry",
+                    }
+                )
+
+        checks = {
+            "promptRegistryExists": prompt_profile is not None,
+            "toolRegistryExists": tool_profile is not None,
+            "promptKeysPresent": not missing_prompt_keys,
+            "promptVersionsAligned": not mismatched_prompt_versions,
+            "toolIdsCovered": not missing_tool_ids,
+        }
+        return {
+            "ok": not issues,
+            "code": "dependency_ok" if not issues else "policy_registry_dependency_invalid",
+            "source": source,
+            "policyVersion": policy_profile.version,
+            "promptRegistryVersion": prompt_registry_version,
+            "toolRegistryVersion": tool_registry_version,
+            "checks": checks,
+            "issues": issues,
+            "missingPromptKeys": missing_prompt_keys,
+            "mismatchedPromptVersions": mismatched_prompt_versions,
+            "missingToolIds": missing_tool_ids,
+            "policyProfile": PolicyRegistryRuntime.serialize_profile(policy_profile),
+            "promptRegistrySnapshot": (
+                PromptRegistryRuntime.serialize_profile(prompt_profile)
+                if prompt_profile is not None
+                else None
+            ),
+            "toolRegistrySnapshot": (
+                ToolRegistryRuntime.serialize_profile(tool_profile)
+                if tool_profile is not None
+                else None
+            ),
+        }
 
     @staticmethod
     def _resolve_default_version(*, rows: list[JudgeRegistryReleaseModel]) -> str:

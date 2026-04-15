@@ -240,6 +240,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/prompts/{prompt_version}", paths)
         self.assertIn("/internal/judge/registries/tools", paths)
         self.assertIn("/internal/judge/registries/tools/{toolset_version}", paths)
+        self.assertIn("/internal/judge/registries/policy/dependencies/health", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/publish", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/{version}/activate", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/rollback", paths)
@@ -579,7 +580,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad_resp.status_code, 422)
         self.assertIn("unknown_judge_policy_version", bad_resp.text)
 
-    async def test_phase_dispatch_should_reject_unknown_prompt_registry_version(self) -> None:
+    async def test_policy_registry_publish_should_reject_unknown_prompt_registry_version(
+        self,
+    ) -> None:
         runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)
         policy_version = f"policy-missing-{_unique_case_id(8105)}"
@@ -588,9 +591,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             path="/internal/judge/registries/policy/publish",
             payload={
                 "version": policy_version,
-                "activate": True,
+                "activate": False,
                 "reason": "test_policy_override_for_prompt_registry_validation",
-                "overrideFairnessGate": True,
                 "profile": {
                     "rubricVersion": "v3",
                     "topicDomain": "tft",
@@ -599,21 +601,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             },
             internal_key=runtime.settings.ai_internal_key,
         )
-        self.assertEqual(publish_resp.status_code, 200)
-        req = _build_phase_request(
-            case_id=8105,
-            idempotency_key="phase:8105",
-            judge_policy_version=policy_version,
-        )
-
-        bad_resp = await self._post_json(
-            app=app,
-            path="/internal/judge/v3/phase/dispatch",
-            payload=req.model_dump(mode="json"),
-            internal_key=runtime.settings.ai_internal_key,
-        )
-        self.assertEqual(bad_resp.status_code, 422)
-        self.assertIn("unknown_prompt_registry_version", bad_resp.text)
+        self.assertEqual(publish_resp.status_code, 422)
+        detail = publish_resp.json()["detail"]
+        self.assertEqual(detail["code"], "registry_policy_dependency_invalid")
+        dependency = detail["dependency"]
+        self.assertFalse(dependency["ok"])
+        issue_codes = {str(item.get("code") or "") for item in dependency["issues"]}
+        self.assertIn("prompt_registry_version_not_found", issue_codes)
 
     async def test_registry_routes_should_support_publish_activate_rollback_and_audit(
         self,
@@ -766,6 +760,88 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "registry_fairness_gate_no_benchmark",
         )
 
+    async def test_policy_registry_activate_should_block_when_dependency_invalid(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        await runtime.workflow_runtime.db.create_schema()
+        suffix = _unique_case_id(9212)
+        version = f"policy-dep-{suffix}"
+        await runtime.registry_product_runtime.publish_release(
+            registry_type="policy",
+            version=version,
+            profile_payload={
+                "rubricVersion": "v3",
+                "topicDomain": "tft",
+                "promptRegistryVersion": "promptset-not-exist",
+                "toolRegistryVersion": "toolset-v3-default",
+            },
+            actor="seed",
+            reason="seed_invalid_dependency_for_activate",
+            activate=False,
+        )
+
+        activate_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{version}/activate"
+                "?override_fairness_gate=true&reason=test_override"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 409)
+        detail = activate_resp.json()["detail"]
+        self.assertEqual(detail["code"], "registry_policy_dependency_blocked")
+        dependency = detail["dependency"]
+        self.assertFalse(dependency["ok"])
+        issue_codes = {str(item.get("code") or "") for item in dependency["issues"]}
+        self.assertIn("prompt_registry_version_not_found", issue_codes)
+
+    async def test_policy_registry_dependency_health_route_should_return_dependency_snapshot(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9214)
+        version = f"policy-health-{suffix}"
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "reason": "prepare_for_dependency_health",
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+
+        health_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/dependencies/health"
+                f"?policy_version={version}&include_all_versions=true&limit=5"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(health_resp.status_code, 200)
+        payload = health_resp.json()
+        self.assertEqual(payload["selectedPolicyVersion"], version)
+        self.assertGreaterEqual(payload["count"], 1)
+        self.assertTrue(payload["includeAllVersions"])
+        self.assertEqual(payload["item"]["policyVersion"], version)
+        self.assertTrue(payload["item"]["ok"])
+        self.assertTrue(payload["item"]["checks"]["promptRegistryExists"])
+        self.assertTrue(payload["item"]["checks"]["toolRegistryExists"])
+        self.assertEqual(payload["activeVersions"]["policyVersion"], runtime.policy_registry_runtime.default_version)
+
     async def test_policy_registry_activate_override_should_require_reason_and_be_auditable(
         self,
     ) -> None:
@@ -818,6 +894,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         activate_payload = activate_resp.json()
         self.assertEqual(activate_payload["item"]["version"], version)
         self.assertTrue(activate_payload["item"]["isActive"])
+        self.assertIsNotNone(activate_payload["dependencyHealth"])
+        self.assertTrue(bool(activate_payload["dependencyHealth"]["ok"]))
         self.assertIsNotNone(activate_payload["fairnessGate"])
         self.assertTrue(
             activate_payload["fairnessGate"]["latestRun"] is None
@@ -846,6 +924,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         fairness_gate = override_audit["details"].get("fairnessGate")
         self.assertIsInstance(fairness_gate, dict)
         self.assertTrue(bool(fairness_gate.get("overrideApplied")))
+        dependency_health = override_audit["details"].get("dependencyHealth")
+        self.assertIsInstance(dependency_health, dict)
+        self.assertTrue(bool(dependency_health.get("ok")))
 
     async def test_final_dispatch_should_reject_policy_rubric_mismatch(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -1192,6 +1273,24 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             callback_final_failed_impl=noop_callback,
         )
         app = create_app(runtime)
+        prompt_publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/prompt/publish",
+            payload={
+                "version": "promptset-v9-custom",
+                "activate": False,
+                "profile": {
+                    "promptVersions": {
+                        "summaryPromptVersion": "summary-v9",
+                        "agent2PromptVersion": "agent2-v9",
+                        "finalPipelineVersion": "final-v9",
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_publish_resp.status_code, 200)
         publish_resp = await self._post_json(
             app=app,
             path="/internal/judge/registries/policy/publish",
@@ -1201,7 +1300,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 "profile": {
                     "rubricVersion": "v3",
                     "topicDomain": "tft",
-                    "promptRegistryVersion": "promptset-v3-default",
+                    "promptRegistryVersion": "promptset-v9-custom",
                     "toolRegistryVersion": "toolset-v3-default",
                     "promptVersions": {
                         "summaryPromptVersion": "summary-v9",
@@ -2758,6 +2857,15 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(list_payload["returned"], 1)
         self.assertTrue(any(row["caseId"] == case_id for row in list_payload["items"]))
         self.assertEqual(list_payload["filters"]["dispatchType"], "final")
+        self.assertEqual(list_payload["aggregations"]["totalMatched"], list_payload["count"])
+        self.assertGreaterEqual(
+            list_payload["aggregations"]["gateConclusionCounts"][item["gateConclusion"]],
+            1,
+        )
+        self.assertGreaterEqual(
+            list_payload["aggregations"]["policyVersionCounts"]["v3-default"],
+            1,
+        )
 
         challenge_resp = await self._post(
             app=app,
@@ -2784,6 +2892,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         filtered_payload = filtered_resp.json()
         self.assertGreaterEqual(filtered_payload["count"], 1)
         self.assertTrue(any(row["caseId"] == case_id for row in filtered_payload["items"]))
+        self.assertEqual(filtered_payload["filters"]["sortBy"], "updated_at")
+        self.assertEqual(filtered_payload["filters"]["sortOrder"], "desc")
 
         drift_filter_resp = await self._get(
             app=app,
@@ -2839,6 +2949,33 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page_payload["returned"], 1)
         self.assertEqual(page_payload["filters"]["offset"], 1)
 
+        open_review_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?dispatch_type=final&has_open_review=true&limit=50",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(open_review_resp.status_code, 200)
+        open_review_payload = open_review_resp.json()
+        self.assertTrue(any(row["caseId"] == case_id for row in open_review_payload["items"]))
+        self.assertTrue(all(bool(row["challengeLink"]["hasOpenReview"]) for row in open_review_payload["items"]))
+        self.assertGreaterEqual(open_review_payload["aggregations"]["openReviewCount"], 1)
+        self.assertGreaterEqual(open_review_payload["aggregations"]["withChallengeCount"], 1)
+
+        sorted_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?dispatch_type=final&sort_by=updated_at&sort_order=asc&limit=2",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(sorted_resp.status_code, 200)
+        sorted_payload = sorted_resp.json()
+        self.assertEqual(sorted_payload["returned"], 2)
+        self.assertEqual(sorted_payload["filters"]["sortBy"], "updated_at")
+        self.assertEqual(sorted_payload["filters"]["sortOrder"], "asc")
+        self.assertEqual(sorted_payload["aggregations"]["totalMatched"], sorted_payload["count"])
+        ordered_case_ids = [int(row["caseId"]) for row in sorted_payload["items"]]
+        self.assertEqual(ordered_case_ids[0], case_id)
+        self.assertEqual(ordered_case_ids[1], case_id_2)
+
         invalid_gate_resp = await self._get(
             app=app,
             path="/internal/judge/fairness/cases?gate_conclusion=bad-value",
@@ -2854,6 +2991,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(invalid_challenge_resp.status_code, 422)
         self.assertIn("invalid_challenge_state", invalid_challenge_resp.text)
+
+        invalid_sort_by_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?sort_by=bad-value",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_sort_by_resp.status_code, 422)
+        self.assertIn("invalid_sort_by", invalid_sort_by_resp.text)
+
+        invalid_sort_order_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?sort_order=bad-value",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_sort_order_resp.status_code, 422)
+        self.assertIn("invalid_sort_order", invalid_sort_order_resp.text)
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)

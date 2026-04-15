@@ -260,6 +260,12 @@ CASE_FAIRNESS_CHALLENGE_STATES = {
     TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
     TRUST_CHALLENGE_STATE_CLOSED,
 }
+CASE_FAIRNESS_SORT_FIELDS = {
+    "updated_at",
+    "panel_disagreement_ratio",
+    "gate_conclusion",
+    "case_id",
+}
 
 
 def _new_challenge_id(*, case_id: int) -> str:
@@ -769,6 +775,112 @@ def _normalize_case_fairness_challenge_state(value: str | None) -> str | None:
     return normalized
 
 
+def _normalize_case_fairness_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def _normalize_case_fairness_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def _build_case_fairness_sort_key(*, item: dict[str, Any], sort_by: str) -> tuple[Any, ...]:
+    if sort_by == "panel_disagreement_ratio":
+        panel = item.get("panelDisagreement") if isinstance(item.get("panelDisagreement"), dict) else {}
+        return (
+            _safe_float(panel.get("ratio"), default=0.0),
+            int(item.get("caseId") or 0),
+        )
+    if sort_by == "gate_conclusion":
+        return (
+            str(item.get("gateConclusion") or "").strip().lower(),
+            int(item.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(item.get("caseId") or 0),)
+    return (
+        str(item.get("updatedAt") or "").strip(),
+        int(item.get("caseId") or 0),
+    )
+
+
+def _build_case_fairness_aggregations(items: list[dict[str, Any]]) -> dict[str, Any]:
+    gate_counts: dict[str, int] = {key: 0 for key in sorted(CASE_FAIRNESS_GATE_CONCLUSIONS)}
+    gate_counts["unknown"] = 0
+    winner_counts: dict[str, int] = {
+        "pro": 0,
+        "con": 0,
+        "draw": 0,
+        "unknown": 0,
+    }
+    challenge_state_counts: dict[str, int] = {"none": 0}
+    policy_version_counts: dict[str, int] = {"unknown": 0}
+
+    open_review_count = 0
+    review_required_count = 0
+    drift_breach_count = 0
+    threshold_breach_count = 0
+    panel_high_disagreement_count = 0
+    with_challenge_count = 0
+
+    for item in items:
+        gate = str(item.get("gateConclusion") or "").strip().lower()
+        if gate in gate_counts:
+            gate_counts[gate] += 1
+        else:
+            gate_counts["unknown"] += 1
+
+        winner = str(item.get("winner") or "").strip().lower()
+        if winner in winner_counts:
+            winner_counts[winner] += 1
+        else:
+            winner_counts["unknown"] += 1
+
+        if bool(item.get("reviewRequired")):
+            review_required_count += 1
+
+        panel = item.get("panelDisagreement") if isinstance(item.get("panelDisagreement"), dict) else {}
+        if bool(panel.get("high")):
+            panel_high_disagreement_count += 1
+
+        drift = item.get("driftSummary") if isinstance(item.get("driftSummary"), dict) else {}
+        if bool(drift.get("hasDriftBreach")):
+            drift_breach_count += 1
+        if bool(drift.get("hasThresholdBreach")):
+            threshold_breach_count += 1
+        policy_version = str(drift.get("policyVersion") or "").strip()
+        if policy_version:
+            policy_version_counts[policy_version] = policy_version_counts.get(policy_version, 0) + 1
+        else:
+            policy_version_counts["unknown"] += 1
+
+        challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
+        if bool(challenge_link.get("hasOpenReview")):
+            open_review_count += 1
+        latest_challenge = challenge_link.get("latest") if isinstance(challenge_link.get("latest"), dict) else None
+        state = str(latest_challenge.get("state") or "").strip() if isinstance(latest_challenge, dict) else ""
+        if state:
+            challenge_state_counts[state] = challenge_state_counts.get(state, 0) + 1
+            with_challenge_count += 1
+        else:
+            challenge_state_counts["none"] = challenge_state_counts.get("none", 0) + 1
+
+    return {
+        "totalMatched": len(items),
+        "reviewRequiredCount": review_required_count,
+        "openReviewCount": open_review_count,
+        "driftBreachCount": drift_breach_count,
+        "thresholdBreachCount": threshold_breach_count,
+        "panelHighDisagreementCount": panel_high_disagreement_count,
+        "withChallengeCount": with_challenge_count,
+        "gateConclusionCounts": gate_counts,
+        "winnerCounts": winner_counts,
+        "challengeStateCounts": dict(sorted(challenge_state_counts.items(), key=lambda kv: kv[0])),
+        "policyVersionCounts": dict(sorted(policy_version_counts.items(), key=lambda kv: kv[0])),
+    }
+
+
 def _build_judge_core_view(
     *,
     workflow_job: WorkflowJob | None,
@@ -925,6 +1037,11 @@ def _build_case_fairness_item(
         "dispatchType": dispatch_type,
         "traceId": trace_id or None,
         "workflowStatus": workflow_job.status if workflow_job is not None else None,
+        "updatedAt": (
+            workflow_job.updated_at.isoformat()
+            if workflow_job is not None and isinstance(workflow_job.updated_at, datetime)
+            else None
+        ),
         "winner": winner,
         "reviewRequired": review_required,
         "gateConclusion": gate_conclusion,
@@ -1831,6 +1948,25 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         }
 
+    async def _evaluate_policy_registry_dependency_health(
+        *,
+        policy_version: str,
+        profile_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            return await runtime.registry_product_runtime.evaluate_policy_dependency_health(
+                policy_version=policy_version,
+                profile_payload=profile_payload,
+            )
+        except ValueError as err:
+            code = str(err)
+            if code in {"invalid_policy_profile", "invalid_registry_version"}:
+                raise HTTPException(status_code=422, detail=code) from err
+            raise HTTPException(
+                status_code=422,
+                detail="registry_dependency_health_invalid",
+            ) from err
+
     async def _emit_registry_fairness_gate_alert(
         *,
         registry_type: str,
@@ -2351,6 +2487,58 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "item": _serialize_tool_profile(runtime, profile=profile),
         }
 
+    @app.get("/internal/judge/registries/policy/dependencies/health")
+    async def get_policy_registry_dependency_health(
+        x_ai_internal_key: str | None = Header(default=None),
+        policy_version: str | None = Query(default=None),
+        include_all_versions: bool = Query(default=False),
+        limit: int = Query(default=20, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        selected_policy_version = (
+            str(policy_version or "").strip()
+            or runtime.policy_registry_runtime.default_version
+        )
+        selected_item = await _evaluate_policy_registry_dependency_health(
+            policy_version=selected_policy_version,
+        )
+        if selected_item.get("code") == "policy_registry_not_found":
+            raise HTTPException(status_code=404, detail="policy_registry_not_found")
+        items: list[dict[str, Any]] = [selected_item]
+        if include_all_versions:
+            policy_versions: list[str] = []
+            seen_versions: set[str] = set()
+            for row in runtime.policy_registry_runtime.list_profiles():
+                version_token = str(getattr(row, "version", "") or "").strip()
+                if not version_token or version_token in seen_versions:
+                    continue
+                seen_versions.add(version_token)
+                policy_versions.append(version_token)
+            if selected_policy_version not in seen_versions:
+                policy_versions.insert(0, selected_policy_version)
+            items = []
+            for version_token in policy_versions[: max(1, min(int(limit), 200))]:
+                dependency_item = await _evaluate_policy_registry_dependency_health(
+                    policy_version=version_token,
+                )
+                if dependency_item.get("code") == "policy_registry_not_found":
+                    continue
+                items.append(dependency_item)
+        return {
+            "activeVersions": {
+                "policyVersion": runtime.policy_registry_runtime.default_version,
+                "promptRegistryVersion": runtime.prompt_registry_runtime.default_version,
+                "toolRegistryVersion": runtime.tool_registry_runtime.default_version,
+            },
+            "selectedPolicyVersion": selected_policy_version,
+            "item": selected_item,
+            "count": len(items),
+            "items": items,
+            "includeAllVersions": bool(include_all_versions),
+            "limit": int(limit),
+        }
+
     @app.post("/internal/judge/registries/{registry_type}/publish")
     async def publish_registry_release(
         registry_type: str,
@@ -2383,6 +2571,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         registry_type_token = str(registry_type or "").strip().lower()
         fairness_gate: dict[str, Any] | None = None
         fairness_alert: dict[str, Any] | None = None
+        dependency_health: dict[str, Any] | None = None
+        if registry_type_token == REGISTRY_TYPE_POLICY:
+            dependency_health = await _evaluate_policy_registry_dependency_health(
+                policy_version=version,
+                profile_payload=profile_payload,
+            )
+            if not bool(dependency_health.get("ok")):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "registry_policy_dependency_invalid",
+                        "dependency": dependency_health,
+                    },
+                )
         if registry_type_token == REGISTRY_TYPE_POLICY and activate:
             fairness_gate = await _evaluate_policy_release_fairness_gate(
                 policy_version=version,
@@ -2420,20 +2622,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                         },
                     )
 
-        extra_details = (
-            {
-                "fairnessGate": {
-                    **(fairness_gate or {}),
-                    "overrideApplied": bool(
-                        override_fairness_gate
-                        and fairness_gate is not None
-                        and not bool(fairness_gate.get("passed"))
-                    ),
-                }
+        extra_details_payload: dict[str, Any] = {}
+        if dependency_health is not None:
+            extra_details_payload["dependencyHealth"] = dict(dependency_health)
+        if fairness_gate is not None:
+            extra_details_payload["fairnessGate"] = {
+                **(fairness_gate or {}),
+                "overrideApplied": bool(
+                    override_fairness_gate
+                    and fairness_gate is not None
+                    and not bool(fairness_gate.get("passed"))
+                ),
             }
-            if fairness_gate is not None
-            else None
-        )
+        extra_details = extra_details_payload or None
         try:
             item = await runtime.registry_product_runtime.publish_release(
                 registry_type=registry_type,
@@ -2462,6 +2663,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return {
             "ok": True,
             "item": item,
+            "dependencyHealth": dependency_health,
             "fairnessGate": fairness_gate,
             "alert": fairness_alert,
         }
@@ -2480,7 +2682,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         registry_type_token = str(registry_type or "").strip().lower()
         fairness_gate: dict[str, Any] | None = None
         fairness_alert: dict[str, Any] | None = None
+        dependency_health: dict[str, Any] | None = None
         if registry_type_token == REGISTRY_TYPE_POLICY:
+            dependency_health = await _evaluate_policy_registry_dependency_health(
+                policy_version=version,
+            )
+            if not bool(dependency_health.get("ok")):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "registry_policy_dependency_blocked",
+                        "dependency": dependency_health,
+                    },
+                )
             fairness_gate = await _evaluate_policy_release_fairness_gate(
                 policy_version=version,
             )
@@ -2516,20 +2730,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                             "alert": fairness_alert,
                         },
                     )
-        extra_details = (
-            {
-                "fairnessGate": {
-                    **(fairness_gate or {}),
-                    "overrideApplied": bool(
-                        override_fairness_gate
-                        and fairness_gate is not None
-                        and not bool(fairness_gate.get("passed"))
-                    ),
-                }
+        extra_details_payload: dict[str, Any] = {}
+        if dependency_health is not None:
+            extra_details_payload["dependencyHealth"] = dict(dependency_health)
+        if fairness_gate is not None:
+            extra_details_payload["fairnessGate"] = {
+                **(fairness_gate or {}),
+                "overrideApplied": bool(
+                    override_fairness_gate
+                    and fairness_gate is not None
+                    and not bool(fairness_gate.get("passed"))
+                ),
             }
-            if fairness_gate is not None
-            else None
-        )
+        extra_details = extra_details_payload or None
         try:
             item = await runtime.registry_product_runtime.activate_release(
                 registry_type=registry_type,
@@ -2548,6 +2761,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return {
             "ok": True,
             "item": item,
+            "dependencyHealth": dependency_health,
             "fairnessGate": fairness_gate,
             "alert": fairness_alert,
         }
@@ -5569,8 +5783,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         policy_version: str | None = Query(default=None),
         has_drift_breach: bool | None = Query(default=None),
         has_threshold_breach: bool | None = Query(default=None),
+        has_open_review: bool | None = Query(default=None),
         gate_conclusion: str | None = Query(default=None),
         challenge_state: str | None = Query(default=None),
+        sort_by: str = Query(default="updated_at"),
+        sort_order: str = Query(default="desc"),
         review_required: bool | None = Query(default=None),
         panel_high_disagreement: bool | None = Query(default=None),
         offset: int = Query(default=0, ge=0, le=2000),
@@ -5593,6 +5810,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if normalized_policy_version == "":
             normalized_policy_version = None
+        normalized_sort_by = _normalize_case_fairness_sort_by(sort_by)
+        if normalized_sort_by not in CASE_FAIRNESS_SORT_FIELDS:
+            raise HTTPException(status_code=422, detail="invalid_sort_by")
+        normalized_sort_order = _normalize_case_fairness_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=422, detail="invalid_sort_order")
         normalized_gate_conclusion = _normalize_case_fairness_gate_conclusion(gate_conclusion)
         if (
             normalized_gate_conclusion is not None
@@ -5688,6 +5911,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 and bool(drift_summary.get("hasThresholdBreach")) != has_threshold_breach
             ):
                 continue
+            challenge_link = (
+                item.get("challengeLink")
+                if isinstance(item.get("challengeLink"), dict)
+                else {}
+            )
+            if (
+                has_open_review is not None
+                and bool(challenge_link.get("hasOpenReview")) != has_open_review
+            ):
+                continue
             if (
                 normalized_gate_conclusion is not None
                 and str(item.get("gateConclusion") or "").strip().lower()
@@ -5702,8 +5935,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 continue
             if normalized_challenge_state is not None:
                 latest_challenge = (
-                    item.get("challengeLink", {}).get("latest")
-                    if isinstance(item.get("challengeLink"), dict)
+                    challenge_link.get("latest")
+                    if isinstance(challenge_link, dict)
                     else None
                 )
                 latest_state = (
@@ -5715,12 +5948,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     continue
             items.append(item)
 
+        items.sort(
+            key=lambda row: _build_case_fairness_sort_key(item=row, sort_by=normalized_sort_by),
+            reverse=(normalized_sort_order == "desc"),
+        )
         total_count = len(items)
+        aggregations = _build_case_fairness_aggregations(items)
         page_items = items[offset : offset + limit]
         return {
             "count": total_count,
             "returned": len(page_items),
             "items": page_items,
+            "aggregations": aggregations,
             "filters": {
                 "status": normalized_status,
                 "dispatchType": normalized_dispatch_type,
@@ -5728,8 +5967,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "policyVersion": normalized_policy_version,
                 "hasDriftBreach": has_drift_breach,
                 "hasThresholdBreach": has_threshold_breach,
+                "hasOpenReview": has_open_review,
                 "gateConclusion": normalized_gate_conclusion,
                 "challengeState": normalized_challenge_state,
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
                 "reviewRequired": review_required,
                 "panelHighDisagreement": panel_high_disagreement,
                 "offset": offset,
