@@ -2755,7 +2755,88 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list_resp.status_code, 200)
         list_payload = list_resp.json()
         self.assertGreaterEqual(list_payload["count"], 1)
+        self.assertGreaterEqual(list_payload["returned"], 1)
         self.assertTrue(any(row["caseId"] == case_id for row in list_payload["items"]))
+        self.assertEqual(list_payload["filters"]["dispatchType"], "final")
+
+        challenge_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{case_id}/trust/challenges/request"
+                "?dispatch_type=auto&reason_code=manual_challenge&requested_by=ops&auto_accept=true"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(challenge_resp.status_code, 200)
+        challenge_payload = challenge_resp.json()
+        self.assertEqual(challenge_payload["item"]["challengeState"], "under_review")
+
+        filtered_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/cases"
+                f"?dispatch_type=final&gate_conclusion={item['gateConclusion']}"
+                "&challenge_state=under_review&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(filtered_resp.status_code, 200)
+        filtered_payload = filtered_resp.json()
+        self.assertGreaterEqual(filtered_payload["count"], 1)
+        self.assertTrue(any(row["caseId"] == case_id for row in filtered_payload["items"]))
+
+        case_id_2 = _unique_case_id(7623)
+        phase_req_2 = _build_phase_request(
+            case_id=case_id_2,
+            idempotency_key=f"phase:{case_id_2}",
+            judge_policy_version="v3-default",
+        )
+        phase_resp_2 = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req_2.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp_2.status_code, 200)
+        final_req_2 = _build_final_request(
+            case_id=case_id_2,
+            idempotency_key=f"final:{case_id_2}",
+            judge_policy_version="v3-default",
+        )
+        final_resp_2 = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req_2.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp_2.status_code, 200)
+
+        page_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?dispatch_type=final&offset=1&limit=1",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(page_resp.status_code, 200)
+        page_payload = page_resp.json()
+        self.assertGreaterEqual(page_payload["count"], 2)
+        self.assertEqual(page_payload["returned"], 1)
+        self.assertEqual(page_payload["filters"]["offset"], 1)
+
+        invalid_gate_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?gate_conclusion=bad-value",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_gate_resp.status_code, 422)
+        self.assertIn("invalid_gate_conclusion", invalid_gate_resp.text)
+
+        invalid_challenge_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?challenge_state=bad-value",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_challenge_resp.status_code, 422)
+        self.assertIn("invalid_challenge_state", invalid_challenge_resp.text)
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)

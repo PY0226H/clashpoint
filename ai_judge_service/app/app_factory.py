@@ -246,6 +246,20 @@ PANEL_RUNTIME_PROFILE_DEFAULTS = {
         "promptVersionKey": "summaryPromptVersion",
     },
 }
+CASE_FAIRNESS_GATE_CONCLUSIONS = {
+    "auto_passed",
+    "review_required",
+    "benchmark_attention_required",
+}
+CASE_FAIRNESS_CHALLENGE_STATES = {
+    TRUST_CHALLENGE_STATE_REQUESTED,
+    TRUST_CHALLENGE_STATE_ACCEPTED,
+    TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+    TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
+    TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED,
+    TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+    TRUST_CHALLENGE_STATE_CLOSED,
+}
 
 
 def _new_challenge_id(*, case_id: int) -> str:
@@ -737,6 +751,24 @@ def _normalize_workflow_status(status: str | None) -> str | None:
     return normalized
 
 
+def _normalize_case_fairness_gate_conclusion(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_case_fairness_challenge_state(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
+
+
 def _build_judge_core_view(
     *,
     workflow_job: WorkflowJob | None,
@@ -788,15 +820,39 @@ def _extract_latest_challenge_snapshot(workflow_events: list[Any]) -> dict[str, 
         if str(getattr(event, "event_type", "") or "").strip() != TRUST_CHALLENGE_EVENT_TYPE:
             continue
         payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
-        state = str(payload.get("state") or "").strip()
+        state = str(
+            payload.get("state")
+            or payload.get("challengeState")
+            or payload.get("currentState")
+            or ""
+        ).strip()
         if not state:
             continue
         return {
             "state": state,
-            "reasonCode": str(payload.get("reasonCode") or "").strip() or None,
-            "reason": str(payload.get("reason") or "").strip() or None,
-            "requestedBy": str(payload.get("requestedBy") or "").strip() or None,
-            "decidedBy": str(payload.get("decidedBy") or "").strip() or None,
+            "reasonCode": (
+                str(payload.get("reasonCode") or payload.get("challengeReasonCode") or "").strip()
+                or None
+            ),
+            "reason": (
+                str(payload.get("reason") or payload.get("challengeReason") or "").strip() or None
+            ),
+            "requestedBy": (
+                str(
+                    payload.get("requestedBy")
+                    or payload.get("challengeRequestedBy")
+                    or ""
+                ).strip()
+                or None
+            ),
+            "decidedBy": (
+                str(
+                    payload.get("decidedBy")
+                    or payload.get("challengeDecisionBy")
+                    or ""
+                ).strip()
+                or None
+            ),
             "dispatchType": str(payload.get("dispatchType") or "").strip() or None,
             "at": (
                 getattr(event, "created_at", None).isoformat()
@@ -5510,8 +5566,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         status: str | None = Query(default=None),
         dispatch_type: str | None = Query(default=None),
         winner: str | None = Query(default=None),
+        gate_conclusion: str | None = Query(default=None),
+        challenge_state: str | None = Query(default=None),
         review_required: bool | None = Query(default=None),
         panel_high_disagreement: bool | None = Query(default=None),
+        offset: int = Query(default=0, ge=0, le=2000),
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
@@ -5526,11 +5585,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         normalized_winner = str(winner or "").strip().lower() or None
         if normalized_winner not in {None, "pro", "con", "draw"}:
             raise HTTPException(status_code=422, detail="invalid_winner")
+        normalized_gate_conclusion = _normalize_case_fairness_gate_conclusion(gate_conclusion)
+        if (
+            normalized_gate_conclusion is not None
+            and normalized_gate_conclusion not in CASE_FAIRNESS_GATE_CONCLUSIONS
+        ):
+            raise HTTPException(status_code=422, detail="invalid_gate_conclusion")
+        normalized_challenge_state = _normalize_case_fairness_challenge_state(challenge_state)
+        if (
+            normalized_challenge_state is not None
+            and normalized_challenge_state not in CASE_FAIRNESS_CHALLENGE_STATES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_challenge_state")
 
         jobs = await _workflow_list_jobs(
             status=normalized_status,
             dispatch_type=normalized_dispatch_type,
-            limit=limit,
+            limit=max(limit, limit + offset),
         )
         benchmark_cache: dict[str, FactFairnessBenchmarkRun | None] = {}
         items: list[dict[str, Any]] = []
@@ -5588,23 +5659,48 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
             if normalized_winner is not None and item.get("winner") != normalized_winner:
                 continue
+            if (
+                normalized_gate_conclusion is not None
+                and str(item.get("gateConclusion") or "").strip().lower()
+                != normalized_gate_conclusion
+            ):
+                continue
             if review_required is not None and bool(item.get("reviewRequired")) != review_required:
                 continue
             if panel_high_disagreement is not None and bool(
                 ((item.get("panelDisagreement") or {}).get("high"))
             ) != panel_high_disagreement:
                 continue
+            if normalized_challenge_state is not None:
+                latest_challenge = (
+                    item.get("challengeLink", {}).get("latest")
+                    if isinstance(item.get("challengeLink"), dict)
+                    else None
+                )
+                latest_state = (
+                    str(latest_challenge.get("state") or "").strip()
+                    if isinstance(latest_challenge, dict)
+                    else ""
+                )
+                if latest_state != normalized_challenge_state:
+                    continue
             items.append(item)
 
+        total_count = len(items)
+        page_items = items[offset : offset + limit]
         return {
-            "count": len(items),
-            "items": items,
+            "count": total_count,
+            "returned": len(page_items),
+            "items": page_items,
             "filters": {
                 "status": normalized_status,
                 "dispatchType": normalized_dispatch_type,
                 "winner": normalized_winner,
+                "gateConclusion": normalized_gate_conclusion,
+                "challengeState": normalized_challenge_state,
                 "reviewRequired": review_required,
                 "panelHighDisagreement": panel_high_disagreement,
+                "offset": offset,
                 "limit": limit,
             },
         }
