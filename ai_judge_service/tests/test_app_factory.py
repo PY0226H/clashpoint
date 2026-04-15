@@ -2785,6 +2785,23 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(filtered_payload["count"], 1)
         self.assertTrue(any(row["caseId"] == case_id for row in filtered_payload["items"]))
 
+        drift_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/cases"
+                "?dispatch_type=final&policy_version=v3-default"
+                "&has_threshold_breach=false&has_drift_breach=false&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(drift_filter_resp.status_code, 200)
+        drift_filter_payload = drift_filter_resp.json()
+        self.assertGreaterEqual(drift_filter_payload["count"], 1)
+        self.assertTrue(any(row["caseId"] == case_id for row in drift_filter_payload["items"]))
+        self.assertEqual(drift_filter_payload["filters"]["policyVersion"], "v3-default")
+        self.assertFalse(drift_filter_payload["filters"]["hasThresholdBreach"])
+        self.assertFalse(drift_filter_payload["filters"]["hasDriftBreach"])
+
         case_id_2 = _unique_case_id(7623)
         phase_req_2 = _build_phase_request(
             case_id=case_id_2,

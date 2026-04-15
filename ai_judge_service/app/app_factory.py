@@ -5566,6 +5566,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         status: str | None = Query(default=None),
         dispatch_type: str | None = Query(default=None),
         winner: str | None = Query(default=None),
+        policy_version: str | None = Query(default=None),
+        has_drift_breach: bool | None = Query(default=None),
+        has_threshold_breach: bool | None = Query(default=None),
         gate_conclusion: str | None = Query(default=None),
         challenge_state: str | None = Query(default=None),
         review_required: bool | None = Query(default=None),
@@ -5585,6 +5588,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         normalized_winner = str(winner or "").strip().lower() or None
         if normalized_winner not in {None, "pro", "con", "draw"}:
             raise HTTPException(status_code=422, detail="invalid_winner")
+        normalized_policy_version = (
+            str(policy_version or "").strip() if policy_version is not None else None
+        )
+        if normalized_policy_version == "":
+            normalized_policy_version = None
         normalized_gate_conclusion = _normalize_case_fairness_gate_conclusion(gate_conclusion)
         if (
             normalized_gate_conclusion is not None
@@ -5659,6 +5667,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
             if normalized_winner is not None and item.get("winner") != normalized_winner:
                 continue
+            drift_summary = (
+                item.get("driftSummary")
+                if isinstance(item.get("driftSummary"), dict)
+                else {}
+            )
+            if (
+                normalized_policy_version is not None
+                and str(drift_summary.get("policyVersion") or "").strip()
+                != normalized_policy_version
+            ):
+                continue
+            if (
+                has_drift_breach is not None
+                and bool(drift_summary.get("hasDriftBreach")) != has_drift_breach
+            ):
+                continue
+            if (
+                has_threshold_breach is not None
+                and bool(drift_summary.get("hasThresholdBreach")) != has_threshold_breach
+            ):
+                continue
             if (
                 normalized_gate_conclusion is not None
                 and str(item.get("gateConclusion") or "").strip().lower()
@@ -5696,6 +5725,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "status": normalized_status,
                 "dispatchType": normalized_dispatch_type,
                 "winner": normalized_winner,
+                "policyVersion": normalized_policy_version,
+                "hasDriftBreach": has_drift_breach,
+                "hasThresholdBreach": has_threshold_breach,
                 "gateConclusion": normalized_gate_conclusion,
                 "challengeState": normalized_challenge_state,
                 "reviewRequired": review_required,
