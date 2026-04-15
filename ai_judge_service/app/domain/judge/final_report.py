@@ -8,6 +8,27 @@ from ...style_mode import resolve_effective_style_mode
 from .claim_graph import build_claim_graph_payload
 from .evidence_ledger import EvidenceLedgerBuilder
 
+PANEL_RUNTIME_PROFILE_DEFAULTS = {
+    "judgeA": {
+        "profileId": "panel-judgeA-weighted-v1",
+        "modelStrategy": "deterministic_weighted",
+        "scoreSource": "agent3WeightedScore",
+        "decisionMargin": 0.8,
+    },
+    "judgeB": {
+        "profileId": "panel-judgeB-path-alignment-v1",
+        "modelStrategy": "deterministic_path_alignment",
+        "scoreSource": "agent2Score",
+        "decisionMargin": 0.8,
+    },
+    "judgeC": {
+        "profileId": "panel-judgeC-dimension-composite-v1",
+        "modelStrategy": "deterministic_dimension_composite",
+        "scoreSource": "agent1Dimensions",
+        "decisionMargin": 0.8,
+    },
+}
+
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
     try:
@@ -122,6 +143,7 @@ def _build_panel_judge_item(
     pro_score: float,
     con_score: float,
     reason: str,
+    runtime_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     gap = _score_gap(pro_score, con_score)
     return {
@@ -134,7 +156,68 @@ def _build_panel_judge_item(
         "scoreGap": gap,
         "confidence": _score_confidence(score_gap=gap),
         "reason": str(reason or "").strip(),
+        "runtimeProfile": (
+            dict(runtime_profile)
+            if isinstance(runtime_profile, dict)
+            else {}
+        ),
     }
+
+
+def _normalize_panel_runtime_profiles(
+    raw_profiles: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    source = raw_profiles if isinstance(raw_profiles, dict) else {}
+    out: dict[str, dict[str, Any]] = {}
+    for judge_id, defaults in PANEL_RUNTIME_PROFILE_DEFAULTS.items():
+        row = source.get(judge_id) if isinstance(source.get(judge_id), dict) else {}
+        out[judge_id] = {
+            "judgeId": judge_id,
+            "profileId": str(
+                row.get("profileId")
+                or row.get("profile_id")
+                or defaults["profileId"]
+            ).strip()
+            or defaults["profileId"],
+            "modelStrategy": str(
+                row.get("modelStrategy")
+                or row.get("model_strategy")
+                or defaults["modelStrategy"]
+            ).strip()
+            or defaults["modelStrategy"],
+            "scoreSource": str(
+                row.get("scoreSource")
+                or row.get("score_source")
+                or defaults["scoreSource"]
+            ).strip()
+            or defaults["scoreSource"],
+            "decisionMargin": max(
+                0.0,
+                _safe_float(
+                    row.get("decisionMargin") or row.get("decision_margin"),
+                    default=float(defaults["decisionMargin"]),
+                ),
+            ),
+            "promptVersion": (
+                str(row.get("promptVersion") or row.get("prompt_version") or "").strip()
+                or None
+            ),
+            "toolsetVersion": (
+                str(row.get("toolsetVersion") or row.get("toolset_version") or "").strip()
+                or None
+            ),
+            "policyVersion": (
+                str(row.get("policyVersion") or row.get("policy_version") or "").strip()
+                or None
+            ),
+            "profileSource": str(
+                row.get("profileSource")
+                or row.get("profile_source")
+                or "builtin_default"
+            ).strip()
+            or "builtin_default",
+        }
+    return out
 
 
 def _index_retrieval_items(payload: dict[str, Any], *, side: str) -> dict[str, dict[str, Any]]:
@@ -260,6 +343,7 @@ def _build_verdict_ledger(
     con_score: float,
     dimension_scores: dict[str, Any],
     panel_judges: dict[str, Any],
+    panel_runtime_profiles: dict[str, Any],
     winner_first: str,
     winner_second: str,
     winner_third: str,
@@ -295,6 +379,11 @@ def _build_verdict_ledger(
             "agent1Dimensions": winner_third,
         },
         "judges": panel_decisions_payload,
+        "runtimeProfiles": (
+            dict(panel_runtime_profiles)
+            if isinstance(panel_runtime_profiles, dict)
+            else {}
+        ),
         "panelDisagreement": panel_disagreement,
         "panelHighDisagreement": panel_disagreement["high"],
         "scoreGap": _score_gap(pro_score, con_score),
@@ -404,6 +493,7 @@ def _evaluate_fairness_gate(
     winner_first: str,
     winner_second: str,
     panel_judges: dict[str, Any],
+    panel_runtime_profiles: dict[str, Any] | None,
     winner_before_gate: str,
     pro_score: float,
     con_score: float,
@@ -452,6 +542,9 @@ def _evaluate_fairness_gate(
             or "draw"
         ).strip().lower(),
     }
+    normalized_panel_runtime_profiles = (
+        panel_runtime_profiles if isinstance(panel_runtime_profiles, dict) else {}
+    )
     panel_vote_by_side = {
         "pro": 0,
         "con": 0,
@@ -605,6 +698,7 @@ def _evaluate_fairness_gate(
                     "panelDisagreementRatio": panel_disagreement_ratio,
                     "panelDisagreementRatioMax": panel_disagreement_ratio_max,
                     "panelDisagreementReasons": panel_disagreement_reasons,
+                    "panelRuntimeProfiles": normalized_panel_runtime_profiles,
                 },
             }
         )
@@ -665,6 +759,7 @@ def _evaluate_fairness_gate(
         "styleProbeWinners": style_probe_winners,
         "panelProbeWinners": panel_probe_winners,
         "panelJudges": normalized_panel_judges,
+        "panelRuntimeProfiles": normalized_panel_runtime_profiles,
         "evidenceSufficiency": {
             "checkApplied": evidence_check_applied,
             "winnerBeforeGate": winner_before_gate,
@@ -909,6 +1004,7 @@ def build_final_report_payload(
     phase_receipts: list[Any],
     judge_style_mode: str,
     fairness_thresholds: dict[str, Any] | None = None,
+    panel_runtime_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     expected_phase_nos = list(range(request.phase_start_no, request.phase_end_no + 1))
     expected_phase_set = set(expected_phase_nos)
@@ -1190,6 +1286,7 @@ def build_final_report_payload(
             "clarity": 50.0,
         }
 
+    normalized_panel_runtime_profiles = _normalize_panel_runtime_profiles(panel_runtime_profiles)
     panel_judges = {
         "judgeA": _build_panel_judge_item(
             judge_id="judgeA",
@@ -1202,6 +1299,7 @@ def build_final_report_payload(
                 f"Aggregates phase weighted scores across {len(phase_rollup_summary)} phase(s). "
                 f"Uses margin=0.8 winner rule."
             ),
+            runtime_profile=normalized_panel_runtime_profiles.get("judgeA"),
         ),
         "judgeB": _build_panel_judge_item(
             judge_id="judgeB",
@@ -1213,6 +1311,7 @@ def build_final_report_payload(
             reason=(
                 "Uses agent2 hit/miss path alignment averages as an independent lane."
             ),
+            runtime_profile=normalized_panel_runtime_profiles.get("judgeB"),
         ),
         "judgeC": _build_panel_judge_item(
             judge_id="judgeC",
@@ -1224,6 +1323,7 @@ def build_final_report_payload(
             reason=(
                 "Uses agent1 logic/evidence/rebuttal/clarity composite scores as an independent lane."
             ),
+            runtime_profile=normalized_panel_runtime_profiles.get("judgeC"),
         ),
     }
 
@@ -1245,6 +1345,7 @@ def build_final_report_payload(
             winner_first=winner_first,
             winner_second=winner_second,
             panel_judges=panel_judges,
+            panel_runtime_profiles=normalized_panel_runtime_profiles,
             winner_before_gate=winner,
             pro_score=pro_score,
             con_score=con_score,
@@ -1348,6 +1449,7 @@ def build_final_report_payload(
         con_score=con_score,
         dimension_scores=dimension_scores,
         panel_judges=panel_judges,
+        panel_runtime_profiles=normalized_panel_runtime_profiles,
         winner_first=winner_first,
         winner_second=winner_second,
         winner_third=winner_third,
@@ -1440,6 +1542,7 @@ def build_final_report_payload(
                     if isinstance(verdict_ledger.get("panelDecisions"), dict)
                     else {}
                 ),
+                "runtimeProfiles": normalized_panel_runtime_profiles,
                 "arbitration": (
                     verdict_ledger.get("arbitration")
                     if isinstance(verdict_ledger.get("arbitration"), dict)
@@ -1451,6 +1554,7 @@ def build_final_report_payload(
                     else []
                 ),
             },
+            "panelRuntimeProfiles": normalized_panel_runtime_profiles,
             "opinionPackVersion": opinion_pack.get("version"),
             "fairnessGate": fairness_summary,
         },

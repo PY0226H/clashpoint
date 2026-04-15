@@ -35,10 +35,10 @@
 
 ## 5. ingest 状态
 
-1. ingest_enabled: `false`
-2. ingest_base_url: ``
+1. ingest_enabled: `true`
+2. ingest_base_url: `http://127.0.0.1:8787`
 3. ingest_path: `/internal/judge/fairness/benchmark-runs`
-4. ingest_status: `skipped`
-5. ingest_http_code: `（无）`
+4. ingest_status: `sent`
+5. ingest_http_code: `200`
 6. ingest_error: `（无）`
-7. ingest_response: `（无）`
+7. ingest_response: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T005405Z-ai-judge-fairness-benchmark-freeze.ingest.response.json`

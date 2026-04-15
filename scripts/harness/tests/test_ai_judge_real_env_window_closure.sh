@@ -268,4 +268,50 @@ expect_contains "local status" "ai_judge_real_env_window_closure_status: local_r
 expect_contains "local p5 status" "p5_status: local_reference_pass" "$LOCAL_STDOUT"
 expect_contains "local runtime pack status" "runtime_ops_pack_status: local_reference_ready" "$LOCAL_STDOUT"
 
+# 场景6：窗口脚本透传 fairness ingest 并成功
+WORK_INGEST="$TMP_DIR/ingest"
+EVIDENCE_INGEST="$WORK_INGEST/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_INGEST"
+seed_tracks_local "$EVIDENCE_INGEST"
+cat >"$EVIDENCE_INGEST/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=false
+LOCAL_REFERENCE_ENV_READY=true
+CALIBRATION_ENV_MODE=local_reference
+EOF
+
+MOCK_BIN_INGEST="$TMP_DIR/mock-bin-ingest"
+mkdir -p "$MOCK_BIN_INGEST"
+cat >"$MOCK_BIN_INGEST/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      output_file="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift 1
+      ;;
+  esac
+done
+if [[ -n "$output_file" ]]; then
+  printf '{"ok":true}' >"$output_file"
+fi
+printf '200'
+EOF
+chmod +x "$MOCK_BIN_INGEST/curl"
+
+INGEST_STDOUT="$TMP_DIR/ingest.stdout"
+PATH="$MOCK_BIN_INGEST:$PATH" run_window_closure "$WORK_INGEST" \
+  --allow-local-reference \
+  --fairness-ingest-enabled \
+  --fairness-ingest-base-url "http://127.0.0.1:8787" \
+  --fairness-ingest-internal-key "test-key" >"$INGEST_STDOUT"
+expect_contains "ingest closure status" "ai_judge_real_env_window_closure_status: local_reference_ready" "$INGEST_STDOUT"
+expect_contains "ingest runtime status" "runtime_ops_pack_status: local_reference_ready" "$INGEST_STDOUT"
+expect_contains "ingest runtime fairness ingest line" "runtime_ops_fairness_ingest_status: sent" "$INGEST_STDOUT"
+expect_contains "ingest closure env persisted" "FAIRNESS_INGEST_STATUS=sent" "$EVIDENCE_INGEST/ai_judge_real_env_window_closure.env"
+
 echo "all ai-judge real env window closure tests passed"

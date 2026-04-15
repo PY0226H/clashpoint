@@ -244,6 +244,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/{registry_type}/{version}/activate", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/rollback", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/audits", paths)
+        self.assertIn("/internal/judge/registries/{registry_type}/releases", paths)
+        self.assertIn("/internal/judge/registries/{registry_type}/releases/{version}", paths)
+        self.assertIn("/internal/judge/fairness/cases", paths)
+        self.assertIn("/internal/judge/fairness/cases/{case_id}", paths)
         self.assertIn("/internal/judge/cases/{case_id}/attestation/verify", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/commitment", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/verdict-attestation", paths)
@@ -585,6 +589,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             payload={
                 "version": policy_version,
                 "activate": True,
+                "reason": "test_policy_override_for_prompt_registry_validation",
+                "overrideFairnessGate": True,
                 "profile": {
                     "rubricVersion": "v3",
                     "topicDomain": "tft",
@@ -698,6 +704,148 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("publish", actor_actions)
         self.assertIn("activate", actor_actions)
         self.assertIn("rollback", actor_actions)
+
+        releases_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/prompt/releases?limit=200&include_payload=false",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(releases_resp.status_code, 200)
+        release_items = releases_resp.json()["items"]
+        version_items = [
+            item
+            for item in release_items
+            if str(item.get("version") or "") == version
+        ]
+        self.assertTrue(version_items)
+        self.assertNotIn("payload", version_items[0])
+
+        get_release_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/registries/prompt/releases/{version}",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(get_release_resp.status_code, 200)
+        release_item = get_release_resp.json()["item"]
+        self.assertEqual(release_item["version"], version)
+        self.assertIn("payload", release_item)
+
+    async def test_policy_registry_activate_should_block_when_fairness_gate_not_ready(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9211)
+        version = f"policy-gate-{suffix}"
+
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+
+        activate_resp = await self._post(
+            app=app,
+            path=f"/internal/judge/registries/policy/{version}/activate",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 409)
+        detail = activate_resp.json()["detail"]
+        self.assertEqual(detail["code"], "registry_fairness_gate_blocked")
+        self.assertEqual(
+            detail["gate"]["code"],
+            "registry_fairness_gate_no_benchmark",
+        )
+
+    async def test_policy_registry_activate_override_should_require_reason_and_be_auditable(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9213)
+        version = f"policy-gate-{suffix}"
+        actor = f"policy-actor-{suffix}"
+
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "actor": actor,
+                "reason": "prepare_policy_release",
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+
+        missing_reason_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{version}/activate"
+                f"?override_fairness_gate=true&actor={actor}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(missing_reason_resp.status_code, 422)
+        self.assertIn(
+            "registry_fairness_gate_override_reason_required",
+            missing_reason_resp.text,
+        )
+
+        activate_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{version}/activate"
+                f"?override_fairness_gate=true&actor={actor}&reason=manual_override_for_trial"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 200)
+        activate_payload = activate_resp.json()
+        self.assertEqual(activate_payload["item"]["version"], version)
+        self.assertTrue(activate_payload["item"]["isActive"])
+        self.assertIsNotNone(activate_payload["fairnessGate"])
+        self.assertTrue(
+            activate_payload["fairnessGate"]["latestRun"] is None
+            or isinstance(activate_payload["fairnessGate"]["latestRun"], dict)
+        )
+
+        audits_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/audits?limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(audits_resp.status_code, 200)
+        audit_items = audits_resp.json()["items"]
+        override_audit = next(
+            (
+                item
+                for item in audit_items
+                if str(item.get("action") or "") == "activate"
+                and str(item.get("version") or "") == version
+                and str(item.get("actor") or "") == actor
+            ),
+            None,
+        )
+        self.assertIsNotNone(override_audit)
+        assert override_audit is not None
+        fairness_gate = override_audit["details"].get("fairnessGate")
+        self.assertIsInstance(fairness_gate, dict)
+        self.assertTrue(bool(fairness_gate.get("overrideApplied")))
 
     async def test_final_dispatch_should_reject_policy_rubric_mismatch(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -1003,6 +1151,18 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "toolset-v3-default",
         )
         self.assertEqual(
+            final_callback_calls[0][1]["verdictLedger"]["panelDecisions"]["runtimeProfiles"][
+                "judgeA"
+            ]["profileId"],
+            "panel-judgeA-weighted-v1",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["panelRuntimeProfiles"]["judgeB"][
+                "modelStrategy"
+            ],
+            "deterministic_path_alignment",
+        )
+        self.assertEqual(
             len(final_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
             8,
         )
@@ -1017,6 +1177,79 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         assert phase_job is not None and final_job is not None
         self.assertEqual(phase_job.status, "callback_reported")
         self.assertEqual(final_job.status, "callback_reported")
+
+    async def test_final_dispatch_should_apply_policy_panel_runtime_profiles(self) -> None:
+        final_callback_calls: list[tuple[int, dict]] = []
+
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            final_callback_calls.append((case_id, payload))
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": "v3-custom",
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                    "promptVersions": {
+                        "summaryPromptVersion": "summary-v9",
+                        "agent2PromptVersion": "agent2-v9",
+                        "finalPipelineVersion": "final-v9",
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                    "metadata": {
+                        "panelRuntimeProfiles": {
+                            "judgeA": {
+                                "profileId": "panel-a-custom",
+                                "modelStrategy": "llm_vote",
+                                "promptVersion": "panel-prompt-v9",
+                                "profileSource": "policy_metadata",
+                            }
+                        }
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+        final_req = _build_final_request(
+            case_id=2012,
+            idempotency_key="final:2012",
+            judge_policy_version="v3-custom",
+        )
+
+        resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(final_callback_calls), 1)
+        final_payload = final_callback_calls[0][1]
+        judge_a_profile = final_payload["verdictLedger"]["panelDecisions"]["runtimeProfiles"][
+            "judgeA"
+        ]
+        self.assertEqual(judge_a_profile["profileId"], "panel-a-custom")
+        self.assertEqual(judge_a_profile["modelStrategy"], "llm_vote")
+        self.assertEqual(judge_a_profile["promptVersion"], "panel-prompt-v9")
+        self.assertEqual(judge_a_profile["profileSource"], "policy_metadata")
+        self.assertEqual(
+            final_payload["judgeTrace"]["panelRuntimeProfiles"]["judgeA"]["profileId"],
+            "panel-a-custom",
+        )
 
     async def test_final_dispatch_should_mark_workflow_review_required_when_gate_triggers(
         self,
@@ -1697,6 +1930,12 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("verdictContract", replay_payload)
         self.assertIn("debateSummary", replay_payload["reportPayload"])
         self.assertIn("trustAttestation", replay_payload["reportPayload"])
+        self.assertEqual(
+            replay_payload["reportPayload"]["judgeTrace"]["panelRuntimeProfiles"]["judgeC"][
+                "profileId"
+            ],
+            "panel-judgeC-dimension-composite-v1",
+        )
         self.assertEqual(replay_payload["judgeCoreStage"], "replay_computed")
         self.assertEqual(replay_payload["judgeCoreVersion"], "v1")
         self.assertEqual(callback_total_before_replay, len(phase_calls) + len(final_calls))
@@ -2431,6 +2670,92 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(item.alert_type == "fairness_benchmark_threshold_violation" for item in fact_alerts)
         )
+
+    async def test_fairness_case_read_model_routes_should_return_case_and_list_views(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(7621)
+        phase_req = _build_phase_request(
+            case_id=case_id,
+            idempotency_key=f"phase:{case_id}",
+            judge_policy_version="v3-default",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(
+            case_id=case_id,
+            idempotency_key=f"final:{case_id}",
+            judge_policy_version="v3-default",
+        )
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        run_id = f"run-{_unique_case_id(7622)}"
+        benchmark_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": run_id,
+                "policy_version": "v3-default",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.03,
+                    "appeal_overturn_rate": 0.06,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(benchmark_resp.status_code, 200)
+
+        detail_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/fairness/cases/{case_id}?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(detail_resp.status_code, 200)
+        detail_payload = detail_resp.json()
+        self.assertEqual(detail_payload["caseId"], case_id)
+        self.assertEqual(detail_payload["dispatchType"], "final")
+        item = detail_payload["item"]
+        self.assertEqual(item["caseId"], case_id)
+        self.assertIn(item["gateConclusion"], {"auto_passed", "review_required", "benchmark_attention_required"})
+        self.assertIsInstance(item["panelDisagreement"]["runtimeProfiles"], dict)
+        self.assertIn("judgeA", item["panelDisagreement"]["runtimeProfiles"])
+        self.assertEqual(item["driftSummary"]["latestRun"]["runId"], run_id)
+
+        list_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/cases?dispatch_type=final&limit=50",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        list_payload = list_resp.json()
+        self.assertGreaterEqual(list_payload["count"], 1)
+        self.assertTrue(any(row["caseId"] == case_id for row in list_payload["items"]))
 
     async def test_create_default_app_should_be_constructible(self) -> None:
         app = create_default_app(load_settings_fn=_build_settings)

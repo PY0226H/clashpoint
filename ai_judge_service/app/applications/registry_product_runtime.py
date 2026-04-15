@@ -226,6 +226,7 @@ class RegistryProductRuntime:
         actor: str | None,
         reason: str | None,
         activate: bool,
+        extra_details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_registry_type = _normalize_registry_type(registry_type)
         normalized_version = _normalize_version(version)
@@ -282,6 +283,11 @@ class RegistryProductRuntime:
                         reason=normalized_reason,
                         details={
                             "activate": bool(activate),
+                            **(
+                                dict(extra_details)
+                                if isinstance(extra_details, dict)
+                                else {}
+                            ),
                         },
                         created_at=now,
                     )
@@ -290,18 +296,23 @@ class RegistryProductRuntime:
                     session.add(
                         JudgeRegistryAuditModel(
                             registry_type=normalized_registry_type,
-                            action=REGISTRY_ACTION_ACTIVATE,
-                            version=normalized_version,
-                            actor=normalized_actor,
-                            reason=normalized_reason or "publish_and_activate",
-                            details={
-                                "fromVersion": previous_active_version,
-                                "toVersion": normalized_version,
-                                "source": "publish",
-                            },
-                            created_at=now,
-                        )
+                        action=REGISTRY_ACTION_ACTIVATE,
+                        version=normalized_version,
+                        actor=normalized_actor,
+                        reason=normalized_reason or "publish_and_activate",
+                        details={
+                            "fromVersion": previous_active_version,
+                            "toVersion": normalized_version,
+                            "source": "publish",
+                            **(
+                                dict(extra_details)
+                                if isinstance(extra_details, dict)
+                                else {}
+                            ),
+                        },
+                        created_at=now,
                     )
+                )
                 await session.flush()
                 serialized = self._serialize_release_row(release)
         await self.ensure_loaded(force=True)
@@ -314,6 +325,7 @@ class RegistryProductRuntime:
         version: str,
         actor: str | None,
         reason: str | None,
+        extra_details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_registry_type = _normalize_registry_type(registry_type)
         normalized_version = _normalize_version(version)
@@ -357,6 +369,11 @@ class RegistryProductRuntime:
                             "fromVersion": current_active_version,
                             "toVersion": normalized_version,
                             "source": "activate",
+                            **(
+                                dict(extra_details)
+                                if isinstance(extra_details, dict)
+                                else {}
+                            ),
                         },
                         created_at=now,
                     )
@@ -465,6 +482,56 @@ class RegistryProductRuntime:
             )
             rows = (await session.execute(stmt)).scalars().all()
         return [self._serialize_audit_row(row) for row in rows]
+
+    async def list_releases(
+        self,
+        *,
+        registry_type: str,
+        limit: int = 50,
+        include_payload: bool = True,
+    ) -> list[dict[str, Any]]:
+        normalized_registry_type = _normalize_registry_type(registry_type)
+        cap = max(1, min(int(limit), 200))
+        await self.ensure_loaded()
+        async with self.session_factory() as session:
+            stmt: Select[tuple[JudgeRegistryReleaseModel]] = (
+                select(JudgeRegistryReleaseModel)
+                .where(JudgeRegistryReleaseModel.registry_type == normalized_registry_type)
+                .where(JudgeRegistryReleaseModel.status == REGISTRY_STATUS_PUBLISHED)
+                .order_by(
+                    JudgeRegistryReleaseModel.updated_at.desc(),
+                    JudgeRegistryReleaseModel.id.desc(),
+                )
+                .limit(cap)
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        items = [self._serialize_release_row(row) for row in rows]
+        if include_payload:
+            return items
+        for item in items:
+            item.pop("payload", None)
+        return items
+
+    async def get_release(
+        self,
+        *,
+        registry_type: str,
+        version: str,
+    ) -> dict[str, Any] | None:
+        normalized_registry_type = _normalize_registry_type(registry_type)
+        normalized_version = _normalize_version(version)
+        await self.ensure_loaded()
+        async with self.session_factory() as session:
+            stmt: Select[tuple[JudgeRegistryReleaseModel]] = select(
+                JudgeRegistryReleaseModel
+            ).where(
+                JudgeRegistryReleaseModel.registry_type == normalized_registry_type,
+                JudgeRegistryReleaseModel.version == normalized_version,
+            )
+            row = (await session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            return None
+        return self._serialize_release_row(row)
 
     async def _seed_builtins_if_needed(self, *, session: AsyncSession) -> None:
         now = _utcnow()

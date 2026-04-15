@@ -1,7 +1,7 @@
 # AI Judge Runtime Ops Pack 收口摘要
 
 1. 生成日期：2026-04-15
-2. 运行窗口：2026-04-15T00:28:34Z -> 2026-04-15T00:28:36Z
+2. 运行窗口：2026-04-15T00:54:05Z -> 2026-04-15T00:54:07Z
 3. 统一状态：`local_reference_ready`
 4. allow_local_reference：`true`
 5. evidence_dir：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence`
@@ -10,7 +10,7 @@
 
 | 子模块 | 状态 | 阈值决策 | 退出码 |
 | --- | --- | --- | --- |
-| fairness benchmark freeze | `local_reference_frozen` | `accepted`（ingest=`skipped`） | `0` |
+| fairness benchmark freeze | `local_reference_frozen` | `accepted`（ingest=`sent`） | `0` |
 | runtime SLA freeze | `local_reference_frozen` | `accepted` | `0` |
 | real-env evidence closure | `local_reference_ready` | `-` | `0` |
 | stage closure evidence | `pass` | `-` | `0` |
@@ -19,5 +19,5 @@
 
 1. pack env: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.env`
 2. pack doc: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
-3. pack json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T002834Z-ai-judge-runtime-ops-pack.summary.json`
-4. pack md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T002834Z-ai-judge-runtime-ops-pack.summary.md`
+3. pack json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T005404Z-ai-judge-real-env-window-closure/runtime_ops_pack.summary.json`
+4. pack md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T005404Z-ai-judge-real-env-window-closure/runtime_ops_pack.summary.md`

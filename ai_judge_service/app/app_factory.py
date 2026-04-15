@@ -217,6 +217,36 @@ TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED = "verdict_overturned"
 TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW = "draw_after_review"
 TRUST_CHALLENGE_STATE_CLOSED = "challenge_closed"
 
+REGISTRY_TYPE_POLICY = "policy"
+FAIRNESS_RELEASE_GATE_ACCEPTED_STATUSES = {
+    "pass",
+    "local_reference_frozen",
+}
+PANEL_JUDGE_IDS = ("judgeA", "judgeB", "judgeC")
+PANEL_RUNTIME_PROFILE_DEFAULTS = {
+    "judgeA": {
+        "profileId": "panel-judgeA-weighted-v1",
+        "modelStrategy": "deterministic_weighted",
+        "scoreSource": "agent3WeightedScore",
+        "decisionMargin": 0.8,
+        "promptVersionKey": "finalPipelineVersion",
+    },
+    "judgeB": {
+        "profileId": "panel-judgeB-path-alignment-v1",
+        "modelStrategy": "deterministic_path_alignment",
+        "scoreSource": "agent2Score",
+        "decisionMargin": 0.8,
+        "promptVersionKey": "agent2PromptVersion",
+    },
+    "judgeC": {
+        "profileId": "panel-judgeC-dimension-composite-v1",
+        "modelStrategy": "deterministic_dimension_composite",
+        "scoreSource": "agent1Dimensions",
+        "decisionMargin": 0.8,
+        "promptVersionKey": "summaryPromptVersion",
+    },
+}
+
 
 def _new_challenge_id(*, case_id: int) -> str:
     return f"chlg-{max(0, int(case_id))}-{uuid4().hex[:12]}"
@@ -332,6 +362,72 @@ def _attach_policy_trace_snapshot(
         "promptVersion": str(getattr(prompt_profile, "version", "") or "").strip(),
         "toolsetVersion": str(getattr(tool_profile, "version", "") or "").strip(),
     }
+
+
+def _resolve_panel_runtime_profiles(*, profile: Any) -> dict[str, dict[str, Any]]:
+    prompt_versions = (
+        getattr(profile, "prompt_versions", None)
+        if isinstance(getattr(profile, "prompt_versions", None), dict)
+        else {}
+    )
+    metadata = (
+        getattr(profile, "metadata", None)
+        if isinstance(getattr(profile, "metadata", None), dict)
+        else {}
+    )
+    raw_profiles = metadata.get("panelRuntimeProfiles")
+    if not isinstance(raw_profiles, dict):
+        raw_profiles = metadata.get("panel_runtime_profiles")
+    normalized: dict[str, dict[str, Any]] = {}
+    policy_version = str(getattr(profile, "version", "") or "").strip()
+    toolset_version = str(getattr(profile, "tool_registry_version", "") or "").strip()
+
+    for judge_id in PANEL_JUDGE_IDS:
+        defaults = PANEL_RUNTIME_PROFILE_DEFAULTS[judge_id]
+        raw_row = raw_profiles.get(judge_id) if isinstance(raw_profiles, dict) else None
+        row = raw_row if isinstance(raw_row, dict) else {}
+        prompt_version_key = defaults["promptVersionKey"]
+        prompt_version = str(
+            row.get("promptVersion")
+            or row.get("prompt_version")
+            or prompt_versions.get(prompt_version_key)
+            or ""
+        ).strip()
+        normalized[judge_id] = {
+            "judgeId": judge_id,
+            "profileId": str(
+                row.get("profileId")
+                or row.get("profile_id")
+                or defaults["profileId"]
+            ).strip()
+            or defaults["profileId"],
+            "modelStrategy": str(
+                row.get("modelStrategy")
+                or row.get("model_strategy")
+                or defaults["modelStrategy"]
+            ).strip()
+            or defaults["modelStrategy"],
+            "scoreSource": str(
+                row.get("scoreSource")
+                or row.get("score_source")
+                or defaults["scoreSource"]
+            ).strip()
+            or defaults["scoreSource"],
+            "decisionMargin": _safe_float(
+                row.get("decisionMargin") or row.get("decision_margin"),
+                default=float(defaults["decisionMargin"]),
+            ),
+            "promptVersion": prompt_version or None,
+            "toolsetVersion": (
+                str(row.get("toolsetVersion") or row.get("toolset_version") or "").strip()
+                or toolset_version
+                or None
+            ),
+            "policyVersion": policy_version or None,
+            # 这里显式记录来源，便于重放时判断是策略配置还是默认值导致的分歧。
+            "profileSource": "policy_metadata" if row else "builtin_default",
+        }
+    return normalized
 
 
 def _attach_report_attestation(
@@ -464,6 +560,28 @@ def _build_case_evidence_view(
             else None
         )
     )
+    panel_runtime_profiles = (
+        judge_trace.get("panelRuntimeProfiles")
+        if isinstance(judge_trace.get("panelRuntimeProfiles"), dict)
+        else (
+            (
+                verdict_ledger.get("panelDecisions")
+                if isinstance(verdict_ledger, dict)
+                and isinstance(verdict_ledger.get("panelDecisions"), dict)
+                else {}
+            ).get("runtimeProfiles")
+            if isinstance(
+                (
+                    verdict_ledger.get("panelDecisions")
+                    if isinstance(verdict_ledger, dict)
+                    and isinstance(verdict_ledger.get("panelDecisions"), dict)
+                    else {}
+                ).get("runtimeProfiles"),
+                dict,
+            )
+            else None
+        )
+    )
 
     raw_audit_alerts = payload.get("auditAlerts")
     if not isinstance(raw_audit_alerts, list):
@@ -531,6 +649,7 @@ def _build_case_evidence_view(
         "toolsetVersion": toolset_version,
         "trustAttestation": trust_attestation,
         "fairnessSummary": fairness_summary,
+        "panelRuntimeProfiles": panel_runtime_profiles,
         "verdictEvidenceRefs": verdict_evidence_refs,
         "auditSummary": {
             "alertCount": len(audit_alerts),
@@ -661,6 +780,137 @@ def _build_judge_core_view(
         "stage": latest_stage,
         "version": latest_version or JUDGE_CORE_VERSION,
         "eventSeq": latest_event_seq,
+    }
+
+
+def _extract_latest_challenge_snapshot(workflow_events: list[Any]) -> dict[str, Any] | None:
+    for event in reversed(workflow_events):
+        if str(getattr(event, "event_type", "") or "").strip() != TRUST_CHALLENGE_EVENT_TYPE:
+            continue
+        payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+        state = str(payload.get("state") or "").strip()
+        if not state:
+            continue
+        return {
+            "state": state,
+            "reasonCode": str(payload.get("reasonCode") or "").strip() or None,
+            "reason": str(payload.get("reason") or "").strip() or None,
+            "requestedBy": str(payload.get("requestedBy") or "").strip() or None,
+            "decidedBy": str(payload.get("decidedBy") or "").strip() or None,
+            "dispatchType": str(payload.get("dispatchType") or "").strip() or None,
+            "at": (
+                getattr(event, "created_at", None).isoformat()
+                if isinstance(getattr(event, "created_at", None), datetime)
+                else None
+            ),
+        }
+    return None
+
+
+def _build_case_fairness_item(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    workflow_job: WorkflowJob | None,
+    workflow_events: list[Any],
+    report_payload: dict[str, Any],
+    latest_run: FactFairnessBenchmarkRun | None,
+) -> dict[str, Any]:
+    fairness_summary = (
+        report_payload.get("fairnessSummary")
+        if isinstance(report_payload.get("fairnessSummary"), dict)
+        else {}
+    )
+    judge_trace = (
+        report_payload.get("judgeTrace")
+        if isinstance(report_payload.get("judgeTrace"), dict)
+        else {}
+    )
+    panel_runtime_profiles = (
+        judge_trace.get("panelRuntimeProfiles")
+        if isinstance(judge_trace.get("panelRuntimeProfiles"), dict)
+        else {}
+    )
+    winner = str(report_payload.get("winner") or "").strip().lower() or None
+    review_required = bool(report_payload.get("reviewRequired"))
+    error_codes = [
+        str(item).strip()
+        for item in (report_payload.get("errorCodes") or [])
+        if str(item).strip()
+    ]
+    panel_high_disagreement = bool(fairness_summary.get("panelHighDisagreement"))
+    challenge_snapshot = _extract_latest_challenge_snapshot(workflow_events)
+    policy_version = (
+        str((judge_trace.get("policyRegistry") or {}).get("version") or "").strip()
+        if isinstance(judge_trace.get("policyRegistry"), dict)
+        else ""
+    ) or None
+    run_summary = (
+        latest_run.summary if latest_run is not None and isinstance(latest_run.summary, dict) else {}
+    )
+    drift_payload = run_summary.get("drift") if isinstance(run_summary.get("drift"), dict) else {}
+    threshold_breaches = run_summary.get("thresholdBreaches")
+    if not isinstance(threshold_breaches, list):
+        threshold_breaches = []
+    drift_breaches = drift_payload.get("driftBreaches")
+    if not isinstance(drift_breaches, list):
+        drift_breaches = []
+    gate_conclusion = "review_required" if review_required else "auto_passed"
+    if (
+        latest_run is not None
+        and latest_run.threshold_decision != "accepted"
+        and gate_conclusion != "review_required"
+    ):
+        gate_conclusion = "benchmark_attention_required"
+
+    return {
+        "caseId": case_id,
+        "dispatchType": dispatch_type,
+        "traceId": trace_id or None,
+        "workflowStatus": workflow_job.status if workflow_job is not None else None,
+        "winner": winner,
+        "reviewRequired": review_required,
+        "gateConclusion": gate_conclusion,
+        "errorCodes": error_codes,
+        "panelDisagreement": {
+            "high": panel_high_disagreement,
+            "ratio": _safe_float(fairness_summary.get("panelDisagreementRatio"), default=0.0),
+            "ratioMax": _safe_float(fairness_summary.get("panelDisagreementRatioMax"), default=0.0),
+            "reasons": [
+                str(item).strip()
+                for item in (fairness_summary.get("panelDisagreementReasons") or [])
+                if str(item).strip()
+            ],
+            "majorityWinner": (
+                str(fairness_summary.get("panelMajorityWinner") or "").strip().lower() or None
+            ),
+            "voteBySide": (
+                fairness_summary.get("panelVoteBySide")
+                if isinstance(fairness_summary.get("panelVoteBySide"), dict)
+                else {}
+            ),
+            "runtimeProfiles": panel_runtime_profiles,
+        },
+        "driftSummary": {
+            "policyVersion": policy_version,
+            "latestRun": (
+                _serialize_fairness_benchmark_run(latest_run)
+                if latest_run is not None
+                else None
+            ),
+            "thresholdBreaches": [str(item).strip() for item in threshold_breaches if str(item).strip()],
+            "driftBreaches": [str(item).strip() for item in drift_breaches if str(item).strip()],
+            "hasThresholdBreach": bool(run_summary.get("hasThresholdBreach")),
+            "hasDriftBreach": bool(drift_payload.get("hasDriftBreach")),
+        },
+        "challengeLink": {
+            "latest": challenge_snapshot,
+            "hasOpenReview": (
+                workflow_job is not None
+                and workflow_job.status in {"review_required", "draw_pending_vote"}
+            ),
+        },
     }
 
 
@@ -1076,6 +1326,7 @@ def _build_final_report_payload(
     request: FinalDispatchRequest,
     phase_receipts: list[Any] | None = None,
     fairness_thresholds: dict[str, Any] | None = None,
+    panel_runtime_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     receipts = (
         phase_receipts
@@ -1092,6 +1343,7 @@ def _build_final_report_payload(
         phase_receipts=list(receipts),
         judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
         fairness_thresholds=fairness_thresholds,
+        panel_runtime_profiles=panel_runtime_profiles,
     )
 
 
@@ -1459,6 +1711,113 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             status=status,
             limit=limit,
         )
+
+    async def _evaluate_policy_release_fairness_gate(
+        *,
+        policy_version: str,
+    ) -> dict[str, Any]:
+        version = str(policy_version or "").strip()
+        if not version:
+            return {
+                "passed": False,
+                "code": "registry_fairness_gate_invalid_policy_version",
+                "message": "policy version is empty",
+                "latestRun": None,
+            }
+        runs = await _list_fairness_benchmark_runs(
+            policy_version=version,
+            limit=20,
+        )
+        latest = runs[0] if runs else None
+        if latest is None:
+            return {
+                "passed": False,
+                "code": "registry_fairness_gate_no_benchmark",
+                "message": "no fairness benchmark run found for policy version",
+                "latestRun": None,
+            }
+
+        passed = (
+            latest.threshold_decision == "accepted"
+            and not bool(latest.needs_remediation)
+            and latest.status in FAIRNESS_RELEASE_GATE_ACCEPTED_STATUSES
+        )
+        if passed:
+            code = "registry_fairness_gate_passed"
+            message = "fairness gate passed"
+        elif latest.threshold_decision != "accepted":
+            code = "registry_fairness_gate_threshold_not_accepted"
+            message = "latest benchmark threshold_decision is not accepted"
+        elif bool(latest.needs_remediation):
+            code = "registry_fairness_gate_remediation_required"
+            message = "latest benchmark requires remediation"
+        else:
+            code = "registry_fairness_gate_status_not_ready"
+            message = "latest benchmark status is not release-ready"
+
+        return {
+            "passed": bool(passed),
+            "code": code,
+            "message": message,
+            "latestRun": {
+                "runId": latest.run_id,
+                "policyVersion": latest.policy_version,
+                "environmentMode": latest.environment_mode,
+                "status": latest.status,
+                "thresholdDecision": latest.threshold_decision,
+                "needsRemediation": bool(latest.needs_remediation),
+                "needsRealEnvReconfirm": bool(latest.needs_real_env_reconfirm),
+                "reportedAt": (
+                    latest.reported_at.isoformat()
+                    if latest.reported_at is not None
+                    else None
+                ),
+            },
+        }
+
+    async def _emit_registry_fairness_gate_alert(
+        *,
+        registry_type: str,
+        version: str,
+        gate_result: dict[str, Any],
+        override_applied: bool,
+        actor: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        alert_type = (
+            "registry_fairness_gate_override"
+            if override_applied
+            else "registry_fairness_gate_blocked"
+        )
+        severity = "warning" if override_applied else "critical"
+        title = (
+            "AI Judge Registry Fairness Gate Override"
+            if override_applied
+            else "AI Judge Registry Fairness Gate Blocked"
+        )
+        message = (
+            f"registry fairness gate {'overridden' if override_applied else 'blocked'}: "
+            f"registry_type={registry_type}; version={version}; code={gate_result.get('code')}"
+        )
+        alert = runtime.trace_store.upsert_audit_alert(
+            job_id=0,
+            scope_id=1,
+            trace_id=f"registry-fairness:{registry_type}:{version}",
+            alert_type=alert_type,
+            severity=severity,
+            title=title,
+            message=message,
+            details={
+                "registryType": registry_type,
+                "version": version,
+                "overrideApplied": bool(override_applied),
+                "actor": (str(actor or "").strip() or None),
+                "reason": (str(reason or "").strip() or None),
+                "gate": dict(gate_result),
+            },
+        )
+        fact_alert = await _sync_audit_alert_to_facts(alert=alert)
+        return _serialize_alert_item(fact_alert)
 
     async def _sync_audit_alert_to_facts(*, alert: Any) -> FactAuditAlert:
         await _ensure_workflow_schema_ready()
@@ -1954,10 +2313,71 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         if not isinstance(profile_payload, dict):
             raise HTTPException(status_code=422, detail="invalid_registry_profile")
         activate = bool(payload.get("activate"))
+        override_fairness_gate = bool(
+            _extract_optional_bool(
+                payload,
+                "override_fairness_gate",
+                "overrideFairnessGate",
+            )
+        )
         actor = str(payload.get("actor") or "").strip() or None
         reason = str(payload.get("reason") or "").strip() or None
 
         await _ensure_registry_runtime_ready()
+        registry_type_token = str(registry_type or "").strip().lower()
+        fairness_gate: dict[str, Any] | None = None
+        fairness_alert: dict[str, Any] | None = None
+        if registry_type_token == REGISTRY_TYPE_POLICY and activate:
+            fairness_gate = await _evaluate_policy_release_fairness_gate(
+                policy_version=version,
+            )
+            if not bool(fairness_gate.get("passed")):
+                if override_fairness_gate:
+                    if reason is None:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="registry_fairness_gate_override_reason_required",
+                        )
+                    fairness_alert = await _emit_registry_fairness_gate_alert(
+                        registry_type=registry_type_token,
+                        version=version,
+                        gate_result=fairness_gate,
+                        override_applied=True,
+                        actor=actor,
+                        reason=reason,
+                    )
+                else:
+                    fairness_alert = await _emit_registry_fairness_gate_alert(
+                        registry_type=registry_type_token,
+                        version=version,
+                        gate_result=fairness_gate,
+                        override_applied=False,
+                        actor=actor,
+                        reason=reason,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "registry_fairness_gate_blocked",
+                            "gate": fairness_gate,
+                            "alert": fairness_alert,
+                        },
+                    )
+
+        extra_details = (
+            {
+                "fairnessGate": {
+                    **(fairness_gate or {}),
+                    "overrideApplied": bool(
+                        override_fairness_gate
+                        and fairness_gate is not None
+                        and not bool(fairness_gate.get("passed"))
+                    ),
+                }
+            }
+            if fairness_gate is not None
+            else None
+        )
         try:
             item = await runtime.registry_product_runtime.publish_release(
                 registry_type=registry_type,
@@ -1966,6 +2386,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 actor=actor,
                 reason=reason,
                 activate=activate,
+                extra_details=extra_details,
             )
         except LookupError as err:
             raise HTTPException(status_code=404, detail=str(err)) from err
@@ -1985,6 +2406,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return {
             "ok": True,
             "item": item,
+            "fairnessGate": fairness_gate,
+            "alert": fairness_alert,
         }
 
     @app.post("/internal/judge/registries/{registry_type}/{version}/activate")
@@ -1994,15 +2417,70 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
         actor: str | None = Query(default=None),
         reason: str | None = Query(default=None),
+        override_fairness_gate: bool = Query(default=False),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
+        registry_type_token = str(registry_type or "").strip().lower()
+        fairness_gate: dict[str, Any] | None = None
+        fairness_alert: dict[str, Any] | None = None
+        if registry_type_token == REGISTRY_TYPE_POLICY:
+            fairness_gate = await _evaluate_policy_release_fairness_gate(
+                policy_version=version,
+            )
+            if not bool(fairness_gate.get("passed")):
+                if override_fairness_gate:
+                    if reason is None:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="registry_fairness_gate_override_reason_required",
+                        )
+                    fairness_alert = await _emit_registry_fairness_gate_alert(
+                        registry_type=registry_type_token,
+                        version=version,
+                        gate_result=fairness_gate,
+                        override_applied=True,
+                        actor=actor,
+                        reason=reason,
+                    )
+                else:
+                    fairness_alert = await _emit_registry_fairness_gate_alert(
+                        registry_type=registry_type_token,
+                        version=version,
+                        gate_result=fairness_gate,
+                        override_applied=False,
+                        actor=actor,
+                        reason=reason,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "registry_fairness_gate_blocked",
+                            "gate": fairness_gate,
+                            "alert": fairness_alert,
+                        },
+                    )
+        extra_details = (
+            {
+                "fairnessGate": {
+                    **(fairness_gate or {}),
+                    "overrideApplied": bool(
+                        override_fairness_gate
+                        and fairness_gate is not None
+                        and not bool(fairness_gate.get("passed"))
+                    ),
+                }
+            }
+            if fairness_gate is not None
+            else None
+        )
         try:
             item = await runtime.registry_product_runtime.activate_release(
                 registry_type=registry_type,
                 version=version,
                 actor=actor,
                 reason=reason,
+                extra_details=extra_details,
             )
         except LookupError as err:
             raise HTTPException(status_code=404, detail="registry_version_not_found") from err
@@ -2014,6 +2492,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return {
             "ok": True,
             "item": item,
+            "fairnessGate": fairness_gate,
+            "alert": fairness_alert,
         }
 
     @app.post("/internal/judge/registries/{registry_type}/rollback")
@@ -2072,6 +2552,58 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "count": len(items),
             "items": items,
             "limit": limit,
+        }
+
+    @app.get("/internal/judge/registries/{registry_type}/releases")
+    async def list_registry_releases(
+        registry_type: str,
+        x_ai_internal_key: str | None = Header(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+        include_payload: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        try:
+            items = await runtime.registry_product_runtime.list_releases(
+                registry_type=registry_type,
+                limit=limit,
+                include_payload=include_payload,
+            )
+        except ValueError as err:
+            code = str(err)
+            if code == "invalid_registry_type":
+                raise HTTPException(status_code=422, detail=code) from err
+            raise HTTPException(status_code=422, detail="registry_release_query_invalid") from err
+        return {
+            "registryType": str(registry_type or "").strip().lower(),
+            "count": len(items),
+            "items": items,
+            "limit": limit,
+            "includePayload": bool(include_payload),
+        }
+
+    @app.get("/internal/judge/registries/{registry_type}/releases/{version}")
+    async def get_registry_release(
+        registry_type: str,
+        version: str,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        try:
+            item = await runtime.registry_product_runtime.get_release(
+                registry_type=registry_type,
+                version=version,
+            )
+        except ValueError as err:
+            code = str(err)
+            if code in {"invalid_registry_type", "invalid_registry_version"}:
+                raise HTTPException(status_code=422, detail=code) from err
+            raise HTTPException(status_code=422, detail="registry_release_query_invalid") from err
+        if item is None:
+            raise HTTPException(status_code=404, detail="registry_version_not_found")
+        return {
+            "item": item,
         }
 
     @app.post("/internal/judge/cases")
@@ -2862,6 +3394,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             request=parsed,
             phase_receipts=phase_receipts,
             fairness_thresholds=policy_profile.fairness_thresholds,
+            panel_runtime_profiles=_resolve_panel_runtime_profiles(profile=policy_profile),
         )
         await _attach_judge_agent_runtime_trace(
             runtime=runtime,
@@ -3714,6 +4247,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 request=final_request,
                 phase_receipts=phase_receipts,
                 fairness_thresholds=policy_profile.fairness_thresholds,
+                panel_runtime_profiles=_resolve_panel_runtime_profiles(profile=policy_profile),
             )
             await _attach_judge_agent_runtime_trace(
                 runtime=runtime,
@@ -4911,6 +5445,166 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "policyVersion": normalized_policy_version,
                 "environmentMode": normalized_environment_mode,
                 "status": normalized_status,
+                "limit": limit,
+            },
+        }
+
+    @app.get("/internal/judge/fairness/cases/{case_id}")
+    async def get_judge_case_fairness(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="fairness_case_not_found",
+            missing_report_detail="fairness_report_payload_missing",
+        )
+        workflow_job = await _workflow_get_job(job_id=case_id)
+        workflow_events = (
+            await _workflow_list_events(job_id=case_id)
+            if workflow_job is not None
+            else []
+        )
+        report_payload = (
+            context["reportPayload"] if isinstance(context["reportPayload"], dict) else {}
+        )
+        judge_trace = (
+            report_payload.get("judgeTrace")
+            if isinstance(report_payload.get("judgeTrace"), dict)
+            else {}
+        )
+        policy_version = (
+            str((judge_trace.get("policyRegistry") or {}).get("version") or "").strip()
+            if isinstance(judge_trace.get("policyRegistry"), dict)
+            else ""
+        )
+        latest_run = None
+        if policy_version:
+            runs = await _list_fairness_benchmark_runs(
+                policy_version=policy_version,
+                limit=1,
+            )
+            latest_run = runs[0] if runs else None
+
+        item = _build_case_fairness_item(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=str(context["traceId"] or ""),
+            workflow_job=workflow_job,
+            workflow_events=workflow_events,
+            report_payload=report_payload,
+            latest_run=latest_run,
+        )
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "item": item,
+        }
+
+    @app.get("/internal/judge/fairness/cases")
+    async def list_judge_case_fairness(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str | None = Query(default=None),
+        winner: str | None = Query(default=None),
+        review_required: bool | None = Query(default=None),
+        panel_high_disagreement: bool | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_status = _normalize_workflow_status(status)
+        if status is not None and normalized_status is None:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or None
+        if normalized_dispatch_type not in {None, "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+        normalized_winner = str(winner or "").strip().lower() or None
+        if normalized_winner not in {None, "pro", "con", "draw"}:
+            raise HTTPException(status_code=422, detail="invalid_winner")
+
+        jobs = await _workflow_list_jobs(
+            status=normalized_status,
+            dispatch_type=normalized_dispatch_type,
+            limit=limit,
+        )
+        benchmark_cache: dict[str, FactFairnessBenchmarkRun | None] = {}
+        items: list[dict[str, Any]] = []
+        for job in jobs:
+            trace = runtime.trace_store.get_trace(job.job_id)
+            report_summary = (
+                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+            )
+            report_payload = (
+                report_summary.get("payload")
+                if isinstance(report_summary.get("payload"), dict)
+                else {}
+            )
+            if not report_payload:
+                continue
+            workflow_events = await _workflow_list_events(job_id=job.job_id)
+            trace_id = (
+                str(
+                    (trace.trace_id if trace is not None else "")
+                    or report_summary.get("traceId")
+                    or ""
+                ).strip()
+            )
+            dispatch_type_token = (
+                str(report_summary.get("dispatchType") or "").strip().lower()
+                or job.dispatch_type
+            )
+            judge_trace = (
+                report_payload.get("judgeTrace")
+                if isinstance(report_payload.get("judgeTrace"), dict)
+                else {}
+            )
+            policy_version = (
+                str((judge_trace.get("policyRegistry") or {}).get("version") or "").strip()
+                if isinstance(judge_trace.get("policyRegistry"), dict)
+                else ""
+            )
+            latest_run: FactFairnessBenchmarkRun | None = None
+            if policy_version:
+                if policy_version not in benchmark_cache:
+                    runs = await _list_fairness_benchmark_runs(
+                        policy_version=policy_version,
+                        limit=1,
+                    )
+                    benchmark_cache[policy_version] = runs[0] if runs else None
+                latest_run = benchmark_cache.get(policy_version)
+            item = _build_case_fairness_item(
+                case_id=job.job_id,
+                dispatch_type=dispatch_type_token,
+                trace_id=trace_id,
+                workflow_job=job,
+                workflow_events=workflow_events,
+                report_payload=report_payload,
+                latest_run=latest_run,
+            )
+            if normalized_winner is not None and item.get("winner") != normalized_winner:
+                continue
+            if review_required is not None and bool(item.get("reviewRequired")) != review_required:
+                continue
+            if panel_high_disagreement is not None and bool(
+                ((item.get("panelDisagreement") or {}).get("high"))
+            ) != panel_high_disagreement:
+                continue
+            items.append(item)
+
+        return {
+            "count": len(items),
+            "items": items,
+            "filters": {
+                "status": normalized_status,
+                "dispatchType": normalized_dispatch_type,
+                "winner": normalized_winner,
+                "reviewRequired": review_required,
+                "panelHighDisagreement": panel_high_disagreement,
                 "limit": limit,
             },
         }

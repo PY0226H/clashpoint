@@ -20,12 +20,14 @@ def build_final_report_payload(
     phase_receipts: list[Any],
     judge_style_mode: str,
     fairness_thresholds: dict[str, Any] | None = None,
+    panel_runtime_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return build_domain_final_report_payload(
         request=request,
         phase_receipts=phase_receipts,
         judge_style_mode=judge_style_mode,
         fairness_thresholds=fairness_thresholds,
+        panel_runtime_profiles=panel_runtime_profiles,
     )
 
 

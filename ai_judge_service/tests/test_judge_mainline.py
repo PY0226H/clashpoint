@@ -165,6 +165,17 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
         assert isinstance(judges[key]["proScore"], float)
         assert isinstance(judges[key]["conScore"], float)
         assert isinstance(judges[key]["reason"], str) and judges[key]["reason"]
+        assert isinstance(judges[key]["runtimeProfile"], dict)
+    runtime_profiles = payload["verdictLedger"]["panelDecisions"]["runtimeProfiles"]
+    assert set(runtime_profiles.keys()) == {"judgeA", "judgeB", "judgeC"}
+    assert runtime_profiles["judgeA"]["profileId"] == "panel-judgeA-weighted-v1"
+    assert runtime_profiles["judgeB"]["modelStrategy"] == "deterministic_path_alignment"
+    assert runtime_profiles["judgeC"]["scoreSource"] == "agent1Dimensions"
+    assert payload["judgeTrace"]["panelRuntimeProfiles"] == runtime_profiles
+    assert (
+        payload["judgeTrace"]["panelArbiter"]["runtimeProfiles"]["judgeA"]["profileId"]
+        == runtime_profiles["judgeA"]["profileId"]
+    )
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -226,6 +237,51 @@ def test_build_final_report_payload_should_track_unanswered_claims() -> None:
 
     assert result["claimGraph"]["stats"]["unansweredClaims"] >= 1
     assert len(result["claimGraph"]["unansweredClaimIds"]) >= 1
+
+
+def test_build_final_report_payload_should_apply_custom_panel_runtime_profiles() -> None:
+    request = FinalDispatchRequest(
+        case_id=9012,
+        scope_id=1,
+        session_id=312,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9012",
+        idempotency_key="final:9012",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={"reportPayload": _build_phase_payload(pro=66, con=58, msg_offset=0)},
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+        panel_runtime_profiles={
+            "judgeA": {
+                "profileId": "panel-weighted-pro-v2",
+                "modelStrategy": "llm_vote",
+                "scoreSource": "agent3WeightedScore",
+                "decisionMargin": 0.6,
+                "promptVersion": "panel-prompt-v2",
+                "toolsetVersion": "toolset-v4",
+                "policyVersion": "v4-pro",
+                "profileSource": "policy_metadata",
+            }
+        },
+    )
+    profiles = payload["verdictLedger"]["panelDecisions"]["runtimeProfiles"]
+    assert profiles["judgeA"]["profileId"] == "panel-weighted-pro-v2"
+    assert profiles["judgeA"]["modelStrategy"] == "llm_vote"
+    assert profiles["judgeA"]["promptVersion"] == "panel-prompt-v2"
+    assert profiles["judgeA"]["profileSource"] == "policy_metadata"
+    assert profiles["judgeB"]["profileSource"] == "builtin_default"
 
 
 def test_build_final_report_payload_should_trigger_style_shift_instability_gate() -> None:

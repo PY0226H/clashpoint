@@ -1,0 +1,113 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-14  
+当前主线：`AI_judge_service 下一阶段（P8：Fairness Drift + Real-env Reconfirm）`  
+当前状态：进行中（P8 主链能力已完成，P9 fairness ingest 自动化已落地，剩 real-env 收口窗口）
+
+---
+
+## 1. 计划定位
+
+1. 本计划用于承接 AI_judge_service 阶段收口后的下一轮主开发线，按“企业级 Agent 裁判庭”方向继续推进。
+2. 本轮严格遵循硬切原则：不保留兼容层、灰度双轨、旧新并行主链。
+3. 真实环境依赖项（真实压测、真实语料、真实成本账单）继续保留“可执行入口 + 阻塞标记”，不伪造 `pass`。
+4. 计划依据：
+   - `docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - `docs/dev_plan/completed.md`
+   - `docs/dev_plan/todo.md`
+
+---
+
+## 2. 当前完成度快照（用于定义下一阶段边界）
+
+1. 已完成 P1~P4 平台化重构主链：workflow/orchestrator、gateway、judge mainline、replay/audit/ops、agent runtime shell。
+2. 已完成 P6/P7 主体能力：cases 硬切、judge core 统一、claim/evidence ledger v2、panel/arbiter/opinion v2、fairness sentinel v2、trust layer phaseA、cross-layer sync v2。
+3. 已完成本机口径冻结：`fairness benchmark` 与 `runtime SLA` 的 `local_reference_frozen`。
+4. 仍待完成的核心缺口：
+   - real-env 复核仍未从 `local_reference_ready` 升级为真实环境 `pass`。
+
+---
+
+## 3. 下一阶段总目标（P8）
+
+在不引入兼容双轨的前提下，完成“公平性工程化 + 信任层进阶 + 规则注册中心产品化”的一体化落地，使 AI_judge_service 从“主链可用”升级为“可制度化运营”。
+
+P8 完成定义（全量）：
+
+1. Trust Layer 从 PhaseA 升级到 PhaseB：challenge 受理、决策、审计与回放链路可闭环。
+2. Registry 从配置态升级为产品态：Prompt/Tool/Policy 支持版本发布、激活切换与审计留痕。
+3. Claim Graph 从“payload 附带结果”升级为“可查询、可回放、可挑战”的持久化账本对象。
+4. Judge Panel 从单路扩展到 A/B/C 独立执行与分歧治理，公平门禁与 review 流程一致联动。
+5. fairness/runtime 冻结口径继续保持本机可执行，同时保留真实环境复核收口入口。
+
+---
+
+## 4. P8 模块执行矩阵（完整）
+
+| 模块 | 优先级 | 状态 | 本轮目标 | DoD（完成定义） | 验证方式 |
+| --- | --- | --- | --- | --- | --- |
+| `ai-judge-p8-trust-layer-phaseB` | P0 | 已完成 | 已落地 challenge 注册、受理、决策、结案状态机，并与 review queue/alerts 打通 | 新增 challenge request/decision 接口；`challenge_requested/accepted/under_review/upheld/overturned/draw_after_review/closed` 状态可回放；trust 视图升级为 phaseB registry | `cd ai_judge_service && ../scripts/py -m pytest -q`（已通过）；`/internal/judge/cases/{id}/trust/challenges*` 路由测试已通过 |
+| `ai-judge-p8-registry-productization-hard-cut` | P0 | 已完成 | 已完成 Prompt/Tool/Policy Registry 从 env 配置态到 DB 发布态硬切 | 新增 registry release/audit 落库模型与迁移；发布/激活/回滚/审计接口可用；phase/final/cases/replay 主链统一走 DB registry runtime | `cd ai_judge_service && ../scripts/py -m pytest -q`（已通过）；`tests/test_app_factory.py` 覆盖 registry 发布/激活/回滚/审计与 unknown prompt 拒绝链路 |
+| `ai-judge-p8-claim-ledger-v3` | P1 | 已完成 | 已完成 claim graph 节点/边/冲突/未回应项持久化与 case 级查询接口 | 新增 `claim_ledger_records` 落库模型与迁移；phase/final/replay 自动 upsert claim ledger；`/internal/judge/cases/{case_id}/claim-ledger` 查询可用；case view/replay report 可读取 claim ledger | `cd ai_judge_service && ../scripts/py -m pytest -q`（已通过）；`../scripts/py -m ruff check app tests`（已通过） |
+| `ai-judge-p8-panel-independence-v1` | P1 | 已完成 | 已建立 Judge A/B/C 独立判定输出与分歧治理 | final report 输出 `judgeA/judgeB/judgeC` 独立 verdict/score/reason；panel 分歧比率阈值门禁触发 `reviewRequired`；`fairnessSummary` 新增 `panelDisagreementRatio/panelDisagreementReasons` 等解释字段 | `cd ai_judge_service && ../scripts/py -m pytest -q`（已通过）；`../scripts/py -m ruff check app tests`（已通过） |
+| `ai-judge-p8-fairness-drift-governance-v1` | P1 | 已完成 | 已落地 fairness benchmark run 落库、基线漂移对比与阈值越界治理 | 新增 fairness benchmark run 持久化模型与路由；写入时自动计算 baseline drift；阈值/漂移越界触发 audit alert outbox 并同步 facts；支持按策略/环境/状态查询 | `cd ai_judge_service && ../scripts/py -m pytest -q`；`cd ai_judge_service && ../scripts/py -m ruff check app tests` |
+| `ai-judge-p8-real-env-reconfirm-window` | P0（环境阻塞） | 进行中（local_reference_ready） | 保持真实环境收口入口，环境就绪即复跑 P5 real calibration 与 runtime ops pack | real-env 条件满足后，`ai_judge_p5_real_calibration_on_env` 与 runtime ops pack 状态达到 `pass`；回写 completed/todo | `bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`；`bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` |
+| `ai-judge-p9-fairness-benchmark-auto-ingest` | P1 | 已完成 | 将 fairness benchmark 冻结结果自动上报到服务治理账本 | `ai_judge_fairness_benchmark_freeze.sh` 支持 ingest 配置并输出 ingest 结果字段；`ai_judge_runtime_ops_pack.sh` 支持 fairness ingest 参数透传并汇总 ingest 状态；harness 用例覆盖 ingest 成功/失败/require-success 分支 | `bash scripts/harness/tests/test_ai_judge_fairness_benchmark_freeze.sh`；`bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`；`bash scripts/harness/tests/test_ai_judge_stage_closure_draft.sh`；`bash scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh` |
+| `ai-judge-p9-real-env-window-ingest-bridge` | P1 | 已完成 | 让 real env window closure 透传 fairness ingest 配置并汇总 ingest 状态 | `ai_judge_real_env_window_closure.sh` 支持 `--fairness-ingest-*` 参数透传给 runtime ops pack，并在 closure env/doc/json/md/stdout 汇总 `FAIRNESS_INGEST_STATUS`；窗口脚本测试覆盖 ingest 成功分支 | `bash scripts/harness/tests/test_ai_judge_real_env_window_closure.sh`；`bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`；`bash scripts/harness/tests/test_ai_judge_fairness_benchmark_freeze.sh` |
+
+---
+
+## 5. 执行顺序与依赖
+
+1. 先做 `ai-judge-p8-trust-layer-phaseB`，因为 challenge 状态机会直接影响 fairness/review 的制度闭环。
+2. 然后做 `ai-judge-p8-registry-productization-hard-cut`，为 panel 与策略治理提供可发布版本主链。
+3. 再做 `ai-judge-p8-claim-ledger-v3`，补齐 claim 级证据账本，避免 challenge 缺少可追溯对象。
+4. 接着做 `ai-judge-p8-panel-independence-v1`，将 Judge A/B/C 分歧纳入公平门禁主链。
+5. 随后做 `ai-judge-p8-fairness-drift-governance-v1`，把公平冻结升级为持续治理机制。
+6. 最后执行 `ai-judge-p8-real-env-reconfirm-window`，完成真实环境复核收口（环境可用时执行）。
+
+---
+
+## 6. 本阶段明确不做
+
+1. 不上线 NPC Coach / Room QA 的正式业务能力（保持 shell，不扩展到用户侧主链）。
+2. 不引入 Temporal/Kafka 的新编排重构（维持当前 orchestrator 主线）。
+3. 不做区块链/ZK/ZKML 的生产主链接入，仅保留 Trust Layer 的协议化接口预留。
+4. 不为未上线能力保留长期兼容层或 alias 字段。
+
+---
+
+## 7. 测试与验收基线
+
+1. 单元与路由基线：`cd ai_judge_service && ../scripts/py -m pytest -q`
+2. runtime 收口基线：`bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+3. real-env 收口基线（环境就绪后）：`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --root /Users/panyihang/Documents/EchoIsle`
+4. 文档一致性基线：`completed.md`、`todo.md`、`当前开发计划.md` 三处状态一致回写。
+
+---
+
+## 8. 风险与对策
+
+1. 风险：registry 硬切可能影响现有 phase/final 主链稳定性。  
+   对策：先落库再切读路径，切换回归必须覆盖 trace/replay/final contract。
+2. 风险：panel 独立执行会增加时延与成本。  
+   对策：先引入可配置采样/并发策略，默认保守阈值并保留审计证据。
+3. 风险：real-env 长期不可用导致“冻结口径长期本机化”。  
+   对策：保持 `local_reference_*` 明示状态，不把本机冻结写成真实 `pass`。
+
+---
+
+## 9. 模块完成同步历史
+
+- 2026-04-14：完成 `ai-judge-p8-trust-layer-phaseB`：新增 `POST /internal/judge/cases/{case_id}/trust/challenges/request` 与 `POST /internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision`，trust challenge registry 升级为 `trust-phaseB-challenge-review-v1`，并通过 `cd ai_judge_service && ../scripts/py -m pytest -q` 全量回归。
+- 2026-04-14：完成 `ai-judge-p8-registry-productization-hard-cut`：新增 `judge_registry_releases/judge_registry_audits` 模型与 Alembic 迁移，落地 `publish/activate/rollback/audits` 路由，并将 phase/final/cases/replay 注册表读取硬切至 DB runtime；`cd ai_judge_service && ../scripts/py -m pytest -q` 全量通过。
+- 2026-04-14：完成 `ai-judge-p8-claim-ledger-v3`：新增 `claim_ledger_records` 模型与 Alembic 迁移，落地 claim ledger upsert/get/list 仓储能力；phase/final/replay 主链自动写入 claim ledger，新增 `GET /internal/judge/cases/{case_id}/claim-ledger`，并在 case detail 与 replay report 接入 claim ledger 读取；`cd ai_judge_service && ../scripts/py -m pytest -q`、`cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+- 2026-04-14：完成 `ai-judge-p8-panel-independence-v1`：`final_report` 升级为 A/B/C 独立 panel 输出（`judgeA/judgeB/judgeC` 各自 verdict/score/confidence/reason），公平门禁新增 panel 分歧比率阈值（`panelDisagreementRatioMax`），并将分歧原因写入 `fairnessSummary` 与 `verdictLedger.panelDecisions.panelDisagreement`；`cd ai_judge_service && ../scripts/py -m pytest -q`、`cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+- 2026-04-14：完成 `ai-judge-p8-fairness-drift-governance-v1`：新增 `fairness_benchmark_runs` 模型与 Alembic 迁移；新增 `POST/GET /internal/judge/fairness/benchmark-runs`，支持 benchmark run 入库、基线漂移计算、阈值/漂移越界自动告警与 outbox 留痕，并同步 facts audit alerts；`cd ai_judge_service && ../scripts/py -m pytest -q`、`cd ai_judge_service && ../scripts/py -m ruff check app tests` 通过。
+- 2026-04-14：推进 `ai-judge-p8-real-env-reconfirm-window`：本机执行 `ai_judge_p5_real_calibration_on_env.sh --allow-local-reference` 得到 `local_reference_pass`；修复 stage closure draft 对当前计划矩阵的提取口径后，`ai_judge_runtime_ops_pack.sh --allow-local-reference` 达到 `local_reference_ready`（`stage_closure_evidence=pass`）；real-env 仍待真实环境窗口复核为 `pass`。
+- 2026-04-15：完成 `ai-judge-p9-fairness-benchmark-auto-ingest`：`ai_judge_fairness_benchmark_freeze.sh` 新增 ingest 能力（支持 `--ingest-*` 参数与 `AI_JUDGE_FAIRNESS_INGEST_*` 环境变量、`FAIRNESS_INGEST_STATUS` 落盘、`--ingest-require-success` 强约束）；`ai_judge_runtime_ops_pack.sh` 新增 fairness ingest 参数透传与 `fairness_ingest_status` 汇总；通过 `test_ai_judge_fairness_benchmark_freeze.sh`、`test_ai_judge_runtime_ops_pack.sh`、`test_ai_judge_stage_closure_draft.sh`、`test_ai_judge_stage_closure_evidence.sh`。
+- 2026-04-15：完成 `ai-judge-p9-real-env-window-ingest-bridge`：`ai_judge_real_env_window_closure.sh` 新增 `--fairness-ingest-*` 参数并透传至 runtime ops pack，closure 汇总输出新增 `FAIRNESS_INGEST_STATUS` 与 `runtime_ops_fairness_ingest_status`；新增 `test_ai_judge_real_env_window_closure.sh` ingest 场景，确认窗口收口链路可一键携带 fairness ingest。
+- 2026-04-15：执行本机近真实链路验证：本机启动 `ai_judge_service` 后以 `--fairness-ingest-enabled --fairness-ingest-base-url http://127.0.0.1:8787` 复跑 `ai_judge_real_env_window_closure.sh --allow-local-reference`，`FAIRNESS_INGEST_STATUS` 达到 `sent`（`HTTP 200`），并回写 `docs/loadtest/evidence/*` 最新收口证据。
+- 2026-04-14：刷新下一阶段计划，主线切换为 `P8：Fairness Hardened + Trust Layer PhaseB + Registry Productization`，并锁定 6 个可执行模块。
