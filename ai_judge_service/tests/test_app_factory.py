@@ -257,6 +257,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/kernel-version", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/audit-anchor", paths)
+        self.assertIn("/internal/judge/alerts/ops-view", paths)
         self.assertIn("/internal/judge/fairness/benchmark-runs", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
@@ -608,6 +609,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(dependency["ok"])
         issue_codes = {str(item.get("code") or "") for item in dependency["issues"]}
         self.assertIn("prompt_registry_version_not_found", issue_codes)
+        self.assertEqual(detail["alert"]["type"], "registry_dependency_health_blocked")
+        self.assertEqual(detail["alert"]["status"], "raised")
 
     async def test_registry_routes_should_support_publish_activate_rollback_and_audit(
         self,
@@ -836,11 +839,228 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["selectedPolicyVersion"], version)
         self.assertGreaterEqual(payload["count"], 1)
         self.assertTrue(payload["includeAllVersions"])
+        self.assertTrue(payload["includeOverview"])
+        self.assertTrue(payload["includeTrend"])
         self.assertEqual(payload["item"]["policyVersion"], version)
         self.assertTrue(payload["item"]["ok"])
         self.assertTrue(payload["item"]["checks"]["promptRegistryExists"])
         self.assertTrue(payload["item"]["checks"]["toolRegistryExists"])
         self.assertEqual(payload["activeVersions"]["policyVersion"], runtime.policy_registry_runtime.default_version)
+        overview = payload["dependencyOverview"]
+        self.assertIsInstance(overview, dict)
+        self.assertEqual(overview["registryType"], "policy")
+        self.assertGreaterEqual(overview["counts"]["trackedPolicyVersions"], 1)
+        self.assertIn("byPolicyVersion", overview)
+        self.assertTrue(any(row["policyVersion"] == version for row in overview["byPolicyVersion"]))
+        trend = payload["dependencyTrend"]
+        self.assertIsInstance(trend, dict)
+        self.assertEqual(trend["registryType"], "policy")
+        self.assertIn("items", trend)
+        self.assertGreaterEqual(trend["count"], 0)
+
+    async def test_policy_registry_dependency_health_route_should_reject_invalid_trend_status(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        health_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/dependencies/health?trend_status=bad-status",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(health_resp.status_code, 422)
+        self.assertIn("invalid_trend_status", health_resp.text)
+
+    async def test_policy_registry_dependency_blocked_alert_should_emit_and_resolve_outbox(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        version = f"policy-dep-alert-{_unique_case_id(9215)}"
+
+        blocked_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-missing",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(blocked_publish.status_code, 422)
+        blocked_detail = blocked_publish.json()["detail"]
+        self.assertEqual(blocked_detail["code"], "registry_policy_dependency_invalid")
+        blocked_alert = blocked_detail["alert"]
+        self.assertEqual(blocked_alert["type"], "registry_dependency_health_blocked")
+        self.assertEqual(blocked_alert["status"], "raised")
+
+        outbox_after_blocked = await self._get(
+            app=app,
+            path="/internal/judge/alerts/outbox",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(outbox_after_blocked.status_code, 200)
+        blocked_event = next(
+            (
+                item
+                for item in outbox_after_blocked.json()["items"]
+                if item.get("payload", {}).get("alertType")
+                == "registry_dependency_health_blocked"
+                and item.get("payload", {}).get("status") == "raised"
+                and item.get("payload", {}).get("details", {}).get("version") == version
+            ),
+            None,
+        )
+        self.assertIsNotNone(blocked_event)
+        open_trend_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/dependencies/health"
+                "?include_all_versions=true&include_overview=false"
+                "&include_trend=true&trend_status=open&trend_policy_version="
+                f"{version}&trend_limit=20&trend_offset=0"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(open_trend_resp.status_code, 200)
+        open_trend_payload = open_trend_resp.json()
+        self.assertIsNone(open_trend_payload["dependencyOverview"])
+        self.assertIsInstance(open_trend_payload["dependencyTrend"], dict)
+        self.assertGreaterEqual(open_trend_payload["dependencyTrend"]["count"], 1)
+        self.assertGreaterEqual(
+            open_trend_payload["dependencyTrend"]["statusCounts"]["raised"],
+            1,
+        )
+        self.assertTrue(
+            all(
+                row["policyVersion"] == version
+                for row in open_trend_payload["dependencyTrend"]["items"]
+            )
+        )
+
+        prompt_publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/prompt/publish",
+            payload={
+                "version": "promptset-dep-recover",
+                "activate": False,
+                "profile": {
+                    "promptVersions": {
+                        "summaryPromptVersion": "v3.a2a3.summary.v1",
+                        "agent2PromptVersion": "v3.a6a7.bidirectional.v2",
+                        "finalPipelineVersion": "v3-final-a9a10-rollup-v2",
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_publish_resp.status_code, 200)
+
+        recovered_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "reason": "dependency_recovered",
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-dep-recover",
+                    "toolRegistryVersion": "toolset-v3-default",
+                    "promptVersions": {
+                        "summaryPromptVersion": "v3.a2a3.summary.v1",
+                        "agent2PromptVersion": "v3.a6a7.bidirectional.v2",
+                        "finalPipelineVersion": "v3-final-a9a10-rollup-v2",
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(recovered_publish.status_code, 200)
+        recovered_payload = recovered_publish.json()
+        self.assertIsNotNone(recovered_payload["dependencyHealth"])
+        self.assertTrue(recovered_payload["dependencyHealth"]["ok"])
+        self.assertGreaterEqual(len(recovered_payload["resolvedDependencyAlerts"]), 1)
+
+        outbox_after_recovered = await self._get(
+            app=app,
+            path="/internal/judge/alerts/outbox",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(outbox_after_recovered.status_code, 200)
+        resolved_event = next(
+            (
+                item
+                for item in outbox_after_recovered.json()["items"]
+                if item.get("payload", {}).get("alertType")
+                == "registry_dependency_health_blocked"
+                and item.get("payload", {}).get("status") == "resolved"
+                and item.get("payload", {}).get("details", {}).get("version") == version
+            ),
+            None,
+        )
+        self.assertIsNotNone(resolved_event)
+
+        health_overview_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/dependencies/health"
+                f"?policy_version={version}&include_all_versions=true&include_overview=true"
+                "&overview_window_minutes=1440&limit=20"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(health_overview_resp.status_code, 200)
+        health_overview_payload = health_overview_resp.json()
+        overview = health_overview_payload["dependencyOverview"]
+        self.assertIsInstance(overview, dict)
+        self.assertGreaterEqual(overview["counts"]["totalAlerts"], 1)
+        self.assertGreaterEqual(overview["counts"]["resolvedCount"], 1)
+        self.assertGreaterEqual(overview["counts"]["recentChanges"], 1)
+        target_row = next(
+            (
+                row
+                for row in overview["byPolicyVersion"]
+                if row["policyVersion"] == version
+            ),
+            None,
+        )
+        self.assertIsNotNone(target_row)
+        assert target_row is not None
+        self.assertGreaterEqual(target_row["totalAlerts"], 1)
+        self.assertGreaterEqual(target_row["resolvedCount"], 1)
+        self.assertEqual(target_row["openBlockedCount"], 0)
+        self.assertEqual(target_row["lastStatus"], "resolved")
+        resolved_trend = health_overview_payload["dependencyTrend"]
+        self.assertIsInstance(resolved_trend, dict)
+        self.assertGreaterEqual(resolved_trend["count"], 1)
+
+        resolved_trend_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/dependencies/health"
+                f"?policy_version={version}&include_all_versions=true&include_overview=false"
+                "&include_trend=true&trend_status=resolved"
+                f"&trend_policy_version={version}&trend_limit=1&trend_offset=0"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(resolved_trend_resp.status_code, 200)
+        resolved_trend_payload = resolved_trend_resp.json()["dependencyTrend"]
+        self.assertEqual(resolved_trend_payload["returned"], 1)
+        self.assertGreaterEqual(resolved_trend_payload["count"], 1)
+        self.assertEqual(resolved_trend_payload["filters"]["status"], "resolved")
+        self.assertEqual(resolved_trend_payload["filters"]["policyVersion"], version)
+        self.assertEqual(resolved_trend_payload["items"][0]["status"], "resolved")
 
     async def test_policy_registry_activate_override_should_require_reason_and_be_auditable(
         self,
@@ -927,6 +1147,556 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         dependency_health = override_audit["details"].get("dependencyHealth")
         self.assertIsInstance(dependency_health, dict)
         self.assertTrue(bool(dependency_health.get("ok")))
+
+    async def test_policy_registry_audits_should_support_gate_link_export_and_filters(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9220)
+        override_version = f"policy-audit-override-{suffix}"
+        override_actor = f"audit-actor-{suffix}"
+
+        override_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": override_version,
+                "activate": False,
+                "actor": override_actor,
+                "reason": "audit_prepare",
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(override_publish.status_code, 200)
+
+        override_activate = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{override_version}/activate"
+                f"?override_fairness_gate=true&actor={override_actor}"
+                "&reason=audit_manual_override"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(override_activate.status_code, 200)
+        override_gate_code = override_activate.json()["alert"]["details"]["gate"]["code"]
+
+        audits_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/audits?limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(audits_resp.status_code, 200)
+        audits_payload = audits_resp.json()
+        self.assertGreaterEqual(audits_payload["count"], 2)
+        self.assertGreaterEqual(audits_payload["aggregations"]["byAction"]["publish"], 1)
+        self.assertGreaterEqual(audits_payload["aggregations"]["byAction"]["activate"], 1)
+        self.assertGreaterEqual(audits_payload["aggregations"]["byGateCode"][override_gate_code], 1)
+        self.assertGreaterEqual(audits_payload["aggregations"]["withGateReviewCount"], 1)
+        self.assertGreaterEqual(audits_payload["aggregations"]["withLinkedAlertsCount"], 1)
+        target_item = next(
+            (
+                row
+                for row in audits_payload["items"]
+                if row["action"] == "activate"
+                and row["version"] == override_version
+                and row["actor"] == override_actor
+            ),
+            None,
+        )
+        self.assertIsNotNone(target_item)
+        assert target_item is not None
+        self.assertEqual(target_item["gateReview"]["gateCode"], override_gate_code)
+        self.assertTrue(bool(target_item["gateReview"]["overrideApplied"]))
+        self.assertIsInstance(target_item["linkedAlertSummary"], dict)
+        self.assertGreaterEqual(target_item["linkedAlertSummary"]["count"], 1)
+        self.assertGreaterEqual(
+            target_item["linkedAlertSummary"]["byType"]["registry_fairness_gate_override"],
+            1,
+        )
+        self.assertTrue(
+            any(
+                row["type"] == "registry_fairness_gate_override"
+                for row in target_item["linkedAlerts"]
+            )
+        )
+
+        gate_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/audits"
+                f"?action=activate&version={override_version}&actor={override_actor}"
+                f"&gate_code={override_gate_code}&override_applied=true&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(gate_filter_resp.status_code, 200)
+        gate_filter_payload = gate_filter_resp.json()
+        self.assertGreaterEqual(gate_filter_payload["returned"], 1)
+        self.assertEqual(gate_filter_payload["filters"]["action"], "activate")
+        self.assertEqual(gate_filter_payload["filters"]["version"], override_version)
+        self.assertEqual(gate_filter_payload["filters"]["actor"], override_actor)
+        self.assertEqual(gate_filter_payload["filters"]["gateCode"], override_gate_code)
+        self.assertTrue(bool(gate_filter_payload["filters"]["overrideApplied"]))
+        self.assertTrue(
+            all(
+                row["action"] == "activate"
+                and row["version"] == override_version
+                and row["actor"] == override_actor
+                and row["gateReview"]["gateCode"] == override_gate_code
+                and bool(row["gateReview"]["overrideApplied"])
+                for row in gate_filter_payload["items"]
+            )
+        )
+
+        no_gate_view_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/audits?include_gate_view=false&limit=20",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(no_gate_view_resp.status_code, 200)
+        no_gate_view_payload = no_gate_view_resp.json()
+        self.assertFalse(bool(no_gate_view_payload["filters"]["includeGateView"]))
+        self.assertTrue(
+            all(row["linkedAlerts"] is None for row in no_gate_view_payload["items"])
+        )
+
+        bad_action_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/audits?action=invalid-action",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_action_resp.status_code, 422)
+        self.assertIn("invalid_registry_audit_action", bad_action_resp.text)
+
+    async def test_registry_alert_ops_view_should_join_outbox_and_support_filters(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9221)
+        blocked_actor = f"ops-blocked-{suffix}"
+        override_actor = f"ops-override-{suffix}"
+
+        fairness_blocked_version = f"policy-ops-blocked-{suffix}"
+        fairness_blocked_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": fairness_blocked_version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(fairness_blocked_publish.status_code, 200)
+        fairness_blocked_activate = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{fairness_blocked_version}/activate"
+                f"?actor={blocked_actor}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(fairness_blocked_activate.status_code, 409)
+        fairness_blocked_alert_id = fairness_blocked_activate.json()["detail"]["alert"]["alertId"]
+        blocked_gate_code = fairness_blocked_activate.json()["detail"]["alert"]["details"]["gate"]["code"]
+
+        fairness_override_version = f"policy-ops-override-{suffix}"
+        fairness_override_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": fairness_override_version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(fairness_override_publish.status_code, 200)
+        fairness_override_activate = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{fairness_override_version}/activate"
+                f"?override_fairness_gate=true&actor={override_actor}"
+                f"&reason=ops_view_override_{suffix}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(fairness_override_activate.status_code, 200)
+        self.assertEqual(
+            fairness_override_activate.json()["alert"]["type"],
+            "registry_fairness_gate_override",
+        )
+        override_gate_code = fairness_override_activate.json()["alert"]["details"]["gate"]["code"]
+
+        dep_version = f"policy-ops-dep-{suffix}"
+        dep_blocked = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": dep_version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": f"promptset-missing-{suffix}",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(dep_blocked.status_code, 422)
+        self.assertEqual(
+            dep_blocked.json()["detail"]["alert"]["type"],
+            "registry_dependency_health_blocked",
+        )
+
+        dep_promptset_version = f"promptset-ops-{suffix}"
+        dep_promptset_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/prompt/publish",
+            payload={
+                "version": dep_promptset_version,
+                "activate": False,
+                "profile": {
+                    "promptVersions": {
+                        "summaryPromptVersion": "v3.a2a3.summary.v1",
+                        "agent2PromptVersion": "v3.a6a7.bidirectional.v2",
+                        "finalPipelineVersion": "v3-final-a9a10-rollup-v2",
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(dep_promptset_publish.status_code, 200)
+        dep_recovered = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": dep_version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": dep_promptset_version,
+                    "toolRegistryVersion": "toolset-v3-default",
+                    "promptVersions": {
+                        "summaryPromptVersion": "v3.a2a3.summary.v1",
+                        "agent2PromptVersion": "v3.a6a7.bidirectional.v2",
+                        "finalPipelineVersion": "v3-final-a9a10-rollup-v2",
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(dep_recovered.status_code, 200)
+
+        outbox_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/outbox",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(outbox_resp.status_code, 200)
+        blocked_event = next(
+            (
+                row
+                for row in outbox_resp.json()["items"]
+                if row["alertId"] == fairness_blocked_alert_id
+            ),
+            None,
+        )
+        self.assertIsNotNone(blocked_event)
+        assert blocked_event is not None
+        mark_failed_resp = await self._post(
+            app=app,
+            path=(
+                "/internal/judge/alerts/outbox/"
+                f"{blocked_event['eventId']}/delivery?delivery_status=failed&error_message=ops_view_probe"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(mark_failed_resp.status_code, 200)
+        self.assertEqual(mark_failed_resp.json()["item"]["deliveryStatus"], "failed")
+
+        ops_view_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(ops_view_resp.status_code, 200)
+        ops_payload = ops_view_resp.json()
+        self.assertGreaterEqual(ops_payload["count"], 3)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byType"]["registry_fairness_gate_blocked"], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byType"]["registry_fairness_gate_override"], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byType"]["registry_dependency_health_blocked"], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byGateCode"][blocked_gate_code], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byGateCode"][override_gate_code], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byGateActor"][blocked_actor], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byGateActor"][override_actor], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byOverrideApplied"]["true"], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["byOverrideApplied"]["false"], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["overrideAppliedCount"], 1)
+        self.assertGreaterEqual(ops_payload["aggregations"]["blockedWithoutOverrideCount"], 1)
+        self.assertEqual(ops_payload["filters"]["fieldsMode"], "full")
+        self.assertTrue(bool(ops_payload["filters"]["includeTrend"]))
+        self.assertIsInstance(ops_payload["trend"], dict)
+        self.assertGreaterEqual(ops_payload["trend"]["count"], 1)
+        blocked_item = next(
+            (
+                row
+                for row in ops_payload["items"]
+                if row["alertId"] == fairness_blocked_alert_id
+            ),
+            None,
+        )
+        self.assertIsNotNone(blocked_item)
+        assert blocked_item is not None
+        self.assertEqual(blocked_item["outbox"]["latestDeliveryStatus"], "failed")
+        self.assertEqual(blocked_item["gateCode"], blocked_gate_code)
+        self.assertEqual(blocked_item["gateActor"], blocked_actor)
+        self.assertFalse(bool(blocked_item["overrideApplied"]))
+
+        failed_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/alerts/ops-view"
+                "?alert_type=registry_fairness_gate_blocked&delivery_status=failed&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(failed_filter_resp.status_code, 200)
+        failed_filter_payload = failed_filter_resp.json()
+        self.assertGreaterEqual(failed_filter_payload["returned"], 1)
+        self.assertTrue(
+            all(
+                row["type"] == "registry_fairness_gate_blocked"
+                and row["outbox"]["latestDeliveryStatus"] == "failed"
+                for row in failed_filter_payload["items"]
+            )
+        )
+
+        open_filter_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?status=open&limit=50",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(open_filter_resp.status_code, 200)
+        self.assertTrue(
+            all(row["status"] in {"raised", "acked"} for row in open_filter_resp.json()["items"])
+        )
+
+        dep_resolved_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/alerts/ops-view"
+                f"?alert_type=registry_dependency_health_blocked&status=resolved&policy_version={dep_version}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(dep_resolved_filter_resp.status_code, 200)
+        dep_resolved_payload = dep_resolved_filter_resp.json()
+        self.assertGreaterEqual(dep_resolved_payload["returned"], 1)
+        self.assertTrue(
+            all(
+                row["type"] == "registry_dependency_health_blocked"
+                and row["status"] == "resolved"
+                and row["policyVersion"] == dep_version
+                for row in dep_resolved_payload["items"]
+            )
+        )
+
+        override_gate_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/alerts/ops-view"
+                f"?gate_code={override_gate_code}&gate_actor={override_actor}"
+                "&override_applied=true&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(override_gate_filter_resp.status_code, 200)
+        override_gate_filter_payload = override_gate_filter_resp.json()
+        self.assertGreaterEqual(override_gate_filter_payload["returned"], 1)
+        self.assertEqual(override_gate_filter_payload["filters"]["gateCode"], override_gate_code)
+        self.assertEqual(override_gate_filter_payload["filters"]["gateActor"], override_actor)
+        self.assertTrue(bool(override_gate_filter_payload["filters"]["overrideApplied"]))
+        self.assertTrue(
+            all(
+                row["gateCode"] == override_gate_code
+                and row["gateActor"] == override_actor
+                and bool(row["overrideApplied"])
+                for row in override_gate_filter_payload["items"]
+            )
+        )
+
+        blocked_gate_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/alerts/ops-view"
+                f"?gate_code={blocked_gate_code}&gate_actor={blocked_actor}"
+                "&override_applied=false&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(blocked_gate_filter_resp.status_code, 200)
+        blocked_gate_filter_payload = blocked_gate_filter_resp.json()
+        self.assertGreaterEqual(blocked_gate_filter_payload["returned"], 1)
+        self.assertEqual(blocked_gate_filter_payload["filters"]["gateCode"], blocked_gate_code)
+        self.assertEqual(blocked_gate_filter_payload["filters"]["gateActor"], blocked_actor)
+        self.assertFalse(bool(blocked_gate_filter_payload["filters"]["overrideApplied"]))
+        self.assertTrue(
+            all(
+                row["gateCode"] == blocked_gate_code
+                and row["gateActor"] == blocked_actor
+                and not bool(row["overrideApplied"])
+                for row in blocked_gate_filter_payload["items"]
+            )
+        )
+
+        bad_alert_type_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?alert_type=invalid-type",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_alert_type_resp.status_code, 422)
+        self.assertIn("invalid_alert_type", bad_alert_type_resp.text)
+
+        bad_status_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?status=invalid-status",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_status_resp.status_code, 422)
+        self.assertIn("invalid_alert_status", bad_status_resp.text)
+
+        bad_delivery_status_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?delivery_status=invalid-delivery",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_delivery_status_resp.status_code, 422)
+        self.assertIn("invalid_delivery_status", bad_delivery_status_resp.text)
+
+    async def test_registry_alert_ops_view_should_support_lite_mode_and_trend_window(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9222)
+
+        blocked_version = f"policy-ops-lite-blocked-{suffix}"
+        blocked_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": blocked_version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(blocked_publish.status_code, 200)
+        blocked_activate = await self._post(
+            app=app,
+            path=f"/internal/judge/registries/policy/{blocked_version}/activate",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(blocked_activate.status_code, 409)
+
+        override_version = f"policy-ops-lite-override-{suffix}"
+        override_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": override_version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(override_publish.status_code, 200)
+        override_activate = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{override_version}/activate"
+                f"?override_fairness_gate=true&reason=ops_lite_override_{suffix}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(override_activate.status_code, 200)
+
+        lite_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/alerts/ops-view"
+                "?fields_mode=lite&trend_window_minutes=1440&trend_bucket_minutes=120&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(lite_resp.status_code, 200)
+        lite_payload = lite_resp.json()
+        self.assertEqual(lite_payload["filters"]["fieldsMode"], "lite")
+        self.assertEqual(lite_payload["filters"]["trendWindowMinutes"], 1440)
+        self.assertEqual(lite_payload["filters"]["trendBucketMinutes"], 120)
+        self.assertIsInstance(lite_payload["trend"], dict)
+        self.assertGreaterEqual(lite_payload["trend"]["count"], 2)
+        self.assertGreaterEqual(lite_payload["trend"]["typeCounts"]["registry_fairness_gate_blocked"], 1)
+        self.assertGreaterEqual(lite_payload["trend"]["typeCounts"]["registry_fairness_gate_override"], 1)
+        self.assertGreaterEqual(len(lite_payload["trend"]["timeline"]), 1)
+        self.assertGreaterEqual(lite_payload["returned"], 1)
+        lite_item = lite_payload["items"][0]
+        self.assertNotIn("message", lite_item)
+        self.assertIn("outbox", lite_item)
+        self.assertIn("latestDeliveryStatus", lite_item["outbox"])
+        self.assertIn("totalEvents", lite_item["outbox"])
+
+        no_trend_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?include_trend=false&fields_mode=lite&limit=20",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(no_trend_resp.status_code, 200)
+        no_trend_payload = no_trend_resp.json()
+        self.assertFalse(bool(no_trend_payload["filters"]["includeTrend"]))
+        self.assertIsNone(no_trend_payload["trend"])
+
+        bad_fields_mode_resp = await self._get(
+            app=app,
+            path="/internal/judge/alerts/ops-view?fields_mode=compact",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(bad_fields_mode_resp.status_code, 422)
+        self.assertIn("invalid_fields_mode", bad_fields_mode_resp.text)
 
     async def test_final_dispatch_should_reject_policy_rubric_mismatch(self) -> None:
         runtime = create_runtime(settings=_build_settings())
