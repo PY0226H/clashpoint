@@ -1,0 +1,25 @@
+{
+  "run_id": "20260415T002836Z-ai-judge-stage-closure-draft",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "status": "pass",
+  "started_at": "2026-04-15T00:28:36Z",
+  "finished_at": "2026-04-15T00:28:36Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T002836Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T002836Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md"
+  },
+  "counts": {
+    "completed_candidates_total": 5,
+    "todo_candidates_total": 0
+  },
+  "completed_candidates": [
+    {"module":"ai-judge-p8-trust-layer-phaseB","conclusion":"阶段收口草案：模块主体已完成（已完成）","code_evidence":"artifacts/harness/*-ai-judge-p8-trust-layer-phaseB.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260415T002836Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p8-registry-productization-hard-cut","conclusion":"阶段收口草案：模块主体已完成（已完成）","code_evidence":"artifacts/harness/*-ai-judge-p8-registry-productization-hard-cut.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260415T002836Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p8-claim-ledger-v3","conclusion":"阶段收口草案：模块主体已完成（已完成）","code_evidence":"artifacts/harness/*-ai-judge-p8-claim-ledger-v3.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260415T002836Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p8-panel-independence-v1","conclusion":"阶段收口草案：模块主体已完成（已完成）","code_evidence":"artifacts/harness/*-ai-judge-p8-panel-independence-v1.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260415T002836Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p8-fairness-drift-governance-v1","conclusion":"阶段收口草案：模块主体已完成（已完成）","code_evidence":"artifacts/harness/*-ai-judge-p8-fairness-drift-governance-v1.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260415T002836Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+  ],
+  "todo_candidates": [
+  ]
+}

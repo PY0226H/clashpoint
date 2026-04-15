@@ -33,6 +33,15 @@ STAGE_CLOSURE_EVIDENCE_STATUS=""
 
 FAIRNESS_THRESHOLD_DECISION=""
 RUNTIME_SLA_THRESHOLD_DECISION=""
+FAIRNESS_INGEST_STATUS=""
+
+FAIRNESS_INGEST_ENABLED="${AI_JUDGE_FAIRNESS_INGEST_ENABLED:-false}"
+FAIRNESS_INGEST_BASE_URL="${AI_JUDGE_FAIRNESS_INGEST_BASE_URL:-}"
+FAIRNESS_INGEST_PATH="${AI_JUDGE_FAIRNESS_INGEST_PATH:-/internal/judge/fairness/benchmark-runs}"
+FAIRNESS_INGEST_INTERNAL_KEY="${AI_JUDGE_FAIRNESS_INGEST_INTERNAL_KEY:-${AI_JUDGE_INTERNAL_KEY:-}}"
+FAIRNESS_INGEST_TIMEOUT_SECS="${AI_JUDGE_FAIRNESS_INGEST_TIMEOUT_SECS:-8}"
+FAIRNESS_INGEST_REQUIRE_SUCCESS="${AI_JUDGE_FAIRNESS_INGEST_REQUIRE_SUCCESS:-false}"
+FAIRNESS_INGEST_REPORTED_BY="${AI_JUDGE_FAIRNESS_INGEST_REPORTED_BY:-harness}"
 
 usage() {
   cat <<'USAGE'
@@ -42,6 +51,13 @@ usage() {
     [--evidence-dir <path>] \
     [--env-marker <path>] \
     [--allow-local-reference] \
+    [--fairness-ingest-enabled] \
+    [--fairness-ingest-base-url <url>] \
+    [--fairness-ingest-path <path>] \
+    [--fairness-ingest-internal-key <key>] \
+    [--fairness-ingest-timeout-secs <int>] \
+    [--fairness-ingest-require-success] \
+    [--fairness-ingest-reported-by <actor>] \
     [--fairness-script <path>] \
     [--runtime-sla-script <path>] \
     [--real-env-closure-script <path>] \
@@ -154,6 +170,34 @@ parse_args() {
         ALLOW_LOCAL_REFERENCE="true"
         shift 1
         ;;
+      --fairness-ingest-enabled)
+        FAIRNESS_INGEST_ENABLED="true"
+        shift 1
+        ;;
+      --fairness-ingest-base-url)
+        FAIRNESS_INGEST_BASE_URL="${2:-}"
+        shift 2
+        ;;
+      --fairness-ingest-path)
+        FAIRNESS_INGEST_PATH="${2:-}"
+        shift 2
+        ;;
+      --fairness-ingest-internal-key)
+        FAIRNESS_INGEST_INTERNAL_KEY="${2:-}"
+        shift 2
+        ;;
+      --fairness-ingest-timeout-secs)
+        FAIRNESS_INGEST_TIMEOUT_SECS="${2:-}"
+        shift 2
+        ;;
+      --fairness-ingest-require-success)
+        FAIRNESS_INGEST_REQUIRE_SUCCESS="true"
+        shift 1
+        ;;
+      --fairness-ingest-reported-by)
+        FAIRNESS_INGEST_REPORTED_BY="${2:-}"
+        shift 2
+        ;;
       --fairness-script)
         FAIRNESS_SCRIPT="${2:-}"
         shift 2
@@ -219,6 +263,29 @@ run_stage() {
   cmd=(bash "$script" --root "$ROOT" --emit-json "$stage_json" --emit-md "$stage_md")
   if [[ "$stage" == "real_env_closure" ]]; then
     cmd+=(--evidence-dir "$EVIDENCE_DIR")
+  fi
+  if [[ "$stage" == "fairness" ]]; then
+    if [[ "$FAIRNESS_INGEST_ENABLED" == "true" ]]; then
+      cmd+=(--ingest-enabled)
+    fi
+    if [[ -n "$FAIRNESS_INGEST_BASE_URL" ]]; then
+      cmd+=(--ingest-base-url "$FAIRNESS_INGEST_BASE_URL")
+    fi
+    if [[ -n "$FAIRNESS_INGEST_PATH" ]]; then
+      cmd+=(--ingest-path "$FAIRNESS_INGEST_PATH")
+    fi
+    if [[ -n "$FAIRNESS_INGEST_INTERNAL_KEY" ]]; then
+      cmd+=(--ingest-internal-key "$FAIRNESS_INGEST_INTERNAL_KEY")
+    fi
+    if [[ -n "$FAIRNESS_INGEST_TIMEOUT_SECS" ]]; then
+      cmd+=(--ingest-timeout-secs "$FAIRNESS_INGEST_TIMEOUT_SECS")
+    fi
+    if [[ "$FAIRNESS_INGEST_REQUIRE_SUCCESS" == "true" ]]; then
+      cmd+=(--ingest-require-success)
+    fi
+    if [[ -n "$FAIRNESS_INGEST_REPORTED_BY" ]]; then
+      cmd+=(--ingest-reported-by "$FAIRNESS_INGEST_REPORTED_BY")
+    fi
   fi
   if [[ "$stage" == "stage_closure_evidence" ]]; then
     cmd+=(--evidence-dir "$EVIDENCE_DIR" --plan-doc "$STAGE_CLOSURE_PLAN_DOC" --draft-script "$STAGE_CLOSURE_DRAFT_SCRIPT" --runtime-ops-env "$OUTPUT_ENV" --runtime-ops-doc "$OUTPUT_DOC")
@@ -345,6 +412,7 @@ ENVIRONMENT_MODE=$env_mode
 REAL_CALIBRATION_ENV_READY=$marker_ready
 LOCAL_REFERENCE_ENV_READY=$local_ready
 FAIRNESS_STATUS=$FAIRNESS_STATUS
+FAIRNESS_INGEST_STATUS=$FAIRNESS_INGEST_STATUS
 RUNTIME_SLA_STATUS=$RUNTIME_SLA_STATUS
 REAL_ENV_CLOSURE_STATUS=$REAL_ENV_CLOSURE_STATUS
 STAGE_CLOSURE_EVIDENCE_STATUS=$STAGE_CLOSURE_EVIDENCE_STATUS
@@ -371,7 +439,7 @@ write_output_doc() {
 
 | 子模块 | 状态 | 阈值决策 | 退出码 |
 | --- | --- | --- | --- |
-| fairness benchmark freeze | \`$FAIRNESS_STATUS\` | \`$FAIRNESS_THRESHOLD_DECISION\` | \`$FAIRNESS_EXIT_CODE\` |
+| fairness benchmark freeze | \`$FAIRNESS_STATUS\` | \`$FAIRNESS_THRESHOLD_DECISION\`（ingest=\`$FAIRNESS_INGEST_STATUS\`） | \`$FAIRNESS_EXIT_CODE\` |
 | runtime SLA freeze | \`$RUNTIME_SLA_STATUS\` | \`$RUNTIME_SLA_THRESHOLD_DECISION\` | \`$RUNTIME_SLA_EXIT_CODE\` |
 | real-env evidence closure | \`$REAL_ENV_CLOSURE_STATUS\` | \`-\` | \`$REAL_ENV_CLOSURE_EXIT_CODE\` |
 | stage closure evidence | \`$STAGE_CLOSURE_EVIDENCE_STATUS\` | \`-\` | \`$STAGE_CLOSURE_EVIDENCE_EXIT_CODE\` |
@@ -399,6 +467,7 @@ write_json_summary() {
     {
       "stage": "fairness_benchmark_freeze",
       "status": "$(json_escape "$FAIRNESS_STATUS")",
+      "ingest_status": "$(json_escape "$FAIRNESS_INGEST_STATUS")",
       "threshold_decision": "$(json_escape "$FAIRNESS_THRESHOLD_DECISION")",
       "exit_code": $FAIRNESS_EXIT_CODE
     },
@@ -438,7 +507,7 @@ write_md_summary() {
 
 ## stages
 
-1. fairness_benchmark_freeze: \`$FAIRNESS_STATUS\` (threshold=\`$FAIRNESS_THRESHOLD_DECISION\`, exit=\`$FAIRNESS_EXIT_CODE\`)
+1. fairness_benchmark_freeze: \`$FAIRNESS_STATUS\` (threshold=\`$FAIRNESS_THRESHOLD_DECISION\`, ingest=\`$FAIRNESS_INGEST_STATUS\`, exit=\`$FAIRNESS_EXIT_CODE\`)
 2. runtime_sla_freeze: \`$RUNTIME_SLA_STATUS\` (threshold=\`$RUNTIME_SLA_THRESHOLD_DECISION\`, exit=\`$RUNTIME_SLA_EXIT_CODE\`)
 3. real_env_evidence_closure: \`$REAL_ENV_CLOSURE_STATUS\` (exit=\`$REAL_ENV_CLOSURE_EXIT_CODE\`)
 4. stage_closure_evidence: \`$STAGE_CLOSURE_EVIDENCE_STATUS\` (exit=\`$STAGE_CLOSURE_EVIDENCE_EXIT_CODE\`)
@@ -560,6 +629,7 @@ main() {
   REAL_ENV_CLOSURE_STATUS="$(trim "$(read_env_value "$closure_env" "AI_JUDGE_REAL_ENV_CLOSURE_STATUS")")"
   FAIRNESS_THRESHOLD_DECISION="$(trim "$(read_env_value "$fairness_env" "THRESHOLD_DECISION")")"
   RUNTIME_SLA_THRESHOLD_DECISION="$(trim "$(read_env_value "$runtime_env" "THRESHOLD_DECISION")")"
+  FAIRNESS_INGEST_STATUS="$(trim "$(read_env_value "$fairness_env" "FAIRNESS_INGEST_STATUS")")"
 
   if [[ -z "$FAIRNESS_STATUS" ]]; then
     FAIRNESS_STATUS="unknown"
@@ -569,6 +639,9 @@ main() {
   fi
   if [[ -z "$REAL_ENV_CLOSURE_STATUS" ]]; then
     REAL_ENV_CLOSURE_STATUS="unknown"
+  fi
+  if [[ -z "$FAIRNESS_INGEST_STATUS" ]]; then
+    FAIRNESS_INGEST_STATUS="unknown"
   fi
 
   # 先基于前三阶段生成 pack 快照，供 stage closure evidence 回读关联。
@@ -609,6 +682,7 @@ main() {
 
   echo "ai_judge_runtime_ops_pack_status: $STATUS"
   echo "fairness_status: $FAIRNESS_STATUS (exit=$FAIRNESS_EXIT_CODE)"
+  echo "fairness_ingest_status: $FAIRNESS_INGEST_STATUS"
   echo "runtime_sla_status: $RUNTIME_SLA_STATUS (exit=$RUNTIME_SLA_EXIT_CODE)"
   echo "real_env_closure_status: $REAL_ENV_CLOSURE_STATUS (exit=$REAL_ENV_CLOSURE_EXIT_CODE)"
   echo "stage_closure_evidence_status: $STAGE_CLOSURE_EVIDENCE_STATUS (exit=$STAGE_CLOSURE_EVIDENCE_EXIT_CODE)"

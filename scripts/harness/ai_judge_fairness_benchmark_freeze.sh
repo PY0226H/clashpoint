@@ -19,6 +19,20 @@ MAX_DRAW_RATE="0.30"
 MAX_SIDE_BIAS_DELTA="0.08"
 MAX_APPEAL_OVERTURN_RATE="0.12"
 
+INGEST_ENABLED="${AI_JUDGE_FAIRNESS_INGEST_ENABLED:-false}"
+INGEST_BASE_URL="${AI_JUDGE_FAIRNESS_INGEST_BASE_URL:-}"
+INGEST_PATH="${AI_JUDGE_FAIRNESS_INGEST_PATH:-/internal/judge/fairness/benchmark-runs}"
+INGEST_INTERNAL_KEY="${AI_JUDGE_FAIRNESS_INGEST_INTERNAL_KEY:-${AI_JUDGE_INTERNAL_KEY:-}}"
+INGEST_TIMEOUT_SECS="${AI_JUDGE_FAIRNESS_INGEST_TIMEOUT_SECS:-8}"
+INGEST_REQUIRE_SUCCESS="${AI_JUDGE_FAIRNESS_INGEST_REQUIRE_SUCCESS:-false}"
+INGEST_REPORTED_BY="${AI_JUDGE_FAIRNESS_INGEST_REPORTED_BY:-harness}"
+
+INGEST_STATUS="skipped"
+INGEST_HTTP_CODE=""
+INGEST_ERROR=""
+INGEST_RESPONSE_FILE=""
+INGEST_REQUIRED_FAILURE="false"
+
 usage() {
   cat <<'USAGE'
 用法:
@@ -29,6 +43,13 @@ usage() {
     [--output-doc <path>] \
     [--output-env <path>] \
     [--allow-local-reference] \
+    [--ingest-enabled] \
+    [--ingest-base-url <url>] \
+    [--ingest-path <path>] \
+    [--ingest-internal-key <key>] \
+    [--ingest-timeout-secs <int>] \
+    [--ingest-require-success] \
+    [--ingest-reported-by <actor>] \
     [--max-draw-rate <float>] \
     [--max-side-bias-delta <float>] \
     [--max-appeal-overturn-rate <float>] \
@@ -39,6 +60,7 @@ usage() {
   - 冻结 fairness benchmark 的阈值口径与当前观测值。
   - 默认优先真实环境；开启 --allow-local-reference 时允许本机参考冻结。
   - 输出状态可能为 pass/local_reference_frozen/pending_data/threshold_violation/env_blocked。
+  - 开启 ingest 后，会将冻结结果自动上报到 AI judge service 的 fairness benchmark run 路由。
 USAGE
 }
 
@@ -167,6 +189,34 @@ parse_args() {
         ALLOW_LOCAL_REFERENCE="true"
         shift 1
         ;;
+      --ingest-enabled)
+        INGEST_ENABLED="true"
+        shift 1
+        ;;
+      --ingest-base-url)
+        INGEST_BASE_URL="${2:-}"
+        shift 2
+        ;;
+      --ingest-path)
+        INGEST_PATH="${2:-}"
+        shift 2
+        ;;
+      --ingest-internal-key)
+        INGEST_INTERNAL_KEY="${2:-}"
+        shift 2
+        ;;
+      --ingest-timeout-secs)
+        INGEST_TIMEOUT_SECS="${2:-}"
+        shift 2
+        ;;
+      --ingest-require-success)
+        INGEST_REQUIRE_SUCCESS="true"
+        shift 1
+        ;;
+      --ingest-reported-by)
+        INGEST_REPORTED_BY="${2:-}"
+        shift 2
+        ;;
       --max-draw-rate)
         MAX_DRAW_RATE="${2:-}"
         shift 2
@@ -226,6 +276,129 @@ resolve_environment_mode() {
   fi
 }
 
+build_ingest_payload() {
+  local policy_version="$1"
+  local threshold_decision="$2"
+  local needs_real_reconfirm="$3"
+  local needs_remediation="$4"
+  local sample_size="$5"
+  local draw_rate="$6"
+  local side_bias_delta="$7"
+  local appeal_overturn_rate="$8"
+  local missing_keys="$9"
+  local note="${10}"
+
+  cat <<EOF_JSON
+{
+  "run_id": "$(json_escape "$RUN_ID")",
+  "policy_version": "$(json_escape "$policy_version")",
+  "environment_mode": "$(json_escape "$ENV_MODE")",
+  "status": "$(json_escape "$STATUS")",
+  "threshold_decision": "$(json_escape "$threshold_decision")",
+  "needs_real_env_reconfirm": $([[ "$needs_real_reconfirm" == "true" ]] && echo "true" || echo "false"),
+  "needs_remediation": $([[ "$needs_remediation" == "true" ]] && echo "true" || echo "false"),
+  "sample_size": "$(json_escape "$sample_size")",
+  "draw_rate": "$(json_escape "$draw_rate")",
+  "side_bias_delta": "$(json_escape "$side_bias_delta")",
+  "appeal_overturn_rate": "$(json_escape "$appeal_overturn_rate")",
+  "thresholds": {
+    "draw_rate_max": "$(json_escape "$MAX_DRAW_RATE")",
+    "side_bias_delta_max": "$(json_escape "$MAX_SIDE_BIAS_DELTA")",
+    "appeal_overturn_rate_max": "$(json_escape "$MAX_APPEAL_OVERTURN_RATE")"
+  },
+  "metrics": {
+    "sample_size": "$(json_escape "$sample_size")",
+    "draw_rate": "$(json_escape "$draw_rate")",
+    "side_bias_delta": "$(json_escape "$side_bias_delta")",
+    "appeal_overturn_rate": "$(json_escape "$appeal_overturn_rate")"
+  },
+  "summary": {
+    "note": "$(json_escape "$note")",
+    "missing_keys": "$(json_escape "$missing_keys")"
+  },
+  "source": "harness_fairness_benchmark_freeze",
+  "reported_by": "$(json_escape "$INGEST_REPORTED_BY")",
+  "reported_at": "$(json_escape "$FINISHED_AT")"
+}
+EOF_JSON
+}
+
+run_ingest() {
+  local payload="$1"
+  INGEST_STATUS="skipped"
+  INGEST_HTTP_CODE=""
+  INGEST_ERROR=""
+  INGEST_RESPONSE_FILE=""
+  INGEST_REQUIRED_FAILURE="false"
+
+  if ! is_truthy "$INGEST_ENABLED"; then
+    return
+  fi
+
+  if [[ -z "$INGEST_BASE_URL" || -z "$INGEST_INTERNAL_KEY" ]]; then
+    INGEST_STATUS="misconfigured"
+    INGEST_ERROR="missing_ingest_base_url_or_internal_key"
+    if is_truthy "$INGEST_REQUIRE_SUCCESS"; then
+      INGEST_REQUIRED_FAILURE="true"
+    fi
+    return
+  fi
+
+  local normalized_path
+  normalized_path="${INGEST_PATH:-/internal/judge/fairness/benchmark-runs}"
+  if [[ "${normalized_path:0:1}" != "/" ]]; then
+    normalized_path="/$normalized_path"
+  fi
+  local target_url
+  target_url="${INGEST_BASE_URL%/}${normalized_path}"
+
+  local timeout_secs
+  timeout_secs="$(trim "$INGEST_TIMEOUT_SECS")"
+  if ! [[ "$timeout_secs" =~ ^[0-9]+$ ]] || [[ "$timeout_secs" -le 0 ]]; then
+    timeout_secs="8"
+  fi
+
+  local response_file stderr_file
+  response_file="$ROOT/artifacts/harness/${RUN_ID}.ingest.response.json"
+  stderr_file="$ROOT/artifacts/harness/${RUN_ID}.ingest.stderr.log"
+  ensure_parent_dir "$response_file"
+  INGEST_RESPONSE_FILE="$response_file"
+
+  local http_code curl_code
+  set +e
+  http_code="$(curl \
+    -sS \
+    -o "$response_file" \
+    -w "%{http_code}" \
+    --connect-timeout "$timeout_secs" \
+    --max-time "$timeout_secs" \
+    -X POST "$target_url" \
+    -H "Content-Type: application/json" \
+    -H "x-ai-internal-key: $INGEST_INTERNAL_KEY" \
+    --data "$payload" \
+    2>"$stderr_file")"
+  curl_code="$?"
+  set -e
+
+  if [[ "$curl_code" -ne 0 ]]; then
+    INGEST_STATUS="failed"
+    INGEST_HTTP_CODE="${http_code:-000}"
+    INGEST_ERROR="curl_exit_${curl_code}"
+  elif [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+    INGEST_STATUS="sent"
+    INGEST_HTTP_CODE="$http_code"
+    INGEST_ERROR=""
+  else
+    INGEST_STATUS="failed"
+    INGEST_HTTP_CODE="${http_code:-000}"
+    INGEST_ERROR="http_${http_code:-000}"
+  fi
+
+  if [[ "$INGEST_STATUS" != "sent" ]] && is_truthy "$INGEST_REQUIRE_SUCCESS"; then
+    INGEST_REQUIRED_FAILURE="true"
+  fi
+}
+
 write_threshold_env() {
   local policy_version="$1"
   local threshold_decision="$2"
@@ -240,6 +413,7 @@ write_threshold_env() {
   local appeal_ok="${11}"
   local freeze_evidence_ref="${12}"
   local dataset_ref="${13}"
+  local ingest_path="${14}"
 
   cat >"$OUTPUT_ENV" <<EOF_ENV
 FAIRNESS_BENCHMARK_FREEZE_STATUS=$STATUS
@@ -264,6 +438,14 @@ OBS_APPEAL_OVERTURN_RATE=$appeal_overturn_rate
 COMPLIANCE_DRAW_RATE=$draw_ok
 COMPLIANCE_SIDE_BIAS_DELTA=$side_ok
 COMPLIANCE_APPEAL_OVERTURN_RATE=$appeal_ok
+
+FAIRNESS_INGEST_ENABLED=$INGEST_ENABLED
+FAIRNESS_INGEST_STATUS=$INGEST_STATUS
+FAIRNESS_INGEST_BASE_URL=$INGEST_BASE_URL
+FAIRNESS_INGEST_PATH=$ingest_path
+FAIRNESS_INGEST_HTTP_CODE=$INGEST_HTTP_CODE
+FAIRNESS_INGEST_ERROR=$INGEST_ERROR
+FAIRNESS_INGEST_RESPONSE=$INGEST_RESPONSE_FILE
 EOF_ENV
 }
 
@@ -284,6 +466,7 @@ write_freeze_doc() {
   local dataset_ref="${14}"
   local missing_keys="${15}"
   local note="${16}"
+  local ingest_path="${17}"
 
   cat >"$OUTPUT_DOC" <<EOF_DOC
 # AI Judge Fairness Benchmark 冻结口径
@@ -320,6 +503,16 @@ write_freeze_doc() {
 1. missing_keys: \`${missing_keys:-（无）}\`
 2. note: \`${note}\`
 3. 当前冻结仅用于工程口径治理；真实环境冻结结论仍以 \`status=pass\` 为准。
+
+## 5. ingest 状态
+
+1. ingest_enabled: \`$INGEST_ENABLED\`
+2. ingest_base_url: \`$INGEST_BASE_URL\`
+3. ingest_path: \`$ingest_path\`
+4. ingest_status: \`$INGEST_STATUS\`
+5. ingest_http_code: \`${INGEST_HTTP_CODE:-（无）}\`
+6. ingest_error: \`${INGEST_ERROR:-（无）}\`
+7. ingest_response: \`${INGEST_RESPONSE_FILE:-（无）}\`
 EOF_DOC
 }
 
@@ -337,6 +530,7 @@ write_json_summary() {
   local appeal_ok="${11}"
   local missing_keys="${12}"
   local note="${13}"
+  local ingest_path="${14}"
 
   {
     printf '{\n'
@@ -367,6 +561,15 @@ write_json_summary() {
     printf '  },\n'
     printf '  "missing_keys": "%s",\n' "$(json_escape "$missing_keys")"
     printf '  "note": "%s",\n' "$(json_escape "$note")"
+    printf '  "ingest": {\n'
+    printf '    "enabled": %s,\n' "$([[ "$INGEST_ENABLED" == "true" ]] && echo "true" || echo "false")"
+    printf '    "base_url": "%s",\n' "$(json_escape "$INGEST_BASE_URL")"
+    printf '    "path": "%s",\n' "$(json_escape "$ingest_path")"
+    printf '    "status": "%s",\n' "$(json_escape "$INGEST_STATUS")"
+    printf '    "http_code": "%s",\n' "$(json_escape "$INGEST_HTTP_CODE")"
+    printf '    "error": "%s",\n' "$(json_escape "$INGEST_ERROR")"
+    printf '    "response": "%s"\n' "$(json_escape "$INGEST_RESPONSE_FILE")"
+    printf '  },\n'
     printf '  "started_at": "%s",\n' "$(json_escape "$STARTED_AT")"
     printf '  "finished_at": "%s",\n' "$(json_escape "$FINISHED_AT")"
     printf '  "outputs": {\n'
@@ -382,6 +585,7 @@ write_json_summary() {
 write_md_summary() {
   local threshold_decision="$1"
   local note="$2"
+  local ingest_path="$3"
 
   {
     printf '# AI Judge Fairness Benchmark Freeze\n\n'
@@ -394,6 +598,13 @@ write_md_summary() {
     printf -- '- output_doc: `%s`\n' "$OUTPUT_DOC"
     printf -- '- started_at: `%s`\n' "$STARTED_AT"
     printf -- '- finished_at: `%s`\n' "$FINISHED_AT"
+    printf -- '- ingest_enabled: `%s`\n' "$INGEST_ENABLED"
+    printf -- '- ingest_base_url: `%s`\n' "$INGEST_BASE_URL"
+    printf -- '- ingest_path: `%s`\n' "$ingest_path"
+    printf -- '- ingest_status: `%s`\n' "$INGEST_STATUS"
+    printf -- '- ingest_http_code: `%s`\n' "${INGEST_HTTP_CODE:-}"
+    printf -- '- ingest_error: `%s`\n' "${INGEST_ERROR:-}"
+    printf -- '- ingest_response: `%s`\n' "${INGEST_RESPONSE_FILE:-}"
     printf '\n## Note\n\n'
     printf '1. %s\n' "$note"
   } >"$EMIT_MD"
@@ -422,6 +633,14 @@ main() {
     OUTPUT_DOC="$ROOT/docs/dev_plan/AI_Judge_Fairness_Benchmark_冻结口径-$(date_cn).md"
   else
     OUTPUT_DOC="$(abs_path "$OUTPUT_DOC")"
+  fi
+  if [[ -z "$INGEST_PATH" ]]; then
+    INGEST_PATH="/internal/judge/fairness/benchmark-runs"
+  fi
+  local normalized_ingest_path
+  normalized_ingest_path="$INGEST_PATH"
+  if [[ "${normalized_ingest_path:0:1}" != "/" ]]; then
+    normalized_ingest_path="/$normalized_ingest_path"
   fi
 
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-ai-judge-fairness-benchmark-freeze"
@@ -538,6 +757,19 @@ main() {
   fi
 
   FINISHED_AT="$(iso_now)"
+  local ingest_payload
+  ingest_payload="$(build_ingest_payload \
+    "$policy_version" \
+    "$threshold_decision" \
+    "$needs_real_reconfirm" \
+    "$needs_remediation" \
+    "$sample_size" \
+    "$draw_rate" \
+    "$side_bias_delta" \
+    "$appeal_overturn_rate" \
+    "$missing_keys" \
+    "$note")"
+  run_ingest "$ingest_payload"
   write_threshold_env \
     "$policy_version" \
     "$threshold_decision" \
@@ -551,7 +783,8 @@ main() {
     "$side_ok" \
     "$appeal_ok" \
     "$freeze_evidence_ref" \
-    "$dataset_ref"
+    "$dataset_ref" \
+    "$normalized_ingest_path"
   write_freeze_doc \
     "$(date_cn)" \
     "$policy_version" \
@@ -568,7 +801,8 @@ main() {
     "$freeze_evidence_ref" \
     "$dataset_ref" \
     "$missing_keys" \
-    "$note"
+    "$note" \
+    "$normalized_ingest_path"
   write_json_summary \
     "$policy_version" \
     "$threshold_decision" \
@@ -582,16 +816,27 @@ main() {
     "$side_ok" \
     "$appeal_ok" \
     "$missing_keys" \
-    "$note"
-  write_md_summary "$threshold_decision" "$note"
+    "$note" \
+    "$normalized_ingest_path"
+  write_md_summary "$threshold_decision" "$note" "$normalized_ingest_path"
 
   echo "ai_judge_fairness_benchmark_freeze_status: $STATUS"
   echo "environment_mode: $ENV_MODE"
   echo "allow_local_reference: $ALLOW_LOCAL_REFERENCE"
+  echo "ingest_enabled: $INGEST_ENABLED"
+  echo "ingest_status: $INGEST_STATUS"
+  echo "ingest_http_code: ${INGEST_HTTP_CODE:-000}"
+  echo "ingest_error: ${INGEST_ERROR:-}"
+  echo "ingest_response: ${INGEST_RESPONSE_FILE:-}"
   echo "output_env: $OUTPUT_ENV"
   echo "output_doc: $OUTPUT_DOC"
   echo "summary_json: $EMIT_JSON"
   echo "summary_md: $EMIT_MD"
+
+  if [[ "$INGEST_REQUIRED_FAILURE" == "true" ]]; then
+    echo "ai_judge_fairness_benchmark_freeze_error: ingest_required_but_not_sent"
+    exit 4
+  fi
 }
 
 main "$@"

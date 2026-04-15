@@ -142,4 +142,98 @@ expect_contains "real violation decision" "THRESHOLD_DECISION=violated" "$REAL_V
 expect_contains "real violation remediation" "NEEDS_REMEDIATION=true" "$REAL_VIOLATION_ENV_OUT"
 expect_contains "real violation draw compliance false" "COMPLIANCE_DRAW_RATE=false" "$REAL_VIOLATION_ENV_OUT"
 
+# 场景5：ingest 启用且上报成功（mock curl） -> ingest_status=sent
+WORK_INGEST_SENT="$TMP_DIR/ingest-sent"
+mkdir -p "$WORK_INGEST_SENT/docs/loadtest/evidence" "$WORK_INGEST_SENT/docs/dev_plan" "$WORK_INGEST_SENT/artifacts/harness"
+cat >"$WORK_INGEST_SENT/docs/loadtest/evidence/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+EOF
+write_real_benchmark_env "$WORK_INGEST_SENT/docs/loadtest/evidence/ai_judge_p5_fairness_benchmark.env" "0.19" "0.03" "0.05"
+
+MOCK_BIN_SENT="$TMP_DIR/mock-bin-sent"
+mkdir -p "$MOCK_BIN_SENT"
+cat >"$MOCK_BIN_SENT/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output_file=""
+data_payload=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      output_file="${2:-}"
+      shift 2
+      ;;
+    --data)
+      data_payload="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift 1
+      ;;
+  esac
+done
+if [[ -n "${MOCK_CURL_CAPTURE:-}" ]]; then
+  printf '%s' "$data_payload" >"$MOCK_CURL_CAPTURE"
+fi
+if [[ -n "$output_file" ]]; then
+  printf '{"ok":true}' >"$output_file"
+fi
+printf '200'
+EOF
+chmod +x "$MOCK_BIN_SENT/curl"
+
+INGEST_SENT_STDOUT="$TMP_DIR/ingest-sent.stdout"
+INGEST_SENT_ENV_OUT="$TMP_DIR/ingest-sent.thresholds.env"
+INGEST_CAPTURE="$TMP_DIR/ingest.sent.payload.json"
+PATH="$MOCK_BIN_SENT:$PATH" MOCK_CURL_CAPTURE="$INGEST_CAPTURE" bash "$SCRIPT" \
+  --root "$WORK_INGEST_SENT" \
+  --output-env "$INGEST_SENT_ENV_OUT" \
+  --ingest-enabled \
+  --ingest-base-url "http://127.0.0.1:8787" \
+  --ingest-internal-key "test-key" >"$INGEST_SENT_STDOUT"
+
+expect_contains "ingest sent stdout" "ingest_status: sent" "$INGEST_SENT_STDOUT"
+expect_contains "ingest sent env status" "FAIRNESS_INGEST_STATUS=sent" "$INGEST_SENT_ENV_OUT"
+expect_contains "ingest sent env code" "FAIRNESS_INGEST_HTTP_CODE=200" "$INGEST_SENT_ENV_OUT"
+expect_contains "ingest sent payload run id" "\"run_id\"" "$INGEST_CAPTURE"
+
+# 场景6：ingest 启用且要求成功，但上报失败 -> 退出非 0
+WORK_INGEST_FAIL="$TMP_DIR/ingest-fail"
+mkdir -p "$WORK_INGEST_FAIL/docs/loadtest/evidence" "$WORK_INGEST_FAIL/docs/dev_plan" "$WORK_INGEST_FAIL/artifacts/harness"
+cat >"$WORK_INGEST_FAIL/docs/loadtest/evidence/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+EOF
+write_real_benchmark_env "$WORK_INGEST_FAIL/docs/loadtest/evidence/ai_judge_p5_fairness_benchmark.env" "0.18" "0.03" "0.05"
+
+MOCK_BIN_FAIL="$TMP_DIR/mock-bin-fail"
+mkdir -p "$MOCK_BIN_FAIL"
+cat >"$MOCK_BIN_FAIL/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '000'
+exit 7
+EOF
+chmod +x "$MOCK_BIN_FAIL/curl"
+
+INGEST_FAIL_STDOUT="$TMP_DIR/ingest-fail.stdout"
+INGEST_FAIL_ENV_OUT="$TMP_DIR/ingest-fail.thresholds.env"
+set +e
+PATH="$MOCK_BIN_FAIL:$PATH" bash "$SCRIPT" \
+  --root "$WORK_INGEST_FAIL" \
+  --output-env "$INGEST_FAIL_ENV_OUT" \
+  --ingest-enabled \
+  --ingest-base-url "http://127.0.0.1:8787" \
+  --ingest-internal-key "test-key" \
+  --ingest-require-success >"$INGEST_FAIL_STDOUT" 2>&1
+INGEST_FAIL_CODE="$?"
+set -e
+if [[ "$INGEST_FAIL_CODE" -eq 0 ]]; then
+  echo "[FAIL] ingest require success should fail"
+  cat "$INGEST_FAIL_STDOUT"
+  exit 1
+fi
+expect_contains "ingest fail stdout" "ingest_status: failed" "$INGEST_FAIL_STDOUT"
+expect_contains "ingest fail error line" "ingest_required_but_not_sent" "$INGEST_FAIL_STDOUT"
+expect_contains "ingest fail env status" "FAIRNESS_INGEST_STATUS=failed" "$INGEST_FAIL_ENV_OUT"
+
 echo "all ai-judge fairness benchmark freeze tests passed"
