@@ -1,0 +1,49 @@
+{
+  "run_id": "20260415T230836Z-ai-judge-runtime-sla-freeze",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace",
+  "latency_env": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_p5_latency_baseline.env",
+  "fault_env": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_p5_fault_drill.env",
+  "trust_env": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_p5_trust_attestation.env",
+  "env_marker": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_p5_real_env.env",
+  "environment_mode": "real",
+  "allow_local_reference": false,
+  "policy_version": "runtime-sla-v1",
+  "threshold_decision": "accepted",
+  "needs_real_env_reconfirm": false,
+  "needs_remediation": false,
+  "metrics": {
+    "sample_size": "1200",
+    "p95_ms": "980",
+    "p99_ms": "1860",
+    "callback_failure_recovery_pass": true,
+    "replay_consistency_pass": true,
+    "audit_alert_delivery_pass": true,
+    "trace_hash_coverage": "0.995",
+    "commitment_coverage": "0.985",
+    "attestation_gap": "0.003",
+    "p95_ok": true,
+    "p99_ok": true,
+    "fault_ok": true,
+    "trace_ok": true,
+    "commitment_ok": true,
+    "gap_ok": true
+  },
+  "thresholds": {
+    "p95_ms_max": "1200",
+    "p99_ms_max": "2200",
+    "trace_hash_coverage_min": "0.99",
+    "commitment_coverage_min": "0.98",
+    "attestation_gap_max": "0.01"
+  },
+  "missing_keys": "",
+  "note": "real environment runtime sla frozen successfully",
+  "started_at": "2026-04-15T23:08:36Z",
+  "finished_at": "2026-04-15T23:08:36Z",
+  "outputs": {
+    "threshold_env": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_runtime_sla_thresholds.env",
+    "freeze_doc": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/docs/dev_plan/AI_Judge_Runtime_SLA_冻结口径-2026-04-15.md",
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/artifacts/harness/20260415T230836Z-ai-judge-runtime-ops-pack/runtime_sla.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260415T230834Z-ai-judge-real-pass-rehearsal/workspace/artifacts/harness/20260415T230836Z-ai-judge-runtime-ops-pack/runtime_sla.summary.md"
+  }
+}
