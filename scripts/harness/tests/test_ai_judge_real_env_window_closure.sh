@@ -219,8 +219,11 @@ run_window_closure "$WORK_PASS" --emit-json "$PASS_JSON" --emit-md "$PASS_MD" >"
 expect_contains "pass status" "ai_judge_real_env_window_closure_status: pass" "$PASS_STDOUT"
 expect_contains "pass p5 status" "p5_status: pass" "$PASS_STDOUT"
 expect_contains "pass runtime pack status" "runtime_ops_pack_status: pass" "$PASS_STDOUT"
+expect_contains "pass real pass ready" "real_pass_ready: true" "$PASS_STDOUT"
 expect_contains "pass json" "\"status\": \"pass\"" "$PASS_JSON"
+expect_contains "pass json real pass ready" "\"ready\": true" "$PASS_JSON"
 expect_contains "pass md title" "# ai-judge-real-env-window-closure" "$PASS_MD"
+expect_contains "pass closure env real pass" "REAL_PASS_READY=true" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
 
 # 场景3：阈值违反 -> threshold_violation
 WORK_VIOLATION="$TMP_DIR/violation"
@@ -267,6 +270,8 @@ run_window_closure "$WORK_LOCAL" --allow-local-reference >"$LOCAL_STDOUT"
 expect_contains "local status" "ai_judge_real_env_window_closure_status: local_reference_ready" "$LOCAL_STDOUT"
 expect_contains "local p5 status" "p5_status: local_reference_pass" "$LOCAL_STDOUT"
 expect_contains "local runtime pack status" "runtime_ops_pack_status: local_reference_ready" "$LOCAL_STDOUT"
+expect_contains "local real pass not ready" "real_pass_ready: false" "$LOCAL_STDOUT"
+expect_contains "local blocker includes marker" "real_pass_blocker_codes: real_env_marker_not_ready" "$LOCAL_STDOUT"
 
 # 场景6：窗口脚本透传 fairness ingest 并成功
 WORK_INGEST="$TMP_DIR/ingest"
@@ -312,6 +317,7 @@ PATH="$MOCK_BIN_INGEST:$PATH" run_window_closure "$WORK_INGEST" \
 expect_contains "ingest closure status" "ai_judge_real_env_window_closure_status: local_reference_ready" "$INGEST_STDOUT"
 expect_contains "ingest runtime status" "runtime_ops_pack_status: local_reference_ready" "$INGEST_STDOUT"
 expect_contains "ingest runtime fairness ingest line" "runtime_ops_fairness_ingest_status: sent" "$INGEST_STDOUT"
+expect_contains "ingest still real pass false" "real_pass_ready: false" "$INGEST_STDOUT"
 expect_contains "ingest closure env persisted" "FAIRNESS_INGEST_STATUS=sent" "$EVIDENCE_INGEST/ai_judge_real_env_window_closure.env"
 
 echo "all ai-judge real env window closure tests passed"

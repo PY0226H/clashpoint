@@ -33,6 +33,9 @@ REAL_ENV_CLOSURE_STATUS="unknown"
 STAGE_CLOSURE_EVIDENCE_STATUS="unknown"
 MARKER_READY="false"
 ENV_MODE="blocked"
+REAL_PASS_READY="false"
+REAL_PASS_BLOCKER_CODES=""
+REAL_PASS_BLOCKER_HINTS=""
 
 FAIRNESS_INGEST_ENABLED="${AI_JUDGE_FAIRNESS_INGEST_ENABLED:-false}"
 FAIRNESS_INGEST_BASE_URL="${AI_JUDGE_FAIRNESS_INGEST_BASE_URL:-}"
@@ -348,6 +351,22 @@ is_in_set() {
   return 1
 }
 
+join_with_delim() {
+  local delim="$1"
+  shift
+  if [[ $# -eq 0 ]]; then
+    printf '%s' ""
+    return
+  fi
+  local out="$1"
+  shift
+  local part
+  for part in "$@"; do
+    out+="$delim$part"
+  done
+  printf '%s' "$out"
+}
+
 derive_status() {
   if [[ "$P5_EXIT_CODE" != "0" || "$RUNTIME_OPS_EXIT_CODE" != "0" ]]; then
     STATUS="stage_failed"
@@ -383,6 +402,55 @@ derive_status() {
   STATUS="mixed"
 }
 
+derive_real_pass_readiness() {
+  local -a blocker_codes=()
+  local -a blocker_hints=()
+
+  if [[ "$MARKER_READY" != "true" ]]; then
+    blocker_codes+=("real_env_marker_not_ready")
+    blocker_hints+=("设置 docs/loadtest/evidence/ai_judge_p5_real_env.env 中 REAL_CALIBRATION_ENV_READY=true")
+  fi
+  if [[ "$P5_STATUS" != "pass" ]]; then
+    blocker_codes+=("p5_status_not_pass")
+    blocker_hints+=("P5 real calibration 当前为 '$P5_STATUS'，需提升到 pass")
+  fi
+  if [[ "$RUNTIME_OPS_STATUS" != "pass" ]]; then
+    blocker_codes+=("runtime_ops_status_not_pass")
+    blocker_hints+=("runtime ops pack 当前为 '$RUNTIME_OPS_STATUS'，需提升到 pass")
+  fi
+  if [[ "$FAIRNESS_STATUS" != "pass" ]]; then
+    blocker_codes+=("fairness_status_not_pass")
+    blocker_hints+=("fairness freeze 当前为 '$FAIRNESS_STATUS'，需提升到 pass")
+  fi
+  if [[ "$RUNTIME_SLA_STATUS" != "pass" ]]; then
+    blocker_codes+=("runtime_sla_status_not_pass")
+    blocker_hints+=("runtime SLA freeze 当前为 '$RUNTIME_SLA_STATUS'，需提升到 pass")
+  fi
+  if [[ "$REAL_ENV_CLOSURE_STATUS" != "pass" ]]; then
+    blocker_codes+=("real_env_closure_status_not_pass")
+    blocker_hints+=("real env evidence closure 当前为 '$REAL_ENV_CLOSURE_STATUS'，需提升到 pass")
+  fi
+  if [[ "$STAGE_CLOSURE_EVIDENCE_STATUS" != "pass" ]]; then
+    blocker_codes+=("stage_closure_evidence_not_pass")
+    blocker_hints+=("stage closure evidence 当前为 '$STAGE_CLOSURE_EVIDENCE_STATUS'，需为 pass")
+  fi
+  if [[ "$FAIRNESS_INGEST_REQUIRE_SUCCESS" == "true" && "$FAIRNESS_INGEST_STATUS" != "sent" ]]; then
+    blocker_codes+=("fairness_ingest_not_sent")
+    blocker_hints+=("fairness ingest 要求成功，但当前为 '$FAIRNESS_INGEST_STATUS'")
+  fi
+
+  if [[ ${#blocker_codes[@]} -eq 0 ]]; then
+    REAL_PASS_READY="true"
+    REAL_PASS_BLOCKER_CODES=""
+    REAL_PASS_BLOCKER_HINTS=""
+    return
+  fi
+
+  REAL_PASS_READY="false"
+  REAL_PASS_BLOCKER_CODES="$(join_with_delim "," "${blocker_codes[@]}")"
+  REAL_PASS_BLOCKER_HINTS="$(join_with_delim " || " "${blocker_hints[@]}")"
+}
+
 write_output_env() {
   cat >"$OUTPUT_ENV" <<EOF_ENV
 AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=$STATUS
@@ -391,6 +459,9 @@ RUN_ID=$RUN_ID
 REAL_CALIBRATION_ENV_READY=$MARKER_READY
 ENVIRONMENT_MODE=$ENV_MODE
 ALLOW_LOCAL_REFERENCE=$ALLOW_LOCAL_REFERENCE
+REAL_PASS_READY=$REAL_PASS_READY
+REAL_PASS_BLOCKER_CODES=$REAL_PASS_BLOCKER_CODES
+REAL_PASS_BLOCKER_HINTS=$REAL_PASS_BLOCKER_HINTS
 P5_REAL_CALIBRATION_STATUS=$P5_STATUS
 RUNTIME_OPS_PACK_STATUS=$RUNTIME_OPS_STATUS
 FAIRNESS_STATUS=$FAIRNESS_STATUS
@@ -428,6 +499,12 @@ write_output_doc() {
 3. runtime_sla_status：\`$RUNTIME_SLA_STATUS\`
 4. real_env_closure_status：\`$REAL_ENV_CLOSURE_STATUS\`
 5. stage_closure_evidence_status：\`$STAGE_CLOSURE_EVIDENCE_STATUS\`
+
+## Real Pass 就绪检查
+
+1. real_pass_ready：\`$REAL_PASS_READY\`
+2. blocker_codes：\`${REAL_PASS_BLOCKER_CODES:-（无）}\`
+3. blocker_hints：\`${REAL_PASS_BLOCKER_HINTS:-（无）}\`
 
 ## 输出工件
 
@@ -468,6 +545,11 @@ write_json_summary() {
     "real_env_closure_status": "$(json_escape "$REAL_ENV_CLOSURE_STATUS")",
     "stage_closure_evidence_status": "$(json_escape "$STAGE_CLOSURE_EVIDENCE_STATUS")"
   },
+  "real_pass": {
+    "ready": $([[ "$REAL_PASS_READY" == "true" ]] && echo "true" || echo "false"),
+    "blocker_codes": "$(json_escape "$REAL_PASS_BLOCKER_CODES")",
+    "blocker_hints": "$(json_escape "$REAL_PASS_BLOCKER_HINTS")"
+  },
   "outputs": {
     "output_env": "$(json_escape "$OUTPUT_ENV")",
     "output_doc": "$(json_escape "$OUTPUT_DOC")",
@@ -489,6 +571,8 @@ write_md_summary() {
 - environment_mode: \`$ENV_MODE\`
 - marker_ready: \`$MARKER_READY\`
 - allow_local_reference: \`$ALLOW_LOCAL_REFERENCE\`
+- real_pass_ready: \`$REAL_PASS_READY\`
+- real_pass_blocker_codes: \`${REAL_PASS_BLOCKER_CODES:-（无）}\`
 
 ## stages
 
@@ -502,6 +586,10 @@ write_md_summary() {
 3. runtime_sla_status: \`$RUNTIME_SLA_STATUS\`
 4. real_env_closure_status: \`$REAL_ENV_CLOSURE_STATUS\`
 5. stage_closure_evidence_status: \`$STAGE_CLOSURE_EVIDENCE_STATUS\`
+
+## real_pass_hints
+
+1. \`${REAL_PASS_BLOCKER_HINTS:-（无）}\`
 EOF_MD
 }
 
@@ -637,6 +725,7 @@ main() {
   [[ -z "$STAGE_CLOSURE_EVIDENCE_STATUS" ]] && STAGE_CLOSURE_EVIDENCE_STATUS="unknown"
 
   derive_status
+  derive_real_pass_readiness
   FINISHED_AT="$(iso_now)"
   write_output_env
   write_output_doc
@@ -652,6 +741,9 @@ main() {
   echo "runtime_ops_runtime_sla_status: $RUNTIME_SLA_STATUS"
   echo "runtime_ops_real_env_closure_status: $REAL_ENV_CLOSURE_STATUS"
   echo "runtime_ops_stage_closure_evidence_status: $STAGE_CLOSURE_EVIDENCE_STATUS"
+  echo "real_pass_ready: $REAL_PASS_READY"
+  echo "real_pass_blocker_codes: ${REAL_PASS_BLOCKER_CODES:-none}"
+  echo "real_pass_blocker_hints: ${REAL_PASS_BLOCKER_HINTS:-none}"
   echo "output_env: $OUTPUT_ENV"
   echo "output_doc: $OUTPUT_DOC"
   echo "summary_json: $EMIT_JSON"
