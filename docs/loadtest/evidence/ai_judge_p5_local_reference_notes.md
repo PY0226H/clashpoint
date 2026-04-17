@@ -1,6 +1,6 @@
 # AI Judge P5 本机参考校准说明
 
-更新时间：2026-04-14
+更新时间：2026-04-17
 环境：2021 MacBook Pro / Apple M1 Pro / 16GB / 10-core
 用途：仅用于 `local_reference_*` 口径预校准，不替代真实环境 `pass` 结论。
 
@@ -27,12 +27,19 @@
 
 ## 4. 最新本机复跑记录
 
-1. 复跑时间：2026-04-14T01:08:51Z
-2. 执行命令：`bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh --allow-local-reference`
-3. 结果：`local_reference_pass`（5/5 轨道为 `local_reference_pass`）
+1. 复跑时间：2026-04-17T02:58:07Z ~ 2026-04-17T02:58:10Z
+2. 执行命令：
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference --emit-json artifacts/harness/manual-ai-judge-runtime-ops-pack-local.summary.json --emit-md artifacts/harness/manual-ai-judge-runtime-ops-pack-local.summary.md`
+   - `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference --emit-json artifacts/harness/manual-ai-judge-real-env-window-local.summary.json --emit-md artifacts/harness/manual-ai-judge-real-env-window-local.summary.md`
+3. 结果：
+   - `ai_judge_runtime_ops_pack_status=local_reference_ready`
+   - `ai_judge_real_env_window_closure_status=local_reference_ready`
+   - `REAL_PASS_READY=false`（未进入真实环境 `pass`）
 4. 摘要工件：
-   - `artifacts/harness/20260414T010851Z-ai-judge-p5-real-calibration-on-env.summary.json`
-   - `artifacts/harness/20260414T010851Z-ai-judge-p5-real-calibration-on-env.summary.md`
+   - `artifacts/harness/manual-ai-judge-runtime-ops-pack-local.summary.json`
+   - `artifacts/harness/manual-ai-judge-runtime-ops-pack-local.summary.md`
+   - `artifacts/harness/manual-ai-judge-real-env-window-local.summary.json`
+   - `artifacts/harness/manual-ai-judge-real-env-window-local.summary.md`
 5. 仍待真实环境补齐：
    - `REAL_CALIBRATION_ENV_READY=true`
    - 五轨道 real 证据键：`REAL_ENV_EVIDENCE`、`DATASET_REF`
