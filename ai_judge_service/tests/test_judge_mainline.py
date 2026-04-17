@@ -181,6 +181,16 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
         payload["judgeTrace"]["panelArbiter"]["runtimeProfiles"]["judgeA"]["profileId"]
         == runtime_profiles["judgeA"]["profileId"]
     )
+    arbitration = payload["verdictLedger"]["arbitration"]
+    assert arbitration["chainVersion"] == "v1-panel-fairness-arbiter"
+    assert arbitration["decisionPath"] == ["judge_panel", "fairness_sentinel", "chief_arbiter"]
+    assert arbitration["fairnessGateApplied"] is True
+    assert arbitration["gateDecision"] == "pass_through"
+    assert arbitration["winnerAfterArbitration"] == payload["winner"]
+    invariants = payload["judgeTrace"]["panelArbiter"]["nonBypassInvariant"]
+    assert invariants["reviewRequiredImpliesDraw"] is True
+    assert invariants["arbitrationWinnerMatchesTopWinner"] is True
+    assert invariants["fairnessReviewMatchesArbitration"] is True
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -327,6 +337,8 @@ def test_build_final_report_payload_should_trigger_style_shift_instability_gate(
     assert payload["winner"] == "draw"
     assert "style_shift_instability" in payload["errorCodes"]
     assert "fairness_gate_review_required" in payload["errorCodes"]
+    assert payload["verdictLedger"]["arbitration"]["gateDecision"] == "blocked_to_draw"
+    assert payload["verdictLedger"]["arbitration"]["reviewRequired"] is True
     assert any(item.get("type") == "style_shift_instability" for item in payload["auditAlerts"])
 
 
@@ -426,6 +438,7 @@ def test_build_final_report_payload_should_trigger_panel_disagreement_gate() -> 
     assert payload["fairnessSummary"]["panelDisagreementRatio"] > 0.0
     assert payload["fairnessSummary"]["panelDisagreementReasons"]
     assert payload["verdictLedger"]["panelDecisions"]["panelDisagreement"]["high"] is True
+    assert payload["verdictLedger"]["arbitration"]["gateDecision"] == "blocked_to_draw"
 
 
 def test_build_final_report_payload_should_respect_panel_disagreement_threshold() -> None:

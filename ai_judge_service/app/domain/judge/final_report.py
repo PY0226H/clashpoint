@@ -352,6 +352,7 @@ def _build_verdict_ledger(
     rejudge_triggered: bool,
     needs_draw_vote: bool,
     fairness_summary: dict[str, Any],
+    fairness_error_codes: list[str],
     error_codes: list[str],
     claim_graph_summary: dict[str, Any],
     phase_rollup_summary: list[dict[str, Any]],
@@ -390,11 +391,30 @@ def _build_verdict_ledger(
         "phaseCountUsed": len(phase_rollup_summary),
     }
     arbitration = {
+        "chainVersion": "v1-panel-fairness-arbiter",
+        "decisionPath": [
+            "judge_panel",
+            "fairness_sentinel",
+            "chief_arbiter",
+        ],
+        "fairnessGateApplied": True,
         "winnerBeforeFairnessGate": winner_before_fairness_gate,
         "winnerAfterArbitration": winner,
+        "gateDecision": (
+            "blocked_to_draw"
+            if review_required and winner == "draw"
+            else "pass_through"
+        ),
         "reviewRequired": review_required,
+        "fairnessReviewRequired": bool(fairness_summary.get("reviewRequired")),
+        "gateLockedToDraw": bool(review_required and winner == "draw"),
         "rejudgeTriggered": rejudge_triggered,
         "needsDrawVote": needs_draw_vote,
+        "fairnessErrorCodes": [
+            str(code).strip()
+            for code in fairness_error_codes
+            if str(code).strip()
+        ],
         "errorCodes": [str(code).strip() for code in error_codes if str(code).strip()],
     }
     return {
@@ -893,6 +913,9 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
     if not isinstance(verdict_refs, list):
         missing.append("verdictEvidenceRefs")
         verdict_refs = []
+    review_required = payload.get("reviewRequired")
+    if not isinstance(review_required, bool):
+        missing.append("reviewRequired")
     for key in ("phaseRollupSummary", "retrievalSnapshotRollup"):
         if not isinstance(payload.get(key), list):
             missing.append(key)
@@ -946,6 +969,11 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             missing.append("verdictEvidenceRefs.evidenceId_not_found")
 
     verdict_ledger = payload.get("verdictLedger")
+    fairness_summary = payload.get("fairnessSummary")
+    if not isinstance(fairness_summary, dict):
+        missing.append("fairnessSummary")
+    elif not isinstance(fairness_summary.get("reviewRequired"), bool):
+        missing.append("fairnessSummary.reviewRequired")
     if not isinstance(verdict_ledger, dict):
         missing.append("verdictLedger")
     else:
@@ -959,6 +987,41 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             missing.append("verdictLedger.pivotalMoments")
         if not isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list):
             missing.append("verdictLedger.decisiveEvidenceRefs")
+        arbitration = (
+            verdict_ledger.get("arbitration")
+            if isinstance(verdict_ledger.get("arbitration"), dict)
+            else {}
+        )
+        if not str(arbitration.get("chainVersion") or "").strip():
+            missing.append("verdictLedger.arbitration.chainVersion")
+        if not isinstance(arbitration.get("decisionPath"), list):
+            missing.append("verdictLedger.arbitration.decisionPath")
+        if not isinstance(arbitration.get("fairnessGateApplied"), bool):
+            missing.append("verdictLedger.arbitration.fairnessGateApplied")
+        if not str(arbitration.get("gateDecision") or "").strip():
+            missing.append("verdictLedger.arbitration.gateDecision")
+        arbitration_winner = str(arbitration.get("winnerAfterArbitration") or "").strip().lower()
+        if arbitration_winner not in {"pro", "con", "draw"}:
+            missing.append("verdictLedger.arbitration.winnerAfterArbitration")
+        elif arbitration_winner != winner:
+            missing.append("verdictLedger.arbitration.winnerAfterArbitration_mismatch")
+        if not isinstance(arbitration.get("reviewRequired"), bool):
+            missing.append("verdictLedger.arbitration.reviewRequired")
+        elif isinstance(review_required, bool) and bool(arbitration.get("reviewRequired")) != review_required:
+            missing.append("verdictLedger.arbitration.reviewRequired_mismatch")
+        if (
+            isinstance(arbitration.get("reviewRequired"), bool)
+            and isinstance(fairness_summary, dict)
+            and isinstance(fairness_summary.get("reviewRequired"), bool)
+            and bool(arbitration.get("reviewRequired")) != bool(fairness_summary.get("reviewRequired"))
+        ):
+            missing.append("verdictLedger.arbitration.reviewRequired_fairness_mismatch")
+        if (
+            isinstance(arbitration.get("reviewRequired"), bool)
+            and bool(arbitration.get("reviewRequired"))
+            and winner != "draw"
+        ):
+            missing.append("verdictLedger.arbitration.reviewRequired_winner_not_draw")
 
     opinion_pack = payload.get("opinionPack")
     if not isinstance(opinion_pack, dict):
@@ -1477,6 +1540,7 @@ def build_final_report_payload(
         rejudge_triggered=rejudge_triggered,
         needs_draw_vote=needs_draw_vote,
         fairness_summary=fairness_summary,
+        fairness_error_codes=fairness_error_codes,
         error_codes=error_codes,
         claim_graph_summary=claim_graph_summary,
         phase_rollup_summary=phase_rollup_summary,
@@ -1567,6 +1631,31 @@ def build_final_report_payload(
                     if isinstance(verdict_ledger.get("arbitration"), dict)
                     else {}
                 ),
+                "nonBypassInvariant": {
+                    # 当公平门禁要求人工复核时，Chief Arbiter 必须把终局锁到 draw，禁止直接终判到某一方。
+                    "reviewRequiredImpliesDraw": (not review_required) or winner == "draw",
+                    "arbitrationWinnerMatchesTopWinner": (
+                        str(
+                            (
+                                verdict_ledger.get("arbitration")
+                                if isinstance(verdict_ledger.get("arbitration"), dict)
+                                else {}
+                            ).get("winnerAfterArbitration")
+                            or ""
+                        ).strip().lower()
+                        == str(winner or "").strip().lower()
+                    ),
+                    "fairnessReviewMatchesArbitration": (
+                        bool(fairness_summary.get("reviewRequired"))
+                        == bool(
+                            (
+                                verdict_ledger.get("arbitration")
+                                if isinstance(verdict_ledger.get("arbitration"), dict)
+                                else {}
+                            ).get("reviewRequired")
+                        )
+                    ),
+                },
                 "pivotalMomentCount": len(
                     verdict_ledger.get("pivotalMoments")
                     if isinstance(verdict_ledger.get("pivotalMoments"), list)
