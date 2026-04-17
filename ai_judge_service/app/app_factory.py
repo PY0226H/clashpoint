@@ -102,6 +102,9 @@ from .domain.facts import (
     FairnessBenchmarkRun as FactFairnessBenchmarkRun,
 )
 from .domain.facts import (
+    FairnessShadowRun as FactFairnessShadowRun,
+)
+from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
 from .domain.workflow import WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUSES, WorkflowJob
@@ -884,6 +887,31 @@ def _serialize_fairness_benchmark_run(record: FactFairnessBenchmarkRun) -> dict[
     }
 
 
+def _serialize_fairness_shadow_run(record: FactFairnessShadowRun) -> dict[str, Any]:
+    return {
+        "runId": record.run_id,
+        "policyVersion": record.policy_version,
+        "benchmarkRunId": record.benchmark_run_id,
+        "environmentMode": record.environment_mode,
+        "status": record.status,
+        "thresholdDecision": record.threshold_decision,
+        "needsRealEnvReconfirm": bool(record.needs_real_env_reconfirm),
+        "needsRemediation": bool(record.needs_remediation),
+        "sampleSize": record.sample_size,
+        "winnerFlipRate": record.winner_flip_rate,
+        "scoreShiftDelta": record.score_shift_delta,
+        "reviewRequiredDelta": record.review_required_delta,
+        "thresholds": dict(record.thresholds),
+        "metrics": dict(record.metrics),
+        "summary": dict(record.summary),
+        "source": record.source,
+        "reportedBy": record.reported_by,
+        "reportedAt": record.reported_at.isoformat(),
+        "createdAt": record.created_at.isoformat(),
+        "updatedAt": record.updated_at.isoformat(),
+    }
+
+
 def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -965,6 +993,7 @@ def _build_case_fairness_aggregations(items: list[dict[str, Any]]) -> dict[str, 
     review_required_count = 0
     drift_breach_count = 0
     threshold_breach_count = 0
+    shadow_breach_count = 0
     panel_high_disagreement_count = 0
     with_challenge_count = 0
 
@@ -999,6 +1028,10 @@ def _build_case_fairness_aggregations(items: list[dict[str, Any]]) -> dict[str, 
         else:
             policy_version_counts["unknown"] += 1
 
+        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
+        if bool(shadow.get("hasShadowBreach")):
+            shadow_breach_count += 1
+
         challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
         if bool(challenge_link.get("hasOpenReview")):
             open_review_count += 1
@@ -1016,6 +1049,7 @@ def _build_case_fairness_aggregations(items: list[dict[str, Any]]) -> dict[str, 
         "openReviewCount": open_review_count,
         "driftBreachCount": drift_breach_count,
         "thresholdBreachCount": threshold_breach_count,
+        "shadowBreachCount": shadow_breach_count,
         "panelHighDisagreementCount": panel_high_disagreement_count,
         "withChallengeCount": with_challenge_count,
         "gateConclusionCounts": gate_counts,
@@ -2540,6 +2574,7 @@ def _build_case_fairness_item(
     workflow_events: list[Any],
     report_payload: dict[str, Any],
     latest_run: FactFairnessBenchmarkRun | None,
+    latest_shadow_run: FactFairnessShadowRun | None,
 ) -> dict[str, Any]:
     fairness_summary = (
         report_payload.get("fairnessSummary")
@@ -2580,10 +2615,31 @@ def _build_case_fairness_item(
     drift_breaches = drift_payload.get("driftBreaches")
     if not isinstance(drift_breaches, list):
         drift_breaches = []
+    shadow_summary = (
+        latest_shadow_run.summary
+        if latest_shadow_run is not None and isinstance(latest_shadow_run.summary, dict)
+        else {}
+    )
+    shadow_breaches = shadow_summary.get("breaches")
+    if not isinstance(shadow_breaches, list):
+        shadow_breaches = []
+    has_shadow_breach = bool(
+        shadow_summary.get("hasBreach")
+        if isinstance(shadow_summary, dict)
+        else False
+    )
+    if latest_shadow_run is not None and latest_shadow_run.threshold_decision != "accepted":
+        has_shadow_breach = True
     gate_conclusion = "review_required" if review_required else "auto_passed"
     if (
         latest_run is not None
         and latest_run.threshold_decision != "accepted"
+        and gate_conclusion != "review_required"
+    ):
+        gate_conclusion = "benchmark_attention_required"
+    if (
+        latest_shadow_run is not None
+        and latest_shadow_run.threshold_decision != "accepted"
         and gate_conclusion != "review_required"
     ):
         gate_conclusion = "benchmark_attention_required"
@@ -2632,6 +2688,17 @@ def _build_case_fairness_item(
             "driftBreaches": [str(item).strip() for item in drift_breaches if str(item).strip()],
             "hasThresholdBreach": bool(run_summary.get("hasThresholdBreach")),
             "hasDriftBreach": bool(drift_payload.get("hasDriftBreach")),
+        },
+        "shadowSummary": {
+            "policyVersion": policy_version,
+            "latestRun": (
+                _serialize_fairness_shadow_run(latest_shadow_run)
+                if latest_shadow_run is not None
+                else None
+            ),
+            "benchmarkRunId": latest_shadow_run.benchmark_run_id if latest_shadow_run is not None else None,
+            "breaches": [str(item).strip() for item in shadow_breaches if str(item).strip()],
+            "hasShadowBreach": has_shadow_breach,
         },
         "challengeLink": {
             "latest": challenge_snapshot,
@@ -3470,6 +3537,66 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         await _ensure_workflow_schema_ready()
         return await runtime.workflow_runtime.facts.list_fairness_benchmark_runs(
             policy_version=policy_version,
+            environment_mode=environment_mode,
+            status=status,
+            limit=limit,
+        )
+
+    async def _upsert_fairness_shadow_run(
+        *,
+        run_id: str,
+        policy_version: str,
+        benchmark_run_id: str | None,
+        environment_mode: str,
+        status: str,
+        threshold_decision: str,
+        needs_real_env_reconfirm: bool,
+        needs_remediation: bool,
+        sample_size: int | None,
+        winner_flip_rate: float | None,
+        score_shift_delta: float | None,
+        review_required_delta: float | None,
+        thresholds: dict[str, Any] | None,
+        metrics: dict[str, Any] | None,
+        summary: dict[str, Any] | None,
+        source: str | None,
+        reported_by: str | None,
+        reported_at: datetime | None = None,
+    ) -> FactFairnessShadowRun:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.upsert_fairness_shadow_run(
+            run_id=run_id,
+            policy_version=policy_version,
+            benchmark_run_id=benchmark_run_id,
+            environment_mode=environment_mode,
+            status=status,
+            threshold_decision=threshold_decision,
+            needs_real_env_reconfirm=needs_real_env_reconfirm,
+            needs_remediation=needs_remediation,
+            sample_size=sample_size,
+            winner_flip_rate=winner_flip_rate,
+            score_shift_delta=score_shift_delta,
+            review_required_delta=review_required_delta,
+            thresholds=thresholds,
+            metrics=metrics,
+            summary=summary,
+            source=source,
+            reported_by=reported_by,
+            reported_at=reported_at,
+        )
+
+    async def _list_fairness_shadow_runs(
+        *,
+        policy_version: str | None = None,
+        benchmark_run_id: str | None = None,
+        environment_mode: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[FactFairnessShadowRun]:
+        await _ensure_workflow_schema_ready()
+        return await runtime.workflow_runtime.facts.list_fairness_shadow_runs(
+            policy_version=policy_version,
+            benchmark_run_id=benchmark_run_id,
             environment_mode=environment_mode,
             status=status,
             limit=limit,
@@ -6628,6 +6755,100 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "kernelVersion": kernel_version,
         }
 
+    def _build_public_trust_verify_payload(
+        *,
+        commitment: dict[str, Any],
+        verdict_attestation: dict[str, Any],
+        challenge_review: dict[str, Any],
+        kernel_version: dict[str, Any],
+        audit_anchor: dict[str, Any],
+    ) -> dict[str, Any]:
+        attestation = (
+            verdict_attestation.get("attestation")
+            if isinstance(verdict_attestation.get("attestation"), dict)
+            else {}
+        )
+        attestation_hashes: dict[str, str] = {}
+        for key in ("commitmentHash", "verdictHash", "auditHash"):
+            token = str(attestation.get(key) or "").strip()
+            if token:
+                attestation_hashes[key] = token
+
+        mismatch_components_raw = verdict_attestation.get("mismatchComponents")
+        mismatch_components = (
+            [
+                str(item).strip()
+                for item in mismatch_components_raw
+                if str(item).strip()
+            ]
+            if isinstance(mismatch_components_raw, list)
+            else []
+        )
+        challenge_reasons_raw = challenge_review.get("challengeReasons")
+        challenge_reasons = (
+            [str(item).strip() for item in challenge_reasons_raw if str(item).strip()]
+            if isinstance(challenge_reasons_raw, list)
+            else []
+        )
+        total_challenges_raw = challenge_review.get("totalChallenges")
+        try:
+            total_challenges = int(total_challenges_raw)
+        except (TypeError, ValueError):
+            total_challenges = 0
+
+        return {
+            "caseCommitment": {
+                "version": commitment.get("version"),
+                "commitmentHash": commitment.get("commitmentHash"),
+                "requestHash": commitment.get("requestHash"),
+                "workflowHash": commitment.get("workflowHash"),
+                "reportHash": commitment.get("reportHash"),
+                "attestationCommitmentHash": commitment.get("attestationCommitmentHash"),
+            },
+            "verdictAttestation": {
+                "version": verdict_attestation.get("version"),
+                "registryHash": verdict_attestation.get("registryHash"),
+                "verified": bool(verdict_attestation.get("verified")),
+                "reason": verdict_attestation.get("reason"),
+                "mismatchComponents": mismatch_components,
+                "attestationHashes": attestation_hashes,
+            },
+            "challengeReview": {
+                "version": challenge_review.get("version"),
+                "registryHash": challenge_review.get("registryHash"),
+                "reviewState": challenge_review.get("reviewState"),
+                "reviewRequired": bool(challenge_review.get("reviewRequired")),
+                "challengeState": challenge_review.get("challengeState"),
+                "activeChallengeId": challenge_review.get("activeChallengeId"),
+                "totalChallenges": total_challenges,
+                "alertSummary": (
+                    dict(challenge_review.get("alertSummary"))
+                    if isinstance(challenge_review.get("alertSummary"), dict)
+                    else {}
+                ),
+                "challengeReasons": challenge_reasons,
+            },
+            "kernelVersion": {
+                "version": kernel_version.get("version"),
+                "registryHash": kernel_version.get("registryHash"),
+                "kernelHash": kernel_version.get("kernelHash"),
+                "kernelVector": (
+                    dict(kernel_version.get("kernelVector"))
+                    if isinstance(kernel_version.get("kernelVector"), dict)
+                    else {}
+                ),
+            },
+            "auditAnchor": {
+                "version": audit_anchor.get("version"),
+                "anchorHash": audit_anchor.get("anchorHash"),
+                "componentHashes": (
+                    dict(audit_anchor.get("componentHashes"))
+                    if isinstance(audit_anchor.get("componentHashes"), dict)
+                    else {}
+                ),
+            },
+        }
+
     @app.get("/internal/judge/cases/{case_id}/trust/commitment")
     async def get_judge_trust_case_commitment(
         case_id: int,
@@ -7035,6 +7256,57 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "dispatchType": context["dispatchType"],
             "traceId": context["traceId"],
             "item": anchor,
+        }
+
+    @app.get("/internal/judge/cases/{case_id}/trust/public-verify")
+    async def get_judge_trust_public_verify(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        bundle = await _build_trust_phasea_bundle(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+        )
+        context = bundle["context"]
+        commitment = (
+            dict(bundle["commitment"]) if isinstance(bundle.get("commitment"), dict) else {}
+        )
+        verdict_attestation = (
+            dict(bundle["verdictAttestation"])
+            if isinstance(bundle.get("verdictAttestation"), dict)
+            else {}
+        )
+        challenge_review = (
+            dict(bundle["challengeReview"])
+            if isinstance(bundle.get("challengeReview"), dict)
+            else {}
+        )
+        kernel_version = (
+            dict(bundle["kernelVersion"]) if isinstance(bundle.get("kernelVersion"), dict) else {}
+        )
+        audit_anchor = build_audit_anchor_export_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            case_commitment=commitment,
+            verdict_attestation=verdict_attestation,
+            challenge_review=challenge_review,
+            kernel_version=kernel_version,
+            include_payload=False,
+        )
+        return {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"],
+            "verifyPayload": _build_public_trust_verify_payload(
+                commitment=commitment,
+                verdict_attestation=verdict_attestation,
+                challenge_review=challenge_review,
+                kernel_version=kernel_version,
+                audit_anchor=audit_anchor,
+            ),
         }
 
     @app.post("/internal/judge/cases/{case_id}/attestation/verify")
@@ -7555,6 +7827,305 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         }
 
+    @app.post("/internal/judge/fairness/shadow-runs")
+    async def upsert_judge_fairness_shadow_run(
+        request: Request,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        try:
+            raw_payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(raw_payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+
+        run_id = _extract_optional_str(raw_payload, "run_id", "runId")
+        if run_id is None:
+            raise HTTPException(status_code=422, detail="invalid_fairness_shadow_run_id")
+        policy_version = (
+            _extract_optional_str(raw_payload, "policy_version", "policyVersion")
+            or "fairness-benchmark-v1"
+        )
+        benchmark_run_id = _extract_optional_str(raw_payload, "benchmark_run_id", "benchmarkRunId")
+        environment_mode = _normalize_fairness_environment_mode(
+            _extract_optional_str(raw_payload, "environment_mode", "environmentMode"),
+            strict=False,
+        )
+        assert environment_mode is not None
+        status = _normalize_fairness_status(
+            _extract_optional_str(raw_payload, "status"),
+            strict=False,
+        )
+        assert status is not None
+        threshold_decision = _normalize_fairness_threshold_decision(
+            _extract_optional_str(raw_payload, "threshold_decision", "thresholdDecision")
+        )
+        thresholds_payload = (
+            raw_payload.get("thresholds")
+            if isinstance(raw_payload.get("thresholds"), dict)
+            else {}
+        )
+        metrics_payload = (
+            raw_payload.get("metrics")
+            if isinstance(raw_payload.get("metrics"), dict)
+            else {}
+        )
+        summary_payload = (
+            raw_payload.get("summary")
+            if isinstance(raw_payload.get("summary"), dict)
+            else {}
+        )
+        note = (
+            _extract_optional_str(raw_payload, "note")
+            or _extract_optional_str(summary_payload, "note")
+            or ""
+        )
+        sample_size = _extract_optional_int(raw_payload, "sample_size", "sampleSize")
+        if sample_size is None:
+            sample_size = _extract_optional_int(metrics_payload, "sample_size", "sampleSize")
+        winner_flip_rate = _extract_optional_float(
+            raw_payload,
+            "winner_flip_rate",
+            "winnerFlipRate",
+        )
+        if winner_flip_rate is None:
+            winner_flip_rate = _extract_optional_float(
+                metrics_payload,
+                "winner_flip_rate",
+                "winnerFlipRate",
+            )
+        score_shift_delta = _extract_optional_float(
+            raw_payload,
+            "score_shift_delta",
+            "scoreShiftDelta",
+        )
+        if score_shift_delta is None:
+            score_shift_delta = _extract_optional_float(
+                metrics_payload,
+                "score_shift_delta",
+                "scoreShiftDelta",
+            )
+        review_required_delta = _extract_optional_float(
+            raw_payload,
+            "review_required_delta",
+            "reviewRequiredDelta",
+        )
+        if review_required_delta is None:
+            review_required_delta = _extract_optional_float(
+                metrics_payload,
+                "review_required_delta",
+                "reviewRequiredDelta",
+            )
+
+        winner_flip_rate_max = _extract_optional_float(
+            raw_payload,
+            "winner_flip_rate_max",
+            "winnerFlipRateMax",
+        )
+        if winner_flip_rate_max is None:
+            winner_flip_rate_max = _extract_optional_float(
+                thresholds_payload,
+                "winner_flip_rate_max",
+                "winnerFlipRateMax",
+            )
+        score_shift_delta_max = _extract_optional_float(
+            raw_payload,
+            "score_shift_delta_max",
+            "scoreShiftDeltaMax",
+        )
+        if score_shift_delta_max is None:
+            score_shift_delta_max = _extract_optional_float(
+                thresholds_payload,
+                "score_shift_delta_max",
+                "scoreShiftDeltaMax",
+            )
+        review_required_delta_max = _extract_optional_float(
+            raw_payload,
+            "review_required_delta_max",
+            "reviewRequiredDeltaMax",
+        )
+        if review_required_delta_max is None:
+            review_required_delta_max = _extract_optional_float(
+                thresholds_payload,
+                "review_required_delta_max",
+                "reviewRequiredDeltaMax",
+            )
+
+        if benchmark_run_id is None:
+            benchmark_runs = await _list_fairness_benchmark_runs(
+                policy_version=policy_version,
+                limit=1,
+            )
+            benchmark_run_id = benchmark_runs[0].run_id if benchmark_runs else None
+
+        breaches: list[str] = []
+        if (
+            winner_flip_rate_max is not None
+            and winner_flip_rate is not None
+            and winner_flip_rate > winner_flip_rate_max
+        ):
+            breaches.append("winner_flip_rate")
+        if (
+            score_shift_delta_max is not None
+            and score_shift_delta is not None
+            and score_shift_delta > score_shift_delta_max
+        ):
+            breaches.append("score_shift_delta")
+        if (
+            review_required_delta_max is not None
+            and review_required_delta is not None
+            and review_required_delta > review_required_delta_max
+        ):
+            breaches.append("review_required_delta")
+
+        has_breach = bool(breaches)
+        needs_remediation = bool(
+            _extract_optional_bool(raw_payload, "needs_remediation", "needsRemediation")
+        ) or has_breach or threshold_decision == "violated"
+        needs_real_env_reconfirm_override = _extract_optional_bool(
+            raw_payload,
+            "needs_real_env_reconfirm",
+            "needsRealEnvReconfirm",
+        )
+        needs_real_env_reconfirm = (
+            bool(needs_real_env_reconfirm_override)
+            if needs_real_env_reconfirm_override is not None
+            else environment_mode != "real"
+        )
+        reported_at = _extract_optional_datetime(raw_payload, "reported_at", "reportedAt")
+        source = _extract_optional_str(raw_payload, "source") or "manual"
+        reported_by = _extract_optional_str(raw_payload, "reported_by", "reportedBy") or "system"
+
+        normalized_thresholds = dict(thresholds_payload)
+        normalized_thresholds["winnerFlipRateMax"] = winner_flip_rate_max
+        normalized_thresholds["scoreShiftDeltaMax"] = score_shift_delta_max
+        normalized_thresholds["reviewRequiredDeltaMax"] = review_required_delta_max
+        normalized_thresholds = {
+            key: value for key, value in normalized_thresholds.items() if value is not None
+        }
+
+        normalized_metrics = dict(metrics_payload)
+        normalized_metrics["sampleSize"] = sample_size
+        normalized_metrics["winnerFlipRate"] = winner_flip_rate
+        normalized_metrics["scoreShiftDelta"] = score_shift_delta
+        normalized_metrics["reviewRequiredDelta"] = review_required_delta
+        normalized_metrics = {
+            key: value for key, value in normalized_metrics.items() if value is not None
+        }
+
+        normalized_summary = dict(summary_payload)
+        if note:
+            normalized_summary["note"] = note
+        normalized_summary["hasBreach"] = has_breach
+        normalized_summary["breaches"] = breaches
+        normalized_summary["benchmarkRunId"] = benchmark_run_id
+
+        row = await _upsert_fairness_shadow_run(
+            run_id=run_id,
+            policy_version=policy_version,
+            benchmark_run_id=benchmark_run_id,
+            environment_mode=environment_mode,
+            status=status,
+            threshold_decision=threshold_decision,
+            needs_real_env_reconfirm=needs_real_env_reconfirm,
+            needs_remediation=needs_remediation,
+            sample_size=sample_size,
+            winner_flip_rate=winner_flip_rate,
+            score_shift_delta=score_shift_delta,
+            review_required_delta=review_required_delta,
+            thresholds=normalized_thresholds,
+            metrics=normalized_metrics,
+            summary=normalized_summary,
+            source=source,
+            reported_by=reported_by,
+            reported_at=reported_at,
+        )
+
+        alert_item: dict[str, Any] | None = None
+        if has_breach:
+            alert = runtime.trace_store.upsert_audit_alert(
+                job_id=0,
+                scope_id=1,
+                trace_id=f"fairness-shadow:{run_id}",
+                alert_type="fairness_shadow_threshold_violation",
+                severity="warning",
+                title="AI Judge Fairness Shadow Drift",
+                message=(
+                    f"fairness shadow run breached: run_id={run_id}; "
+                    f"breaches={','.join(breaches)}"
+                ),
+                details={
+                    "runId": run_id,
+                    "policyVersion": policy_version,
+                    "benchmarkRunId": benchmark_run_id,
+                    "environmentMode": environment_mode,
+                    "status": status,
+                    "thresholdDecision": threshold_decision,
+                    "metrics": normalized_metrics,
+                    "thresholds": normalized_thresholds,
+                    "breaches": breaches,
+                },
+            )
+            await _sync_audit_alert_to_facts(alert=alert)
+            alert_item = _serialize_alert_item(alert)
+
+        return {
+            "ok": True,
+            "item": _serialize_fairness_shadow_run(row),
+            "breaches": breaches,
+            "alert": alert_item,
+        }
+
+    @app.get("/internal/judge/fairness/shadow-runs")
+    async def list_judge_fairness_shadow_runs(
+        x_ai_internal_key: str | None = Header(default=None),
+        policy_version: str | None = Query(default=None),
+        benchmark_run_id: str | None = Query(default=None),
+        environment_mode: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_policy_version = (
+            str(policy_version or "").strip() if policy_version is not None else None
+        )
+        if normalized_policy_version == "":
+            normalized_policy_version = None
+        normalized_benchmark_run_id = (
+            str(benchmark_run_id or "").strip() if benchmark_run_id is not None else None
+        )
+        if normalized_benchmark_run_id == "":
+            normalized_benchmark_run_id = None
+        normalized_environment_mode = _normalize_fairness_environment_mode(
+            environment_mode,
+            strict=True,
+        )
+        if environment_mode is not None and normalized_environment_mode is None:
+            raise HTTPException(status_code=422, detail="invalid_environment_mode")
+        normalized_status = _normalize_fairness_status(status, strict=True)
+        if status is not None and normalized_status is None:
+            raise HTTPException(status_code=422, detail="invalid_fairness_status")
+
+        rows = await _list_fairness_shadow_runs(
+            policy_version=normalized_policy_version,
+            benchmark_run_id=normalized_benchmark_run_id,
+            environment_mode=normalized_environment_mode,
+            status=normalized_status,
+            limit=limit,
+        )
+        return {
+            "count": len(rows),
+            "items": [_serialize_fairness_shadow_run(row) for row in rows],
+            "filters": {
+                "policyVersion": normalized_policy_version,
+                "benchmarkRunId": normalized_benchmark_run_id,
+                "environmentMode": normalized_environment_mode,
+                "status": normalized_status,
+                "limit": limit,
+            },
+        }
+
     @app.get("/internal/judge/fairness/cases/{case_id}")
     async def get_judge_case_fairness(
         case_id: int,
@@ -7594,6 +8165,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 limit=1,
             )
             latest_run = runs[0] if runs else None
+        latest_shadow_run = None
+        if policy_version:
+            shadow_runs = await _list_fairness_shadow_runs(
+                policy_version=policy_version,
+                limit=1,
+            )
+            latest_shadow_run = shadow_runs[0] if shadow_runs else None
 
         item = _build_case_fairness_item(
             case_id=case_id,
@@ -7603,6 +8181,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             workflow_events=workflow_events,
             report_payload=report_payload,
             latest_run=latest_run,
+            latest_shadow_run=latest_shadow_run,
         )
         return {
             "caseId": case_id,
@@ -7619,6 +8198,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         policy_version: str | None = Query(default=None),
         has_drift_breach: bool | None = Query(default=None),
         has_threshold_breach: bool | None = Query(default=None),
+        has_shadow_breach: bool | None = Query(default=None),
         has_open_review: bool | None = Query(default=None),
         gate_conclusion: str | None = Query(default=None),
         challenge_state: str | None = Query(default=None),
@@ -7671,6 +8251,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             limit=max(limit, limit + offset),
         )
         benchmark_cache: dict[str, FactFairnessBenchmarkRun | None] = {}
+        shadow_cache: dict[str, FactFairnessShadowRun | None] = {}
         items: list[dict[str, Any]] = []
         for job in jobs:
             trace = runtime.trace_store.get_trace(job.job_id)
@@ -7715,6 +8296,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     )
                     benchmark_cache[policy_version] = runs[0] if runs else None
                 latest_run = benchmark_cache.get(policy_version)
+            latest_shadow_run: FactFairnessShadowRun | None = None
+            if policy_version:
+                if policy_version not in shadow_cache:
+                    shadow_runs = await _list_fairness_shadow_runs(
+                        policy_version=policy_version,
+                        limit=1,
+                    )
+                    shadow_cache[policy_version] = shadow_runs[0] if shadow_runs else None
+                latest_shadow_run = shadow_cache.get(policy_version)
             item = _build_case_fairness_item(
                 case_id=job.job_id,
                 dispatch_type=dispatch_type_token,
@@ -7723,6 +8313,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 workflow_events=workflow_events,
                 report_payload=report_payload,
                 latest_run=latest_run,
+                latest_shadow_run=latest_shadow_run,
             )
             if normalized_winner is not None and item.get("winner") != normalized_winner:
                 continue
@@ -7745,6 +8336,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if (
                 has_threshold_breach is not None
                 and bool(drift_summary.get("hasThresholdBreach")) != has_threshold_breach
+            ):
+                continue
+            shadow_summary = (
+                item.get("shadowSummary")
+                if isinstance(item.get("shadowSummary"), dict)
+                else {}
+            )
+            if (
+                has_shadow_breach is not None
+                and bool(shadow_summary.get("hasShadowBreach")) != has_shadow_breach
             ):
                 continue
             challenge_link = (
@@ -7803,6 +8404,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "policyVersion": normalized_policy_version,
                 "hasDriftBreach": has_drift_breach,
                 "hasThresholdBreach": has_threshold_breach,
+                "hasShadowBreach": has_shadow_breach,
                 "hasOpenReview": has_open_review,
                 "gateConclusion": normalized_gate_conclusion,
                 "challengeState": normalized_challenge_state,
@@ -7866,6 +8468,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 policy_version=policy_version,
                 has_drift_breach=None,
                 has_threshold_breach=None,
+                has_shadow_breach=None,
                 has_open_review=has_open_review,
                 gate_conclusion=gate_conclusion,
                 challenge_state=challenge_state,

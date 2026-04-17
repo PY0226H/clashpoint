@@ -269,6 +269,171 @@ def _collect_pivotal_moments(phase_rollup_summary: list[dict[str, Any]]) -> list
     return out
 
 
+def _build_user_phase_timeline(phase_rollup_summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in phase_rollup_summary:
+        if not isinstance(row, dict):
+            continue
+        phase_no = _safe_int(row.get("phaseNo"), default=0)
+        if phase_no <= 0:
+            continue
+        pro_score = round(_clamp_score(_safe_float(row.get("proScore"), default=50.0)), 2)
+        con_score = round(_clamp_score(_safe_float(row.get("conScore"), default=50.0)), 2)
+        winner_hint = str(row.get("winnerHint") or "").strip().lower()
+        if winner_hint not in {"pro", "con", "draw"}:
+            winner_hint = _resolve_winner(pro_score, con_score, margin=0.6)
+        error_codes = (
+            [
+                str(item).strip()
+                for item in (row.get("errorCodes") or [])
+                if str(item).strip()
+            ]
+            if isinstance(row.get("errorCodes"), list)
+            else []
+        )
+        message_start_id = _safe_int(row.get("messageStartId"), default=0)
+        message_end_id = _safe_int(row.get("messageEndId"), default=0)
+        rows.append(
+            {
+                "phaseNo": phase_no,
+                "winnerHint": winner_hint,
+                "scoreCard": {
+                    "proScore": pro_score,
+                    "conScore": con_score,
+                    "scoreGap": round(abs(pro_score - con_score), 2),
+                },
+                "messageRange": {
+                    "startId": message_start_id if message_start_id > 0 else None,
+                    "endId": message_end_id if message_end_id > 0 else None,
+                    "count": max(0, _safe_int(row.get("messageCount"), default=0)),
+                },
+                "degradationLevel": max(0, _safe_int(row.get("degradationLevel"), default=0)),
+                "errorCodes": error_codes,
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("phaseNo") or 0))
+    return rows[:24]
+
+
+def _collect_claim_hits_by_evidence(
+    claim_graph: dict[str, Any],
+) -> tuple[dict[str, int], dict[str, list[str]]]:
+    hit_counts: dict[str, int] = {}
+    claim_ids_by_evidence: dict[str, list[str]] = {}
+    nodes = claim_graph.get("nodes") if isinstance(claim_graph.get("nodes"), list) else []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        claim_id = str(node.get("claimId") or "").strip()
+        ref_ids = node.get("evidenceRefIds") if isinstance(node.get("evidenceRefIds"), list) else []
+        seen_ref_ids: set[str] = set()
+        for raw_ref_id in ref_ids:
+            evidence_id = str(raw_ref_id or "").strip()
+            if not evidence_id or evidence_id in seen_ref_ids:
+                continue
+            seen_ref_ids.add(evidence_id)
+            hit_counts[evidence_id] = int(hit_counts.get(evidence_id, 0)) + 1
+            if claim_id:
+                claim_ids = claim_ids_by_evidence.setdefault(evidence_id, [])
+                if claim_id not in claim_ids and len(claim_ids) < 5:
+                    claim_ids.append(claim_id)
+    return hit_counts, claim_ids_by_evidence
+
+
+def _build_user_evidence_cards(
+    *,
+    verdict_evidence_refs: list[dict[str, Any]],
+    evidence_ledger: dict[str, Any],
+    claim_graph: dict[str, Any],
+) -> list[dict[str, Any]]:
+    entries = evidence_ledger.get("entries") if isinstance(evidence_ledger.get("entries"), list) else []
+    entry_by_id: dict[str, dict[str, Any]] = {}
+    for row in entries:
+        if not isinstance(row, dict):
+            continue
+        evidence_id = str(row.get("evidenceId") or "").strip()
+        if evidence_id and evidence_id not in entry_by_id:
+            entry_by_id[evidence_id] = row
+
+    citations = (
+        evidence_ledger.get("sourceCitations")
+        if isinstance(evidence_ledger.get("sourceCitations"), list)
+        else []
+    )
+    citation_by_evidence_id: dict[str, dict[str, Any]] = {}
+    for row in citations:
+        if not isinstance(row, dict):
+            continue
+        evidence_id = str(row.get("evidenceId") or "").strip()
+        if evidence_id and evidence_id not in citation_by_evidence_id:
+            citation_by_evidence_id[evidence_id] = row
+
+    claim_hit_counts, claim_ids_by_evidence = _collect_claim_hits_by_evidence(claim_graph)
+    cards: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in verdict_evidence_refs:
+        if not isinstance(row, dict):
+            continue
+        evidence_id = str(row.get("evidenceId") or "").strip()
+        if not evidence_id or evidence_id in seen:
+            continue
+        seen.add(evidence_id)
+        entry = entry_by_id.get(evidence_id, {})
+        locator = entry.get("locator") if isinstance(entry.get("locator"), dict) else {}
+        citation = citation_by_evidence_id.get(evidence_id, {})
+        side = str(row.get("side") or entry.get("side") or "unknown").strip().lower()
+        if side not in {"pro", "con"}:
+            side = "unknown"
+        phase_no = _safe_int(
+            row.get("phaseNo"),
+            default=_safe_int(entry.get("phaseNo"), default=0),
+        )
+        evidence_type = str(row.get("type") or entry.get("kind") or "").strip() or "unknown"
+        reason = str(row.get("reason") or "").strip()
+        if not reason:
+            reason_hints = entry.get("reasonHints") if isinstance(entry.get("reasonHints"), list) else []
+            reason = str(reason_hints[0]).strip() if reason_hints else ""
+        reliability_label = str(entry.get("reliabilityLabel") or "").strip() or "unknown"
+        conflict = bool(entry.get("conflict"))
+        chunk_id = str(locator.get("chunkId") or row.get("chunkId") or "").strip() or None
+        source_url = str(citation.get("sourceUrl") or locator.get("sourceUrl") or "").strip() or None
+        source_title = str(citation.get("title") or locator.get("title") or "").strip() or None
+        source_score_raw = citation.get("score") if isinstance(citation, dict) else locator.get("score")
+        source_score = (
+            round(_safe_float(source_score_raw, default=0.0), 4)
+            if source_score_raw is not None
+            else None
+        )
+        claim_hit_count = int(claim_hit_counts.get(evidence_id, 0))
+        linked_claim_ids = list(claim_ids_by_evidence.get(evidence_id, []))
+        cards.append(
+            {
+                "evidenceId": evidence_id,
+                "phaseNo": phase_no if phase_no > 0 else None,
+                "side": side,
+                "evidenceType": evidence_type,
+                "reason": reason or None,
+                "reliabilityLabel": reliability_label,
+                "conflict": conflict,
+                "messageId": locator.get("messageId"),
+                "chunkId": chunk_id,
+                "sourceUrl": source_url,
+                "sourceTitle": source_title,
+                "sourceScore": source_score,
+                "claimHitCount": claim_hit_count,
+                "claimIds": linked_claim_ids,
+                "explanation": (
+                    f"phase={phase_no if phase_no > 0 else 'unknown'}, "
+                    f"side={side}, type={evidence_type}, reliability={reliability_label}, "
+                    f"conflict={str(conflict).lower()}, linkedClaims={claim_hit_count}"
+                ),
+            }
+        )
+        if len(cards) >= 12:
+            break
+    return cards
+
+
 def _build_claim_verdict(
     *,
     winner: str,
@@ -452,6 +617,9 @@ def _build_opinion_pack(
     review_required: bool,
     needs_draw_vote: bool,
     trace_id: str,
+    phase_rollup_summary: list[dict[str, Any]],
+    verdict_evidence_refs: list[dict[str, Any]],
+    claim_graph: dict[str, Any],
     claim_graph_summary: dict[str, Any],
     evidence_ledger: dict[str, Any],
     panel_judges: dict[str, Any],
@@ -463,6 +631,23 @@ def _build_opinion_pack(
         token = str(row.get("type") or "").strip()
         if token and token not in alert_types:
             alert_types.append(token)
+    decisive_evidence_refs = (
+        verdict_ledger.get("decisiveEvidenceRefs")
+        if isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list)
+        else []
+    )
+    if not decisive_evidence_refs:
+        decisive_evidence_refs = [
+            dict(row) for row in verdict_evidence_refs if isinstance(row, dict)
+        ]
+    phase_debate_timeline = _build_user_phase_timeline(phase_rollup_summary)
+    evidence_insight_cards = _build_user_evidence_cards(
+        verdict_evidence_refs=[
+            dict(row) for row in decisive_evidence_refs if isinstance(row, dict)
+        ],
+        evidence_ledger=evidence_ledger if isinstance(evidence_ledger, dict) else {},
+        claim_graph=claim_graph if isinstance(claim_graph, dict) else {},
+    )
     return {
         "version": "v3-opinion-pack",
         "userReport": {
@@ -474,6 +659,8 @@ def _build_opinion_pack(
                 "proScore": round(_clamp_score(pro_score), 2),
                 "conScore": round(_clamp_score(con_score), 2),
             },
+            "phaseDebateTimeline": phase_debate_timeline,
+            "evidenceInsightCards": evidence_insight_cards,
         },
         "opsSummary": {
             "reviewRequired": review_required,
@@ -501,9 +688,7 @@ def _build_opinion_pack(
             else []
         ),
         "decisiveEvidenceRefs": (
-            verdict_ledger.get("decisiveEvidenceRefs")
-            if isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list)
-            else []
+            [dict(row) for row in decisive_evidence_refs if isinstance(row, dict)]
         ),
     }
 
@@ -611,6 +796,14 @@ def _evaluate_fairness_gate(
             panel_disagreement_reasons.append("no_majority_winner")
         if panel_vote_by_side["pro"] > 0 and panel_vote_by_side["con"] > 0:
             panel_disagreement_reasons.append("cross_side_conflict")
+
+    def _normalize_reliability_counts(raw: Any) -> dict[str, int]:
+        payload = raw if isinstance(raw, dict) else {}
+        out: dict[str, int] = {}
+        for key in ("high", "medium", "low", "unknown"):
+            out[key] = max(0, _safe_int(payload.get(key), default=0))
+        return out
+
     threshold_source = fairness_thresholds if isinstance(fairness_thresholds, dict) else {}
     evidence_min_total_refs = max(
         0,
@@ -631,6 +824,16 @@ def _evaluate_fairness_gate(
             _safe_float(threshold_source.get("evidenceConflictRatioMax"), default=0.65),
         ),
     )
+    evidence_max_low_reliability_ratio = max(
+        0.0,
+        min(
+            1.0,
+            _safe_float(
+                threshold_source.get("evidenceMaxLowReliabilityRatio"),
+                default=0.5,
+            ),
+        ),
+    )
     evidence_stats = (
         evidence_ledger.get("stats") if isinstance(evidence_ledger.get("stats"), dict) else {}
     )
@@ -646,7 +849,34 @@ def _evaluate_fairness_gate(
         evidence_stats.get("conflictSourceCount"),
         default=0,
     )
+    reliability_counts = _normalize_reliability_counts(
+        evidence_stats.get("reliabilityCounts")
+    )
+    verdict_reliability_counts = _normalize_reliability_counts(
+        evidence_stats.get("verdictReferencedReliabilityCounts")
+    )
+    conflict_reason_counts = (
+        {
+            str(key).strip(): max(0, _safe_int(value, default=0))
+            for key, value in evidence_stats.get("conflictReasonCounts").items()
+            if str(key).strip()
+        }
+        if isinstance(evidence_stats.get("conflictReasonCounts"), dict)
+        else {}
+    )
     decisive_ref_count = len([row for row in verdict_evidence_refs if isinstance(row, dict)])
+    verdict_referenced_count = max(
+        0,
+        _safe_int(evidence_stats.get("verdictReferencedCount"), default=decisive_ref_count),
+    )
+    if verdict_referenced_count <= 0 and decisive_ref_count > 0:
+        verdict_referenced_count = decisive_ref_count
+    low_reliability_ref_count = max(0, _safe_int(verdict_reliability_counts.get("low"), default=0))
+    evidence_low_reliability_ratio = (
+        round(low_reliability_ref_count / float(max(1, verdict_referenced_count)), 4)
+        if verdict_referenced_count > 0
+        else 0.0
+    )
     winner_support_ref_count = len(
         [
             row
@@ -677,6 +907,11 @@ def _evaluate_fairness_gate(
         evidence_check_applied
         and evidence_total_entries > 0
         and evidence_conflict_ratio > evidence_conflict_ratio_max
+    )
+    evidence_low_reliability_ratio_high = (
+        evidence_check_applied
+        and verdict_referenced_count > 0
+        and evidence_low_reliability_ratio > evidence_max_low_reliability_ratio
     )
 
     alerts: list[dict[str, Any]] = []
@@ -739,11 +974,15 @@ def _evaluate_fairness_gate(
                     "winnerSupportRefCount": winner_support_ref_count,
                     "conflictSourceCount": evidence_conflict_sources,
                     "conflictRatio": evidence_conflict_ratio,
+                    "lowReliabilityRefCount": low_reliability_ref_count,
+                    "verdictReferencedCount": verdict_referenced_count,
+                    "lowReliabilityRatio": evidence_low_reliability_ratio,
                     "thresholds": {
                         "minTotalRefs": evidence_min_total_refs,
                         "minDecisiveRefs": evidence_min_decisive_refs,
                         "minWinnerSupportRefs": evidence_min_winner_refs,
                         "maxConflictRatio": evidence_conflict_ratio_max,
+                        "maxLowReliabilityRatio": evidence_max_low_reliability_ratio,
                     },
                 },
             }
@@ -763,6 +1002,22 @@ def _evaluate_fairness_gate(
                 },
             }
         )
+    if evidence_low_reliability_ratio_high:
+        error_codes.append("evidence_reliability_too_low")
+        alerts.append(
+            {
+                "type": "evidence_reliability_too_low",
+                "severity": "critical",
+                "message": "low-reliability evidence dominates decisive references",
+                "details": {
+                    "lowReliabilityRefCount": low_reliability_ref_count,
+                    "verdictReferencedCount": verdict_referenced_count,
+                    "lowReliabilityRatio": evidence_low_reliability_ratio,
+                    "maxLowReliabilityRatio": evidence_max_low_reliability_ratio,
+                    "verdictReferencedReliabilityCounts": verdict_reliability_counts,
+                },
+            }
+        )
 
     review_required = bool(error_codes)
     summary = {
@@ -778,6 +1033,7 @@ def _evaluate_fairness_gate(
         "panelDisagreementReasons": panel_disagreement_reasons,
         "evidenceSufficiencyPassed": evidence_sufficiency_passed,
         "evidenceConflictRatioHigh": evidence_conflict_ratio_high,
+        "evidenceLowReliabilityRatioHigh": evidence_low_reliability_ratio_high,
         "scoreGap": score_gap,
         "styleProbeWinners": style_probe_winners,
         "panelProbeWinners": panel_probe_winners,
@@ -789,13 +1045,20 @@ def _evaluate_fairness_gate(
             "totalEntries": evidence_total_entries,
             "decisiveRefCount": decisive_ref_count,
             "winnerSupportRefCount": winner_support_ref_count,
+            "verdictReferencedCount": verdict_referenced_count,
             "conflictSourceCount": evidence_conflict_sources,
             "conflictRatio": evidence_conflict_ratio,
+            "lowReliabilityRefCount": low_reliability_ref_count,
+            "lowReliabilityRatio": evidence_low_reliability_ratio,
+            "reliabilityCounts": reliability_counts,
+            "verdictReferencedReliabilityCounts": verdict_reliability_counts,
+            "conflictReasonCounts": conflict_reason_counts,
             "thresholds": {
                 "minTotalRefs": evidence_min_total_refs,
                 "minDecisiveRefs": evidence_min_decisive_refs,
                 "minWinnerSupportRefs": evidence_min_winner_refs,
                 "maxConflictRatio": evidence_conflict_ratio_max,
+                "maxLowReliabilityRatio": evidence_max_low_reliability_ratio,
             },
         },
         "reviewRequired": review_required,
@@ -1147,6 +1410,10 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             user_verdict_reason = str(user_report.get("verdictReason") or "").strip()
             if user_verdict_reason and user_verdict_reason != verdict_reason:
                 missing.append("opinionPack.userReport.verdictReason_mismatch")
+            if not isinstance(user_report.get("phaseDebateTimeline"), list):
+                missing.append("opinionPack.userReport.phaseDebateTimeline")
+            if not isinstance(user_report.get("evidenceInsightCards"), list):
+                missing.append("opinionPack.userReport.evidenceInsightCards")
         if not isinstance(opinion_pack.get("opsSummary"), dict):
             missing.append("opinionPack.opsSummary")
         if not isinstance(opinion_pack.get("internalReview"), dict):
@@ -1673,6 +1940,9 @@ def build_final_report_payload(
         review_required=review_required,
         needs_draw_vote=needs_draw_vote,
         trace_id=request.trace_id,
+        phase_rollup_summary=phase_rollup_summary,
+        verdict_evidence_refs=verdict_evidence_refs,
+        claim_graph=claim_graph,
         claim_graph_summary=claim_graph_summary,
         evidence_ledger=evidence_ledger,
         panel_judges=panel_judges,

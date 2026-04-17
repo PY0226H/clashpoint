@@ -1,0 +1,160 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-17  
+当前主线：`AI_judge_service P11（法庭式 8 Agent 主链落地 + real-env 最终收口）`  
+当前状态：执行中（P11 主链已完成；real-env 维持 local_reference_ready，待真实环境窗口）
+归档来源：`docs/dev_plan/archive/20260415T011924Z-ai-judge-plan-reset-archive.md`
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接 P10 结果，目标是让实现与两份设计文档强一致：
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+2. 本轮继续执行硬切原则：不保留兼容层、灰度双轨、旧新并行主链。
+3. 本计划要求后续每次“下一阶段开发计划”先通过架构方案第 13 章的一致性检查清单（角色/数据/门禁/边界/跨层/收口）。
+
+---
+
+## 2. 当前代码状态快照（已完成主链）
+
+以下能力已在代码侧落地，可作为 P11 起点（保留，不回退）：
+
+1. `trace/replay/audit/receipt` 主链与 callback 失败主链已可用。
+2. `registry-triple-productization`（policy/prompt/tool）与 dependency health 读模型已落地。
+3. `fairness-release-gate-v2`（阻断/override/归因/联查导出）已落地。
+4. `panel-runtime-profile-v2`（A/B/C profile 元信息 + ops 读视图）已落地。
+5. `case-fairness-read-model`（过滤、聚合、排序、关联 challenge/review）已落地。
+6. `NPC Coach / Room QA` 内部入口壳已落地，且 `advisory_only` 边界已明确。
+7. `real-env closure` 工程能力已具备：
+   - `local_reference_ready` 收口链路可复跑；
+   - `REAL_PASS_READY/REAL_PASS_BLOCKER_*` 可执行阻塞项导出已落地；
+   - `ai_judge_real_pass_rehearsal.sh` 一键演练脚本已落地并可达演练 `pass`。
+
+---
+
+## 3. 未完成项（保留并校正）
+
+这是当前真正未完成、必须进入新计划的内容：
+
+1. **real-env 最终收口未完成**：当前仍是 `local_reference_ready`，未达到真实环境 `pass`。
+
+---
+
+## 4. P11 总目标（与企业方案/架构方案强一致）
+
+在不拆服务、不引入长期兼容层的前提下，把 `ai_judge_service` 从“P10 治理与运维强化版”推进到“法庭式 8 Agent 官方裁决主链可执行版”。
+
+P11 完成定义（全量）：
+
+1. 官方裁决主链显式对齐 8 Agent，且角色边界可测试、可追踪、可回放。
+2. `case_dossier / claim_graph / evidence_bundle / verdict_ledger / fairness_report / opinion_pack` 六对象形成稳定读写路径。
+3. `Fairness Sentinel -> Chief Arbiter` 门禁关系在代码主链不可绕过。
+4. `Opinion Writer` 只消费 `verdict_ledger`，输出仍保持 `debateSummary/sideAnalysis/verdictReason` 合同。
+5. real-env 收口达到真实 `pass`（不再停留 local reference）。
+
+---
+
+## 5. P11 模块执行矩阵
+
+### 已完成/未完成矩阵
+
+| 模块 | 优先级 | 状态 | 本轮目标 | DoD（完成定义） | 验证方式 |
+| --- | --- | --- | --- | --- | --- |
+| `ai-judge-p10-real-env-hard-pass-closure` | P0（环境阻塞） | 进行中（local_reference_ready 已复核；real pass 待窗口） | 收口从 `local_reference_ready` 推进到真实环境 `pass` | `ai_judge_real_env_window_closure.sh` 输出 `AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=pass` 且 `REAL_PASS_READY=true`，并具备真实证据键 | `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p11-courtroom-8agent-mainline` | P0 | 已完成（2026-04-16） | 在 Judge 主链显式落地 8 Agent 编排 | 8 角色输入/输出/trace 节点可见；链路顺序符合企业方案；角色职责不塌缩 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_agent_runtime.py tests/test_app_factory.py -k "execute_should_enable_judge_courtroom_runtime or phase_dispatch_should_callback_and_support_idempotent_replay or final_dispatch_should_use_phase_receipts_and_callback"` |
+| `ai-judge-p11-casedossier-claimgraph-objectization` | P1 | 已完成（2026-04-16） | 强化 Clerk/Recorder/ClaimGraph 的对象化与持久化 | `case_dossier`/`claim_graph` 有稳定存储+读取+回放路径 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "case_detail_route_should_aggregate_case_snapshot or claim_ledger_route_should_return_persisted_claim_graph"` |
+| `ai-judge-p11-evidence-ledger-hardening` | P1 | 已完成（2026-04-16） | 把 RAG 能力升级为 Evidence Agent 语义 | `evidence_bundle/source_citations/conflict_sources` 可追踪；不直接定胜负 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_evidence_ledger.py tests/test_judge_mainline.py tests/test_phase_final_contract_models.py tests/test_trust_attestation.py tests/test_app_factory.py -k "case_detail_route_should_aggregate_case_snapshot or claim_ledger_route_should_return_persisted_claim_graph or final_dispatch_should_mark_workflow_review_required_when_gate_triggers or review_routes_should_list_detail_and_decide_review_job or replay_post_should_block_when_final_contract_missing_fields or final_dispatch_should_use_phase_receipts_and_callback or replay_post_should_prefer_final_receipt_when_auto"` |
+| `ai-judge-p11-panel-fairness-arbiter-chain` | P1 | 已完成（2026-04-16） | 固化 `Judge Panel -> Fairness Sentinel -> Chief Arbiter` 不可绕过门禁 | 未过公平门禁不得终判；override 审计完整 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_mainline.py tests/test_app_factory.py -k "build_final_report_payload_should_aggregate_phase_receipts or build_final_report_payload_should_trigger_style_shift_instability_gate or build_final_report_payload_should_trigger_panel_disagreement_gate or final_dispatch_should_mark_workflow_review_required_when_gate_triggers or review_routes_should_list_detail_and_decide_review_job"` |
+| `ai-judge-p11-opinion-writer-ledgerization` | P1 | 已完成（2026-04-16） | Opinion Writer 改为 verdict ledger 驱动生成 | `debateSummary/sideAnalysis/verdictReason` 由 ledger 生成且可解释可回放 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_mainline.py tests/test_app_factory.py tests/test_phase_final_contract_models.py -k "build_final_report_payload_should_aggregate_phase_receipts or build_final_report_payload_should_trigger_style_shift_instability_gate or build_final_report_payload_should_trigger_panel_disagreement_gate or final_dispatch_should_mark_workflow_review_required_when_gate_triggers or review_routes_should_list_detail_and_decide_review_job or final_report_input_should_support_pro_con_draw or replay_post_should_block_when_final_contract_missing_fields or final_contract_blocked_should_mark_workflow_failed_and_sync_alert"` |
+| `ai-judge-p11-plan-consistency-gate` | P2 | 已完成（2026-04-16） | 工程化“计划生成前置一致性检查” | 每轮计划生成默认附带 6 项一致性回答（角色/数据/门禁/边界/跨层/收口） | `bash scripts/harness/tests/test_ai_judge_plan_consistency_gate.sh` |
+
+---
+
+## 6. 执行顺序与依赖
+
+### 下一开发模块建议
+
+1. 先做 `courtroom-8agent-mainline`，因为后续对象化与门禁链都依赖显式角色编排。
+2. 再做 `casedossier-claimgraph-objectization`，锁定上游输入事实。
+3. 然后做 `evidence-ledger-hardening`，把证据语义与裁决语义彻底分离。
+4. 再做 `panel-fairness-arbiter-chain`，把公平门禁前置成不可绕过规则。
+5. 接着做 `opinion-writer-ledgerization`，稳定用户可见终局输出。
+6. 已完成 `plan-consistency-gate`，确保每轮计划可执行校验 6 项一致性回答。
+7. 最后在环境窗口推进 `real-env-hard-pass-closure` 到真实 `pass`。
+
+---
+
+## 7. 本阶段明确不做
+
+1. 不开放 `NPC Coach / Room QA` 到用户侧正式流程（仅内部壳与边界维护）。
+2. 不引入长期兼容层、alias 并存、旧新 payload 双写。
+3. 不在本阶段强推 Temporal/Kafka 全量重构。
+4. 不把区块链/ZK/ZKML 作为生产主链依赖（仅保留协议化扩展接口约束）。
+
+---
+
+## 8. 测试与验收基线
+
+1. 服务回归：`cd ai_judge_service && ../scripts/py -m pytest -q`
+2. 质量检查：`cd ai_judge_service && ../scripts/py -m ruff check app tests`
+3. 收口脚本回归：
+   - `bash scripts/harness/tests/test_ai_judge_real_env_window_closure.sh`
+   - `bash scripts/harness/tests/test_ai_judge_real_pass_rehearsal.sh`
+4. 运行态收口基线：
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+   - `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle`
+
+---
+
+## 9. 风险与对策
+
+1. 风险：8 Agent 显式编排引入重构成本，短期迭代速度下降。  
+   对策：先保证角色边界和 trace 可见，再逐步替换内部实现。
+2. 风险：对象化后存储模型复杂度上升。  
+   对策：按 `case_dossier -> claim_graph -> evidence_bundle` 顺序分层落地，避免一次性重构。
+3. 风险：公平门禁更严格后可能增加 `review_required` 比例。  
+   对策：默认阻断但保留可审计 override，监控误阻断率。
+4. 风险：real-env 窗口仍不可用导致阶段尾部阻塞。  
+   对策：持续维护 rehearsal + blocker 导出，确保窗口到来时可一键冲刺 real pass。
+
+---
+
+## 10. 模块完成同步历史（本轮保留）
+
+### 模块完成同步历史
+
+1. 2026-04-15：P10 主体能力（registry triple / fairness gate v2 / panel runtime profile v2 / case fairness read model）完成至可用态。
+2. 2026-04-15：`ai-judge-p10-agent-entrypoints-shell` 完成，`NPC/Room QA` 明确 `advisory_only` 边界。
+3. 2026-04-15：`ai-judge-p10-real-env-hard-pass-closure` phase2 完成，window closure 新增 `REAL_PASS_READY/REAL_PASS_BLOCKER_*`。
+4. 2026-04-15：`ai-judge-p10-real-env-hard-pass-closure` phase3 完成，新增 `ai_judge_real_pass_rehearsal.sh` 与对应测试，演练 run 可达 `pass`。
+5. 2026-04-16：`ai-judge-p11-courtroom-8agent-mainline` 完成，Judge runtime 输出 `workflowEdges/artifacts`，并写入 callback `judgeTrace`（含 `workflowVersion/mode/officialVerdictAuthority/workflowEdgeCount/artifactCount`），对应测试通过。
+6. 2026-04-16：`ai-judge-p11-casedossier-claimgraph-objectization` 完成，claim ledger 新增 `caseDossier` 持久化（phase/final/replay request snapshot 构建），并在 `/internal/judge/cases/{case_id}` 与 `/internal/judge/cases/{case_id}/claim-ledger` 读链路可见，回归测试通过。
+7. 2026-04-16：`ai-judge-p11-evidence-ledger-hardening` 完成，`evidenceLedger` 升级为 `v3-evidence-bundle`（新增 `sourceCitations/conflictSources/bundleMeta`，统计口径切到 `sourceCitationCount/conflictSourceCount`），并同步 final 合同校验与 fairness gate 口径，回归测试通过。
+8. 2026-04-16：`ai-judge-p11-panel-fairness-arbiter-chain` 完成，`verdictLedger.arbitration` 增加不可绕过链路字段（`chainVersion/decisionPath/fairnessGateApplied/gateDecision`），final 合同新增 `fairnessSummary + arbitration` 一致性校验（含 `reviewRequired => winner=draw`），并在 `judgeTrace.panelArbiter.nonBypassInvariant` 输出链路不变量，回归测试通过。
+9. 2026-04-16：`ai-judge-p11-opinion-writer-ledgerization` 完成，`debateSummary/sideAnalysis/verdictReason` 改为在 `verdictLedger` 生成后由 `arbitration + panelDecisions + claimVerdict + fairnessSummary` 驱动生成；同步增加 `opinionPack.userReport` 与 top-level 展示字段的一致性合同校验（winner/debateSummary/可选 sideAnalysis 与 verdictReason），并通过回归测试。
+10. 2026-04-16：`ai-judge-p11-plan-consistency-gate` 完成，新增 `scripts/harness/ai_judge_plan_consistency_gate.sh` 与测试 `scripts/harness/tests/test_ai_judge_plan_consistency_gate.sh`，可校验计划文档是否完整回答架构方案第13章 6 项一致性（角色/数据/门禁/边界/跨层/收口）并输出结构化 summary（json/md）。
+11. 2026-04-17：`ai-judge-p10-real-env-hard-pass-closure` 完成本地窗口复核：`ai_judge_runtime_ops_pack_status=local_reference_ready`、`ai_judge_real_env_window_closure_status=local_reference_ready`、`REAL_PASS_READY=false`；阻塞项保持可导出（`real_env_marker_not_ready` 等），证据见 `artifacts/harness/manual-ai-judge-runtime-ops-pack-local.summary.{json,md}` 与 `artifacts/harness/manual-ai-judge-real-env-window-local.summary.{json,md}`。
+12. 2026-04-17：补强 `docs/loadtest/evidence/ai_judge_p5_real_env_closure_checklist.md`，新增“真实环境窗口一键冲刺顺序 / 通过判定 / 失败回退口径保护”，用于在真实环境窗口到来时直接按清单冲刺 `pass` 并避免口径误标。
+
+---
+
+## 11. 本轮启动检查清单（执行前）
+
+1. 对照架构方案第 13 章，先回答 6 项一致性问题（角色/数据/门禁/边界/跨层/收口）。
+2. 明确本轮变更触达的 Agent 角色与对象边界，禁止“无名重构”。
+3. 若改动 API/DTO/错误码，必须同轮检查 `chat_server` 与调用方同步状态。
+4. 每次提交前更新本计划矩阵状态与历史，不把 `local_reference_ready` 误记为 `pass`。
+
+---
+
+## 12. 架构方案第13章一致性校验（计划生成前置）
+
+1. **角色一致性**：Judge 主链已显式落地 8 Agent 运行时编排，`workflowEdges/artifacts` 与 callback `judgeTrace` 可追踪角色输入输出，未发生职责塌缩或跳过。
+2. **数据一致性**：`case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 均已形成可落库、可读取、可回放路径，并已在 case detail / claim ledger / final report 合同中可见。
+3. **门禁一致性**：`Fairness Sentinel -> Chief Arbiter` 保持终判前不可绕过，`override` 仍写入审计字段（`fairnessSummary/arbitration/judgeTrace.panelArbiter`）并可联查。
+4. **边界一致性**：`NPC Coach / Room QA` 仍为 `advisory_only`，仅提供建议入口壳，不写官方裁决链、不参与 winner 生成。
+5. **跨层一致性**：涉及 final 展示字段、fairness/arbitration 合同字段的改动均已同轮同步 `chat_server` 消费语义，不保留旧字段 alias 或长期双轨。
+6. **收口一致性**：real-env 仍严格区分 `local_reference_ready` 与真实 `pass`；当前状态仍为前者，未把本机演练结果误标为真实环境通过。

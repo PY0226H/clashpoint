@@ -192,7 +192,14 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
             },
             "opinion_pack": {
                 "version": "v2-opinion-pack",
-                "userReport": {"winner": "draw", "debateSummary": "终局摘要"},
+                "userReport": {
+                    "winner": "draw",
+                    "debateSummary": "终局摘要",
+                    "sideAnalysis": {"pro": "正方优势", "con": "反方优势"},
+                    "verdictReason": "裁决理由",
+                    "phaseDebateTimeline": [],
+                    "evidenceInsightCards": [],
+                },
                 "opsSummary": {"reviewRequired": True},
                 "internalReview": {"traceId": "trace-4"},
             },

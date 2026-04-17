@@ -42,10 +42,16 @@ def test_evidence_ledger_should_build_entries_and_lookup() -> None:
     assert payload["stats"]["verdictReferencedCount"] == 2
     assert payload["stats"]["sourceCitationCount"] == 1
     assert payload["stats"]["conflictSourceCount"] == 1
+    assert payload["stats"]["reliabilityCounts"]["high"] >= 1
+    assert payload["stats"]["reliabilityCounts"]["low"] >= 1
+    assert payload["stats"]["verdictReferencedReliabilityCounts"]["high"] >= 1
+    assert payload["stats"]["verdictReferencedReliabilityCounts"]["low"] == 0
+    assert payload["stats"]["conflictReasonCounts"]["agent2_path_alignment"] == 1
     assert len(payload["sourceCitations"]) == 1
     assert payload["sourceCitations"][0]["sourceUrl"] == "https://example.com/a"
     assert len(payload["conflictSources"]) == 1
     assert payload["conflictSources"][0]["kind"] == "agent2_miss"
+    assert payload["conflictSources"][0]["primaryReason"] == "agent2_path_alignment"
     assert str(payload["refsById"][message_id]["kind"]) == "message_ref"
     assert str(payload["refsById"][chunk_id]["kind"]) == "retrieval_chunk"
 

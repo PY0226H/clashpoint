@@ -100,3 +100,27 @@ class FairnessBenchmarkRun:
     reported_at: datetime
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class FairnessShadowRun:
+    run_id: str
+    policy_version: str
+    benchmark_run_id: str | None
+    environment_mode: str
+    status: str
+    threshold_decision: str
+    needs_real_env_reconfirm: bool
+    needs_remediation: bool
+    sample_size: int | None
+    winner_flip_rate: float | None
+    score_shift_delta: float | None
+    review_required_delta: float | None
+    thresholds: dict[str, Any]
+    metrics: dict[str, Any]
+    summary: dict[str, Any]
+    source: str
+    reported_by: str
+    reported_at: datetime
+    created_at: datetime
+    updated_at: datetime

@@ -258,8 +258,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/kernel-version", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/audit-anchor", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/trust/public-verify", paths)
         self.assertIn("/internal/judge/alerts/ops-view", paths)
         self.assertIn("/internal/judge/fairness/benchmark-runs", paths)
+        self.assertIn("/internal/judge/fairness/shadow-runs", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_case_create_should_mark_case_built_and_support_idempotent_replay(
@@ -2361,7 +2363,14 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             },
             "opinionPack": {
                 "version": "v2-opinion-pack",
-                "userReport": {"winner": "draw", "debateSummary": "summary"},
+                "userReport": {
+                    "winner": "draw",
+                    "debateSummary": "summary",
+                    "sideAnalysis": {"pro": "pro", "con": "con"},
+                    "verdictReason": "reason",
+                    "phaseDebateTimeline": [],
+                    "evidenceInsightCards": [],
+                },
                 "opsSummary": {"reviewRequired": True},
                 "internalReview": {"traceId": "trace-final-7401"},
             },
@@ -2496,7 +2505,14 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             },
             "opinionPack": {
                 "version": "v2-opinion-pack",
-                "userReport": {"winner": "draw", "debateSummary": "summary"},
+                "userReport": {
+                    "winner": "draw",
+                    "debateSummary": "summary",
+                    "sideAnalysis": {"pro": "pro", "con": "con"},
+                    "verdictReason": "reason",
+                    "phaseDebateTimeline": [],
+                    "evidenceInsightCards": [],
+                },
                 "opsSummary": {"reviewRequired": True},
                 "internalReview": {"traceId": "trace-final-7411"},
             },
@@ -3205,6 +3221,43 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             kernel_item["registryHash"],
         )
 
+        public_verify_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/public-verify?dispatch_type=auto",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(public_verify_resp.status_code, 200)
+        public_verify_payload = public_verify_resp.json()
+        self.assertEqual(public_verify_payload["dispatchType"], "final")
+        self.assertEqual(public_verify_payload["traceId"], f"trace-final-{case_id}")
+        verify_payload = public_verify_payload["verifyPayload"]
+        self.assertEqual(
+            verify_payload["caseCommitment"]["commitmentHash"],
+            commitment_item["commitmentHash"],
+        )
+        self.assertEqual(
+            verify_payload["verdictAttestation"]["registryHash"],
+            attestation_item["registryHash"],
+        )
+        self.assertEqual(
+            verify_payload["challengeReview"]["registryHash"],
+            challenge_item["registryHash"],
+        )
+        self.assertEqual(
+            verify_payload["kernelVersion"]["registryHash"],
+            kernel_item["registryHash"],
+        )
+        self.assertEqual(
+            verify_payload["auditAnchor"]["anchorHash"],
+            anchor_item["anchorHash"],
+        )
+        self.assertNotIn("attestation", verify_payload["verdictAttestation"])
+        self.assertNotIn("challenges", verify_payload["challengeReview"])
+        self.assertNotIn("timeline", verify_payload["challengeReview"])
+        self.assertNotIn("reviewDecisions", verify_payload["challengeReview"])
+        self.assertNotIn("openAlertIds", verify_payload["challengeReview"])
+        self.assertNotIn("payload", verify_payload["auditAnchor"])
+
     async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
@@ -3631,6 +3684,119 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(any(item.run_id == run_id for item in fact_runs))
 
+    async def test_fairness_shadow_routes_should_persist_list_and_raise_alert(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        benchmark_run_id = f"run-{_unique_case_id(7605)}"
+        shadow_run_id = f"shadow-{_unique_case_id(7606)}"
+        shadow_breach_run_id = f"shadow-{_unique_case_id(7607)}"
+
+        benchmark_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": benchmark_run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.04,
+                    "appeal_overturn_rate": 0.07,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(benchmark_resp.status_code, 200)
+
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 200,
+                    "winner_flip_rate": 0.05,
+                    "score_shift_delta": 0.08,
+                    "review_required_delta": 0.04,
+                },
+                "thresholds": {
+                    "winner_flip_rate_max": 0.1,
+                    "score_shift_delta_max": 0.2,
+                    "review_required_delta_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
+        shadow_payload = shadow_resp.json()
+        self.assertTrue(shadow_payload["ok"])
+        self.assertEqual(shadow_payload["item"]["runId"], shadow_run_id)
+        self.assertEqual(shadow_payload["item"]["benchmarkRunId"], benchmark_run_id)
+        self.assertEqual(shadow_payload["breaches"], [])
+        self.assertIsNone(shadow_payload["alert"])
+
+        list_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/shadow-runs"
+                "?policy_version=fairness-benchmark-v1&benchmark_run_id="
+                f"{benchmark_run_id}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        list_payload = list_resp.json()
+        self.assertGreaterEqual(list_payload["count"], 1)
+        self.assertTrue(any(item["runId"] == shadow_run_id for item in list_payload["items"]))
+
+        breached_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_breach_run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "benchmark_run_id": benchmark_run_id,
+                "metrics": {
+                    "sample_size": 200,
+                    "winner_flip_rate": 0.25,
+                    "score_shift_delta": 0.35,
+                    "review_required_delta": 0.18,
+                },
+                "thresholds": {
+                    "winner_flip_rate_max": 0.1,
+                    "score_shift_delta_max": 0.2,
+                    "review_required_delta_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(breached_resp.status_code, 200)
+        breached_payload = breached_resp.json()
+        self.assertIn("winner_flip_rate", breached_payload["breaches"])
+        self.assertIn("score_shift_delta", breached_payload["breaches"])
+        self.assertIn("review_required_delta", breached_payload["breaches"])
+        self.assertIsNotNone(breached_payload["alert"])
+        self.assertEqual(
+            breached_payload["alert"]["type"],
+            "fairness_shadow_threshold_violation",
+        )
+
+        fact_shadow_runs = await runtime.workflow_runtime.facts.list_fairness_shadow_runs(
+            policy_version="fairness-benchmark-v1",
+            limit=20,
+        )
+        self.assertTrue(any(item.run_id == shadow_breach_run_id for item in fact_shadow_runs))
+
     async def test_fairness_benchmark_threshold_breach_should_raise_alert_outbox(self) -> None:
         runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)
@@ -3781,6 +3947,34 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(benchmark_resp.status_code, 200)
+        benchmark_run_id = benchmark_resp.json()["item"]["runId"]
+
+        shadow_run_id = f"shadow-{_unique_case_id(7624)}"
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": "v3-default",
+                "benchmark_run_id": benchmark_run_id,
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 200,
+                    "winner_flip_rate": 0.05,
+                    "score_shift_delta": 0.08,
+                    "review_required_delta": 0.03,
+                },
+                "thresholds": {
+                    "winner_flip_rate_max": 0.1,
+                    "score_shift_delta_max": 0.2,
+                    "review_required_delta_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
 
         detail_resp = await self._get(
             app=app,
@@ -3797,6 +3991,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(item["panelDisagreement"]["runtimeProfiles"], dict)
         self.assertIn("judgeA", item["panelDisagreement"]["runtimeProfiles"])
         self.assertEqual(item["driftSummary"]["latestRun"]["runId"], run_id)
+        self.assertEqual(item["shadowSummary"]["latestRun"]["runId"], shadow_run_id)
+        self.assertFalse(item["shadowSummary"]["hasShadowBreach"])
 
         list_resp = await self._get(
             app=app,
@@ -3863,6 +4059,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(drift_filter_payload["filters"]["policyVersion"], "v3-default")
         self.assertFalse(drift_filter_payload["filters"]["hasThresholdBreach"])
         self.assertFalse(drift_filter_payload["filters"]["hasDriftBreach"])
+
+        shadow_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/cases"
+                "?dispatch_type=final&policy_version=v3-default"
+                "&has_shadow_breach=false&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_filter_resp.status_code, 200)
+        shadow_filter_payload = shadow_filter_resp.json()
+        self.assertGreaterEqual(shadow_filter_payload["count"], 1)
+        self.assertTrue(any(row["caseId"] == case_id for row in shadow_filter_payload["items"]))
+        self.assertFalse(shadow_filter_payload["filters"]["hasShadowBreach"])
 
         case_id_2 = _unique_case_id(7623)
         phase_req_2 = _build_phase_request(

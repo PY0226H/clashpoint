@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
+from uuid import uuid4
 
 from httpx import ASGITransport, AsyncClient
 
@@ -96,6 +97,7 @@ def default_report_path() -> Path:
 
 
 def _build_gate_settings(**overrides: object) -> Settings:
+    db_path = f"/tmp/echoisle_ai_judge_service_test_{uuid4().hex}.db"
     base = {
         "ai_internal_key": "m7-gate-key",
         "chat_server_base_url": "http://chat",
@@ -151,7 +153,7 @@ def _build_gate_settings(**overrides: object) -> Settings:
         "redis_url": "redis://127.0.0.1:6379/0",
         "redis_pool_size": 20,
         "redis_key_prefix": "ai_judge:v2",
-        "db_url": "sqlite+aiosqlite:////tmp/echoisle_ai_judge_service_test.db",
+        "db_url": f"sqlite+aiosqlite:///{db_path}",
         "db_echo": False,
         "db_pool_size": 10,
         "db_max_overflow": 20,

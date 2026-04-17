@@ -135,12 +135,17 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert payload["evidenceLedger"]["bundleMeta"]["officialVerdictAuthority"] is False
     assert payload["evidenceLedger"]["stats"]["sourceCitationCount"] >= 1
     assert payload["evidenceLedger"]["stats"]["conflictSourceCount"] >= 0
+    assert isinstance(payload["evidenceLedger"]["stats"]["reliabilityCounts"], dict)
+    assert isinstance(payload["evidenceLedger"]["stats"]["verdictReferencedReliabilityCounts"], dict)
+    assert isinstance(payload["evidenceLedger"]["stats"]["conflictReasonCounts"], dict)
     assert isinstance(payload["verdictLedger"], dict)
     assert isinstance(payload["verdictLedger"]["panelDecisions"], dict)
     assert isinstance(payload["verdictLedger"]["arbitration"], dict)
     assert isinstance(payload["opinionPack"], dict)
     assert isinstance(payload["opinionPack"]["userReport"], dict)
     assert isinstance(payload["opinionPack"]["opsSummary"], dict)
+    assert isinstance(payload["opinionPack"]["userReport"]["phaseDebateTimeline"], list)
+    assert isinstance(payload["opinionPack"]["userReport"]["evidenceInsightCards"], list)
     assert payload["claimGraph"]["stats"]["conflictEdges"] >= 1
     assert payload["claimGraphSummary"]["stats"]["totalClaims"] >= 2
     assert all(
@@ -196,6 +201,11 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert payload["opinionPack"]["userReport"]["debateSummary"] == payload["debateSummary"]
     assert payload["opinionPack"]["userReport"]["sideAnalysis"] == payload["sideAnalysis"]
     assert payload["opinionPack"]["userReport"]["verdictReason"] == payload["verdictReason"]
+    assert len(payload["opinionPack"]["userReport"]["phaseDebateTimeline"]) == len(
+        payload["phaseRollupSummary"]
+    )
+    if payload["verdictLedger"]["decisiveEvidenceRefs"]:
+        assert len(payload["opinionPack"]["userReport"]["evidenceInsightCards"]) >= 1
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -594,6 +604,52 @@ def test_build_final_report_payload_should_apply_policy_fairness_thresholds() ->
     assert evidence_summary["thresholds"]["minTotalRefs"] == 32
     assert evidence_summary["thresholds"]["minDecisiveRefs"] == 32
     assert evidence_summary["thresholds"]["minWinnerSupportRefs"] == 16
+
+
+def test_build_final_report_payload_should_trigger_evidence_reliability_guard() -> None:
+    request = FinalDispatchRequest(
+        case_id=9013,
+        scope_id=1,
+        session_id=313,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9013",
+        idempotency_key="final:9013",
+    )
+    now = datetime.now(timezone.utc)
+    phase_payload = _build_phase_payload(
+        pro=67.0,
+        con=60.0,
+        msg_offset=0,
+        agent2_pro=66.0,
+        agent2_con=59.0,
+    )
+    phase_payload["proRetrievalBundle"]["items"][0]["conflict"] = True
+    phase_payload["conRetrievalBundle"]["items"][0]["conflict"] = True
+
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={"reportPayload": phase_payload},
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+        fairness_thresholds={"evidenceMaxLowReliabilityRatio": 0.2},
+    )
+
+    assert payload["reviewRequired"] is True
+    assert payload["winner"] == "draw"
+    assert "evidence_reliability_too_low" in payload["errorCodes"]
+    assert payload["fairnessSummary"]["evidenceLowReliabilityRatioHigh"] is True
+    reliability_summary = payload["fairnessSummary"]["evidenceSufficiency"]
+    assert reliability_summary["lowReliabilityRatio"] > 0.2
+    assert reliability_summary["thresholds"]["maxLowReliabilityRatio"] == 0.2
 
 
 def test_validate_final_report_payload_contract_should_report_missing_items() -> None:

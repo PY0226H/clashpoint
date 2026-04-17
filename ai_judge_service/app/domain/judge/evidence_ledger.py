@@ -27,6 +27,13 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
+def _normalize_reliability_label(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"high", "medium", "low"}:
+        return token
+    return "unknown"
+
+
 class EvidenceLedgerBuilder:
     """Builds normalized evidence entities and stable evidence-id references."""
 
@@ -226,12 +233,30 @@ class EvidenceLedgerBuilder:
         conflict_sources: list[dict[str, Any]] = []
         refs_by_id: dict[str, Any] = {}
         verdict_referenced_count = 0
+        reliability_counts: dict[str, int] = {
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "unknown": 0,
+        }
+        verdict_referenced_reliability_counts: dict[str, int] = {
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "unknown": 0,
+        }
+        conflict_reason_counts: dict[str, int] = {}
         for idx, entry in enumerate(entries):
             evidence_id = str(entry.get("evidenceId") or "")
             kind = str(entry.get("kind") or "")
             locator = entry.get("locator") if isinstance(entry.get("locator"), dict) else {}
+            reliability_label = _normalize_reliability_label(entry.get("reliabilityLabel"))
+            reliability_counts[reliability_label] = int(reliability_counts.get(reliability_label, 0)) + 1
             if bool(entry.get("verdictReferenced")):
                 verdict_referenced_count += 1
+                verdict_referenced_reliability_counts[reliability_label] = (
+                    int(verdict_referenced_reliability_counts.get(reliability_label, 0)) + 1
+                )
             refs_by_id[evidence_id] = {
                 "index": idx,
                 "kind": kind,
@@ -261,10 +286,19 @@ class EvidenceLedgerBuilder:
                         "sourceUrl": source_url or None,
                         "title": locator.get("title"),
                         "score": locator.get("score"),
-                        "reliabilityLabel": entry.get("reliabilityLabel"),
+                        "reliabilityLabel": reliability_label,
                     }
                 )
             if bool(entry.get("conflict")):
+                reason_hints = [
+                    str(item).strip()
+                    for item in (entry.get("reasonHints") or [])
+                    if str(item).strip()
+                ]
+                primary_reason = reason_hints[0] if reason_hints else (kind or "unknown_conflict")
+                conflict_reason_counts[primary_reason] = int(
+                    conflict_reason_counts.get(primary_reason, 0)
+                ) + 1
                 conflict_sources.append(
                     {
                         "evidenceId": evidence_id,
@@ -276,12 +310,9 @@ class EvidenceLedgerBuilder:
                         "kind": kind,
                         "phaseNo": entry.get("phaseNo"),
                         "side": entry.get("side"),
-                        "reliabilityLabel": entry.get("reliabilityLabel"),
-                        "reasonHints": [
-                            str(item).strip()
-                            for item in (entry.get("reasonHints") or [])
-                            if str(item).strip()
-                        ],
+                        "reliabilityLabel": reliability_label,
+                        "reasonHints": reason_hints,
+                        "primaryReason": primary_reason,
                     }
                 )
         return {
@@ -297,6 +328,9 @@ class EvidenceLedgerBuilder:
                 "sourceCitationCount": len(source_citations),
                 "conflictSourceCount": len(conflict_sources),
                 "verdictReferencedCount": verdict_referenced_count,
+                "reliabilityCounts": reliability_counts,
+                "verdictReferencedReliabilityCounts": verdict_referenced_reliability_counts,
+                "conflictReasonCounts": conflict_reason_counts,
             },
             "bundleMeta": {
                 "kind": "evidence_bundle",

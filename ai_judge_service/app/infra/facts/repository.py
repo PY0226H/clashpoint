@@ -16,6 +16,7 @@ from app.domain.facts import (
     ClaimLedgerRecord,
     DispatchReceipt,
     FairnessBenchmarkRun,
+    FairnessShadowRun,
     ReplayRecord,
 )
 from app.infra.db.models import (
@@ -23,6 +24,7 @@ from app.infra.db.models import (
     ClaimLedgerRecordModel,
     DispatchReceiptModel,
     FairnessBenchmarkRunModel,
+    FairnessShadowRunModel,
     ReplayRecordModel,
 )
 
@@ -386,6 +388,120 @@ class JudgeFactRepository:
             rows = (await session.execute(stmt)).scalars().all()
             return [self._to_fairness_benchmark_run(row) for row in rows]
 
+    async def upsert_fairness_shadow_run(
+        self,
+        *,
+        run_id: str,
+        policy_version: str,
+        benchmark_run_id: str | None,
+        environment_mode: str,
+        status: str,
+        threshold_decision: str,
+        needs_real_env_reconfirm: bool,
+        needs_remediation: bool,
+        sample_size: int | None,
+        winner_flip_rate: float | None,
+        score_shift_delta: float | None,
+        review_required_delta: float | None,
+        thresholds: dict[str, Any] | None,
+        metrics: dict[str, Any] | None,
+        summary: dict[str, Any] | None,
+        source: str | None,
+        reported_by: str | None,
+        reported_at: datetime | None = None,
+    ) -> FairnessShadowRun:
+        now = _utcnow()
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            raise ValueError("invalid_fairness_shadow_run_id")
+        normalized_policy_version = str(policy_version or "").strip() or "fairness-benchmark-v1"
+        normalized_benchmark_run_id = str(benchmark_run_id or "").strip() or None
+        normalized_environment_mode = _normalize_token(environment_mode) or "blocked"
+        normalized_status = _normalize_token(status) or "pending_data"
+        normalized_threshold_decision = _normalize_token(threshold_decision) or "pending"
+        normalized_source = str(source or "").strip() or "manual"
+        normalized_reported_by = str(reported_by or "").strip() or "system"
+        normalized_reported_at = _normalize_dt(reported_at) if reported_at else now
+        normalized_sample_size = max(0, int(sample_size)) if sample_size is not None else None
+        normalized_winner_flip_rate = float(winner_flip_rate) if winner_flip_rate is not None else None
+        normalized_score_shift_delta = float(score_shift_delta) if score_shift_delta is not None else None
+        normalized_review_required_delta = (
+            float(review_required_delta) if review_required_delta is not None else None
+        )
+        stmt: Select[tuple[FairnessShadowRunModel]] = select(FairnessShadowRunModel).where(
+            FairnessShadowRunModel.run_id == normalized_run_id
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(stmt)).scalars().first()
+                if row is None:
+                    row = FairnessShadowRunModel(
+                        run_id=normalized_run_id,
+                        created_at=now,
+                    )
+                    session.add(row)
+                row.policy_version = normalized_policy_version
+                row.benchmark_run_id = normalized_benchmark_run_id
+                row.environment_mode = normalized_environment_mode
+                row.status = normalized_status
+                row.threshold_decision = normalized_threshold_decision
+                row.needs_real_env_reconfirm = bool(needs_real_env_reconfirm)
+                row.needs_remediation = bool(needs_remediation)
+                row.sample_size = normalized_sample_size
+                row.winner_flip_rate = normalized_winner_flip_rate
+                row.score_shift_delta = normalized_score_shift_delta
+                row.review_required_delta = normalized_review_required_delta
+                row.thresholds = dict(thresholds or {})
+                row.metrics = dict(metrics or {})
+                row.summary = dict(summary or {})
+                row.source = normalized_source
+                row.reported_by = normalized_reported_by
+                row.reported_at = normalized_reported_at
+                row.updated_at = now
+            await session.refresh(row)
+            return self._to_fairness_shadow_run(row)
+
+    async def list_fairness_shadow_runs(
+        self,
+        *,
+        policy_version: str | None = None,
+        benchmark_run_id: str | None = None,
+        environment_mode: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[FairnessShadowRun]:
+        stmt: Select[tuple[FairnessShadowRunModel]] = (
+            select(FairnessShadowRunModel)
+            .order_by(
+                FairnessShadowRunModel.reported_at.desc(),
+                FairnessShadowRunModel.id.desc(),
+            )
+            .limit(max(1, min(500, int(limit))))
+        )
+        if policy_version is not None:
+            stmt = stmt.where(
+                FairnessShadowRunModel.policy_version
+                == (str(policy_version).strip() or "fairness-benchmark-v1")
+            )
+        if benchmark_run_id is not None:
+            stmt = stmt.where(
+                FairnessShadowRunModel.benchmark_run_id
+                == (str(benchmark_run_id).strip() or None)
+            )
+        if environment_mode is not None:
+            stmt = stmt.where(
+                FairnessShadowRunModel.environment_mode
+                == (_normalize_token(environment_mode) or "blocked")
+            )
+        if status is not None:
+            stmt = stmt.where(
+                FairnessShadowRunModel.status
+                == (_normalize_token(status) or "pending_data")
+            )
+        async with self._session_factory() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._to_fairness_shadow_run(row) for row in rows]
+
     async def upsert_audit_alert(
         self,
         *,
@@ -622,6 +738,39 @@ class JudgeFactRepository:
                 float(row.appeal_overturn_rate)
                 if row.appeal_overturn_rate is not None
                 else None
+            ),
+            thresholds=row.thresholds if isinstance(row.thresholds, dict) else {},
+            metrics=row.metrics if isinstance(row.metrics, dict) else {},
+            summary=row.summary if isinstance(row.summary, dict) else {},
+            source=row.source,
+            reported_by=row.reported_by,
+            reported_at=_normalize_dt(row.reported_at),
+            created_at=_normalize_dt(row.created_at),
+            updated_at=_normalize_dt(row.updated_at),
+        )
+
+    def _to_fairness_shadow_run(
+        self,
+        row: FairnessShadowRunModel,
+    ) -> FairnessShadowRun:
+        return FairnessShadowRun(
+            run_id=row.run_id,
+            policy_version=row.policy_version,
+            benchmark_run_id=row.benchmark_run_id,
+            environment_mode=row.environment_mode,
+            status=row.status,
+            threshold_decision=row.threshold_decision,
+            needs_real_env_reconfirm=bool(row.needs_real_env_reconfirm),
+            needs_remediation=bool(row.needs_remediation),
+            sample_size=row.sample_size,
+            winner_flip_rate=(
+                float(row.winner_flip_rate) if row.winner_flip_rate is not None else None
+            ),
+            score_shift_delta=(
+                float(row.score_shift_delta) if row.score_shift_delta is not None else None
+            ),
+            review_required_delta=(
+                float(row.review_required_delta) if row.review_required_delta is not None else None
             ),
             thresholds=row.thresholds if isinstance(row.thresholds, dict) else {},
             metrics=row.metrics if isinstance(row.metrics, dict) else {},

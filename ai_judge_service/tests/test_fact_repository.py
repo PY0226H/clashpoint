@@ -177,6 +177,64 @@ class JudgeFactRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(violated_rows), 1)
         self.assertEqual(violated_rows[0].run_id, "fairness-run-2")
 
+    async def test_fairness_shadow_runs_should_upsert_and_filter(self) -> None:
+        first = await self._repo.upsert_fairness_shadow_run(
+            run_id="shadow-run-1",
+            policy_version="fairness-benchmark-v1",
+            benchmark_run_id="fairness-run-1",
+            environment_mode="local_reference",
+            status="local_reference_frozen",
+            threshold_decision="accepted",
+            needs_real_env_reconfirm=True,
+            needs_remediation=False,
+            sample_size=200,
+            winner_flip_rate=0.05,
+            score_shift_delta=0.08,
+            review_required_delta=0.03,
+            thresholds={"winnerFlipRateMax": 0.1},
+            metrics={"winnerFlipRate": 0.05},
+            summary={"note": "shadow baseline"},
+            source="harness",
+            reported_by="ci",
+        )
+        second = await self._repo.upsert_fairness_shadow_run(
+            run_id="shadow-run-2",
+            policy_version="fairness-benchmark-v1",
+            benchmark_run_id="fairness-run-1",
+            environment_mode="local_reference",
+            status="threshold_violation",
+            threshold_decision="violated",
+            needs_real_env_reconfirm=True,
+            needs_remediation=True,
+            sample_size=200,
+            winner_flip_rate=0.22,
+            score_shift_delta=0.35,
+            review_required_delta=0.18,
+            thresholds={"winnerFlipRateMax": 0.1},
+            metrics={"winnerFlipRate": 0.22},
+            summary={"note": "shadow breached"},
+            source="harness",
+            reported_by="ci",
+        )
+        self.assertEqual(first.run_id, "shadow-run-1")
+        self.assertEqual(second.status, "threshold_violation")
+
+        all_rows = await self._repo.list_fairness_shadow_runs(
+            policy_version="fairness-benchmark-v1",
+            limit=10,
+        )
+        self.assertEqual(len(all_rows), 2)
+        self.assertEqual(all_rows[0].run_id, "shadow-run-2")
+
+        filtered_rows = await self._repo.list_fairness_shadow_runs(
+            policy_version="fairness-benchmark-v1",
+            benchmark_run_id="fairness-run-1",
+            status="threshold_violation",
+            limit=10,
+        )
+        self.assertEqual(len(filtered_rows), 1)
+        self.assertEqual(filtered_rows[0].run_id, "shadow-run-2")
+
     async def test_audit_alert_should_dedupe_and_transition_status(self) -> None:
         alert = await self._repo.upsert_audit_alert(
             job_id=8301,
