@@ -1,6 +1,6 @@
 # AI_judge_service 企业级 Agent 服务设计方案（2026-04-13）
 
-状态：待审核  
+状态：已审核，可以实施  
 设计前提：抛开当前实现，从产品需求与企业级可运营性重新设计  
 目标：为“多人在线辩论 + AI 裁判 + 丰富判决展示 + 公正保障”设计一套真正面向产品主线的 Agent 服务
 
@@ -664,8 +664,7 @@ queued
 1. internal auth
 2. tenant isolation
 3. data retention policy
-4. PII redaction
-5.审计日志不可篡改
+4. PII redaction 5.审计日志不可篡改
 
 ### 12.3 观测性
 
@@ -729,25 +728,25 @@ queued
 
 ### 14.1 一页映射表
 
-| 当前能力 / 逻辑 | 当前作用 | 新架构归属 | 处理建议 | 备注 |
-| --- | --- | --- | --- | --- |
-| `phase / final` 分层 | 先阶段汇总，再终局裁决 | `Recorder Agent` + `Chief Arbiter Agent` + `Opinion Writer Agent` | 升级后继承 | 不一定保留旧命名，但保留“先形成阶段记录，再做终局判决”的思想 |
-| `trace / replay / dispatch receipt` | 任务追踪、回放、回执留痕 | `Judge Gateway` + `Judge Ledger Store` + `Ops Console` | 直接继承 | 这是企业级运维骨架，不应推翻 |
-| `failed callback` | 将失败显式回传给调用方 | `Judge Gateway` | 直接继承 | 应继续作为业务主链的一部分 |
-| `audit alert / alert outbox` | 风险与异常可追踪 | `Fairness Sentinel Agent` + `Ops Console` | 直接继承 | 后续可扩展为 fairness / review 告警中心 |
-| `idempotency + retry + callback retry` | 防重与可靠投递 | `Judge Gateway` + `Judge Orchestrator` | 直接继承 | 属于企业级必须能力 |
-| `rubric_version / prompt hash / error_code / degradation_level` | 裁判版本化与降级留痕 | `Policy Registry` + `Verdict Ledger` + `Fairness Report` | 直接继承 | 后续还应纳入 benchmark 分析 |
-| 输入 `extra=forbid` + 敏感键拒绝 | 字段级盲化 | `Clerk Agent` | 升级后继承 | 保留字段级门禁，并增加语义级脱敏 |
-| `summary coverage guard` | 防止总结脱离原始消息 | `Recorder Agent` + `Case Dossier Builder` | 升级后继承 | 很适合成为“原始记录完整性门禁” |
-| 混合 `RAG`、白名单来源、RRF、rerank、冲突标记 | 为判决提供背景材料 | `Evidence Agent` | 升级后继承 | 要从“命中加分器”升级成“证据核验器” |
-| `agent2` 双向路径：生成理想反驳，再看目标方命中程度 | 评估反驳质量 | `Judge Panel / Rebuttal Judge` 或 `Counterfactual Challenge Tool` | 升级后继承 | 这是当前实现里最有创造力的雏形之一 |
-| `winner_first / winner_second / rejudge_triggered / draw protection` | 双次差异控制 | `Fairness Sentinel Agent` + `Chief Arbiter Agent` | 升级后继承 | 后续要扩展成 swap/style/panel 多维稳定性检查 |
-| final 展示字段 `debateSummary / sideAnalysis / verdictReason` | 对用户展示最终裁决 | `Opinion Writer Agent` + `Opinion Pack` | 直接继承结构、重写生成逻辑 | 字段设计对，内容生成方式要升级 |
-| `verdictEvidenceRefs / retrievalSnapshotRollup / phaseRollupSummary` | 证据链和过程展开 | `Evidence Ledger` + `Verdict Ledger` | 直接继承思路 | 后续应结构化而不是只做拼装 |
-| `topic_memory` 存储能力 | 历史经验复用预留 | `Memory Store / Review Assistant` | 暂不进入主链 | 先做 shadow memory，不直接影响胜负 |
-| 启发式信号：长度、标点、数字密度、token diversity | 快速估算逻辑/表达/证据强弱 | `Judge Diagnostics` | 降级为辅助信号 | 不能继续做主裁决驱动器 |
-| 检索命中条数对评分的直接影响 | 借助检索支持评分 | `Evidence Sufficiency Signal` | 降级后继承 | 只能做“证据充分性提示”，不应直接定胜负 |
-| final 模板化文案 | 生成稳定展示结果 | `Opinion Writer Agent` | 保留合同，重做写法 | 应改为 `verdict_ledger` 驱动，而不是模板拼句 |
+| 当前能力 / 逻辑                                                      | 当前作用                   | 新架构归属                                                        | 处理建议                   | 备注                                                         |
+| -------------------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------ |
+| `phase / final` 分层                                                 | 先阶段汇总，再终局裁决     | `Recorder Agent` + `Chief Arbiter Agent` + `Opinion Writer Agent` | 升级后继承                 | 不一定保留旧命名，但保留“先形成阶段记录，再做终局判决”的思想 |
+| `trace / replay / dispatch receipt`                                  | 任务追踪、回放、回执留痕   | `Judge Gateway` + `Judge Ledger Store` + `Ops Console`            | 直接继承                   | 这是企业级运维骨架，不应推翻                                 |
+| `failed callback`                                                    | 将失败显式回传给调用方     | `Judge Gateway`                                                   | 直接继承                   | 应继续作为业务主链的一部分                                   |
+| `audit alert / alert outbox`                                         | 风险与异常可追踪           | `Fairness Sentinel Agent` + `Ops Console`                         | 直接继承                   | 后续可扩展为 fairness / review 告警中心                      |
+| `idempotency + retry + callback retry`                               | 防重与可靠投递             | `Judge Gateway` + `Judge Orchestrator`                            | 直接继承                   | 属于企业级必须能力                                           |
+| `rubric_version / prompt hash / error_code / degradation_level`      | 裁判版本化与降级留痕       | `Policy Registry` + `Verdict Ledger` + `Fairness Report`          | 直接继承                   | 后续还应纳入 benchmark 分析                                  |
+| 输入 `extra=forbid` + 敏感键拒绝                                     | 字段级盲化                 | `Clerk Agent`                                                     | 升级后继承                 | 保留字段级门禁，并增加语义级脱敏                             |
+| `summary coverage guard`                                             | 防止总结脱离原始消息       | `Recorder Agent` + `Case Dossier Builder`                         | 升级后继承                 | 很适合成为“原始记录完整性门禁”                               |
+| 混合 `RAG`、白名单来源、RRF、rerank、冲突标记                        | 为判决提供背景材料         | `Evidence Agent`                                                  | 升级后继承                 | 要从“命中加分器”升级成“证据核验器”                           |
+| `agent2` 双向路径：生成理想反驳，再看目标方命中程度                  | 评估反驳质量               | `Judge Panel / Rebuttal Judge` 或 `Counterfactual Challenge Tool` | 升级后继承                 | 这是当前实现里最有创造力的雏形之一                           |
+| `winner_first / winner_second / rejudge_triggered / draw protection` | 双次差异控制               | `Fairness Sentinel Agent` + `Chief Arbiter Agent`                 | 升级后继承                 | 后续要扩展成 swap/style/panel 多维稳定性检查                 |
+| final 展示字段 `debateSummary / sideAnalysis / verdictReason`        | 对用户展示最终裁决         | `Opinion Writer Agent` + `Opinion Pack`                           | 直接继承结构、重写生成逻辑 | 字段设计对，内容生成方式要升级                               |
+| `verdictEvidenceRefs / retrievalSnapshotRollup / phaseRollupSummary` | 证据链和过程展开           | `Evidence Ledger` + `Verdict Ledger`                              | 直接继承思路               | 后续应结构化而不是只做拼装                                   |
+| `topic_memory` 存储能力                                              | 历史经验复用预留           | `Memory Store / Review Assistant`                                 | 暂不进入主链               | 先做 shadow memory，不直接影响胜负                           |
+| 启发式信号：长度、标点、数字密度、token diversity                    | 快速估算逻辑/表达/证据强弱 | `Judge Diagnostics`                                               | 降级为辅助信号             | 不能继续做主裁决驱动器                                       |
+| 检索命中条数对评分的直接影响                                         | 借助检索支持评分           | `Evidence Sufficiency Signal`                                     | 降级后继承                 | 只能做“证据充分性提示”，不应直接定胜负                       |
+| final 模板化文案                                                     | 生成稳定展示结果           | `Opinion Writer Agent`                                            | 保留合同，重做写法         | 应改为 `verdict_ledger` 驱动，而不是模板拼句                 |
 
 ### 14.2 当前最值得继承的 5 个设计资产
 

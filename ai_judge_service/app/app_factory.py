@@ -516,6 +516,105 @@ def _build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
     return build_verdict_contract_v3(payload)
 
 
+def _payload_int(payload: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _payload_str(payload: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _build_case_dossier_from_request_payload(
+    *,
+    dispatch_type: str,
+    request_payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    payload = request_payload if isinstance(request_payload, dict) else {}
+    if not payload:
+        return None
+
+    phase_no = _payload_int(payload, "phase_no", "phaseNo")
+    phase_start_no = _payload_int(payload, "phase_start_no", "phaseStartNo")
+    phase_end_no = _payload_int(payload, "phase_end_no", "phaseEndNo")
+    message_start_id = _payload_int(payload, "message_start_id", "messageStartId")
+    message_end_id = _payload_int(payload, "message_end_id", "messageEndId")
+    message_count = _payload_int(payload, "message_count", "messageCount")
+
+    message_digest: list[dict[str, Any]] = []
+    side_distribution = {"pro": 0, "con": 0, "other": 0}
+    speaker_tags: list[str] = []
+    speaker_seen: set[str] = set()
+
+    message_rows = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    for row in message_rows:
+        if not isinstance(row, dict):
+            continue
+        side = str(row.get("side") or "").strip().lower()
+        if side == "pro":
+            side_distribution["pro"] += 1
+        elif side == "con":
+            side_distribution["con"] += 1
+        else:
+            side_distribution["other"] += 1
+        speaker_tag = str(row.get("speaker_tag") or row.get("speakerTag") or "").strip()
+        if speaker_tag and speaker_tag not in speaker_seen:
+            speaker_seen.add(speaker_tag)
+            speaker_tags.append(speaker_tag)
+        message_digest.append(
+            {
+                "messageId": _payload_int(row, "message_id", "messageId"),
+                "side": side if side else None,
+                "speakerTag": speaker_tag or None,
+                "createdAt": _payload_str(row, "created_at", "createdAt"),
+            }
+        )
+
+    if dispatch_type == "final":
+        phase_scope: dict[str, Any] = {
+            "startNo": phase_start_no,
+            "endNo": phase_end_no,
+        }
+    else:
+        phase_scope = {"no": phase_no}
+
+    return {
+        "version": "v1",
+        "dispatchType": dispatch_type,
+        "caseId": _payload_int(payload, "case_id", "caseId"),
+        "scopeId": _payload_int(payload, "scope_id", "scopeId"),
+        "sessionId": _payload_int(payload, "session_id", "sessionId"),
+        "traceId": _payload_str(payload, "trace_id", "traceId"),
+        "topicDomain": _payload_str(payload, "topic_domain", "topicDomain"),
+        "rubricVersion": _payload_str(payload, "rubric_version", "rubricVersion"),
+        "judgePolicyVersion": _payload_str(payload, "judge_policy_version", "judgePolicyVersion"),
+        "retrievalProfile": _payload_str(payload, "retrieval_profile", "retrievalProfile"),
+        "phase": phase_scope,
+        "messageWindow": {
+            "startId": message_start_id,
+            "endId": message_end_id,
+            "count": message_count,
+        },
+        "sideDistribution": side_distribution,
+        "speakerTags": speaker_tags,
+        "messageDigest": message_digest,
+    }
+
+
 def _build_case_evidence_view(
     *,
     report_payload: dict[str, Any] | None,
@@ -525,6 +624,11 @@ def _build_case_evidence_view(
     payload = report_payload if isinstance(report_payload, dict) else {}
     contract = verdict_contract if isinstance(verdict_contract, dict) else {}
     judge_trace = payload.get("judgeTrace") if isinstance(payload.get("judgeTrace"), dict) else {}
+    ledger_case_dossier = (
+        claim_ledger_record.case_dossier
+        if claim_ledger_record is not None and isinstance(claim_ledger_record.case_dossier, dict)
+        else None
+    )
     ledger_claim_graph = (
         claim_ledger_record.claim_graph
         if claim_ledger_record is not None and isinstance(claim_ledger_record.claim_graph, dict)
@@ -555,6 +659,11 @@ def _build_case_evidence_view(
         payload.get("claimGraphSummary")
         if isinstance(payload.get("claimGraphSummary"), dict)
         else ledger_claim_summary
+    )
+    case_dossier = (
+        payload.get("caseDossier")
+        if isinstance(payload.get("caseDossier"), dict)
+        else ledger_case_dossier
     )
     verdict_ledger = (
         payload.get("verdictLedger")
@@ -688,6 +797,7 @@ def _build_case_evidence_view(
     )
 
     return {
+        "caseDossier": case_dossier,
         "claimGraph": claim_graph,
         "claimGraphSummary": claim_graph_summary,
         "evidenceLedger": evidence_ledger,
@@ -719,6 +829,7 @@ def _build_case_evidence_view(
             if claim_ledger_record is not None
             else None
         ),
+        "hasCaseDossier": case_dossier is not None,
         "hasClaimGraph": claim_graph is not None,
         "hasClaimLedger": claim_ledger_record is not None,
         "hasEvidenceLedger": evidence_ledger is not None,
@@ -741,6 +852,7 @@ def _serialize_claim_ledger_record(
         "updatedAt": record.updated_at.isoformat(),
     }
     if include_payload:
+        item["caseDossier"] = dict(record.case_dossier)
         item["claimGraph"] = dict(record.claim_graph)
         item["claimGraphSummary"] = dict(record.claim_graph_summary)
         item["evidenceLedger"] = dict(record.evidence_ledger)
@@ -2908,11 +3020,30 @@ async def _attach_judge_agent_runtime_trace(
         "errorCode": judge_runtime_result.error_code,
         "errorMessage": judge_runtime_result.error_message,
         "runtimeVersion": runtime_output.get("runtimeVersion"),
+        "workflowVersion": runtime_output.get("workflowVersion"),
+        "mode": runtime_output.get("mode"),
+        "officialVerdictAuthority": bool(runtime_output.get("officialVerdictAuthority")),
         "activeRoles": runtime_output.get("activeRoles"),
     }
     roles = runtime_output.get("roles")
     if isinstance(roles, list):
         judge_trace["courtroomRoles"] = [item for item in roles if isinstance(item, dict)]
+    workflow_edges = runtime_output.get("workflowEdges")
+    if isinstance(workflow_edges, list):
+        judge_trace["courtroomWorkflowEdges"] = [
+            item for item in workflow_edges if isinstance(item, dict)
+        ]
+        judge_trace["agentRuntime"]["workflowEdgeCount"] = len(
+            judge_trace["courtroomWorkflowEdges"]
+        )
+    artifacts = runtime_output.get("artifacts")
+    if isinstance(artifacts, list):
+        judge_trace["courtroomArtifacts"] = [
+            item for item in artifacts if isinstance(item, dict)
+        ]
+        judge_trace["agentRuntime"]["artifactCount"] = len(
+            judge_trace["courtroomArtifacts"]
+        )
     role_order = runtime_output.get("roleOrder")
     if isinstance(role_order, list):
         judge_trace["courtroomRoleOrder"] = [str(item) for item in role_order if str(item).strip()]
@@ -3208,15 +3339,24 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type: str,
         trace_id: str,
         report_payload: dict[str, Any] | None,
+        request_payload: dict[str, Any] | None = None,
     ) -> FactClaimLedgerRecord | None:
         payload = report_payload if isinstance(report_payload, dict) else {}
-        if not payload:
+        if not payload and not isinstance(request_payload, dict):
             return None
         verdict_contract = _build_verdict_contract(payload)
         evidence_view = _build_case_evidence_view(
             report_payload=payload,
             verdict_contract=verdict_contract,
             claim_ledger_record=None,
+        )
+        case_dossier = (
+            evidence_view.get("caseDossier")
+            if isinstance(evidence_view.get("caseDossier"), dict)
+            else _build_case_dossier_from_request_payload(
+                dispatch_type=dispatch_type,
+                request_payload=request_payload,
+            )
         )
         claim_graph = (
             evidence_view.get("claimGraph")
@@ -3238,13 +3378,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             for item in (evidence_view.get("verdictEvidenceRefs") or [])
             if isinstance(item, dict)
         ]
-        if claim_graph is None and claim_graph_summary is None and not verdict_evidence_refs:
+        if (
+            case_dossier is None
+            and claim_graph is None
+            and claim_graph_summary is None
+            and not verdict_evidence_refs
+        ):
             return None
         await _ensure_workflow_schema_ready()
         return await runtime.workflow_runtime.facts.upsert_claim_ledger_record(
             case_id=case_id,
             dispatch_type=dispatch_type,
             trace_id=trace_id,
+            case_dossier=case_dossier,
             claim_graph=claim_graph,
             claim_graph_summary=claim_graph_summary,
             evidence_ledger=evidence_ledger,
@@ -5021,6 +5167,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type="phase",
             trace_id=parsed.trace_id,
             report_payload=phase_report_payload,
+            request_payload=request_payload,
         )
         try:
             callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
@@ -5380,6 +5527,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type="final",
             trace_id=parsed.trace_id,
             report_payload=final_report_payload,
+            request_payload=request_payload,
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -6287,6 +6435,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type=chosen_dispatch_type,
             trace_id=trace_id,
             report_payload=report_payload,
+            request_payload=request_snapshot,
         )
         winner = str(report_payload.get("winner") or "").strip().lower()
         if winner not in {"pro", "con", "draw"}:

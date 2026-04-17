@@ -400,11 +400,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("trustAttestation", detail_payload["reportPayload"])
         self.assertIn("caseEvidence", detail_payload)
         case_evidence = detail_payload["caseEvidence"]
+        self.assertTrue(case_evidence["hasCaseDossier"])
         self.assertTrue(case_evidence["hasClaimGraph"])
         self.assertTrue(case_evidence["hasEvidenceLedger"])
         self.assertTrue(case_evidence["hasVerdictLedger"])
         self.assertTrue(case_evidence["hasOpinionPack"])
         self.assertTrue(case_evidence["hasTrustAttestation"])
+        self.assertIsInstance(case_evidence["caseDossier"], dict)
+        self.assertEqual(case_evidence["caseDossier"]["dispatchType"], "final")
+        self.assertEqual(
+            case_evidence["caseDossier"]["phase"]["startNo"],
+            final_req.phase_start_no,
+        )
+        self.assertEqual(
+            case_evidence["caseDossier"]["phase"]["endNo"],
+            final_req.phase_end_no,
+        )
         self.assertIsInstance(case_evidence["claimGraph"], dict)
         self.assertIsInstance(case_evidence["claimGraphSummary"], dict)
         self.assertIsInstance(case_evidence["evidenceLedger"], dict)
@@ -478,12 +489,48 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         ledger_body = ledger_resp.json()
         self.assertEqual(ledger_body["dispatchType"], "final")
         self.assertGreaterEqual(ledger_body["count"], 1)
+        self.assertIsInstance(ledger_body["item"]["caseDossier"], dict)
+        self.assertEqual(ledger_body["item"]["caseDossier"]["dispatchType"], "final")
+        self.assertEqual(
+            ledger_body["item"]["caseDossier"]["phase"]["startNo"],
+            final_req.phase_start_no,
+        )
+        self.assertEqual(
+            ledger_body["item"]["caseDossier"]["phase"]["endNo"],
+            final_req.phase_end_no,
+        )
         self.assertIsInstance(ledger_body["item"]["claimGraph"], dict)
         self.assertIsInstance(ledger_body["item"]["claimGraph"]["nodes"], list)
         self.assertIsInstance(ledger_body["item"]["claimGraph"]["edges"], list)
         self.assertIsInstance(ledger_body["item"]["claimGraphSummary"], dict)
         self.assertIsInstance(ledger_body["item"]["evidenceLedger"], dict)
         self.assertIsInstance(ledger_body["item"]["verdictEvidenceRefs"], list)
+
+        phase_ledger_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/claim-ledger?dispatch_type=phase",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_ledger_resp.status_code, 200)
+        phase_ledger_body = phase_ledger_resp.json()
+        self.assertEqual(phase_ledger_body["dispatchType"], "phase")
+        self.assertEqual(phase_ledger_body["item"]["caseDossier"]["phase"]["no"], phase_req.phase_no)
+        self.assertEqual(
+            phase_ledger_body["item"]["caseDossier"]["messageWindow"]["count"],
+            phase_req.message_count,
+        )
+        self.assertEqual(
+            len(phase_ledger_body["item"]["caseDossier"]["messageDigest"]),
+            phase_req.message_count,
+        )
+        self.assertEqual(
+            phase_ledger_body["item"]["caseDossier"]["sideDistribution"]["pro"],
+            1,
+        )
+        self.assertEqual(
+            phase_ledger_body["item"]["caseDossier"]["sideDistribution"]["con"],
+            1,
+        )
 
     async def test_case_detail_route_should_return_404_when_case_missing(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -1893,6 +1940,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "phase",
         )
         self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["workflowVersion"],
+            "courtroom_8agent_chain_v1",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["mode"],
+            "official_verdict_plane",
+        )
+        self.assertTrue(
+            bool(
+                phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"][
+                    "officialVerdictAuthority"
+                ]
+            )
+        )
+        self.assertEqual(
             phase_callback_calls[0][1]["judgeTrace"]["policyRegistry"]["version"],
             "v3-default",
         )
@@ -1920,6 +1982,28 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             len(phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["activeRoles"]),
             5,
         )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["workflowEdgeCount"],
+            7,
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["artifactCount"],
+            8,
+        )
+        self.assertEqual(
+            len(phase_callback_calls[0][1]["judgeTrace"]["courtroomWorkflowEdges"]),
+            7,
+        )
+        self.assertEqual(
+            len(phase_callback_calls[0][1]["judgeTrace"]["courtroomArtifacts"]),
+            8,
+        )
+        deferred_artifacts = [
+            row
+            for row in phase_callback_calls[0][1]["judgeTrace"]["courtroomArtifacts"]
+            if row.get("availability") == "deferred"
+        ]
+        self.assertGreaterEqual(len(deferred_artifacts), 1)
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=1001)
         self.assertIsNotNone(phase_job)
         assert phase_job is not None
@@ -2003,6 +2087,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "final",
         )
         self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["workflowVersion"],
+            "courtroom_8agent_chain_v1",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["mode"],
+            "official_verdict_plane",
+        )
+        self.assertTrue(
+            bool(
+                final_callback_calls[0][1]["judgeTrace"]["agentRuntime"][
+                    "officialVerdictAuthority"
+                ]
+            )
+        )
+        self.assertEqual(
             final_callback_calls[0][1]["judgeTrace"]["promptRegistry"]["version"],
             "promptset-v3-default",
         )
@@ -2037,6 +2136,28 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             len(final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["activeRoles"]),
             8,
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["workflowEdgeCount"],
+            7,
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["artifactCount"],
+            8,
+        )
+        self.assertEqual(
+            len(final_callback_calls[0][1]["judgeTrace"]["courtroomWorkflowEdges"]),
+            7,
+        )
+        self.assertEqual(
+            len(final_callback_calls[0][1]["judgeTrace"]["courtroomArtifacts"]),
+            8,
+        )
+        self.assertTrue(
+            all(
+                bool(row.get("available"))
+                for row in final_callback_calls[0][1]["judgeTrace"]["courtroomArtifacts"]
+            )
         )
         phase_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2001)
         final_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=2002)
@@ -2828,6 +2949,21 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         replay_events = await runtime.workflow_runtime.orchestrator.list_events(job_id=5001)
         self.assertEqual(replay_events[-1].event_type, "replay_marked")
         self.assertEqual(replay_events[-1].payload.get("judgeCoreStage"), "replay_computed")
+        replay_claim_ledger = await runtime.workflow_runtime.facts.get_claim_ledger_record(
+            case_id=5001,
+            dispatch_type="final",
+        )
+        self.assertIsNotNone(replay_claim_ledger)
+        assert replay_claim_ledger is not None
+        self.assertEqual(replay_claim_ledger.case_dossier.get("dispatchType"), "final")
+        self.assertEqual(
+            replay_claim_ledger.case_dossier.get("phase", {}).get("startNo"),
+            final_req.phase_start_no,
+        )
+        self.assertEqual(
+            replay_claim_ledger.case_dossier.get("phase", {}).get("endNo"),
+            final_req.phase_end_no,
+        )
 
     async def test_attestation_verify_should_use_auto_dispatch_and_return_verified(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:

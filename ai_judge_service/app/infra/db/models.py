@@ -120,6 +120,7 @@ class ClaimLedgerRecordModel(Base):
     case_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     dispatch_type: Mapped[str] = mapped_column(String(16), nullable=False)
     trace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    case_dossier: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     claim_graph: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     claim_graph_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     evidence_ledger: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

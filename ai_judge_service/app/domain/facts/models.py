@@ -70,6 +70,7 @@ class ClaimLedgerRecord:
     case_id: int
     dispatch_type: str
     trace_id: str
+    case_dossier: dict[str, Any]
     claim_graph: dict[str, Any]
     claim_graph_summary: dict[str, Any]
     evidence_ledger: dict[str, Any]

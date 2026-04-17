@@ -55,8 +55,11 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(judge_result.status, "ok")
         self.assertIsNone(judge_result.error_code)
         self.assertEqual(judge_result.output.get("accepted"), True)
+        self.assertEqual(judge_result.output.get("mode"), "official_verdict_plane")
+        self.assertTrue(bool(judge_result.output.get("officialVerdictAuthority")))
         self.assertEqual(judge_result.output.get("dispatchType"), "phase")
         self.assertEqual(judge_result.output.get("runtimeVersion"), "courtroom_agent_runtime_mvp_v1")
+        self.assertEqual(judge_result.output.get("workflowVersion"), "courtroom_8agent_chain_v1")
         self.assertEqual(
             judge_result.output.get("roleOrder"),
             [
@@ -82,6 +85,54 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         role_rows = judge_result.output.get("roles")
         self.assertTrue(isinstance(role_rows, list) and len(role_rows) == 8)
+        assert isinstance(role_rows, list)
+        self.assertEqual(role_rows[0]["state"], "active")
+        self.assertEqual(role_rows[-1]["state"], "deferred")
+        self.assertEqual(role_rows[0]["outputArtifacts"], ["case_dossier"])
+        self.assertEqual(role_rows[-1]["inputArtifacts"], ["final_verdict"])
+
+        workflow_edges = judge_result.output.get("workflowEdges")
+        self.assertTrue(isinstance(workflow_edges, list) and len(workflow_edges) == 7)
+        assert isinstance(workflow_edges, list)
+        self.assertEqual(
+            workflow_edges[0],
+            {
+                "sequence": 1,
+                "fromRole": ROLE_CLERK,
+                "toRole": ROLE_RECORDER,
+                "condition": "on_success",
+            },
+        )
+        self.assertEqual(
+            workflow_edges[-1]["toRole"],
+            ROLE_OPINION_WRITER,
+        )
+
+        artifacts = judge_result.output.get("artifacts")
+        self.assertTrue(isinstance(artifacts, list) and len(artifacts) == 8)
+        assert isinstance(artifacts, list)
+        self.assertTrue(artifacts[0]["available"])
+        self.assertFalse(artifacts[-1]["available"])
+        self.assertEqual(artifacts[-1]["availability"], "deferred")
+
+        final_judge_result = await runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_JUDGE,
+                input_payload={"caseId": 101, "phaseStartNo": 1, "phaseEndNo": 3},
+                trace_id="trace-101-final",
+                session_id=11,
+                scope_id=1,
+                metadata={"dispatchType": "final"},
+            )
+        )
+        final_artifacts = final_judge_result.output.get("artifacts")
+        self.assertTrue(isinstance(final_artifacts, list) and len(final_artifacts) == 8)
+        assert isinstance(final_artifacts, list)
+        self.assertTrue(all(bool(item.get("available")) for item in final_artifacts))
+        self.assertEqual(
+            len(final_judge_result.output.get("activeRoles", [])),
+            8,
+        )
 
         self.assertEqual(npc_result.status, "not_ready")
         self.assertEqual(npc_result.error_code, "agent_not_enabled")

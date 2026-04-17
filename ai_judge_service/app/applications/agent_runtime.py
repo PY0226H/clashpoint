@@ -74,6 +74,36 @@ class _JudgeCourtroomExecutor(AgentExecutorPort):
         ROLE_EVIDENCE,
         ROLE_JUDGE_PANEL,
     }
+    _ROLE_INPUT_ARTIFACTS = {
+        ROLE_CLERK: (),
+        ROLE_RECORDER: ("case_dossier",),
+        ROLE_CLAIM_GRAPH: ("debate_timeline",),
+        ROLE_EVIDENCE: ("claim_graph",),
+        ROLE_JUDGE_PANEL: ("claim_graph", "evidence_bundle"),
+        ROLE_FAIRNESS_SENTINEL: ("panel_decisions",),
+        ROLE_CHIEF_ARBITER: ("panel_decisions", "fairness_report"),
+        ROLE_OPINION_WRITER: ("final_verdict",),
+    }
+    _ROLE_OUTPUT_ARTIFACTS = {
+        ROLE_CLERK: ("case_dossier",),
+        ROLE_RECORDER: ("debate_timeline",),
+        ROLE_CLAIM_GRAPH: ("claim_graph",),
+        ROLE_EVIDENCE: ("evidence_bundle",),
+        ROLE_JUDGE_PANEL: ("panel_decisions",),
+        ROLE_FAIRNESS_SENTINEL: ("fairness_report",),
+        ROLE_CHIEF_ARBITER: ("final_verdict", "verdict_ledger"),
+        ROLE_OPINION_WRITER: ("opinion_pack",),
+    }
+    _ARTIFACT_PLAN = (
+        ("case_dossier", ROLE_CLERK, (ROLE_RECORDER, ROLE_CLAIM_GRAPH, ROLE_EVIDENCE)),
+        ("debate_timeline", ROLE_RECORDER, (ROLE_CLAIM_GRAPH, ROLE_EVIDENCE)),
+        ("claim_graph", ROLE_CLAIM_GRAPH, (ROLE_EVIDENCE, ROLE_JUDGE_PANEL)),
+        ("evidence_bundle", ROLE_EVIDENCE, (ROLE_JUDGE_PANEL,)),
+        ("panel_decisions", ROLE_JUDGE_PANEL, (ROLE_FAIRNESS_SENTINEL, ROLE_CHIEF_ARBITER)),
+        ("fairness_report", ROLE_FAIRNESS_SENTINEL, (ROLE_CHIEF_ARBITER,)),
+        ("final_verdict", ROLE_CHIEF_ARBITER, (ROLE_OPINION_WRITER,)),
+        ("opinion_pack", ROLE_OPINION_WRITER, ()),
+    )
 
     @staticmethod
     def _normalize_dispatch_type(request: AgentExecutionRequest) -> str:
@@ -105,8 +135,46 @@ class _JudgeCourtroomExecutor(AgentExecutorPort):
                     "sequence": index,
                     "role": role,
                     "active": active,
+                    "state": "active" if active else "deferred",
                     "targetStatus": self._ROLE_STAGE_HINTS[role],
                     "responsibility": self._ROLE_RESPONSIBILITIES[role],
+                    "inputArtifacts": list(self._ROLE_INPUT_ARTIFACTS[role]),
+                    "outputArtifacts": list(self._ROLE_OUTPUT_ARTIFACTS[role]),
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _build_workflow_edges() -> list[dict[str, Any]]:
+        edges: list[dict[str, Any]] = []
+        for index in range(len(JUDGE_COURTROOM_ROLE_ORDER) - 1):
+            edges.append(
+                {
+                    "sequence": index + 1,
+                    "fromRole": JUDGE_COURTROOM_ROLE_ORDER[index],
+                    "toRole": JUDGE_COURTROOM_ROLE_ORDER[index + 1],
+                    "condition": "on_success",
+                }
+            )
+        return edges
+
+    def _build_artifact_rows(self, *, dispatch_type: str) -> list[dict[str, Any]]:
+        active_role_set = (
+            self._PHASE_ACTIVE_ROLE_SET
+            if dispatch_type == "phase"
+            else set(JUDGE_COURTROOM_ROLE_ORDER)
+        )
+        rows: list[dict[str, Any]] = []
+        for index, (name, producer_role, consumer_roles) in enumerate(self._ARTIFACT_PLAN, start=1):
+            available = producer_role in active_role_set
+            rows.append(
+                {
+                    "sequence": index,
+                    "artifact": name,
+                    "producerRole": producer_role,
+                    "consumerRoles": list(consumer_roles),
+                    "available": available,
+                    "availability": "available" if available else "deferred",
                 }
             )
         return rows
@@ -139,17 +207,24 @@ class _JudgeCourtroomExecutor(AgentExecutorPort):
     async def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
         dispatch_type = self._normalize_dispatch_type(request)
         roles = self._build_role_rows(dispatch_type=dispatch_type)
+        workflow_edges = self._build_workflow_edges()
+        artifacts = self._build_artifact_rows(dispatch_type=dispatch_type)
         context = self._collect_context(request)
         return AgentExecutionResult(
             status="ok",
             output={
                 "kind": AGENT_KIND_JUDGE,
                 "accepted": True,
+                "mode": "official_verdict_plane",
+                "officialVerdictAuthority": True,
                 "dispatchType": dispatch_type,
                 "runtimeVersion": "courtroom_agent_runtime_mvp_v1",
+                "workflowVersion": "courtroom_8agent_chain_v1",
                 "roleOrder": list(JUDGE_COURTROOM_ROLE_ORDER),
                 "activeRoles": [item["role"] for item in roles if item["active"]],
                 "roles": roles,
+                "workflowEdges": workflow_edges,
+                "artifacts": artifacts,
                 "context": context,
             },
         )

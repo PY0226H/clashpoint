@@ -57,6 +57,7 @@ class JudgeFactPort(Protocol):
         case_id: int,
         dispatch_type: str,
         trace_id: str,
+        case_dossier: dict[str, Any] | None,
         claim_graph: dict[str, Any] | None,
         claim_graph_summary: dict[str, Any] | None,
         evidence_ledger: dict[str, Any] | None,

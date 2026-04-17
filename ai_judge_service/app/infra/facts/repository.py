@@ -200,6 +200,7 @@ class JudgeFactRepository:
         case_id: int,
         dispatch_type: str,
         trace_id: str,
+        case_dossier: dict[str, Any] | None,
         claim_graph: dict[str, Any] | None,
         claim_graph_summary: dict[str, Any] | None,
         evidence_ledger: dict[str, Any] | None,
@@ -229,6 +230,7 @@ class JudgeFactRepository:
                     )
                     session.add(row)
                 row.trace_id = str(trace_id or "").strip()
+                row.case_dossier = dict(case_dossier or {})
                 row.claim_graph = dict(claim_graph or {})
                 row.claim_graph_summary = dict(claim_graph_summary or {})
                 row.evidence_ledger = dict(evidence_ledger or {})
@@ -582,6 +584,7 @@ class JudgeFactRepository:
             case_id=row.case_id,
             dispatch_type=row.dispatch_type,
             trace_id=row.trace_id,
+            case_dossier=row.case_dossier if isinstance(row.case_dossier, dict) else {},
             claim_graph=row.claim_graph if isinstance(row.claim_graph, dict) else {},
             claim_graph_summary=(
                 row.claim_graph_summary

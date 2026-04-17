@@ -28,6 +28,10 @@
 2. 未来 `NPC / 问答 Agent` 不需要另起一套检索、上下文、提示词、审计和模型调用基础设施
 3. 公平性、证据链、规则版本、复核与可信记录能继续作为平台级能力复用
 
+并且新增一条硬约束：
+
+4. `Judge App` 不是“单大模型调用器”，其内部必须按企业方案的法庭式 8 类 Agent 职责实现，不可长期塌缩为单一 pipeline。
+
 已拍板前提：
 
 1. 产品尚未上线，不保留兼容层、灰度路径、双写或旧新并行主链。
@@ -160,9 +164,27 @@ flowchart TB
     B --> D["NPC Coach API"]
     B --> E["Room QA API"]
 
-    C --> F["Workflow Runtime"]
+    C --> F["Workflow Runtime (Judge App)"]
     D --> G["Realtime Agent Runtime"]
     E --> G
+
+    subgraph CW["Courtroom Workflow (Official Verdict Plane)"]
+      C1["Clerk Agent"]
+      C2["Recorder Agent"]
+      C3["Claim Graph Agent"]
+      C4["Evidence Agent"]
+      C5["Judge Panel A/B/C"]
+      C6["Fairness Sentinel Agent"]
+      C7["Chief Arbiter Agent"]
+      C8["Opinion Writer Agent"]
+      C1 --> C2 --> C3
+      C2 --> C4
+      C3 --> C5
+      C4 --> C5
+      C5 --> C6 --> C7 --> C8
+    end
+
+    F --> C1
 
     subgraph H["Platform Core"]
       H1["Context Builder"]
@@ -215,6 +237,11 @@ flowchart TB
    - Object Store
    - Callback / Event Adapter
 
+补充硬约束：
+
+1. `Judge App` 内部必须显式拆成法庭式 8 Agent 的编排层，不允许长期把 `Clerk/Recorder/Claim Graph/Evidence/Fairness/Arbiter/Opinion` 合并成不可观察黑箱。
+2. `NPC Coach App` 与 `Room QA App` 只能复用 `Platform Core`，不得写入 `verdict_ledger` 或覆盖 `judge_trace` 官方链路。
+
 ### 5.2 为什么这套结构能兼容未来功能
 
 1. `Judge App` 用的是“不可变案件快照”
@@ -228,6 +255,42 @@ flowchart TB
 3. 工具注册表
 4. 模型网关
 5. 策略与审计框架
+
+### 5.3 从企业方案到架构落地的强映射（8 Agent）
+
+| 企业方案 Agent | 架构落点 | 运行平面 | 关键输入 | 关键输出 | 主持久化对象 |
+| --- | --- | --- | --- | --- | --- |
+| `Clerk Agent` | `Judge App` + `Policy & Safety Guard` | 异步工作流平面 | 房间裁决请求、消息快照、规则版本 | 盲化后的 `case_dossier` | `case_dossiers` |
+| `Recorder Agent` | `Judge App` + `Context Builder` | 异步工作流平面 | 盲化消息流、phase 窗口 | `debate_timeline`、结构化 turn 索引 | `judge_job_events` / transcript snapshot |
+| `Claim Graph Agent` | `Judge App`（claim stage） | 异步工作流平面 | 结构化 timeline | `claim_graph`、争点关系 | `claim_graph`（对象存储+索引） |
+| `Evidence Agent` | `Judge App` + `Knowledge Gateway` | 异步工作流平面 | claim graph、知识检索策略 | `evidence_bundle`、引用列表 | `evidence_bundle`（对象存储） |
+| `Judge Panel A/B/C` | `Judge App` + `LLM Gateway` | 异步工作流平面 | claim + evidence + policy | 三法官结构化评分与理由 | `verdict_ledgers`（panel 部分） |
+| `Fairness Sentinel Agent` | `Judge App` + `Policy Guard` + `Trace/Audit` | 异步工作流平面 | panel 结果、扰动测试、门禁策略 | `fairness_report`、阻断/告警 | `audit_alerts` / fairness report |
+| `Chief Arbiter Agent` | `Judge App`（arbiter stage） | 异步工作流平面 | panel + fairness report | `final_verdict`/`review_required` | `verdict_ledgers`（裁决锁定） |
+| `Opinion Writer Agent` | `Judge App`（opinion stage） | 异步工作流平面 | verdict ledger | `debateSummary/sideAnalysis/verdictReason` | `dispatch_receipts` / report snapshot |
+
+说明：
+
+1. 这 8 类 Agent 全部属于 `Judge App` 官方裁决链。
+2. `NPC Coach App` 与 `Room QA App` 不是 8 Agent 的替代，它们是交互型应用层，受独立策略约束。
+
+### 5.4 不可折叠的架构边界
+
+为避免后续文档/代码再断层，以下边界视为长期硬约束：
+
+1. 必须存在 `Fairness Sentinel -> Chief Arbiter` 的门禁关系，不能跳过哨兵直接终判。
+2. `Opinion Writer` 只能消费 `verdict_ledger`，不得绕过 ledger 直接基于原始 prompt 生成最终文案。
+3. `Evidence Agent` 负责“证据核验”，不负责直接定胜负。
+4. `NPC/Room QA` 仅输出建议或进行中视图，不能写官方裁决链。
+
+### 5.5 计划生成一致性入口（给每轮 Codex 计划用）
+
+每轮根据“企业方案 + 架构方案 + 当前代码状态”生成计划时，必须先回答：
+
+1. 本轮变更影响到 8 Agent 中哪些角色，是否破坏了角色职责边界？
+2. 是否触达官方裁决链（`verdict_ledger/judge_trace/fairness gate`）？若触达，是否同步更新审计与回放路径？
+3. 是否误把 `NPC/Room QA` 需求并入 `Judge App` 官方裁决语义？
+4. 新增接口/字段是否在 `chat_server` 与消费层完成同轮同步？
 
 ---
 
@@ -440,6 +503,7 @@ flowchart TB
 2. 自建 `Tool Registry`
 3. 自建 `Prompt Registry`
 4. 用显式 Python 类与 typed contract 组织 Agent
+5. `Judge App` 内部按 8 Agent 显式建模（至少在 runtime 层具备角色级输入/输出/trace 节点）
 
 ### 可接受的边界
 
@@ -667,6 +731,7 @@ ai_judge_service/
 1. 把 `phase/final` workflow 从 `app_factory/phase_pipeline` 拆进 `Judge App`
 2. 把 `receipt / trace / replay / review` 收敛成领域模型
 3. 将当前 RAG、agent2、winner mismatch 等有价值逻辑迁入共享平台能力
+4. 在 `Judge App` 显式落地 8 Agent 编排（至少先落 `Clerk -> Recorder -> Claim Graph -> Evidence -> Panel -> Fairness -> Arbiter -> Opinion` 主链）
 
 ### Phase C：给未来 Agent 预留入口
 
@@ -711,3 +776,17 @@ ai_judge_service/
 1. 你未来扩功能不会每次都推翻主链
 2. 公平性与官方裁决不会被互动型 Agent 污染
 3. 架构能自然承接你已经在构想的长期蓝图
+
+---
+
+## 13. 与企业方案的一致性检查清单（必须通过）
+
+这份架构方案是企业方案的实现设计，不是替代方案。  
+后续任何“下一阶段开发计划”都必须先过以下清单：
+
+1. **角色一致性**：8 Agent 职责是否完整映射，是否被错误合并或绕过。
+2. **数据一致性**：`case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 是否有对应存储与追踪路径。
+3. **门禁一致性**：`Fairness Sentinel` 是否仍在终判前，override 是否可审计。
+4. **边界一致性**：`NPC/Room QA` 是否严格保持 advisory-only，不写官方裁决链。
+5. **跨层一致性**：契约变更是否在 `chat_server` 与调用方同轮更新。
+6. **收口一致性**：real-env 项是否区分 `local_reference_ready` 与 `pass`，不混淆口径。
