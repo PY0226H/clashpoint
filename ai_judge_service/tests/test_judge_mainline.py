@@ -191,6 +191,11 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert invariants["reviewRequiredImpliesDraw"] is True
     assert invariants["arbitrationWinnerMatchesTopWinner"] is True
     assert invariants["fairnessReviewMatchesArbitration"] is True
+    assert payload["verdictLedger"]["arbitration"]["gateDecision"] in payload["debateSummary"]
+    assert "judge_panel -> fairness_sentinel -> chief_arbiter" in payload["verdictReason"]
+    assert payload["opinionPack"]["userReport"]["debateSummary"] == payload["debateSummary"]
+    assert payload["opinionPack"]["userReport"]["sideAnalysis"] == payload["sideAnalysis"]
+    assert payload["opinionPack"]["userReport"]["verdictReason"] == payload["verdictReason"]
     assert validate_final_report_payload_contract(payload) == []
 
 
@@ -339,6 +344,7 @@ def test_build_final_report_payload_should_trigger_style_shift_instability_gate(
     assert "fairness_gate_review_required" in payload["errorCodes"]
     assert payload["verdictLedger"]["arbitration"]["gateDecision"] == "blocked_to_draw"
     assert payload["verdictLedger"]["arbitration"]["reviewRequired"] is True
+    assert "blocked_to_draw" in payload["debateSummary"]
     assert any(item.get("type") == "style_shift_instability" for item in payload["auditAlerts"])
 
 
@@ -439,6 +445,7 @@ def test_build_final_report_payload_should_trigger_panel_disagreement_gate() -> 
     assert payload["fairnessSummary"]["panelDisagreementReasons"]
     assert payload["verdictLedger"]["panelDecisions"]["panelDisagreement"]["high"] is True
     assert payload["verdictLedger"]["arbitration"]["gateDecision"] == "blocked_to_draw"
+    assert "blocked_to_draw" in payload["verdictReason"]
 
 
 def test_build_final_report_payload_should_respect_panel_disagreement_threshold() -> None:

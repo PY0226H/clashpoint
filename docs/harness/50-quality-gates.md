@@ -1,6 +1,6 @@
 # EchoIsle Quality Gates
 
-更新时间：2026-04-08
+更新时间：2026-04-16
 状态：当前质量门禁说明
 
 ---
@@ -73,6 +73,20 @@
    - `todo.md` 缺少新技术债表头
    - `completed.md` 缺少新完成态表头
    - harness 文档缺少基础元信息
+
+### 2.5 `ai_judge_plan_consistency_gate.sh`
+
+当前已新增的 AI Judge 计划一致性门禁：
+
+1. 脚本位置：`scripts/harness/ai_judge_plan_consistency_gate.sh`
+2. 当前职责：
+   - 校验活动计划文档是否完整回答架构方案第13章 6 项一致性（角色/数据/门禁/边界/跨层/收口）
+   - 拒绝缺失项、空答案和占位答案（如 `待补充` / `TBD`）
+   - 输出结构化总结：`artifacts/harness/*ai-judge-plan-consistency-gate*.summary.{json,md}`
+3. 当前失败条件：
+   - 计划文档缺少一致性校验章节
+   - 任一一致性问题未回答、答案为空或占位
+   - 架构方案清单项缺失（文档漂移）
 
 ---
 

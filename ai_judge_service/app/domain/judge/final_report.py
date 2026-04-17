@@ -806,71 +806,167 @@ def _evaluate_fairness_gate(
 def _build_final_display_payload(
     *,
     style_mode: str,
-    winner: str,
-    pro_score: float,
-    con_score: float,
+    verdict_ledger: dict[str, Any],
     phase_count_used: int,
     phase_count_expected: int,
     missing_phase_nos: list[int],
-    winner_first: str,
-    winner_second: str,
-    rejudge_triggered: bool,
-    raw_rationale: str,
 ) -> dict[str, Any]:
-    winner_label = _winner_label(winner)
-    missing = ",".join(str(no) for no in missing_phase_nos) if missing_phase_nos else "none"
-    fact_sentence = (
-        f"winner={winner}, pro={round(_clamp_score(pro_score), 2)}, con={round(_clamp_score(con_score), 2)}, "
-        f"phases={phase_count_used}/{phase_count_expected}, missing={missing}, "
-        f"first={winner_first}, second={winner_second}, rejudge={str(rejudge_triggered).lower()}"
+    score_card = (
+        verdict_ledger.get("scoreCard")
+        if isinstance(verdict_ledger.get("scoreCard"), dict)
+        else {}
+    )
+    panel_decisions = (
+        verdict_ledger.get("panelDecisions")
+        if isinstance(verdict_ledger.get("panelDecisions"), dict)
+        else {}
+    )
+    arbitration = (
+        verdict_ledger.get("arbitration")
+        if isinstance(verdict_ledger.get("arbitration"), dict)
+        else {}
+    )
+    claim_verdict = (
+        verdict_ledger.get("claimVerdict")
+        if isinstance(verdict_ledger.get("claimVerdict"), dict)
+        else {}
+    )
+    fairness_summary = (
+        verdict_ledger.get("fairnessSummary")
+        if isinstance(verdict_ledger.get("fairnessSummary"), dict)
+        else {}
+    )
+    winner = str(verdict_ledger.get("winner") or "").strip().lower() or "draw"
+    pro_score = _clamp_score(_safe_float(score_card.get("proScore"), default=50.0))
+    con_score = _clamp_score(_safe_float(score_card.get("conScore"), default=50.0))
+    probe_winners = (
+        panel_decisions.get("probeWinners")
+        if isinstance(panel_decisions.get("probeWinners"), dict)
+        else {}
+    )
+    winner_first = str(probe_winners.get("agent3Weighted") or "").strip().lower() or "draw"
+    winner_second = str(probe_winners.get("agent2Path") or "").strip().lower() or "draw"
+    winner_third = str(probe_winners.get("agent1Dimensions") or "").strip().lower() or "draw"
+    review_required = bool(arbitration.get("reviewRequired"))
+    rejudge_triggered = bool(arbitration.get("rejudgeTriggered"))
+    gate_decision = str(arbitration.get("gateDecision") or "").strip() or "pass_through"
+    decision_path = (
+        [
+            str(item).strip()
+            for item in (arbitration.get("decisionPath") or [])
+            if str(item).strip()
+        ]
+        if isinstance(arbitration.get("decisionPath"), list)
+        else []
+    )
+    if not decision_path:
+        decision_path = ["judge_panel", "fairness_sentinel", "chief_arbiter"]
+    decisive_evidence_refs = (
+        verdict_ledger.get("decisiveEvidenceRefs")
+        if isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list)
+        else []
+    )
+    accepted_claims = (
+        claim_verdict.get("acceptedClaims")
+        if isinstance(claim_verdict.get("acceptedClaims"), list)
+        else []
+    )
+    rejected_claims = (
+        claim_verdict.get("rejectedClaims")
+        if isinstance(claim_verdict.get("rejectedClaims"), list)
+        else []
+    )
+    unresolved_claims = (
+        claim_verdict.get("unresolvedClaims")
+        if isinstance(claim_verdict.get("unresolvedClaims"), list)
+        else []
     )
 
+    def _count_claims(rows: list[Any], *, side: str) -> int:
+        return sum(
+            1
+            for row in rows
+            if isinstance(row, dict) and str(row.get("side") or "").strip().lower() == side
+        )
+
+    pro_accepted = _count_claims(accepted_claims, side="pro")
+    con_accepted = _count_claims(accepted_claims, side="con")
+    pro_rejected = _count_claims(rejected_claims, side="pro")
+    con_rejected = _count_claims(rejected_claims, side="con")
+    unresolved_total = len([row for row in unresolved_claims if isinstance(row, dict)])
+
+    panel_disagreement = (
+        panel_decisions.get("panelDisagreement")
+        if isinstance(panel_decisions.get("panelDisagreement"), dict)
+        else {}
+    )
+    disagreement_ratio = _safe_float(panel_disagreement.get("ratio"), default=0.0)
+    panel_majority_winner = (
+        str(panel_disagreement.get("majorityWinner") or "").strip().lower() or None
+    )
+    evidence_sufficiency = (
+        fairness_summary.get("evidenceSufficiency")
+        if isinstance(fairness_summary.get("evidenceSufficiency"), dict)
+        else {}
+    )
+
+    winner_label = _winner_label(winner)
+    missing = ",".join(str(no) for no in missing_phase_nos) if missing_phase_nos else "none"
     normalized = str(style_mode or "").strip().lower()
     if normalized == "entertaining":
         debate_summary = (
-            f"Final buzzer: {winner_label} takes the edge. Scoreboard pro "
-            f"{round(_clamp_score(pro_score), 2)} vs con {round(_clamp_score(con_score), 2)}."
+            f"Final buzzer: {winner_label}. Scoreboard pro {round(pro_score, 2)} vs "
+            f"con {round(con_score, 2)}, gate={gate_decision}, phases={phase_count_used}/{phase_count_expected}."
         )
     elif normalized == "mixed":
         debate_summary = (
-            f"Final call: {winner_label}. Pro {round(_clamp_score(pro_score), 2)} and "
-            f"con {round(_clamp_score(con_score), 2)} after {phase_count_used}/{phase_count_expected} phase(s)."
+            f"Final call: {winner_label}. Pro {round(pro_score, 2)} and con {round(con_score, 2)} "
+            f"after {phase_count_used}/{phase_count_expected} phase(s), gate={gate_decision}."
         )
     else:
         normalized = "rational"
         debate_summary = (
-            f"Final verdict: {winner_label}. Scores pro={round(_clamp_score(pro_score), 2)}, "
-            f"con={round(_clamp_score(con_score), 2)}."
+            f"Final verdict: {winner_label}. Scores pro={round(pro_score, 2)}, con={round(con_score, 2)}; "
+            f"arbitration gate={gate_decision}, missing phases={missing}."
         )
     side_analysis = {
         "pro": (
-            f"Pro side average score {round(_clamp_score(pro_score), 2)}; "
-            f"phase coverage {phase_count_used}/{phase_count_expected}."
+            f"Panel score pro={round(pro_score, 2)}; accepted claims={pro_accepted}, "
+            f"rejected claims={pro_rejected}, unresolved={unresolved_total}."
         ),
         "con": (
-            f"Con side average score {round(_clamp_score(con_score), 2)}; "
-            f"missing phases={missing}."
+            f"Panel score con={round(con_score, 2)}; accepted claims={con_accepted}, "
+            f"rejected claims={con_rejected}, unresolved={unresolved_total}."
         ),
     }
     verdict_reason = (
-        f"Consistency check first={winner_first}, second={winner_second}, "
-        f"rejudge={str(rejudge_triggered).lower()}. Facts locked: {fact_sentence}."
+        f"Decision path={' -> '.join(decision_path)}; probe winners "
+        f"(a3={winner_first}, a2={winner_second}, a1={winner_third}); "
+        f"majority={panel_majority_winner or 'none'}, disagreement={round(disagreement_ratio, 4)}, "
+        f"gateDecision={gate_decision}, reviewRequired={str(review_required).lower()}, "
+        f"rejudge={str(rejudge_triggered).lower()}, "
+        f"decisiveEvidenceRefs={len([row for row in decisive_evidence_refs if isinstance(row, dict)])}, "
+        f"evidenceSufficiencyPassed={str(bool(fairness_summary.get('evidenceSufficiencyPassed'))).lower()}, "
+        f"winnerSupportRefs={_safe_int(evidence_sufficiency.get('winnerSupportRefCount'), default=0)}."
     )
     return {
         "styleMode": normalized,
         "debateSummary": debate_summary,
         "sideAnalysis": side_analysis,
         "verdictReason": verdict_reason,
-        "rationaleRaw": raw_rationale,
         "factLock": {
             "winner": winner,
-            "proScore": round(_clamp_score(pro_score), 2),
-            "conScore": round(_clamp_score(con_score), 2),
+            "proScore": round(pro_score, 2),
+            "conScore": round(con_score, 2),
             "phaseCountUsed": phase_count_used,
             "phaseCountExpected": phase_count_expected,
             "missingPhaseNos": list(missing_phase_nos),
+            "decisionPath": decision_path,
+            "gateDecision": gate_decision,
+            "reviewRequired": review_required,
             "winnerFirst": winner_first,
             "winnerSecond": winner_second,
+            "winnerThird": winner_third,
             "rejudgeTriggered": rejudge_triggered,
         },
     }
@@ -977,6 +1073,9 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
     if not isinstance(verdict_ledger, dict):
         missing.append("verdictLedger")
     else:
+        ledger_winner = str(verdict_ledger.get("winner") or "").strip().lower()
+        if ledger_winner in {"pro", "con", "draw"} and ledger_winner != winner:
+            missing.append("verdictLedger.winner_mismatch")
         if not isinstance(verdict_ledger.get("scoreCard"), dict):
             missing.append("verdictLedger.scoreCard")
         if not isinstance(verdict_ledger.get("panelDecisions"), dict):
@@ -1027,8 +1126,27 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
     if not isinstance(opinion_pack, dict):
         missing.append("opinionPack")
     else:
-        if not isinstance(opinion_pack.get("userReport"), dict):
+        user_report = (
+            opinion_pack.get("userReport")
+            if isinstance(opinion_pack.get("userReport"), dict)
+            else None
+        )
+        if user_report is None:
             missing.append("opinionPack.userReport")
+        else:
+            user_winner = str(user_report.get("winner") or "").strip().lower()
+            if user_winner not in {"pro", "con", "draw"}:
+                missing.append("opinionPack.userReport.winner")
+            elif user_winner != winner:
+                missing.append("opinionPack.userReport.winner_mismatch")
+            if str(user_report.get("debateSummary") or "").strip() != debate_summary:
+                missing.append("opinionPack.userReport.debateSummary_mismatch")
+            user_side_analysis = user_report.get("sideAnalysis")
+            if isinstance(user_side_analysis, dict) and user_side_analysis != side_analysis:
+                missing.append("opinionPack.userReport.sideAnalysis_mismatch")
+            user_verdict_reason = str(user_report.get("verdictReason") or "").strip()
+            if user_verdict_reason and user_verdict_reason != verdict_reason:
+                missing.append("opinionPack.userReport.verdictReason_mismatch")
         if not isinstance(opinion_pack.get("opsSummary"), dict):
             missing.append("opinionPack.opsSummary")
         if not isinstance(opinion_pack.get("internalReview"), dict):
@@ -1483,26 +1601,6 @@ def build_final_report_payload(
         "rational",
         judge_style_mode,
     )
-    display_payload = _build_final_display_payload(
-        style_mode=final_style_mode,
-        winner=winner,
-        pro_score=pro_score,
-        con_score=con_score,
-        phase_count_used=len(phase_rollup_summary),
-        phase_count_expected=len(expected_phase_nos),
-        missing_phase_nos=missing_phase_nos,
-        winner_first=winner_first,
-        winner_second=winner_second,
-        rejudge_triggered=rejudge_triggered,
-        raw_rationale=final_rationale_raw,
-    )
-    debate_summary = str(display_payload.get("debateSummary") or "").strip()
-    side_analysis = (
-        display_payload.get("sideAnalysis")
-        if isinstance(display_payload.get("sideAnalysis"), dict)
-        else {}
-    )
-    verdict_reason = str(display_payload.get("verdictReason") or final_rationale_raw)
     claim_graph_payload = build_claim_graph_payload(
         phase_payloads=[(phase_no, phase_reports_by_no[phase_no][1]) for phase_no in used_phase_nos],
         verdict_evidence_refs=verdict_evidence_refs,
@@ -1546,6 +1644,20 @@ def build_final_report_payload(
         phase_rollup_summary=phase_rollup_summary,
         verdict_evidence_refs=verdict_evidence_refs,
     )
+    display_payload = _build_final_display_payload(
+        style_mode=final_style_mode,
+        verdict_ledger=verdict_ledger,
+        phase_count_used=len(phase_rollup_summary),
+        phase_count_expected=len(expected_phase_nos),
+        missing_phase_nos=missing_phase_nos,
+    )
+    debate_summary = str(display_payload.get("debateSummary") or "").strip()
+    side_analysis = (
+        display_payload.get("sideAnalysis")
+        if isinstance(display_payload.get("sideAnalysis"), dict)
+        else {}
+    )
+    verdict_reason = str(display_payload.get("verdictReason") or final_rationale_raw)
     opinion_pack = _build_opinion_pack(
         winner=winner,
         pro_score=pro_score,
