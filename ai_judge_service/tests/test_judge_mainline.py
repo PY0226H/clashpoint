@@ -130,6 +130,11 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["evidenceLedger"], dict)
     assert isinstance(payload["evidenceLedger"]["entries"], list)
     assert isinstance(payload["evidenceLedger"]["refsById"], dict)
+    assert isinstance(payload["evidenceLedger"]["sourceCitations"], list)
+    assert isinstance(payload["evidenceLedger"]["conflictSources"], list)
+    assert payload["evidenceLedger"]["bundleMeta"]["officialVerdictAuthority"] is False
+    assert payload["evidenceLedger"]["stats"]["sourceCitationCount"] >= 1
+    assert payload["evidenceLedger"]["stats"]["conflictSourceCount"] >= 0
     assert isinstance(payload["verdictLedger"], dict)
     assert isinstance(payload["verdictLedger"]["panelDecisions"], dict)
     assert isinstance(payload["verdictLedger"]["arbitration"], dict)

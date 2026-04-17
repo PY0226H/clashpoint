@@ -35,10 +35,17 @@ def test_evidence_ledger_should_build_entries_and_lookup() -> None:
     builder.mark_verdict_referenced(chunk_id)
     payload = builder.build_payload()
 
-    assert payload["pipelineVersion"] == "v2-evidence-ledger"
+    assert payload["pipelineVersion"] == "v3-evidence-bundle"
+    assert payload["bundleMeta"]["kind"] == "evidence_bundle"
+    assert payload["bundleMeta"]["officialVerdictAuthority"] is False
     assert payload["stats"]["totalEntries"] == 3
     assert payload["stats"]["verdictReferencedCount"] == 2
-    assert payload["stats"]["conflictRefCount"] == 1
+    assert payload["stats"]["sourceCitationCount"] == 1
+    assert payload["stats"]["conflictSourceCount"] == 1
+    assert len(payload["sourceCitations"]) == 1
+    assert payload["sourceCitations"][0]["sourceUrl"] == "https://example.com/a"
+    assert len(payload["conflictSources"]) == 1
+    assert payload["conflictSources"][0]["kind"] == "agent2_miss"
     assert str(payload["refsById"][message_id]["kind"]) == "message_ref"
     assert str(payload["refsById"][chunk_id]["kind"]) == "retrieval_chunk"
 

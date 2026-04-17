@@ -222,8 +222,8 @@ class EvidenceLedgerBuilder:
     def build_payload(self) -> dict[str, Any]:
         entries = [dict(self._entries_by_id[evidence_id]) for evidence_id in self._entry_order]
         message_refs: list[dict[str, Any]] = []
-        citation_refs: list[dict[str, Any]] = []
-        conflict_refs: list[dict[str, Any]] = []
+        source_citations: list[dict[str, Any]] = []
+        conflict_sources: list[dict[str, Any]] = []
         refs_by_id: dict[str, Any] = {}
         verdict_referenced_count = 0
         for idx, entry in enumerate(entries):
@@ -248,36 +248,60 @@ class EvidenceLedgerBuilder:
                     }
                 )
             if kind == "retrieval_chunk":
-                citation_refs.append(
+                chunk_id = str(locator.get("chunkId") or "").strip()
+                source_url = str(locator.get("sourceUrl") or "").strip()
+                source_id = f"src-{_short_hash([chunk_id, source_url])}"
+                source_citations.append(
                     {
+                        "sourceId": source_id,
                         "evidenceId": evidence_id,
                         "phaseNo": entry.get("phaseNo"),
                         "side": entry.get("side"),
-                        "chunkId": locator.get("chunkId"),
-                        "sourceUrl": locator.get("sourceUrl"),
+                        "chunkId": chunk_id or None,
+                        "sourceUrl": source_url or None,
+                        "title": locator.get("title"),
+                        "score": locator.get("score"),
+                        "reliabilityLabel": entry.get("reliabilityLabel"),
                     }
                 )
             if bool(entry.get("conflict")):
-                conflict_refs.append(
+                conflict_sources.append(
                     {
                         "evidenceId": evidence_id,
+                        "sourceId": (
+                            f"src-{_short_hash([str(locator.get('chunkId') or ''), str(locator.get('sourceUrl') or '')])}"
+                            if kind == "retrieval_chunk"
+                            else None
+                        ),
                         "kind": kind,
                         "phaseNo": entry.get("phaseNo"),
                         "side": entry.get("side"),
+                        "reliabilityLabel": entry.get("reliabilityLabel"),
+                        "reasonHints": [
+                            str(item).strip()
+                            for item in (entry.get("reasonHints") or [])
+                            if str(item).strip()
+                        ],
                     }
                 )
         return {
-            "pipelineVersion": "v2-evidence-ledger",
+            "pipelineVersion": "v3-evidence-bundle",
             "entries": entries,
             "refsById": refs_by_id,
             "messageRefs": message_refs,
-            "citationRefs": citation_refs,
-            "conflictRefs": conflict_refs,
+            "sourceCitations": source_citations,
+            "conflictSources": conflict_sources,
             "stats": {
                 "totalEntries": len(entries),
                 "messageRefCount": len(message_refs),
-                "citationRefCount": len(citation_refs),
-                "conflictRefCount": len(conflict_refs),
+                "sourceCitationCount": len(source_citations),
+                "conflictSourceCount": len(conflict_sources),
                 "verdictReferencedCount": verdict_referenced_count,
+            },
+            "bundleMeta": {
+                "kind": "evidence_bundle",
+                "ownerAgent": "evidence_agent",
+                "decisionAuthority": "non_verdict",
+                "officialVerdictAuthority": False,
             },
         }

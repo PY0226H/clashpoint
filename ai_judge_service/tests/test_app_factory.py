@@ -420,6 +420,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(case_evidence["claimGraphSummary"], dict)
         self.assertIsInstance(case_evidence["evidenceLedger"], dict)
         self.assertIsInstance(case_evidence["evidenceLedger"]["entries"], list)
+        self.assertIsInstance(case_evidence["evidenceLedger"]["sourceCitations"], list)
+        self.assertIsInstance(case_evidence["evidenceLedger"]["conflictSources"], list)
+        self.assertFalse(
+            bool(case_evidence["evidenceLedger"]["bundleMeta"]["officialVerdictAuthority"])
+        )
         self.assertIsInstance(case_evidence["verdictLedger"], dict)
         self.assertIsInstance(case_evidence["opinionPack"], dict)
         self.assertIsInstance(case_evidence["policySnapshot"], dict)
@@ -504,6 +509,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(ledger_body["item"]["claimGraph"]["edges"], list)
         self.assertIsInstance(ledger_body["item"]["claimGraphSummary"], dict)
         self.assertIsInstance(ledger_body["item"]["evidenceLedger"], dict)
+        self.assertIsInstance(ledger_body["item"]["evidenceLedger"]["sourceCitations"], list)
+        self.assertIsInstance(ledger_body["item"]["evidenceLedger"]["conflictSources"], list)
         self.assertIsInstance(ledger_body["item"]["verdictEvidenceRefs"], list)
 
         phase_ledger_resp = await self._get(
@@ -2322,17 +2329,17 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
             "evidenceLedger": {
-                "pipelineVersion": "v2-evidence-ledger",
+                "pipelineVersion": "v3-evidence-bundle",
                 "entries": [],
                 "refsById": {},
                 "messageRefs": [],
-                "citationRefs": [],
-                "conflictRefs": [],
+                "sourceCitations": [],
+                "conflictSources": [],
                 "stats": {
                     "totalEntries": 0,
                     "messageRefCount": 0,
-                    "citationRefCount": 0,
-                    "conflictRefCount": 0,
+                    "sourceCitationCount": 0,
+                    "conflictSourceCount": 0,
                     "verdictReferencedCount": 0,
                 },
             },
@@ -2443,17 +2450,17 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
             "evidenceLedger": {
-                "pipelineVersion": "v2-evidence-ledger",
+                "pipelineVersion": "v3-evidence-bundle",
                 "entries": [],
                 "refsById": {},
                 "messageRefs": [],
-                "citationRefs": [],
-                "conflictRefs": [],
+                "sourceCitations": [],
+                "conflictSources": [],
                 "stats": {
                     "totalEntries": 0,
                     "messageRefCount": 0,
-                    "citationRefCount": 0,
-                    "conflictRefCount": 0,
+                    "sourceCitationCount": 0,
+                    "conflictSourceCount": 0,
                     "verdictReferencedCount": 0,
                 },
             },

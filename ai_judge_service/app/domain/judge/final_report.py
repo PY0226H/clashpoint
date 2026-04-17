@@ -622,7 +622,10 @@ def _evaluate_fairness_gate(
             else []
         ),
     )
-    evidence_conflict_refs = _safe_int(evidence_stats.get("conflictRefCount"), default=0)
+    evidence_conflict_sources = _safe_int(
+        evidence_stats.get("conflictSourceCount"),
+        default=0,
+    )
     decisive_ref_count = len([row for row in verdict_evidence_refs if isinstance(row, dict)])
     winner_support_ref_count = len(
         [
@@ -633,7 +636,7 @@ def _evaluate_fairness_gate(
         ]
     )
     evidence_conflict_ratio = (
-        round(evidence_conflict_refs / float(max(1, evidence_total_entries)), 4)
+        round(evidence_conflict_sources / float(max(1, evidence_total_entries)), 4)
         if evidence_total_entries > 0
         else 0.0
     )
@@ -714,7 +717,7 @@ def _evaluate_fairness_gate(
                     "totalEntries": evidence_total_entries,
                     "decisiveRefCount": decisive_ref_count,
                     "winnerSupportRefCount": winner_support_ref_count,
-                    "conflictRefCount": evidence_conflict_refs,
+                    "conflictSourceCount": evidence_conflict_sources,
                     "conflictRatio": evidence_conflict_ratio,
                     "thresholds": {
                         "minTotalRefs": evidence_min_total_refs,
@@ -735,7 +738,7 @@ def _evaluate_fairness_gate(
                 "details": {
                     "conflictRatio": evidence_conflict_ratio,
                     "maxConflictRatio": evidence_conflict_ratio_max,
-                    "conflictRefCount": evidence_conflict_refs,
+                    "conflictSourceCount": evidence_conflict_sources,
                     "totalEntries": evidence_total_entries,
                 },
             }
@@ -766,7 +769,7 @@ def _evaluate_fairness_gate(
             "totalEntries": evidence_total_entries,
             "decisiveRefCount": decisive_ref_count,
             "winnerSupportRefCount": winner_support_ref_count,
-            "conflictRefCount": evidence_conflict_refs,
+            "conflictSourceCount": evidence_conflict_sources,
             "conflictRatio": evidence_conflict_ratio,
             "thresholds": {
                 "minTotalRefs": evidence_min_total_refs,
@@ -906,9 +909,25 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
         refs_by_id = evidence_ledger.get("refsById")
         if not isinstance(refs_by_id, dict):
             missing.append("evidenceLedger.refsById")
+        source_citations = evidence_ledger.get("sourceCitations")
+        if not isinstance(source_citations, list):
+            missing.append("evidenceLedger.sourceCitations")
+        conflict_sources = evidence_ledger.get("conflictSources")
+        if not isinstance(conflict_sources, list):
+            missing.append("evidenceLedger.conflictSources")
         stats = evidence_ledger.get("stats")
         if not isinstance(stats, dict):
             missing.append("evidenceLedger.stats")
+        else:
+            for key in (
+                "totalEntries",
+                "messageRefCount",
+                "sourceCitationCount",
+                "conflictSourceCount",
+                "verdictReferencedCount",
+            ):
+                if not isinstance(stats.get(key), (int, float)):
+                    missing.append(f"evidenceLedger.stats.{key}")
         for row in entries:
             if not isinstance(row, dict):
                 continue

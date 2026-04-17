@@ -160,13 +160,19 @@ class PhaseFinalContractModelsTests(unittest.TestCase):
                 "stats": {"totalClaims": 0},
             },
             "evidence_ledger": {
-                "pipelineVersion": "v2-evidence-ledger",
+                "pipelineVersion": "v3-evidence-bundle",
                 "entries": [],
                 "refsById": {},
                 "messageRefs": [],
-                "citationRefs": [],
-                "conflictRefs": [],
-                "stats": {"totalEntries": 0},
+                "sourceCitations": [],
+                "conflictSources": [],
+                "stats": {
+                    "totalEntries": 0,
+                    "messageRefCount": 0,
+                    "sourceCitationCount": 0,
+                    "conflictSourceCount": 0,
+                    "verdictReferencedCount": 0,
+                },
             },
             "verdict_ledger": {
                 "version": "v2-panel-arbiter-opinion",
