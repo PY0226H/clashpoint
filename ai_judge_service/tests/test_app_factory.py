@@ -262,6 +262,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/alerts/ops-view", paths)
         self.assertIn("/internal/judge/fairness/benchmark-runs", paths)
         self.assertIn("/internal/judge/fairness/shadow-runs", paths)
+        self.assertIn("/internal/judge/fairness/dashboard", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_case_create_should_mark_case_built_and_support_idempotent_replay(
@@ -818,6 +819,202 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             detail["gate"]["code"],
             "registry_fairness_gate_no_benchmark",
+        )
+
+    async def test_policy_registry_activate_should_block_when_shadow_gate_not_ready(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9216)
+        version = f"policy-shadow-gate-{suffix}"
+        benchmark_run_id = f"benchmark-{suffix}"
+        shadow_run_id = f"shadow-{suffix}"
+
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+
+        benchmark_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": benchmark_run_id,
+                "policy_version": version,
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "sample_size": 48,
+                "draw_rate": 0.11,
+                "side_bias_delta": 0.02,
+                "appeal_overturn_rate": 0.03,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(benchmark_resp.status_code, 200)
+
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": version,
+                "benchmark_run_id": benchmark_run_id,
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "sample_size": 48,
+                "winner_flip_rate": 0.12,
+                "score_shift_delta": 0.18,
+                "review_required_delta": 0.07,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
+
+        activate_resp = await self._post(
+            app=app,
+            path=f"/internal/judge/registries/policy/{version}/activate",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 409)
+        detail = activate_resp.json()["detail"]
+        self.assertEqual(detail["code"], "registry_fairness_gate_blocked")
+        gate = detail["gate"]
+        self.assertEqual(
+            gate["code"],
+            "registry_fairness_gate_shadow_threshold_not_accepted",
+        )
+        self.assertEqual(gate["source"], "shadow")
+        self.assertTrue(bool(gate["benchmarkGatePassed"]))
+        self.assertTrue(bool(gate["shadowGateApplied"]))
+        self.assertFalse(bool(gate["shadowGatePassed"]))
+        self.assertEqual(gate["latestRun"]["runId"], benchmark_run_id)
+        self.assertEqual(gate["latestShadowRun"]["runId"], shadow_run_id)
+
+    async def test_policy_registry_publish_activate_should_allow_shadow_gate_override_and_audit(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9217)
+        version = f"policy-shadow-override-{suffix}"
+        benchmark_run_id = f"benchmark-{suffix}"
+        shadow_run_id = f"shadow-{suffix}"
+        actor = f"shadow-override-actor-{suffix}"
+
+        benchmark_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": benchmark_run_id,
+                "policy_version": version,
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "sample_size": 52,
+                "draw_rate": 0.12,
+                "side_bias_delta": 0.02,
+                "appeal_overturn_rate": 0.02,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(benchmark_resp.status_code, 200)
+
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": version,
+                "benchmark_run_id": benchmark_run_id,
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "sample_size": 52,
+                "winner_flip_rate": 0.11,
+                "score_shift_delta": 0.16,
+                "review_required_delta": 0.05,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
+
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": True,
+                "override_fairness_gate": True,
+                "actor": actor,
+                "reason": "shadow_gate_manual_override",
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+        publish_payload = publish_resp.json()
+        self.assertTrue(bool(publish_payload["item"]["isActive"]))
+        self.assertEqual(
+            publish_payload["fairnessGate"]["code"],
+            "registry_fairness_gate_shadow_threshold_not_accepted",
+        )
+        self.assertEqual(
+            publish_payload["alert"]["type"],
+            "registry_fairness_gate_override",
+        )
+        self.assertTrue(bool(publish_payload["alert"]["details"]["overrideApplied"]))
+        self.assertEqual(
+            publish_payload["alert"]["details"]["gate"]["latestShadowRun"]["runId"],
+            shadow_run_id,
+        )
+
+        audits_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/audits?limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(audits_resp.status_code, 200)
+        audit_items = audits_resp.json()["items"]
+        activate_audit = next(
+            (
+                item
+                for item in audit_items
+                if str(item.get("action") or "") == "activate"
+                and str(item.get("version") or "") == version
+                and str(item.get("actor") or "") == actor
+            ),
+            None,
+        )
+        self.assertIsNotNone(activate_audit)
+        assert activate_audit is not None
+        fairness_gate = activate_audit["details"].get("fairnessGate")
+        self.assertIsInstance(fairness_gate, dict)
+        self.assertTrue(bool(fairness_gate.get("overrideApplied")))
+        self.assertEqual(
+            fairness_gate.get("code"),
+            "registry_fairness_gate_shadow_threshold_not_accepted",
+        )
+        self.assertEqual(
+            fairness_gate.get("latestShadowRun", {}).get("runId"),
+            shadow_run_id,
         )
 
     async def test_policy_registry_activate_should_block_when_dependency_invalid(
@@ -4170,6 +4367,133 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(invalid_sort_order_resp.status_code, 422)
         self.assertIn("invalid_sort_order", invalid_sort_order_resp.text)
+
+    async def test_fairness_dashboard_route_should_return_overview_trends_and_top_risk(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(7841)
+
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        benchmark_run_id = f"run-{_unique_case_id(7842)}"
+        benchmark_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": benchmark_run_id,
+                "policy_version": "v3-default",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 384,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.03,
+                    "appeal_overturn_rate": 0.06,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(benchmark_resp.status_code, 200)
+
+        shadow_run_id = f"shadow-{_unique_case_id(7843)}"
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": "v3-default",
+                "benchmark_run_id": benchmark_run_id,
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "metrics": {
+                    "sample_size": 200,
+                    "winner_flip_rate": 0.22,
+                    "score_shift_delta": 0.33,
+                    "review_required_delta": 0.18,
+                },
+                "thresholds": {
+                    "winner_flip_rate_max": 0.1,
+                    "score_shift_delta_max": 0.2,
+                    "review_required_delta_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
+
+        dashboard_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/dashboard"
+                "?dispatch_type=final&policy_version=v3-default"
+                "&window_days=7&top_limit=10&case_scan_limit=200"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(dashboard_resp.status_code, 200)
+        payload = dashboard_resp.json()
+        self.assertIsInstance(payload["overview"], dict)
+        self.assertIsInstance(payload["trends"], dict)
+        self.assertIsInstance(payload["topRiskCases"], list)
+        self.assertIsInstance(payload["gateDistribution"], dict)
+        self.assertGreaterEqual(payload["overview"]["totalMatched"], 1)
+        self.assertGreaterEqual(payload["overview"]["shadowBreachCount"], 1)
+        self.assertGreaterEqual(payload["gateDistribution"]["benchmark_attention_required"], 1)
+        self.assertTrue(any(row["caseId"] == case_id for row in payload["topRiskCases"]))
+        self.assertTrue(
+            any(
+                row["caseId"] == case_id and "shadow_breach" in row["riskTags"]
+                for row in payload["topRiskCases"]
+            )
+        )
+        self.assertTrue(
+            any(
+                row.get("runId") == benchmark_run_id
+                for row in payload["trends"]["benchmarkRuns"]
+            )
+        )
+        self.assertTrue(
+            any(
+                row.get("runId") == shadow_run_id
+                for row in payload["trends"]["shadowRuns"]
+            )
+        )
+        self.assertEqual(payload["filters"]["dispatchType"], "final")
+        self.assertEqual(payload["filters"]["policyVersion"], "v3-default")
+        self.assertEqual(payload["filters"]["windowDays"], 7)
+        self.assertEqual(payload["filters"]["topLimit"], 10)
 
     async def test_panel_runtime_profile_ops_view_should_support_filters_and_aggregations(
         self,

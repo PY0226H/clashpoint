@@ -1059,6 +1059,218 @@ def _build_case_fairness_aggregations(items: list[dict[str, Any]]) -> dict[str, 
     }
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    normalized = token.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _build_fairness_dashboard_case_trends(
+    *,
+    items: list[dict[str, Any]],
+    window_days: int,
+) -> list[dict[str, Any]]:
+    window = max(1, min(int(window_days), 30))
+    now = datetime.now(timezone.utc)
+    date_keys = [
+        (now - timedelta(days=offset)).date().isoformat()
+        for offset in range(window - 1, -1, -1)
+    ]
+    counters: dict[str, dict[str, int]] = {
+        key: {
+            "totalCases": 0,
+            "reviewRequiredCount": 0,
+            "openReviewCount": 0,
+            "benchmarkAttentionCount": 0,
+        }
+        for key in date_keys
+    }
+    for item in items:
+        updated_at = _parse_iso_datetime(item.get("updatedAt"))
+        if updated_at is None:
+            continue
+        date_key = updated_at.date().isoformat()
+        row = counters.get(date_key)
+        if row is None:
+            continue
+        row["totalCases"] += 1
+        if bool(item.get("reviewRequired")):
+            row["reviewRequiredCount"] += 1
+        challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
+        if bool(challenge_link.get("hasOpenReview")):
+            row["openReviewCount"] += 1
+        if str(item.get("gateConclusion") or "").strip().lower() == "benchmark_attention_required":
+            row["benchmarkAttentionCount"] += 1
+
+    return [
+        {
+            "date": date_key,
+            **counters[date_key],
+        }
+        for date_key in date_keys
+    ]
+
+
+def _build_fairness_dashboard_run_trends(
+    *,
+    benchmark_runs: list[FactFairnessBenchmarkRun],
+    shadow_runs: list[FactFairnessShadowRun],
+    window_days: int,
+) -> dict[str, Any]:
+    window = max(1, min(int(window_days), 30))
+    now = datetime.now(timezone.utc)
+    window_from = now - timedelta(days=window)
+
+    benchmark_items: list[dict[str, Any]] = []
+    for row in benchmark_runs:
+        reported_at = _normalize_aware_datetime(row.reported_at)
+        if reported_at is None or reported_at < window_from:
+            continue
+        summary = row.summary if isinstance(row.summary, dict) else {}
+        drift = summary.get("drift") if isinstance(summary.get("drift"), dict) else {}
+        benchmark_items.append(
+            {
+                "runId": row.run_id,
+                "policyVersion": row.policy_version,
+                "environmentMode": row.environment_mode,
+                "status": row.status,
+                "thresholdDecision": row.threshold_decision,
+                "reportedAt": reported_at.isoformat(),
+                "hasThresholdBreach": bool(summary.get("hasThresholdBreach")),
+                "hasDriftBreach": bool(drift.get("hasDriftBreach")),
+                "thresholdBreaches": [
+                    str(item).strip()
+                    for item in (summary.get("thresholdBreaches") or [])
+                    if str(item).strip()
+                ],
+                "driftBreaches": [
+                    str(item).strip()
+                    for item in (drift.get("driftBreaches") or [])
+                    if str(item).strip()
+                ],
+            }
+        )
+
+    shadow_items: list[dict[str, Any]] = []
+    for row in shadow_runs:
+        reported_at = _normalize_aware_datetime(row.reported_at)
+        if reported_at is None or reported_at < window_from:
+            continue
+        summary = row.summary if isinstance(row.summary, dict) else {}
+        shadow_items.append(
+            {
+                "runId": row.run_id,
+                "policyVersion": row.policy_version,
+                "benchmarkRunId": row.benchmark_run_id,
+                "environmentMode": row.environment_mode,
+                "status": row.status,
+                "thresholdDecision": row.threshold_decision,
+                "reportedAt": reported_at.isoformat(),
+                "hasShadowBreach": (
+                    bool(summary.get("hasBreach")) or row.threshold_decision != "accepted"
+                ),
+                "breaches": [
+                    str(item).strip()
+                    for item in (summary.get("breaches") or [])
+                    if str(item).strip()
+                ],
+            }
+        )
+
+    benchmark_items.sort(key=lambda item: str(item.get("reportedAt") or ""), reverse=True)
+    shadow_items.sort(key=lambda item: str(item.get("reportedAt") or ""), reverse=True)
+    return {
+        "benchmarkRuns": benchmark_items[:50],
+        "shadowRuns": shadow_items[:50],
+    }
+
+
+def _build_fairness_dashboard_top_risk_cases(
+    *,
+    items: list[dict[str, Any]],
+    top_limit: int,
+) -> list[dict[str, Any]]:
+    limit = max(1, min(int(top_limit), 50))
+
+    risk_rows: list[dict[str, Any]] = []
+    for item in items:
+        risk_score = 0
+        risk_tags: list[str] = []
+        gate_conclusion = str(item.get("gateConclusion") or "").strip().lower()
+        if gate_conclusion == "benchmark_attention_required":
+            risk_score += 20
+            risk_tags.append("benchmark_attention")
+        if bool(item.get("reviewRequired")):
+            risk_score += 30
+            risk_tags.append("review_required")
+        panel = item.get("panelDisagreement") if isinstance(item.get("panelDisagreement"), dict) else {}
+        if bool(panel.get("high")):
+            risk_score += 20
+            risk_tags.append("panel_high_disagreement")
+        drift = item.get("driftSummary") if isinstance(item.get("driftSummary"), dict) else {}
+        if bool(drift.get("hasThresholdBreach")):
+            risk_score += 25
+            risk_tags.append("benchmark_threshold_breach")
+        if bool(drift.get("hasDriftBreach")):
+            risk_score += 15
+            risk_tags.append("benchmark_drift_breach")
+        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
+        if bool(shadow.get("hasShadowBreach")):
+            risk_score += 20
+            risk_tags.append("shadow_breach")
+        challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
+        if bool(challenge_link.get("hasOpenReview")):
+            risk_score += 10
+            risk_tags.append("open_review")
+        latest_challenge = (
+            challenge_link.get("latest")
+            if isinstance(challenge_link.get("latest"), dict)
+            else {}
+        )
+        challenge_state = str(latest_challenge.get("state") or "").strip()
+        if challenge_state:
+            risk_score += 5
+            risk_tags.append("challenge_active")
+
+        risk_rows.append(
+            {
+                "caseId": int(item.get("caseId") or 0),
+                "dispatchType": item.get("dispatchType"),
+                "updatedAt": item.get("updatedAt"),
+                "winner": item.get("winner"),
+                "gateConclusion": item.get("gateConclusion"),
+                "reviewRequired": bool(item.get("reviewRequired")),
+                "riskScore": risk_score,
+                "riskTags": risk_tags,
+                "panelDisagreementRatio": _safe_float(panel.get("ratio"), default=0.0),
+                "hasOpenReview": bool(challenge_link.get("hasOpenReview")),
+                "policyVersion": (
+                    str((drift.get("policyVersion") or "").strip())
+                    or str((shadow.get("policyVersion") or "").strip())
+                    or None
+                ),
+            }
+        )
+
+    risk_rows.sort(
+        key=lambda row: (
+            int(row.get("riskScore") or 0),
+            str(row.get("updatedAt") or ""),
+            int(row.get("caseId") or 0),
+        ),
+        reverse=True,
+    )
+    return risk_rows[:limit]
+
+
 def _normalize_panel_runtime_profile_source(value: str | None) -> str | None:
     if value is None:
         return None
@@ -1797,14 +2009,23 @@ def _serialize_registry_alert_ops_item(
         "action": row.get("action"),
         "gateCode": row.get("gateCode"),
         "gateMessage": row.get("gateMessage"),
+        "gateSource": row.get("gateSource"),
         "overrideApplied": row.get("overrideApplied"),
         "gateActor": row.get("gateActor"),
         "gateReason": row.get("gateReason"),
+        "gateBenchmarkPassed": row.get("gateBenchmarkPassed"),
+        "gateShadowApplied": row.get("gateShadowApplied"),
+        "gateShadowPassed": row.get("gateShadowPassed"),
         "gateLatestRunId": row.get("gateLatestRunId"),
         "gateLatestRunStatus": row.get("gateLatestRunStatus"),
         "gateLatestRunThresholdDecision": row.get("gateLatestRunThresholdDecision"),
         "gateLatestRunEnvironmentMode": row.get("gateLatestRunEnvironmentMode"),
         "gateLatestRunNeedsRemediation": row.get("gateLatestRunNeedsRemediation"),
+        "gateLatestShadowRunId": row.get("gateLatestShadowRunId"),
+        "gateLatestShadowRunStatus": row.get("gateLatestShadowRunStatus"),
+        "gateLatestShadowRunThresholdDecision": row.get("gateLatestShadowRunThresholdDecision"),
+        "gateLatestShadowRunEnvironmentMode": row.get("gateLatestShadowRunEnvironmentMode"),
+        "gateLatestShadowRunNeedsRemediation": row.get("gateLatestShadowRunNeedsRemediation"),
         "dependencyCode": row.get("dependencyCode"),
         "createdAt": row.get("createdAt"),
         "updatedAt": row.get("updatedAt"),
@@ -1988,6 +2209,11 @@ def _build_registry_audit_ops_view(
             if isinstance(fairness_gate.get("latestRun"), dict)
             else {}
         )
+        latest_shadow_run = (
+            fairness_gate.get("latestShadowRun")
+            if isinstance(fairness_gate.get("latestShadowRun"), dict)
+            else {}
+        )
         row_gate_code = str(fairness_gate.get("code") or "").strip() or None
         if normalized_gate_code is not None and row_gate_code != normalized_gate_code:
             continue
@@ -2016,11 +2242,24 @@ def _build_registry_audit_ops_view(
             "gateCode": row_gate_code,
             "gateMessage": str(fairness_gate.get("message") or "").strip() or None,
             "gatePassed": _extract_optional_bool({"passed": fairness_gate.get("passed")}, "passed"),
+            "gateSource": str(fairness_gate.get("source") or "").strip() or None,
             "overrideApplied": row_override_applied,
             "thresholdDecision": str(fairness_gate.get("thresholdDecision") or "").strip() or None,
             "needsRemediation": _extract_optional_bool(
                 {"needsRemediation": fairness_gate.get("needsRemediation")},
                 "needsRemediation",
+            ),
+            "benchmarkGatePassed": _extract_optional_bool(
+                {"benchmarkGatePassed": fairness_gate.get("benchmarkGatePassed")},
+                "benchmarkGatePassed",
+            ),
+            "shadowGateApplied": _extract_optional_bool(
+                {"shadowGateApplied": fairness_gate.get("shadowGateApplied")},
+                "shadowGateApplied",
+            ),
+            "shadowGatePassed": _extract_optional_bool(
+                {"shadowGatePassed": fairness_gate.get("shadowGatePassed")},
+                "shadowGatePassed",
             ),
             "dependencyOk": _extract_optional_bool(
                 {"ok": dependency_health.get("ok")},
@@ -2037,6 +2276,18 @@ def _build_registry_audit_ops_view(
             ),
             "latestRunNeedsRemediation": _extract_optional_bool(
                 {"needsRemediation": latest_run.get("needsRemediation")},
+                "needsRemediation",
+            ),
+            "latestShadowRunId": str(latest_shadow_run.get("runId") or "").strip() or None,
+            "latestShadowRunStatus": str(latest_shadow_run.get("status") or "").strip() or None,
+            "latestShadowRunThresholdDecision": (
+                str(latest_shadow_run.get("thresholdDecision") or "").strip() or None
+            ),
+            "latestShadowRunEnvironmentMode": (
+                str(latest_shadow_run.get("environmentMode") or "").strip() or None
+            ),
+            "latestShadowRunNeedsRemediation": _extract_optional_bool(
+                {"needsRemediation": latest_shadow_run.get("needsRemediation")},
                 "needsRemediation",
             ),
             "actor": row_actor,
@@ -2347,6 +2598,11 @@ def _build_registry_alert_ops_view(
             if isinstance(gate_payload.get("latestRun"), dict)
             else {}
         )
+        latest_shadow_run_payload = (
+            gate_payload.get("latestShadowRun")
+            if isinstance(gate_payload.get("latestShadowRun"), dict)
+            else {}
+        )
         rows.append(
             {
                 "alertId": str(getattr(alert, "alert_id", "") or "").strip() or None,
@@ -2363,9 +2619,22 @@ def _build_registry_alert_ops_view(
                 "action": str(details.get("action") or "").strip() or None,
                 "gateCode": row_gate_code,
                 "gateMessage": str(gate_payload.get("message") or "").strip() or None,
+                "gateSource": str(gate_payload.get("source") or "").strip() or None,
                 "overrideApplied": row_override_applied,
                 "gateActor": row_gate_actor,
                 "gateReason": row_gate_reason,
+                "gateBenchmarkPassed": _extract_optional_bool(
+                    {"benchmarkGatePassed": gate_payload.get("benchmarkGatePassed")},
+                    "benchmarkGatePassed",
+                ),
+                "gateShadowApplied": _extract_optional_bool(
+                    {"shadowGateApplied": gate_payload.get("shadowGateApplied")},
+                    "shadowGateApplied",
+                ),
+                "gateShadowPassed": _extract_optional_bool(
+                    {"shadowGatePassed": gate_payload.get("shadowGatePassed")},
+                    "shadowGatePassed",
+                ),
                 "gateLatestRunId": str(latest_run_payload.get("runId") or "").strip() or None,
                 "gateLatestRunStatus": str(latest_run_payload.get("status") or "").strip() or None,
                 "gateLatestRunThresholdDecision": (
@@ -2376,6 +2645,24 @@ def _build_registry_alert_ops_view(
                 ),
                 "gateLatestRunNeedsRemediation": _extract_optional_bool(
                     {"needsRemediation": latest_run_payload.get("needsRemediation")},
+                    "needsRemediation",
+                ),
+                "gateLatestShadowRunId": (
+                    str(latest_shadow_run_payload.get("runId") or "").strip() or None
+                ),
+                "gateLatestShadowRunStatus": (
+                    str(latest_shadow_run_payload.get("status") or "").strip() or None
+                ),
+                "gateLatestShadowRunThresholdDecision": (
+                    str(latest_shadow_run_payload.get("thresholdDecision") or "").strip()
+                    or None
+                ),
+                "gateLatestShadowRunEnvironmentMode": (
+                    str(latest_shadow_run_payload.get("environmentMode") or "").strip()
+                    or None
+                ),
+                "gateLatestShadowRunNeedsRemediation": _extract_optional_bool(
+                    {"needsRemediation": latest_shadow_run_payload.get("needsRemediation")},
                     "needsRemediation",
                 ),
                 "dependencyCode": str(dependency_payload.get("code") or "").strip() or None,
@@ -3606,13 +3893,67 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         *,
         policy_version: str,
     ) -> dict[str, Any]:
+        def _serialize_benchmark_gate_run(
+            row: FactFairnessBenchmarkRun | None,
+        ) -> dict[str, Any] | None:
+            if row is None:
+                return None
+            return {
+                "runId": row.run_id,
+                "policyVersion": row.policy_version,
+                "environmentMode": row.environment_mode,
+                "status": row.status,
+                "thresholdDecision": row.threshold_decision,
+                "needsRemediation": bool(row.needs_remediation),
+                "needsRealEnvReconfirm": bool(row.needs_real_env_reconfirm),
+                "reportedAt": (
+                    row.reported_at.isoformat()
+                    if row.reported_at is not None
+                    else None
+                ),
+            }
+
+        def _serialize_shadow_gate_run(
+            row: FactFairnessShadowRun | None,
+        ) -> dict[str, Any] | None:
+            if row is None:
+                return None
+            summary_payload = row.summary if isinstance(row.summary, dict) else {}
+            breaches = summary_payload.get("breaches")
+            if not isinstance(breaches, list):
+                breaches = []
+            return {
+                "runId": row.run_id,
+                "policyVersion": row.policy_version,
+                "benchmarkRunId": row.benchmark_run_id,
+                "environmentMode": row.environment_mode,
+                "status": row.status,
+                "thresholdDecision": row.threshold_decision,
+                "needsRemediation": bool(row.needs_remediation),
+                "needsRealEnvReconfirm": bool(row.needs_real_env_reconfirm),
+                "hasBreach": bool(summary_payload.get("hasBreach")),
+                "breaches": [str(item).strip() for item in breaches if str(item).strip()],
+                "reportedAt": (
+                    row.reported_at.isoformat()
+                    if row.reported_at is not None
+                    else None
+                ),
+            }
+
         version = str(policy_version or "").strip()
         if not version:
             return {
                 "passed": False,
                 "code": "registry_fairness_gate_invalid_policy_version",
                 "message": "policy version is empty",
+                "source": "benchmark",
+                "benchmarkGatePassed": False,
+                "shadowGateApplied": False,
+                "shadowGatePassed": None,
+                "thresholdDecision": None,
+                "needsRemediation": None,
                 "latestRun": None,
+                "latestShadowRun": None,
             }
         runs = await _list_fairness_benchmark_runs(
             policy_version=version,
@@ -3624,18 +3965,99 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "passed": False,
                 "code": "registry_fairness_gate_no_benchmark",
                 "message": "no fairness benchmark run found for policy version",
+                "source": "benchmark",
+                "benchmarkGatePassed": False,
+                "shadowGateApplied": False,
+                "shadowGatePassed": None,
+                "thresholdDecision": None,
+                "needsRemediation": None,
                 "latestRun": None,
+                "latestShadowRun": None,
             }
 
-        passed = (
+        benchmark_gate_passed = (
             latest.threshold_decision == "accepted"
             and not bool(latest.needs_remediation)
             and latest.status in FAIRNESS_RELEASE_GATE_ACCEPTED_STATUSES
         )
-        if passed:
-            code = "registry_fairness_gate_passed"
-            message = "fairness gate passed"
-        elif latest.threshold_decision != "accepted":
+        serialized_latest_run = _serialize_benchmark_gate_run(latest)
+        if benchmark_gate_passed:
+            shadow_runs = await _list_fairness_shadow_runs(
+                policy_version=version,
+                limit=20,
+            )
+            latest_shadow_run = shadow_runs[0] if shadow_runs else None
+            serialized_latest_shadow_run = _serialize_shadow_gate_run(latest_shadow_run)
+            if latest_shadow_run is None:
+                return {
+                    "passed": True,
+                    "code": "registry_fairness_gate_passed",
+                    "message": "fairness gate passed",
+                    "source": "benchmark",
+                    "benchmarkGatePassed": True,
+                    "shadowGateApplied": False,
+                    "shadowGatePassed": None,
+                    "thresholdDecision": latest.threshold_decision,
+                    "needsRemediation": bool(latest.needs_remediation),
+                    "latestRun": serialized_latest_run,
+                    "latestShadowRun": None,
+                }
+
+            shadow_summary = (
+                latest_shadow_run.summary
+                if isinstance(latest_shadow_run.summary, dict)
+                else {}
+            )
+            shadow_has_breach = bool(shadow_summary.get("hasBreach"))
+            shadow_gate_passed = (
+                latest_shadow_run.threshold_decision == "accepted"
+                and not bool(latest_shadow_run.needs_remediation)
+                and latest_shadow_run.status in FAIRNESS_RELEASE_GATE_ACCEPTED_STATUSES
+                and not shadow_has_breach
+            )
+            if shadow_gate_passed:
+                return {
+                    "passed": True,
+                    "code": "registry_fairness_gate_passed",
+                    "message": "fairness gate passed (benchmark + shadow)",
+                    "source": "shadow",
+                    "benchmarkGatePassed": True,
+                    "shadowGateApplied": True,
+                    "shadowGatePassed": True,
+                    "thresholdDecision": latest_shadow_run.threshold_decision,
+                    "needsRemediation": bool(latest_shadow_run.needs_remediation),
+                    "latestRun": serialized_latest_run,
+                    "latestShadowRun": serialized_latest_shadow_run,
+                }
+
+            if latest_shadow_run.threshold_decision != "accepted":
+                code = "registry_fairness_gate_shadow_threshold_not_accepted"
+                message = "latest shadow threshold_decision is not accepted"
+            elif bool(latest_shadow_run.needs_remediation):
+                code = "registry_fairness_gate_shadow_remediation_required"
+                message = "latest shadow run requires remediation"
+            elif latest_shadow_run.status not in FAIRNESS_RELEASE_GATE_ACCEPTED_STATUSES:
+                code = "registry_fairness_gate_shadow_status_not_ready"
+                message = "latest shadow status is not release-ready"
+            else:
+                code = "registry_fairness_gate_shadow_breach_detected"
+                message = "latest shadow summary indicates breach"
+
+            return {
+                "passed": False,
+                "code": code,
+                "message": message,
+                "source": "shadow",
+                "benchmarkGatePassed": True,
+                "shadowGateApplied": True,
+                "shadowGatePassed": False,
+                "thresholdDecision": latest_shadow_run.threshold_decision,
+                "needsRemediation": bool(latest_shadow_run.needs_remediation),
+                "latestRun": serialized_latest_run,
+                "latestShadowRun": serialized_latest_shadow_run,
+            }
+
+        if latest.threshold_decision != "accepted":
             code = "registry_fairness_gate_threshold_not_accepted"
             message = "latest benchmark threshold_decision is not accepted"
         elif bool(latest.needs_remediation):
@@ -3646,23 +4068,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             message = "latest benchmark status is not release-ready"
 
         return {
-            "passed": bool(passed),
+            "passed": False,
             "code": code,
             "message": message,
-            "latestRun": {
-                "runId": latest.run_id,
-                "policyVersion": latest.policy_version,
-                "environmentMode": latest.environment_mode,
-                "status": latest.status,
-                "thresholdDecision": latest.threshold_decision,
-                "needsRemediation": bool(latest.needs_remediation),
-                "needsRealEnvReconfirm": bool(latest.needs_real_env_reconfirm),
-                "reportedAt": (
-                    latest.reported_at.isoformat()
-                    if latest.reported_at is not None
-                    else None
-                ),
-            },
+            "source": "benchmark",
+            "benchmarkGatePassed": False,
+            "shadowGateApplied": False,
+            "shadowGatePassed": None,
+            "thresholdDecision": latest.threshold_decision,
+            "needsRemediation": bool(latest.needs_remediation),
+            "latestRun": serialized_latest_run,
+            "latestShadowRun": None,
         }
 
     async def _evaluate_policy_registry_dependency_health(
@@ -8414,6 +8830,131 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "panelHighDisagreement": panel_high_disagreement,
                 "offset": offset,
                 "limit": limit,
+            },
+        }
+
+    @app.get("/internal/judge/fairness/dashboard")
+    async def get_judge_fairness_dashboard(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str | None = Query(default="final"),
+        winner: str | None = Query(default=None),
+        policy_version: str | None = Query(default=None),
+        challenge_state: str | None = Query(default=None),
+        window_days: int = Query(default=7, ge=1, le=30),
+        top_limit: int = Query(default=10, ge=1, le=50),
+        case_scan_limit: int = Query(default=200, ge=20, le=1000),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+
+        collected_items: list[dict[str, Any]] = []
+        offset = 0
+        total_count: int | None = None
+        while len(collected_items) < case_scan_limit:
+            batch_limit = min(200, case_scan_limit - len(collected_items))
+            page = await list_judge_case_fairness(
+                x_ai_internal_key=x_ai_internal_key,
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                policy_version=policy_version,
+                has_drift_breach=None,
+                has_threshold_breach=None,
+                has_shadow_breach=None,
+                has_open_review=None,
+                gate_conclusion=None,
+                challenge_state=challenge_state,
+                sort_by="updated_at",
+                sort_order="desc",
+                review_required=None,
+                panel_high_disagreement=None,
+                offset=offset,
+                limit=batch_limit,
+            )
+            if total_count is None:
+                total_count = int(page.get("count") or 0)
+            page_items = page.get("items") if isinstance(page.get("items"), list) else []
+            if not page_items:
+                break
+            collected_items.extend(page_items)
+            if len(page_items) < batch_limit:
+                break
+            offset += batch_limit
+
+        aggregations = _build_case_fairness_aggregations(collected_items)
+        gate_distribution = (
+            aggregations.get("gateConclusionCounts")
+            if isinstance(aggregations.get("gateConclusionCounts"), dict)
+            else {}
+        )
+        case_trends = _build_fairness_dashboard_case_trends(
+            items=collected_items,
+            window_days=window_days,
+        )
+        normalized_policy_version = str(policy_version or "").strip() or None
+        benchmark_runs = await _list_fairness_benchmark_runs(
+            policy_version=normalized_policy_version,
+            limit=200,
+        )
+        shadow_runs = await _list_fairness_shadow_runs(
+            policy_version=normalized_policy_version,
+            limit=200,
+        )
+        run_trends = _build_fairness_dashboard_run_trends(
+            benchmark_runs=benchmark_runs,
+            shadow_runs=shadow_runs,
+            window_days=window_days,
+        )
+        top_risk_cases = _build_fairness_dashboard_top_risk_cases(
+            items=collected_items,
+            top_limit=top_limit,
+        )
+        generated_at = datetime.now(timezone.utc).isoformat()
+        total_matched = int(total_count or 0)
+        scanned_count = len(collected_items)
+        return {
+            "generatedAt": generated_at,
+            "overview": {
+                "totalMatched": total_matched,
+                "scannedCases": scanned_count,
+                "scanTruncated": scanned_count < total_matched,
+                "reviewRequiredCount": int(aggregations.get("reviewRequiredCount") or 0),
+                "openReviewCount": int(aggregations.get("openReviewCount") or 0),
+                "panelHighDisagreementCount": int(
+                    aggregations.get("panelHighDisagreementCount") or 0
+                ),
+                "driftBreachCount": int(aggregations.get("driftBreachCount") or 0),
+                "thresholdBreachCount": int(aggregations.get("thresholdBreachCount") or 0),
+                "shadowBreachCount": int(aggregations.get("shadowBreachCount") or 0),
+            },
+            "gateDistribution": {
+                "auto_passed": int(gate_distribution.get("auto_passed") or 0),
+                "review_required": int(gate_distribution.get("review_required") or 0),
+                "benchmark_attention_required": int(
+                    gate_distribution.get("benchmark_attention_required") or 0
+                ),
+                "unknown": int(gate_distribution.get("unknown") or 0),
+            },
+            "trends": {
+                "windowDays": int(window_days),
+                "caseDaily": case_trends,
+                "benchmarkRuns": run_trends.get("benchmarkRuns")
+                if isinstance(run_trends.get("benchmarkRuns"), list)
+                else [],
+                "shadowRuns": run_trends.get("shadowRuns")
+                if isinstance(run_trends.get("shadowRuns"), list)
+                else [],
+            },
+            "topRiskCases": top_risk_cases,
+            "filters": {
+                "status": status,
+                "dispatchType": dispatch_type,
+                "winner": winner,
+                "policyVersion": normalized_policy_version,
+                "challengeState": challenge_state,
+                "windowDays": int(window_days),
+                "topLimit": int(top_limit),
+                "caseScanLimit": int(case_scan_limit),
             },
         }
 

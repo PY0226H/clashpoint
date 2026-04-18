@@ -1,0 +1,21 @@
+{
+  "run_id": "20260417T053154Z-ai-judge-stage-closure-execute",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "completed_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md",
+  "todo_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md",
+  "archive_path": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260417T053154Z-ai-judge-stage-closure-execute.md",
+  "started_at": "2026-04-17T05:31:54Z",
+  "finished_at": "2026-04-17T05:31:54Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260417T053154Z-ai-judge-stage-closure-execute.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260417T053154Z-ai-judge-stage-closure-execute.summary.md"
+  },
+  "counts": {
+    "completed_appended": 4,
+    "completed_skipped_existing": 0,
+    "todo_appended": 1,
+    "todo_skipped_existing": 4
+  }
+}

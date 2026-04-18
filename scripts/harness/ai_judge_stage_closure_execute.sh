@@ -362,6 +362,15 @@ reset_plan_doc() {
 ### 模块完成同步历史
 
 - $(date_cn)：推进 \`ai-judge-stage-closure-execute\`；完成阶段收口：completed/todo 同步、活动计划归档并重置。
+
+## 2. 架构方案第13章一致性校验（下一轮计划生成前置）
+
+1. **角色一致性**：下一轮计划必须继续沿用法庭式主链角色边界，不新增绕过 Sentinel/Arbiter 的捷径路径。
+2. **数据一致性**：六对象主链（case/claim/evidence/verdict/fairness/opinion）仍为唯一业务事实源，不引入平行 winner 写链。
+3. **门禁一致性**：发布、裁决、复核相关门禁不得弱化；若引入新能力，需明确与 fairness/review gate 的关系。
+4. **边界一致性**：\`NPC Coach / Room QA\` 保持 \`advisory_only\`，未冻结 PRD 前不进入官方裁决链。
+5. **跨层一致性**：涉及 API/DTO/错误码变更时，同轮同步调用方、测试与文档，不保留长期双轨 alias。
+6. **收口一致性**：真实环境结论与本地参考结论继续分层表达，未获得真实窗口前不宣称 \`pass\`。
 PLAN
 }
 

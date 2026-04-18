@@ -281,3 +281,11 @@
 | ai-judge-cross-layer-sync-v2 | AI judge 平台化重构阶段主体已完成（已完成） | artifacts/harness/*-ai-judge-cross-layer-sync-v2.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
 | ai-judge-npc-qa-shell-bootstrap | AI judge 平台化重构阶段主体已完成（已完成） | artifacts/harness/*-ai-judge-npc-qa-shell-bootstrap.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
 | ai-judge-real-env-window-pass-closure | AI judge 平台化重构阶段主体已完成（已完成（local_reference_ready）） | artifacts/harness/*-ai-judge-real-env-window-pass-closure.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-14） | （待收口映射） |
+
+### B20. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| ai-judge-p13-baseline-delta-freeze | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-baseline-delta-freeze.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
+| ai-judge-p13-fairness-shadow-eval-ledger-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-fairness-shadow-eval-ledger-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
+| ai-judge-p13-fairness-dashboard-export-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-fairness-dashboard-export-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
+| ai-judge-p13-policy-release-gate-shadow-link | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-policy-release-gate-shadow-link.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
