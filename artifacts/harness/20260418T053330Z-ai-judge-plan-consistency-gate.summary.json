@@ -1,0 +1,27 @@
+{
+  "run_id": "20260418T053330Z-ai-judge-plan-consistency-gate",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "arch_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md",
+  "consistency_section_found": true,
+  "arch_checklist_found": true,
+  "checks": [
+    {"label":"角色一致性","status":"pass","answer":"8 Agent 职责保持完整，不新增绕过 Sentinel/Arbiter 的捷径链路。"},
+    {"label":"数据一致性","status":"pass","answer":"六对象主链仍是唯一裁决事实源，不引入平行 winner 写链。"},
+    {"label":"门禁一致性","status":"pass","answer":"Fairness gate 保持终判前置，override 必须可审计可追溯。"},
+    {"label":"边界一致性","status":"pass","answer":"`NPC/Room QA` 继续 `advisory_only`，不写官方裁决链。"},
+    {"label":"跨层一致性","status":"pass","answer":"契约变更同轮同步调用方与测试，不保留长期双轨 alias。"},
+    {"label":"收口一致性","status":"pass","answer":"real-env 继续区分 `local_reference_ready` 与 `pass`，不混淆口径。"}
+  ],
+  "missing_items": [],
+  "empty_items": [],
+  "placeholder_items": [],
+  "arch_missing_items": [],
+  "started_at": "2026-04-18T05:33:30Z",
+  "finished_at": "2026-04-18T05:33:30Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T053330Z-ai-judge-plan-consistency-gate.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T053330Z-ai-judge-plan-consistency-gate.summary.md"
+  }
+}

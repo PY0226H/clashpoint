@@ -241,6 +241,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/tools", paths)
         self.assertIn("/internal/judge/registries/tools/{toolset_version}", paths)
         self.assertIn("/internal/judge/registries/policy/dependencies/health", paths)
+        self.assertIn("/internal/judge/registries/governance/overview", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/publish", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/{version}/activate", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/rollback", paths)
@@ -263,6 +264,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/fairness/benchmark-runs", paths)
         self.assertIn("/internal/judge/fairness/shadow-runs", paths)
         self.assertIn("/internal/judge/fairness/dashboard", paths)
+        self.assertIn("/internal/judge/fairness/calibration-pack", paths)
+        self.assertIn("/internal/judge/ops/read-model/pack", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)
 
     async def test_case_create_should_mark_case_built_and_support_idempotent_replay(
@@ -1124,6 +1127,132 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(health_resp.status_code, 422)
         self.assertIn("invalid_trend_status", health_resp.text)
+
+    async def test_registry_governance_overview_route_should_join_triple_dependency_usage_and_audits(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9218)
+        prompt_version = f"promptset-governance-{suffix}"
+        policy_invalid_version = f"policy-governance-invalid-{suffix}"
+        actor = f"governance-actor-{suffix}"
+
+        prompt_publish = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/prompt/publish",
+            payload={
+                "version": prompt_version,
+                "activate": False,
+                "actor": actor,
+                "reason": "governance_publish_prompt",
+                "profile": {
+                    "promptVersions": {
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                    "metadata": {
+                        "status": "candidate",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_publish.status_code, 200)
+
+        prompt_activate = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/prompt/{prompt_version}/activate"
+                f"?actor={actor}&reason=governance_activate_prompt"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_activate.status_code, 200)
+
+        prompt_rollback = await self._post(
+            app=app,
+            path=(
+                "/internal/judge/registries/prompt/rollback"
+                f"?actor={actor}&reason=governance_rollback_prompt"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(prompt_rollback.status_code, 200)
+
+        await runtime.registry_product_runtime.publish_release(
+            registry_type="policy",
+            version=policy_invalid_version,
+            profile_payload={
+                "rubricVersion": "v3",
+                "topicDomain": "tft",
+                "promptRegistryVersion": f"promptset-missing-{suffix}",
+                "toolRegistryVersion": "toolset-v3-default",
+            },
+            actor="seed",
+            reason="seed_invalid_prompt_dependency_for_governance_overview",
+            activate=False,
+        )
+
+        overview_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/governance/overview"
+                "?dependency_limit=200&usage_preview_limit=10&release_limit=100&audit_limit=200"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(overview_resp.status_code, 200)
+        payload = overview_resp.json()
+        active_versions = payload["activeVersions"]
+        self.assertTrue(str(active_versions["policyVersion"] or "").strip())
+        self.assertTrue(str(active_versions["promptRegistryVersion"] or "").strip())
+        self.assertTrue(str(active_versions["toolRegistryVersion"] or "").strip())
+
+        dependency = payload["dependencyHealth"]
+        self.assertGreaterEqual(dependency["count"], 1)
+        self.assertGreaterEqual(dependency["invalidCount"], 1)
+        invalid_row = next(
+            (
+                row
+                for row in dependency["items"]
+                if row["policyVersion"] == policy_invalid_version
+            ),
+            None,
+        )
+        self.assertIsNotNone(invalid_row)
+        assert invalid_row is not None
+        self.assertFalse(bool(invalid_row["ok"]))
+        self.assertIn("prompt_registry_version_not_found", invalid_row["issueCodes"])
+        self.assertIn(f"promptset-missing-{suffix}", dependency["byPromptRegistryVersion"])
+
+        reverse_usage = payload["reverseUsage"]
+        prompt_row = next(
+            (
+                row
+                for row in reverse_usage["prompts"]
+                if row["version"] == prompt_version
+            ),
+            None,
+        )
+        self.assertIsNotNone(prompt_row)
+        assert prompt_row is not None
+        self.assertIsInstance(prompt_row["referencedByPolicyCount"], int)
+        self.assertGreaterEqual(prompt_row["referencedByPolicyCount"], 0)
+
+        release_state = payload["releaseState"]
+        self.assertIn("policy", release_state)
+        self.assertIn("prompt", release_state)
+        self.assertIn("tool", release_state)
+        self.assertGreaterEqual(release_state["prompt"]["count"], 1)
+
+        audit_summary = payload["auditSummary"]
+        self.assertGreaterEqual(audit_summary["countsByAction"].get("publish", 0), 1)
+        self.assertGreaterEqual(audit_summary["countsByAction"].get("activate", 0), 1)
+        self.assertGreaterEqual(audit_summary["countsByAction"].get("rollback", 0), 1)
+        latest_rollback = audit_summary["latestRollbackByRegistryType"]["prompt"]
+        self.assertIsNotNone(latest_rollback)
+        assert latest_rollback is not None
+        self.assertEqual(latest_rollback["registryType"], "prompt")
 
     async def test_policy_registry_dependency_blocked_alert_should_emit_and_resolve_outbox(
         self,
@@ -2423,11 +2552,20 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                         "claimGraphVersion": "v1-claim-graph-bootstrap",
                     },
                     "metadata": {
+                        "panelRuntimeContext": {
+                            "defaultDomainSlot": "tft_ranked",
+                            "runtimeStage": "adaptive_bootstrap",
+                            "adaptiveEnabled": True,
+                            "candidateModels": ["gpt-5.4", "gpt-5.4-mini"],
+                            "strategyMetadata": {"calibrationVersion": "calib-local-v2"},
+                        },
                         "panelRuntimeProfiles": {
                             "judgeA": {
                                 "profileId": "panel-a-custom",
                                 "modelStrategy": "llm_vote",
+                                "strategySlot": "adaptive_weighted_vote",
                                 "promptVersion": "panel-prompt-v9",
+                                "candidateModels": ["gpt-5.4"],
                                 "profileSource": "policy_metadata",
                             }
                         }
@@ -2458,10 +2596,23 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(judge_a_profile["profileId"], "panel-a-custom")
         self.assertEqual(judge_a_profile["modelStrategy"], "llm_vote")
         self.assertEqual(judge_a_profile["promptVersion"], "panel-prompt-v9")
+        self.assertEqual(judge_a_profile["strategySlot"], "adaptive_weighted_vote")
+        self.assertEqual(judge_a_profile["domainSlot"], "tft_ranked")
+        self.assertEqual(judge_a_profile["runtimeStage"], "adaptive_bootstrap")
+        self.assertTrue(judge_a_profile["adaptiveEnabled"])
+        self.assertEqual(judge_a_profile["candidateModels"], ["gpt-5.4"])
+        self.assertEqual(
+            judge_a_profile["strategyMetadata"]["calibrationVersion"],
+            "calib-local-v2",
+        )
         self.assertEqual(judge_a_profile["profileSource"], "policy_metadata")
         self.assertEqual(
             final_payload["judgeTrace"]["panelRuntimeProfiles"]["judgeA"]["profileId"],
             "panel-a-custom",
+        )
+        self.assertEqual(
+            final_payload["judgeTrace"]["panelRuntimeProfiles"]["judgeB"]["domainSlot"],
+            "tft_ranked",
         )
 
     async def test_final_dispatch_should_mark_workflow_review_required_when_gate_triggers(
@@ -4495,6 +4646,267 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["filters"]["windowDays"], 7)
         self.assertEqual(payload["filters"]["topLimit"], 10)
 
+    async def test_fairness_calibration_pack_route_should_return_thresholds_drift_and_risks(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(7851)
+
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        baseline_run_id = f"run-{_unique_case_id(7852)}"
+        baseline_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": baseline_run_id,
+                "policy_version": "v3-default",
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "metrics": {
+                    "sample_size": 400,
+                    "draw_rate": 0.2,
+                    "side_bias_delta": 0.03,
+                    "appeal_overturn_rate": 0.05,
+                },
+                "thresholds": {
+                    "draw_rate_max": 0.3,
+                    "side_bias_delta_max": 0.08,
+                    "appeal_overturn_rate_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(baseline_resp.status_code, 200)
+
+        breached_run_id = f"run-{_unique_case_id(7853)}"
+        breached_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": breached_run_id,
+                "policy_version": "v3-default",
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "metrics": {
+                    "sample_size": 420,
+                    "draw_rate": 0.45,
+                    "side_bias_delta": 0.04,
+                    "appeal_overturn_rate": 0.08,
+                },
+                "thresholds": {
+                    "draw_rate_max": 0.3,
+                    "side_bias_delta_max": 0.08,
+                    "appeal_overturn_rate_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(breached_resp.status_code, 200)
+
+        shadow_run_id = f"shadow-{_unique_case_id(7854)}"
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": "v3-default",
+                "benchmark_run_id": breached_run_id,
+                "environment_mode": "local_reference",
+                "status": "threshold_violation",
+                "threshold_decision": "violated",
+                "metrics": {
+                    "sample_size": 200,
+                    "winner_flip_rate": 0.26,
+                    "score_shift_delta": 0.3,
+                    "review_required_delta": 0.19,
+                },
+                "thresholds": {
+                    "winner_flip_rate_max": 0.1,
+                    "score_shift_delta_max": 0.2,
+                    "review_required_delta_max": 0.1,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
+
+        pack_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/calibration-pack"
+                "?dispatch_type=final&policy_version=v3-default"
+                "&case_scan_limit=200&risk_limit=30"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(pack_resp.status_code, 200)
+        payload = pack_resp.json()
+
+        self.assertIsInstance(payload["overview"], dict)
+        self.assertIsInstance(payload["thresholdSuggestions"], dict)
+        self.assertIsInstance(payload["driftSummary"], dict)
+        self.assertIsInstance(payload["riskItems"], list)
+        self.assertIsInstance(payload["onEnvInputTemplate"], dict)
+        self.assertGreaterEqual(payload["overview"]["benchmarkRunCount"], 2)
+        self.assertGreaterEqual(payload["overview"]["shadowRunCount"], 1)
+        self.assertGreaterEqual(payload["overview"]["highRiskCount"], 1)
+        self.assertEqual(payload["overview"]["latestBenchmarkRunId"], breached_run_id)
+        self.assertEqual(payload["overview"]["latestShadowRunId"], shadow_run_id)
+        self.assertEqual(payload["filters"]["policyVersion"], "v3-default")
+        self.assertEqual(payload["filters"]["riskLimit"], 30)
+
+        threshold_suggestions = payload["thresholdSuggestions"]
+        self.assertEqual(threshold_suggestions["method"], "local_observed_max_with_margin")
+        self.assertIsNotNone(
+            threshold_suggestions["benchmark"]["drawRateMaxSuggested"]
+        )
+        self.assertIsNotNone(
+            threshold_suggestions["shadow"]["winnerFlipRateMaxSuggested"]
+        )
+
+        drift_summary = payload["driftSummary"]
+        self.assertEqual(drift_summary["benchmark"]["latestRunId"], breached_run_id)
+        self.assertEqual(drift_summary["shadow"]["latestRunId"], shadow_run_id)
+        self.assertTrue(drift_summary["benchmark"]["hasThresholdBreach"])
+        self.assertTrue(drift_summary["shadow"]["hasBreach"])
+
+        risk_types = {row.get("riskType") for row in payload["riskItems"]}
+        self.assertIn("benchmark_threshold_violation", risk_types)
+        self.assertIn("shadow_threshold_violation", risk_types)
+        self.assertEqual(
+            payload["onEnvInputTemplate"]["envMarker"]["REAL_CALIBRATION_ENV_READY"],
+            "true",
+        )
+        self.assertTrue(
+            any(
+                "real-env pass" in str(note)
+                for note in payload["onEnvInputTemplate"]["notes"]
+            )
+        )
+
+    async def test_ops_read_model_pack_route_should_join_fairness_registry_and_trust(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(7844)
+
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        pack_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/ops/read-model/pack"
+                "?dispatch_type=final&policy_version=v3-default"
+                "&window_days=7&top_limit=10&case_scan_limit=200"
+                "&include_case_trust=true&trust_case_limit=3"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(pack_resp.status_code, 200)
+        payload = pack_resp.json()
+        self.assertIsInstance(payload["fairnessDashboard"], dict)
+        self.assertIsInstance(payload["registryGovernance"], dict)
+        self.assertIsInstance(payload["trustOverview"], dict)
+        self.assertGreaterEqual(
+            payload["fairnessDashboard"]["overview"]["totalMatched"],
+            1,
+        )
+        self.assertIn(
+            "activeVersions",
+            payload["registryGovernance"],
+        )
+        self.assertIn(
+            "dependencyHealth",
+            payload["registryGovernance"],
+        )
+        self.assertGreaterEqual(payload["trustOverview"]["count"], 1)
+        self.assertGreaterEqual(payload["trustOverview"]["verifiedCount"], 0)
+        self.assertLessEqual(
+            payload["trustOverview"]["verifiedCount"],
+            payload["trustOverview"]["count"],
+        )
+        self.assertGreaterEqual(payload["trustOverview"]["reviewRequiredCount"], 0)
+        self.assertTrue(
+            any(row["caseId"] == case_id for row in payload["trustOverview"]["items"])
+        )
+        self.assertEqual(payload["filters"]["dispatchType"], "final")
+        self.assertEqual(payload["filters"]["policyVersion"], "v3-default")
+        self.assertEqual(payload["filters"]["trustCaseLimit"], 3)
+
+        pack_without_trust_resp = await self._get(
+            app=app,
+            path="/internal/judge/ops/read-model/pack?include_case_trust=false",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(pack_without_trust_resp.status_code, 200)
+        without_trust_payload = pack_without_trust_resp.json()
+        self.assertFalse(without_trust_payload["trustOverview"]["included"])
+        self.assertEqual(without_trust_payload["trustOverview"]["count"], 0)
+        self.assertEqual(without_trust_payload["trustOverview"]["errorCount"], 0)
+
     async def test_panel_runtime_profile_ops_view_should_support_filters_and_aggregations(
         self,
     ) -> None:
@@ -4572,6 +4984,14 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             1,
         )
         self.assertGreaterEqual(
+            payload["aggregations"]["byStrategySlot"]["path_alignment"],
+            1,
+        )
+        self.assertGreaterEqual(
+            payload["aggregations"]["byDomainSlot"]["general"],
+            1,
+        )
+        self.assertGreaterEqual(
             payload["aggregations"]["byProfileSource"]["builtin_default"],
             1,
         )
@@ -4619,6 +5039,29 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 row["judgeId"] == "judgeB"
                 and row["modelStrategy"] == "deterministic_path_alignment"
                 for row in judge_b_payload["items"]
+            )
+        )
+
+        strategy_slot_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/panels/runtime/profiles"
+                "?dispatch_type=final&strategy_slot=path_alignment"
+                "&domain_slot=general&sort_by=strategy_slot&sort_order=asc&limit=50"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(strategy_slot_resp.status_code, 200)
+        strategy_slot_payload = strategy_slot_resp.json()
+        self.assertGreaterEqual(strategy_slot_payload["count"], 1)
+        self.assertEqual(strategy_slot_payload["filters"]["strategySlot"], "path_alignment")
+        self.assertEqual(strategy_slot_payload["filters"]["domainSlot"], "general")
+        self.assertEqual(strategy_slot_payload["filters"]["sortBy"], "strategy_slot")
+        self.assertTrue(
+            all(
+                row["strategySlot"] == "path_alignment"
+                and row["domainSlot"] == "general"
+                for row in strategy_slot_payload["items"]
             )
         )
 

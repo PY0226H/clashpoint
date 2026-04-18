@@ -297,11 +297,17 @@ def test_build_final_report_payload_should_apply_custom_panel_runtime_profiles()
             "judgeA": {
                 "profileId": "panel-weighted-pro-v2",
                 "modelStrategy": "llm_vote",
+                "strategySlot": "adaptive_weighted_vote",
                 "scoreSource": "agent3WeightedScore",
                 "decisionMargin": 0.6,
                 "promptVersion": "panel-prompt-v2",
                 "toolsetVersion": "toolset-v4",
                 "policyVersion": "v4-pro",
+                "domainSlot": "tft_meta",
+                "runtimeStage": "adaptive_bootstrap",
+                "adaptiveEnabled": True,
+                "candidateModels": ["gpt-5.4", "gpt-5.4-mini"],
+                "strategyMetadata": {"calibrationVersion": "calib-local-v1"},
                 "profileSource": "policy_metadata",
             }
         },
@@ -310,7 +316,15 @@ def test_build_final_report_payload_should_apply_custom_panel_runtime_profiles()
     assert profiles["judgeA"]["profileId"] == "panel-weighted-pro-v2"
     assert profiles["judgeA"]["modelStrategy"] == "llm_vote"
     assert profiles["judgeA"]["promptVersion"] == "panel-prompt-v2"
+    assert profiles["judgeA"]["strategySlot"] == "adaptive_weighted_vote"
+    assert profiles["judgeA"]["domainSlot"] == "tft_meta"
+    assert profiles["judgeA"]["runtimeStage"] == "adaptive_bootstrap"
+    assert profiles["judgeA"]["adaptiveEnabled"] is True
+    assert profiles["judgeA"]["candidateModels"] == ["gpt-5.4", "gpt-5.4-mini"]
+    assert profiles["judgeA"]["strategyMetadata"]["calibrationVersion"] == "calib-local-v1"
     assert profiles["judgeA"]["profileSource"] == "policy_metadata"
+    assert profiles["judgeB"]["strategySlot"] == "path_alignment"
+    assert profiles["judgeB"]["domainSlot"] == "general"
     assert profiles["judgeB"]["profileSource"] == "builtin_default"
 
 

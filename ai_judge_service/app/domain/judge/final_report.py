@@ -12,20 +12,29 @@ PANEL_RUNTIME_PROFILE_DEFAULTS = {
     "judgeA": {
         "profileId": "panel-judgeA-weighted-v1",
         "modelStrategy": "deterministic_weighted",
+        "strategySlot": "weighted_vote",
         "scoreSource": "agent3WeightedScore",
         "decisionMargin": 0.8,
+        "domainSlot": "general",
+        "runtimeStage": "bootstrap",
     },
     "judgeB": {
         "profileId": "panel-judgeB-path-alignment-v1",
         "modelStrategy": "deterministic_path_alignment",
+        "strategySlot": "path_alignment",
         "scoreSource": "agent2Score",
         "decisionMargin": 0.8,
+        "domainSlot": "general",
+        "runtimeStage": "bootstrap",
     },
     "judgeC": {
         "profileId": "panel-judgeC-dimension-composite-v1",
         "modelStrategy": "deterministic_dimension_composite",
+        "strategySlot": "dimension_composite",
         "scoreSource": "agent1Dimensions",
         "decisionMargin": 0.8,
+        "domainSlot": "general",
+        "runtimeStage": "bootstrap",
     },
 }
 
@@ -167,6 +176,31 @@ def _build_panel_judge_item(
 def _normalize_panel_runtime_profiles(
     raw_profiles: dict[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
+    def _normalize_text_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            token = str(item or "").strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
+        return out
+
+    def _to_bool(value: Any, *, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value or "").strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
     source = raw_profiles if isinstance(raw_profiles, dict) else {}
     out: dict[str, dict[str, Any]] = {}
     for judge_id, defaults in PANEL_RUNTIME_PROFILE_DEFAULTS.items():
@@ -185,6 +219,12 @@ def _normalize_panel_runtime_profiles(
                 or defaults["modelStrategy"]
             ).strip()
             or defaults["modelStrategy"],
+            "strategySlot": str(
+                row.get("strategySlot")
+                or row.get("strategy_slot")
+                or defaults["strategySlot"]
+            ).strip()
+            or defaults["strategySlot"],
             "scoreSource": str(
                 row.get("scoreSource")
                 or row.get("score_source")
@@ -209,6 +249,38 @@ def _normalize_panel_runtime_profiles(
             "policyVersion": (
                 str(row.get("policyVersion") or row.get("policy_version") or "").strip()
                 or None
+            ),
+            "domainSlot": str(
+                row.get("domainSlot")
+                or row.get("domain_slot")
+                or defaults["domainSlot"]
+            ).strip()
+            or defaults["domainSlot"],
+            "runtimeStage": str(
+                row.get("runtimeStage")
+                or row.get("runtime_stage")
+                or defaults["runtimeStage"]
+            ).strip()
+            or defaults["runtimeStage"],
+            "adaptiveEnabled": _to_bool(
+                row.get("adaptiveEnabled")
+                if row.get("adaptiveEnabled") is not None
+                else row.get("adaptive_enabled"),
+                default=False,
+            ),
+            "candidateModels": _normalize_text_list(
+                row.get("candidateModels")
+                if row.get("candidateModels") is not None
+                else row.get("candidate_models")
+            ),
+            "strategyMetadata": (
+                dict(row.get("strategyMetadata"))
+                if isinstance(row.get("strategyMetadata"), dict)
+                else (
+                    dict(row.get("strategy_metadata"))
+                    if isinstance(row.get("strategy_metadata"), dict)
+                    else {}
+                )
             ),
             "profileSource": str(
                 row.get("profileSource")
