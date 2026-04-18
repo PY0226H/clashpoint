@@ -18,6 +18,12 @@ DEPENDENCY_LIMIT="${AI_JUDGE_OPS_READ_MODEL_DEPENDENCY_LIMIT:-200}"
 USAGE_PREVIEW_LIMIT="${AI_JUDGE_OPS_READ_MODEL_USAGE_PREVIEW_LIMIT:-20}"
 RELEASE_LIMIT="${AI_JUDGE_OPS_READ_MODEL_RELEASE_LIMIT:-50}"
 AUDIT_LIMIT="${AI_JUDGE_OPS_READ_MODEL_AUDIT_LIMIT:-100}"
+CALIBRATION_RISK_LIMIT="${AI_JUDGE_OPS_READ_MODEL_CALIBRATION_RISK_LIMIT:-50}"
+CALIBRATION_BENCHMARK_LIMIT="${AI_JUDGE_OPS_READ_MODEL_CALIBRATION_BENCHMARK_LIMIT:-200}"
+CALIBRATION_SHADOW_LIMIT="${AI_JUDGE_OPS_READ_MODEL_CALIBRATION_SHADOW_LIMIT:-200}"
+PANEL_PROFILE_SCAN_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_PROFILE_SCAN_LIMIT:-600}"
+PANEL_GROUP_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_GROUP_LIMIT:-50}"
+PANEL_ATTENTION_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_ATTENTION_LIMIT:-20}"
 
 OUTPUT_JSON=""
 OUTPUT_MD=""
@@ -36,6 +42,9 @@ FAIRNESS_TOTAL_MATCHED="0"
 REGISTRY_INVALID_COUNT="0"
 TRUST_ITEM_COUNT="0"
 TRUST_ERROR_COUNT="0"
+ADAPTIVE_RECOMMENDED_ACTION_COUNT="0"
+ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT="0"
+ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT="0"
 
 usage() {
   cat <<'USAGE'
@@ -57,6 +66,12 @@ usage() {
     [--usage-preview-limit <int>] \
     [--release-limit <int>] \
     [--audit-limit <int>] \
+    [--calibration-risk-limit <int>] \
+    [--calibration-benchmark-limit <int>] \
+    [--calibration-shadow-limit <int>] \
+    [--panel-profile-scan-limit <int>] \
+    [--panel-group-limit <int>] \
+    [--panel-attention-limit <int>] \
     [--output-json <path>] \
     [--output-md <path>] \
     [--output-env <path>] \
@@ -215,6 +230,30 @@ parse_args() {
         AUDIT_LIMIT="${2:-}"
         shift 2
         ;;
+      --calibration-risk-limit)
+        CALIBRATION_RISK_LIMIT="${2:-}"
+        shift 2
+        ;;
+      --calibration-benchmark-limit)
+        CALIBRATION_BENCHMARK_LIMIT="${2:-}"
+        shift 2
+        ;;
+      --calibration-shadow-limit)
+        CALIBRATION_SHADOW_LIMIT="${2:-}"
+        shift 2
+        ;;
+      --panel-profile-scan-limit)
+        PANEL_PROFILE_SCAN_LIMIT="${2:-}"
+        shift 2
+        ;;
+      --panel-group-limit)
+        PANEL_GROUP_LIMIT="${2:-}"
+        shift 2
+        ;;
+      --panel-attention-limit)
+        PANEL_ATTENTION_LIMIT="${2:-}"
+        shift 2
+        ;;
       --output-json)
         OUTPUT_JSON="${2:-}"
         shift 2
@@ -260,6 +299,9 @@ OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=$FAIRNESS_TOTAL_MATCHED
 OPS_READ_MODEL_REGISTRY_INVALID_COUNT=$REGISTRY_INVALID_COUNT
 OPS_READ_MODEL_TRUST_ITEM_COUNT=$TRUST_ITEM_COUNT
 OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
+OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=$ADAPTIVE_RECOMMENDED_ACTION_COUNT
+OPS_READ_MODEL_ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT=$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT
+OPS_READ_MODEL_ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT=$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT
 OPS_READ_MODEL_UPDATED_AT=$FINISHED_AT
 EOF
 }
@@ -280,7 +322,10 @@ write_output_md() {
 2. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
 3. trust_item_count：\`$TRUST_ITEM_COUNT\`
 4. trust_error_count：\`$TRUST_ERROR_COUNT\`
-5. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+5. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+6. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+7. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+8. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -300,7 +345,10 @@ write_summary_json() {
     "fairness_total_matched": $FAIRNESS_TOTAL_MATCHED,
     "registry_invalid_count": $REGISTRY_INVALID_COUNT,
     "trust_item_count": $TRUST_ITEM_COUNT,
-    "trust_error_count": $TRUST_ERROR_COUNT
+    "trust_error_count": $TRUST_ERROR_COUNT,
+    "adaptive_recommended_action_count": $ADAPTIVE_RECOMMENDED_ACTION_COUNT,
+    "adaptive_panel_attention_group_count": $ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT,
+    "adaptive_calibration_high_risk_count": $ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT
   },
   "artifacts": {
     "output_json": "$(json_escape "$OUTPUT_JSON")",
@@ -328,7 +376,10 @@ write_summary_md() {
 2. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
 3. trust_item_count: \`$TRUST_ITEM_COUNT\`
 4. trust_error_count: \`$TRUST_ERROR_COUNT\`
-5. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+5. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+6. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+7. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+8. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -400,6 +451,12 @@ main() {
   request_url="$(append_query_param "$request_url" "usage_preview_limit" "$USAGE_PREVIEW_LIMIT")"
   request_url="$(append_query_param "$request_url" "release_limit" "$RELEASE_LIMIT")"
   request_url="$(append_query_param "$request_url" "audit_limit" "$AUDIT_LIMIT")"
+  request_url="$(append_query_param "$request_url" "calibration_risk_limit" "$CALIBRATION_RISK_LIMIT")"
+  request_url="$(append_query_param "$request_url" "calibration_benchmark_limit" "$CALIBRATION_BENCHMARK_LIMIT")"
+  request_url="$(append_query_param "$request_url" "calibration_shadow_limit" "$CALIBRATION_SHADOW_LIMIT")"
+  request_url="$(append_query_param "$request_url" "panel_profile_scan_limit" "$PANEL_PROFILE_SCAN_LIMIT")"
+  request_url="$(append_query_param "$request_url" "panel_group_limit" "$PANEL_GROUP_LIMIT")"
+  request_url="$(append_query_param "$request_url" "panel_attention_limit" "$PANEL_ATTENTION_LIMIT")"
 
   local timeout_secs
   timeout_secs="$(trim "$REQUEST_TIMEOUT_SECS")"
@@ -434,7 +491,7 @@ main() {
 
   if [[ "$STATUS" == "pass" ]]; then
     local required_key
-    for required_key in "\"fairnessDashboard\"" "\"registryGovernance\"" "\"trustOverview\"" "\"filters\""; do
+    for required_key in "\"fairnessDashboard\"" "\"fairnessCalibrationAdvisor\"" "\"panelRuntimeReadiness\"" "\"registryGovernance\"" "\"adaptiveSummary\"" "\"trustOverview\"" "\"filters\""; do
       if ! grep -Fq "$required_key" "$OUTPUT_JSON"; then
         REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${required_key}"
       fi
@@ -450,6 +507,9 @@ main() {
     REGISTRY_INVALID_COUNT="$(extract_first_number "$OUTPUT_JSON" "invalidCount")"
     TRUST_ITEM_COUNT="$(count_token "$OUTPUT_JSON" "\"verdictVerified\"")"
     TRUST_ERROR_COUNT="$(extract_first_number "$OUTPUT_JSON" "errorCount")"
+    ADAPTIVE_RECOMMENDED_ACTION_COUNT="$(extract_first_number "$OUTPUT_JSON" "recommendedActionCount")"
+    ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT="$(extract_first_number "$OUTPUT_JSON" "panelAttentionGroupCount")"
+    ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "calibrationHighRiskCount")"
   fi
 
   FINISHED_AT="$(iso_now)"

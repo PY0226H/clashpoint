@@ -1,7 +1,7 @@
 # AI_Judge_Service 企业级 Agent 方案章节完成度映射（2026-04-13）
 
 更新时间：2026-04-17  
-状态：已更新（对齐 P13 收口完成：baseline freeze + shadow eval ledger + policy release gate shadow link + stage closure 已完成）  
+状态：已更新（对齐 P15-M1~M4：policy calibration advisor + panel readiness + domain family bootstrap + ops pack v2 已完成）  
 映射对象：[AI_judge_service 企业级 Agent 服务设计方案（2026-04-13）](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md)
 
 ## 1. 判定口径
@@ -25,13 +25,13 @@
 | 8. 丰富判决内容 | 用户层/高级层/Ops 层三层展示 | 部分落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py) | 用户展示主字段已硬切并稳定；高级解释与 Ops read model 还需补齐 |
 | 9. 公平性保证机制 | 盲化、镜像、扰动、复核、benchmark | 部分落地（高） | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py), [ai_judge_fairness_benchmark_freeze.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_fairness_benchmark_freeze.sh) | 盲化 + panel gate + review/challenge + drift governance v1 + shadow-linked release gate 已落地；real-env pass 待完成 |
 | 10. 企业级工程架构 | Gateway/Orchestrator/Runtime/Ledger/Ops | 部分落地 | [core/workflow/orchestrator.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/core/workflow/orchestrator.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 模块化单体满足当前阶段目标，后续不阻塞业务情况下再评估拆分 |
-| 11. Agent Runtime 设计 | Prompt/Tool/Policy Registry + Model Gateway | 部分落地（高） | [policy_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/policy_registry.py), [runtime_policy.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_policy.py), [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md) | policy/prompt/tool 主链已具备，且发布治理已接入 shadow 门禁；下一步聚焦 next-iteration planning 与外部核验读模型 |
+| 11. Agent Runtime 设计 | Prompt/Tool/Policy Registry + Model Gateway | 部分落地（高） | [policy_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/policy_registry.py), [registry_product_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_product_runtime.py), [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md) | policy/prompt/tool 主链已具备；已新增 domain judge family 合法性校验与治理视图，下一步仍需真实环境窗口验证 |
 | 12. 企业级可靠性要求 | 可靠性/安全/观测/变更安全 | 部分落地（高） | [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py), [trace_store.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/trace_store.py), [scripts/harness/](/Users/panyihang/Documents/EchoIsle/scripts/harness) | 幂等、重放、告警、收口自动化已具备；真实环境稳定性结论仍待验证 |
-| 13. 对外接口模型 | cases/trace/replay/fairness/review/policies | 部分落地（高） | [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | cases/challenges/review/replay/fairness benchmark + shadow runs + fairness dashboard 已有主链；剩余缺口集中在真实环境验收与后续平台化 |
+| 13. 对外接口模型 | cases/trace/replay/fairness/review/policies | 部分落地（高） | [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 已新增 `policy-calibration-advisor`、`panels/runtime/readiness`、`registries/policy/domain-families` 与 `ops/read-model/pack v2` 聚合；剩余缺口集中在真实环境验收 |
 | 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地（文档+实现一致） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md) | 当前开发轨迹与继承策略一致 |
 | 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_attestation.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_attestation.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | attestation + verify + challenge phaseB 已落地；公开可验证承诺与协议层扩展未进入主线 |
 | 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 部分落地 | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | 已守住主要边界，后续继续防止 NPC/Room QA 侵入官方裁决链 |
-| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase2 在途） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [archive/20260415T011924Z-ai-judge-plan-reset-archive.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260415T011924Z-ai-judge-plan-reset-archive.md) | Phase1 主要目标已完成，当前在 Phase2 的 P13 收口段 |
+| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase3 主线进行中） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [archive/20260418T064409Z-ai-judge-current-plan-pre-p15.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260418T064409Z-ai-judge-current-plan-pre-p15.md) | Phase1/2 主链已收敛，当前进入 Phase3 的 P15 执行段 |
 | 18. 最后产品判断 | 企业级裁判系统目标态 | 部分落地（明确推进） | 同上 | 方向正确，工程主链已显著成型；距离“完整目标态”仍有运营化与平台化差距 |
 
 ## 3. Agent 子项映射（方案第6章）
@@ -49,15 +49,15 @@
 
 ## 4. 关键结论（当前真实状态）
 
-1. 当前阶段 `P13` 主体模块已完成并执行阶段收口，活动计划已归档重置，进入下一轮规划入口。
-2. 截至 2026-04-17：
-   - 已完成 `public verification endpoint v1`、`opinion-pack timeline v2`、`evidence-ledger reliability guard v2` 的基线冻结与回归验证。
-   - 已完成 `fairness-shadow-eval-ledger v1`：新增 `fairness_shadow_runs` 事实源与 `/internal/judge/fairness/shadow-runs` 写读接口。
-   - 已完成 `fairness cases` 读模型增强：`shadowSummary`、`has_shadow_breach` 过滤与聚合计数已接通。
-   - 已完成 `policy-release-gate-shadow-link`：`publish/activate` 的 fairness gate 在 benchmark 通过后会继续校验 latest shadow run，并支持 override 审计追踪。
-3. 当前主要阻塞项仍是 `real-env pass window`（环境窗口型阻塞）；非环境模块已继续向运营化读模型推进。
+1. 当前阶段已进入 `P15`，且 `M1~M4` 已完成，主链从“可用”推进到“可运营”。
+2. 截至 2026-04-17 已完成：
+   - `fairness policy calibration advisor`：新增 `/internal/judge/fairness/policy-calibration-advisor`，形成“建议可见、执行受控”闭环。
+   - `panel multi-model readiness`：新增 `/internal/judge/panels/runtime/readiness`，提供 readiness/simulation 运营视图（advisory-only）。
+   - `domain judge family bootstrap`：新增 `/internal/judge/registries/policy/domain-families`，并在 policy 发布链路加入 family 合法性校验。
+   - `ops read model pack v2`：`/internal/judge/ops/read-model/pack` 已聚合 fairness calibration + panel readiness + adaptive summary，并同步导出脚本回归。
+3. 当前主要阻塞项仍是 `real-env pass window`；本地侧 P15 主链已基本收敛。
 
 ## 5. 下一步优先级（收口后）
 
-1. 推进 `ai-judge-next-iteration-planning`，基于归档后的收口状态生成下一阶段完整开发计划。
-2. 维持 `ai-judge-p13-real-env-pass-window-execute-on-env` 的窗口冲刺准备，窗口到来后一次性推进 `pass`。
+1. 完成 `ai-judge-p15-enterprise-alignment-mapping-refresh` 与 `ai-judge-p15-stage-closure-execute` 文档收口。
+2. 维持 `ai-judge-p15-real-env-pass-window-execute-on-env` 的窗口冲刺准备，窗口到来后一次性推进 `pass`。

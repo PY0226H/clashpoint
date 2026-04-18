@@ -289,3 +289,20 @@
 | ai-judge-p13-fairness-shadow-eval-ledger-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-fairness-shadow-eval-ledger-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
 | ai-judge-p13-fairness-dashboard-export-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-fairness-dashboard-export-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
 | ai-judge-p13-policy-release-gate-shadow-link | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p13-policy-release-gate-shadow-link.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-17） | （待收口映射） |
+
+### B21. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| ai-judge-p14-baseline-freeze | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p14-baseline-freeze.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p14-registry-triple-governance-v2 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p14-registry-triple-governance-v2.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p14-adaptive-panel-runtime-bootstrap | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p14-adaptive-panel-runtime-bootstrap.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p14-ops-read-model-pack-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p14-ops-read-model-pack-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p14-fairness-calibration-pack-local | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p14-fairness-calibration-pack-local.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+
+### B22. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| ai-judge-p15-adaptive-policy-calibration-advisor-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-adaptive-policy-calibration-advisor-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p15-panel-multi-model-readiness-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-panel-multi-model-readiness-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p15-domain-judge-family-bootstrap-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-domain-judge-family-bootstrap-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p15-ops-read-model-pack-v2 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-ops-read-model-pack-v2.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |

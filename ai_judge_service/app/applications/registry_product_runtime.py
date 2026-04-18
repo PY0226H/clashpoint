@@ -42,6 +42,17 @@ REGISTRY_ACTION_ACTIVATE = "activate"
 REGISTRY_ACTION_ROLLBACK = "rollback"
 REGISTRY_ACTOR_SYSTEM = "system"
 REGISTRY_ACTOR_BOOTSTRAP = "system_bootstrap"
+POLICY_DOMAIN_JUDGE_FAMILY_VALUES = {
+    "general",
+    "tft",
+    "education",
+    "finance",
+    "healthcare",
+    "public_policy",
+    "technology",
+    "law",
+    "ethics",
+}
 
 
 def _utcnow() -> datetime:
@@ -59,6 +70,19 @@ def _normalize_version(value: str) -> str:
     token = str(value or "").strip()
     if not token:
         raise ValueError("invalid_registry_version")
+    return token
+
+
+def _normalize_policy_domain_judge_family_token(
+    value: Any,
+    *,
+    default_general: bool,
+) -> str | None:
+    token = str(value or "").strip().lower()
+    if token in {"*", "default"}:
+        return "general"
+    if not token:
+        return "general" if default_general else None
     return token
 
 
@@ -943,6 +967,30 @@ class RegistryProductRuntime:
             return None
         return str(row.version)
 
+    @staticmethod
+    def _enrich_policy_domain_judge_family(serialized: dict[str, Any]) -> None:
+        metadata = (
+            dict(serialized.get("metadata"))
+            if isinstance(serialized.get("metadata"), dict)
+            else {}
+        )
+        topic_domain = _normalize_policy_domain_judge_family_token(
+            serialized.get("topicDomain") or serialized.get("topic_domain"),
+            default_general=True,
+        ) or "general"
+        family = _normalize_policy_domain_judge_family_token(
+            metadata.get("domainJudgeFamily")
+            or metadata.get("domain_judge_family"),
+            default_general=False,
+        ) or topic_domain
+        if family not in POLICY_DOMAIN_JUDGE_FAMILY_VALUES:
+            raise ValueError("invalid_policy_domain_judge_family")
+        if topic_domain != "general" and family != topic_domain:
+            raise ValueError("policy_domain_family_topic_domain_mismatch")
+        metadata["domainJudgeFamily"] = family
+        metadata["domainJudgeFamilyValid"] = True
+        serialized["metadata"] = metadata
+
     def _normalize_profile_payload(
         self,
         *,
@@ -966,6 +1014,7 @@ class RegistryProductRuntime:
             if profile is None:
                 raise ValueError("invalid_policy_profile")
             serialized = PolicyRegistryRuntime.serialize_profile(profile)
+            self._enrich_policy_domain_judge_family(serialized)
         elif registry_type == REGISTRY_TYPE_PROMPT:
             runtime = build_prompt_registry_runtime(
                 settings=SimpleNamespace(

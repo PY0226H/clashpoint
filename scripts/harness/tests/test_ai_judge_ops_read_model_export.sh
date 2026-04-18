@@ -53,8 +53,19 @@ if [[ -n "$output_file" ]]; then
   "fairnessDashboard": {
     "overview": {"totalMatched": 15}
   },
+  "fairnessCalibrationAdvisor": {
+    "overview": {"highRiskCount": 4}
+  },
+  "panelRuntimeReadiness": {
+    "overview": {"attentionGroupCount": 2}
+  },
   "registryGovernance": {
     "dependencyHealth": {"invalidCount": 2}
+  },
+  "adaptiveSummary": {
+    "recommendedActionCount": 5,
+    "panelAttentionGroupCount": 2,
+    "calibrationHighRiskCount": 4
   },
   "trustOverview": {
     "count": 2,
@@ -92,6 +103,9 @@ expect_contains "ok env status" "AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=pass" "$O
 expect_contains "ok env fairness matched" "OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=15" "$OK_ENV_OUT"
 expect_contains "ok env invalid count" "OPS_READ_MODEL_REGISTRY_INVALID_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env trust item count" "OPS_READ_MODEL_TRUST_ITEM_COUNT=2" "$OK_ENV_OUT"
+expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=5" "$OK_ENV_OUT"
+expect_contains "ok env panel attention count" "OPS_READ_MODEL_ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT=2" "$OK_ENV_OUT"
+expect_contains "ok env calibration high risk" "OPS_READ_MODEL_ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT=4" "$OK_ENV_OUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 
 # 场景2：payload 缺少必填键 -> payload_invalid

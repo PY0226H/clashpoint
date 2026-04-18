@@ -317,6 +317,17 @@ PANEL_RUNTIME_PROFILE_SORT_FIELDS = {
     "strategy_slot",
     "domain_slot",
 }
+POLICY_DOMAIN_JUDGE_FAMILY_VALUES = {
+    "general",
+    "tft",
+    "education",
+    "finance",
+    "healthcare",
+    "public_policy",
+    "technology",
+    "law",
+    "ethics",
+}
 
 
 def _new_challenge_id(*, case_id: int) -> str:
@@ -353,8 +364,162 @@ def _serialize_workflow_job(item: WorkflowJob) -> dict[str, Any]:
     }
 
 
+def _normalize_policy_domain_judge_family_token(
+    value: Any,
+    *,
+    default_general: bool,
+) -> str | None:
+    token = str(value or "").strip().lower()
+    if token in {"*", "default"}:
+        return "general"
+    if not token:
+        return "general" if default_general else None
+    return token
+
+
+def _resolve_policy_domain_judge_family_state(
+    *,
+    topic_domain: Any,
+    metadata: dict[str, Any] | None,
+) -> tuple[str, bool, str | None]:
+    normalized_topic_domain = _normalize_policy_domain_judge_family_token(
+        topic_domain,
+        default_general=True,
+    )
+    effective_topic_domain = normalized_topic_domain or "general"
+    metadata_payload = metadata if isinstance(metadata, dict) else {}
+    configured_family = _normalize_policy_domain_judge_family_token(
+        metadata_payload.get("domainJudgeFamily")
+        or metadata_payload.get("domain_judge_family"),
+        default_general=False,
+    )
+    family = configured_family or effective_topic_domain
+    if family not in POLICY_DOMAIN_JUDGE_FAMILY_VALUES:
+        return family, False, "invalid_policy_domain_judge_family"
+    if effective_topic_domain != "general" and family != effective_topic_domain:
+        return family, False, "policy_domain_family_topic_domain_mismatch"
+    return family, True, None
+
+
+def _enforce_policy_domain_judge_family_profile_payload(
+    *,
+    profile_payload: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    payload = dict(profile_payload) if isinstance(profile_payload, dict) else {}
+    metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+    family, valid, error_code = _resolve_policy_domain_judge_family_state(
+        topic_domain=payload.get("topicDomain") or payload.get("topic_domain"),
+        metadata=metadata,
+    )
+    if not valid:
+        raise ValueError(error_code or "invalid_policy_domain_judge_family")
+    metadata["domainJudgeFamily"] = family
+    metadata["domainJudgeFamilyValid"] = True
+    payload["metadata"] = metadata
+    return payload, family
+
+
+def _build_policy_domain_judge_family_overview(
+    *,
+    policy_profiles: list[Any],
+    active_policy_version: str,
+    preview_limit: int,
+    include_versions: bool,
+) -> dict[str, Any]:
+    by_family: dict[str, dict[str, Any]] = {}
+    invalid_items: list[dict[str, Any]] = []
+    valid_count = 0
+    preview_cap = max(1, min(int(preview_limit), 200))
+    normalized_active_version = str(active_policy_version or "").strip()
+
+    for profile in policy_profiles:
+        version = str(getattr(profile, "version", "") or "").strip() or "unknown"
+        topic_domain = str(getattr(profile, "topic_domain", "") or "").strip() or "general"
+        metadata = (
+            dict(getattr(profile, "metadata"))
+            if isinstance(getattr(profile, "metadata", None), dict)
+            else {}
+        )
+        family, valid, error_code = _resolve_policy_domain_judge_family_state(
+            topic_domain=topic_domain,
+            metadata=metadata,
+        )
+        family_token = family or "unknown"
+        row = by_family.setdefault(
+            family_token,
+            {
+                "domainJudgeFamily": family_token,
+                "count": 0,
+                "activeCount": 0,
+                "validCount": 0,
+                "invalidCount": 0,
+                "topicDomains": set(),
+                "policyVersions": [],
+            },
+        )
+        row["count"] += 1
+        if version == normalized_active_version:
+            row["activeCount"] += 1
+        row["topicDomains"].add(topic_domain.strip().lower() or "general")
+        if include_versions and len(row["policyVersions"]) < preview_cap:
+            row["policyVersions"].append(version)
+        if valid:
+            row["validCount"] += 1
+            valid_count += 1
+        else:
+            row["invalidCount"] += 1
+            invalid_items.append(
+                {
+                    "policyVersion": version,
+                    "topicDomain": topic_domain,
+                    "domainJudgeFamily": family_token,
+                    "errorCode": error_code,
+                }
+            )
+
+    family_items = []
+    for row in by_family.values():
+        family_items.append(
+            {
+                "domainJudgeFamily": row["domainJudgeFamily"],
+                "count": int(row["count"]),
+                "activeCount": int(row["activeCount"]),
+                "validCount": int(row["validCount"]),
+                "invalidCount": int(row["invalidCount"]),
+                "topicDomains": sorted(str(item) for item in row["topicDomains"]),
+                "policyVersions": list(row["policyVersions"]) if include_versions else [],
+            }
+        )
+    family_items.sort(
+        key=lambda row: (
+            -int(row.get("count") or 0),
+            str(row.get("domainJudgeFamily") or ""),
+        )
+    )
+    return {
+        "count": len(policy_profiles),
+        "validCount": valid_count,
+        "invalidCount": max(0, len(policy_profiles) - valid_count),
+        "allowedFamilies": sorted(POLICY_DOMAIN_JUDGE_FAMILY_VALUES),
+        "items": family_items,
+        "invalidItems": invalid_items[:preview_cap],
+        "includeVersions": bool(include_versions),
+    }
+
+
 def _serialize_policy_profile(runtime: AppRuntime, *, profile: Any) -> dict[str, Any]:
-    return runtime.policy_registry_runtime.serialize_profile(profile)
+    payload = runtime.policy_registry_runtime.serialize_profile(profile)
+    metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+    family, valid, error_code = _resolve_policy_domain_judge_family_state(
+        topic_domain=payload.get("topicDomain") or payload.get("topic_domain"),
+        metadata=metadata,
+    )
+    metadata["domainJudgeFamily"] = family
+    metadata["domainJudgeFamilyValid"] = bool(valid)
+    if error_code:
+        metadata["domainJudgeFamilyError"] = error_code
+    payload["metadata"] = metadata
+    return payload
 
 
 def _serialize_prompt_profile(runtime: AppRuntime, *, profile: Any) -> dict[str, Any]:
@@ -1858,6 +2023,173 @@ def _build_fairness_calibration_on_env_input_template() -> dict[str, Any]:
     }
 
 
+def _build_fairness_policy_calibration_recommended_actions(
+    *,
+    release_gate: dict[str, Any],
+    policy_version: str | None,
+    risk_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    seen_action_ids: set[str] = set()
+
+    gate_code = str(release_gate.get("code") or "").strip()
+    gate_passed = bool(release_gate.get("passed"))
+    benchmark_gate_passed = bool(release_gate.get("benchmarkGatePassed"))
+    shadow_gate_applied = bool(release_gate.get("shadowGateApplied"))
+    shadow_gate_passed = release_gate.get("shadowGatePassed")
+    high_risk_count = sum(
+        1
+        for item in risk_items
+        if isinstance(item, dict)
+        and str(item.get("severity") or "").strip().lower() == "high"
+    )
+
+    def _append_action(
+        *,
+        action_id: str,
+        priority: str,
+        reason_code: str,
+        description: str,
+        blocking: bool,
+    ) -> None:
+        normalized_action_id = str(action_id or "").strip()
+        if not normalized_action_id or normalized_action_id in seen_action_ids:
+            return
+        seen_action_ids.add(normalized_action_id)
+        actions.append(
+            {
+                "actionId": normalized_action_id,
+                "priority": str(priority or "").strip().lower() or "medium",
+                "reasonCode": str(reason_code or "").strip() or None,
+                "description": str(description or "").strip(),
+                "blocking": bool(blocking),
+                "advisoryOnly": True,
+                "policyVersion": policy_version,
+            }
+        )
+
+    if not policy_version:
+        _append_action(
+            action_id="select_policy_version_context",
+            priority="high",
+            reason_code="no_policy_version_context",
+            description=(
+                "provide policy_version in query or upload benchmark/shadow runs "
+                "before using calibration advisor."
+            ),
+            blocking=True,
+        )
+        return actions
+
+    if gate_code == "registry_fairness_gate_no_benchmark":
+        _append_action(
+            action_id="run_benchmark_first",
+            priority="high",
+            reason_code=gate_code,
+            description=(
+                "no benchmark evidence found for this policy version; run a benchmark "
+                "window before publish/activate."
+            ),
+            blocking=True,
+        )
+    elif gate_code in {
+        "registry_fairness_gate_threshold_not_accepted",
+        "registry_fairness_gate_remediation_required",
+        "registry_fairness_gate_status_not_ready",
+    }:
+        _append_action(
+            action_id="rerun_benchmark_with_remediation",
+            priority="high",
+            reason_code=gate_code,
+            description=(
+                "latest benchmark does not meet release gate; patch policy/prompts/tools "
+                "and rerun benchmark."
+            ),
+            blocking=True,
+        )
+
+    if benchmark_gate_passed and not shadow_gate_applied:
+        _append_action(
+            action_id="run_shadow_evaluation",
+            priority="high",
+            reason_code="shadow_required_after_benchmark_pass",
+            description=(
+                "benchmark passed and shadow evidence is missing; run shadow evaluation "
+                "to check winner-flip and score-shift risks."
+            ),
+            blocking=True,
+        )
+
+    if shadow_gate_applied and shadow_gate_passed is False:
+        _append_action(
+            action_id="prepare_candidate_policy_patch",
+            priority="high",
+            reason_code=gate_code or "shadow_gate_blocked",
+            description=(
+                "shadow gate is blocked; prepare candidate policy patch and rerun "
+                "shadow with the same benchmark baseline."
+            ),
+            blocking=True,
+        )
+        _append_action(
+            action_id="manual_review_before_activation",
+            priority="high",
+            reason_code="activation_requires_manual_review",
+            description=(
+                "activation should stay blocked until shadow breaches are resolved "
+                "or a governance override is explicitly approved."
+            ),
+            blocking=True,
+        )
+
+    if gate_passed:
+        _append_action(
+            action_id="publish_candidate_policy",
+            priority="medium",
+            reason_code="registry_fairness_gate_passed",
+            description=(
+                "fairness gate is currently passing; candidate policy can be published "
+                "through registry governance flow."
+            ),
+            blocking=False,
+        )
+        _append_action(
+            action_id="activate_candidate_policy",
+            priority="low",
+            reason_code="registry_fairness_gate_passed",
+            description=(
+                "after publish and governance review, policy activation can proceed "
+                "without fairness override."
+            ),
+            blocking=False,
+        )
+
+    if high_risk_count > 0 and not gate_passed:
+        _append_action(
+            action_id="triage_high_risk_cases",
+            priority="medium",
+            reason_code="high_risk_cases_present",
+            description=(
+                f"{high_risk_count} high-severity risk items detected; review top cases "
+                "for targeted remediation before next calibration run."
+            ),
+            blocking=False,
+        )
+
+    if not actions:
+        _append_action(
+            action_id="monitor_next_calibration_window",
+            priority="low",
+            reason_code=gate_code or "gate_status_unknown",
+            description=(
+                "no immediate blocking suggestion detected; continue monitoring fairness "
+                "runs and keep calibration evidence fresh."
+            ),
+            blocking=False,
+        )
+    return actions
+
+
 def _normalize_panel_runtime_profile_source(value: str | None) -> str | None:
     if value is None:
         return None
@@ -2129,6 +2461,209 @@ def _build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> di
         "byProfileSource": dict(sorted(profile_source_counts.items(), key=lambda kv: kv[0])),
         "byPolicyVersion": dict(sorted(policy_version_counts.items(), key=lambda kv: kv[0])),
         "winnerCounts": winner_counts,
+    }
+
+
+def _build_panel_runtime_readiness_summary(
+    *,
+    items: list[dict[str, Any]],
+    group_limit: int,
+    attention_limit: int,
+) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in items:
+        strategy_slot = str(item.get("strategySlot") or "").strip() or "unknown"
+        domain_slot = str(item.get("domainSlot") or "").strip() or "unknown"
+        model_strategy = str(item.get("modelStrategy") or "").strip() or "unknown"
+        profile_id = str(item.get("profileId") or "").strip() or "unknown"
+        policy_version = str(item.get("policyVersion") or "").strip() or "unknown"
+        group_key = (
+            f"{strategy_slot}|{domain_slot}|{model_strategy}|{profile_id}|{policy_version}"
+        )
+
+        row = grouped.setdefault(
+            group_key,
+            {
+                "groupKey": group_key,
+                "strategySlot": strategy_slot,
+                "domainSlot": domain_slot,
+                "modelStrategy": model_strategy,
+                "profileId": profile_id,
+                "policyVersion": policy_version,
+                "recordCount": 0,
+                "caseIds": set(),
+                "judgeIds": set(),
+                "profileSources": set(),
+                "candidateModels": set(),
+                "adaptiveEnabledCount": 0,
+                "reviewRequiredCount": 0,
+                "openReviewCount": 0,
+                "panelHighDisagreementCount": 0,
+                "panelDisagreementRatioSum": 0.0,
+            },
+        )
+        row["recordCount"] += 1
+        case_id = int(item.get("caseId") or 0)
+        if case_id > 0:
+            row["caseIds"].add(case_id)
+        judge_id = str(item.get("judgeId") or "").strip()
+        if judge_id:
+            row["judgeIds"].add(judge_id)
+        source = str(item.get("profileSource") or "").strip().lower()
+        if source:
+            row["profileSources"].add(source)
+        if bool(item.get("adaptiveEnabled")):
+            row["adaptiveEnabledCount"] += 1
+        if bool(item.get("reviewRequired")):
+            row["reviewRequiredCount"] += 1
+        if bool(item.get("hasOpenReview")):
+            row["openReviewCount"] += 1
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        if bool(panel.get("high")):
+            row["panelHighDisagreementCount"] += 1
+        row["panelDisagreementRatioSum"] += _safe_float(panel.get("ratio"), default=0.0)
+        for candidate_model in item.get("candidateModels") or []:
+            candidate_model_token = str(candidate_model).strip()
+            if candidate_model_token:
+                row["candidateModels"].add(candidate_model_token)
+
+    group_rows: list[dict[str, Any]] = []
+    for row in grouped.values():
+        record_count = int(row["recordCount"])
+        panel_high_count = int(row["panelHighDisagreementCount"])
+        review_required_count = int(row["reviewRequiredCount"])
+        open_review_count = int(row["openReviewCount"])
+        candidate_models = sorted(str(item) for item in row["candidateModels"])
+        panel_high_rate = panel_high_count / record_count if record_count > 0 else 0.0
+        review_required_rate = (
+            review_required_count / record_count if record_count > 0 else 0.0
+        )
+        open_review_rate = open_review_count / record_count if record_count > 0 else 0.0
+        avg_disagreement_ratio = (
+            float(row["panelDisagreementRatioSum"]) / record_count
+            if record_count > 0
+            else 0.0
+        )
+        adaptive_enabled_rate = (
+            int(row["adaptiveEnabledCount"]) / record_count if record_count > 0 else 0.0
+        )
+        readiness_score = max(
+            0.0,
+            min(
+                100.0,
+                100.0
+                - panel_high_rate * 60.0
+                - review_required_rate * 30.0
+                - open_review_rate * 10.0,
+            ),
+        )
+
+        if readiness_score < 60.0:
+            readiness_level = "attention"
+        elif readiness_score < 80.0:
+            readiness_level = "watch"
+        else:
+            readiness_level = "ready"
+
+        switch_conditions: list[str] = []
+        if panel_high_rate >= 0.2:
+            switch_conditions.append("panel_disagreement_ratio_high")
+        if review_required_rate >= 0.2:
+            switch_conditions.append("review_required_rate_high")
+        if open_review_rate >= 0.1:
+            switch_conditions.append("open_review_backlog")
+        if not candidate_models:
+            switch_conditions.append("candidate_models_missing")
+        if not switch_conditions:
+            switch_conditions.append("stable_runtime")
+
+        simulations: list[dict[str, Any]] = []
+        if len(candidate_models) >= 2 and readiness_level != "ready":
+            simulations.append(
+                {
+                    "scenarioId": "switch_to_secondary_candidate",
+                    "trigger": switch_conditions[0],
+                    "candidateModel": candidate_models[1],
+                    "expectedImpact": "reduce disagreement and review pressure",
+                    "advisoryOnly": True,
+                }
+            )
+        else:
+            simulations.append(
+                {
+                    "scenarioId": "keep_current_strategy",
+                    "trigger": switch_conditions[0],
+                    "candidateModel": candidate_models[0] if candidate_models else None,
+                    "expectedImpact": "maintain current runtime strategy and monitor drift",
+                    "advisoryOnly": True,
+                }
+            )
+
+        group_rows.append(
+            {
+                "groupKey": row["groupKey"],
+                "strategySlot": row["strategySlot"],
+                "domainSlot": row["domainSlot"],
+                "modelStrategy": row["modelStrategy"],
+                "profileId": row["profileId"],
+                "policyVersion": row["policyVersion"],
+                "recordCount": record_count,
+                "caseCount": len(row["caseIds"]),
+                "judgeIds": sorted(str(item) for item in row["judgeIds"]),
+                "profileSources": sorted(str(item) for item in row["profileSources"]),
+                "candidateModels": candidate_models,
+                "candidateModelCount": len(candidate_models),
+                "adaptiveEnabledRate": round(adaptive_enabled_rate, 4),
+                "panelHighDisagreementCount": panel_high_count,
+                "panelHighDisagreementRate": round(panel_high_rate, 4),
+                "reviewRequiredCount": review_required_count,
+                "reviewRequiredRate": round(review_required_rate, 4),
+                "openReviewCount": open_review_count,
+                "openReviewRate": round(open_review_rate, 4),
+                "avgPanelDisagreementRatio": round(avg_disagreement_ratio, 4),
+                "readinessScore": round(readiness_score, 2),
+                "readinessLevel": readiness_level,
+                "recommendedSwitchConditions": switch_conditions,
+                "simulations": simulations,
+            }
+        )
+
+    group_rows.sort(
+        key=lambda row: (
+            float(row.get("readinessScore") or 0.0),
+            float(row.get("panelHighDisagreementRate") or 0.0),
+            float(row.get("reviewRequiredRate") or 0.0),
+            str(row.get("groupKey") or ""),
+        ),
+    )
+    limited_group_rows = group_rows[: max(1, min(int(group_limit), 200))]
+    attention_rows = [
+        row for row in limited_group_rows if str(row.get("readinessLevel")) != "ready"
+    ][: max(1, min(int(attention_limit), 100))]
+
+    readiness_counts = {
+        "ready": 0,
+        "watch": 0,
+        "attention": 0,
+    }
+    for row in limited_group_rows:
+        level = str(row.get("readinessLevel") or "").strip().lower()
+        if level in readiness_counts:
+            readiness_counts[level] += 1
+
+    return {
+        "groups": limited_group_rows,
+        "attentionGroups": attention_rows,
+        "overview": {
+            "totalRecords": len(items),
+            "totalGroups": len(limited_group_rows),
+            "readinessCounts": readiness_counts,
+            "attentionGroupCount": len(attention_rows),
+        },
     }
 
 
@@ -4727,7 +5262,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
         except ValueError as err:
             code = str(err)
-            if code in {"invalid_policy_profile", "invalid_registry_version"}:
+            if code in {
+                "invalid_policy_profile",
+                "invalid_registry_version",
+                "invalid_policy_domain_judge_family",
+                "policy_domain_family_topic_domain_mismatch",
+            }:
                 raise HTTPException(status_code=422, detail=code) from err
             raise HTTPException(
                 status_code=422,
@@ -5560,6 +6100,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 tool_refs_by_policy.setdefault(tool_version, []).append(policy_version)
 
         preview_cap = max(1, min(int(usage_preview_limit), 200))
+        domain_family_overview = _build_policy_domain_judge_family_overview(
+            policy_profiles=policy_profiles,
+            active_policy_version=runtime.policy_registry_runtime.default_version,
+            preview_limit=preview_cap,
+            include_versions=True,
+        )
         prompt_usage_rows: list[dict[str, Any]] = []
         for profile in prompt_profiles:
             version_token = str(getattr(profile, "version", "") or "").strip()
@@ -5745,6 +6291,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "missingPromptRegistryRefs": missing_prompt_refs,
                 "missingToolRegistryRefs": missing_tool_refs,
             },
+            "domainJudgeFamilies": domain_family_overview,
             "releaseState": release_state,
             "auditSummary": {
                 "countsByRegistryType": dict(
@@ -5762,6 +6309,29 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "usagePreviewLimit": preview_cap,
                 "releaseLimit": max(1, min(int(release_limit), 200)),
                 "auditLimit": max(1, min(int(audit_limit), 200)),
+            },
+        }
+
+    @app.get("/internal/judge/registries/policy/domain-families")
+    async def list_policy_domain_judge_families(
+        x_ai_internal_key: str | None = Header(default=None),
+        preview_limit: int = Query(default=20, ge=1, le=200),
+        include_versions: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        overview = _build_policy_domain_judge_family_overview(
+            policy_profiles=runtime.policy_registry_runtime.list_profiles(),
+            active_policy_version=runtime.policy_registry_runtime.default_version,
+            preview_limit=preview_limit,
+            include_versions=include_versions,
+        )
+        return {
+            "activePolicyVersion": runtime.policy_registry_runtime.default_version,
+            "domainJudgeFamilies": overview,
+            "filters": {
+                "previewLimit": max(1, min(int(preview_limit), 200)),
+                "includeVersions": bool(include_versions),
             },
         }
 
@@ -5800,7 +6370,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dependency_alert: dict[str, Any] | None = None
         dependency_alert_resolved: list[dict[str, Any]] = []
         dependency_health: dict[str, Any] | None = None
+        policy_domain_judge_family: str | None = None
         if registry_type_token == REGISTRY_TYPE_POLICY:
+            try:
+                profile_payload, policy_domain_judge_family = (
+                    _enforce_policy_domain_judge_family_profile_payload(
+                        profile_payload=profile_payload,
+                    )
+                )
+            except ValueError as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
             dependency_health = await _evaluate_policy_registry_dependency_health(
                 policy_version=version,
                 profile_payload=profile_payload,
@@ -5897,6 +6476,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "invalid_registry_type",
                 "invalid_registry_version",
                 "invalid_policy_profile",
+                "invalid_policy_domain_judge_family",
+                "policy_domain_family_topic_domain_mismatch",
                 "invalid_prompt_profile",
                 "invalid_tool_profile",
             }:
@@ -5905,6 +6486,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         return {
             "ok": True,
             "item": item,
+            "policyDomainJudgeFamily": policy_domain_judge_family,
             "dependencyHealth": dependency_health,
             "dependencyAlert": dependency_alert,
             "resolvedDependencyAlerts": dependency_alert_resolved,
@@ -10037,6 +10619,195 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         }
 
+    @app.get("/internal/judge/fairness/policy-calibration-advisor")
+    async def get_judge_fairness_policy_calibration_advisor(
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str | None = Query(default="final"),
+        status: str | None = Query(default=None),
+        winner: str | None = Query(default=None),
+        policy_version: str | None = Query(default=None),
+        challenge_state: str | None = Query(default=None),
+        case_scan_limit: int = Query(default=200, ge=20, le=1000),
+        risk_limit: int = Query(default=50, ge=1, le=200),
+        benchmark_limit: int = Query(default=200, ge=1, le=500),
+        shadow_limit: int = Query(default=200, ge=1, le=500),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_policy_version = str(policy_version or "").strip() or None
+        normalized_benchmark_limit = max(1, min(int(benchmark_limit), 500))
+        normalized_shadow_limit = max(1, min(int(shadow_limit), 500))
+        normalized_risk_limit = max(1, min(int(risk_limit), 200))
+
+        collected_items: list[dict[str, Any]] = []
+        offset = 0
+        total_count: int | None = None
+        while len(collected_items) < case_scan_limit:
+            batch_limit = min(200, case_scan_limit - len(collected_items))
+            page = await list_judge_case_fairness(
+                x_ai_internal_key=x_ai_internal_key,
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                policy_version=normalized_policy_version,
+                has_drift_breach=None,
+                has_threshold_breach=None,
+                has_shadow_breach=None,
+                has_open_review=None,
+                gate_conclusion=None,
+                challenge_state=challenge_state,
+                sort_by="updated_at",
+                sort_order="desc",
+                review_required=None,
+                panel_high_disagreement=None,
+                offset=offset,
+                limit=batch_limit,
+            )
+            if total_count is None:
+                total_count = int(page.get("count") or 0)
+            page_items = page.get("items") if isinstance(page.get("items"), list) else []
+            if not page_items:
+                break
+            collected_items.extend(page_items)
+            if len(page_items) < batch_limit:
+                break
+            offset += batch_limit
+
+        benchmark_runs = await _list_fairness_benchmark_runs(
+            policy_version=normalized_policy_version,
+            limit=normalized_benchmark_limit,
+        )
+        shadow_runs = await _list_fairness_shadow_runs(
+            policy_version=normalized_policy_version,
+            limit=normalized_shadow_limit,
+        )
+        sorted_benchmark_runs = sorted(
+            benchmark_runs,
+            key=lambda row: (
+                row.reported_at.isoformat() if row.reported_at is not None else ""
+            ),
+            reverse=True,
+        )
+        sorted_shadow_runs = sorted(
+            shadow_runs,
+            key=lambda row: (
+                row.reported_at.isoformat() if row.reported_at is not None else ""
+            ),
+            reverse=True,
+        )
+        latest_benchmark_run = (
+            sorted_benchmark_runs[0] if sorted_benchmark_runs else None
+        )
+        latest_shadow_run = sorted_shadow_runs[0] if sorted_shadow_runs else None
+        inferred_policy_version = (
+            normalized_policy_version
+            or (
+                latest_benchmark_run.policy_version
+                if latest_benchmark_run is not None
+                else None
+            )
+            or (
+                latest_shadow_run.policy_version
+                if latest_shadow_run is not None
+                else None
+            )
+        )
+
+        top_risk_cases = _build_fairness_dashboard_top_risk_cases(
+            items=collected_items,
+            top_limit=normalized_risk_limit,
+        )
+        threshold_suggestions = _build_fairness_calibration_threshold_suggestions(
+            benchmark_runs=sorted_benchmark_runs,
+            shadow_runs=sorted_shadow_runs,
+        )
+        drift_summary = _build_fairness_calibration_drift_summary(
+            latest_benchmark_run=latest_benchmark_run,
+            latest_shadow_run=latest_shadow_run,
+        )
+        risk_items = _build_fairness_calibration_risk_items(
+            benchmark_runs=sorted_benchmark_runs,
+            shadow_runs=sorted_shadow_runs,
+            top_risk_cases=top_risk_cases,
+            risk_limit=normalized_risk_limit,
+        )
+        release_gate = (
+            await _evaluate_policy_release_fairness_gate(
+                policy_version=inferred_policy_version,
+            )
+            if inferred_policy_version is not None
+            else {
+                "passed": False,
+                "code": "registry_fairness_gate_no_policy_context",
+                "message": "no policy context for fairness gate evaluation",
+                "source": "benchmark",
+                "benchmarkGatePassed": False,
+                "shadowGateApplied": False,
+                "shadowGatePassed": None,
+                "thresholdDecision": None,
+                "needsRemediation": None,
+                "latestRun": None,
+                "latestShadowRun": None,
+            }
+        )
+        recommended_actions = _build_fairness_policy_calibration_recommended_actions(
+            release_gate=release_gate,
+            policy_version=inferred_policy_version,
+            risk_items=risk_items,
+        )
+
+        high_risk_count = sum(
+            1
+            for item in risk_items
+            if isinstance(item, dict)
+            and str(item.get("severity") or "").strip().lower() == "high"
+        )
+        total_matched = int(total_count or 0)
+        scanned_cases = len(collected_items)
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "overview": {
+                "policyVersion": inferred_policy_version,
+                "dispatchType": str(dispatch_type or "").strip().lower() or None,
+                "totalMatched": total_matched,
+                "scannedCases": scanned_cases,
+                "scanTruncated": scanned_cases < total_matched,
+                "benchmarkRunCount": len(sorted_benchmark_runs),
+                "shadowRunCount": len(sorted_shadow_runs),
+                "latestBenchmarkRunId": (
+                    latest_benchmark_run.run_id if latest_benchmark_run is not None else None
+                ),
+                "latestShadowRunId": (
+                    latest_shadow_run.run_id if latest_shadow_run is not None else None
+                ),
+                "highRiskCount": high_risk_count,
+                "releaseGatePassed": bool(release_gate.get("passed")),
+                "releaseGateCode": str(release_gate.get("code") or "").strip() or None,
+            },
+            "thresholdSuggestions": threshold_suggestions,
+            "driftSummary": drift_summary,
+            "releaseGate": release_gate,
+            "recommendedActions": recommended_actions,
+            "riskItems": risk_items,
+            "filters": {
+                "dispatchType": str(dispatch_type or "").strip().lower() or None,
+                "status": str(status or "").strip() or None,
+                "winner": str(winner or "").strip().lower() or None,
+                "policyVersion": normalized_policy_version,
+                "effectivePolicyVersion": inferred_policy_version,
+                "challengeState": str(challenge_state or "").strip() or None,
+                "caseScanLimit": int(case_scan_limit),
+                "riskLimit": normalized_risk_limit,
+                "benchmarkLimit": normalized_benchmark_limit,
+                "shadowLimit": normalized_shadow_limit,
+            },
+            "notes": [
+                (
+                    "recommendedActions are advisory only and do not auto-publish "
+                    "or auto-activate policy versions."
+                ),
+            ],
+        }
+
     @app.get("/internal/judge/ops/read-model/pack")
     async def get_judge_ops_read_model_pack(
         x_ai_internal_key: str | None = Header(default=None),
@@ -10051,6 +10822,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         usage_preview_limit: int = Query(default=20, ge=1, le=200),
         release_limit: int = Query(default=50, ge=1, le=200),
         audit_limit: int = Query(default=100, ge=1, le=200),
+        calibration_risk_limit: int = Query(default=50, ge=1, le=200),
+        calibration_benchmark_limit: int = Query(default=200, ge=1, le=500),
+        calibration_shadow_limit: int = Query(default=200, ge=1, le=500),
+        panel_profile_scan_limit: int = Query(default=600, ge=50, le=5000),
+        panel_group_limit: int = Query(default=50, ge=1, le=200),
+        panel_attention_limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         fairness_dashboard = await get_judge_fairness_dashboard(
@@ -10070,6 +10847,39 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             usage_preview_limit=usage_preview_limit,
             release_limit=release_limit,
             audit_limit=audit_limit,
+        )
+        fairness_calibration_advisor = await get_judge_fairness_policy_calibration_advisor(
+            x_ai_internal_key=x_ai_internal_key,
+            dispatch_type=dispatch_type,
+            status=None,
+            winner=None,
+            policy_version=policy_version,
+            challenge_state=None,
+            case_scan_limit=case_scan_limit,
+            risk_limit=calibration_risk_limit,
+            benchmark_limit=calibration_benchmark_limit,
+            shadow_limit=calibration_shadow_limit,
+        )
+        panel_runtime_readiness = await get_panel_runtime_readiness(
+            x_ai_internal_key=x_ai_internal_key,
+            status=None,
+            dispatch_type=dispatch_type,
+            winner=None,
+            policy_version=policy_version,
+            has_open_review=None,
+            gate_conclusion=None,
+            challenge_state=None,
+            review_required=None,
+            panel_high_disagreement=None,
+            judge_id=None,
+            profile_source=None,
+            profile_id=None,
+            model_strategy=None,
+            strategy_slot=None,
+            domain_slot=None,
+            profile_scan_limit=panel_profile_scan_limit,
+            group_limit=panel_group_limit,
+            attention_limit=panel_attention_limit,
         )
 
         trust_items: list[dict[str, Any]] = []
@@ -10159,10 +10969,48 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if challenge_state in TRUST_CHALLENGE_OPEN_STATES:
                 open_challenge_count += 1
 
+        advisor_overview = (
+            fairness_calibration_advisor.get("overview")
+            if isinstance(fairness_calibration_advisor.get("overview"), dict)
+            else {}
+        )
+        release_gate = (
+            fairness_calibration_advisor.get("releaseGate")
+            if isinstance(fairness_calibration_advisor.get("releaseGate"), dict)
+            else {}
+        )
+        recommended_actions = (
+            fairness_calibration_advisor.get("recommendedActions")
+            if isinstance(fairness_calibration_advisor.get("recommendedActions"), list)
+            else []
+        )
+        readiness_overview = (
+            panel_runtime_readiness.get("overview")
+            if isinstance(panel_runtime_readiness.get("overview"), dict)
+            else {}
+        )
+        readiness_counts = (
+            readiness_overview.get("readinessCounts")
+            if isinstance(readiness_overview.get("readinessCounts"), dict)
+            else {}
+        )
+
         return {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "fairnessDashboard": fairness_dashboard,
+            "fairnessCalibrationAdvisor": fairness_calibration_advisor,
+            "panelRuntimeReadiness": panel_runtime_readiness,
             "registryGovernance": governance_overview,
+            "adaptiveSummary": {
+                "calibrationGatePassed": bool(release_gate.get("passed")),
+                "calibrationGateCode": str(release_gate.get("code") or "").strip() or None,
+                "calibrationHighRiskCount": int(advisor_overview.get("highRiskCount") or 0),
+                "recommendedActionCount": len(recommended_actions),
+                "panelReadyGroupCount": int(readiness_counts.get("ready") or 0),
+                "panelWatchGroupCount": int(readiness_counts.get("watch") or 0),
+                "panelAttentionGroupCount": int(readiness_counts.get("attention") or 0),
+                "panelScannedRecordCount": int(readiness_overview.get("scannedRecords") or 0),
+            },
             "trustOverview": {
                 "included": bool(include_case_trust),
                 "requestedCaseLimit": int(trust_case_limit),
@@ -10187,6 +11035,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "usagePreviewLimit": max(1, min(int(usage_preview_limit), 200)),
                 "releaseLimit": max(1, min(int(release_limit), 200)),
                 "auditLimit": max(1, min(int(audit_limit), 200)),
+                "calibrationRiskLimit": max(1, min(int(calibration_risk_limit), 200)),
+                "calibrationBenchmarkLimit": max(1, min(int(calibration_benchmark_limit), 500)),
+                "calibrationShadowLimit": max(1, min(int(calibration_shadow_limit), 500)),
+                "panelProfileScanLimit": max(50, min(int(panel_profile_scan_limit), 5000)),
+                "panelGroupLimit": max(1, min(int(panel_group_limit), 200)),
+                "panelAttentionLimit": max(1, min(int(panel_attention_limit), 100)),
             },
         }
 
@@ -10356,6 +11210,130 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "sortOrder": normalized_sort_order,
                 "offset": offset,
                 "limit": limit,
+            },
+        }
+
+    @app.get("/internal/judge/panels/runtime/readiness")
+    async def get_panel_runtime_readiness(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str | None = Query(default="final"),
+        winner: str | None = Query(default=None),
+        policy_version: str | None = Query(default=None),
+        has_open_review: bool | None = Query(default=None),
+        gate_conclusion: str | None = Query(default=None),
+        challenge_state: str | None = Query(default=None),
+        review_required: bool | None = Query(default=None),
+        panel_high_disagreement: bool | None = Query(default=None),
+        judge_id: str | None = Query(default=None),
+        profile_source: str | None = Query(default=None),
+        profile_id: str | None = Query(default=None),
+        model_strategy: str | None = Query(default=None),
+        strategy_slot: str | None = Query(default=None),
+        domain_slot: str | None = Query(default=None),
+        profile_scan_limit: int = Query(default=600, ge=50, le=5000),
+        group_limit: int = Query(default=50, ge=1, le=200),
+        attention_limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_scan_limit = max(50, min(int(profile_scan_limit), 5000))
+        normalized_group_limit = max(1, min(int(group_limit), 200))
+        normalized_attention_limit = max(1, min(int(attention_limit), 100))
+
+        collected_items: list[dict[str, Any]] = []
+        offset = 0
+        total_count: int | None = None
+        while len(collected_items) < normalized_scan_limit:
+            batch_limit = min(200, normalized_scan_limit - len(collected_items))
+            page = await list_panel_runtime_profiles(
+                x_ai_internal_key=x_ai_internal_key,
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                policy_version=policy_version,
+                has_open_review=has_open_review,
+                gate_conclusion=gate_conclusion,
+                challenge_state=challenge_state,
+                review_required=review_required,
+                panel_high_disagreement=panel_high_disagreement,
+                judge_id=judge_id,
+                profile_source=profile_source,
+                profile_id=profile_id,
+                model_strategy=model_strategy,
+                strategy_slot=strategy_slot,
+                domain_slot=domain_slot,
+                sort_by="updated_at",
+                sort_order="desc",
+                offset=offset,
+                limit=batch_limit,
+            )
+            if total_count is None:
+                total_count = int(page.get("count") or 0)
+            page_items = page.get("items") if isinstance(page.get("items"), list) else []
+            if not page_items:
+                break
+            collected_items.extend(page_items)
+            if len(page_items) < batch_limit:
+                break
+            offset += batch_limit
+
+        readiness = _build_panel_runtime_readiness_summary(
+            items=collected_items,
+            group_limit=normalized_group_limit,
+            attention_limit=normalized_attention_limit,
+        )
+        overview = readiness.get("overview") if isinstance(readiness.get("overview"), dict) else {}
+        total_matched = int(total_count or 0)
+        scanned_records = len(collected_items)
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "overview": {
+                "totalMatched": total_matched,
+                "scannedRecords": scanned_records,
+                "scanTruncated": scanned_records < total_matched,
+                "totalGroups": int(overview.get("totalGroups") or 0),
+                "attentionGroupCount": int(overview.get("attentionGroupCount") or 0),
+                "readinessCounts": (
+                    overview.get("readinessCounts")
+                    if isinstance(overview.get("readinessCounts"), dict)
+                    else {"ready": 0, "watch": 0, "attention": 0}
+                ),
+            },
+            "groups": (
+                readiness.get("groups")
+                if isinstance(readiness.get("groups"), list)
+                else []
+            ),
+            "attentionGroups": (
+                readiness.get("attentionGroups")
+                if isinstance(readiness.get("attentionGroups"), list)
+                else []
+            ),
+            "notes": [
+                (
+                    "simulations are advisory-only readiness suggestions and never "
+                    "change official winner semantics or auto-switch active policy."
+                ),
+            ],
+            "filters": {
+                "status": _normalize_workflow_status(status),
+                "dispatchType": str(dispatch_type or "").strip().lower() or None,
+                "winner": str(winner or "").strip().lower() or None,
+                "policyVersion": str(policy_version or "").strip() or None,
+                "hasOpenReview": has_open_review,
+                "gateConclusion": _normalize_case_fairness_gate_conclusion(gate_conclusion),
+                "challengeState": _normalize_case_fairness_challenge_state(challenge_state),
+                "reviewRequired": review_required,
+                "panelHighDisagreement": panel_high_disagreement,
+                "judgeId": str(judge_id or "").strip() or None,
+                "profileSource": _normalize_panel_runtime_profile_source(profile_source),
+                "profileId": str(profile_id or "").strip() or None,
+                "modelStrategy": str(model_strategy or "").strip() or None,
+                "strategySlot": str(strategy_slot or "").strip() or None,
+                "domainSlot": str(domain_slot or "").strip() or None,
+                "profileScanLimit": normalized_scan_limit,
+                "groupLimit": normalized_group_limit,
+                "attentionLimit": normalized_attention_limit,
             },
         }
 

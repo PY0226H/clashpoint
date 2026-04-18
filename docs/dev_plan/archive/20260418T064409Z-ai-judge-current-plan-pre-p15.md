@@ -10,7 +10,7 @@
 ## 1. 计划定位
 
 1. 本文档已由阶段收口流程重置，用于承接下一轮活动计划。
-2. 本轮完整执行细节已归档到：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260418T071215Z-ai-judge-stage-closure-execute.md`。
+2. 本轮完整执行细节已归档到：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260418T063435Z-ai-judge-stage-closure-execute.md`。
 3. 长期沉淀已同步到：`docs/dev_plan/completed.md` 与 `docs/dev_plan/todo.md`。
 
 ---
