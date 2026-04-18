@@ -240,6 +240,11 @@ REGISTRY_DEPENDENCY_TREND_STATUS_VALUES = {
     "acked",
     "resolved",
 }
+REGISTRY_PROMPT_TOOL_RISK_SEVERITY_RANK = {
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+}
 FAIRNESS_RELEASE_GATE_ACCEPTED_STATUSES = {
     "pass",
     "local_reference_frozen",
@@ -3848,6 +3853,284 @@ def _build_registry_dependency_trend(
     }
 
 
+def _registry_prompt_tool_risk_severity_rank(value: str | None) -> int:
+    normalized = str(value or "").strip().lower()
+    return REGISTRY_PROMPT_TOOL_RISK_SEVERITY_RANK.get(normalized, 0)
+
+
+def _build_registry_prompt_tool_usage_rows(
+    *,
+    usage_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    enriched_rows: list[dict[str, Any]] = []
+    unreferenced_count = 0
+    for row in usage_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ref_count = max(0, int(row.get("referencedByPolicyCount") or 0))
+        except (TypeError, ValueError):
+            ref_count = 0
+        is_active = bool(row.get("isActive"))
+        risk_tags: list[str] = []
+        if ref_count <= 0:
+            unreferenced_count += 1
+            risk_tags.append("unreferenced")
+        if is_active and ref_count <= 0:
+            risk_tags.append("active_unreferenced")
+        if ref_count <= 0 and is_active:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+        enriched = dict(row)
+        enriched["riskLevel"] = risk_level
+        enriched["riskTags"] = risk_tags
+        enriched_rows.append(enriched)
+    return enriched_rows, unreferenced_count
+
+
+def _build_registry_prompt_tool_risk_items(
+    *,
+    dependency_items: list[dict[str, Any]],
+    prompt_usage_rows: list[dict[str, Any]],
+    tool_usage_rows: list[dict[str, Any]],
+    missing_prompt_refs: list[str],
+    missing_tool_refs: list[str],
+    release_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    risk_items: list[dict[str, Any]] = []
+
+    for item in dependency_items:
+        if not isinstance(item, dict):
+            continue
+        if bool(item.get("ok")):
+            continue
+        policy_version = str(item.get("policyVersion") or "").strip() or None
+        issue_codes = sorted(
+            {
+                str(code).strip()
+                for code in (item.get("issueCodes") or [])
+                if str(code).strip()
+            }
+        )
+        detail_path = "/internal/judge/registries/policy/dependencies/health"
+        if policy_version:
+            detail_path = f"{detail_path}?policy_version={policy_version}"
+        risk_items.append(
+            {
+                "riskType": "dependency_invalid",
+                "severity": "high",
+                "policyVersion": policy_version,
+                "promptRegistryVersion": (
+                    str(item.get("promptRegistryVersion") or "").strip() or None
+                ),
+                "toolRegistryVersion": (
+                    str(item.get("toolRegistryVersion") or "").strip() or None
+                ),
+                "issueCodes": issue_codes,
+                "reason": "policy release dependencies are invalid.",
+                "detailPath": detail_path,
+                "actionHint": "registry.policy.dependencies.fix",
+            }
+        )
+
+    for version in sorted({str(row).strip() for row in missing_prompt_refs if str(row).strip()}):
+        risk_items.append(
+            {
+                "riskType": "prompt_registry_ref_missing",
+                "severity": "high",
+                "promptRegistryVersion": version,
+                "reason": "policy references a missing prompt registry version.",
+                "detailPath": "/internal/judge/registries/prompts",
+                "actionHint": "registry.prompt.curate",
+            }
+        )
+    for version in sorted({str(row).strip() for row in missing_tool_refs if str(row).strip()}):
+        risk_items.append(
+            {
+                "riskType": "tool_registry_ref_missing",
+                "severity": "high",
+                "toolRegistryVersion": version,
+                "reason": "policy references a missing tool registry version.",
+                "detailPath": "/internal/judge/registries/tools",
+                "actionHint": "registry.tool.curate",
+            }
+        )
+
+    for row in prompt_usage_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ref_count = max(0, int(row.get("referencedByPolicyCount") or 0))
+        except (TypeError, ValueError):
+            ref_count = 0
+        if ref_count > 0:
+            continue
+        version = str(row.get("version") or "").strip() or None
+        is_active = bool(row.get("isActive"))
+        risk_items.append(
+            {
+                "riskType": "prompt_unreferenced",
+                "severity": "medium" if is_active else "low",
+                "promptRegistryVersion": version,
+                "isActive": is_active,
+                "reason": "prompt registry version is not referenced by any policy.",
+                "detailPath": "/internal/judge/registries/prompts",
+                "actionHint": "registry.prompt.curate",
+            }
+        )
+
+    for row in tool_usage_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ref_count = max(0, int(row.get("referencedByPolicyCount") or 0))
+        except (TypeError, ValueError):
+            ref_count = 0
+        if ref_count > 0:
+            continue
+        version = str(row.get("version") or "").strip() or None
+        is_active = bool(row.get("isActive"))
+        risk_items.append(
+            {
+                "riskType": "tool_unreferenced",
+                "severity": "medium" if is_active else "low",
+                "toolRegistryVersion": version,
+                "isActive": is_active,
+                "reason": "tool registry version is not referenced by any policy.",
+                "detailPath": "/internal/judge/registries/tools",
+                "actionHint": "registry.tool.curate",
+            }
+        )
+
+    for registry_type in ("prompt", "tool"):
+        state = (
+            release_state.get(registry_type)
+            if isinstance(release_state.get(registry_type), dict)
+            else {}
+        )
+        try:
+            release_count = max(0, int(state.get("count") or 0))
+        except (TypeError, ValueError):
+            release_count = 0
+        if release_count > 0:
+            continue
+        risk_items.append(
+            {
+                "riskType": f"{registry_type}_release_missing",
+                "severity": "high",
+                "reason": (
+                    f"{registry_type} registry has no release history and needs bootstrap."
+                ),
+                "detailPath": f"/internal/judge/registries/{registry_type}/releases",
+                "actionHint": (
+                    "registry.prompt.curate"
+                    if registry_type == "prompt"
+                    else "registry.tool.curate"
+                ),
+            }
+        )
+
+    risk_items.sort(
+        key=lambda item: (
+            -_registry_prompt_tool_risk_severity_rank(
+                str(item.get("severity") or "").strip().lower()
+            ),
+            str(item.get("riskType") or ""),
+            str(item.get("policyVersion") or ""),
+            str(item.get("promptRegistryVersion") or ""),
+            str(item.get("toolRegistryVersion") or ""),
+        )
+    )
+    return risk_items
+
+
+def _build_registry_prompt_tool_action_hints(
+    *,
+    risk_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    action_index: dict[str, dict[str, Any]] = {}
+
+    def upsert_hint(
+        *,
+        action_id: str,
+        path: str,
+        reason: str,
+        severity: str,
+    ) -> None:
+        rank = _registry_prompt_tool_risk_severity_rank(severity)
+        current = action_index.get(action_id)
+        if current is not None and int(current.get("_rank") or 0) >= rank:
+            return
+        action_index[action_id] = {
+            "actionId": action_id,
+            "path": path,
+            "reason": reason,
+            "severity": severity if severity in {"high", "medium", "low"} else "low",
+            "_rank": rank,
+        }
+
+    for item in risk_items:
+        if not isinstance(item, dict):
+            continue
+        risk_type = str(item.get("riskType") or "").strip().lower()
+        severity = str(item.get("severity") or "").strip().lower() or "low"
+
+        if risk_type in {
+            "dependency_invalid",
+            "prompt_registry_ref_missing",
+            "tool_registry_ref_missing",
+        }:
+            upsert_hint(
+                action_id="registry.policy.dependencies.fix",
+                path="/internal/judge/registries/policy/dependencies/health",
+                reason="resolve policy to prompt/tool dependency mismatch.",
+                severity=severity,
+            )
+        if risk_type.startswith("prompt_"):
+            upsert_hint(
+                action_id="registry.prompt.curate",
+                path="/internal/judge/registries/prompts",
+                reason="review prompt releases and keep only referenced versions.",
+                severity=severity,
+            )
+        if risk_type.startswith("tool_"):
+            upsert_hint(
+                action_id="registry.tool.curate",
+                path="/internal/judge/registries/tools",
+                reason="review tool releases and keep only referenced versions.",
+                severity=severity,
+            )
+        if risk_type.endswith("_missing"):
+            upsert_hint(
+                action_id="registry.audits.inspect",
+                path="/internal/judge/registries/policy/gate-simulation",
+                reason="inspect release gate simulation before activation.",
+                severity=severity,
+            )
+
+    if not action_index:
+        return [
+            {
+                "actionId": "monitor",
+                "path": "/internal/judge/registries/prompt-tool/governance",
+                "reason": "governance signals look healthy; continue monitoring.",
+                "severity": "low",
+            }
+        ]
+
+    action_rows = list(action_index.values())
+    action_rows.sort(
+        key=lambda row: (
+            -int(row.get("_rank") or 0),
+            str(row.get("actionId") or ""),
+        )
+    )
+    for row in action_rows:
+        row.pop("_rank", None)
+    return action_rows
+
+
 def _normalize_ops_alert_status(value: str | None) -> str | None:
     if value is None:
         return None
@@ -7220,6 +7503,175 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "releaseLimit": max(1, min(int(release_limit), 200)),
                 "auditLimit": max(1, min(int(audit_limit), 200)),
             },
+        }
+
+    @app.get("/internal/judge/registries/prompt-tool/governance")
+    async def get_registry_prompt_tool_governance(
+        x_ai_internal_key: str | None = Header(default=None),
+        dependency_limit: int = Query(default=200, ge=1, le=500),
+        usage_preview_limit: int = Query(default=20, ge=1, le=200),
+        release_limit: int = Query(default=50, ge=1, le=200),
+        audit_limit: int = Query(default=100, ge=1, le=200),
+        risk_limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, Any]:
+        governance_overview = await get_registry_governance_overview(
+            x_ai_internal_key=x_ai_internal_key,
+            dependency_limit=dependency_limit,
+            usage_preview_limit=usage_preview_limit,
+            release_limit=release_limit,
+            audit_limit=audit_limit,
+        )
+        dependency_health = (
+            governance_overview.get("dependencyHealth")
+            if isinstance(governance_overview.get("dependencyHealth"), dict)
+            else {}
+        )
+        reverse_usage = (
+            governance_overview.get("reverseUsage")
+            if isinstance(governance_overview.get("reverseUsage"), dict)
+            else {}
+        )
+        release_state = (
+            governance_overview.get("releaseState")
+            if isinstance(governance_overview.get("releaseState"), dict)
+            else {}
+        )
+        audit_summary = (
+            governance_overview.get("auditSummary")
+            if isinstance(governance_overview.get("auditSummary"), dict)
+            else {}
+        )
+
+        dependency_items = (
+            dependency_health.get("items")
+            if isinstance(dependency_health.get("items"), list)
+            else []
+        )
+        prompt_usage_rows_raw = (
+            reverse_usage.get("prompts")
+            if isinstance(reverse_usage.get("prompts"), list)
+            else []
+        )
+        tool_usage_rows_raw = (
+            reverse_usage.get("tools")
+            if isinstance(reverse_usage.get("tools"), list)
+            else []
+        )
+        missing_prompt_refs = sorted(
+            {
+                str(item).strip()
+                for item in (reverse_usage.get("missingPromptRegistryRefs") or [])
+                if str(item).strip()
+            }
+        )
+        missing_tool_refs = sorted(
+            {
+                str(item).strip()
+                for item in (reverse_usage.get("missingToolRegistryRefs") or [])
+                if str(item).strip()
+            }
+        )
+        prompt_usage_rows, unreferenced_prompt_count = (
+            _build_registry_prompt_tool_usage_rows(usage_rows=prompt_usage_rows_raw)
+        )
+        tool_usage_rows, unreferenced_tool_count = (
+            _build_registry_prompt_tool_usage_rows(usage_rows=tool_usage_rows_raw)
+        )
+        all_risk_items = _build_registry_prompt_tool_risk_items(
+            dependency_items=dependency_items,
+            prompt_usage_rows=prompt_usage_rows,
+            tool_usage_rows=tool_usage_rows,
+            missing_prompt_refs=missing_prompt_refs,
+            missing_tool_refs=missing_tool_refs,
+            release_state=release_state,
+        )
+        effective_risk_limit = max(1, min(int(risk_limit), 500))
+        risk_items = all_risk_items[:effective_risk_limit]
+        action_hints = _build_registry_prompt_tool_action_hints(risk_items=all_risk_items)
+
+        high_risk_count = sum(
+            1
+            for item in all_risk_items
+            if str(item.get("severity") or "").strip().lower() == "high"
+        )
+        medium_risk_count = sum(
+            1
+            for item in all_risk_items
+            if str(item.get("severity") or "").strip().lower() == "medium"
+        )
+        low_risk_count = sum(
+            1
+            for item in all_risk_items
+            if str(item.get("severity") or "").strip().lower() == "low"
+        )
+
+        if high_risk_count > 0:
+            risk_level = "high"
+        elif medium_risk_count > 0:
+            risk_level = "medium"
+        elif low_risk_count > 0:
+            risk_level = "low"
+        else:
+            risk_level = "healthy"
+
+        try:
+            dependency_invalid_count = max(
+                0, int(dependency_health.get("invalidCount") or 0)
+            )
+        except (TypeError, ValueError):
+            dependency_invalid_count = 0
+
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "activeVersions": governance_overview.get("activeVersions"),
+            "summary": {
+                "riskLevel": risk_level,
+                "dependencyInvalidCount": dependency_invalid_count,
+                "missingPromptRefCount": len(missing_prompt_refs),
+                "missingToolRefCount": len(missing_tool_refs),
+                "unreferencedPromptCount": unreferenced_prompt_count,
+                "unreferencedToolCount": unreferenced_tool_count,
+                "highRiskCount": high_risk_count,
+                "mediumRiskCount": medium_risk_count,
+                "lowRiskCount": low_risk_count,
+                "riskTotalCount": len(all_risk_items),
+                "riskReturned": len(risk_items),
+                "riskTruncated": len(all_risk_items) > len(risk_items),
+            },
+            "dependencyHealth": {
+                "count": dependency_health.get("count"),
+                "invalidCount": dependency_invalid_count,
+                "issueCodeCounts": (
+                    dependency_health.get("issueCodeCounts")
+                    if isinstance(dependency_health.get("issueCodeCounts"), dict)
+                    else {}
+                ),
+                "items": dependency_items,
+            },
+            "promptToolUsage": {
+                "prompts": prompt_usage_rows,
+                "tools": tool_usage_rows,
+                "missingPromptRegistryRefs": missing_prompt_refs,
+                "missingToolRegistryRefs": missing_tool_refs,
+            },
+            "releaseState": release_state,
+            "auditSummary": audit_summary,
+            "domainJudgeFamilies": governance_overview.get("domainJudgeFamilies"),
+            "riskItems": risk_items,
+            "actionHints": action_hints,
+            "filters": {
+                "dependencyLimit": max(1, min(int(dependency_limit), 500)),
+                "usagePreviewLimit": max(1, min(int(usage_preview_limit), 200)),
+                "releaseLimit": max(1, min(int(release_limit), 200)),
+                "auditLimit": max(1, min(int(audit_limit), 200)),
+                "riskLimit": effective_risk_limit,
+            },
+            "notes": [
+                (
+                    "prompt/tool governance view is read-only; actionHints never "
+                    "trigger publish, activate, or rollback automatically."
+                )
+            ],
         }
 
     @app.get("/internal/judge/registries/policy/domain-families")

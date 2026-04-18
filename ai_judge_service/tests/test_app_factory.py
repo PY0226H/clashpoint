@@ -250,6 +250,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/policy/domain-families", paths)
         self.assertIn("/internal/judge/registries/policy/gate-simulation", paths)
         self.assertIn("/internal/judge/registries/governance/overview", paths)
+        self.assertIn("/internal/judge/registries/prompt-tool/governance", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/publish", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/{version}/activate", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/rollback", paths)
@@ -1653,6 +1654,107 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(latest_rollback)
         assert latest_rollback is not None
         self.assertEqual(latest_rollback["registryType"], "prompt")
+
+    async def test_registry_prompt_tool_governance_route_should_return_risk_and_action_hints(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9220)
+        actor = f"prompt-tool-governance-actor-{suffix}"
+        orphan_prompt_version = f"promptset-orphan-{suffix}"
+        missing_prompt_version = f"promptset-missing-{suffix}"
+        missing_tool_version = f"toolset-missing-{suffix}"
+        policy_invalid_version = f"policy-prompt-tool-risk-{suffix}"
+
+        publish_prompt_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/prompt/publish",
+            payload={
+                "version": orphan_prompt_version,
+                "activate": False,
+                "actor": actor,
+                "reason": "seed_orphan_prompt_for_prompt_tool_governance",
+                "profile": {
+                    "promptVersions": {
+                        "claimGraphVersion": "v1-claim-graph-bootstrap",
+                    },
+                    "metadata": {
+                        "status": "candidate",
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_prompt_resp.status_code, 200)
+
+        await runtime.registry_product_runtime.publish_release(
+            registry_type="policy",
+            version=policy_invalid_version,
+            profile_payload={
+                "rubricVersion": "v3",
+                "topicDomain": "tft",
+                "promptRegistryVersion": missing_prompt_version,
+                "toolRegistryVersion": missing_tool_version,
+            },
+            actor="seed",
+            reason="seed_invalid_dependencies_for_prompt_tool_governance",
+            activate=False,
+        )
+
+        route_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/prompt-tool/governance"
+                "?dependency_limit=200&usage_preview_limit=20&release_limit=50&audit_limit=100"
+                "&risk_limit=3"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(route_resp.status_code, 200)
+        payload = route_resp.json()
+        self.assertIsInstance(payload["summary"], dict)
+        self.assertIsInstance(payload["dependencyHealth"], dict)
+        self.assertIsInstance(payload["promptToolUsage"], dict)
+        self.assertIsInstance(payload["riskItems"], list)
+        self.assertIsInstance(payload["actionHints"], list)
+        self.assertEqual(payload["filters"]["riskLimit"], 3)
+
+        summary = payload["summary"]
+        self.assertIn(summary["riskLevel"], {"high", "medium", "low", "healthy"})
+        self.assertGreaterEqual(summary["dependencyInvalidCount"], 1)
+        self.assertGreaterEqual(summary["missingPromptRefCount"], 1)
+        self.assertGreaterEqual(summary["missingToolRefCount"], 1)
+        self.assertGreaterEqual(summary["unreferencedPromptCount"], 1)
+        self.assertGreaterEqual(summary["riskTotalCount"], summary["riskReturned"])
+        self.assertEqual(summary["riskReturned"], len(payload["riskItems"]))
+        self.assertTrue(summary["riskTruncated"])
+
+        prompt_usage = payload["promptToolUsage"]["prompts"]
+        orphan_prompt_row = next(
+            (row for row in prompt_usage if row["version"] == orphan_prompt_version),
+            None,
+        )
+        self.assertIsNotNone(orphan_prompt_row)
+        assert orphan_prompt_row is not None
+        self.assertEqual(orphan_prompt_row["referencedByPolicyCount"], 0)
+        self.assertIn("unreferenced", orphan_prompt_row["riskTags"])
+
+        self.assertIn(
+            missing_prompt_version,
+            payload["promptToolUsage"]["missingPromptRegistryRefs"],
+        )
+        self.assertIn(
+            missing_tool_version,
+            payload["promptToolUsage"]["missingToolRegistryRefs"],
+        )
+
+        risk_types = {row.get("riskType") for row in payload["riskItems"]}
+        self.assertIn("dependency_invalid", risk_types)
+        action_ids = {row.get("actionId") for row in payload["actionHints"]}
+        self.assertIn("registry.policy.dependencies.fix", action_ids)
+        self.assertIn("registry.prompt.curate", action_ids)
+        self.assertIn("registry.tool.curate", action_ids)
 
     async def test_policy_domain_judge_families_route_should_return_family_snapshot(self) -> None:
         runtime = create_runtime(settings=_build_settings())
