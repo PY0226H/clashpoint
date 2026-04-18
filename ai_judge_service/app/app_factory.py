@@ -1603,6 +1603,253 @@ def _build_courtroom_read_model_light_summary(
     }
 
 
+def _build_courtroom_drilldown_bundle_view(
+    *,
+    courtroom_view: dict[str, Any] | None,
+    claim_preview_limit: int,
+    evidence_preview_limit: int,
+    panel_preview_limit: int,
+) -> dict[str, Any]:
+    model = courtroom_view if isinstance(courtroom_view, dict) else {}
+    claim = model.get("claim") if isinstance(model.get("claim"), dict) else {}
+    evidence = model.get("evidence") if isinstance(model.get("evidence"), dict) else {}
+    panel = model.get("panel") if isinstance(model.get("panel"), dict) else {}
+    fairness = model.get("fairness") if isinstance(model.get("fairness"), dict) else {}
+    opinion = model.get("opinion") if isinstance(model.get("opinion"), dict) else {}
+    governance = model.get("governance") if isinstance(model.get("governance"), dict) else {}
+
+    claim_preview_cap = max(1, min(int(claim_preview_limit), 100))
+    evidence_preview_cap = max(1, min(int(evidence_preview_limit), 100))
+    panel_preview_cap = max(1, min(int(panel_preview_limit), 100))
+
+    conflict_pairs = (
+        claim.get("conflictPairs")
+        if isinstance(claim.get("conflictPairs"), list)
+        else []
+    )
+    unanswered_claims = (
+        claim.get("unansweredClaims")
+        if isinstance(claim.get("unansweredClaims"), list)
+        else []
+    )
+    claim_graph_summary = (
+        claim.get("claimGraphSummary")
+        if isinstance(claim.get("claimGraphSummary"), dict)
+        else {}
+    )
+    claim_graph_stats = (
+        claim_graph_summary.get("stats")
+        if isinstance(claim_graph_summary.get("stats"), dict)
+        else {}
+    )
+    conflict_pair_count = max(
+        len(conflict_pairs),
+        int(claim_graph_stats.get("conflictEdges") or 0),
+    )
+    unanswered_claim_count = max(
+        len(unanswered_claims),
+        int(claim_graph_stats.get("unansweredClaims") or 0),
+    )
+
+    evidence_ledger = (
+        evidence.get("evidenceLedger")
+        if isinstance(evidence.get("evidenceLedger"), dict)
+        else {}
+    )
+    evidence_stats = (
+        evidence_ledger.get("stats")
+        if isinstance(evidence_ledger.get("stats"), dict)
+        else {}
+    )
+    source_citations = (
+        evidence_ledger.get("sourceCitations")
+        if isinstance(evidence_ledger.get("sourceCitations"), list)
+        else []
+    )
+    conflict_sources = (
+        evidence_ledger.get("conflictSources")
+        if isinstance(evidence_ledger.get("conflictSources"), list)
+        else []
+    )
+    decisive_refs = (
+        evidence.get("decisiveEvidenceRefs")
+        if isinstance(evidence.get("decisiveEvidenceRefs"), list)
+        else []
+    )
+    verdict_refs = (
+        evidence.get("verdictEvidenceRefs")
+        if isinstance(evidence.get("verdictEvidenceRefs"), list)
+        else []
+    )
+    evidence_reliability = _build_evidence_claim_reliability_profile(
+        evidence_stats=evidence_stats,
+        fallback_decisive_count=len(decisive_refs),
+    )
+
+    pivotal_moments = (
+        panel.get("pivotalMoments")
+        if isinstance(panel.get("pivotalMoments"), list)
+        else []
+    )
+    runtime_profiles = (
+        panel.get("runtimeProfiles")
+        if isinstance(panel.get("runtimeProfiles"), dict)
+        else {}
+    )
+    courtroom_roles = (
+        panel.get("courtroomRoles")
+        if isinstance(panel.get("courtroomRoles"), list)
+        else []
+    )
+    workflow_edges = (
+        panel.get("courtroomWorkflowEdges")
+        if isinstance(panel.get("courtroomWorkflowEdges"), list)
+        else []
+    )
+    courtroom_artifacts = (
+        panel.get("courtroomArtifacts")
+        if isinstance(panel.get("courtroomArtifacts"), list)
+        else []
+    )
+
+    return {
+        "claim": {
+            "keyClaimsBySide": (
+                claim.get("keyClaimsBySide")
+                if isinstance(claim.get("keyClaimsBySide"), dict)
+                else {}
+            ),
+            "conflictPairCount": max(0, conflict_pair_count),
+            "conflictPairsPreview": conflict_pairs[:claim_preview_cap],
+            "conflictPairsHasMore": len(conflict_pairs) > claim_preview_cap,
+            "unansweredClaimCount": max(0, unanswered_claim_count),
+            "unansweredClaimsPreview": unanswered_claims[:claim_preview_cap],
+            "unansweredClaimsHasMore": len(unanswered_claims) > claim_preview_cap,
+            "claimGraphStats": claim_graph_stats,
+        },
+        "evidence": {
+            "decisiveEvidenceCount": len(decisive_refs),
+            "decisiveEvidenceRefsPreview": decisive_refs[:evidence_preview_cap],
+            "decisiveEvidenceRefsHasMore": len(decisive_refs) > evidence_preview_cap,
+            "verdictEvidenceRefCount": len(verdict_refs),
+            "verdictEvidenceRefsPreview": verdict_refs[:evidence_preview_cap],
+            "verdictEvidenceRefsHasMore": len(verdict_refs) > evidence_preview_cap,
+            "sourceCitationCount": (
+                int(evidence_stats.get("sourceCitationCount"))
+                if isinstance(evidence_stats.get("sourceCitationCount"), int)
+                else len(source_citations)
+            ),
+            "sourceCitationsPreview": source_citations[:evidence_preview_cap],
+            "sourceCitationsHasMore": len(source_citations) > evidence_preview_cap,
+            "conflictSourceCount": (
+                int(evidence_stats.get("conflictSourceCount"))
+                if isinstance(evidence_stats.get("conflictSourceCount"), int)
+                else len(conflict_sources)
+            ),
+            "conflictSourcesPreview": conflict_sources[:evidence_preview_cap],
+            "conflictSourcesHasMore": len(conflict_sources) > evidence_preview_cap,
+            "reliability": evidence_reliability,
+            "evidenceLedgerStats": evidence_stats,
+        },
+        "panel": {
+            "pivotalMomentCount": len(pivotal_moments),
+            "pivotalMomentsPreview": pivotal_moments[:panel_preview_cap],
+            "pivotalMomentsHasMore": len(pivotal_moments) > panel_preview_cap,
+            "runtimeProfiles": runtime_profiles,
+            "courtroomRoleCount": len(courtroom_roles),
+            "courtroomRolesPreview": courtroom_roles[:panel_preview_cap],
+            "courtroomRolesHasMore": len(courtroom_roles) > panel_preview_cap,
+            "workflowEdgeCount": len(workflow_edges),
+            "workflowEdgesPreview": workflow_edges[:panel_preview_cap],
+            "workflowEdgesHasMore": len(workflow_edges) > panel_preview_cap,
+            "artifactCount": len(courtroom_artifacts),
+            "artifactsPreview": courtroom_artifacts[:panel_preview_cap],
+            "artifactsHasMore": len(courtroom_artifacts) > panel_preview_cap,
+            "panelDecisions": (
+                panel.get("panelDecisions")
+                if isinstance(panel.get("panelDecisions"), dict)
+                else {}
+            ),
+        },
+        "fairness": {
+            "gateDecision": str(fairness.get("gateDecision") or "").strip().lower() or None,
+            "reviewRequired": bool(fairness.get("reviewRequired")),
+            "auditAlertCount": int(fairness.get("auditAlertCount") or 0),
+            "degradationLevel": fairness.get("degradationLevel"),
+            "summary": (
+                fairness.get("summary")
+                if isinstance(fairness.get("summary"), dict)
+                else {}
+            ),
+            "errorCodes": (
+                fairness.get("errorCodes")
+                if isinstance(fairness.get("errorCodes"), list)
+                else []
+            ),
+        },
+        "opinion": {
+            "winner": str(opinion.get("winner") or "").strip().lower() or None,
+            "debateSummary": (
+                opinion.get("debateSummary")
+                if isinstance(opinion.get("debateSummary"), str)
+                else None
+            ),
+            "sideAnalysis": (
+                opinion.get("sideAnalysis")
+                if isinstance(opinion.get("sideAnalysis"), dict)
+                else {}
+            ),
+            "verdictReason": (
+                opinion.get("verdictReason")
+                if isinstance(opinion.get("verdictReason"), str)
+                else None
+            ),
+        },
+        "governance": {
+            "policyVersion": str(governance.get("policyVersion") or "").strip() or None,
+            "promptVersion": str(governance.get("promptVersion") or "").strip() or None,
+            "toolsetVersion": str(governance.get("toolsetVersion") or "").strip() or None,
+        },
+    }
+
+
+def _build_courtroom_drilldown_action_hints(
+    *,
+    drilldown: dict[str, Any],
+) -> list[str]:
+    payload = drilldown if isinstance(drilldown, dict) else {}
+    claim = payload.get("claim") if isinstance(payload.get("claim"), dict) else {}
+    evidence = (
+        payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+    )
+    panel = payload.get("panel") if isinstance(payload.get("panel"), dict) else {}
+    fairness = (
+        payload.get("fairness") if isinstance(payload.get("fairness"), dict) else {}
+    )
+    reliability = (
+        evidence.get("reliability")
+        if isinstance(evidence.get("reliability"), dict)
+        else {}
+    )
+    hints: list[str] = []
+    if int(claim.get("conflictPairCount") or 0) > 0:
+        hints.append("claim.resolve_conflict")
+    if int(claim.get("unansweredClaimCount") or 0) > 0:
+        hints.append("claim.answer_missing")
+    reliability_level = str(reliability.get("level") or "").strip().lower()
+    if reliability_level in {"low", "medium"}:
+        hints.append("evidence.upgrade_reliability")
+    if int(evidence.get("decisiveEvidenceCount") or 0) <= 0:
+        hints.append("evidence.add_decisive_refs")
+    if int(panel.get("pivotalMomentCount") or 0) <= 0:
+        hints.append("panel.inspect_runtime")
+    if bool(fairness.get("reviewRequired")):
+        hints.append("review.queue.decide")
+    if not hints:
+        hints.append("monitor")
+    return hints
+
+
 def _serialize_claim_ledger_record(
     record: FactClaimLedgerRecord,
     *,
@@ -10323,6 +10570,316 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "offset": normalized_offset,
                 "limit": normalized_limit,
             },
+        }
+
+    @app.get("/internal/judge/courtroom/drilldown-bundle")
+    async def list_judge_courtroom_drilldown_bundle(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str = Query(default="auto"),
+        winner: str | None = Query(default=None),
+        review_required: bool | None = Query(default=None),
+        risk_level: str | None = Query(default=None),
+        sla_bucket: str | None = Query(default=None),
+        updated_from: datetime | None = Query(default=None),
+        updated_to: datetime | None = Query(default=None),
+        sort_by: str = Query(default="updated_at"),
+        sort_order: str = Query(default="desc"),
+        scan_limit: int = Query(default=500, ge=20, le=2000),
+        offset: int = Query(default=0, ge=0, le=5000),
+        limit: int = Query(default=50, ge=1, le=200),
+        claim_preview_limit: int = Query(default=10, ge=1, le=100),
+        evidence_preview_limit: int = Query(default=10, ge=1, le=100),
+        panel_preview_limit: int = Query(default=10, ge=1, le=100),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_status = _normalize_workflow_status(status)
+        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+
+        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+        if normalized_dispatch_type not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+        workflow_dispatch_filter = (
+            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        )
+
+        normalized_winner = str(winner or "").strip().lower() or None
+        if normalized_winner not in {None, "pro", "con", "draw"}:
+            raise HTTPException(status_code=422, detail="invalid_winner")
+
+        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
+        if (
+            normalized_risk_level is not None
+            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
+
+        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
+        if (
+            normalized_sla_bucket is not None
+            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
+
+        normalized_updated_from = _normalize_query_datetime(updated_from)
+        normalized_updated_to = _normalize_query_datetime(updated_to)
+        if (
+            normalized_updated_from is not None
+            and normalized_updated_to is not None
+            and normalized_updated_from > normalized_updated_to
+        ):
+            raise HTTPException(status_code=422, detail="invalid_updated_time_window")
+
+        normalized_sort_by = _normalize_courtroom_case_sort_by(sort_by)
+        if normalized_sort_by not in COURTROOM_CASE_SORT_FIELDS:
+            raise HTTPException(
+                status_code=422,
+                detail="invalid_courtroom_drilldown_sort_by",
+            )
+        normalized_sort_order = _normalize_courtroom_case_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(
+                status_code=422,
+                detail="invalid_courtroom_drilldown_sort_order",
+            )
+
+        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
+        normalized_offset = max(0, int(offset))
+        normalized_limit = max(1, min(int(limit), 200))
+        normalized_claim_preview_limit = max(1, min(int(claim_preview_limit), 100))
+        normalized_evidence_preview_limit = max(
+            1, min(int(evidence_preview_limit), 100)
+        )
+        normalized_panel_preview_limit = max(1, min(int(panel_preview_limit), 100))
+
+        jobs = await _workflow_list_jobs(
+            status=normalized_status,
+            dispatch_type=workflow_dispatch_filter,
+            limit=normalized_scan_limit,
+        )
+        now = datetime.now(timezone.utc)
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for job in jobs:
+            updated_at = _normalize_query_datetime(job.updated_at)
+            if (
+                normalized_updated_from is not None
+                and (updated_at is None or updated_at < normalized_updated_from)
+            ):
+                continue
+            if (
+                normalized_updated_to is not None
+                and (updated_at is None or updated_at > normalized_updated_to)
+            ):
+                continue
+
+            try:
+                context = await _resolve_report_context_for_case(
+                    case_id=job.job_id,
+                    dispatch_type=normalized_dispatch_type,
+                    not_found_detail="courtroom_case_not_found",
+                    missing_report_detail="courtroom_report_payload_missing",
+                )
+            except HTTPException as err:
+                error_code = str(err.detail or "").strip() or "courtroom_case_unavailable"
+                if error_code in {
+                    "courtroom_case_not_found",
+                    "courtroom_report_payload_missing",
+                }:
+                    errors.append(
+                        {
+                            "caseId": int(job.job_id),
+                            "statusCode": int(err.status_code),
+                            "errorCode": error_code,
+                        }
+                    )
+                    continue
+                raise
+
+            report_payload = (
+                context.get("reportPayload")
+                if isinstance(context.get("reportPayload"), dict)
+                else {}
+            )
+            winner_value = str(report_payload.get("winner") or "").strip().lower() or None
+            if normalized_winner is not None and winner_value != normalized_winner:
+                continue
+            report_review_required = bool(report_payload.get("reviewRequired"))
+            if review_required is not None and report_review_required != bool(review_required):
+                continue
+
+            trace = runtime.trace_store.get_trace(job.job_id)
+            report_summary = (
+                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+            )
+            risk_profile = _build_review_case_risk_profile(
+                workflow=job,
+                report_payload=report_payload,
+                report_summary=report_summary,
+                now=now,
+            )
+            if (
+                normalized_risk_level is not None
+                and str(risk_profile.get("level") or "").strip().lower()
+                != normalized_risk_level
+            ):
+                continue
+            if (
+                normalized_sla_bucket is not None
+                and str(risk_profile.get("slaBucket") or "").strip().lower()
+                != normalized_sla_bucket
+            ):
+                continue
+
+            try:
+                courtroom_payload = await get_judge_case_courtroom_read_model(
+                    case_id=job.job_id,
+                    x_ai_internal_key=x_ai_internal_key,
+                    dispatch_type=normalized_dispatch_type,
+                    include_events=False,
+                    include_alerts=False,
+                    alert_limit=50,
+                )
+            except HTTPException as err:
+                errors.append(
+                    {
+                        "caseId": int(job.job_id),
+                        "statusCode": int(err.status_code),
+                        "errorCode": str(err.detail),
+                    }
+                )
+                continue
+
+            courtroom_view = (
+                courtroom_payload.get("courtroom")
+                if isinstance(courtroom_payload.get("courtroom"), dict)
+                else {}
+            )
+            drilldown = _build_courtroom_drilldown_bundle_view(
+                courtroom_view=courtroom_view,
+                claim_preview_limit=normalized_claim_preview_limit,
+                evidence_preview_limit=normalized_evidence_preview_limit,
+                panel_preview_limit=normalized_panel_preview_limit,
+            )
+            callback = (
+                courtroom_payload.get("callback")
+                if isinstance(courtroom_payload.get("callback"), dict)
+                else {}
+            )
+            dispatch_type_value = (
+                str(context.get("dispatchType") or "").strip().lower() or "auto"
+            )
+            items.append(
+                {
+                    "caseId": int(job.job_id),
+                    "dispatchType": dispatch_type_value,
+                    "traceId": context.get("traceId") or None,
+                    "workflow": _serialize_workflow_job(job),
+                    "winner": winner_value,
+                    "reviewRequired": report_review_required,
+                    "needsDrawVote": bool(report_payload.get("needsDrawVote")),
+                    "callbackStatus": callback.get("status"),
+                    "callbackError": callback.get("error"),
+                    "riskProfile": risk_profile,
+                    "drilldown": drilldown,
+                    "actionHints": _build_courtroom_drilldown_action_hints(
+                        drilldown=drilldown,
+                    ),
+                    "detailPath": (
+                        f"/internal/judge/cases/{int(job.job_id)}/courtroom-read-model"
+                        f"?dispatch_type={dispatch_type_value}"
+                    ),
+                }
+            )
+
+        items.sort(
+            key=lambda row: _build_courtroom_case_sort_key(
+                item=row,
+                sort_by=normalized_sort_by,
+            ),
+            reverse=(normalized_sort_order == "desc"),
+        )
+        page_items = items[normalized_offset : normalized_offset + normalized_limit]
+
+        total_conflict_pairs = 0
+        total_unanswered_claims = 0
+        total_decisive_evidence = 0
+        total_pivotal_moments = 0
+        review_required_count = 0
+        high_risk_count = 0
+        for row in items:
+            drilldown = (
+                row.get("drilldown")
+                if isinstance(row.get("drilldown"), dict)
+                else {}
+            )
+            claim = drilldown.get("claim") if isinstance(drilldown.get("claim"), dict) else {}
+            evidence = (
+                drilldown.get("evidence")
+                if isinstance(drilldown.get("evidence"), dict)
+                else {}
+            )
+            panel = drilldown.get("panel") if isinstance(drilldown.get("panel"), dict) else {}
+            total_conflict_pairs += int(claim.get("conflictPairCount") or 0)
+            total_unanswered_claims += int(claim.get("unansweredClaimCount") or 0)
+            total_decisive_evidence += int(evidence.get("decisiveEvidenceCount") or 0)
+            total_pivotal_moments += int(panel.get("pivotalMomentCount") or 0)
+            if bool(row.get("reviewRequired")):
+                review_required_count += 1
+            risk_profile = (
+                row.get("riskProfile")
+                if isinstance(row.get("riskProfile"), dict)
+                else {}
+            )
+            if str(risk_profile.get("level") or "").strip().lower() == "high":
+                high_risk_count += 1
+
+        return {
+            "count": len(items),
+            "returned": len(page_items),
+            "scanned": len(jobs),
+            "skipped": max(0, len(jobs) - len(items)),
+            "errorCount": len(errors),
+            "items": page_items,
+            "errors": errors,
+            "aggregations": {
+                "totalConflictPairCount": total_conflict_pairs,
+                "totalUnansweredClaimCount": total_unanswered_claims,
+                "totalDecisiveEvidenceCount": total_decisive_evidence,
+                "totalPivotalMomentCount": total_pivotal_moments,
+                "reviewRequiredCount": review_required_count,
+                "highRiskCount": high_risk_count,
+            },
+            "filters": {
+                "status": normalized_status,
+                "dispatchType": normalized_dispatch_type,
+                "winner": normalized_winner,
+                "reviewRequired": review_required,
+                "riskLevel": normalized_risk_level,
+                "slaBucket": normalized_sla_bucket,
+                "updatedFrom": (
+                    normalized_updated_from.isoformat()
+                    if normalized_updated_from is not None
+                    else None
+                ),
+                "updatedTo": (
+                    normalized_updated_to.isoformat()
+                    if normalized_updated_to is not None
+                    else None
+                ),
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
+                "scanLimit": normalized_scan_limit,
+                "offset": normalized_offset,
+                "limit": normalized_limit,
+                "claimPreviewLimit": normalized_claim_preview_limit,
+                "evidencePreviewLimit": normalized_evidence_preview_limit,
+                "panelPreviewLimit": normalized_panel_preview_limit,
+            },
+            "notes": [
+                "drilldown bundle is read-only and does not change verdict state.",
+            ],
         }
 
     @app.get("/internal/judge/evidence-claim/ops-queue")

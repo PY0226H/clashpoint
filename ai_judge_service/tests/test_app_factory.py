@@ -240,6 +240,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}/claim-ledger", paths)
         self.assertIn("/internal/judge/cases/{case_id}/courtroom-read-model", paths)
         self.assertIn("/internal/judge/courtroom/cases", paths)
+        self.assertIn("/internal/judge/courtroom/drilldown-bundle", paths)
         self.assertIn("/internal/judge/evidence-claim/ops-queue", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
@@ -779,6 +780,342 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(invalid_window_resp.status_code, 422)
         self.assertIn("invalid_updated_time_window", invalid_window_resp.text)
+
+    async def test_courtroom_drilldown_bundle_route_should_support_batch_filters_and_aggregations(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        high_case_id = _unique_case_id(9528)
+        low_case_id = _unique_case_id(9529)
+        case_overrides: dict[int, dict[str, Any]] = {
+            high_case_id: {
+                "reviewRequired": True,
+                "fairnessSummary": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": True,
+                    "reviewRequired": True,
+                },
+                "verdictLedger": {
+                    "arbitration": {
+                        "reviewRequired": True,
+                        "gateDecision": "review_required",
+                    },
+                    "pivotalMoments": [
+                        {"id": "pivot-high-1", "phaseNo": 1},
+                        {"id": "pivot-high-2", "phaseNo": 2},
+                    ],
+                },
+                "claimGraphSummary": {
+                    "stats": {
+                        "totalClaims": 4,
+                        "proClaims": 2,
+                        "conClaims": 2,
+                        "conflictEdges": 2,
+                        "unansweredClaims": 1,
+                        "weakSupportedClaims": 1,
+                        "verdictReferencedClaims": 2,
+                    },
+                },
+                "evidenceLedger": {
+                    "stats": {
+                        "totalEntries": 3,
+                        "messageRefCount": 3,
+                        "sourceCitationCount": 2,
+                        "conflictSourceCount": 1,
+                        "verdictReferencedCount": 3,
+                        "reliabilityCounts": {"high": 1, "medium": 0, "low": 2},
+                        "verdictReferencedReliabilityCounts": {
+                            "high": 1,
+                            "medium": 0,
+                            "low": 2,
+                        },
+                    },
+                },
+                "errorCodes": [
+                    "judge_panel_high_disagreement",
+                    "evidence_reliability_too_low",
+                    "fairness_gate_review_required",
+                ],
+                "auditAlerts": [{"type": "judge_panel_high_disagreement"}],
+                "degradationLevel": 1,
+            },
+            low_case_id: {
+                "reviewRequired": False,
+                "fairnessSummary": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": False,
+                    "reviewRequired": False,
+                },
+                "verdictLedger": {
+                    "arbitration": {
+                        "reviewRequired": False,
+                        "gateDecision": "auto_passed",
+                    },
+                    "pivotalMoments": [],
+                },
+                "claimGraphSummary": {
+                    "stats": {
+                        "totalClaims": 2,
+                        "proClaims": 1,
+                        "conClaims": 1,
+                        "conflictEdges": 0,
+                        "unansweredClaims": 0,
+                        "weakSupportedClaims": 0,
+                        "verdictReferencedClaims": 2,
+                    },
+                },
+                "evidenceLedger": {
+                    "stats": {
+                        "totalEntries": 2,
+                        "messageRefCount": 2,
+                        "sourceCitationCount": 1,
+                        "conflictSourceCount": 0,
+                        "verdictReferencedCount": 2,
+                        "reliabilityCounts": {"high": 2, "medium": 0, "low": 0},
+                        "verdictReferencedReliabilityCounts": {
+                            "high": 2,
+                            "medium": 0,
+                            "low": 0,
+                        },
+                    },
+                },
+                "errorCodes": [],
+                "auditAlerts": [],
+                "degradationLevel": 0,
+            },
+        }
+
+        def _build_custom_final_payload(
+            *,
+            runtime,
+            request,
+            phase_receipts=None,
+            fairness_thresholds=None,
+            panel_runtime_profiles=None,
+        ):
+            receipts = (
+                list(phase_receipts)
+                if phase_receipts is not None
+                else list(
+                    runtime.trace_store.list_dispatch_receipts(
+                        dispatch_type="phase",
+                        session_id=request.session_id,
+                        status="reported",
+                        limit=1000,
+                    )
+                )
+            )
+            payload = build_final_report_payload_v3_final(
+                request=request,
+                phase_receipts=receipts,
+                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                fairness_thresholds=fairness_thresholds,
+                panel_runtime_profiles=panel_runtime_profiles,
+            )
+            override = case_overrides.get(int(request.case_id), {})
+            if not override:
+                return payload
+            if "reviewRequired" in override:
+                payload["reviewRequired"] = bool(override["reviewRequired"])
+            if "fairnessSummary" in override:
+                fairness_summary = (
+                    payload.get("fairnessSummary")
+                    if isinstance(payload.get("fairnessSummary"), dict)
+                    else {}
+                )
+                fairness_summary.update(dict(override["fairnessSummary"]))
+                payload["fairnessSummary"] = fairness_summary
+            if "verdictLedger" in override:
+                verdict_ledger = (
+                    payload.get("verdictLedger")
+                    if isinstance(payload.get("verdictLedger"), dict)
+                    else {}
+                )
+                verdict_override = (
+                    override.get("verdictLedger")
+                    if isinstance(override.get("verdictLedger"), dict)
+                    else {}
+                )
+                arbitration = (
+                    verdict_ledger.get("arbitration")
+                    if isinstance(verdict_ledger.get("arbitration"), dict)
+                    else {}
+                )
+                arbitration_override = (
+                    verdict_override.get("arbitration")
+                    if isinstance(verdict_override.get("arbitration"), dict)
+                    else {}
+                )
+                arbitration.update(arbitration_override)
+                verdict_ledger["arbitration"] = arbitration
+                if isinstance(verdict_override.get("pivotalMoments"), list):
+                    verdict_ledger["pivotalMoments"] = list(
+                        verdict_override["pivotalMoments"]
+                    )
+                payload["verdictLedger"] = verdict_ledger
+            if "claimGraphSummary" in override:
+                claim_summary = (
+                    payload.get("claimGraphSummary")
+                    if isinstance(payload.get("claimGraphSummary"), dict)
+                    else {}
+                )
+                claim_summary_override = (
+                    override.get("claimGraphSummary")
+                    if isinstance(override.get("claimGraphSummary"), dict)
+                    else {}
+                )
+                claim_summary.update(claim_summary_override)
+                payload["claimGraphSummary"] = claim_summary
+            if "evidenceLedger" in override:
+                evidence_ledger = (
+                    payload.get("evidenceLedger")
+                    if isinstance(payload.get("evidenceLedger"), dict)
+                    else {}
+                )
+                evidence_override = (
+                    override.get("evidenceLedger")
+                    if isinstance(override.get("evidenceLedger"), dict)
+                    else {}
+                )
+                evidence_ledger.update(
+                    {
+                        key: value
+                        for key, value in evidence_override.items()
+                        if key != "stats"
+                    }
+                )
+                evidence_stats = (
+                    evidence_ledger.get("stats")
+                    if isinstance(evidence_ledger.get("stats"), dict)
+                    else {}
+                )
+                stats_override = (
+                    evidence_override.get("stats")
+                    if isinstance(evidence_override.get("stats"), dict)
+                    else {}
+                )
+                evidence_stats.update(stats_override)
+                evidence_ledger["stats"] = evidence_stats
+                payload["evidenceLedger"] = evidence_ledger
+            if "errorCodes" in override:
+                payload["errorCodes"] = list(override["errorCodes"])
+            if "auditAlerts" in override:
+                payload["auditAlerts"] = list(override["auditAlerts"])
+            if "degradationLevel" in override:
+                payload["degradationLevel"] = int(override["degradationLevel"])
+            return payload
+
+        with patch(
+            "app.app_factory._build_final_report_payload",
+            side_effect=_build_custom_final_payload,
+        ):
+            for case_id in (high_case_id, low_case_id):
+                final_req = _build_final_request(
+                    case_id=case_id,
+                    idempotency_key=f"final:{case_id}",
+                )
+                final_resp = await self._post_json(
+                    app=app,
+                    path="/internal/judge/v3/final/dispatch",
+                    payload=final_req.model_dump(mode="json"),
+                    internal_key=runtime.settings.ai_internal_key,
+                )
+                self.assertEqual(final_resp.status_code, 200, final_resp.text)
+
+        filtered_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/courtroom/drilldown-bundle"
+                "?dispatch_type=auto"
+                "&status=review_required"
+                "&review_required=true"
+                "&risk_level=high"
+                "&sort_by=risk_score"
+                "&sort_order=desc"
+                "&scan_limit=200"
+                "&claim_preview_limit=5"
+                "&evidence_preview_limit=5"
+                "&panel_preview_limit=5"
+                "&limit=20"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(filtered_resp.status_code, 200)
+        filtered_payload = filtered_resp.json()
+        self.assertEqual(filtered_payload["count"], 1)
+        self.assertEqual(filtered_payload["returned"], 1)
+        item = filtered_payload["items"][0]
+        self.assertEqual(item["caseId"], high_case_id)
+        self.assertTrue(item["reviewRequired"])
+        self.assertEqual(item["riskProfile"]["level"], "high")
+        self.assertIsInstance(item["drilldown"]["claim"], dict)
+        self.assertIsInstance(item["drilldown"]["evidence"], dict)
+        self.assertIsInstance(item["drilldown"]["panel"], dict)
+        self.assertIsInstance(item["drilldown"]["fairness"], dict)
+        self.assertIsInstance(item["drilldown"]["opinion"], dict)
+        self.assertIsInstance(item["drilldown"]["governance"], dict)
+        self.assertGreaterEqual(item["drilldown"]["claim"]["conflictPairCount"], 2)
+        self.assertGreaterEqual(item["drilldown"]["claim"]["unansweredClaimCount"], 1)
+        self.assertEqual(item["drilldown"]["panel"]["pivotalMomentCount"], 2)
+        self.assertIn("claim.resolve_conflict", item["actionHints"])
+        self.assertIn("claim.answer_missing", item["actionHints"])
+        self.assertIn("review.queue.decide", item["actionHints"])
+        self.assertIn(
+            f"/internal/judge/cases/{high_case_id}/courtroom-read-model",
+            item["detailPath"],
+        )
+        self.assertEqual(filtered_payload["filters"]["sortBy"], "risk_score")
+        self.assertEqual(filtered_payload["filters"]["claimPreviewLimit"], 5)
+        self.assertGreaterEqual(
+            filtered_payload["aggregations"]["totalConflictPairCount"],
+            2,
+        )
+        self.assertGreaterEqual(
+            filtered_payload["aggregations"]["totalUnansweredClaimCount"],
+            1,
+        )
+        self.assertGreaterEqual(
+            filtered_payload["aggregations"]["totalPivotalMomentCount"],
+            2,
+        )
+
+        paged_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/courtroom/drilldown-bundle"
+                "?dispatch_type=auto"
+                "&sort_by=case_id"
+                "&sort_order=asc"
+                "&offset=1"
+                "&limit=1"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(paged_resp.status_code, 200)
+        paged_payload = paged_resp.json()
+        self.assertGreaterEqual(paged_payload["count"], 2)
+        self.assertEqual(paged_payload["returned"], 1)
+        self.assertEqual(paged_payload["filters"]["offset"], 1)
+        self.assertEqual(paged_payload["filters"]["limit"], 1)
+
+        invalid_sort_resp = await self._get(
+            app=app,
+            path="/internal/judge/courtroom/drilldown-bundle?sort_by=bad-value",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_sort_resp.status_code, 422)
+        self.assertIn("invalid_courtroom_drilldown_sort_by", invalid_sort_resp.text)
 
     async def test_evidence_claim_ops_queue_route_should_support_conflict_reliability_and_unanswered_filters(
         self,
