@@ -1,6 +1,7 @@
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import patch
 
 from app.app_factory import create_app, create_default_app, create_runtime, require_internal_key
@@ -234,6 +235,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases", paths)
         self.assertIn("/internal/judge/cases/{case_id}", paths)
         self.assertIn("/internal/judge/cases/{case_id}/claim-ledger", paths)
+        self.assertIn("/internal/judge/cases/{case_id}/courtroom-read-model", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
         self.assertIn("/internal/judge/registries/prompts", paths)
@@ -242,6 +244,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/registries/tools/{toolset_version}", paths)
         self.assertIn("/internal/judge/registries/policy/dependencies/health", paths)
         self.assertIn("/internal/judge/registries/policy/domain-families", paths)
+        self.assertIn("/internal/judge/registries/policy/gate-simulation", paths)
         self.assertIn("/internal/judge/registries/governance/overview", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/publish", paths)
         self.assertIn("/internal/judge/registries/{registry_type}/{version}/activate", paths)
@@ -461,6 +464,82 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail_payload["judgeCore"]["stage"], "reported")
         self.assertEqual(detail_payload["judgeCore"]["version"], "v1")
         self.assertGreaterEqual(len(detail_payload["events"]), 2)
+
+    async def test_courtroom_read_model_route_should_aggregate_case_view(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(9340)
+        final_req = _build_final_request(case_id=case_id, idempotency_key=f"final:{case_id}")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        read_resp = await self._get(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{case_id}/courtroom-read-model"
+                "?dispatch_type=auto&include_events=true&include_alerts=false"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(read_resp.status_code, 200)
+        payload = read_resp.json()
+        self.assertEqual(payload["caseId"], case_id)
+        self.assertEqual(payload["dispatchType"], "final")
+        self.assertTrue(str(payload["traceId"] or "").strip())
+        self.assertEqual(payload["filters"]["dispatchType"], "final")
+        self.assertTrue(payload["filters"]["includeEvents"])
+        self.assertFalse(payload["filters"]["includeAlerts"])
+        self.assertEqual(payload["alerts"], [])
+        self.assertEqual(len(payload["events"]), payload["eventCount"])
+
+        courtroom = payload["courtroom"]
+        self.assertEqual(
+            courtroom["recorder"]["caseDossier"]["dispatchType"],
+            "final",
+        )
+        self.assertIsInstance(courtroom["claim"]["claimGraph"], dict)
+        self.assertIsInstance(courtroom["claim"]["claimGraphSummary"], dict)
+        self.assertIsInstance(courtroom["claim"]["keyClaimsBySide"], dict)
+        self.assertIsInstance(courtroom["evidence"]["evidenceLedger"], dict)
+        self.assertIsInstance(courtroom["evidence"]["decisiveEvidenceRefs"], list)
+        self.assertIsInstance(courtroom["panel"]["panelDecisions"], dict)
+        self.assertEqual(len(courtroom["panel"]["courtroomRoles"]), 8)
+        self.assertIsInstance(courtroom["fairness"]["summary"], dict)
+        self.assertIn(
+            courtroom["fairness"]["gateDecision"],
+            {"auto_passed", "review_required", "blocked_to_draw", "pass_through"},
+        )
+        self.assertIsInstance(courtroom["opinion"]["userReport"], dict)
+        self.assertIsInstance(courtroom["governance"]["policySnapshot"], dict)
+        self.assertEqual(courtroom["governance"]["trustAttestation"]["dispatchType"], "final")
+        self.assertIn(payload["report"]["winner"], {"pro", "con", "draw"})
+
+    async def test_courtroom_read_model_route_should_return_404_when_case_missing(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        missing_resp = await self._get(
+            app=app,
+            path="/internal/judge/cases/999902/courtroom-read-model",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(missing_resp.status_code, 404)
+        self.assertIn("courtroom_case_not_found", missing_resp.text)
 
     async def test_claim_ledger_route_should_return_persisted_claim_graph(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -1130,6 +1209,79 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(health_resp.status_code, 422)
         self.assertIn("invalid_trend_status", health_resp.text)
+
+    async def test_policy_gate_simulation_route_should_return_advisory_snapshot(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9215)
+        version = f"policy-gate-sim-{suffix}"
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "reason": "prepare_for_policy_gate_simulation",
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+        before_alerts = list(
+            runtime.trace_store.list_audit_alerts(job_id=0, status=None, limit=500)
+        )
+
+        sim_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/gate-simulation"
+                f"?policy_version={version}&include_all_versions=true&limit=10"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(sim_resp.status_code, 200)
+        payload = sim_resp.json()
+        self.assertEqual(payload["selectedPolicyVersion"], version)
+        self.assertGreaterEqual(payload["count"], 1)
+        self.assertTrue(payload["summary"]["advisoryOnly"])
+        self.assertTrue(payload["filters"]["includeAllVersions"])
+        self.assertIn("notes", payload)
+        target = next(row for row in payload["items"] if row["policyVersion"] == version)
+        self.assertIn("domainJudgeFamily", target)
+        self.assertIn("dependencyHealth", target)
+        self.assertIn("fairnessGate", target)
+        self.assertIn("simulatedGate", target)
+        self.assertIn(target["simulatedGate"]["status"], {"pass", "blocked"})
+        self.assertIsInstance(target["simulatedGate"]["failingComponents"], list)
+
+        after_alerts = list(
+            runtime.trace_store.list_audit_alerts(job_id=0, status=None, limit=500)
+        )
+        self.assertEqual(len(after_alerts), len(before_alerts))
+
+    async def test_policy_gate_simulation_route_should_return_404_when_policy_missing(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        missing_version = f"policy-gate-sim-missing-{_unique_case_id(9216)}"
+        sim_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/registries/policy/gate-simulation"
+                f"?policy_version={missing_version}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(sim_resp.status_code, 404)
+        self.assertIn("policy_registry_not_found", sim_resp.text)
 
     async def test_registry_governance_overview_route_should_join_triple_dependency_usage_and_audits(
         self,
@@ -3054,6 +3206,229 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         approved_challenge_item = approved_challenge_resp.json()["item"]
         self.assertEqual(approved_challenge_item["reviewState"], "approved")
         self.assertEqual(approved_challenge_item["openAlertIds"], [])
+
+    async def test_review_cases_route_should_support_risk_filter_and_sorting(self) -> None:
+        async def noop_phase_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        async def noop_final_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_phase_callback,
+            callback_final_report_impl=noop_final_callback,
+            callback_phase_failed_impl=noop_phase_callback,
+            callback_final_failed_impl=noop_final_callback,
+        )
+        app = create_app(runtime)
+
+        def _build_review_payload(
+            *,
+            trace_id: str,
+            panel_high_disagreement: bool,
+            error_codes: list[str],
+            audit_alerts: list[dict[str, Any]],
+        ) -> dict[str, Any]:
+            return {
+                "sessionId": 2,
+                "winner": "draw",
+                "proScore": 61.0,
+                "conScore": 60.2,
+                "dimensionScores": {
+                    "logic": 60.0,
+                    "evidence": 61.0,
+                    "rebuttal": 59.5,
+                    "clarity": 60.4,
+                },
+                "debateSummary": "summary",
+                "sideAnalysis": {"pro": "pro", "con": "con"},
+                "verdictReason": "reason",
+                "claimGraph": {
+                    "pipelineVersion": "v1-claim-graph-bootstrap",
+                    "nodes": [],
+                    "edges": [],
+                    "unansweredClaimIds": [],
+                    "stats": {
+                        "totalClaims": 0,
+                        "proClaims": 0,
+                        "conClaims": 0,
+                        "conflictEdges": 0,
+                        "unansweredClaims": 0,
+                        "weakSupportedClaims": 0,
+                        "verdictReferencedClaims": 0,
+                    },
+                },
+                "claimGraphSummary": {
+                    "coreClaims": {"pro": [], "con": []},
+                    "conflictPairs": [],
+                    "unansweredClaims": [],
+                    "stats": {
+                        "totalClaims": 0,
+                        "proClaims": 0,
+                        "conClaims": 0,
+                        "conflictEdges": 0,
+                        "unansweredClaims": 0,
+                        "weakSupportedClaims": 0,
+                        "verdictReferencedClaims": 0,
+                    },
+                },
+                "evidenceLedger": {
+                    "pipelineVersion": "v3-evidence-bundle",
+                    "entries": [],
+                    "refsById": {},
+                    "messageRefs": [],
+                    "sourceCitations": [],
+                    "conflictSources": [],
+                    "stats": {
+                        "totalEntries": 0,
+                        "messageRefCount": 0,
+                        "sourceCitationCount": 0,
+                        "conflictSourceCount": 0,
+                        "verdictReferencedCount": 0,
+                    },
+                },
+                "verdictLedger": {
+                    "version": "v2-panel-arbiter-opinion",
+                    "scoreCard": {
+                        "proScore": 61.0,
+                        "conScore": 60.2,
+                        "dimensionScores": {"logic": 60.0},
+                    },
+                    "panelDecisions": {"probeWinners": {"agent3Weighted": "pro"}},
+                    "arbitration": {
+                        "chainVersion": "v1-panel-fairness-arbiter",
+                        "decisionPath": ["judge_panel", "fairness_sentinel", "chief_arbiter"],
+                        "fairnessGateApplied": True,
+                        "winnerBeforeFairnessGate": "pro",
+                        "winnerAfterArbitration": "draw",
+                        "gateDecision": "blocked_to_draw",
+                        "reviewRequired": True,
+                    },
+                    "pivotalMoments": [],
+                    "decisiveEvidenceRefs": [],
+                },
+                "opinionPack": {
+                    "version": "v2-opinion-pack",
+                    "userReport": {
+                        "winner": "draw",
+                        "debateSummary": "summary",
+                        "sideAnalysis": {"pro": "pro", "con": "con"},
+                        "verdictReason": "reason",
+                        "phaseDebateTimeline": [],
+                        "evidenceInsightCards": [],
+                    },
+                    "opsSummary": {"reviewRequired": True},
+                    "internalReview": {"traceId": trace_id},
+                },
+                "verdictEvidenceRefs": [],
+                "phaseRollupSummary": [{"phaseNo": 1}],
+                "retrievalSnapshotRollup": [],
+                "winnerFirst": "pro",
+                "winnerSecond": "pro",
+                "rejudgeTriggered": True,
+                "needsDrawVote": True,
+                "reviewRequired": True,
+                "judgeTrace": {"traceId": trace_id},
+                "fairnessSummary": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": panel_high_disagreement,
+                    "reviewRequired": True,
+                },
+                "auditAlerts": audit_alerts,
+                "errorCodes": error_codes,
+                "degradationLevel": 1,
+            }
+
+        high_risk_case_id = _unique_case_id(7421)
+        low_risk_case_id = _unique_case_id(7422)
+
+        payload_call_index = {"value": 0}
+
+        def _payload_side_effect(*args, **kwargs):
+            payload_call_index["value"] += 1
+            if payload_call_index["value"] == 1:
+                return _build_review_payload(
+                    trace_id=f"trace-final-{high_risk_case_id}",
+                    panel_high_disagreement=True,
+                    error_codes=["judge_panel_high_disagreement", "fairness_gate_review_required"],
+                    audit_alerts=[
+                        {"type": "judge_panel_high_disagreement"},
+                        {"type": "fairness_gate_review_required"},
+                    ],
+                )
+            return _build_review_payload(
+                trace_id=f"trace-final-{low_risk_case_id}",
+                panel_high_disagreement=False,
+                error_codes=[],
+                audit_alerts=[],
+            )
+
+        with patch("app.app_factory._build_final_report_payload", side_effect=_payload_side_effect):
+            high_resp = await self._post_json(
+                app=app,
+                path="/internal/judge/v3/final/dispatch",
+                payload=_build_final_request(
+                    case_id=high_risk_case_id,
+                    idempotency_key=f"final:{high_risk_case_id}",
+                ).model_dump(mode="json"),
+                internal_key=runtime.settings.ai_internal_key,
+            )
+            self.assertEqual(high_resp.status_code, 200)
+            low_resp = await self._post_json(
+                app=app,
+                path="/internal/judge/v3/final/dispatch",
+                payload=_build_final_request(
+                    case_id=low_risk_case_id,
+                    idempotency_key=f"final:{low_risk_case_id}",
+                ).model_dump(mode="json"),
+                internal_key=runtime.settings.ai_internal_key,
+            )
+            self.assertEqual(low_resp.status_code, 200)
+
+        high_filter_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/review/cases"
+                "?status=review_required&dispatch_type=final"
+                "&risk_level=high&sort_by=risk_score&sort_order=desc"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(high_filter_resp.status_code, 200)
+        high_filter_payload = high_filter_resp.json()
+        self.assertGreaterEqual(high_filter_payload["count"], 1)
+        self.assertEqual(high_filter_payload["filters"]["riskLevel"], "high")
+        self.assertEqual(high_filter_payload["filters"]["sortBy"], "risk_score")
+        self.assertGreaterEqual(high_filter_payload["returned"], 1)
+        self.assertEqual(
+            high_filter_payload["items"][0]["workflow"]["caseId"],
+            high_risk_case_id,
+        )
+        self.assertEqual(
+            high_filter_payload["items"][0]["riskProfile"]["level"],
+            "high",
+        )
+        self.assertGreaterEqual(
+            int(high_filter_payload["items"][0]["riskProfile"]["score"]),
+            75,
+        )
+
+        sorted_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/review/cases"
+                "?status=review_required&dispatch_type=final"
+                "&sla_bucket=normal&sort_by=risk_score&sort_order=desc"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(sorted_resp.status_code, 200)
+        sorted_payload = sorted_resp.json()
+        self.assertEqual(sorted_payload["count"], 2)
+        self.assertEqual(sorted_payload["filters"]["slaBucket"], "normal")
+        self.assertEqual(sorted_payload["items"][0]["workflow"]["caseId"], high_risk_case_id)
+        self.assertEqual(sorted_payload["items"][1]["workflow"]["caseId"], low_risk_case_id)
 
     async def test_trust_challenge_request_and_decision_should_drive_phaseb_lifecycle(
         self,
@@ -5110,6 +5485,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(payload["fairnessCalibrationAdvisor"], dict)
         self.assertIsInstance(payload["panelRuntimeReadiness"], dict)
         self.assertIsInstance(payload["registryGovernance"], dict)
+        self.assertIsInstance(payload["courtroomReadModel"], dict)
+        self.assertIsInstance(payload["reviewQueue"], dict)
+        self.assertIsInstance(payload["policyGateSimulation"], dict)
         self.assertIsInstance(payload["adaptiveSummary"], dict)
         self.assertIsInstance(payload["trustOverview"], dict)
         self.assertGreaterEqual(
@@ -5120,6 +5498,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("groups", payload["panelRuntimeReadiness"])
         self.assertIn("calibrationGateCode", payload["adaptiveSummary"])
         self.assertGreaterEqual(payload["adaptiveSummary"]["recommendedActionCount"], 1)
+        self.assertIn("reviewQueueCount", payload["adaptiveSummary"])
+        self.assertIn("policySimulationBlockedCount", payload["adaptiveSummary"])
+        self.assertIn("courtroomSampleCount", payload["adaptiveSummary"])
+        self.assertGreaterEqual(payload["adaptiveSummary"]["reviewQueueCount"], 0)
+        self.assertGreaterEqual(payload["adaptiveSummary"]["courtroomSampleCount"], 1)
         self.assertIn(
             "activeVersions",
             payload["registryGovernance"],
@@ -5128,6 +5511,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "dependencyHealth",
             payload["registryGovernance"],
         )
+        self.assertGreaterEqual(payload["courtroomReadModel"]["count"], 1)
+        self.assertIn("items", payload["courtroomReadModel"])
+        self.assertIn("simulatedGate", payload["policyGateSimulation"]["items"][0])
+        self.assertGreaterEqual(payload["reviewQueue"]["count"], 0)
         self.assertGreaterEqual(payload["trustOverview"]["count"], 1)
         self.assertGreaterEqual(payload["trustOverview"]["verifiedCount"], 0)
         self.assertLessEqual(

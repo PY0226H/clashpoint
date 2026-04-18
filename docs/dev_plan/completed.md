@@ -306,3 +306,12 @@
 | ai-judge-p15-panel-multi-model-readiness-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-panel-multi-model-readiness-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
 | ai-judge-p15-domain-judge-family-bootstrap-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-domain-judge-family-bootstrap-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
 | ai-judge-p15-ops-read-model-pack-v2 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-17）） | artifacts/harness/*-ai-judge-p15-ops-read-model-pack-v2.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+
+### B23. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 模块 | 结论 | 代码证据 | 验证结论 | 归档来源 | 关联待办 |
+|---|---|---|---|---|---|
+| ai-judge-p16-courtroom-read-model-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-18）） | artifacts/harness/*-ai-judge-p16-courtroom-read-model-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p16-review-queue-risk-prioritization-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-18）） | artifacts/harness/*-ai-judge-p16-review-queue-risk-prioritization-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p16-policy-gate-simulation-v1 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-18）） | artifacts/harness/*-ai-judge-p16-policy-gate-simulation-v1.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p16-ops-pack-and-export-v3 | AI judge 平台化重构阶段主体已完成（已完成（2026-04-18）） | artifacts/harness/*-ai-judge-p16-ops-pack-and-export-v3.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |
+| ai-judge-p16-enterprise-architecture-consistency-refresh | AI judge 平台化重构阶段主体已完成（已完成（2026-04-18）） | artifacts/harness/*-ai-judge-p16-enterprise-architecture-consistency-refresh.summary.json（或执行增量） | 见当前开发计划执行增量中的门禁记录 | AI_judge_service 平台化重构阶段收口（2026-04-18） | （待收口映射） |

@@ -317,6 +317,14 @@ PANEL_RUNTIME_PROFILE_SORT_FIELDS = {
     "strategy_slot",
     "domain_slot",
 }
+REVIEW_CASE_RISK_LEVEL_VALUES = {"high", "medium", "low"}
+REVIEW_CASE_SLA_BUCKET_VALUES = {"normal", "warning", "urgent", "unknown"}
+REVIEW_CASE_SORT_FIELDS = {
+    "updated_at",
+    "risk_score",
+    "audit_alert_count",
+    "case_id",
+}
 POLICY_DOMAIN_JUDGE_FAMILY_VALUES = {
     "general",
     "tft",
@@ -1135,6 +1143,241 @@ def _build_case_evidence_view(
     }
 
 
+def _build_courtroom_read_model_view(
+    *,
+    report_payload: dict[str, Any] | None,
+    case_evidence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = report_payload if isinstance(report_payload, dict) else {}
+    evidence_view = case_evidence if isinstance(case_evidence, dict) else {}
+    judge_trace = payload.get("judgeTrace") if isinstance(payload.get("judgeTrace"), dict) else {}
+
+    case_dossier = (
+        evidence_view.get("caseDossier")
+        if isinstance(evidence_view.get("caseDossier"), dict)
+        else {}
+    )
+    claim_graph = (
+        evidence_view.get("claimGraph")
+        if isinstance(evidence_view.get("claimGraph"), dict)
+        else {}
+    )
+    claim_graph_summary = (
+        evidence_view.get("claimGraphSummary")
+        if isinstance(evidence_view.get("claimGraphSummary"), dict)
+        else {}
+    )
+    evidence_ledger = (
+        evidence_view.get("evidenceLedger")
+        if isinstance(evidence_view.get("evidenceLedger"), dict)
+        else {}
+    )
+    verdict_ledger = (
+        evidence_view.get("verdictLedger")
+        if isinstance(evidence_view.get("verdictLedger"), dict)
+        else {}
+    )
+    opinion_pack = (
+        evidence_view.get("opinionPack")
+        if isinstance(evidence_view.get("opinionPack"), dict)
+        else {}
+    )
+    fairness_summary = (
+        evidence_view.get("fairnessSummary")
+        if isinstance(evidence_view.get("fairnessSummary"), dict)
+        else {}
+    )
+    panel_runtime_profiles = (
+        evidence_view.get("panelRuntimeProfiles")
+        if isinstance(evidence_view.get("panelRuntimeProfiles"), dict)
+        else {}
+    )
+    audit_summary = (
+        evidence_view.get("auditSummary")
+        if isinstance(evidence_view.get("auditSummary"), dict)
+        else {}
+    )
+    user_report = (
+        opinion_pack.get("userReport")
+        if isinstance(opinion_pack.get("userReport"), dict)
+        else {}
+    )
+    ops_summary = (
+        opinion_pack.get("opsSummary")
+        if isinstance(opinion_pack.get("opsSummary"), dict)
+        else {}
+    )
+    internal_review = (
+        opinion_pack.get("internalReview")
+        if isinstance(opinion_pack.get("internalReview"), dict)
+        else {}
+    )
+    panel_decisions = (
+        verdict_ledger.get("panelDecisions")
+        if isinstance(verdict_ledger.get("panelDecisions"), dict)
+        else {}
+    )
+    arbitration = (
+        verdict_ledger.get("arbitration")
+        if isinstance(verdict_ledger.get("arbitration"), dict)
+        else {}
+    )
+    key_claims = (
+        claim_graph_summary.get("coreClaims")
+        if isinstance(claim_graph_summary.get("coreClaims"), dict)
+        else {"pro": [], "con": []}
+    )
+    conflict_pairs = (
+        claim_graph_summary.get("conflictPairs")
+        if isinstance(claim_graph_summary.get("conflictPairs"), list)
+        else []
+    )
+    unanswered_claims = (
+        claim_graph_summary.get("unansweredClaims")
+        if isinstance(claim_graph_summary.get("unansweredClaims"), list)
+        else []
+    )
+    decisive_evidence_refs = (
+        verdict_ledger.get("decisiveEvidenceRefs")
+        if isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list)
+        else []
+    )
+    pivotal_moments = (
+        verdict_ledger.get("pivotalMoments")
+        if isinstance(verdict_ledger.get("pivotalMoments"), list)
+        else []
+    )
+    gate_decision = str(arbitration.get("gateDecision") or "").strip().lower()
+    if not gate_decision:
+        gate_decision = (
+            "review_required"
+            if bool(payload.get("reviewRequired"))
+            else "auto_passed"
+        )
+
+    return {
+        "recorder": {
+            "caseDossier": case_dossier,
+            "phaseRollupSummary": (
+                payload.get("phaseRollupSummary")
+                if isinstance(payload.get("phaseRollupSummary"), list)
+                else []
+            ),
+            "retrievalSnapshotRollup": (
+                payload.get("retrievalSnapshotRollup")
+                if isinstance(payload.get("retrievalSnapshotRollup"), list)
+                else []
+            ),
+            "phaseDebateTimeline": (
+                user_report.get("phaseDebateTimeline")
+                if isinstance(user_report.get("phaseDebateTimeline"), list)
+                else []
+            ),
+        },
+        "claim": {
+            "claimGraph": claim_graph,
+            "claimGraphSummary": claim_graph_summary,
+            "keyClaimsBySide": key_claims,
+            "conflictPairs": conflict_pairs,
+            "unansweredClaims": unanswered_claims,
+        },
+        "evidence": {
+            "evidenceLedger": evidence_ledger,
+            "verdictEvidenceRefs": (
+                evidence_view.get("verdictEvidenceRefs")
+                if isinstance(evidence_view.get("verdictEvidenceRefs"), list)
+                else []
+            ),
+            "decisiveEvidenceRefs": decisive_evidence_refs,
+            "evidenceInsightCards": (
+                user_report.get("evidenceInsightCards")
+                if isinstance(user_report.get("evidenceInsightCards"), list)
+                else []
+            ),
+        },
+        "panel": {
+            "panelDecisions": panel_decisions,
+            "runtimeProfiles": panel_runtime_profiles,
+            "pivotalMoments": pivotal_moments,
+            "courtroomRoles": (
+                judge_trace.get("courtroomRoles")
+                if isinstance(judge_trace.get("courtroomRoles"), list)
+                else []
+            ),
+            "courtroomWorkflowEdges": (
+                judge_trace.get("courtroomWorkflowEdges")
+                if isinstance(judge_trace.get("courtroomWorkflowEdges"), list)
+                else []
+            ),
+            "courtroomArtifacts": (
+                judge_trace.get("courtroomArtifacts")
+                if isinstance(judge_trace.get("courtroomArtifacts"), list)
+                else []
+            ),
+            "courtroomRoleOrder": (
+                judge_trace.get("courtroomRoleOrder")
+                if isinstance(judge_trace.get("courtroomRoleOrder"), list)
+                else []
+            ),
+            "agentRuntime": (
+                judge_trace.get("agentRuntime")
+                if isinstance(judge_trace.get("agentRuntime"), dict)
+                else {}
+            ),
+        },
+        "fairness": {
+            "summary": fairness_summary,
+            "gateDecision": gate_decision,
+            "reviewRequired": bool(payload.get("reviewRequired")),
+            "errorCodes": (
+                audit_summary.get("errorCodes")
+                if isinstance(audit_summary.get("errorCodes"), list)
+                else []
+            ),
+            "auditAlertCount": int(audit_summary.get("alertCount") or 0),
+            "degradationLevel": audit_summary.get("degradationLevel"),
+        },
+        "opinion": {
+            "winner": str(payload.get("winner") or "").strip().lower() or None,
+            "debateSummary": payload.get("debateSummary"),
+            "sideAnalysis": (
+                payload.get("sideAnalysis")
+                if isinstance(payload.get("sideAnalysis"), dict)
+                else {}
+            ),
+            "verdictReason": payload.get("verdictReason"),
+            "userReport": user_report,
+            "opsSummary": ops_summary,
+            "internalReview": internal_review,
+        },
+        "governance": {
+            "policyVersion": evidence_view.get("policyVersion"),
+            "promptVersion": evidence_view.get("promptVersion"),
+            "toolsetVersion": evidence_view.get("toolsetVersion"),
+            "policySnapshot": (
+                evidence_view.get("policySnapshot")
+                if isinstance(evidence_view.get("policySnapshot"), dict)
+                else None
+            ),
+            "promptSnapshot": (
+                evidence_view.get("promptSnapshot")
+                if isinstance(evidence_view.get("promptSnapshot"), dict)
+                else None
+            ),
+            "toolSnapshot": (
+                evidence_view.get("toolSnapshot")
+                if isinstance(evidence_view.get("toolSnapshot"), dict)
+                else None
+            ),
+            "trustAttestation": (
+                evidence_view.get("trustAttestation")
+                if isinstance(evidence_view.get("trustAttestation"), dict)
+                else None
+            ),
+        },
+    }
+
+
 def _serialize_claim_ledger_record(
     record: FactClaimLedgerRecord,
     *,
@@ -1220,6 +1463,149 @@ def _normalize_workflow_status(status: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _normalize_review_case_risk_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_review_case_sla_bucket(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_review_case_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def _normalize_review_case_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def _build_review_case_risk_profile(
+    *,
+    workflow: WorkflowJob,
+    report_payload: dict[str, Any],
+    report_summary: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    payload = report_payload if isinstance(report_payload, dict) else {}
+    summary = report_summary if isinstance(report_summary, dict) else {}
+    fairness_summary = (
+        payload.get("fairnessSummary")
+        if isinstance(payload.get("fairnessSummary"), dict)
+        else {}
+    )
+    error_codes = [
+        str(item).strip()
+        for item in (payload.get("errorCodes") or [])
+        if str(item).strip()
+    ]
+    audit_alerts = summary.get("auditAlerts") if isinstance(summary.get("auditAlerts"), list) else []
+    audit_alert_count = len(audit_alerts)
+    callback_status = str(summary.get("callbackStatus") or "").strip().lower()
+    winner = str(payload.get("winner") or "").strip().lower()
+    panel_high_disagreement = bool(fairness_summary.get("panelHighDisagreement"))
+    review_required = bool(payload.get("reviewRequired"))
+
+    age_minutes: int | None = None
+    if isinstance(workflow.updated_at, datetime):
+        updated_at = _normalize_query_datetime(workflow.updated_at)
+        if updated_at is not None:
+            age_delta = now - updated_at
+            age_minutes = max(0, int(age_delta.total_seconds() // 60))
+
+    risk_score = 0
+    risk_tags: list[str] = []
+
+    if review_required:
+        risk_score += 35
+        risk_tags.append("review_required")
+    if panel_high_disagreement:
+        risk_score += 20
+        risk_tags.append("panel_high_disagreement")
+    if error_codes:
+        risk_score += min(25, len(error_codes) * 8)
+        risk_tags.append("error_codes_present")
+    if audit_alert_count > 0:
+        risk_score += min(20, audit_alert_count * 4)
+        risk_tags.append("audit_alerts_present")
+    if callback_status in {"failed", "error", "callback_failed"}:
+        risk_score += 15
+        risk_tags.append("callback_failed")
+    if winner == "draw":
+        risk_score += 5
+        risk_tags.append("draw_outcome")
+
+    if age_minutes is not None and age_minutes >= 360:
+        risk_score += 15
+        risk_tags.append("review_stale_6h")
+    elif age_minutes is not None and age_minutes >= 120:
+        risk_score += 8
+        risk_tags.append("review_stale_2h")
+
+    risk_score = max(0, min(int(risk_score), 100))
+    if risk_score >= 75:
+        risk_level = "high"
+    elif risk_score >= 45:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    if age_minutes is None:
+        sla_bucket = "unknown"
+    elif age_minutes >= 360:
+        sla_bucket = "urgent"
+    elif age_minutes >= 120:
+        sla_bucket = "warning"
+    else:
+        sla_bucket = "normal"
+
+    return {
+        "score": risk_score,
+        "level": risk_level,
+        "tags": risk_tags,
+        "ageMinutes": age_minutes,
+        "slaBucket": sla_bucket,
+        "auditAlertCount": audit_alert_count,
+        "panelHighDisagreement": panel_high_disagreement,
+        "reviewRequired": review_required,
+    }
+
+
+def _build_review_case_sort_key(*, item: dict[str, Any], sort_by: str) -> tuple[Any, ...]:
+    risk = item.get("riskProfile") if isinstance(item.get("riskProfile"), dict) else {}
+    workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    if sort_by == "risk_score":
+        return (
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "audit_alert_count":
+        return (
+            int(risk.get("auditAlertCount") or 0),
+            int(risk.get("score") or 0),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(workflow.get("caseId") or 0),)
+    return (
+        str(workflow.get("updatedAt") or "").strip(),
+        int(risk.get("score") or 0),
+        int(workflow.get("caseId") or 0),
+    )
 
 
 def _normalize_case_fairness_gate_conclusion(value: str | None) -> str | None:
@@ -6335,6 +6721,129 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             },
         }
 
+    @app.get("/internal/judge/registries/policy/gate-simulation")
+    async def simulate_policy_release_gate(
+        x_ai_internal_key: str | None = Header(default=None),
+        policy_version: str | None = Query(default=None),
+        include_all_versions: bool = Query(default=False),
+        limit: int = Query(default=20, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        selected_policy_version = (
+            str(policy_version or "").strip()
+            or runtime.policy_registry_runtime.default_version
+        )
+        if not selected_policy_version:
+            raise HTTPException(status_code=422, detail="invalid_policy_version")
+
+        policy_versions: list[str] = []
+        if include_all_versions:
+            seen_versions: set[str] = set()
+            for row in runtime.policy_registry_runtime.list_profiles():
+                version_token = str(getattr(row, "version", "") or "").strip()
+                if not version_token or version_token in seen_versions:
+                    continue
+                seen_versions.add(version_token)
+                policy_versions.append(version_token)
+            if selected_policy_version not in seen_versions:
+                policy_versions.insert(0, selected_policy_version)
+        else:
+            policy_versions = [selected_policy_version]
+
+        evaluated_items: list[dict[str, Any]] = []
+        for version_token in policy_versions[: max(1, min(int(limit), 200))]:
+            profile = runtime.policy_registry_runtime.get_profile(version_token)
+            if profile is None:
+                if version_token == selected_policy_version:
+                    raise HTTPException(status_code=404, detail="policy_registry_not_found")
+                continue
+            profile_payload = _serialize_policy_profile(runtime, profile=profile)
+            metadata = (
+                profile_payload.get("metadata")
+                if isinstance(profile_payload.get("metadata"), dict)
+                else {}
+            )
+            dependency_health = await _evaluate_policy_registry_dependency_health(
+                policy_version=version_token,
+            )
+            fairness_gate = await _evaluate_policy_release_fairness_gate(
+                policy_version=version_token,
+            )
+            failing_components: list[str] = []
+            if not bool(dependency_health.get("ok")):
+                failing_components.append("dependency_health")
+            if not bool(fairness_gate.get("passed")):
+                failing_components.append("fairness_gate")
+            if not bool(metadata.get("domainJudgeFamilyValid")):
+                failing_components.append("domain_judge_family")
+            simulated_passed = len(failing_components) == 0
+
+            evaluated_items.append(
+                {
+                    "policyVersion": version_token,
+                    "topicDomain": str(profile_payload.get("topicDomain") or "").strip() or "general",
+                    "domainJudgeFamily": {
+                        "family": str(metadata.get("domainJudgeFamily") or "").strip() or None,
+                        "valid": bool(metadata.get("domainJudgeFamilyValid")),
+                        "errorCode": str(metadata.get("domainJudgeFamilyError") or "").strip() or None,
+                    },
+                    "dependencyHealth": dependency_health,
+                    "fairnessGate": fairness_gate,
+                    "simulatedGate": {
+                        "passed": simulated_passed,
+                        "status": "pass" if simulated_passed else "blocked",
+                        "code": (
+                            "registry_policy_gate_simulation_passed"
+                            if simulated_passed
+                            else "registry_policy_gate_simulation_blocked"
+                        ),
+                        "reason": (
+                            "all checks passed"
+                            if simulated_passed
+                            else f"blocked by {','.join(failing_components)}"
+                        ),
+                        "failingComponents": failing_components,
+                    },
+                }
+            )
+
+        pass_count = 0
+        blocked_count = 0
+        for row in evaluated_items:
+            simulated_gate = (
+                row.get("simulatedGate")
+                if isinstance(row.get("simulatedGate"), dict)
+                else {}
+            )
+            if bool(simulated_gate.get("passed")):
+                pass_count += 1
+            else:
+                blocked_count += 1
+
+        return {
+            "activePolicyVersion": runtime.policy_registry_runtime.default_version,
+            "selectedPolicyVersion": selected_policy_version,
+            "count": len(evaluated_items),
+            "items": evaluated_items,
+            "summary": {
+                "passCount": pass_count,
+                "blockedCount": blocked_count,
+                "advisoryOnly": True,
+            },
+            "filters": {
+                "policyVersion": selected_policy_version,
+                "includeAllVersions": bool(include_all_versions),
+                "limit": max(1, min(int(limit), 200)),
+            },
+            "notes": [
+                (
+                    "simulation is advisory-only and never triggers publish/activate "
+                    "or emits registry gate alerts."
+                )
+            ],
+        }
+
     @app.post("/internal/judge/registries/{registry_type}/publish")
     async def publish_registry_release(
         registry_type: str,
@@ -8185,6 +8694,122 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 for row in records
             ],
         }
+
+    @app.get("/internal/judge/cases/{case_id}/courtroom-read-model")
+    async def get_judge_case_courtroom_read_model(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+        include_events: bool = Query(default=False),
+        include_alerts: bool = Query(default=True),
+        alert_limit: int = Query(default=200, ge=1, le=500),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="courtroom_case_not_found",
+            missing_report_detail="courtroom_report_payload_missing",
+        )
+        workflow_job = await _workflow_get_job(job_id=case_id)
+        workflow_events = list(await _workflow_list_events(job_id=case_id))
+        trace = runtime.trace_store.get_trace(case_id)
+        report_summary = (
+            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+        )
+        callback_status = (
+            report_summary.get("callbackStatus")
+            or context["responsePayload"].get("callbackStatus")
+            or (trace.callback_status if trace is not None else None)
+        )
+        callback_error = (
+            report_summary.get("callbackError")
+            or context["responsePayload"].get("callbackError")
+            or (trace.callback_error if trace is not None else None)
+        )
+        claim_ledger_record = await _get_claim_ledger_record(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+        )
+        verdict_contract = _build_verdict_contract(context["reportPayload"])
+        case_evidence = _build_case_evidence_view(
+            report_payload=context["reportPayload"],
+            verdict_contract=verdict_contract,
+            claim_ledger_record=claim_ledger_record,
+        )
+        courtroom_read_model = _build_courtroom_read_model_view(
+            report_payload=context["reportPayload"],
+            case_evidence=case_evidence,
+        )
+        judge_core_view = _build_judge_core_view(
+            workflow_job=workflow_job,
+            workflow_events=workflow_events,
+        )
+        alert_items = (
+            await _list_audit_alerts(job_id=case_id, status=None, limit=alert_limit)
+            if include_alerts
+            else []
+        )
+
+        response_payload = {
+            "caseId": case_id,
+            "dispatchType": context["dispatchType"],
+            "traceId": context["traceId"] or None,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "workflow": _serialize_workflow_job(workflow_job) if workflow_job is not None else None,
+            "judgeCore": judge_core_view,
+            "callback": {
+                "status": callback_status,
+                "error": callback_error,
+            },
+            "report": {
+                "winner": str(context["reportPayload"].get("winner") or "").strip().lower() or None,
+                "reviewRequired": bool(context["reportPayload"].get("reviewRequired")),
+                "needsDrawVote": bool(context["reportPayload"].get("needsDrawVote")),
+                "debateSummary": (
+                    context["reportPayload"].get("debateSummary")
+                    if isinstance(context["reportPayload"].get("debateSummary"), str)
+                    else None
+                ),
+                "sideAnalysis": (
+                    context["reportPayload"].get("sideAnalysis")
+                    if isinstance(context["reportPayload"].get("sideAnalysis"), dict)
+                    else {}
+                ),
+                "verdictReason": (
+                    context["reportPayload"].get("verdictReason")
+                    if isinstance(context["reportPayload"].get("verdictReason"), str)
+                    else None
+                ),
+            },
+            "courtroom": courtroom_read_model,
+            "events": (
+                [
+                    {
+                        "eventSeq": item.event_seq,
+                        "eventType": item.event_type,
+                        "payload": item.payload,
+                        "createdAt": item.created_at.isoformat(),
+                    }
+                    for item in workflow_events
+                ]
+                if include_events
+                else []
+            ),
+            "eventCount": len(workflow_events),
+            "alerts": (
+                [_serialize_alert_item(item) for item in alert_items]
+                if include_alerts
+                else []
+            ),
+            "filters": {
+                "dispatchType": context["dispatchType"],
+                "includeEvents": bool(include_events),
+                "includeAlerts": bool(include_alerts),
+                "alertLimit": int(alert_limit),
+            },
+        }
+        return response_payload
 
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
     async def request_npc_coach_advice(
@@ -10881,6 +11506,136 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             group_limit=panel_group_limit,
             attention_limit=panel_attention_limit,
         )
+        review_queue = await list_judge_review_jobs(
+            x_ai_internal_key=x_ai_internal_key,
+            status="review_required",
+            dispatch_type=dispatch_type,
+            risk_level=None,
+            sla_bucket=None,
+            sort_by="risk_score",
+            sort_order="desc",
+            scan_limit=case_scan_limit,
+            limit=max(1, min(int(top_limit) * 5, 200)),
+        )
+        policy_gate_simulation = await simulate_policy_release_gate(
+            x_ai_internal_key=x_ai_internal_key,
+            policy_version=policy_version,
+            include_all_versions=False,
+            limit=10,
+        )
+
+        courtroom_items: list[dict[str, Any]] = []
+        courtroom_errors: list[dict[str, Any]] = []
+        courtroom_case_ids: list[int] = []
+        top_risk_cases = (
+            fairness_dashboard.get("topRiskCases")
+            if isinstance(fairness_dashboard.get("topRiskCases"), list)
+            else []
+        )
+        seen_case_ids: set[int] = set()
+        for row in top_risk_cases:
+            if len(courtroom_case_ids) >= int(top_limit):
+                break
+            if not isinstance(row, dict):
+                continue
+            try:
+                case_id = int(row.get("caseId") or 0)
+            except (TypeError, ValueError):
+                continue
+            if case_id <= 0 or case_id in seen_case_ids:
+                continue
+            seen_case_ids.add(case_id)
+            courtroom_case_ids.append(case_id)
+        for case_id in courtroom_case_ids:
+            try:
+                courtroom_payload = await get_judge_case_courtroom_read_model(
+                    case_id=case_id,
+                    x_ai_internal_key=x_ai_internal_key,
+                    dispatch_type="auto",
+                    include_events=False,
+                    include_alerts=False,
+                    alert_limit=50,
+                )
+            except HTTPException as err:
+                courtroom_errors.append(
+                    {
+                        "caseId": case_id,
+                        "statusCode": int(err.status_code),
+                        "errorCode": str(err.detail),
+                    }
+                )
+                continue
+            courtroom_view = (
+                courtroom_payload.get("courtroom")
+                if isinstance(courtroom_payload.get("courtroom"), dict)
+                else {}
+            )
+            claim_view = (
+                courtroom_view.get("claim")
+                if isinstance(courtroom_view.get("claim"), dict)
+                else {}
+            )
+            evidence_view = (
+                courtroom_view.get("evidence")
+                if isinstance(courtroom_view.get("evidence"), dict)
+                else {}
+            )
+            panel_view = (
+                courtroom_view.get("panel")
+                if isinstance(courtroom_view.get("panel"), dict)
+                else {}
+            )
+            fairness_view = (
+                courtroom_view.get("fairness")
+                if isinstance(courtroom_view.get("fairness"), dict)
+                else {}
+            )
+            opinion_view = (
+                courtroom_view.get("opinion")
+                if isinstance(courtroom_view.get("opinion"), dict)
+                else {}
+            )
+            key_claims = (
+                claim_view.get("keyClaimsBySide")
+                if isinstance(claim_view.get("keyClaimsBySide"), dict)
+                else {}
+            )
+            key_claim_count = 0
+            for side in ("pro", "con"):
+                entries = key_claims.get(side)
+                if isinstance(entries, list):
+                    key_claim_count += len(entries)
+            decisive_refs = (
+                evidence_view.get("decisiveEvidenceRefs")
+                if isinstance(evidence_view.get("decisiveEvidenceRefs"), list)
+                else []
+            )
+            pivotal_moments = (
+                panel_view.get("pivotalMoments")
+                if isinstance(panel_view.get("pivotalMoments"), list)
+                else []
+            )
+            courtroom_items.append(
+                {
+                    "caseId": case_id,
+                    "dispatchType": courtroom_payload.get("dispatchType"),
+                    "winner": (
+                        courtroom_payload.get("report", {})
+                        if isinstance(courtroom_payload.get("report"), dict)
+                        else {}
+                    ).get("winner"),
+                    "reviewRequired": bool(fairness_view.get("reviewRequired")),
+                    "gateDecision": str(fairness_view.get("gateDecision") or "").strip() or None,
+                    "keyClaimCount": key_claim_count,
+                    "decisiveEvidenceCount": len(decisive_refs),
+                    "pivotalMomentCount": len(pivotal_moments),
+                    "debateSummary": (
+                        opinion_view.get("debateSummary")
+                        if isinstance(opinion_view.get("debateSummary"), str)
+                        else None
+                    ),
+                }
+            )
 
         trust_items: list[dict[str, Any]] = []
         trust_errors: list[dict[str, Any]] = []
@@ -10994,6 +11749,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if isinstance(readiness_overview.get("readinessCounts"), dict)
             else {}
         )
+        review_items = (
+            review_queue.get("items")
+            if isinstance(review_queue.get("items"), list)
+            else []
+        )
+        review_high_risk_count = 0
+        review_urgent_count = 0
+        for row in review_items:
+            risk_profile = (
+                row.get("riskProfile")
+                if isinstance(row.get("riskProfile"), dict)
+                else {}
+            )
+            if str(risk_profile.get("level") or "").strip().lower() == "high":
+                review_high_risk_count += 1
+            if str(risk_profile.get("slaBucket") or "").strip().lower() == "urgent":
+                review_urgent_count += 1
+        simulation_summary = (
+            policy_gate_simulation.get("summary")
+            if isinstance(policy_gate_simulation.get("summary"), dict)
+            else {}
+        )
 
         return {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -11001,6 +11778,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "fairnessCalibrationAdvisor": fairness_calibration_advisor,
             "panelRuntimeReadiness": panel_runtime_readiness,
             "registryGovernance": governance_overview,
+            "courtroomReadModel": {
+                "requestedCaseLimit": int(top_limit),
+                "caseIds": list(courtroom_case_ids),
+                "count": len(courtroom_items),
+                "errorCount": len(courtroom_errors),
+                "items": courtroom_items,
+                "errors": courtroom_errors,
+            },
+            "reviewQueue": review_queue,
+            "policyGateSimulation": policy_gate_simulation,
             "adaptiveSummary": {
                 "calibrationGatePassed": bool(release_gate.get("passed")),
                 "calibrationGateCode": str(release_gate.get("code") or "").strip() or None,
@@ -11010,6 +11797,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "panelWatchGroupCount": int(readiness_counts.get("watch") or 0),
                 "panelAttentionGroupCount": int(readiness_counts.get("attention") or 0),
                 "panelScannedRecordCount": int(readiness_overview.get("scannedRecords") or 0),
+                "reviewQueueCount": int(review_queue.get("count") or 0),
+                "reviewHighRiskCount": review_high_risk_count,
+                "reviewUrgentCount": review_urgent_count,
+                "policySimulationBlockedCount": int(simulation_summary.get("blockedCount") or 0),
+                "courtroomSampleCount": len(courtroom_items),
             },
             "trustOverview": {
                 "included": bool(include_case_trust),
@@ -11342,6 +12134,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
         status: str = Query(default="review_required"),
         dispatch_type: str | None = Query(default=None),
+        risk_level: str | None = Query(default=None),
+        sla_bucket: str | None = Query(default=None),
+        sort_by: str = Query(default="updated_at"),
+        sort_order: str = Query(default="desc"),
+        scan_limit: int = Query(default=200, ge=20, le=1000),
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
@@ -11353,13 +12150,33 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         if normalized_dispatch_type not in {None, "phase", "final"}:
             raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
+        if (
+            normalized_risk_level is not None
+            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
+        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
+        if (
+            normalized_sla_bucket is not None
+            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
+        normalized_sort_by = _normalize_review_case_sort_by(sort_by)
+        if normalized_sort_by not in REVIEW_CASE_SORT_FIELDS:
+            raise HTTPException(status_code=422, detail="invalid_review_sort_by")
+        normalized_sort_order = _normalize_review_case_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=422, detail="invalid_review_sort_order")
+        normalized_scan_limit = max(20, min(int(scan_limit), 1000))
 
         jobs = await _workflow_list_jobs(
             status=normalized_status,
             dispatch_type=normalized_dispatch_type,
-            limit=limit,
+            limit=normalized_scan_limit,
         )
         items: list[dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
         for job in jobs:
             trace = runtime.trace_store.get_trace(job.job_id)
             report_summary = (
@@ -11387,14 +12204,53 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                         else 0
                     ),
                     "callbackStatus": report_summary.get("callbackStatus"),
+                    "riskProfile": _build_review_case_risk_profile(
+                        workflow=job,
+                        report_payload=report_payload,
+                        report_summary=report_summary,
+                        now=now,
+                    ),
                 }
             )
+        filtered_items: list[dict[str, Any]] = []
+        for row in items:
+            risk_profile = (
+                row.get("riskProfile")
+                if isinstance(row.get("riskProfile"), dict)
+                else {}
+            )
+            if (
+                normalized_risk_level is not None
+                and str(risk_profile.get("level") or "").strip().lower() != normalized_risk_level
+            ):
+                continue
+            if (
+                normalized_sla_bucket is not None
+                and str(risk_profile.get("slaBucket") or "").strip().lower() != normalized_sla_bucket
+            ):
+                continue
+            filtered_items.append(row)
+        filtered_items.sort(
+            key=lambda row: _build_review_case_sort_key(
+                item=row,
+                sort_by=normalized_sort_by,
+            ),
+            reverse=(normalized_sort_order == "desc"),
+        )
+        page_items = filtered_items[:limit]
         return {
-            "count": len(items),
-            "items": items,
+            "count": len(filtered_items),
+            "returned": len(page_items),
+            "scanned": len(items),
+            "items": page_items,
             "filters": {
                 "status": normalized_status,
                 "dispatchType": normalized_dispatch_type,
+                "riskLevel": normalized_risk_level,
+                "slaBucket": normalized_sla_bucket,
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
+                "scanLimit": normalized_scan_limit,
                 "limit": limit,
             },
         }

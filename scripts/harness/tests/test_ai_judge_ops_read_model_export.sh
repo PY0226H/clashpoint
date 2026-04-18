@@ -62,10 +62,26 @@ if [[ -n "$output_file" ]]; then
   "registryGovernance": {
     "dependencyHealth": {"invalidCount": 2}
   },
+  "courtroomReadModel": {
+    "count": 3,
+    "items": [{"caseId": 901}]
+  },
+  "reviewQueue": {
+    "count": 6,
+    "items": [{"workflow": {"caseId": 901}}]
+  },
+  "policyGateSimulation": {
+    "summary": {"blockedCount": 2},
+    "items": [{"simulatedGate": {"status": "blocked"}}]
+  },
   "adaptiveSummary": {
     "recommendedActionCount": 5,
     "panelAttentionGroupCount": 2,
-    "calibrationHighRiskCount": 4
+    "calibrationHighRiskCount": 4,
+    "courtroomSampleCount": 3,
+    "reviewQueueCount": 6,
+    "reviewHighRiskCount": 2,
+    "policySimulationBlockedCount": 2
   },
   "trustOverview": {
     "count": 2,
@@ -106,6 +122,10 @@ expect_contains "ok env trust item count" "OPS_READ_MODEL_TRUST_ITEM_COUNT=2" "$
 expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=5" "$OK_ENV_OUT"
 expect_contains "ok env panel attention count" "OPS_READ_MODEL_ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env calibration high risk" "OPS_READ_MODEL_ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT=4" "$OK_ENV_OUT"
+expect_contains "ok env courtroom sample count" "OPS_READ_MODEL_COURTROOM_SAMPLE_COUNT=3" "$OK_ENV_OUT"
+expect_contains "ok env review queue count" "OPS_READ_MODEL_REVIEW_QUEUE_COUNT=6" "$OK_ENV_OUT"
+expect_contains "ok env review high risk count" "OPS_READ_MODEL_REVIEW_HIGH_RISK_COUNT=2" "$OK_ENV_OUT"
+expect_contains "ok env policy sim blocked count" "OPS_READ_MODEL_POLICY_SIM_BLOCKED_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 
 # 场景2：payload 缺少必填键 -> payload_invalid

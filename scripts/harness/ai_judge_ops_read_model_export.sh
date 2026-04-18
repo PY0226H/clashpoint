@@ -45,6 +45,10 @@ TRUST_ERROR_COUNT="0"
 ADAPTIVE_RECOMMENDED_ACTION_COUNT="0"
 ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT="0"
 ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT="0"
+OPS_COURTROOM_SAMPLE_COUNT="0"
+OPS_REVIEW_QUEUE_COUNT="0"
+OPS_REVIEW_HIGH_RISK_COUNT="0"
+OPS_POLICY_SIM_BLOCKED_COUNT="0"
 
 usage() {
   cat <<'USAGE'
@@ -302,6 +306,10 @@ OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
 OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=$ADAPTIVE_RECOMMENDED_ACTION_COUNT
 OPS_READ_MODEL_ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT=$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT
 OPS_READ_MODEL_ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT=$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT
+OPS_READ_MODEL_COURTROOM_SAMPLE_COUNT=$OPS_COURTROOM_SAMPLE_COUNT
+OPS_READ_MODEL_REVIEW_QUEUE_COUNT=$OPS_REVIEW_QUEUE_COUNT
+OPS_READ_MODEL_REVIEW_HIGH_RISK_COUNT=$OPS_REVIEW_HIGH_RISK_COUNT
+OPS_READ_MODEL_POLICY_SIM_BLOCKED_COUNT=$OPS_POLICY_SIM_BLOCKED_COUNT
 OPS_READ_MODEL_UPDATED_AT=$FINISHED_AT
 EOF
 }
@@ -325,7 +333,11 @@ write_output_md() {
 5. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
 6. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
 7. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-8. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+8. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
+9. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
+10. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
+11. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+12. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -348,7 +360,11 @@ write_summary_json() {
     "trust_error_count": $TRUST_ERROR_COUNT,
     "adaptive_recommended_action_count": $ADAPTIVE_RECOMMENDED_ACTION_COUNT,
     "adaptive_panel_attention_group_count": $ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT,
-    "adaptive_calibration_high_risk_count": $ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT
+    "adaptive_calibration_high_risk_count": $ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT,
+    "courtroom_sample_count": $OPS_COURTROOM_SAMPLE_COUNT,
+    "review_queue_count": $OPS_REVIEW_QUEUE_COUNT,
+    "review_high_risk_count": $OPS_REVIEW_HIGH_RISK_COUNT,
+    "policy_sim_blocked_count": $OPS_POLICY_SIM_BLOCKED_COUNT
   },
   "artifacts": {
     "output_json": "$(json_escape "$OUTPUT_JSON")",
@@ -379,7 +395,11 @@ write_summary_md() {
 5. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
 6. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
 7. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-8. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+8. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
+9. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
+10. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
+11. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+12. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -491,7 +511,7 @@ main() {
 
   if [[ "$STATUS" == "pass" ]]; then
     local required_key
-    for required_key in "\"fairnessDashboard\"" "\"fairnessCalibrationAdvisor\"" "\"panelRuntimeReadiness\"" "\"registryGovernance\"" "\"adaptiveSummary\"" "\"trustOverview\"" "\"filters\""; do
+    for required_key in "\"fairnessDashboard\"" "\"fairnessCalibrationAdvisor\"" "\"panelRuntimeReadiness\"" "\"registryGovernance\"" "\"courtroomReadModel\"" "\"reviewQueue\"" "\"policyGateSimulation\"" "\"adaptiveSummary\"" "\"trustOverview\"" "\"filters\""; do
       if ! grep -Fq "$required_key" "$OUTPUT_JSON"; then
         REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${required_key}"
       fi
@@ -510,6 +530,10 @@ main() {
     ADAPTIVE_RECOMMENDED_ACTION_COUNT="$(extract_first_number "$OUTPUT_JSON" "recommendedActionCount")"
     ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT="$(extract_first_number "$OUTPUT_JSON" "panelAttentionGroupCount")"
     ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "calibrationHighRiskCount")"
+    OPS_COURTROOM_SAMPLE_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomSampleCount")"
+    OPS_REVIEW_QUEUE_COUNT="$(extract_first_number "$OUTPUT_JSON" "reviewQueueCount")"
+    OPS_REVIEW_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "reviewHighRiskCount")"
+    OPS_POLICY_SIM_BLOCKED_COUNT="$(extract_first_number "$OUTPUT_JSON" "policySimulationBlockedCount")"
   fi
 
   FINISHED_AT="$(iso_now)"
