@@ -350,6 +350,15 @@ COURTROOM_CASE_SORT_FIELDS = {
     "risk_score",
     "case_id",
 }
+EVIDENCE_CLAIM_RELIABILITY_LEVEL_VALUES = {"high", "medium", "low", "unknown"}
+EVIDENCE_CLAIM_QUEUE_SORT_FIELDS = {
+    "updated_at",
+    "risk_score",
+    "conflict_pair_count",
+    "unanswered_claim_count",
+    "reliability_score",
+    "case_id",
+}
 POLICY_DOMAIN_JUDGE_FAMILY_VALUES = {
     "general",
     "tft",
@@ -1482,6 +1491,16 @@ def _build_courtroom_read_model_light_summary(
         if isinstance(claim.get("unansweredClaims"), list)
         else []
     )
+    claim_graph_summary = (
+        claim.get("claimGraphSummary")
+        if isinstance(claim.get("claimGraphSummary"), dict)
+        else {}
+    )
+    claim_graph_stats = (
+        claim_graph_summary.get("stats")
+        if isinstance(claim_graph_summary.get("stats"), dict)
+        else {}
+    )
     fairness_summary = (
         fairness.get("summary")
         if isinstance(fairness.get("summary"), dict)
@@ -1511,6 +1530,18 @@ def _build_courtroom_read_model_light_summary(
             "keyClaimCount": key_claim_count,
             "conflictPairCount": len(conflict_pairs),
             "unansweredClaimCount": len(unanswered_claims),
+            "stats": {
+                "conflictEdges": (
+                    int(claim_graph_stats.get("conflictEdges"))
+                    if isinstance(claim_graph_stats.get("conflictEdges"), int)
+                    else len(conflict_pairs)
+                ),
+                "unansweredClaims": (
+                    int(claim_graph_stats.get("unansweredClaims"))
+                    if isinstance(claim_graph_stats.get("unansweredClaims"), int)
+                    else len(unanswered_claims)
+                ),
+            },
         },
         "evidence": {
             "decisiveEvidenceCount": len(decisive_refs),
@@ -1524,6 +1555,26 @@ def _build_courtroom_read_model_light_summary(
                 if isinstance(evidence_stats.get("conflictSourceCount"), int)
                 else len(conflict_sources)
             ),
+            "stats": {
+                "verdictReferencedCount": (
+                    int(evidence_stats.get("verdictReferencedCount"))
+                    if isinstance(evidence_stats.get("verdictReferencedCount"), int)
+                    else len(decisive_refs)
+                ),
+                "reliabilityCounts": (
+                    dict(evidence_stats.get("reliabilityCounts"))
+                    if isinstance(evidence_stats.get("reliabilityCounts"), dict)
+                    else {}
+                ),
+                "verdictReferencedReliabilityCounts": (
+                    dict(evidence_stats.get("verdictReferencedReliabilityCounts"))
+                    if isinstance(
+                        evidence_stats.get("verdictReferencedReliabilityCounts"),
+                        dict,
+                    )
+                    else {}
+                ),
+            },
         },
         "panel": {
             "courtroomRoleCount": len(courtroom_roles),
@@ -1663,6 +1714,254 @@ def _build_courtroom_case_sort_key(*, item: dict[str, Any], sort_by: str) -> tup
     return (
         str(workflow.get("updatedAt") or "").strip(),
         int(risk.get("score") or 0),
+        int(workflow.get("caseId") or 0),
+    )
+
+
+def _normalize_evidence_claim_reliability_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_evidence_claim_queue_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def _normalize_evidence_claim_queue_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def _normalize_evidence_claim_reliability_counts(raw: Any) -> dict[str, int]:
+    counts = {
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "unknown": 0,
+    }
+    if not isinstance(raw, dict):
+        return counts
+    for key in counts:
+        value = raw.get(key)
+        try:
+            counts[key] = max(0, int(value))
+        except (TypeError, ValueError):
+            counts[key] = 0
+    return counts
+
+
+def _build_evidence_claim_reliability_profile(
+    *,
+    evidence_stats: dict[str, Any],
+    fallback_decisive_count: int,
+) -> dict[str, Any]:
+    stats = evidence_stats if isinstance(evidence_stats, dict) else {}
+    reliability_counts = _normalize_evidence_claim_reliability_counts(
+        stats.get("reliabilityCounts")
+    )
+    verdict_referenced_counts = _normalize_evidence_claim_reliability_counts(
+        stats.get("verdictReferencedReliabilityCounts")
+    )
+
+    try:
+        verdict_referenced_count = max(0, int(stats.get("verdictReferencedCount") or 0))
+    except (TypeError, ValueError):
+        verdict_referenced_count = 0
+    if verdict_referenced_count <= 0:
+        verdict_referenced_count = sum(verdict_referenced_counts.values())
+    if verdict_referenced_count <= 0:
+        verdict_referenced_count = max(0, int(fallback_decisive_count))
+
+    low_referenced_count = max(0, int(verdict_referenced_counts.get("low") or 0))
+    if verdict_referenced_count > 0:
+        low_referenced_ratio = round(
+            low_referenced_count / float(max(1, verdict_referenced_count)),
+            4,
+        )
+    else:
+        low_referenced_ratio = None
+
+    if verdict_referenced_count <= 0:
+        level = "unknown"
+        score = 0
+    else:
+        ratio = float(low_referenced_ratio or 0.0)
+        score = max(0, min(100, int(round((1.0 - ratio) * 100.0))))
+        if ratio >= 0.45:
+            level = "low"
+        elif ratio >= 0.2:
+            level = "medium"
+        else:
+            level = "high"
+
+    return {
+        "level": level,
+        "score": score,
+        "lowReferencedCount": low_referenced_count,
+        "lowReferencedRatio": low_referenced_ratio,
+        "verdictReferencedCount": verdict_referenced_count,
+        "reliabilityCounts": reliability_counts,
+        "verdictReferencedReliabilityCounts": verdict_referenced_counts,
+    }
+
+
+def _build_evidence_claim_ops_profile(
+    *,
+    risk_profile: dict[str, Any],
+    courtroom_summary: dict[str, Any],
+) -> dict[str, Any]:
+    risk = risk_profile if isinstance(risk_profile, dict) else {}
+    summary = courtroom_summary if isinstance(courtroom_summary, dict) else {}
+    claim = summary.get("claim") if isinstance(summary.get("claim"), dict) else {}
+    evidence = (
+        summary.get("evidence") if isinstance(summary.get("evidence"), dict) else {}
+    )
+    claim_stats = claim.get("stats") if isinstance(claim.get("stats"), dict) else {}
+
+    conflict_pair_count = max(
+        int(claim.get("conflictPairCount") or 0),
+        int(claim_stats.get("conflictEdges") or 0),
+    )
+    unanswered_claim_count = max(
+        int(claim.get("unansweredClaimCount") or 0),
+        int(claim_stats.get("unansweredClaims") or 0),
+    )
+    decisive_evidence_count = int(evidence.get("decisiveEvidenceCount") or 0)
+    conflict_source_count = int(evidence.get("conflictSourceCount") or 0)
+    source_citation_count = int(evidence.get("sourceCitationCount") or 0)
+    evidence_stats = (
+        evidence.get("stats") if isinstance(evidence.get("stats"), dict) else {}
+    )
+    reliability_profile = _build_evidence_claim_reliability_profile(
+        evidence_stats=evidence_stats,
+        fallback_decisive_count=decisive_evidence_count,
+    )
+
+    has_conflict = conflict_pair_count > 0 or conflict_source_count > 0
+    has_unanswered_claim = unanswered_claim_count > 0
+    priority_score = int(risk.get("score") or 0)
+    risk_tags: list[str] = []
+    if has_conflict:
+        priority_score += 15
+        risk_tags.append("claim_conflict_present")
+    if has_unanswered_claim:
+        priority_score += 18
+        risk_tags.append("claim_unanswered")
+    reliability_level = str(reliability_profile.get("level") or "").strip().lower()
+    if reliability_level == "low":
+        priority_score += 20
+        risk_tags.append("evidence_reliability_low")
+    elif reliability_level == "medium":
+        priority_score += 8
+        risk_tags.append("evidence_reliability_medium")
+    if decisive_evidence_count <= 0:
+        priority_score += 8
+        risk_tags.append("no_decisive_evidence")
+    priority_score = max(0, min(priority_score, 100))
+
+    if priority_score >= 75:
+        priority_level = "high"
+    elif priority_score >= 45:
+        priority_level = "medium"
+    else:
+        priority_level = "low"
+
+    return {
+        "priorityScore": priority_score,
+        "priorityLevel": priority_level,
+        "slaBucket": str(risk.get("slaBucket") or "").strip().lower() or "unknown",
+        "riskTags": risk_tags,
+        "hasConflict": has_conflict,
+        "hasUnansweredClaim": has_unanswered_claim,
+        "conflictPairCount": max(0, conflict_pair_count),
+        "unansweredClaimCount": max(0, unanswered_claim_count),
+        "decisiveEvidenceCount": max(0, decisive_evidence_count),
+        "sourceCitationCount": max(0, source_citation_count),
+        "conflictSourceCount": max(0, conflict_source_count),
+        "reliability": reliability_profile,
+    }
+
+
+def _build_evidence_claim_action_hints(
+    *,
+    ops_profile: dict[str, Any],
+    review_required: bool,
+) -> list[str]:
+    profile = ops_profile if isinstance(ops_profile, dict) else {}
+    hints: list[str] = []
+    if bool(profile.get("hasUnansweredClaim")):
+        hints.append("claim.answer_missing")
+    if int(profile.get("conflictPairCount") or 0) > 0:
+        hints.append("claim.resolve_conflict")
+    reliability = (
+        profile.get("reliability")
+        if isinstance(profile.get("reliability"), dict)
+        else {}
+    )
+    reliability_level = str(reliability.get("level") or "").strip().lower()
+    if reliability_level in {"low", "medium"}:
+        hints.append("evidence.upgrade_reliability")
+    if int(profile.get("decisiveEvidenceCount") or 0) <= 0:
+        hints.append("evidence.add_decisive_refs")
+    if review_required:
+        hints.append("review.queue.decide")
+    if not hints:
+        hints.append("monitor")
+    return hints
+
+
+def _build_evidence_claim_queue_sort_key(
+    *,
+    item: dict[str, Any],
+    sort_by: str,
+) -> tuple[Any, ...]:
+    ops_profile = (
+        item.get("claimEvidenceProfile")
+        if isinstance(item.get("claimEvidenceProfile"), dict)
+        else {}
+    )
+    reliability = (
+        ops_profile.get("reliability")
+        if isinstance(ops_profile.get("reliability"), dict)
+        else {}
+    )
+    workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    risk = item.get("riskProfile") if isinstance(item.get("riskProfile"), dict) else {}
+    if sort_by == "risk_score":
+        return (
+            int(ops_profile.get("priorityScore") or 0),
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "conflict_pair_count":
+        return (
+            int(ops_profile.get("conflictPairCount") or 0),
+            int(ops_profile.get("priorityScore") or 0),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "unanswered_claim_count":
+        return (
+            int(ops_profile.get("unansweredClaimCount") or 0),
+            int(ops_profile.get("priorityScore") or 0),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "reliability_score":
+        return (
+            int(reliability.get("score") or 0),
+            int(ops_profile.get("priorityScore") or 0),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(workflow.get("caseId") or 0),)
+    return (
+        str(workflow.get("updatedAt") or "").strip(),
+        int(ops_profile.get("priorityScore") or 0),
         int(workflow.get("caseId") or 0),
     )
 
@@ -10008,6 +10307,353 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "reviewRequired": review_required,
                 "riskLevel": normalized_risk_level,
                 "slaBucket": normalized_sla_bucket,
+                "updatedFrom": (
+                    normalized_updated_from.isoformat()
+                    if normalized_updated_from is not None
+                    else None
+                ),
+                "updatedTo": (
+                    normalized_updated_to.isoformat()
+                    if normalized_updated_to is not None
+                    else None
+                ),
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
+                "scanLimit": normalized_scan_limit,
+                "offset": normalized_offset,
+                "limit": normalized_limit,
+            },
+        }
+
+    @app.get("/internal/judge/evidence-claim/ops-queue")
+    async def list_judge_evidence_claim_ops_queue(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str = Query(default="auto"),
+        winner: str | None = Query(default=None),
+        review_required: bool | None = Query(default=None),
+        risk_level: str | None = Query(default=None),
+        sla_bucket: str | None = Query(default=None),
+        reliability_level: str | None = Query(default=None),
+        has_conflict: bool | None = Query(default=None),
+        has_unanswered_claim: bool | None = Query(default=None),
+        updated_from: datetime | None = Query(default=None),
+        updated_to: datetime | None = Query(default=None),
+        sort_by: str = Query(default="updated_at"),
+        sort_order: str = Query(default="desc"),
+        scan_limit: int = Query(default=500, ge=20, le=2000),
+        offset: int = Query(default=0, ge=0, le=5000),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_status = _normalize_workflow_status(status)
+        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+
+        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+        if normalized_dispatch_type not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+        workflow_dispatch_filter = (
+            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        )
+
+        normalized_winner = str(winner or "").strip().lower() or None
+        if normalized_winner not in {None, "pro", "con", "draw"}:
+            raise HTTPException(status_code=422, detail="invalid_winner")
+
+        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
+        if (
+            normalized_risk_level is not None
+            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
+
+        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
+        if (
+            normalized_sla_bucket is not None
+            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
+
+        normalized_reliability_level = _normalize_evidence_claim_reliability_level(
+            reliability_level
+        )
+        if (
+            normalized_reliability_level is not None
+            and normalized_reliability_level
+            not in EVIDENCE_CLAIM_RELIABILITY_LEVEL_VALUES
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="invalid_evidence_claim_reliability_level",
+            )
+
+        normalized_updated_from = _normalize_query_datetime(updated_from)
+        normalized_updated_to = _normalize_query_datetime(updated_to)
+        if (
+            normalized_updated_from is not None
+            and normalized_updated_to is not None
+            and normalized_updated_from > normalized_updated_to
+        ):
+            raise HTTPException(status_code=422, detail="invalid_updated_time_window")
+
+        normalized_sort_by = _normalize_evidence_claim_queue_sort_by(sort_by)
+        if normalized_sort_by not in EVIDENCE_CLAIM_QUEUE_SORT_FIELDS:
+            raise HTTPException(status_code=422, detail="invalid_evidence_claim_sort_by")
+        normalized_sort_order = _normalize_evidence_claim_queue_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=422, detail="invalid_evidence_claim_sort_order")
+
+        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
+        normalized_offset = max(0, int(offset))
+        normalized_limit = max(1, min(int(limit), 200))
+
+        jobs = await _workflow_list_jobs(
+            status=normalized_status,
+            dispatch_type=workflow_dispatch_filter,
+            limit=normalized_scan_limit,
+        )
+        now = datetime.now(timezone.utc)
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for job in jobs:
+            updated_at = _normalize_query_datetime(job.updated_at)
+            if (
+                normalized_updated_from is not None
+                and (updated_at is None or updated_at < normalized_updated_from)
+            ):
+                continue
+            if (
+                normalized_updated_to is not None
+                and (updated_at is None or updated_at > normalized_updated_to)
+            ):
+                continue
+
+            try:
+                context = await _resolve_report_context_for_case(
+                    case_id=job.job_id,
+                    dispatch_type=normalized_dispatch_type,
+                    not_found_detail="courtroom_case_not_found",
+                    missing_report_detail="courtroom_report_payload_missing",
+                )
+            except HTTPException as err:
+                error_code = str(err.detail or "").strip() or "evidence_claim_case_unavailable"
+                if error_code in {
+                    "courtroom_case_not_found",
+                    "courtroom_report_payload_missing",
+                }:
+                    errors.append(
+                        {
+                            "caseId": int(job.job_id),
+                            "statusCode": int(err.status_code),
+                            "errorCode": error_code,
+                        }
+                    )
+                    continue
+                raise
+
+            report_payload = (
+                context.get("reportPayload")
+                if isinstance(context.get("reportPayload"), dict)
+                else {}
+            )
+            winner_value = str(report_payload.get("winner") or "").strip().lower() or None
+            if normalized_winner is not None and winner_value != normalized_winner:
+                continue
+
+            report_review_required = bool(report_payload.get("reviewRequired"))
+            if review_required is not None and report_review_required != bool(review_required):
+                continue
+
+            trace = runtime.trace_store.get_trace(job.job_id)
+            report_summary = (
+                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+            )
+            risk_profile = _build_review_case_risk_profile(
+                workflow=job,
+                report_payload=report_payload,
+                report_summary=report_summary,
+                now=now,
+            )
+            if (
+                normalized_risk_level is not None
+                and str(risk_profile.get("level") or "").strip().lower()
+                != normalized_risk_level
+            ):
+                continue
+            if (
+                normalized_sla_bucket is not None
+                and str(risk_profile.get("slaBucket") or "").strip().lower()
+                != normalized_sla_bucket
+            ):
+                continue
+
+            verdict_contract = _build_verdict_contract(report_payload)
+            case_evidence = _build_case_evidence_view(
+                report_payload=report_payload,
+                verdict_contract=verdict_contract,
+                claim_ledger_record=None,
+            )
+            courtroom_view = _build_courtroom_read_model_view(
+                report_payload=report_payload,
+                case_evidence=case_evidence,
+            )
+            courtroom_summary = _build_courtroom_read_model_light_summary(
+                courtroom_view=courtroom_view,
+            )
+            ops_profile = _build_evidence_claim_ops_profile(
+                risk_profile=risk_profile,
+                courtroom_summary=courtroom_summary,
+            )
+            if (
+                has_conflict is not None
+                and bool(ops_profile.get("hasConflict")) != bool(has_conflict)
+            ):
+                continue
+            if (
+                has_unanswered_claim is not None
+                and bool(ops_profile.get("hasUnansweredClaim"))
+                != bool(has_unanswered_claim)
+            ):
+                continue
+            reliability = (
+                ops_profile.get("reliability")
+                if isinstance(ops_profile.get("reliability"), dict)
+                else {}
+            )
+            reliability_level_value = (
+                str(reliability.get("level") or "").strip().lower() or "unknown"
+            )
+            if (
+                normalized_reliability_level is not None
+                and reliability_level_value != normalized_reliability_level
+            ):
+                continue
+
+            callback_status = (
+                report_summary.get("callbackStatus")
+                or (
+                    context.get("responsePayload", {})
+                    if isinstance(context.get("responsePayload"), dict)
+                    else {}
+                ).get("callbackStatus")
+                or (trace.callback_status if trace is not None else None)
+            )
+            callback_error = (
+                report_summary.get("callbackError")
+                or (
+                    context.get("responsePayload", {})
+                    if isinstance(context.get("responsePayload"), dict)
+                    else {}
+                ).get("callbackError")
+                or (trace.callback_error if trace is not None else None)
+            )
+            dispatch_type_value = (
+                str(context.get("dispatchType") or "").strip().lower() or "auto"
+            )
+            items.append(
+                {
+                    "caseId": int(job.job_id),
+                    "dispatchType": dispatch_type_value,
+                    "traceId": context.get("traceId") or None,
+                    "workflow": _serialize_workflow_job(job),
+                    "winner": winner_value,
+                    "reviewRequired": report_review_required,
+                    "needsDrawVote": bool(report_payload.get("needsDrawVote")),
+                    "callbackStatus": callback_status,
+                    "callbackError": callback_error,
+                    "riskProfile": risk_profile,
+                    "courtroomSummary": courtroom_summary,
+                    "claimEvidenceProfile": ops_profile,
+                    "actionHints": _build_evidence_claim_action_hints(
+                        ops_profile=ops_profile,
+                        review_required=report_review_required,
+                    ),
+                    "detailPath": (
+                        f"/internal/judge/cases/{int(job.job_id)}/courtroom-read-model"
+                        f"?dispatch_type={dispatch_type_value}"
+                    ),
+                }
+            )
+
+        items.sort(
+            key=lambda row: _build_evidence_claim_queue_sort_key(
+                item=row,
+                sort_by=normalized_sort_by,
+            ),
+            reverse=(normalized_sort_order == "desc"),
+        )
+        page_items = items[normalized_offset : normalized_offset + normalized_limit]
+
+        risk_level_counts = {
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+        }
+        reliability_level_counts = {
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "unknown": 0,
+        }
+        conflict_case_count = 0
+        unanswered_case_count = 0
+        for row in items:
+            risk_profile = (
+                row.get("riskProfile")
+                if isinstance(row.get("riskProfile"), dict)
+                else {}
+            )
+            risk_level_value = str(risk_profile.get("level") or "").strip().lower()
+            if risk_level_value in risk_level_counts:
+                risk_level_counts[risk_level_value] += 1
+
+            ops_profile = (
+                row.get("claimEvidenceProfile")
+                if isinstance(row.get("claimEvidenceProfile"), dict)
+                else {}
+            )
+            if bool(ops_profile.get("hasConflict")):
+                conflict_case_count += 1
+            if bool(ops_profile.get("hasUnansweredClaim")):
+                unanswered_case_count += 1
+            reliability = (
+                ops_profile.get("reliability")
+                if isinstance(ops_profile.get("reliability"), dict)
+                else {}
+            )
+            reliability_level_value = str(
+                reliability.get("level") or ""
+            ).strip().lower()
+            if reliability_level_value in reliability_level_counts:
+                reliability_level_counts[reliability_level_value] += 1
+            else:
+                reliability_level_counts["unknown"] += 1
+
+        return {
+            "count": len(items),
+            "returned": len(page_items),
+            "scanned": len(jobs),
+            "skipped": max(0, len(jobs) - len(items)),
+            "errorCount": len(errors),
+            "items": page_items,
+            "errors": errors,
+            "aggregations": {
+                "riskLevelCounts": risk_level_counts,
+                "reliabilityLevelCounts": reliability_level_counts,
+                "conflictCaseCount": conflict_case_count,
+                "unansweredCaseCount": unanswered_case_count,
+            },
+            "filters": {
+                "status": normalized_status,
+                "dispatchType": normalized_dispatch_type,
+                "winner": normalized_winner,
+                "reviewRequired": review_required,
+                "riskLevel": normalized_risk_level,
+                "slaBucket": normalized_sla_bucket,
+                "reliabilityLevel": normalized_reliability_level,
+                "hasConflict": has_conflict,
+                "hasUnansweredClaim": has_unanswered_claim,
                 "updatedFrom": (
                     normalized_updated_from.isoformat()
                     if normalized_updated_from is not None
