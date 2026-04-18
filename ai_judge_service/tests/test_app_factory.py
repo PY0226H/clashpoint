@@ -5,6 +5,9 @@ from typing import Any
 from unittest.mock import patch
 
 from app.app_factory import create_app, create_default_app, create_runtime, require_internal_key
+from app.applications import (
+    build_final_report_payload as build_final_report_payload_v3_final,
+)
 from app.models import (
     CaseCreateRequest,
     FinalDispatchRequest,
@@ -236,6 +239,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}", paths)
         self.assertIn("/internal/judge/cases/{case_id}/claim-ledger", paths)
         self.assertIn("/internal/judge/cases/{case_id}/courtroom-read-model", paths)
+        self.assertIn("/internal/judge/courtroom/cases", paths)
         self.assertIn("/internal/judge/policies", paths)
         self.assertIn("/internal/judge/policies/{policy_version}", paths)
         self.assertIn("/internal/judge/registries/prompts", paths)
@@ -260,6 +264,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/internal/judge/cases/{case_id}/trust/commitment", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/verdict-attestation", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges", paths)
+        self.assertIn("/internal/judge/trust/challenges/ops-queue", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges/request", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision", paths)
         self.assertIn("/internal/judge/cases/{case_id}/trust/kernel-version", paths)
@@ -540,6 +545,238 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(missing_resp.status_code, 404)
         self.assertIn("courtroom_case_not_found", missing_resp.text)
+
+    async def test_courtroom_cases_route_should_support_filters_sorting_and_pagination(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        high_case_id = _unique_case_id(9510)
+        mid_case_id = _unique_case_id(9511)
+        low_case_id = _unique_case_id(9512)
+        case_overrides: dict[int, dict[str, Any]] = {
+            high_case_id: {
+                "reviewRequired": True,
+                "fairnessSummary": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": True,
+                    "reviewRequired": True,
+                },
+                "verdictLedger": {
+                    "arbitration": {
+                        "reviewRequired": True,
+                        "gateDecision": "review_required",
+                    },
+                },
+                "errorCodes": [
+                    "judge_panel_high_disagreement",
+                    "fairness_gate_review_required",
+                ],
+                "auditAlerts": [{"type": "judge_panel_high_disagreement"}],
+                "degradationLevel": 1,
+            },
+            mid_case_id: {
+                "fairnessSummary": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": False,
+                    "reviewRequired": False,
+                },
+                "errorCodes": ["manual_watch"],
+                "auditAlerts": [],
+                "degradationLevel": 0,
+            },
+            low_case_id: {
+                "fairnessSummary": {
+                    "phase": "phase2",
+                    "panelHighDisagreement": False,
+                    "reviewRequired": False,
+                },
+                "errorCodes": [],
+                "auditAlerts": [],
+                "degradationLevel": 0,
+            },
+        }
+
+        def _build_custom_final_payload(
+            *,
+            runtime,
+            request,
+            phase_receipts=None,
+            fairness_thresholds=None,
+            panel_runtime_profiles=None,
+        ):
+            receipts = (
+                list(phase_receipts)
+                if phase_receipts is not None
+                else list(
+                    runtime.trace_store.list_dispatch_receipts(
+                        dispatch_type="phase",
+                        session_id=request.session_id,
+                        status="reported",
+                        limit=1000,
+                    )
+                )
+            )
+            payload = build_final_report_payload_v3_final(
+                request=request,
+                phase_receipts=receipts,
+                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                fairness_thresholds=fairness_thresholds,
+                panel_runtime_profiles=panel_runtime_profiles,
+            )
+            override = case_overrides.get(int(request.case_id), {})
+            if "winner" in override:
+                payload["winner"] = override["winner"]
+            if "reviewRequired" in override:
+                payload["reviewRequired"] = bool(override["reviewRequired"])
+            if "fairnessSummary" in override:
+                fairness_summary = (
+                    payload.get("fairnessSummary")
+                    if isinstance(payload.get("fairnessSummary"), dict)
+                    else {}
+                )
+                fairness_summary.update(override["fairnessSummary"])
+                payload["fairnessSummary"] = fairness_summary
+            if "verdictLedger" in override:
+                verdict_ledger = (
+                    payload.get("verdictLedger")
+                    if isinstance(payload.get("verdictLedger"), dict)
+                    else {}
+                )
+                ledger_override = (
+                    override.get("verdictLedger")
+                    if isinstance(override.get("verdictLedger"), dict)
+                    else {}
+                )
+                arbitration = (
+                    verdict_ledger.get("arbitration")
+                    if isinstance(verdict_ledger.get("arbitration"), dict)
+                    else {}
+                )
+                arbitration_override = (
+                    ledger_override.get("arbitration")
+                    if isinstance(ledger_override.get("arbitration"), dict)
+                    else {}
+                )
+                arbitration.update(arbitration_override)
+                verdict_ledger["arbitration"] = arbitration
+                payload["verdictLedger"] = verdict_ledger
+            if "errorCodes" in override:
+                payload["errorCodes"] = list(override["errorCodes"])
+            if "auditAlerts" in override:
+                payload["auditAlerts"] = list(override["auditAlerts"])
+            if "degradationLevel" in override:
+                payload["degradationLevel"] = int(override["degradationLevel"])
+            if str(payload.get("winner") or "").strip().lower() == "draw":
+                payload["needsDrawVote"] = True
+            return payload
+
+        with patch(
+            "app.app_factory._build_final_report_payload",
+            side_effect=_build_custom_final_payload,
+        ):
+            for case_id in (high_case_id, mid_case_id, low_case_id):
+                final_req = _build_final_request(
+                    case_id=case_id,
+                    idempotency_key=f"final:{case_id}",
+                )
+                final_resp = await self._post_json(
+                    app=app,
+                    path="/internal/judge/v3/final/dispatch",
+                    payload=final_req.model_dump(mode="json"),
+                    internal_key=runtime.settings.ai_internal_key,
+                )
+                self.assertEqual(final_resp.status_code, 200)
+
+        filtered_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/courtroom/cases"
+                "?dispatch_type=auto"
+                "&status=review_required"
+                "&winner=draw"
+                "&review_required=true"
+                "&risk_level=high"
+                "&sort_by=risk_score"
+                "&sort_order=desc"
+                "&scan_limit=200"
+                "&offset=0"
+                "&limit=10"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(filtered_resp.status_code, 200)
+        filtered_payload = filtered_resp.json()
+        self.assertEqual(filtered_payload["count"], 1)
+        self.assertEqual(filtered_payload["returned"], 1)
+        item = filtered_payload["items"][0]
+        self.assertEqual(item["caseId"], high_case_id)
+        self.assertEqual(item["winner"], "draw")
+        self.assertTrue(item["reviewRequired"])
+        self.assertEqual(item["riskProfile"]["level"], "high")
+        self.assertEqual(item["workflow"]["status"], "review_required")
+        self.assertIsInstance(item["courtroomSummary"]["recorder"], dict)
+        self.assertIsInstance(item["courtroomSummary"]["claim"], dict)
+        self.assertIsInstance(item["courtroomSummary"]["evidence"], dict)
+        self.assertIsInstance(item["courtroomSummary"]["panel"], dict)
+        self.assertIsInstance(item["courtroomSummary"]["fairness"], dict)
+        self.assertIsInstance(item["courtroomSummary"]["opinion"], dict)
+        self.assertEqual(filtered_payload["filters"]["status"], "review_required")
+        self.assertEqual(filtered_payload["filters"]["riskLevel"], "high")
+        self.assertEqual(filtered_payload["filters"]["sortBy"], "risk_score")
+
+        paged_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/courtroom/cases"
+                "?dispatch_type=auto"
+                "&sort_by=case_id"
+                "&sort_order=asc"
+                "&offset=1"
+                "&limit=1"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(paged_resp.status_code, 200)
+        paged_payload = paged_resp.json()
+        self.assertEqual(paged_payload["returned"], 1)
+        self.assertGreaterEqual(paged_payload["count"], 3)
+        sorted_case_ids = sorted([high_case_id, mid_case_id, low_case_id])
+        self.assertEqual(paged_payload["items"][0]["caseId"], sorted_case_ids[1])
+        self.assertEqual(paged_payload["filters"]["offset"], 1)
+        self.assertEqual(paged_payload["filters"]["limit"], 1)
+
+    async def test_courtroom_cases_route_should_validate_query_values(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        invalid_winner_resp = await self._get(
+            app=app,
+            path="/internal/judge/courtroom/cases?winner=invalid",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_winner_resp.status_code, 422)
+        self.assertIn("invalid_winner", invalid_winner_resp.text)
+
+        invalid_window_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/courtroom/cases"
+                "?updated_from=2026-04-18T03:00:00Z"
+                "&updated_to=2026-04-18T02:00:00Z"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_window_resp.status_code, 422)
+        self.assertIn("invalid_updated_time_window", invalid_window_resp.text)
 
     async def test_claim_ledger_route_should_return_persisted_claim_graph(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -3430,6 +3667,181 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted_payload["items"][0]["workflow"]["caseId"], high_risk_case_id)
         self.assertEqual(sorted_payload["items"][1]["workflow"]["caseId"], low_risk_case_id)
 
+    async def test_review_cases_route_should_include_trust_association_and_unified_priority(self) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        challenged_case_id = _unique_case_id(8521)
+        plain_case_id = _unique_case_id(8522)
+        forced_review_cases = {challenged_case_id, plain_case_id}
+
+        def _build_review_payload(
+            *,
+            runtime,
+            request,
+            phase_receipts=None,
+            fairness_thresholds=None,
+            panel_runtime_profiles=None,
+        ):
+            receipts = (
+                list(phase_receipts)
+                if phase_receipts is not None
+                else list(
+                    runtime.trace_store.list_dispatch_receipts(
+                        dispatch_type="phase",
+                        session_id=request.session_id,
+                        status="reported",
+                        limit=1000,
+                    )
+                )
+            )
+            payload = build_final_report_payload_v3_final(
+                request=request,
+                phase_receipts=receipts,
+                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                fairness_thresholds=fairness_thresholds,
+                panel_runtime_profiles=panel_runtime_profiles,
+            )
+            if int(request.case_id) in forced_review_cases:
+                payload["reviewRequired"] = True
+                fairness_summary = (
+                    payload.get("fairnessSummary")
+                    if isinstance(payload.get("fairnessSummary"), dict)
+                    else {}
+                )
+                fairness_summary["reviewRequired"] = True
+                payload["fairnessSummary"] = fairness_summary
+                verdict_ledger = (
+                    payload.get("verdictLedger")
+                    if isinstance(payload.get("verdictLedger"), dict)
+                    else {}
+                )
+                arbitration = (
+                    verdict_ledger.get("arbitration")
+                    if isinstance(verdict_ledger.get("arbitration"), dict)
+                    else {}
+                )
+                arbitration["reviewRequired"] = True
+                arbitration["gateDecision"] = "review_required"
+                verdict_ledger["arbitration"] = arbitration
+                payload["verdictLedger"] = verdict_ledger
+                payload["errorCodes"] = ["review_required"]
+            return payload
+
+        with patch(
+            "app.app_factory._build_final_report_payload",
+            side_effect=_build_review_payload,
+        ):
+            for case_id in (challenged_case_id, plain_case_id):
+                final_resp = await self._post_json(
+                    app=app,
+                    path="/internal/judge/v3/final/dispatch",
+                    payload=_build_final_request(
+                        case_id=case_id,
+                        idempotency_key=f"final:{case_id}",
+                    ).model_dump(mode="json"),
+                    internal_key=runtime.settings.ai_internal_key,
+                )
+                self.assertEqual(final_resp.status_code, 200)
+
+        challenge_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{challenged_case_id}/trust/challenges/request"
+                "?dispatch_type=auto&reason_code=manual_challenge&reason=need_recheck"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(challenge_resp.status_code, 200)
+
+        open_only_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/review/cases"
+                "?status=review_required&dispatch_type=final"
+                "&challenge_state=open&trust_review_state=pending_review"
+                "&sort_by=unified_priority_score&sort_order=desc"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(open_only_resp.status_code, 200)
+        open_only_payload = open_only_resp.json()
+        self.assertEqual(open_only_payload["count"], 1)
+        item = open_only_payload["items"][0]
+        self.assertEqual(item["workflow"]["caseId"], challenged_case_id)
+        self.assertEqual(item["trustChallenge"]["state"], "under_review")
+        self.assertEqual(item["trustChallenge"]["reviewState"], "pending_review")
+        self.assertIsInstance(item["trustPriorityProfile"], dict)
+        self.assertIsInstance(item["unifiedPriorityProfile"], dict)
+        self.assertGreaterEqual(
+            int(item["unifiedPriorityProfile"]["score"]),
+            int(item["riskProfile"]["score"]),
+        )
+        self.assertEqual(open_only_payload["filters"]["challengeState"], "open")
+        self.assertEqual(open_only_payload["filters"]["trustReviewState"], "pending_review")
+        self.assertEqual(open_only_payload["filters"]["sortBy"], "unified_priority_score")
+
+        merged_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/review/cases"
+                "?status=review_required&dispatch_type=final"
+                "&sort_by=unified_priority_score&sort_order=desc"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(merged_resp.status_code, 200)
+        merged_payload = merged_resp.json()
+        self.assertEqual(merged_payload["count"], 2)
+        self.assertEqual(
+            merged_payload["items"][0]["workflow"]["caseId"],
+            challenged_case_id,
+        )
+        self.assertEqual(
+            merged_payload["items"][1]["workflow"]["caseId"],
+            plain_case_id,
+        )
+
+    async def test_review_cases_route_should_validate_trust_priority_query_values(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        invalid_challenge_state_resp = await self._get(
+            app=app,
+            path="/internal/judge/review/cases?challenge_state=invalid",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_challenge_state_resp.status_code, 422)
+        self.assertIn("invalid_review_challenge_state", invalid_challenge_state_resp.text)
+
+        invalid_review_state_resp = await self._get(
+            app=app,
+            path="/internal/judge/review/cases?trust_review_state=invalid",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_review_state_resp.status_code, 422)
+        self.assertIn("invalid_review_trust_review_state", invalid_review_state_resp.text)
+
+        invalid_unified_level_resp = await self._get(
+            app=app,
+            path="/internal/judge/review/cases?unified_priority_level=extreme",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_unified_level_resp.status_code, 422)
+        self.assertIn(
+            "invalid_review_unified_priority_level",
+            invalid_unified_level_resp.text,
+        )
+
     async def test_trust_challenge_request_and_decision_should_drive_phaseb_lifecycle(
         self,
     ) -> None:
@@ -3519,6 +3931,150 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(final_job)
         assert final_job is not None
         self.assertEqual(final_job.status, "callback_reported")
+
+    async def test_trust_challenge_ops_queue_route_should_support_state_and_priority_filters(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        open_case_id = _unique_case_id(8451)
+        closed_case_id = _unique_case_id(8452)
+        passive_case_id = _unique_case_id(8453)
+
+        for case_id in (open_case_id, closed_case_id, passive_case_id):
+            final_resp = await self._post_json(
+                app=app,
+                path="/internal/judge/v3/final/dispatch",
+                payload=_build_final_request(
+                    case_id=case_id,
+                    idempotency_key=f"final:{case_id}",
+                ).model_dump(mode="json"),
+                internal_key=runtime.settings.ai_internal_key,
+            )
+            self.assertEqual(final_resp.status_code, 200)
+
+        open_request_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{open_case_id}/trust/challenges/request"
+                "?dispatch_type=auto&reason_code=manual_challenge&reason=open_case"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(open_request_resp.status_code, 200)
+        open_challenge_id = open_request_resp.json()["challengeId"]
+
+        closed_request_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{closed_case_id}/trust/challenges/request"
+                "?dispatch_type=auto&reason_code=manual_challenge&reason=closed_case"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(closed_request_resp.status_code, 200)
+        closed_challenge_id = closed_request_resp.json()["challengeId"]
+        closed_decision_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{closed_case_id}/trust/challenges/{closed_challenge_id}/decision"
+                "?dispatch_type=auto&decision=uphold&actor=ops&reason=verified"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(closed_decision_resp.status_code, 200)
+
+        open_queue_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/trust/challenges/ops-queue"
+                "?dispatch_type=auto&challenge_state=open&sort_by=priority_score"
+                "&sort_order=desc&scan_limit=300&offset=0&limit=20"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(open_queue_resp.status_code, 200)
+        open_queue_payload = open_queue_resp.json()
+        self.assertGreaterEqual(open_queue_payload["count"], 1)
+        self.assertGreaterEqual(open_queue_payload["returned"], 1)
+        open_case_item = next(
+            item for item in open_queue_payload["items"] if item["caseId"] == open_case_id
+        )
+        self.assertEqual(open_case_item["challengeReview"]["state"], "under_review")
+        self.assertEqual(open_case_item["challengeReview"]["activeChallengeId"], open_challenge_id)
+        self.assertEqual(open_case_item["review"]["state"], "pending_review")
+        self.assertIn(
+            open_case_item["priorityProfile"]["level"],
+            {"medium", "high"},
+        )
+        self.assertIn("trust.challenge.decide", open_case_item["actionHints"])
+        self.assertIn("review.queue.decide", open_case_item["actionHints"])
+        self.assertIn(
+            f"/internal/judge/cases/{open_case_id}/trust/challenges/{open_challenge_id}/decision",
+            str(open_case_item["actionPaths"]["decisionPath"]),
+        )
+        self.assertEqual(open_queue_payload["filters"]["challengeState"], "open")
+        self.assertEqual(open_queue_payload["filters"]["sortBy"], "priority_score")
+
+        closed_queue_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/trust/challenges/ops-queue"
+                "?dispatch_type=auto&challenge_state=challenge_closed"
+                "&review_state=approved&sort_by=case_id&sort_order=asc"
+                "&scan_limit=300&offset=0&limit=20"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(closed_queue_resp.status_code, 200)
+        closed_queue_payload = closed_queue_resp.json()
+        self.assertGreaterEqual(closed_queue_payload["count"], 1)
+        closed_case_item = next(
+            item for item in closed_queue_payload["items"] if item["caseId"] == closed_case_id
+        )
+        self.assertEqual(closed_case_item["challengeReview"]["state"], "challenge_closed")
+        self.assertEqual(closed_case_item["review"]["state"], "approved")
+        self.assertEqual(closed_case_item["review"]["workflowStatus"], "callback_reported")
+        self.assertIsNone(closed_case_item["actionPaths"]["decisionPath"])
+        self.assertEqual(closed_queue_payload["filters"]["reviewState"], "approved")
+
+    async def test_trust_challenge_ops_queue_route_should_validate_query_values(self) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        invalid_state_resp = await self._get(
+            app=app,
+            path="/internal/judge/trust/challenges/ops-queue?challenge_state=invalid",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_state_resp.status_code, 422)
+        self.assertIn("invalid_trust_challenge_state", invalid_state_resp.text)
+
+        invalid_priority_resp = await self._get(
+            app=app,
+            path="/internal/judge/trust/challenges/ops-queue?priority_level=extreme",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_priority_resp.status_code, 422)
+        self.assertIn("invalid_trust_priority_level", invalid_priority_resp.text)
+
+        invalid_sort_resp = await self._get(
+            app=app,
+            path="/internal/judge/trust/challenges/ops-queue?sort_by=unknown",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(invalid_sort_resp.status_code, 422)
+        self.assertIn("invalid_trust_sort_by", invalid_sort_resp.text)
 
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,
@@ -5486,7 +6042,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(payload["panelRuntimeReadiness"], dict)
         self.assertIsInstance(payload["registryGovernance"], dict)
         self.assertIsInstance(payload["courtroomReadModel"], dict)
+        self.assertIsInstance(payload["courtroomQueue"], dict)
         self.assertIsInstance(payload["reviewQueue"], dict)
+        self.assertIsInstance(payload["reviewTrustPriority"], dict)
+        self.assertIsInstance(payload["trustChallengeQueue"], dict)
         self.assertIsInstance(payload["policyGateSimulation"], dict)
         self.assertIsInstance(payload["adaptiveSummary"], dict)
         self.assertIsInstance(payload["trustOverview"], dict)
@@ -5501,8 +6060,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("reviewQueueCount", payload["adaptiveSummary"])
         self.assertIn("policySimulationBlockedCount", payload["adaptiveSummary"])
         self.assertIn("courtroomSampleCount", payload["adaptiveSummary"])
+        self.assertIn("courtroomQueueCount", payload["adaptiveSummary"])
+        self.assertIn("trustChallengeQueueCount", payload["adaptiveSummary"])
+        self.assertIn("reviewTrustPriorityCount", payload["adaptiveSummary"])
+        self.assertIn("reviewUnifiedHighPriorityCount", payload["adaptiveSummary"])
         self.assertGreaterEqual(payload["adaptiveSummary"]["reviewQueueCount"], 0)
         self.assertGreaterEqual(payload["adaptiveSummary"]["courtroomSampleCount"], 1)
+        self.assertGreaterEqual(payload["adaptiveSummary"]["courtroomQueueCount"], 1)
         self.assertIn(
             "activeVersions",
             payload["registryGovernance"],
@@ -5513,8 +6077,19 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreaterEqual(payload["courtroomReadModel"]["count"], 1)
         self.assertIn("items", payload["courtroomReadModel"])
+        self.assertGreaterEqual(payload["courtroomQueue"]["count"], 1)
+        self.assertEqual(payload["courtroomQueue"]["filters"]["sortBy"], "risk_score")
+        self.assertEqual(payload["courtroomQueue"]["filters"]["dispatchType"], "auto")
         self.assertIn("simulatedGate", payload["policyGateSimulation"]["items"][0])
         self.assertGreaterEqual(payload["reviewQueue"]["count"], 0)
+        self.assertEqual(payload["reviewQueue"]["filters"]["sortBy"], "risk_score")
+        self.assertGreaterEqual(payload["reviewTrustPriority"]["count"], 0)
+        self.assertEqual(
+            payload["reviewTrustPriority"]["filters"]["sortBy"],
+            "unified_priority_score",
+        )
+        self.assertGreaterEqual(payload["trustChallengeQueue"]["count"], 0)
+        self.assertEqual(payload["trustChallengeQueue"]["filters"]["challengeState"], "open")
         self.assertGreaterEqual(payload["trustOverview"]["count"], 1)
         self.assertGreaterEqual(payload["trustOverview"]["verifiedCount"], 0)
         self.assertLessEqual(

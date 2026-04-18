@@ -1,0 +1,160 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-18  
+当前主线：`AI_judge_service P17（Courtroom Query + Trust Challenge Ops Queue + Review/Trust Unified Priority + Ops Pack v4）`  
+当前状态：执行中（`ai-judge-next-iteration-planning` 已完成，P17-M1 起待执行）
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接 `P16` 阶段收口后的下一轮开发，目标是把“法庭式 Agent 主链”从单案查看升级到“可批量运营、可排队治理、可发布前仿真决策”。
+2. 本轮继续执行未上线硬切原则：不保留长期兼容层、双写链路、灰度旧路径。
+3. 规划输入保持三元一致：
+   - 企业方案：`docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - 架构方案：`docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+   - 当前代码状态：`P16` 已完成能力 + `app_factory/tests/scripts` 当前实现 + `completed/todo` 沉淀
+4. 已归档上一版当前计划快照：`docs/dev_plan/archive/20260418T084116Z-ai-judge-current-plan-archive.md`。
+
+---
+
+## 2. 当前代码状态快照（P17 起点）
+
+截至 2026-04-18，以下能力已在本地主线确认：
+
+1. 官方裁决链闭环：`phase/final dispatch + trace + replay + review + failed callback`。
+2. 六对象主链可查：`case_dossier / claim_graph / evidence_ledger / verdict_ledger / fairness_report / opinion_pack`。
+3. 法庭式读面已具备单案视图：`GET /internal/judge/cases/{case_id}/courtroom-read-model`。
+4. Review 队列已具备风险优先级：`GET /internal/judge/review/cases` 支持风险/SLA 筛选排序与 `riskProfile`。
+5. Registry 发布前仿真已上线：`GET /internal/judge/registries/policy/gate-simulation`（advisory-only）。
+6. Ops 聚合包已升级到 v3：`GET /internal/judge/ops/read-model/pack` 包含 courtroom/review/simulation/trust 汇总。
+7. `NPC Coach / Room QA` 仅保留 runtime shell（`advisory_only`），尚未进入正式业务实现。
+8. 当前主要缺口：
+   - 缺少“按批量案件”的 courtroom 运营查询面；
+   - 缺少 trust challenge 的独立 ops 队列面与优先级治理面；
+   - 缺少 review 与 trust challenge 的统一运营优先级视图；
+   - `real-env pass` 仍是环境窗口阻塞项（本地仅能做参考演练）。
+
+---
+
+## 3. P17 总目标
+
+1. 对齐企业方案第 6/7/8/13/15 章：把法庭式主链对象升级为“可批量查询 + 可治理排队 + 可验证信任”的运营读面。
+2. 对齐架构方案第 5.3/5.4/13 章：强化 Official Verdict Plane 的治理与门禁，不让互动型能力侵入裁决写链。
+3. 完成 review 与 trust challenge 的统一优先级编排，支撑运营端真实排队处理。
+4. 将 ops read model 与导出脚本升级到 v4，统一形成第三方看板可消费证据面。
+5. 保持边界：`NPC Coach / Room QA` 继续 `advisory_only`，不推进业务策略实现。
+
+---
+
+## 4. P17 模块执行矩阵
+
+### 已完成/未完成矩阵
+
+| 模块 | 优先级 | 状态 | 本轮目标 | DoD（完成定义） | 验证方式 |
+| --- | --- | --- | --- | --- | --- |
+| `ai-judge-next-iteration-planning` | P0 | 已完成（2026-04-18） | 基于企业方案+架构方案+当前代码状态生成 P17 计划 | 当前计划已切换为 P17，并给出模块矩阵/门禁口径/阻塞边界 | `bash scripts/quality/harness_docs_lint.sh` + `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p17-courtroom-read-model-list-v1` | P1 | 已完成（2026-04-18） | 从单案读面升级到案件列表读面 | 新增 `GET /internal/judge/courtroom/cases`（支持 status/winner/review/risk/sla/时间窗口/分页排序），返回 recorder/claim/evidence/panel/fairness/opinion 轻摘要并保持无 verdict 写副作用 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "courtroom_cases_route or courtroom_read_model"` |
+| `ai-judge-p17-trust-challenge-ops-queue-v1` | P1 | 已完成（2026-04-18） | 建立 trust challenge 运维队列视图 | 新增 `GET /internal/judge/trust/challenges/ops-queue`（支持 state/review/priority/sla/has_open_alert/sort/分页），输出 challenge 生命周期、trace、review 关联、`actionHints` 与可执行路径建议 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "trust and challenge and ops"` |
+| `ai-judge-p17-review-trust-priority-unify-v1` | P1 | 已完成（2026-04-18） | 打通 review 队列与 trust queue 的优先级口径 | `review/cases` 已新增 trust challenge 关联字段、`trustPriorityProfile`、`unifiedPriorityProfile`，支持 `challenge_state/trust_review_state/unified_priority_level` 过滤与 `unified_priority_score` 排序（不改变 verdict 主语义） | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "review and trust and priority"` |
+| `ai-judge-p17-ops-pack-and-export-v4` | P1 | 已完成（2026-04-18） | 升级 ops read model 与导出口径到 v4 | `ops/read-model/pack` 新增 `courtroomQueue` / `trustChallengeQueue` / `reviewTrustPriority` 聚合段，并补齐 `adaptiveSummary` 对应聚合计数；`scripts/harness/ai_judge_ops_read_model_export.sh` 与脚本测试同步升级到 v4 口径 | `bash scripts/harness/tests/test_ai_judge_ops_read_model_export.sh` + `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "ops and pack and trust"` |
+| `ai-judge-p17-enterprise-architecture-consistency-refresh` | P2 | 已完成（2026-04-18） | 同步更新章节完成度映射 | `AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md` 已更新到 P17 口径，并纳入 `courtroom list/trust challenge ops queue/review unified priority/ops pack v4` 映射 | `bash scripts/quality/harness_docs_lint.sh` |
+| `ai-judge-p17-local-pass-rehearsal` | P2 | 已完成（2026-04-18） | 在无真实环境条件下完成本地参考收口演练 | 已产出 runtime/ops/fairness/real-pass rehearsal 本地参考证据，并明确 `local_reference_ready`/`pass` 分层，不将本地演练结论宣称为 real-env pass | `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` + `bash scripts/harness/ai_judge_real_pass_rehearsal.sh --root /Users/panyihang/Documents/EchoIsle` + `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` |
+| `ai-judge-p17-real-env-pass-window-execute-on-env` | P0（环境阻塞） | 阻塞（待真实环境窗口） | 真实环境窗口 pass 冲刺 | `AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=pass` 且 `REAL_PASS_READY=true`，并形成 on-env 证据归档 | `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p17-stage-closure-execute` | P2 | 待执行 | 执行阶段收口 | 活动计划归档、`completed/todo` 同步、当前计划重置到下一轮模板 | `bash scripts/harness/ai_judge_stage_closure_execute.sh --root /Users/panyihang/Documents/EchoIsle` |
+
+### 下一开发模块建议
+
+1. `ai-judge-p17-stage-closure-execute`
+
+---
+
+## 5. 延后事项（不阻塞 P17）
+
+1. 真实环境样本驱动的阈值冻结、容量规划、成本路由优化（`on-env`）。
+2. `NPC Coach / Room QA` 正式业务策略与产品逻辑（等待你冻结这两个模块 PRD）。
+3. 链上协议化扩展（ZK/ZKML/链上锚定）继续保持接口预留，主链实现后置。
+4. 基础设施替换评估（Temporal/Kafka adapter/向量后端重选）等待真实运维样本后再决策。
+
+---
+
+## 6. 执行顺序与依赖
+
+1. 先做 `courtroom-read-model-list-v1`，补齐“单案→批量案件”运营查询能力。
+2. 再做 `trust-challenge-ops-queue-v1`，把 trust challenge 生命周期转成可排队可筛选视图。
+3. 然后做 `review-trust-priority-unify-v1`，统一运营优先级口径。
+4. 基于前三项升级 `ops-pack-and-export-v4`，统一看板导出证据面。
+5. 完成章节映射刷新与本地参考演练，再执行阶段收口。
+6. 真实环境窗口就绪后，单独推进 `real-env-pass-window-execute-on-env`。
+
+---
+
+## 7. 本阶段明确不做
+
+1. 不推进 `NPC Coach / Room QA` 正式业务实现。
+2. 不为未上线能力保留长期兼容双轨（alias/双写/灰度并行）。
+3. 不新增绕过 Sentinel/Arbiter 的捷径判决链路。
+4. 不把本地演练结论写成 `real-env pass`。
+
+---
+
+## 8. 测试与验收基线
+
+1. 全量回归：`cd ai_judge_service && ../scripts/py -m pytest -q`
+2. 主链回归：`cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_mainline.py tests/test_phase_final_contract_models.py tests/test_app_factory.py tests/test_evidence_ledger.py`
+3. trust + review + ops 重点回归：`cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "courtroom or review or trust or ops"`
+4. 质量门禁：
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests`
+   - `bash scripts/quality/harness_docs_lint.sh`
+   - `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle`
+5. 本地收口基线（非 real-env pass）：
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+   - `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+
+---
+
+## 9. 风险与对策
+
+1. 风险：courtroom 列表读面字段过重导致查询慢。  
+   对策：先做轻摘要 + 分页 + 时间窗口限制；必要时再引入索引/物化视图。
+2. 风险：trust queue 与 review queue 口径冲突。  
+   对策：先冻结统一 priority profile 结构，再同轮更新 route/测试/文档。
+3. 风险：ops pack v4 结构扩张导致调用方解析漂移。  
+   对策：保持主字段稳定，仅新增聚合段；同轮更新导出脚本测试。
+4. 风险：本地演练被误解为真实环境 pass。  
+   对策：所有收口文案强制区分 `local_reference_ready` 与 `pass`。
+
+---
+
+## 10. 模块完成同步历史
+
+### 模块完成同步历史
+
+1. 2026-04-18：完成 `ai-judge-next-iteration-planning`，基于企业方案+架构方案+当前代码状态重写为 `P17` 完整计划，并归档上一版当前计划到 `docs/dev_plan/archive/20260418T084116Z-ai-judge-current-plan-archive.md`。
+2. 2026-04-18：完成 `ai-judge-p17-courtroom-read-model-list-v1`，新增 `GET /internal/judge/courtroom/cases` 与轻摘要构建器，支持 status/winner/review/risk/sla/时间窗口/分页排序；通过 `ruff check` 与 `tests/test_app_factory.py` 定向回归（含路径暴露、过滤排序分页、参数校验、既有 courtroom/review/ops 回归）。
+3. 2026-04-18：完成 `ai-judge-p17-trust-challenge-ops-queue-v1`，新增 `GET /internal/judge/trust/challenges/ops-queue` 与 trust challenge 优先级画像/排序/动作建议逻辑；通过 `ruff check` 与 `tests/test_app_factory.py` 定向回归（路径暴露、state/priority/sla 过滤、参数校验、既有 trust challenge 生命周期回归）。
+4. 2026-04-18：完成 `ai-judge-p17-review-trust-priority-unify-v1`，升级 `GET /internal/judge/review/cases`：新增 trust challenge 关联字段与 `trustPriorityProfile/unifiedPriorityProfile`，并支持 `challenge_state/trust_review_state/unified_priority_level` 过滤及 `unified_priority_score` 排序；通过 `ruff check` 与 `tests/test_app_factory.py` 定向回归。
+5. 2026-04-18：完成 `ai-judge-p17-ops-pack-and-export-v4`，升级 `GET /internal/judge/ops/read-model/pack`：新增 `courtroomQueue/reviewTrustPriority/trustChallengeQueue` 聚合段，并扩展 `adaptiveSummary` 的 queue/priority 指标；同步升级 `scripts/harness/ai_judge_ops_read_model_export.sh` 与 `scripts/harness/tests/test_ai_judge_ops_read_model_export.sh` 到 v4 口径；通过 `ruff check`、`tests/test_app_factory.py -k "ops and pack and trust"` 与脚本测试回归。
+6. 2026-04-18：完成 `ai-judge-p17-enterprise-architecture-consistency-refresh`，更新 `AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md` 到 P17 口径，补齐 `courtroom list/trust challenge ops queue/review unified priority/ops pack v4` 的章节映射并重写阶段结论与下一步优先级。
+7. 2026-04-18：完成 `ai-judge-p17-local-pass-rehearsal`，在仅本地环境下执行 `runtime_ops_pack + real_pass_rehearsal + real_env_window_closure(--allow-local-reference)`，形成 `local_reference_ready` 证据链；同时确认 `AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=local_reference_ready`，真实环境 `pass` 仍保持阻塞态。
+
+---
+
+## 11. 本轮启动检查清单
+
+1. 开发前先跑 `pre-module-prd-goal-guard`（本轮已执行，命中高风险 judge 关键词，模式为 `full`）。
+2. 任何 API/DTO/错误码变更，同轮检查调用方、路由测试与文档，不保留长期 alias。
+3. 与 `real-env` 相关结论必须标记 `on-env`，禁止把本地结论写成 pass。
+4. 每完成一个模块就回写本计划矩阵与同步历史。
+
+---
+
+## 12. 架构方案第13章一致性校验（计划生成前置）
+
+1. **角色一致性**：继续沿用法庭式 8 Agent 职责，不新增绕过 Sentinel/Arbiter 的捷径路径。
+2. **数据一致性**：六对象主链仍是唯一裁决事实源，不引入平行 verdict 写链。
+3. **门禁一致性**：fairness/review/registry/trust gate 不弱化；新增能力需显式标注是否 advisory-only。
+4. **边界一致性**：`NPC/Room QA` 继续 `advisory_only`，不写官方裁决链。
+5. **跨层一致性**：契约变更同轮同步调用方和测试，不保留长期双轨 alias。
+6. **收口一致性**：真实环境结论与本地参考结论继续分层表达，未获窗口前不宣称 `pass`。

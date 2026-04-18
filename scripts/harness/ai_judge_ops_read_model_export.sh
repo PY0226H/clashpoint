@@ -46,8 +46,13 @@ ADAPTIVE_RECOMMENDED_ACTION_COUNT="0"
 ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT="0"
 ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT="0"
 OPS_COURTROOM_SAMPLE_COUNT="0"
+OPS_COURTROOM_QUEUE_COUNT="0"
 OPS_REVIEW_QUEUE_COUNT="0"
 OPS_REVIEW_HIGH_RISK_COUNT="0"
+OPS_REVIEW_TRUST_PRIORITY_COUNT="0"
+OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT="0"
+OPS_TRUST_CHALLENGE_QUEUE_COUNT="0"
+OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT="0"
 OPS_POLICY_SIM_BLOCKED_COUNT="0"
 
 usage() {
@@ -307,8 +312,13 @@ OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=$ADAPTIVE_RECOMMENDED_ACTION_CO
 OPS_READ_MODEL_ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT=$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT
 OPS_READ_MODEL_ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT=$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT
 OPS_READ_MODEL_COURTROOM_SAMPLE_COUNT=$OPS_COURTROOM_SAMPLE_COUNT
+OPS_READ_MODEL_COURTROOM_QUEUE_COUNT=$OPS_COURTROOM_QUEUE_COUNT
 OPS_READ_MODEL_REVIEW_QUEUE_COUNT=$OPS_REVIEW_QUEUE_COUNT
 OPS_READ_MODEL_REVIEW_HIGH_RISK_COUNT=$OPS_REVIEW_HIGH_RISK_COUNT
+OPS_READ_MODEL_REVIEW_TRUST_PRIORITY_COUNT=$OPS_REVIEW_TRUST_PRIORITY_COUNT
+OPS_READ_MODEL_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT=$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT
+OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_COUNT=$OPS_TRUST_CHALLENGE_QUEUE_COUNT
+OPS_READ_MODEL_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT=$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT
 OPS_READ_MODEL_POLICY_SIM_BLOCKED_COUNT=$OPS_POLICY_SIM_BLOCKED_COUNT
 OPS_READ_MODEL_UPDATED_AT=$FINISHED_AT
 EOF
@@ -334,10 +344,15 @@ write_output_md() {
 6. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
 7. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
 8. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
-9. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
-10. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
-11. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-12. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+9. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
+10. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
+11. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
+12. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+13. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+14. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+15. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+16. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+17. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -362,8 +377,13 @@ write_summary_json() {
     "adaptive_panel_attention_group_count": $ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT,
     "adaptive_calibration_high_risk_count": $ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT,
     "courtroom_sample_count": $OPS_COURTROOM_SAMPLE_COUNT,
+    "courtroom_queue_count": $OPS_COURTROOM_QUEUE_COUNT,
     "review_queue_count": $OPS_REVIEW_QUEUE_COUNT,
     "review_high_risk_count": $OPS_REVIEW_HIGH_RISK_COUNT,
+    "review_trust_priority_count": $OPS_REVIEW_TRUST_PRIORITY_COUNT,
+    "review_unified_high_priority_count": $OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT,
+    "trust_challenge_queue_count": $OPS_TRUST_CHALLENGE_QUEUE_COUNT,
+    "trust_challenge_high_priority_count": $OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT,
     "policy_sim_blocked_count": $OPS_POLICY_SIM_BLOCKED_COUNT
   },
   "artifacts": {
@@ -396,10 +416,15 @@ write_summary_md() {
 6. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
 7. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
 8. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
-9. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
-10. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
-11. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-12. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+9. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
+10. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
+11. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
+12. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+13. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+14. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+15. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+16. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+17. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -511,7 +536,7 @@ main() {
 
   if [[ "$STATUS" == "pass" ]]; then
     local required_key
-    for required_key in "\"fairnessDashboard\"" "\"fairnessCalibrationAdvisor\"" "\"panelRuntimeReadiness\"" "\"registryGovernance\"" "\"courtroomReadModel\"" "\"reviewQueue\"" "\"policyGateSimulation\"" "\"adaptiveSummary\"" "\"trustOverview\"" "\"filters\""; do
+    for required_key in "\"fairnessDashboard\"" "\"fairnessCalibrationAdvisor\"" "\"panelRuntimeReadiness\"" "\"registryGovernance\"" "\"courtroomReadModel\"" "\"courtroomQueue\"" "\"reviewQueue\"" "\"reviewTrustPriority\"" "\"trustChallengeQueue\"" "\"policyGateSimulation\"" "\"adaptiveSummary\"" "\"trustOverview\"" "\"filters\""; do
       if ! grep -Fq "$required_key" "$OUTPUT_JSON"; then
         REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${required_key}"
       fi
@@ -531,8 +556,13 @@ main() {
     ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT="$(extract_first_number "$OUTPUT_JSON" "panelAttentionGroupCount")"
     ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "calibrationHighRiskCount")"
     OPS_COURTROOM_SAMPLE_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomSampleCount")"
+    OPS_COURTROOM_QUEUE_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomQueueCount")"
     OPS_REVIEW_QUEUE_COUNT="$(extract_first_number "$OUTPUT_JSON" "reviewQueueCount")"
     OPS_REVIEW_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "reviewHighRiskCount")"
+    OPS_REVIEW_TRUST_PRIORITY_COUNT="$(extract_first_number "$OUTPUT_JSON" "reviewTrustPriorityCount")"
+    OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT="$(extract_first_number "$OUTPUT_JSON" "reviewUnifiedHighPriorityCount")"
+    OPS_TRUST_CHALLENGE_QUEUE_COUNT="$(extract_first_number "$OUTPUT_JSON" "trustChallengeQueueCount")"
+    OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT="$(extract_first_number "$OUTPUT_JSON" "trustChallengeHighPriorityCount")"
     OPS_POLICY_SIM_BLOCKED_COUNT="$(extract_first_number "$OUTPUT_JSON" "policySimulationBlockedCount")"
   fi
 

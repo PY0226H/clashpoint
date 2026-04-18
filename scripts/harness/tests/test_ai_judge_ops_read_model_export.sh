@@ -66,9 +66,21 @@ if [[ -n "$output_file" ]]; then
     "count": 3,
     "items": [{"caseId": 901}]
   },
+  "courtroomQueue": {
+    "count": 4,
+    "items": [{"caseId": 901}]
+  },
   "reviewQueue": {
     "count": 6,
     "items": [{"workflow": {"caseId": 901}}]
+  },
+  "reviewTrustPriority": {
+    "count": 5,
+    "items": [{"workflow": {"caseId": 901}}]
+  },
+  "trustChallengeQueue": {
+    "count": 3,
+    "items": [{"caseId": 901}]
   },
   "policyGateSimulation": {
     "summary": {"blockedCount": 2},
@@ -79,8 +91,13 @@ if [[ -n "$output_file" ]]; then
     "panelAttentionGroupCount": 2,
     "calibrationHighRiskCount": 4,
     "courtroomSampleCount": 3,
+    "courtroomQueueCount": 4,
     "reviewQueueCount": 6,
     "reviewHighRiskCount": 2,
+    "reviewTrustPriorityCount": 5,
+    "reviewUnifiedHighPriorityCount": 3,
+    "trustChallengeQueueCount": 3,
+    "trustChallengeHighPriorityCount": 2,
     "policySimulationBlockedCount": 2
   },
   "trustOverview": {
@@ -123,8 +140,13 @@ expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMEN
 expect_contains "ok env panel attention count" "OPS_READ_MODEL_ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env calibration high risk" "OPS_READ_MODEL_ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT=4" "$OK_ENV_OUT"
 expect_contains "ok env courtroom sample count" "OPS_READ_MODEL_COURTROOM_SAMPLE_COUNT=3" "$OK_ENV_OUT"
+expect_contains "ok env courtroom queue count" "OPS_READ_MODEL_COURTROOM_QUEUE_COUNT=4" "$OK_ENV_OUT"
 expect_contains "ok env review queue count" "OPS_READ_MODEL_REVIEW_QUEUE_COUNT=6" "$OK_ENV_OUT"
 expect_contains "ok env review high risk count" "OPS_READ_MODEL_REVIEW_HIGH_RISK_COUNT=2" "$OK_ENV_OUT"
+expect_contains "ok env review trust priority count" "OPS_READ_MODEL_REVIEW_TRUST_PRIORITY_COUNT=5" "$OK_ENV_OUT"
+expect_contains "ok env review unified high priority count" "OPS_READ_MODEL_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT=3" "$OK_ENV_OUT"
+expect_contains "ok env trust challenge queue count" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_COUNT=3" "$OK_ENV_OUT"
+expect_contains "ok env trust challenge high priority count" "OPS_READ_MODEL_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env policy sim blocked count" "OPS_READ_MODEL_POLICY_SIM_BLOCKED_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 

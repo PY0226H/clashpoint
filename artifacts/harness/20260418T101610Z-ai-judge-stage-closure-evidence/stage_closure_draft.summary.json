@@ -1,0 +1,30 @@
+{
+  "run_id": "20260418T101610Z-ai-judge-stage-closure-draft",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "status": "pass",
+  "started_at": "2026-04-18T10:16:10Z",
+  "finished_at": "2026-04-18T10:16:11Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T101610Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T101610Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md"
+  },
+  "counts": {
+    "completed_candidates_total": 6,
+    "todo_candidates_total": 4
+  },
+  "completed_candidates": [
+    {"module":"ai-judge-next-iteration-planning","conclusion":"阶段收口草案：模块主体已完成（已完成（2026-04-18））","code_evidence":"artifacts/harness/*-ai-judge-next-iteration-planning.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260418T101610Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p17-courtroom-read-model-list-v1","conclusion":"阶段收口草案：模块主体已完成（已完成（2026-04-18））","code_evidence":"artifacts/harness/*-ai-judge-p17-courtroom-read-model-list-v1.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260418T101610Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p17-trust-challenge-ops-queue-v1","conclusion":"阶段收口草案：模块主体已完成（已完成（2026-04-18））","code_evidence":"artifacts/harness/*-ai-judge-p17-trust-challenge-ops-queue-v1.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260418T101610Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p17-review-trust-priority-unify-v1","conclusion":"阶段收口草案：模块主体已完成（已完成（2026-04-18））","code_evidence":"artifacts/harness/*-ai-judge-p17-review-trust-priority-unify-v1.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260418T101610Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p17-ops-pack-and-export-v4","conclusion":"阶段收口草案：模块主体已完成（已完成（2026-04-18））","code_evidence":"artifacts/harness/*-ai-judge-p17-ops-pack-and-export-v4.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260418T101610Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+    ,{"module":"ai-judge-p17-enterprise-architecture-consistency-refresh","conclusion":"阶段收口草案：模块主体已完成（已完成（2026-04-18））","code_evidence":"artifacts/harness/*-ai-judge-p17-enterprise-architecture-consistency-refresh.summary.json（或执行增量）","verification":"见模块执行增量中的测试门禁记录","archive_source":"当前开发计划阶段收口草案（20260418T101610Z-ai-judge-stage-closure-draft）","linked_todo":"（待收口映射）"}
+  ],
+  "todo_candidates": [
+    {"debt":"ai-judge-stage-closure-deferred-01","source_module":"ai-judge-stage-closure-draft","debt_type":"环境依赖","reason":"真实环境样本驱动的阈值冻结、容量规划、成本路由优化（`on-env`）。","trigger":"获得真实环境或上线前收口","dod":"将该延后项转为可执行模块并产出证据","verify":"对应脚本或报告工件归档"}
+    ,{"debt":"ai-judge-stage-closure-deferred-02","source_module":"ai-judge-stage-closure-draft","debt_type":"环境依赖","reason":"`NPC Coach / Room QA` 正式业务策略与产品逻辑（等待你冻结这两个模块 PRD）。","trigger":"获得真实环境或上线前收口","dod":"将该延后项转为可执行模块并产出证据","verify":"对应脚本或报告工件归档"}
+    ,{"debt":"ai-judge-stage-closure-deferred-03","source_module":"ai-judge-stage-closure-draft","debt_type":"环境依赖","reason":"链上协议化扩展（ZK/ZKML/链上锚定）继续保持接口预留，主链实现后置。","trigger":"获得真实环境或上线前收口","dod":"将该延后项转为可执行模块并产出证据","verify":"对应脚本或报告工件归档"}
+    ,{"debt":"ai-judge-stage-closure-deferred-04","source_module":"ai-judge-stage-closure-draft","debt_type":"环境依赖","reason":"基础设施替换评估（Temporal/Kafka adapter/向量后端重选）等待真实运维样本后再决策。","trigger":"获得真实环境或上线前收口","dod":"将该延后项转为可执行模块并产出证据","verify":"对应脚本或报告工件归档"}
+  ]
+}

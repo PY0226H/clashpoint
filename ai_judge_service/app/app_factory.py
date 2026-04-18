@@ -322,7 +322,27 @@ REVIEW_CASE_SLA_BUCKET_VALUES = {"normal", "warning", "urgent", "unknown"}
 REVIEW_CASE_SORT_FIELDS = {
     "updated_at",
     "risk_score",
+    "unified_priority_score",
     "audit_alert_count",
+    "case_id",
+}
+TRUST_CHALLENGE_REVIEW_STATE_VALUES = {
+    "pending_review",
+    "approved",
+    "rejected",
+    "not_required",
+}
+TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES = {"high", "medium", "low"}
+TRUST_CHALLENGE_SLA_BUCKET_VALUES = {"normal", "warning", "urgent", "unknown"}
+TRUST_CHALLENGE_SORT_FIELDS = {
+    "updated_at",
+    "priority_score",
+    "total_challenges",
+    "case_id",
+}
+COURTROOM_CASE_SORT_FIELDS = {
+    "updated_at",
+    "risk_score",
     "case_id",
 }
 POLICY_DOMAIN_JUDGE_FAMILY_VALUES = {
@@ -1378,6 +1398,155 @@ def _build_courtroom_read_model_view(
     }
 
 
+def _build_courtroom_read_model_light_summary(
+    *,
+    courtroom_view: dict[str, Any] | None,
+) -> dict[str, Any]:
+    model = courtroom_view if isinstance(courtroom_view, dict) else {}
+    recorder = model.get("recorder") if isinstance(model.get("recorder"), dict) else {}
+    claim = model.get("claim") if isinstance(model.get("claim"), dict) else {}
+    evidence = model.get("evidence") if isinstance(model.get("evidence"), dict) else {}
+    panel = model.get("panel") if isinstance(model.get("panel"), dict) else {}
+    fairness = model.get("fairness") if isinstance(model.get("fairness"), dict) else {}
+    opinion = model.get("opinion") if isinstance(model.get("opinion"), dict) else {}
+
+    case_dossier = (
+        recorder.get("caseDossier")
+        if isinstance(recorder.get("caseDossier"), dict)
+        else {}
+    )
+    message_window = (
+        case_dossier.get("messageWindow")
+        if isinstance(case_dossier.get("messageWindow"), dict)
+        else {}
+    )
+    phase_info = case_dossier.get("phase") if isinstance(case_dossier.get("phase"), dict) else {}
+    key_claims_by_side = (
+        claim.get("keyClaimsBySide")
+        if isinstance(claim.get("keyClaimsBySide"), dict)
+        else {}
+    )
+    key_claim_count = 0
+    for side in ("pro", "con"):
+        entries = key_claims_by_side.get(side)
+        if isinstance(entries, list):
+            key_claim_count += len(entries)
+
+    evidence_ledger = (
+        evidence.get("evidenceLedger")
+        if isinstance(evidence.get("evidenceLedger"), dict)
+        else {}
+    )
+    evidence_stats = (
+        evidence_ledger.get("stats")
+        if isinstance(evidence_ledger.get("stats"), dict)
+        else {}
+    )
+    source_citations = (
+        evidence_ledger.get("sourceCitations")
+        if isinstance(evidence_ledger.get("sourceCitations"), list)
+        else []
+    )
+    conflict_sources = (
+        evidence_ledger.get("conflictSources")
+        if isinstance(evidence_ledger.get("conflictSources"), list)
+        else []
+    )
+    decisive_refs = (
+        evidence.get("decisiveEvidenceRefs")
+        if isinstance(evidence.get("decisiveEvidenceRefs"), list)
+        else []
+    )
+    courtroom_roles = (
+        panel.get("courtroomRoles")
+        if isinstance(panel.get("courtroomRoles"), list)
+        else []
+    )
+    pivotal_moments = (
+        panel.get("pivotalMoments")
+        if isinstance(panel.get("pivotalMoments"), list)
+        else []
+    )
+    conflict_pairs = (
+        claim.get("conflictPairs")
+        if isinstance(claim.get("conflictPairs"), list)
+        else []
+    )
+    unanswered_claims = (
+        claim.get("unansweredClaims")
+        if isinstance(claim.get("unansweredClaims"), list)
+        else []
+    )
+    fairness_summary = (
+        fairness.get("summary")
+        if isinstance(fairness.get("summary"), dict)
+        else {}
+    )
+
+    return {
+        "recorder": {
+            "dispatchType": str(case_dossier.get("dispatchType") or "").strip().lower() or None,
+            "phase": {
+                "no": phase_info.get("no"),
+                "startNo": phase_info.get("startNo"),
+                "endNo": phase_info.get("endNo"),
+            },
+            "messageCount": (
+                int(message_window.get("count"))
+                if isinstance(message_window.get("count"), int)
+                else 0
+            ),
+            "timelineCount": (
+                len(recorder.get("phaseDebateTimeline"))
+                if isinstance(recorder.get("phaseDebateTimeline"), list)
+                else 0
+            ),
+        },
+        "claim": {
+            "keyClaimCount": key_claim_count,
+            "conflictPairCount": len(conflict_pairs),
+            "unansweredClaimCount": len(unanswered_claims),
+        },
+        "evidence": {
+            "decisiveEvidenceCount": len(decisive_refs),
+            "sourceCitationCount": (
+                int(evidence_stats.get("sourceCitationCount"))
+                if isinstance(evidence_stats.get("sourceCitationCount"), int)
+                else len(source_citations)
+            ),
+            "conflictSourceCount": (
+                int(evidence_stats.get("conflictSourceCount"))
+                if isinstance(evidence_stats.get("conflictSourceCount"), int)
+                else len(conflict_sources)
+            ),
+        },
+        "panel": {
+            "courtroomRoleCount": len(courtroom_roles),
+            "pivotalMomentCount": len(pivotal_moments),
+            "panelHighDisagreement": bool(fairness_summary.get("panelHighDisagreement")),
+        },
+        "fairness": {
+            "gateDecision": str(fairness.get("gateDecision") or "").strip().lower() or None,
+            "reviewRequired": bool(fairness.get("reviewRequired")),
+            "auditAlertCount": int(fairness.get("auditAlertCount") or 0),
+            "degradationLevel": fairness.get("degradationLevel"),
+        },
+        "opinion": {
+            "winner": str(opinion.get("winner") or "").strip().lower() or None,
+            "debateSummary": (
+                opinion.get("debateSummary")
+                if isinstance(opinion.get("debateSummary"), str)
+                else None
+            ),
+            "verdictReason": (
+                opinion.get("verdictReason")
+                if isinstance(opinion.get("verdictReason"), str)
+                else None
+            ),
+        },
+    }
+
+
 def _serialize_claim_ledger_record(
     record: FactClaimLedgerRecord,
     *,
@@ -1463,6 +1632,349 @@ def _normalize_workflow_status(status: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _normalize_courtroom_case_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def _normalize_courtroom_case_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def _build_courtroom_case_sort_key(*, item: dict[str, Any], sort_by: str) -> tuple[Any, ...]:
+    risk = item.get("riskProfile") if isinstance(item.get("riskProfile"), dict) else {}
+    workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    if sort_by == "risk_score":
+        return (
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(workflow.get("caseId") or 0),)
+    return (
+        str(workflow.get("updatedAt") or "").strip(),
+        int(risk.get("score") or 0),
+        int(workflow.get("caseId") or 0),
+    )
+
+
+def _normalize_trust_challenge_state_filter(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized or normalized == "all":
+        return None
+    return normalized
+
+
+def _normalize_trust_challenge_review_state(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_trust_challenge_priority_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_trust_challenge_sla_bucket(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_trust_challenge_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "priority_score"
+    return normalized
+
+
+def _normalize_trust_challenge_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def _build_trust_challenge_priority_profile(
+    *,
+    workflow: WorkflowJob,
+    challenge_review: dict[str, Any],
+    report_payload: dict[str, Any],
+    report_summary: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    review = challenge_review if isinstance(challenge_review, dict) else {}
+    payload = report_payload if isinstance(report_payload, dict) else {}
+    summary = report_summary if isinstance(report_summary, dict) else {}
+    fairness_summary = (
+        payload.get("fairnessSummary")
+        if isinstance(payload.get("fairnessSummary"), dict)
+        else {}
+    )
+
+    challenge_state = str(review.get("challengeState") or "").strip().lower()
+    review_state = str(review.get("reviewState") or "").strip().lower()
+    total_challenges_raw = review.get("totalChallenges")
+    try:
+        total_challenges = max(0, int(total_challenges_raw))
+    except (TypeError, ValueError):
+        total_challenges = 0
+    open_alert_ids = (
+        review.get("openAlertIds")
+        if isinstance(review.get("openAlertIds"), list)
+        else []
+    )
+    open_alert_count = len(open_alert_ids)
+    alert_summary = (
+        review.get("alertSummary")
+        if isinstance(review.get("alertSummary"), dict)
+        else {}
+    )
+    critical_alert_count = int(alert_summary.get("critical") or 0)
+    challenge_reasons = (
+        review.get("challengeReasons")
+        if isinstance(review.get("challengeReasons"), list)
+        else []
+    )
+
+    age_minutes: int | None = None
+    if isinstance(workflow.updated_at, datetime):
+        updated_at = _normalize_query_datetime(workflow.updated_at)
+        if updated_at is not None:
+            age_delta = now - updated_at
+            age_minutes = max(0, int(age_delta.total_seconds() // 60))
+
+    risk_score = 0
+    risk_tags: list[str] = []
+    if challenge_state in TRUST_CHALLENGE_OPEN_STATES:
+        risk_score += 35
+        risk_tags.append("open_challenge")
+    if review_state == "pending_review":
+        risk_score += 20
+        risk_tags.append("pending_review")
+    if bool(review.get("reviewRequired")):
+        risk_score += 10
+        risk_tags.append("review_required")
+    if total_challenges >= 2:
+        risk_score += min(15, (total_challenges - 1) * 5)
+        risk_tags.append("multi_challenge_case")
+    if open_alert_count > 0:
+        risk_score += min(20, open_alert_count * 4)
+        risk_tags.append("open_alerts_present")
+    if critical_alert_count > 0:
+        risk_score += 10
+        risk_tags.append("critical_alert_present")
+    if str(summary.get("callbackStatus") or "").strip().lower() in {
+        "failed",
+        "error",
+        "callback_failed",
+        "blocked_failed_reported",
+    }:
+        risk_score += 12
+        risk_tags.append("callback_failed")
+    if bool(fairness_summary.get("panelHighDisagreement")):
+        risk_score += 8
+        risk_tags.append("panel_high_disagreement")
+    if len([item for item in challenge_reasons if str(item).strip()]) >= 3:
+        risk_score += 5
+        risk_tags.append("multi_reason_challenge")
+    if age_minutes is not None and age_minutes >= 360:
+        risk_score += 15
+        risk_tags.append("challenge_stale_6h")
+    elif age_minutes is not None and age_minutes >= 120:
+        risk_score += 8
+        risk_tags.append("challenge_stale_2h")
+
+    risk_score = max(0, min(int(risk_score), 100))
+    if risk_score >= 75:
+        risk_level = "high"
+    elif risk_score >= 45:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    if age_minutes is None:
+        sla_bucket = "unknown"
+    elif age_minutes >= 360:
+        sla_bucket = "urgent"
+    elif age_minutes >= 120:
+        sla_bucket = "warning"
+    else:
+        sla_bucket = "normal"
+
+    return {
+        "score": risk_score,
+        "level": risk_level,
+        "tags": risk_tags,
+        "ageMinutes": age_minutes,
+        "slaBucket": sla_bucket,
+        "challengeState": challenge_state or None,
+        "reviewState": review_state or None,
+        "reviewRequired": bool(review.get("reviewRequired")),
+        "totalChallenges": total_challenges,
+        "openAlertCount": open_alert_count,
+    }
+
+
+def _build_trust_challenge_sort_key(*, item: dict[str, Any], sort_by: str) -> tuple[Any, ...]:
+    priority = (
+        item.get("priorityProfile")
+        if isinstance(item.get("priorityProfile"), dict)
+        else {}
+    )
+    workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    challenge_review = (
+        item.get("challengeReview")
+        if isinstance(item.get("challengeReview"), dict)
+        else {}
+    )
+    if sort_by == "priority_score":
+        return (
+            int(priority.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "total_challenges":
+        return (
+            int(challenge_review.get("totalChallenges") or 0),
+            int(priority.get("score") or 0),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(workflow.get("caseId") or 0),)
+    return (
+        str(workflow.get("updatedAt") or "").strip(),
+        int(priority.get("score") or 0),
+        int(workflow.get("caseId") or 0),
+    )
+
+
+def _build_trust_challenge_action_hints(
+    *,
+    challenge_review: dict[str, Any],
+    priority_profile: dict[str, Any],
+) -> list[str]:
+    review = challenge_review if isinstance(challenge_review, dict) else {}
+    priority = priority_profile if isinstance(priority_profile, dict) else {}
+    hints: list[str] = []
+    challenge_state = str(
+        review.get("challengeState") or review.get("state") or ""
+    ).strip().lower()
+    review_state = str(review.get("reviewState") or "").strip().lower()
+    open_alert_count = int(priority.get("openAlertCount") or 0)
+    priority_level = str(priority.get("level") or "").strip().lower()
+
+    if challenge_state in TRUST_CHALLENGE_OPEN_STATES:
+        hints.append("trust.challenge.decide")
+    if review_state == "pending_review":
+        hints.append("review.queue.decide")
+    if open_alert_count > 0:
+        hints.append("alerts.resolve_open")
+    if priority_level == "high":
+        hints.append("ops.escalate_priority")
+    if not hints:
+        hints.append("monitor")
+    return hints
+
+
+def _build_review_trust_unified_priority_profile(
+    *,
+    risk_profile: dict[str, Any],
+    trust_priority_profile: dict[str, Any],
+    challenge_review: dict[str, Any],
+) -> dict[str, Any]:
+    risk = risk_profile if isinstance(risk_profile, dict) else {}
+    trust = trust_priority_profile if isinstance(trust_priority_profile, dict) else {}
+    review = challenge_review if isinstance(challenge_review, dict) else {}
+    risk_score = int(risk.get("score") or 0)
+    trust_score = int(trust.get("score") or 0)
+    challenge_state = str(
+        review.get("challengeState") or trust.get("challengeState") or ""
+    ).strip().lower()
+    review_state = str(
+        review.get("reviewState") or trust.get("reviewState") or ""
+    ).strip().lower()
+    try:
+        total_challenges = int(
+            review.get("totalChallenges")
+            if review.get("totalChallenges") is not None
+            else trust.get("totalChallenges")
+        )
+    except (TypeError, ValueError):
+        total_challenges = 0
+    open_alert_count = int(trust.get("openAlertCount") or 0)
+
+    score = int(round(risk_score * 0.65 + trust_score * 0.35))
+    tags: list[str] = []
+    for source in (
+        risk.get("tags") if isinstance(risk.get("tags"), list) else [],
+        trust.get("tags") if isinstance(trust.get("tags"), list) else [],
+    ):
+        for token in source:
+            text = str(token).strip()
+            if text and text not in tags:
+                tags.append(text)
+    if challenge_state in TRUST_CHALLENGE_OPEN_STATES:
+        score += 10
+        if "open_challenge" not in tags:
+            tags.append("open_challenge")
+    if review_state == "pending_review":
+        score += 5
+        if "pending_review" not in tags:
+            tags.append("pending_review")
+    if total_challenges >= 2:
+        score += min(8, (total_challenges - 1) * 2)
+        if "multi_challenge_case" not in tags:
+            tags.append("multi_challenge_case")
+    score = max(0, min(score, 100))
+
+    if score >= 75:
+        level = "high"
+    elif score >= 45:
+        level = "medium"
+    else:
+        level = "low"
+
+    bucket_rank = {"unknown": 0, "normal": 1, "warning": 2, "urgent": 3}
+    risk_bucket = str(risk.get("slaBucket") or "").strip().lower() or "unknown"
+    trust_bucket = str(trust.get("slaBucket") or "").strip().lower() or "unknown"
+    if risk_bucket not in bucket_rank:
+        risk_bucket = "unknown"
+    if trust_bucket not in bucket_rank:
+        trust_bucket = "unknown"
+    merged_rank = max(bucket_rank.get(risk_bucket, 0), bucket_rank.get(trust_bucket, 0))
+    merged_bucket = next(
+        (key for key, value in bucket_rank.items() if value == merged_rank),
+        "unknown",
+    )
+
+    return {
+        "score": score,
+        "level": level,
+        "tags": tags,
+        "slaBucket": merged_bucket,
+        "riskScore": risk_score,
+        "riskLevel": str(risk.get("level") or "").strip().lower() or None,
+        "trustScore": trust_score,
+        "trustLevel": str(trust.get("level") or "").strip().lower() or None,
+        "challengeState": challenge_state or None,
+        "reviewState": review_state or None,
+        "totalChallenges": max(0, total_challenges),
+        "openAlertCount": max(0, open_alert_count),
+    }
 
 
 def _normalize_review_case_risk_level(value: str | None) -> str | None:
@@ -1586,7 +2098,19 @@ def _build_review_case_risk_profile(
 
 def _build_review_case_sort_key(*, item: dict[str, Any], sort_by: str) -> tuple[Any, ...]:
     risk = item.get("riskProfile") if isinstance(item.get("riskProfile"), dict) else {}
+    unified = (
+        item.get("unifiedPriorityProfile")
+        if isinstance(item.get("unifiedPriorityProfile"), dict)
+        else {}
+    )
     workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    if sort_by == "unified_priority_score":
+        return (
+            int(unified.get("score") or 0),
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
     if sort_by == "risk_score":
         return (
             int(risk.get("score") or 0),
@@ -8811,6 +9335,245 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         }
         return response_payload
 
+    @app.get("/internal/judge/courtroom/cases")
+    async def list_judge_courtroom_cases(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str = Query(default="auto"),
+        winner: str | None = Query(default=None),
+        review_required: bool | None = Query(default=None),
+        risk_level: str | None = Query(default=None),
+        sla_bucket: str | None = Query(default=None),
+        updated_from: datetime | None = Query(default=None),
+        updated_to: datetime | None = Query(default=None),
+        sort_by: str = Query(default="updated_at"),
+        sort_order: str = Query(default="desc"),
+        scan_limit: int = Query(default=500, ge=20, le=2000),
+        offset: int = Query(default=0, ge=0, le=5000),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_status = _normalize_workflow_status(status)
+        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+
+        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+        if normalized_dispatch_type not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+        workflow_dispatch_filter = (
+            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        )
+
+        normalized_winner = str(winner or "").strip().lower() or None
+        if normalized_winner not in {None, "pro", "con", "draw"}:
+            raise HTTPException(status_code=422, detail="invalid_winner")
+
+        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
+        if (
+            normalized_risk_level is not None
+            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
+
+        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
+        if (
+            normalized_sla_bucket is not None
+            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
+
+        normalized_updated_from = _normalize_query_datetime(updated_from)
+        normalized_updated_to = _normalize_query_datetime(updated_to)
+        if (
+            normalized_updated_from is not None
+            and normalized_updated_to is not None
+            and normalized_updated_from > normalized_updated_to
+        ):
+            raise HTTPException(status_code=422, detail="invalid_updated_time_window")
+
+        normalized_sort_by = _normalize_courtroom_case_sort_by(sort_by)
+        if normalized_sort_by not in COURTROOM_CASE_SORT_FIELDS:
+            raise HTTPException(status_code=422, detail="invalid_courtroom_sort_by")
+        normalized_sort_order = _normalize_courtroom_case_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=422, detail="invalid_courtroom_sort_order")
+
+        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
+        normalized_offset = max(0, int(offset))
+        normalized_limit = max(1, min(int(limit), 200))
+
+        jobs = await _workflow_list_jobs(
+            status=normalized_status,
+            dispatch_type=workflow_dispatch_filter,
+            limit=normalized_scan_limit,
+        )
+        now = datetime.now(timezone.utc)
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for job in jobs:
+            updated_at = _normalize_query_datetime(job.updated_at)
+            if (
+                normalized_updated_from is not None
+                and (
+                    updated_at is None
+                    or updated_at < normalized_updated_from
+                )
+            ):
+                continue
+            if (
+                normalized_updated_to is not None
+                and (
+                    updated_at is None
+                    or updated_at > normalized_updated_to
+                )
+            ):
+                continue
+
+            try:
+                context = await _resolve_report_context_for_case(
+                    case_id=job.job_id,
+                    dispatch_type=normalized_dispatch_type,
+                    not_found_detail="courtroom_case_not_found",
+                    missing_report_detail="courtroom_report_payload_missing",
+                )
+            except HTTPException as err:
+                error_code = str(err.detail or "").strip() or "courtroom_case_unavailable"
+                if error_code in {
+                    "courtroom_case_not_found",
+                    "courtroom_report_payload_missing",
+                }:
+                    errors.append(
+                        {
+                            "caseId": int(job.job_id),
+                            "statusCode": int(err.status_code),
+                            "errorCode": error_code,
+                        }
+                    )
+                    continue
+                raise
+
+            report_payload = (
+                context.get("reportPayload")
+                if isinstance(context.get("reportPayload"), dict)
+                else {}
+            )
+            winner_value = str(report_payload.get("winner") or "").strip().lower() or None
+            if normalized_winner is not None and winner_value != normalized_winner:
+                continue
+            report_review_required = bool(report_payload.get("reviewRequired"))
+            if review_required is not None and report_review_required != bool(review_required):
+                continue
+
+            trace = runtime.trace_store.get_trace(job.job_id)
+            report_summary = (
+                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+            )
+            risk_profile = _build_review_case_risk_profile(
+                workflow=job,
+                report_payload=report_payload,
+                report_summary=report_summary,
+                now=now,
+            )
+            if (
+                normalized_risk_level is not None
+                and str(risk_profile.get("level") or "").strip().lower() != normalized_risk_level
+            ):
+                continue
+            if (
+                normalized_sla_bucket is not None
+                and str(risk_profile.get("slaBucket") or "").strip().lower() != normalized_sla_bucket
+            ):
+                continue
+
+            verdict_contract = _build_verdict_contract(report_payload)
+            case_evidence = _build_case_evidence_view(
+                report_payload=report_payload,
+                verdict_contract=verdict_contract,
+                claim_ledger_record=None,
+            )
+            courtroom_view = _build_courtroom_read_model_view(
+                report_payload=report_payload,
+                case_evidence=case_evidence,
+            )
+            callback_status = (
+                report_summary.get("callbackStatus")
+                or (
+                    context.get("responsePayload", {})
+                    if isinstance(context.get("responsePayload"), dict)
+                    else {}
+                ).get("callbackStatus")
+                or (trace.callback_status if trace is not None else None)
+            )
+            callback_error = (
+                report_summary.get("callbackError")
+                or (
+                    context.get("responsePayload", {})
+                    if isinstance(context.get("responsePayload"), dict)
+                    else {}
+                ).get("callbackError")
+                or (trace.callback_error if trace is not None else None)
+            )
+
+            items.append(
+                {
+                    "caseId": int(job.job_id),
+                    "dispatchType": context.get("dispatchType"),
+                    "traceId": context.get("traceId") or None,
+                    "workflow": _serialize_workflow_job(job),
+                    "winner": winner_value,
+                    "reviewRequired": report_review_required,
+                    "needsDrawVote": bool(report_payload.get("needsDrawVote")),
+                    "callbackStatus": callback_status,
+                    "callbackError": callback_error,
+                    "riskProfile": risk_profile,
+                    "courtroomSummary": _build_courtroom_read_model_light_summary(
+                        courtroom_view=courtroom_view,
+                    ),
+                }
+            )
+
+        items.sort(
+            key=lambda row: _build_courtroom_case_sort_key(
+                item=row,
+                sort_by=normalized_sort_by,
+            ),
+            reverse=(normalized_sort_order == "desc"),
+        )
+        page_items = items[normalized_offset : normalized_offset + normalized_limit]
+
+        return {
+            "count": len(items),
+            "returned": len(page_items),
+            "scanned": len(jobs),
+            "skipped": max(0, len(jobs) - len(items)),
+            "errorCount": len(errors),
+            "items": page_items,
+            "errors": errors,
+            "filters": {
+                "status": normalized_status,
+                "dispatchType": normalized_dispatch_type,
+                "winner": normalized_winner,
+                "reviewRequired": review_required,
+                "riskLevel": normalized_risk_level,
+                "slaBucket": normalized_sla_bucket,
+                "updatedFrom": (
+                    normalized_updated_from.isoformat()
+                    if normalized_updated_from is not None
+                    else None
+                ),
+                "updatedTo": (
+                    normalized_updated_to.isoformat()
+                    if normalized_updated_to is not None
+                    else None
+                ),
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
+                "scanLimit": normalized_scan_limit,
+                "offset": normalized_offset,
+                "limit": normalized_limit,
+            },
+        }
+
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
     async def request_npc_coach_advice(
         session_id: int,
@@ -9444,6 +10207,264 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             "dispatchType": context["dispatchType"],
             "traceId": context["traceId"],
             "item": bundle["challengeReview"],
+        }
+
+    @app.get("/internal/judge/trust/challenges/ops-queue")
+    async def list_judge_trust_challenge_ops_queue(
+        x_ai_internal_key: str | None = Header(default=None),
+        status: str | None = Query(default=None),
+        dispatch_type: str = Query(default="auto"),
+        challenge_state: str | None = Query(default="open"),
+        review_state: str | None = Query(default=None),
+        priority_level: str | None = Query(default=None),
+        sla_bucket: str | None = Query(default=None),
+        has_open_alert: bool | None = Query(default=None),
+        sort_by: str = Query(default="priority_score"),
+        sort_order: str = Query(default="desc"),
+        scan_limit: int = Query(default=500, ge=20, le=2000),
+        offset: int = Query(default=0, ge=0, le=5000),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        normalized_status = _normalize_workflow_status(status)
+        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
+            raise HTTPException(status_code=422, detail="invalid_workflow_status")
+        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+        if normalized_dispatch_type not in {"auto", "phase", "final"}:
+            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
+        workflow_dispatch_filter = (
+            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        )
+
+        normalized_challenge_state = _normalize_trust_challenge_state_filter(challenge_state)
+        if (
+            normalized_challenge_state is not None
+            and normalized_challenge_state != "open"
+            and normalized_challenge_state not in CASE_FAIRNESS_CHALLENGE_STATES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_trust_challenge_state")
+        normalized_review_state = _normalize_trust_challenge_review_state(review_state)
+        if (
+            normalized_review_state is not None
+            and normalized_review_state not in TRUST_CHALLENGE_REVIEW_STATE_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_trust_review_state")
+        normalized_priority_level = _normalize_trust_challenge_priority_level(priority_level)
+        if (
+            normalized_priority_level is not None
+            and normalized_priority_level not in TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_trust_priority_level")
+        normalized_sla_bucket = _normalize_trust_challenge_sla_bucket(sla_bucket)
+        if (
+            normalized_sla_bucket is not None
+            and normalized_sla_bucket not in TRUST_CHALLENGE_SLA_BUCKET_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_trust_sla_bucket")
+        normalized_sort_by = _normalize_trust_challenge_sort_by(sort_by)
+        if normalized_sort_by not in TRUST_CHALLENGE_SORT_FIELDS:
+            raise HTTPException(status_code=422, detail="invalid_trust_sort_by")
+        normalized_sort_order = _normalize_trust_challenge_sort_order(sort_order)
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=422, detail="invalid_trust_sort_order")
+        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
+        normalized_offset = max(0, int(offset))
+        normalized_limit = max(1, min(int(limit), 200))
+
+        jobs = await _workflow_list_jobs(
+            status=normalized_status,
+            dispatch_type=workflow_dispatch_filter,
+            limit=normalized_scan_limit,
+        )
+        now = datetime.now(timezone.utc)
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for job in jobs:
+            try:
+                bundle = await _build_trust_phasea_bundle(
+                    case_id=job.job_id,
+                    dispatch_type=normalized_dispatch_type,
+                )
+            except HTTPException as err:
+                error_code = str(err.detail or "").strip() or "trust_case_unavailable"
+                if error_code in {
+                    "trust_receipt_not_found",
+                    "trust_report_payload_missing",
+                }:
+                    errors.append(
+                        {
+                            "caseId": int(job.job_id),
+                            "statusCode": int(err.status_code),
+                            "errorCode": error_code,
+                        }
+                    )
+                    continue
+                raise
+
+            challenge_review = (
+                bundle.get("challengeReview")
+                if isinstance(bundle.get("challengeReview"), dict)
+                else {}
+            )
+            current_challenge_state = (
+                str(challenge_review.get("challengeState") or "").strip().lower() or None
+            )
+            if normalized_challenge_state == "open":
+                if current_challenge_state not in TRUST_CHALLENGE_OPEN_STATES:
+                    continue
+            elif (
+                normalized_challenge_state is not None
+                and current_challenge_state != normalized_challenge_state
+            ):
+                continue
+
+            current_review_state = (
+                str(challenge_review.get("reviewState") or "").strip().lower() or None
+            )
+            if (
+                normalized_review_state is not None
+                and current_review_state != normalized_review_state
+            ):
+                continue
+
+            context = bundle["context"] if isinstance(bundle.get("context"), dict) else {}
+            report_payload = (
+                context.get("reportPayload")
+                if isinstance(context.get("reportPayload"), dict)
+                else {}
+            )
+            trace = runtime.trace_store.get_trace(job.job_id)
+            report_summary = (
+                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+            )
+            priority_profile = _build_trust_challenge_priority_profile(
+                workflow=job,
+                challenge_review=challenge_review,
+                report_payload=report_payload,
+                report_summary=report_summary,
+                now=now,
+            )
+            if (
+                normalized_priority_level is not None
+                and str(priority_profile.get("level") or "").strip().lower()
+                != normalized_priority_level
+            ):
+                continue
+            if (
+                normalized_sla_bucket is not None
+                and str(priority_profile.get("slaBucket") or "").strip().lower()
+                != normalized_sla_bucket
+            ):
+                continue
+            if (
+                has_open_alert is not None
+                and (
+                    int(priority_profile.get("openAlertCount") or 0) > 0
+                ) != bool(has_open_alert)
+            ):
+                continue
+
+            active_challenge_id = str(challenge_review.get("activeChallengeId") or "").strip() or None
+            item_payload = {
+                "caseId": int(job.job_id),
+                "dispatchType": context.get("dispatchType"),
+                "traceId": context.get("traceId") or None,
+                "workflow": _serialize_workflow_job(job),
+                "trace": {
+                    "status": trace.status if trace is not None else None,
+                    "callbackStatus": (
+                        report_summary.get("callbackStatus")
+                        or (trace.callback_status if trace is not None else None)
+                    ),
+                    "callbackError": (
+                        report_summary.get("callbackError")
+                        or (trace.callback_error if trace is not None else None)
+                    ),
+                    "updatedAt": (
+                        trace.updated_at.isoformat() if trace is not None else None
+                    ),
+                },
+                "challengeReview": {
+                    "state": current_challenge_state,
+                    "activeChallengeId": active_challenge_id,
+                    "totalChallenges": int(challenge_review.get("totalChallenges") or 0),
+                    "reviewState": current_review_state,
+                    "reviewRequired": bool(challenge_review.get("reviewRequired")),
+                    "challengeReasons": (
+                        challenge_review.get("challengeReasons")
+                        if isinstance(challenge_review.get("challengeReasons"), list)
+                        else []
+                    ),
+                    "alertSummary": (
+                        challenge_review.get("alertSummary")
+                        if isinstance(challenge_review.get("alertSummary"), dict)
+                        else {}
+                    ),
+                    "openAlertIds": (
+                        challenge_review.get("openAlertIds")
+                        if isinstance(challenge_review.get("openAlertIds"), list)
+                        else []
+                    ),
+                    "timeline": (
+                        challenge_review.get("timeline")
+                        if isinstance(challenge_review.get("timeline"), list)
+                        else []
+                    ),
+                },
+                "priorityProfile": priority_profile,
+                "review": {
+                    "required": bool(challenge_review.get("reviewRequired")),
+                    "state": current_review_state,
+                    "workflowStatus": str(job.status or "").strip().lower() or None,
+                    "detailPath": f"/internal/judge/review/cases/{int(job.job_id)}",
+                },
+            }
+            item_payload["actionHints"] = _build_trust_challenge_action_hints(
+                challenge_review=item_payload["challengeReview"],
+                priority_profile=priority_profile,
+            )
+            item_payload["actionPaths"] = {
+                "requestChallengePath": f"/internal/judge/cases/{int(job.job_id)}/trust/challenges/request",
+                "decisionPath": (
+                    f"/internal/judge/cases/{int(job.job_id)}/trust/challenges/{active_challenge_id}/decision"
+                    if active_challenge_id is not None
+                    else None
+                ),
+                "reviewDetailPath": f"/internal/judge/review/cases/{int(job.job_id)}",
+            }
+            items.append(item_payload)
+
+        items.sort(
+            key=lambda row: _build_trust_challenge_sort_key(
+                item=row,
+                sort_by=normalized_sort_by,
+            ),
+            reverse=(normalized_sort_order == "desc"),
+        )
+        page_items = items[normalized_offset : normalized_offset + normalized_limit]
+
+        return {
+            "count": len(items),
+            "returned": len(page_items),
+            "scanned": len(jobs),
+            "skipped": max(0, len(jobs) - len(items)),
+            "errorCount": len(errors),
+            "items": page_items,
+            "errors": errors,
+            "filters": {
+                "status": normalized_status,
+                "dispatchType": normalized_dispatch_type,
+                "challengeState": normalized_challenge_state,
+                "reviewState": normalized_review_state,
+                "priorityLevel": normalized_priority_level,
+                "slaBucket": normalized_sla_bucket,
+                "hasOpenAlert": has_open_alert,
+                "sortBy": normalized_sort_by,
+                "sortOrder": normalized_sort_order,
+                "scanLimit": normalized_scan_limit,
+                "offset": normalized_offset,
+                "limit": normalized_limit,
+            },
         }
 
     @app.post("/internal/judge/cases/{case_id}/trust/challenges/request")
@@ -11506,16 +12527,65 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             group_limit=panel_group_limit,
             attention_limit=panel_attention_limit,
         )
+        queue_limit = max(1, min(int(top_limit) * 5, 200))
+        courtroom_queue = await list_judge_courtroom_cases(
+            x_ai_internal_key=x_ai_internal_key,
+            status=None,
+            dispatch_type="auto",
+            winner=None,
+            review_required=None,
+            risk_level=None,
+            sla_bucket=None,
+            updated_from=None,
+            updated_to=None,
+            sort_by="risk_score",
+            sort_order="desc",
+            scan_limit=case_scan_limit,
+            offset=0,
+            limit=min(queue_limit, 200),
+        )
+        trust_challenge_queue = await list_judge_trust_challenge_ops_queue(
+            x_ai_internal_key=x_ai_internal_key,
+            status=None,
+            dispatch_type="auto",
+            challenge_state="open",
+            review_state=None,
+            priority_level=None,
+            sla_bucket=None,
+            has_open_alert=None,
+            sort_by="priority_score",
+            sort_order="desc",
+            scan_limit=case_scan_limit,
+            offset=0,
+            limit=min(queue_limit, 200),
+        )
         review_queue = await list_judge_review_jobs(
             x_ai_internal_key=x_ai_internal_key,
             status="review_required",
             dispatch_type=dispatch_type,
             risk_level=None,
             sla_bucket=None,
+            challenge_state=None,
+            trust_review_state=None,
+            unified_priority_level=None,
             sort_by="risk_score",
             sort_order="desc",
             scan_limit=case_scan_limit,
-            limit=max(1, min(int(top_limit) * 5, 200)),
+            limit=queue_limit,
+        )
+        review_trust_priority = await list_judge_review_jobs(
+            x_ai_internal_key=x_ai_internal_key,
+            status="review_required",
+            dispatch_type=dispatch_type,
+            risk_level=None,
+            sla_bucket=None,
+            challenge_state=None,
+            trust_review_state=None,
+            unified_priority_level=None,
+            sort_by="unified_priority_score",
+            sort_order="desc",
+            scan_limit=case_scan_limit,
+            limit=queue_limit,
         )
         policy_gate_simulation = await simulate_policy_release_gate(
             x_ai_internal_key=x_ai_internal_key,
@@ -11754,6 +12824,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if isinstance(review_queue.get("items"), list)
             else []
         )
+        review_trust_priority_items = (
+            review_trust_priority.get("items")
+            if isinstance(review_trust_priority.get("items"), list)
+            else []
+        )
+        trust_challenge_queue_items = (
+            trust_challenge_queue.get("items")
+            if isinstance(trust_challenge_queue.get("items"), list)
+            else []
+        )
         review_high_risk_count = 0
         review_urgent_count = 0
         for row in review_items:
@@ -11766,6 +12846,40 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 review_high_risk_count += 1
             if str(risk_profile.get("slaBucket") or "").strip().lower() == "urgent":
                 review_urgent_count += 1
+
+        review_unified_high_priority_count = 0
+        review_trust_open_challenge_count = 0
+        for row in review_trust_priority_items:
+            unified_priority = (
+                row.get("unifiedPriorityProfile")
+                if isinstance(row.get("unifiedPriorityProfile"), dict)
+                else {}
+            )
+            trust_challenge = (
+                row.get("trustChallenge")
+                if isinstance(row.get("trustChallenge"), dict)
+                else {}
+            )
+            if str(unified_priority.get("level") or "").strip().lower() == "high":
+                review_unified_high_priority_count += 1
+            if (
+                str(trust_challenge.get("state") or "").strip().lower()
+                in TRUST_CHALLENGE_OPEN_STATES
+            ):
+                review_trust_open_challenge_count += 1
+
+        trust_challenge_high_priority_count = 0
+        trust_challenge_urgent_count = 0
+        for row in trust_challenge_queue_items:
+            priority_profile = (
+                row.get("priorityProfile")
+                if isinstance(row.get("priorityProfile"), dict)
+                else {}
+            )
+            if str(priority_profile.get("level") or "").strip().lower() == "high":
+                trust_challenge_high_priority_count += 1
+            if str(priority_profile.get("slaBucket") or "").strip().lower() == "urgent":
+                trust_challenge_urgent_count += 1
         simulation_summary = (
             policy_gate_simulation.get("summary")
             if isinstance(policy_gate_simulation.get("summary"), dict)
@@ -11786,7 +12900,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "items": courtroom_items,
                 "errors": courtroom_errors,
             },
+            "courtroomQueue": courtroom_queue,
             "reviewQueue": review_queue,
+            "reviewTrustPriority": review_trust_priority,
+            "trustChallengeQueue": trust_challenge_queue,
             "policyGateSimulation": policy_gate_simulation,
             "adaptiveSummary": {
                 "calibrationGatePassed": bool(release_gate.get("passed")),
@@ -11800,8 +12917,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "reviewQueueCount": int(review_queue.get("count") or 0),
                 "reviewHighRiskCount": review_high_risk_count,
                 "reviewUrgentCount": review_urgent_count,
+                "reviewTrustPriorityCount": int(review_trust_priority.get("count") or 0),
+                "reviewUnifiedHighPriorityCount": review_unified_high_priority_count,
+                "reviewTrustOpenChallengeCount": review_trust_open_challenge_count,
                 "policySimulationBlockedCount": int(simulation_summary.get("blockedCount") or 0),
                 "courtroomSampleCount": len(courtroom_items),
+                "courtroomQueueCount": int(courtroom_queue.get("count") or 0),
+                "trustChallengeQueueCount": int(trust_challenge_queue.get("count") or 0),
+                "trustChallengeHighPriorityCount": trust_challenge_high_priority_count,
+                "trustChallengeUrgentCount": trust_challenge_urgent_count,
             },
             "trustOverview": {
                 "included": bool(include_case_trust),
@@ -12136,6 +13260,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type: str | None = Query(default=None),
         risk_level: str | None = Query(default=None),
         sla_bucket: str | None = Query(default=None),
+        challenge_state: str | None = Query(default=None),
+        trust_review_state: str | None = Query(default=None),
+        unified_priority_level: str | None = Query(default=None),
         sort_by: str = Query(default="updated_at"),
         sort_order: str = Query(default="desc"),
         scan_limit: int = Query(default=200, ge=20, le=1000),
@@ -12162,6 +13289,29 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
         ):
             raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
+        normalized_challenge_state = _normalize_trust_challenge_state_filter(challenge_state)
+        if (
+            normalized_challenge_state is not None
+            and normalized_challenge_state != "open"
+            and normalized_challenge_state not in CASE_FAIRNESS_CHALLENGE_STATES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_challenge_state")
+        normalized_trust_review_state = _normalize_trust_challenge_review_state(
+            trust_review_state
+        )
+        if (
+            normalized_trust_review_state is not None
+            and normalized_trust_review_state not in TRUST_CHALLENGE_REVIEW_STATE_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_trust_review_state")
+        normalized_unified_priority_level = _normalize_trust_challenge_priority_level(
+            unified_priority_level
+        )
+        if (
+            normalized_unified_priority_level is not None
+            and normalized_unified_priority_level not in TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES
+        ):
+            raise HTTPException(status_code=422, detail="invalid_review_unified_priority_level")
         normalized_sort_by = _normalize_review_case_sort_by(sort_by)
         if normalized_sort_by not in REVIEW_CASE_SORT_FIELDS:
             raise HTTPException(status_code=422, detail="invalid_review_sort_by")
@@ -12185,8 +13335,42 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             report_payload = (
                 report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
             )
+            workflow_events = list(await _workflow_list_events(job_id=job.job_id))
+            alerts = await _list_audit_alerts(job_id=job.job_id, status=None, limit=200)
+            trace_id = str(
+                (trace.trace_id if trace is not None else "")
+                or job.trace_id
+                or report_summary.get("traceId")
+                or ""
+            ).strip()
+            challenge_review = build_challenge_review_registry_v3(
+                case_id=job.job_id,
+                trace_id=trace_id,
+                workflow_status=job.status,
+                workflow_events=workflow_events,
+                alerts=alerts,
+                report_payload=report_payload,
+            )
             error_codes = report_payload.get("errorCodes")
             audit_alerts = report_summary.get("auditAlerts")
+            risk_profile = _build_review_case_risk_profile(
+                workflow=job,
+                report_payload=report_payload,
+                report_summary=report_summary,
+                now=now,
+            )
+            trust_priority_profile = _build_trust_challenge_priority_profile(
+                workflow=job,
+                challenge_review=challenge_review,
+                report_payload=report_payload,
+                report_summary=report_summary,
+                now=now,
+            )
+            unified_priority_profile = _build_review_trust_unified_priority_profile(
+                risk_profile=risk_profile,
+                trust_priority_profile=trust_priority_profile,
+                challenge_review=challenge_review,
+            )
             items.append(
                 {
                     "workflow": _serialize_workflow_job(job),
@@ -12204,12 +13388,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                         else 0
                     ),
                     "callbackStatus": report_summary.get("callbackStatus"),
-                    "riskProfile": _build_review_case_risk_profile(
-                        workflow=job,
-                        report_payload=report_payload,
-                        report_summary=report_summary,
-                        now=now,
-                    ),
+                    "riskProfile": risk_profile,
+                    "trustChallenge": {
+                        "state": str(challenge_review.get("challengeState") or "").strip().lower() or None,
+                        "reviewState": str(challenge_review.get("reviewState") or "").strip().lower() or None,
+                        "activeChallengeId": (
+                            str(challenge_review.get("activeChallengeId") or "").strip() or None
+                        ),
+                        "totalChallenges": int(challenge_review.get("totalChallenges") or 0),
+                        "openAlertIds": (
+                            challenge_review.get("openAlertIds")
+                            if isinstance(challenge_review.get("openAlertIds"), list)
+                            else []
+                        ),
+                        "challengeReasons": (
+                            challenge_review.get("challengeReasons")
+                            if isinstance(challenge_review.get("challengeReasons"), list)
+                            else []
+                        ),
+                    },
+                    "trustPriorityProfile": trust_priority_profile,
+                    "unifiedPriorityProfile": unified_priority_profile,
                 }
             )
         filtered_items: list[dict[str, Any]] = []
@@ -12219,6 +13418,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 if isinstance(row.get("riskProfile"), dict)
                 else {}
             )
+            trust_challenge = (
+                row.get("trustChallenge")
+                if isinstance(row.get("trustChallenge"), dict)
+                else {}
+            )
+            unified_priority = (
+                row.get("unifiedPriorityProfile")
+                if isinstance(row.get("unifiedPriorityProfile"), dict)
+                else {}
+            )
             if (
                 normalized_risk_level is not None
                 and str(risk_profile.get("level") or "").strip().lower() != normalized_risk_level
@@ -12226,7 +13435,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 continue
             if (
                 normalized_sla_bucket is not None
-                and str(risk_profile.get("slaBucket") or "").strip().lower() != normalized_sla_bucket
+                and str(unified_priority.get("slaBucket") or "").strip().lower() != normalized_sla_bucket
+            ):
+                continue
+            challenge_state_value = str(trust_challenge.get("state") or "").strip().lower()
+            if normalized_challenge_state == "open":
+                if challenge_state_value not in TRUST_CHALLENGE_OPEN_STATES:
+                    continue
+            elif (
+                normalized_challenge_state is not None
+                and challenge_state_value != normalized_challenge_state
+            ):
+                continue
+            if (
+                normalized_trust_review_state is not None
+                and str(trust_challenge.get("reviewState") or "").strip().lower()
+                != normalized_trust_review_state
+            ):
+                continue
+            if (
+                normalized_unified_priority_level is not None
+                and str(unified_priority.get("level") or "").strip().lower()
+                != normalized_unified_priority_level
             ):
                 continue
             filtered_items.append(row)
@@ -12248,6 +13478,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "dispatchType": normalized_dispatch_type,
                 "riskLevel": normalized_risk_level,
                 "slaBucket": normalized_sla_bucket,
+                "challengeState": normalized_challenge_state,
+                "trustReviewState": normalized_trust_review_state,
+                "unifiedPriorityLevel": normalized_unified_priority_level,
                 "sortBy": normalized_sort_by,
                 "sortOrder": normalized_sort_order,
                 "scanLimit": normalized_scan_limit,
