@@ -1,0 +1,26 @@
+{
+  "module": "ai-judge-real-pass-rehearsal",
+  "status": "pass",
+  "run_id": "20260418T140400Z-ai-judge-real-pass-rehearsal",
+  "started_at": "2026-04-18T14:04:00Z",
+  "finished_at": "2026-04-18T14:04:02Z",
+  "workspace_root": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal/workspace",
+  "window": {
+    "exit_code": 0,
+    "status": "pass",
+    "real_pass_ready": "true",
+    "blocker_codes": "",
+    "blocker_hints": "",
+    "output_env": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_real_env_window_closure.env",
+    "output_doc": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal/workspace/docs/loadtest/evidence/ai_judge_real_env_window_closure.md",
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal/workspace/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.window.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal/workspace/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.window.summary.md",
+    "stdout_log": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal/workspace/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.window.stdout.log"
+  },
+  "outputs": {
+    "output_doc": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.summary.doc.md",
+    "output_env": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.summary.env",
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260418T140400Z-ai-judge-real-pass-rehearsal.summary.md"
+  }
+}

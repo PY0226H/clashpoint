@@ -1,0 +1,32 @@
+{
+  "run_id": "20260419T084756Z-ai-judge-real-env-evidence-closure",
+  "status": "local_reference_ready",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "evidence_dir": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence",
+  "env_marker_file": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env",
+  "environment_mode": "local_reference",
+  "local_reference_enabled": "true",
+  "started_at": "2026-04-19T08:47:56Z",
+  "finished_at": "2026-04-19T08:47:57Z",
+  "counts": {
+    "total": 6,
+    "ready_total": 6,
+    "blocked_total": 0,
+    "pending_total": 0,
+    "evidence_missing_total": 0
+  },
+  "tracks": [
+    {"track_id":"latency_baseline","title":"Latency Baseline","status":"local_reference_ready","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_latency_baseline.env","calibration_status":"validated","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"local reference evidence ready (not real pass)"},
+    {"track_id":"cost_baseline","title":"Cost Baseline","status":"local_reference_ready","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_cost_baseline.env","calibration_status":"validated","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"local reference evidence ready (not real pass)"},
+    {"track_id":"fairness_benchmark","title":"Fairness Benchmark","status":"local_reference_ready","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fairness_benchmark.env","calibration_status":"validated","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"local reference evidence ready (not real pass)"},
+    {"track_id":"fault_drill","title":"Fault Drill","status":"local_reference_ready","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fault_drill.env","calibration_status":"validated","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"local reference evidence ready (not real pass)"},
+    {"track_id":"trust_attestation","title":"Trust Attestation","status":"local_reference_ready","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_trust_attestation.env","calibration_status":"validated","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"local reference evidence ready (not real pass)"},
+    {"track_id":"runtime_sla_freeze","title":"Runtime SLA Freeze","status":"local_reference_ready","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_sla_thresholds.env","calibration_status":"local_reference_frozen","missing_base_keys":"（无）","missing_real_keys":"（无）","missing_local_keys":"（无）","note":"local reference evidence ready (not real pass)"}
+  ],
+  "outputs": {
+    "output_doc": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env_closure_checklist.md",
+    "output_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env_closure.env",
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260419T084755Z-ai-judge-runtime-ops-pack/real_env_closure.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260419T084755Z-ai-judge-runtime-ops-pack/real_env_closure.summary.md"
+  }
+}

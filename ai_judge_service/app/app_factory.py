@@ -71,6 +71,32 @@ from .applications import (
 from .applications import (
     verify_report_attestation as verify_report_attestation_v3,
 )
+from .applications.fairness_case_scan import (
+    collect_fairness_case_items as collect_fairness_case_items_v3,
+)
+from .applications.fairness_dashboard_contract import (
+    validate_fairness_dashboard_contract as validate_fairness_dashboard_contract_v3,
+)
+from .applications.ops_read_model_pack import (
+    build_ops_read_model_pack_adaptive_summary,
+    build_ops_read_model_pack_filters,
+    build_ops_read_model_pack_trust_overview,
+    build_ops_read_model_pack_v5_payload,
+    summarize_ops_read_model_pack_review_items,
+    summarize_ops_read_model_pack_trust_items,
+)
+from .applications.registry_ops_views import (
+    build_registry_alert_ops_view as build_registry_alert_ops_view_v3,
+)
+from .applications.registry_ops_views import (
+    build_registry_audit_ops_view as build_registry_audit_ops_view_v3,
+)
+from .applications.review_queue_contract import (
+    validate_courtroom_drilldown_bundle_contract as validate_courtroom_drilldown_bundle_contract_v3,
+)
+from .applications.review_queue_contract import (
+    validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
+)
 from .callback_client import (
     callback_final_failed,
     callback_final_report,
@@ -5056,285 +5082,21 @@ def _build_registry_audit_ops_view(
     offset: int,
     limit: int,
 ) -> dict[str, Any]:
-    normalized_registry_type = str(registry_type or "").strip().lower()
-    normalized_action = _normalize_registry_audit_action(action)
-    normalized_version = str(version or "").strip() or None
-    normalized_actor = str(actor or "").strip() or None
-    normalized_gate_code = str(gate_code or "").strip() or None
-    page_offset = max(0, int(offset))
-    page_limit = max(1, min(int(limit), 500))
-    resolved_link_limit = max(1, min(int(link_limit), 20))
-
-    alert_link_index: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    if include_gate_view:
-        alert_link_index = _build_registry_alert_link_index_for_audits(
-            alerts=alerts,
-            outbox_events=outbox_events,
-        )
-
-    rows: list[dict[str, Any]] = []
-    counts_by_action: dict[str, int] = {}
-    counts_by_version: dict[str, int] = {"unknown": 0}
-    counts_by_actor: dict[str, int] = {}
-    counts_by_gate_code: dict[str, int] = {"unknown": 0}
-    counts_by_override_applied: dict[str, int] = {
-        "true": 0,
-        "false": 0,
-        "unknown": 0,
-    }
-    with_gate_review_count = 0
-    with_linked_alerts_count = 0
-    linked_outbox_failed_count = 0
-
-    for item in audit_items:
-        row_registry_type = str(item.get("registryType") or "").strip().lower()
-        if normalized_registry_type and row_registry_type != normalized_registry_type:
-            continue
-        row_action = str(item.get("action") or "").strip().lower() or "unknown"
-        if normalized_action is not None and row_action != normalized_action:
-            continue
-        row_version = str(item.get("version") or "").strip() or None
-        if normalized_version is not None and row_version != normalized_version:
-            continue
-        row_actor = str(item.get("actor") or "").strip() or None
-        if normalized_actor is not None and row_actor != normalized_actor:
-            continue
-        row_reason = str(item.get("reason") or "").strip() or None
-        details = dict(item.get("details")) if isinstance(item.get("details"), dict) else {}
-
-        fairness_gate = (
-            details.get("fairnessGate")
-            if isinstance(details.get("fairnessGate"), dict)
-            else {}
-        )
-        dependency_health = (
-            details.get("dependencyHealth")
-            if isinstance(details.get("dependencyHealth"), dict)
-            else {}
-        )
-        latest_run = (
-            fairness_gate.get("latestRun")
-            if isinstance(fairness_gate.get("latestRun"), dict)
-            else {}
-        )
-        latest_shadow_run = (
-            fairness_gate.get("latestShadowRun")
-            if isinstance(fairness_gate.get("latestShadowRun"), dict)
-            else {}
-        )
-        row_gate_code = str(fairness_gate.get("code") or "").strip() or None
-        if normalized_gate_code is not None and row_gate_code != normalized_gate_code:
-            continue
-        row_override_applied = _extract_optional_bool(
-            {"overrideApplied": fairness_gate.get("overrideApplied")},
-            "overrideApplied",
-        )
-        if (
-            override_applied is not None
-            and row_override_applied is not None
-            and row_override_applied != override_applied
-        ):
-            continue
-        if override_applied is not None and row_override_applied is None:
-            continue
-
-        row_created_at_text = str(item.get("createdAt") or "").strip() or None
-        row_created_at = _extract_optional_datetime(
-            {"createdAt": row_created_at_text},
-            "createdAt",
-        ) or datetime.now(timezone.utc)
-
-        gate_review = {
-            "hasFairnessGate": bool(fairness_gate),
-            "hasDependencyHealth": bool(dependency_health),
-            "gateCode": row_gate_code,
-            "gateMessage": str(fairness_gate.get("message") or "").strip() or None,
-            "gatePassed": _extract_optional_bool({"passed": fairness_gate.get("passed")}, "passed"),
-            "gateSource": str(fairness_gate.get("source") or "").strip() or None,
-            "overrideApplied": row_override_applied,
-            "thresholdDecision": str(fairness_gate.get("thresholdDecision") or "").strip() or None,
-            "needsRemediation": _extract_optional_bool(
-                {"needsRemediation": fairness_gate.get("needsRemediation")},
-                "needsRemediation",
-            ),
-            "benchmarkGatePassed": _extract_optional_bool(
-                {"benchmarkGatePassed": fairness_gate.get("benchmarkGatePassed")},
-                "benchmarkGatePassed",
-            ),
-            "shadowGateApplied": _extract_optional_bool(
-                {"shadowGateApplied": fairness_gate.get("shadowGateApplied")},
-                "shadowGateApplied",
-            ),
-            "shadowGatePassed": _extract_optional_bool(
-                {"shadowGatePassed": fairness_gate.get("shadowGatePassed")},
-                "shadowGatePassed",
-            ),
-            "dependencyOk": _extract_optional_bool(
-                {"ok": dependency_health.get("ok")},
-                "ok",
-            ),
-            "dependencyCode": str(dependency_health.get("code") or "").strip() or None,
-            "latestRunId": str(latest_run.get("runId") or "").strip() or None,
-            "latestRunStatus": str(latest_run.get("status") or "").strip() or None,
-            "latestRunThresholdDecision": (
-                str(latest_run.get("thresholdDecision") or "").strip() or None
-            ),
-            "latestRunEnvironmentMode": (
-                str(latest_run.get("environmentMode") or "").strip() or None
-            ),
-            "latestRunNeedsRemediation": _extract_optional_bool(
-                {"needsRemediation": latest_run.get("needsRemediation")},
-                "needsRemediation",
-            ),
-            "latestShadowRunId": str(latest_shadow_run.get("runId") or "").strip() or None,
-            "latestShadowRunStatus": str(latest_shadow_run.get("status") or "").strip() or None,
-            "latestShadowRunThresholdDecision": (
-                str(latest_shadow_run.get("thresholdDecision") or "").strip() or None
-            ),
-            "latestShadowRunEnvironmentMode": (
-                str(latest_shadow_run.get("environmentMode") or "").strip() or None
-            ),
-            "latestShadowRunNeedsRemediation": _extract_optional_bool(
-                {"needsRemediation": latest_shadow_run.get("needsRemediation")},
-                "needsRemediation",
-            ),
-            "actor": row_actor,
-            "reason": row_reason,
-        }
-
-        linked_alerts: list[dict[str, Any]] = []
-        linked_alert_summary: dict[str, Any] | None = None
-        if include_gate_view and row_version is not None:
-            candidates = alert_link_index.get((row_registry_type, row_version), [])
-            linked_alerts = [dict(row) for row in candidates[:resolved_link_limit]]
-
-            linked_by_type: dict[str, int] = {}
-            linked_by_status: dict[str, int] = {}
-            linked_by_delivery: dict[str, int] = {
-                "pending": 0,
-                "sent": 0,
-                "failed": 0,
-                "none": 0,
-                "unknown": 0,
-            }
-            linked_open_count = 0
-            linked_resolved_count = 0
-            linked_failed_count = 0
-            for row in linked_alerts:
-                alert_type = str(row.get("type") or "").strip() or "unknown"
-                alert_status = str(row.get("status") or "").strip().lower() or "unknown"
-                latest_delivery = str(
-                    (row.get("outbox") or {}).get("latestDeliveryStatus") or ""
-                ).strip().lower()
-                if latest_delivery in linked_by_delivery:
-                    linked_by_delivery[latest_delivery] += 1
-                elif latest_delivery:
-                    linked_by_delivery["unknown"] += 1
-                else:
-                    linked_by_delivery["none"] += 1
-                if alert_status in {"raised", "acked"}:
-                    linked_open_count += 1
-                if alert_status == "resolved":
-                    linked_resolved_count += 1
-                if latest_delivery == "failed":
-                    linked_failed_count += 1
-                linked_by_type[alert_type] = linked_by_type.get(alert_type, 0) + 1
-                linked_by_status[alert_status] = linked_by_status.get(alert_status, 0) + 1
-
-            linked_alert_summary = {
-                "count": len(linked_alerts),
-                "byType": dict(sorted(linked_by_type.items(), key=lambda kv: kv[0])),
-                "byStatus": dict(sorted(linked_by_status.items(), key=lambda kv: kv[0])),
-                "byDeliveryStatus": linked_by_delivery,
-                "openCount": linked_open_count,
-                "resolvedCount": linked_resolved_count,
-                "outboxFailedCount": linked_failed_count,
-            }
-
-        has_gate_review = bool(gate_review.get("hasFairnessGate")) or bool(gate_review.get("hasDependencyHealth"))
-        if has_gate_review:
-            with_gate_review_count += 1
-        if include_gate_view and linked_alerts:
-            with_linked_alerts_count += 1
-            linked_outbox_failed_count += int(
-                (linked_alert_summary or {}).get("outboxFailedCount") or 0
-            )
-
-        counts_by_action[row_action] = counts_by_action.get(row_action, 0) + 1
-        if row_version:
-            counts_by_version[row_version] = counts_by_version.get(row_version, 0) + 1
-        else:
-            counts_by_version["unknown"] += 1
-        if row_actor:
-            counts_by_actor[row_actor] = counts_by_actor.get(row_actor, 0) + 1
-        if row_gate_code:
-            counts_by_gate_code[row_gate_code] = counts_by_gate_code.get(row_gate_code, 0) + 1
-        else:
-            counts_by_gate_code["unknown"] += 1
-        if row_override_applied is True:
-            counts_by_override_applied["true"] += 1
-        elif row_override_applied is False:
-            counts_by_override_applied["false"] += 1
-        else:
-            counts_by_override_applied["unknown"] += 1
-
-        rows.append(
-            {
-                "registryType": row_registry_type,
-                "action": row_action,
-                "version": row_version,
-                "actor": row_actor,
-                "reason": row_reason,
-                "details": details,
-                "createdAt": row_created_at_text,
-                "gateReview": gate_review,
-                "linkedAlerts": linked_alerts if include_gate_view else None,
-                "linkedAlertSummary": linked_alert_summary if include_gate_view else None,
-                "_createdAt": row_created_at,
-            }
-        )
-
-    rows.sort(
-        key=lambda row: (
-            row.get("_createdAt"),
-            str(row.get("action") or ""),
-            str(row.get("version") or ""),
-        ),
-        reverse=True,
+    return build_registry_audit_ops_view_v3(
+        registry_type=registry_type,
+        audit_items=audit_items,
+        alerts=alerts,
+        outbox_events=outbox_events,
+        action=action,
+        version=version,
+        actor=actor,
+        gate_code=gate_code,
+        override_applied=override_applied,
+        include_gate_view=include_gate_view,
+        link_limit=link_limit,
+        offset=offset,
+        limit=limit,
     )
-    total_count = len(rows)
-    paged_rows = rows[page_offset : page_offset + page_limit]
-    for row in paged_rows:
-        row.pop("_createdAt", None)
-
-    return {
-        "registryType": normalized_registry_type,
-        "count": total_count,
-        "returned": len(paged_rows),
-        "items": paged_rows,
-        "aggregations": {
-            "byAction": dict(sorted(counts_by_action.items(), key=lambda kv: kv[0])),
-            "byVersion": dict(sorted(counts_by_version.items(), key=lambda kv: kv[0])),
-            "byActor": dict(sorted(counts_by_actor.items(), key=lambda kv: kv[0])),
-            "byGateCode": dict(sorted(counts_by_gate_code.items(), key=lambda kv: kv[0])),
-            "byOverrideApplied": counts_by_override_applied,
-            "withGateReviewCount": with_gate_review_count,
-            "withLinkedAlertsCount": with_linked_alerts_count,
-            "linkedOutboxFailedCount": linked_outbox_failed_count,
-        },
-        "filters": {
-            "action": normalized_action,
-            "version": normalized_version,
-            "actor": normalized_actor,
-            "gateCode": normalized_gate_code,
-            "overrideApplied": override_applied,
-            "includeGateView": bool(include_gate_view),
-            "linkLimit": resolved_link_limit,
-            "offset": page_offset,
-            "limit": page_limit,
-        },
-        "limit": page_limit,
-    }
 
 
 def _build_registry_alert_ops_view(
@@ -5356,314 +5118,24 @@ def _build_registry_alert_ops_view(
     offset: int,
     limit: int,
 ) -> dict[str, Any]:
-    normalized_alert_type = str(alert_type or "").strip() or None
-    normalized_status = _normalize_ops_alert_status(status)
-    normalized_delivery_status = _normalize_ops_alert_delivery_status(delivery_status)
-    normalized_fields_mode = _normalize_ops_alert_fields_mode(fields_mode)
-    normalized_registry_type = str(registry_type or "").strip().lower() or None
-    normalized_policy_version = str(policy_version or "").strip() or None
-    normalized_gate_code = str(gate_code or "").strip() or None
-    normalized_gate_actor = str(gate_actor or "").strip() or None
-    page_offset = max(0, int(offset))
-    page_limit = max(1, min(int(limit), 500))
-    outbox_index = _build_alert_outbox_index(outbox_events)
-
-    rows: list[dict[str, Any]] = []
-    counts_by_type: dict[str, int] = {}
-    counts_by_status: dict[str, int] = {}
-    counts_by_delivery: dict[str, int] = {
-        "pending": 0,
-        "sent": 0,
-        "failed": 0,
-        "none": 0,
-        "unknown": 0,
-    }
-    counts_by_gate_code: dict[str, int] = {"unknown": 0}
-    counts_by_gate_actor: dict[str, int] = {}
-    counts_by_override_applied: dict[str, int] = {
-        "true": 0,
-        "false": 0,
-        "unknown": 0,
-    }
-    counts_by_registry_type: dict[str, int] = {}
-    counts_by_policy_version: dict[str, int] = {"unknown": 0}
-    open_count = 0
-    resolved_count = 0
-    outbox_failed_count = 0
-    override_applied_count = 0
-    blocked_without_override_count = 0
-
-    for alert in alerts:
-        row_type = str(getattr(alert, "alert_type", "") or "").strip()
-        if row_type not in OPS_REGISTRY_ALERT_TYPES:
-            continue
-        if normalized_alert_type is not None and row_type != normalized_alert_type:
-            continue
-        row_status = str(getattr(alert, "status", "") or "").strip().lower() or "unknown"
-        if normalized_status == "open":
-            if row_status not in {"raised", "acked"}:
-                continue
-        elif normalized_status is not None and row_status != normalized_status:
-            continue
-        details = (
-            dict(getattr(alert, "details"))
-            if isinstance(getattr(alert, "details", None), dict)
-            else {}
-        )
-        gate_payload = details.get("gate") if isinstance(details.get("gate"), dict) else {}
-        row_gate_code = str(gate_payload.get("code") or "").strip() or None
-        row_gate_actor = str(details.get("actor") or "").strip() or None
-        row_gate_reason = str(details.get("reason") or "").strip() or None
-        row_override_applied = _extract_optional_bool(
-            {"overrideApplied": details.get("overrideApplied")},
-            "overrideApplied",
-        )
-        if normalized_gate_code is not None and row_gate_code != normalized_gate_code:
-            continue
-        if normalized_gate_actor is not None and row_gate_actor != normalized_gate_actor:
-            continue
-        if (
-            override_applied is not None
-            and row_override_applied is not None
-            and row_override_applied != override_applied
-        ):
-            continue
-        if override_applied is not None and row_override_applied is None:
-            continue
-
-        row_registry_type = str(details.get("registryType") or "").strip().lower() or None
-        if (
-            normalized_registry_type is not None
-            and row_registry_type != normalized_registry_type
-        ):
-            continue
-        row_policy_version = str(details.get("version") or "").strip() or None
-        if (
-            normalized_policy_version is not None
-            and row_policy_version != normalized_policy_version
-        ):
-            continue
-
-        row_outbox = outbox_index.get(str(getattr(alert, "alert_id", "") or "").strip())
-        latest_delivery = (
-            str(row_outbox.get("latestDeliveryStatus") or "").strip().lower()
-            if isinstance(row_outbox, dict)
-            else ""
-        )
-        if normalized_delivery_status is not None and latest_delivery != normalized_delivery_status:
-            continue
-        if row_status in {"raised", "acked"}:
-            open_count += 1
-        if row_status == "resolved":
-            resolved_count += 1
-        if latest_delivery == "failed":
-            outbox_failed_count += 1
-
-        counts_by_type[row_type] = counts_by_type.get(row_type, 0) + 1
-        counts_by_status[row_status] = counts_by_status.get(row_status, 0) + 1
-        if latest_delivery in counts_by_delivery:
-            counts_by_delivery[latest_delivery] += 1
-        elif latest_delivery:
-            counts_by_delivery["unknown"] += 1
-        else:
-            counts_by_delivery["none"] += 1
-        if row_gate_code:
-            counts_by_gate_code[row_gate_code] = counts_by_gate_code.get(row_gate_code, 0) + 1
-        else:
-            counts_by_gate_code["unknown"] += 1
-        if row_gate_actor:
-            counts_by_gate_actor[row_gate_actor] = counts_by_gate_actor.get(row_gate_actor, 0) + 1
-        if row_override_applied is True:
-            counts_by_override_applied["true"] += 1
-            override_applied_count += 1
-        elif row_override_applied is False:
-            counts_by_override_applied["false"] += 1
-            if row_type == REGISTRY_FAIRNESS_ALERT_TYPE_BLOCKED:
-                blocked_without_override_count += 1
-        else:
-            counts_by_override_applied["unknown"] += 1
-
-        if row_registry_type:
-            counts_by_registry_type[row_registry_type] = (
-                counts_by_registry_type.get(row_registry_type, 0) + 1
-            )
-        if row_policy_version:
-            counts_by_policy_version[row_policy_version] = (
-                counts_by_policy_version.get(row_policy_version, 0) + 1
-            )
-        else:
-            counts_by_policy_version["unknown"] += 1
-
-        created_at = _normalize_aware_datetime(getattr(alert, "created_at", None)) or datetime.now(timezone.utc)
-        updated_at = _normalize_aware_datetime(getattr(alert, "updated_at", None)) or created_at
-        dependency_payload = (
-            details.get("dependency")
-            if isinstance(details.get("dependency"), dict)
-            else {}
-        )
-        latest_run_payload = (
-            gate_payload.get("latestRun")
-            if isinstance(gate_payload.get("latestRun"), dict)
-            else {}
-        )
-        latest_shadow_run_payload = (
-            gate_payload.get("latestShadowRun")
-            if isinstance(gate_payload.get("latestShadowRun"), dict)
-            else {}
-        )
-        rows.append(
-            {
-                "alertId": str(getattr(alert, "alert_id", "") or "").strip() or None,
-                "caseId": int(getattr(alert, "job_id", 0) or 0),
-                "scopeId": int(getattr(alert, "scope_id", 0) or 0),
-                "traceId": str(getattr(alert, "trace_id", "") or "").strip() or None,
-                "type": row_type,
-                "status": row_status,
-                "severity": str(getattr(alert, "severity", "") or "").strip() or None,
-                "title": str(getattr(alert, "title", "") or "").strip() or None,
-                "message": str(getattr(alert, "message", "") or "").strip() or None,
-                "registryType": row_registry_type,
-                "policyVersion": row_policy_version,
-                "action": str(details.get("action") or "").strip() or None,
-                "gateCode": row_gate_code,
-                "gateMessage": str(gate_payload.get("message") or "").strip() or None,
-                "gateSource": str(gate_payload.get("source") or "").strip() or None,
-                "overrideApplied": row_override_applied,
-                "gateActor": row_gate_actor,
-                "gateReason": row_gate_reason,
-                "gateBenchmarkPassed": _extract_optional_bool(
-                    {"benchmarkGatePassed": gate_payload.get("benchmarkGatePassed")},
-                    "benchmarkGatePassed",
-                ),
-                "gateShadowApplied": _extract_optional_bool(
-                    {"shadowGateApplied": gate_payload.get("shadowGateApplied")},
-                    "shadowGateApplied",
-                ),
-                "gateShadowPassed": _extract_optional_bool(
-                    {"shadowGatePassed": gate_payload.get("shadowGatePassed")},
-                    "shadowGatePassed",
-                ),
-                "gateLatestRunId": str(latest_run_payload.get("runId") or "").strip() or None,
-                "gateLatestRunStatus": str(latest_run_payload.get("status") or "").strip() or None,
-                "gateLatestRunThresholdDecision": (
-                    str(latest_run_payload.get("thresholdDecision") or "").strip() or None
-                ),
-                "gateLatestRunEnvironmentMode": (
-                    str(latest_run_payload.get("environmentMode") or "").strip() or None
-                ),
-                "gateLatestRunNeedsRemediation": _extract_optional_bool(
-                    {"needsRemediation": latest_run_payload.get("needsRemediation")},
-                    "needsRemediation",
-                ),
-                "gateLatestShadowRunId": (
-                    str(latest_shadow_run_payload.get("runId") or "").strip() or None
-                ),
-                "gateLatestShadowRunStatus": (
-                    str(latest_shadow_run_payload.get("status") or "").strip() or None
-                ),
-                "gateLatestShadowRunThresholdDecision": (
-                    str(latest_shadow_run_payload.get("thresholdDecision") or "").strip()
-                    or None
-                ),
-                "gateLatestShadowRunEnvironmentMode": (
-                    str(latest_shadow_run_payload.get("environmentMode") or "").strip()
-                    or None
-                ),
-                "gateLatestShadowRunNeedsRemediation": _extract_optional_bool(
-                    {"needsRemediation": latest_shadow_run_payload.get("needsRemediation")},
-                    "needsRemediation",
-                ),
-                "dependencyCode": str(dependency_payload.get("code") or "").strip() or None,
-                "createdAt": created_at.isoformat(),
-                "updatedAt": updated_at.isoformat(),
-                "outbox": (
-                    dict(row_outbox)
-                    if isinstance(row_outbox, dict)
-                    else {
-                        "alertId": str(getattr(alert, "alert_id", "") or "").strip() or None,
-                        "totalEvents": 0,
-                        "deliveryCounts": {
-                            "pending": 0,
-                            "sent": 0,
-                            "failed": 0,
-                            "unknown": 0,
-                        },
-                        "latestEventId": None,
-                        "latestDeliveryStatus": None,
-                        "latestErrorMessage": None,
-                        "latestUpdatedAt": None,
-                    }
-                ),
-                "_updatedAt": updated_at,
-                "_createdAt": created_at,
-                "_deliveryStatus": latest_delivery or "none",
-            }
-        )
-
-    rows.sort(
-        key=lambda row: (
-            row.get("_updatedAt"),
-            row.get("_createdAt"),
-            str(row.get("alertId") or ""),
-        ),
-        reverse=True,
+    return build_registry_alert_ops_view_v3(
+        alerts=alerts,
+        outbox_events=outbox_events,
+        alert_type=alert_type,
+        status=status,
+        delivery_status=delivery_status,
+        registry_type=registry_type,
+        policy_version=policy_version,
+        gate_code=gate_code,
+        gate_actor=gate_actor,
+        override_applied=override_applied,
+        fields_mode=fields_mode,
+        include_trend=include_trend,
+        trend_window_minutes=trend_window_minutes,
+        trend_bucket_minutes=trend_bucket_minutes,
+        offset=offset,
+        limit=limit,
     )
-    total_count = len(rows)
-    paged_rows = rows[page_offset : page_offset + page_limit]
-    serialized_rows = [
-        _serialize_registry_alert_ops_item(
-            row,
-            fields_mode=normalized_fields_mode,
-        )
-        for row in paged_rows
-    ]
-    trend_payload = (
-        _build_registry_alert_ops_trend(
-            rows=rows,
-            window_minutes=trend_window_minutes,
-            bucket_minutes=trend_bucket_minutes,
-        )
-        if include_trend
-        else None
-    )
-
-    return {
-        "count": total_count,
-        "returned": len(serialized_rows),
-        "items": serialized_rows,
-        "aggregations": {
-            "byType": dict(sorted(counts_by_type.items(), key=lambda kv: kv[0])),
-            "byStatus": dict(sorted(counts_by_status.items(), key=lambda kv: kv[0])),
-            "byDeliveryStatus": counts_by_delivery,
-            "byGateCode": dict(sorted(counts_by_gate_code.items(), key=lambda kv: kv[0])),
-            "byGateActor": dict(sorted(counts_by_gate_actor.items(), key=lambda kv: kv[0])),
-            "byOverrideApplied": counts_by_override_applied,
-            "byRegistryType": dict(sorted(counts_by_registry_type.items(), key=lambda kv: kv[0])),
-            "byPolicyVersion": dict(sorted(counts_by_policy_version.items(), key=lambda kv: kv[0])),
-            "openCount": open_count,
-            "resolvedCount": resolved_count,
-            "outboxFailedCount": outbox_failed_count,
-            "overrideAppliedCount": override_applied_count,
-            "blockedWithoutOverrideCount": blocked_without_override_count,
-        },
-        "trend": trend_payload,
-        "filters": {
-            "alertType": normalized_alert_type,
-            "status": normalized_status,
-            "deliveryStatus": normalized_delivery_status,
-            "registryType": normalized_registry_type,
-            "policyVersion": normalized_policy_version,
-            "gateCode": normalized_gate_code,
-            "gateActor": normalized_gate_actor,
-            "overrideApplied": override_applied,
-            "fieldsMode": normalized_fields_mode,
-            "includeTrend": bool(include_trend),
-            "trendWindowMinutes": int(trend_window_minutes),
-            "trendBucketMinutes": int(trend_bucket_minutes),
-            "offset": page_offset,
-            "limit": page_limit,
-        },
-    }
 
 
 def _build_judge_core_view(
@@ -6283,6 +5755,10 @@ async def _attach_judge_agent_runtime_trace(
         "errorMessage": judge_runtime_result.error_message,
         "runtimeVersion": runtime_output.get("runtimeVersion"),
         "workflowVersion": runtime_output.get("workflowVersion"),
+        "roleContractVersion": runtime_output.get("roleContractVersion"),
+        "workflowContractVersion": runtime_output.get("workflowContractVersion"),
+        "artifactContractVersion": runtime_output.get("artifactContractVersion"),
+        "stageContractVersion": runtime_output.get("stageContractVersion"),
         "mode": runtime_output.get("mode"),
         "officialVerdictAuthority": bool(runtime_output.get("officialVerdictAuthority")),
         "activeRoles": runtime_output.get("activeRoles"),
@@ -6328,6 +5804,18 @@ def _resolve_winner(pro_score: float, con_score: float, *, margin: float = 1.0) 
 
 def _validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]:
     return validate_final_report_payload_contract_v3_final(payload)
+
+
+def _validate_fairness_dashboard_contract(payload: dict[str, Any]) -> None:
+    validate_fairness_dashboard_contract_v3(payload)
+
+
+def _validate_courtroom_drilldown_bundle_contract(payload: dict[str, Any]) -> None:
+    validate_courtroom_drilldown_bundle_contract_v3(payload)
+
+
+def _validate_evidence_claim_ops_queue_contract(payload: dict[str, Any]) -> None:
+    validate_evidence_claim_ops_queue_contract_v3(payload)
 
 
 def _build_final_report_payload(
@@ -10539,7 +10027,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         page_items = items[normalized_offset : normalized_offset + normalized_limit]
 
-        return {
+        payload = {
             "count": len(items),
             "returned": len(page_items),
             "scanned": len(jobs),
@@ -10571,6 +10059,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "limit": normalized_limit,
             },
         }
+        return payload
 
     @app.get("/internal/judge/courtroom/drilldown-bundle")
     async def list_judge_courtroom_drilldown_bundle(
@@ -10835,7 +10324,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if str(risk_profile.get("level") or "").strip().lower() == "high":
                 high_risk_count += 1
 
-        return {
+        payload = {
             "count": len(items),
             "returned": len(page_items),
             "scanned": len(jobs),
@@ -10881,6 +10370,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "drilldown bundle is read-only and does not change verdict state.",
             ],
         }
+        try:
+            _validate_courtroom_drilldown_bundle_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "courtroom_drilldown_bundle_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/evidence-claim/ops-queue")
     async def list_judge_evidence_claim_ops_queue(
@@ -11187,7 +10687,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             else:
                 reliability_level_counts["unknown"] += 1
 
-        return {
+        payload = {
             "count": len(items),
             "returned": len(page_items),
             "scanned": len(jobs),
@@ -11228,6 +10728,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "limit": normalized_limit,
             },
         }
+        try:
+            _validate_evidence_claim_ops_queue_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "evidence_claim_ops_queue_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
     async def request_npc_coach_advice(
@@ -13646,13 +13157,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         case_scan_limit: int = Query(default=200, ge=20, le=1000),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-
-        collected_items: list[dict[str, Any]] = []
-        offset = 0
-        total_count: int | None = None
-        while len(collected_items) < case_scan_limit:
-            batch_limit = min(200, case_scan_limit - len(collected_items))
-            page = await list_judge_case_fairness(
+        collected_items, total_count = await collect_fairness_case_items_v3(
+            fetch_page=lambda offset, limit: list_judge_case_fairness(
                 x_ai_internal_key=x_ai_internal_key,
                 status=status,
                 dispatch_type=dispatch_type,
@@ -13669,17 +13175,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 review_required=None,
                 panel_high_disagreement=None,
                 offset=offset,
-                limit=batch_limit,
-            )
-            if total_count is None:
-                total_count = int(page.get("count") or 0)
-            page_items = page.get("items") if isinstance(page.get("items"), list) else []
-            if not page_items:
-                break
-            collected_items.extend(page_items)
-            if len(page_items) < batch_limit:
-                break
-            offset += batch_limit
+                limit=limit,
+            ),
+            scan_limit=case_scan_limit,
+            page_limit=200,
+        )
 
         aggregations = _build_case_fairness_aggregations(collected_items)
         gate_distribution = (
@@ -13712,7 +13212,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         generated_at = datetime.now(timezone.utc).isoformat()
         total_matched = int(total_count or 0)
         scanned_count = len(collected_items)
-        return {
+        payload = {
             "generatedAt": generated_at,
             "overview": {
                 "totalMatched": total_matched,
@@ -13757,6 +13257,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "caseScanLimit": int(case_scan_limit),
             },
         }
+        try:
+            _validate_fairness_dashboard_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "fairness_dashboard_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/fairness/calibration-pack")
     async def get_judge_fairness_calibration_pack(
@@ -13776,13 +13287,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         normalized_benchmark_limit = max(1, min(int(benchmark_limit), 500))
         normalized_shadow_limit = max(1, min(int(shadow_limit), 500))
         normalized_risk_limit = max(1, min(int(risk_limit), 200))
-
-        collected_items: list[dict[str, Any]] = []
-        offset = 0
-        total_count: int | None = None
-        while len(collected_items) < case_scan_limit:
-            batch_limit = min(200, case_scan_limit - len(collected_items))
-            page = await list_judge_case_fairness(
+        collected_items, total_count = await collect_fairness_case_items_v3(
+            fetch_page=lambda offset, limit: list_judge_case_fairness(
                 x_ai_internal_key=x_ai_internal_key,
                 status=status,
                 dispatch_type=dispatch_type,
@@ -13799,17 +13305,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 review_required=None,
                 panel_high_disagreement=None,
                 offset=offset,
-                limit=batch_limit,
-            )
-            if total_count is None:
-                total_count = int(page.get("count") or 0)
-            page_items = page.get("items") if isinstance(page.get("items"), list) else []
-            if not page_items:
-                break
-            collected_items.extend(page_items)
-            if len(page_items) < batch_limit:
-                break
-            offset += batch_limit
+                limit=limit,
+            ),
+            scan_limit=case_scan_limit,
+            page_limit=200,
+        )
 
         benchmark_runs = await _list_fairness_benchmark_runs(
             policy_version=normalized_policy_version,
@@ -13938,13 +13438,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         normalized_benchmark_limit = max(1, min(int(benchmark_limit), 500))
         normalized_shadow_limit = max(1, min(int(shadow_limit), 500))
         normalized_risk_limit = max(1, min(int(risk_limit), 200))
-
-        collected_items: list[dict[str, Any]] = []
-        offset = 0
-        total_count: int | None = None
-        while len(collected_items) < case_scan_limit:
-            batch_limit = min(200, case_scan_limit - len(collected_items))
-            page = await list_judge_case_fairness(
+        collected_items, total_count = await collect_fairness_case_items_v3(
+            fetch_page=lambda offset, limit: list_judge_case_fairness(
                 x_ai_internal_key=x_ai_internal_key,
                 status=status,
                 dispatch_type=dispatch_type,
@@ -13961,17 +13456,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 review_required=None,
                 panel_high_disagreement=None,
                 offset=offset,
-                limit=batch_limit,
-            )
-            if total_count is None:
-                total_count = int(page.get("count") or 0)
-            page_items = page.get("items") if isinstance(page.get("items"), list) else []
-            if not page_items:
-                break
-            collected_items.extend(page_items)
-            if len(page_items) < batch_limit:
-                break
-            offset += batch_limit
+                limit=limit,
+            ),
+            scan_limit=case_scan_limit,
+            page_limit=200,
+        )
 
         benchmark_runs = await _list_fairness_benchmark_runs(
             policy_version=normalized_policy_version,
@@ -14149,6 +13638,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             release_limit=release_limit,
             audit_limit=audit_limit,
         )
+        registry_prompt_tool_governance = await get_registry_prompt_tool_governance(
+            x_ai_internal_key=x_ai_internal_key,
+            dependency_limit=dependency_limit,
+            usage_preview_limit=usage_preview_limit,
+            release_limit=release_limit,
+            audit_limit=audit_limit,
+            risk_limit=calibration_risk_limit,
+        )
         fairness_calibration_advisor = await get_judge_fairness_policy_calibration_advisor(
             x_ai_internal_key=x_ai_internal_key,
             dispatch_type=dispatch_type,
@@ -14191,6 +13688,44 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             review_required=None,
             risk_level=None,
             sla_bucket=None,
+            updated_from=None,
+            updated_to=None,
+            sort_by="risk_score",
+            sort_order="desc",
+            scan_limit=case_scan_limit,
+            offset=0,
+            limit=min(queue_limit, 200),
+        )
+        courtroom_drilldown = await list_judge_courtroom_drilldown_bundle(
+            x_ai_internal_key=x_ai_internal_key,
+            status=None,
+            dispatch_type="auto",
+            winner=None,
+            review_required=None,
+            risk_level=None,
+            sla_bucket=None,
+            updated_from=None,
+            updated_to=None,
+            sort_by="risk_score",
+            sort_order="desc",
+            scan_limit=case_scan_limit,
+            offset=0,
+            limit=min(queue_limit, 200),
+            claim_preview_limit=10,
+            evidence_preview_limit=10,
+            panel_preview_limit=10,
+        )
+        evidence_claim_queue = await list_judge_evidence_claim_ops_queue(
+            x_ai_internal_key=x_ai_internal_key,
+            status=None,
+            dispatch_type="auto",
+            winner=None,
+            review_required=None,
+            risk_level=None,
+            sla_bucket=None,
+            reliability_level=None,
+            has_conflict=None,
+            has_unanswered_claim=None,
             updated_from=None,
             updated_to=None,
             sort_by="risk_score",
@@ -14437,17 +13972,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     }
                 )
 
-        verified_count = 0
-        review_required_count = 0
-        open_challenge_count = 0
-        for item in trust_items:
-            if bool(item.get("verdictVerified")):
-                verified_count += 1
-            if bool(item.get("reviewRequired")):
-                review_required_count += 1
-            challenge_state = str(item.get("challengeState") or "").strip()
-            if challenge_state in TRUST_CHALLENGE_OPEN_STATES:
-                open_challenge_count += 1
+        trust_summary = summarize_ops_read_model_pack_trust_items(
+            trust_items=trust_items,
+            open_challenge_states=TRUST_CHALLENGE_OPEN_STATES,
+        )
 
         advisor_overview = (
             fairness_calibration_advisor.get("overview")
@@ -14489,131 +14017,143 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if isinstance(trust_challenge_queue.get("items"), list)
             else []
         )
-        review_high_risk_count = 0
-        review_urgent_count = 0
-        for row in review_items:
-            risk_profile = (
-                row.get("riskProfile")
-                if isinstance(row.get("riskProfile"), dict)
-                else {}
-            )
-            if str(risk_profile.get("level") or "").strip().lower() == "high":
-                review_high_risk_count += 1
-            if str(risk_profile.get("slaBucket") or "").strip().lower() == "urgent":
-                review_urgent_count += 1
-
-        review_unified_high_priority_count = 0
-        review_trust_open_challenge_count = 0
-        for row in review_trust_priority_items:
-            unified_priority = (
-                row.get("unifiedPriorityProfile")
-                if isinstance(row.get("unifiedPriorityProfile"), dict)
-                else {}
-            )
-            trust_challenge = (
-                row.get("trustChallenge")
-                if isinstance(row.get("trustChallenge"), dict)
-                else {}
-            )
-            if str(unified_priority.get("level") or "").strip().lower() == "high":
-                review_unified_high_priority_count += 1
-            if (
-                str(trust_challenge.get("state") or "").strip().lower()
-                in TRUST_CHALLENGE_OPEN_STATES
-            ):
-                review_trust_open_challenge_count += 1
-
-        trust_challenge_high_priority_count = 0
-        trust_challenge_urgent_count = 0
-        for row in trust_challenge_queue_items:
-            priority_profile = (
-                row.get("priorityProfile")
-                if isinstance(row.get("priorityProfile"), dict)
-                else {}
-            )
-            if str(priority_profile.get("level") or "").strip().lower() == "high":
-                trust_challenge_high_priority_count += 1
-            if str(priority_profile.get("slaBucket") or "").strip().lower() == "urgent":
-                trust_challenge_urgent_count += 1
+        review_summary = summarize_ops_read_model_pack_review_items(
+            review_items=review_items,
+            review_trust_priority_items=review_trust_priority_items,
+            trust_challenge_queue_items=trust_challenge_queue_items,
+            open_challenge_states=TRUST_CHALLENGE_OPEN_STATES,
+        )
         simulation_summary = (
             policy_gate_simulation.get("summary")
             if isinstance(policy_gate_simulation.get("summary"), dict)
             else {}
         )
+        registry_prompt_tool_risk_items = (
+            registry_prompt_tool_governance.get("riskItems")
+            if isinstance(registry_prompt_tool_governance.get("riskItems"), list)
+            else []
+        )
+        registry_prompt_tool_high_risk_count = sum(
+            1
+            for row in registry_prompt_tool_risk_items
+            if isinstance(row, dict)
+            and str(row.get("severity") or "").strip().lower() == "high"
+        )
+        evidence_claim_aggregations = (
+            evidence_claim_queue.get("aggregations")
+            if isinstance(evidence_claim_queue.get("aggregations"), dict)
+            else {}
+        )
+        evidence_claim_risk_counts = (
+            evidence_claim_aggregations.get("riskLevelCounts")
+            if isinstance(evidence_claim_aggregations.get("riskLevelCounts"), dict)
+            else {}
+        )
+        courtroom_drilldown_aggregations = (
+            courtroom_drilldown.get("aggregations")
+            if isinstance(courtroom_drilldown.get("aggregations"), dict)
+            else {}
+        )
+        adaptive_summary = build_ops_read_model_pack_adaptive_summary(
+            release_gate=release_gate,
+            advisor_overview=advisor_overview,
+            recommended_action_count=len(recommended_actions),
+            readiness_counts=readiness_counts,
+            readiness_overview=readiness_overview,
+            review_queue_count=int(review_queue.get("count") or 0),
+            review_high_risk_count=review_summary["reviewHighRiskCount"],
+            review_urgent_count=review_summary["reviewUrgentCount"],
+            review_trust_priority_count=int(review_trust_priority.get("count") or 0),
+            review_unified_high_priority_count=review_summary["reviewUnifiedHighPriorityCount"],
+            review_trust_open_challenge_count=review_summary["reviewTrustOpenChallengeCount"],
+            policy_simulation_blocked_count=int(simulation_summary.get("blockedCount") or 0),
+            courtroom_sample_count=len(courtroom_items),
+            courtroom_queue_count=int(courtroom_queue.get("count") or 0),
+            courtroom_drilldown_count=int(courtroom_drilldown.get("count") or 0),
+            courtroom_drilldown_review_required_count=int(
+                courtroom_drilldown_aggregations.get("reviewRequiredCount") or 0
+            ),
+            courtroom_drilldown_high_risk_count=int(
+                courtroom_drilldown_aggregations.get("highRiskCount") or 0
+            ),
+            evidence_claim_queue_count=int(evidence_claim_queue.get("count") or 0),
+            evidence_claim_high_risk_count=int(evidence_claim_risk_counts.get("high") or 0),
+            evidence_claim_conflict_case_count=int(
+                evidence_claim_aggregations.get("conflictCaseCount") or 0
+            ),
+            evidence_claim_unanswered_claim_case_count=int(
+                evidence_claim_aggregations.get("unansweredClaimCaseCount")
+                or evidence_claim_aggregations.get("unansweredCaseCount")
+                or 0
+            ),
+            trust_challenge_queue_count=int(trust_challenge_queue.get("count") or 0),
+            trust_challenge_high_priority_count=review_summary["trustChallengeHighPriorityCount"],
+            trust_challenge_urgent_count=review_summary["trustChallengeUrgentCount"],
+            registry_prompt_tool_risk_count=len(registry_prompt_tool_risk_items),
+            registry_prompt_tool_high_risk_count=registry_prompt_tool_high_risk_count,
+        )
+        trust_overview = build_ops_read_model_pack_trust_overview(
+            include_case_trust=include_case_trust,
+            trust_case_limit=trust_case_limit,
+            trust_case_ids=trust_case_ids,
+            trust_items=trust_items,
+            trust_errors=trust_errors,
+            verified_count=trust_summary["verifiedCount"],
+            review_required_count=trust_summary["reviewRequiredCount"],
+            open_challenge_count=trust_summary["openChallengeCount"],
+        )
+        pack_filters = build_ops_read_model_pack_filters(
+            dispatch_type=dispatch_type,
+            policy_version=policy_version,
+            window_days=window_days,
+            top_limit=top_limit,
+            case_scan_limit=case_scan_limit,
+            include_case_trust=include_case_trust,
+            trust_case_limit=trust_case_limit,
+            dependency_limit=dependency_limit,
+            usage_preview_limit=usage_preview_limit,
+            release_limit=release_limit,
+            audit_limit=audit_limit,
+            calibration_risk_limit=calibration_risk_limit,
+            calibration_benchmark_limit=calibration_benchmark_limit,
+            calibration_shadow_limit=calibration_shadow_limit,
+            panel_profile_scan_limit=panel_profile_scan_limit,
+            panel_group_limit=panel_group_limit,
+            panel_attention_limit=panel_attention_limit,
+        )
 
-        return {
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "fairnessDashboard": fairness_dashboard,
-            "fairnessCalibrationAdvisor": fairness_calibration_advisor,
-            "panelRuntimeReadiness": panel_runtime_readiness,
-            "registryGovernance": governance_overview,
-            "courtroomReadModel": {
-                "requestedCaseLimit": int(top_limit),
-                "caseIds": list(courtroom_case_ids),
-                "count": len(courtroom_items),
-                "errorCount": len(courtroom_errors),
-                "items": courtroom_items,
-                "errors": courtroom_errors,
-            },
-            "courtroomQueue": courtroom_queue,
-            "reviewQueue": review_queue,
-            "reviewTrustPriority": review_trust_priority,
-            "trustChallengeQueue": trust_challenge_queue,
-            "policyGateSimulation": policy_gate_simulation,
-            "adaptiveSummary": {
-                "calibrationGatePassed": bool(release_gate.get("passed")),
-                "calibrationGateCode": str(release_gate.get("code") or "").strip() or None,
-                "calibrationHighRiskCount": int(advisor_overview.get("highRiskCount") or 0),
-                "recommendedActionCount": len(recommended_actions),
-                "panelReadyGroupCount": int(readiness_counts.get("ready") or 0),
-                "panelWatchGroupCount": int(readiness_counts.get("watch") or 0),
-                "panelAttentionGroupCount": int(readiness_counts.get("attention") or 0),
-                "panelScannedRecordCount": int(readiness_overview.get("scannedRecords") or 0),
-                "reviewQueueCount": int(review_queue.get("count") or 0),
-                "reviewHighRiskCount": review_high_risk_count,
-                "reviewUrgentCount": review_urgent_count,
-                "reviewTrustPriorityCount": int(review_trust_priority.get("count") or 0),
-                "reviewUnifiedHighPriorityCount": review_unified_high_priority_count,
-                "reviewTrustOpenChallengeCount": review_trust_open_challenge_count,
-                "policySimulationBlockedCount": int(simulation_summary.get("blockedCount") or 0),
-                "courtroomSampleCount": len(courtroom_items),
-                "courtroomQueueCount": int(courtroom_queue.get("count") or 0),
-                "trustChallengeQueueCount": int(trust_challenge_queue.get("count") or 0),
-                "trustChallengeHighPriorityCount": trust_challenge_high_priority_count,
-                "trustChallengeUrgentCount": trust_challenge_urgent_count,
-            },
-            "trustOverview": {
-                "included": bool(include_case_trust),
-                "requestedCaseLimit": int(trust_case_limit),
-                "caseIds": list(trust_case_ids),
-                "count": len(trust_items),
-                "verifiedCount": verified_count,
-                "reviewRequiredCount": review_required_count,
-                "openChallengeCount": open_challenge_count,
-                "errorCount": len(trust_errors),
-                "items": trust_items,
-                "errors": trust_errors,
-            },
-            "filters": {
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "policyVersion": str(policy_version or "").strip() or None,
-                "windowDays": int(window_days),
-                "topLimit": int(top_limit),
-                "caseScanLimit": int(case_scan_limit),
-                "includeCaseTrust": bool(include_case_trust),
-                "trustCaseLimit": int(trust_case_limit),
-                "dependencyLimit": max(1, min(int(dependency_limit), 500)),
-                "usagePreviewLimit": max(1, min(int(usage_preview_limit), 200)),
-                "releaseLimit": max(1, min(int(release_limit), 200)),
-                "auditLimit": max(1, min(int(audit_limit), 200)),
-                "calibrationRiskLimit": max(1, min(int(calibration_risk_limit), 200)),
-                "calibrationBenchmarkLimit": max(1, min(int(calibration_benchmark_limit), 500)),
-                "calibrationShadowLimit": max(1, min(int(calibration_shadow_limit), 500)),
-                "panelProfileScanLimit": max(50, min(int(panel_profile_scan_limit), 5000)),
-                "panelGroupLimit": max(1, min(int(panel_group_limit), 200)),
-                "panelAttentionLimit": max(1, min(int(panel_attention_limit), 100)),
-            },
-        }
+        try:
+            pack_payload = build_ops_read_model_pack_v5_payload(
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                fairness_dashboard=fairness_dashboard,
+                fairness_calibration_advisor=fairness_calibration_advisor,
+                panel_runtime_readiness=panel_runtime_readiness,
+                registry_governance=governance_overview,
+                registry_prompt_tool_governance=registry_prompt_tool_governance,
+                courtroom_case_ids=courtroom_case_ids,
+                courtroom_requested_case_limit=top_limit,
+                courtroom_items=courtroom_items,
+                courtroom_errors=courtroom_errors,
+                courtroom_queue=courtroom_queue,
+                courtroom_drilldown=courtroom_drilldown,
+                review_queue=review_queue,
+                review_trust_priority=review_trust_priority,
+                evidence_claim_queue=evidence_claim_queue,
+                trust_challenge_queue=trust_challenge_queue,
+                policy_gate_simulation=policy_gate_simulation,
+                adaptive_summary=adaptive_summary,
+                trust_overview=trust_overview,
+                pack_filters=pack_filters,
+            )
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "ops_read_model_pack_v5_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return pack_payload
 
     @app.get("/internal/judge/panels/runtime/profiles")
     async def list_panel_runtime_profiles(

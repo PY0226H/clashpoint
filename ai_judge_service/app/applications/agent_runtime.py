@@ -47,6 +47,12 @@ class _ReservedAgentExecutor(AgentExecutorPort):
 
 
 class _JudgeCourtroomExecutor(AgentExecutorPort):
+    _RUNTIME_VERSION = "courtroom_agent_runtime_mvp_v1"
+    _WORKFLOW_VERSION = "courtroom_8agent_chain_v1"
+    _ROLE_CONTRACT_VERSION = "courtroom_role_contract_v1"
+    _WORKFLOW_CONTRACT_VERSION = "courtroom_workflow_contract_v1"
+    _ARTIFACT_CONTRACT_VERSION = "courtroom_artifact_contract_v1"
+    _STAGE_CONTRACT_VERSION = "courtroom_stage_contract_v1"
     _ROLE_STAGE_HINTS = {
         ROLE_CLERK: "blinded",
         ROLE_RECORDER: "case_built",
@@ -105,6 +111,11 @@ class _JudgeCourtroomExecutor(AgentExecutorPort):
         ("opinion_pack", ROLE_OPINION_WRITER, ()),
     )
 
+    def _activation_scope_for_role(self, *, role: str) -> str:
+        if role in self._PHASE_ACTIVE_ROLE_SET:
+            return "phase_and_final"
+        return "final_only"
+
     @staticmethod
     def _normalize_dispatch_type(request: AgentExecutionRequest) -> str:
         raw_value = (
@@ -125,21 +136,35 @@ class _JudgeCourtroomExecutor(AgentExecutorPort):
     def _build_role_rows(self, *, dispatch_type: str) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for index, role in enumerate(JUDGE_COURTROOM_ROLE_ORDER, start=1):
+            activation_scope = self._activation_scope_for_role(role=role)
             active = (
                 role in self._PHASE_ACTIVE_ROLE_SET
                 if dispatch_type == "phase"
                 else True
             )
+            input_artifacts = list(self._ROLE_INPUT_ARTIFACTS[role])
+            output_artifacts = list(self._ROLE_OUTPUT_ARTIFACTS[role])
+            stage_tag = self._ROLE_STAGE_HINTS[role]
             rows.append(
                 {
                     "sequence": index,
                     "role": role,
                     "active": active,
                     "state": "active" if active else "deferred",
-                    "targetStatus": self._ROLE_STAGE_HINTS[role],
+                    "targetStatus": stage_tag,
+                    "stageTag": stage_tag,
+                    "activationScope": activation_scope,
                     "responsibility": self._ROLE_RESPONSIBILITIES[role],
-                    "inputArtifacts": list(self._ROLE_INPUT_ARTIFACTS[role]),
-                    "outputArtifacts": list(self._ROLE_OUTPUT_ARTIFACTS[role]),
+                    "inputArtifacts": input_artifacts,
+                    "outputArtifacts": output_artifacts,
+                    "contractVersion": self._ROLE_CONTRACT_VERSION,
+                    "contract": {
+                        "version": self._ROLE_CONTRACT_VERSION,
+                        "activationScope": activation_scope,
+                        "stageTag": stage_tag,
+                        "inputArtifacts": input_artifacts,
+                        "outputArtifacts": output_artifacts,
+                    },
                 }
             )
         return rows
@@ -218,8 +243,12 @@ class _JudgeCourtroomExecutor(AgentExecutorPort):
                 "mode": "official_verdict_plane",
                 "officialVerdictAuthority": True,
                 "dispatchType": dispatch_type,
-                "runtimeVersion": "courtroom_agent_runtime_mvp_v1",
-                "workflowVersion": "courtroom_8agent_chain_v1",
+                "runtimeVersion": self._RUNTIME_VERSION,
+                "workflowVersion": self._WORKFLOW_VERSION,
+                "roleContractVersion": self._ROLE_CONTRACT_VERSION,
+                "workflowContractVersion": self._WORKFLOW_CONTRACT_VERSION,
+                "artifactContractVersion": self._ARTIFACT_CONTRACT_VERSION,
+                "stageContractVersion": self._STAGE_CONTRACT_VERSION,
                 "roleOrder": list(JUDGE_COURTROOM_ROLE_ORDER),
                 "activeRoles": [item["role"] for item in roles if item["active"]],
                 "roles": roles,

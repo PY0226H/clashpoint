@@ -8,6 +8,21 @@ from app.app_factory import create_app, create_default_app, create_runtime, requ
 from app.applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
 )
+from app.applications.fairness_dashboard_contract import (
+    FAIRNESS_DASHBOARD_FILTER_KEYS,
+    FAIRNESS_DASHBOARD_GATE_DISTRIBUTION_KEYS,
+    FAIRNESS_DASHBOARD_OVERVIEW_KEYS,
+    FAIRNESS_DASHBOARD_TOP_LEVEL_KEYS,
+    FAIRNESS_DASHBOARD_TRENDS_KEYS,
+    validate_fairness_dashboard_contract,
+)
+from app.applications.ops_read_model_pack import (
+    OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
+    OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
+    OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
+    OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
+    validate_ops_read_model_pack_v5_contract,
+)
 from app.models import (
     CaseCreateRequest,
     FinalDispatchRequest,
@@ -1441,6 +1456,46 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "invalid_evidence_claim_reliability_level",
             invalid_reliability_resp.text,
         )
+
+    async def test_courtroom_drilldown_bundle_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        with patch(
+            "app.app_factory._validate_courtroom_drilldown_bundle_contract",
+            side_effect=ValueError("courtroom_drilldown_bundle_missing_keys:items"),
+        ):
+            resp = await self._get(
+                app=app,
+                path="/internal/judge/courtroom/drilldown-bundle",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "courtroom_drilldown_bundle_contract_violation")
+        self.assertIn("courtroom_drilldown_bundle_missing_keys", detail["message"])
+
+    async def test_evidence_claim_ops_queue_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        with patch(
+            "app.app_factory._validate_evidence_claim_ops_queue_contract",
+            side_effect=ValueError("evidence_claim_ops_queue_missing_keys:items"),
+        ):
+            resp = await self._get(
+                app=app,
+                path="/internal/judge/evidence-claim/ops-queue",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "evidence_claim_ops_queue_contract_violation")
+        self.assertIn("evidence_claim_ops_queue_missing_keys", detail["message"])
 
     async def test_claim_ledger_route_should_return_persisted_claim_graph(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -3523,6 +3578,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "courtroom_8agent_chain_v1",
         )
         self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["roleContractVersion"],
+            "courtroom_role_contract_v1",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["workflowContractVersion"],
+            "courtroom_workflow_contract_v1",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["artifactContractVersion"],
+            "courtroom_artifact_contract_v1",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["stageContractVersion"],
+            "courtroom_stage_contract_v1",
+        )
+        self.assertEqual(
             phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["mode"],
             "official_verdict_plane",
         )
@@ -3556,6 +3627,18 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             len(phase_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
             8,
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["courtroomRoles"][0]["contractVersion"],
+            "courtroom_role_contract_v1",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["courtroomRoles"][0]["activationScope"],
+            "phase_and_final",
+        )
+        self.assertEqual(
+            phase_callback_calls[0][1]["judgeTrace"]["courtroomRoles"][-1]["activationScope"],
+            "final_only",
         )
         self.assertEqual(
             len(phase_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["activeRoles"]),
@@ -3670,6 +3753,22 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "courtroom_8agent_chain_v1",
         )
         self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["roleContractVersion"],
+            "courtroom_role_contract_v1",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["workflowContractVersion"],
+            "courtroom_workflow_contract_v1",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["artifactContractVersion"],
+            "courtroom_artifact_contract_v1",
+        )
+        self.assertEqual(
+            final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["stageContractVersion"],
+            "courtroom_stage_contract_v1",
+        )
+        self.assertEqual(
             final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["mode"],
             "official_verdict_plane",
         )
@@ -3711,6 +3810,12 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             len(final_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]),
             8,
+        )
+        self.assertTrue(
+            all(
+                str(row.get("contractVersion") or "") == "courtroom_role_contract_v1"
+                for row in final_callback_calls[0][1]["judgeTrace"]["courtroomRoles"]
+            )
         )
         self.assertEqual(
             len(final_callback_calls[0][1]["judgeTrace"]["agentRuntime"]["activeRoles"]),
@@ -6401,6 +6506,24 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(dashboard_resp.status_code, 200)
         payload = dashboard_resp.json()
+        self.assertEqual(set(payload.keys()), set(FAIRNESS_DASHBOARD_TOP_LEVEL_KEYS))
+        self.assertEqual(
+            set(payload["overview"].keys()),
+            set(FAIRNESS_DASHBOARD_OVERVIEW_KEYS),
+        )
+        self.assertEqual(
+            set(payload["gateDistribution"].keys()),
+            set(FAIRNESS_DASHBOARD_GATE_DISTRIBUTION_KEYS),
+        )
+        self.assertEqual(
+            set(payload["trends"].keys()),
+            set(FAIRNESS_DASHBOARD_TRENDS_KEYS),
+        )
+        self.assertEqual(
+            set(payload["filters"].keys()),
+            set(FAIRNESS_DASHBOARD_FILTER_KEYS),
+        )
+        validate_fairness_dashboard_contract(payload)
         self.assertIsInstance(payload["overview"], dict)
         self.assertIsInstance(payload["trends"], dict)
         self.assertIsInstance(payload["topRiskCases"], list)
@@ -6431,6 +6554,30 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["filters"]["policyVersion"], "v3-default")
         self.assertEqual(payload["filters"]["windowDays"], 7)
         self.assertEqual(payload["filters"]["topLimit"], 10)
+
+    async def test_fairness_dashboard_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        with patch(
+            "app.app_factory._validate_fairness_dashboard_contract",
+            side_effect=ValueError("fairness_dashboard_overview_missing_keys"),
+        ):
+            resp = await self._get(
+                app=app,
+                path="/internal/judge/fairness/dashboard?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "fairness_dashboard_contract_violation")
+        self.assertIn(
+            "fairness_dashboard_overview_missing_keys",
+            detail["message"],
+        )
 
     async def test_fairness_calibration_pack_route_should_return_thresholds_drift_and_risks(
         self,
@@ -6753,7 +6900,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["filters"]["effectivePolicyVersion"], "v3-default")
         self.assertEqual(payload["filters"]["riskLimit"], 30)
 
-    async def test_ops_read_model_pack_route_should_join_fairness_registry_and_trust(self) -> None:
+    async def test_ops_read_model_pack_route_should_join_fairness_registry_and_trust_v5(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
 
@@ -6802,14 +6949,31 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(pack_resp.status_code, 200)
         payload = pack_resp.json()
+        self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))
+        self.assertEqual(
+            set(payload["adaptiveSummary"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS),
+        )
+        self.assertEqual(
+            set(payload["trustOverview"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS),
+        )
+        self.assertEqual(
+            set(payload["filters"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_FILTER_KEYS),
+        )
+        validate_ops_read_model_pack_v5_contract(payload)
         self.assertIsInstance(payload["fairnessDashboard"], dict)
         self.assertIsInstance(payload["fairnessCalibrationAdvisor"], dict)
         self.assertIsInstance(payload["panelRuntimeReadiness"], dict)
         self.assertIsInstance(payload["registryGovernance"], dict)
+        self.assertIsInstance(payload["registryPromptToolGovernance"], dict)
         self.assertIsInstance(payload["courtroomReadModel"], dict)
         self.assertIsInstance(payload["courtroomQueue"], dict)
+        self.assertIsInstance(payload["courtroomDrilldown"], dict)
         self.assertIsInstance(payload["reviewQueue"], dict)
         self.assertIsInstance(payload["reviewTrustPriority"], dict)
+        self.assertIsInstance(payload["evidenceClaimQueue"], dict)
         self.assertIsInstance(payload["trustChallengeQueue"], dict)
         self.assertIsInstance(payload["policyGateSimulation"], dict)
         self.assertIsInstance(payload["adaptiveSummary"], dict)
@@ -6826,12 +6990,23 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("policySimulationBlockedCount", payload["adaptiveSummary"])
         self.assertIn("courtroomSampleCount", payload["adaptiveSummary"])
         self.assertIn("courtroomQueueCount", payload["adaptiveSummary"])
+        self.assertIn("courtroomDrilldownCount", payload["adaptiveSummary"])
+        self.assertIn("courtroomDrilldownHighRiskCount", payload["adaptiveSummary"])
+        self.assertIn("evidenceClaimQueueCount", payload["adaptiveSummary"])
+        self.assertIn("evidenceClaimHighRiskCount", payload["adaptiveSummary"])
+        self.assertIn("registryPromptToolRiskCount", payload["adaptiveSummary"])
         self.assertIn("trustChallengeQueueCount", payload["adaptiveSummary"])
         self.assertIn("reviewTrustPriorityCount", payload["adaptiveSummary"])
         self.assertIn("reviewUnifiedHighPriorityCount", payload["adaptiveSummary"])
         self.assertGreaterEqual(payload["adaptiveSummary"]["reviewQueueCount"], 0)
         self.assertGreaterEqual(payload["adaptiveSummary"]["courtroomSampleCount"], 1)
         self.assertGreaterEqual(payload["adaptiveSummary"]["courtroomQueueCount"], 1)
+        self.assertGreaterEqual(payload["adaptiveSummary"]["courtroomDrilldownCount"], 1)
+        self.assertGreaterEqual(payload["adaptiveSummary"]["evidenceClaimQueueCount"], 1)
+        self.assertGreaterEqual(
+            payload["adaptiveSummary"]["registryPromptToolRiskCount"],
+            0,
+        )
         self.assertIn(
             "activeVersions",
             payload["registryGovernance"],
@@ -6840,11 +7015,15 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "dependencyHealth",
             payload["registryGovernance"],
         )
+        self.assertIn("summary", payload["registryPromptToolGovernance"])
+        self.assertIn("riskItems", payload["registryPromptToolGovernance"])
         self.assertGreaterEqual(payload["courtroomReadModel"]["count"], 1)
         self.assertIn("items", payload["courtroomReadModel"])
         self.assertGreaterEqual(payload["courtroomQueue"]["count"], 1)
         self.assertEqual(payload["courtroomQueue"]["filters"]["sortBy"], "risk_score")
         self.assertEqual(payload["courtroomQueue"]["filters"]["dispatchType"], "auto")
+        self.assertGreaterEqual(payload["courtroomDrilldown"]["count"], 1)
+        self.assertIn("aggregations", payload["courtroomDrilldown"])
         self.assertIn("simulatedGate", payload["policyGateSimulation"]["items"][0])
         self.assertGreaterEqual(payload["reviewQueue"]["count"], 0)
         self.assertEqual(payload["reviewQueue"]["filters"]["sortBy"], "risk_score")
@@ -6852,6 +7031,17 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             payload["reviewTrustPriority"]["filters"]["sortBy"],
             "unified_priority_score",
+        )
+        self.assertGreaterEqual(payload["evidenceClaimQueue"]["count"], 1)
+        self.assertEqual(payload["evidenceClaimQueue"]["filters"]["sortBy"], "risk_score")
+        self.assertIn("aggregations", payload["evidenceClaimQueue"])
+        self.assertEqual(
+            payload["adaptiveSummary"]["evidenceClaimConflictCaseCount"],
+            payload["evidenceClaimQueue"]["aggregations"]["conflictCaseCount"],
+        )
+        self.assertEqual(
+            payload["adaptiveSummary"]["evidenceClaimUnansweredClaimCaseCount"],
+            payload["evidenceClaimQueue"]["aggregations"]["unansweredCaseCount"],
         )
         self.assertGreaterEqual(payload["trustChallengeQueue"]["count"], 0)
         self.assertEqual(payload["trustChallengeQueue"]["filters"]["challengeState"], "open")

@@ -39,6 +39,8 @@ REQUEST_ERROR=""
 REQUIRED_KEYS_MISSING=""
 
 FAIRNESS_TOTAL_MATCHED="0"
+FAIRNESS_SCANNED_CASES="0"
+FAIRNESS_BENCHMARK_ATTENTION_COUNT="0"
 REGISTRY_INVALID_COUNT="0"
 TRUST_ITEM_COUNT="0"
 TRUST_ERROR_COUNT="0"
@@ -54,6 +56,15 @@ OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT="0"
 OPS_TRUST_CHALLENGE_QUEUE_COUNT="0"
 OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT="0"
 OPS_POLICY_SIM_BLOCKED_COUNT="0"
+OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT="0"
+OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT="0"
+OPS_EVIDENCE_CLAIM_QUEUE_COUNT="0"
+OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT="0"
+OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT="0"
+OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT="0"
+OPS_COURTROOM_DRILLDOWN_COUNT="0"
+OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT="0"
+OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT="0"
 
 usage() {
   cat <<'USAGE'
@@ -170,6 +181,15 @@ count_token() {
   local count
   count="$(grep -o "$token" "$file" 2>/dev/null | wc -l | tr -d ' ' || true)"
   printf '%s' "${count:-0}"
+}
+
+check_required_token() {
+  local label="$1"
+  local token="$2"
+  if grep -Fq "$token" "$OUTPUT_JSON"; then
+    return
+  fi
+  REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${label}"
 }
 
 parse_args() {
@@ -305,6 +325,8 @@ OPS_READ_MODEL_HTTP_CODE=${HTTP_CODE:-000}
 OPS_READ_MODEL_ERROR=$REQUEST_ERROR
 OPS_READ_MODEL_REQUIRED_KEYS_MISSING=$REQUIRED_KEYS_MISSING
 OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=$FAIRNESS_TOTAL_MATCHED
+OPS_READ_MODEL_FAIRNESS_SCANNED_CASES=$FAIRNESS_SCANNED_CASES
+OPS_READ_MODEL_FAIRNESS_BENCHMARK_ATTENTION_COUNT=$FAIRNESS_BENCHMARK_ATTENTION_COUNT
 OPS_READ_MODEL_REGISTRY_INVALID_COUNT=$REGISTRY_INVALID_COUNT
 OPS_READ_MODEL_TRUST_ITEM_COUNT=$TRUST_ITEM_COUNT
 OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
@@ -320,6 +342,15 @@ OPS_READ_MODEL_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT=$OPS_REVIEW_UNIFIED_HIGH_PRIOR
 OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_COUNT=$OPS_TRUST_CHALLENGE_QUEUE_COUNT
 OPS_READ_MODEL_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT=$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT
 OPS_READ_MODEL_POLICY_SIM_BLOCKED_COUNT=$OPS_POLICY_SIM_BLOCKED_COUNT
+OPS_READ_MODEL_REGISTRY_PROMPT_TOOL_RISK_COUNT=$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT
+OPS_READ_MODEL_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT=$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT
+OPS_READ_MODEL_EVIDENCE_CLAIM_QUEUE_COUNT=$OPS_EVIDENCE_CLAIM_QUEUE_COUNT
+OPS_READ_MODEL_EVIDENCE_CLAIM_HIGH_RISK_COUNT=$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT
+OPS_READ_MODEL_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT=$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT
+OPS_READ_MODEL_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT=$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT
+OPS_READ_MODEL_COURTROOM_DRILLDOWN_COUNT=$OPS_COURTROOM_DRILLDOWN_COUNT
+OPS_READ_MODEL_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT=$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT
+OPS_READ_MODEL_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT=$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT
 OPS_READ_MODEL_UPDATED_AT=$FINISHED_AT
 EOF
 }
@@ -337,22 +368,33 @@ write_output_md() {
 ## 摘要
 
 1. fairness_total_matched：\`$FAIRNESS_TOTAL_MATCHED\`
-2. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
-3. trust_item_count：\`$TRUST_ITEM_COUNT\`
-4. trust_error_count：\`$TRUST_ERROR_COUNT\`
-5. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
-6. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
-7. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-8. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
-9. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
-10. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
-11. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
-12. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
-13. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
-14. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
-15. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
-16. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-17. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+2. fairness_scanned_cases：\`$FAIRNESS_SCANNED_CASES\`
+3. fairness_benchmark_attention_count：\`$FAIRNESS_BENCHMARK_ATTENTION_COUNT\`
+4. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
+5. trust_item_count：\`$TRUST_ITEM_COUNT\`
+6. trust_error_count：\`$TRUST_ERROR_COUNT\`
+7. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+8. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+9. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+10. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
+11. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
+12. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
+13. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
+14. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+15. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+16. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+17. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+18. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+19. registry_prompt_tool_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
+20. registry_prompt_tool_high_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
+21. evidence_claim_queue_count：\`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
+22. evidence_claim_high_risk_count：\`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
+23. evidence_claim_conflict_case_count：\`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
+24. evidence_claim_unanswered_case_count：\`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
+25. courtroom_drilldown_count：\`$OPS_COURTROOM_DRILLDOWN_COUNT\`
+26. courtroom_drilldown_high_risk_count：\`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
+27. courtroom_drilldown_review_required_count：\`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
+28. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -370,6 +412,8 @@ write_summary_json() {
   "required_keys_missing": "$(json_escape "$REQUIRED_KEYS_MISSING")",
   "metrics": {
     "fairness_total_matched": $FAIRNESS_TOTAL_MATCHED,
+    "fairness_scanned_cases": $FAIRNESS_SCANNED_CASES,
+    "fairness_benchmark_attention_count": $FAIRNESS_BENCHMARK_ATTENTION_COUNT,
     "registry_invalid_count": $REGISTRY_INVALID_COUNT,
     "trust_item_count": $TRUST_ITEM_COUNT,
     "trust_error_count": $TRUST_ERROR_COUNT,
@@ -384,7 +428,16 @@ write_summary_json() {
     "review_unified_high_priority_count": $OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT,
     "trust_challenge_queue_count": $OPS_TRUST_CHALLENGE_QUEUE_COUNT,
     "trust_challenge_high_priority_count": $OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT,
-    "policy_sim_blocked_count": $OPS_POLICY_SIM_BLOCKED_COUNT
+    "policy_sim_blocked_count": $OPS_POLICY_SIM_BLOCKED_COUNT,
+    "registry_prompt_tool_risk_count": $OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT,
+    "registry_prompt_tool_high_risk_count": $OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT,
+    "evidence_claim_queue_count": $OPS_EVIDENCE_CLAIM_QUEUE_COUNT,
+    "evidence_claim_high_risk_count": $OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT,
+    "evidence_claim_conflict_case_count": $OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT,
+    "evidence_claim_unanswered_case_count": $OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT,
+    "courtroom_drilldown_count": $OPS_COURTROOM_DRILLDOWN_COUNT,
+    "courtroom_drilldown_high_risk_count": $OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT,
+    "courtroom_drilldown_review_required_count": $OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT
   },
   "artifacts": {
     "output_json": "$(json_escape "$OUTPUT_JSON")",
@@ -409,22 +462,33 @@ write_summary_md() {
 ## Metrics
 
 1. fairness_total_matched: \`$FAIRNESS_TOTAL_MATCHED\`
-2. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
-3. trust_item_count: \`$TRUST_ITEM_COUNT\`
-4. trust_error_count: \`$TRUST_ERROR_COUNT\`
-5. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
-6. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
-7. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-8. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
-9. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
-10. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
-11. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
-12. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
-13. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
-14. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
-15. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
-16. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-17. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+2. fairness_scanned_cases: \`$FAIRNESS_SCANNED_CASES\`
+3. fairness_benchmark_attention_count: \`$FAIRNESS_BENCHMARK_ATTENTION_COUNT\`
+4. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
+5. trust_item_count: \`$TRUST_ITEM_COUNT\`
+6. trust_error_count: \`$TRUST_ERROR_COUNT\`
+7. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+8. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+9. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+10. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
+11. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
+12. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
+13. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
+14. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+15. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+16. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+17. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+18. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+19. registry_prompt_tool_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
+20. registry_prompt_tool_high_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
+21. evidence_claim_queue_count: \`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
+22. evidence_claim_high_risk_count: \`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
+23. evidence_claim_conflict_case_count: \`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
+24. evidence_claim_unanswered_case_count: \`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
+25. courtroom_drilldown_count: \`$OPS_COURTROOM_DRILLDOWN_COUNT\`
+26. courtroom_drilldown_high_risk_count: \`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
+27. courtroom_drilldown_review_required_count: \`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
+28. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -535,12 +599,37 @@ main() {
   fi
 
   if [[ "$STATUS" == "pass" ]]; then
-    local required_key
-    for required_key in "\"fairnessDashboard\"" "\"fairnessCalibrationAdvisor\"" "\"panelRuntimeReadiness\"" "\"registryGovernance\"" "\"courtroomReadModel\"" "\"courtroomQueue\"" "\"reviewQueue\"" "\"reviewTrustPriority\"" "\"trustChallengeQueue\"" "\"policyGateSimulation\"" "\"adaptiveSummary\"" "\"trustOverview\"" "\"filters\""; do
-      if ! grep -Fq "$required_key" "$OUTPUT_JSON"; then
-        REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${required_key}"
-      fi
-    done
+    check_required_token "pack.fairnessDashboard" "\"fairnessDashboard\""
+    check_required_token "pack.fairnessCalibrationAdvisor" "\"fairnessCalibrationAdvisor\""
+    check_required_token "pack.panelRuntimeReadiness" "\"panelRuntimeReadiness\""
+    check_required_token "pack.registryGovernance" "\"registryGovernance\""
+    check_required_token "pack.registryPromptToolGovernance" "\"registryPromptToolGovernance\""
+    check_required_token "pack.courtroomReadModel" "\"courtroomReadModel\""
+    check_required_token "pack.courtroomQueue" "\"courtroomQueue\""
+    check_required_token "pack.courtroomDrilldown" "\"courtroomDrilldown\""
+    check_required_token "pack.reviewQueue" "\"reviewQueue\""
+    check_required_token "pack.reviewTrustPriority" "\"reviewTrustPriority\""
+    check_required_token "pack.evidenceClaimQueue" "\"evidenceClaimQueue\""
+    check_required_token "pack.trustChallengeQueue" "\"trustChallengeQueue\""
+    check_required_token "pack.policyGateSimulation" "\"policyGateSimulation\""
+    check_required_token "pack.adaptiveSummary" "\"adaptiveSummary\""
+    check_required_token "pack.trustOverview" "\"trustOverview\""
+    check_required_token "pack.filters" "\"filters\""
+    check_required_token "fairnessDashboard.overview" "\"overview\""
+    check_required_token "fairnessDashboard.gateDistribution" "\"gateDistribution\""
+    check_required_token "fairnessDashboard.trends" "\"trends\""
+    check_required_token "fairnessDashboard.topRiskCases" "\"topRiskCases\""
+    check_required_token "fairnessDashboard.overview.scanTruncated" "\"scanTruncated\""
+    check_required_token "fairnessDashboard.trends.windowDays" "\"windowDays\""
+    check_required_token "fairnessDashboard.gateDistribution.benchmark_attention_required" "\"benchmark_attention_required\""
+    check_required_token "courtroomDrilldown.aggregations.totalConflictPairCount" "\"totalConflictPairCount\""
+    check_required_token "courtroomDrilldown.aggregations.totalUnansweredClaimCount" "\"totalUnansweredClaimCount\""
+    check_required_token "courtroomDrilldown.aggregations.totalDecisiveEvidenceCount" "\"totalDecisiveEvidenceCount\""
+    check_required_token "courtroomDrilldown.aggregations.totalPivotalMomentCount" "\"totalPivotalMomentCount\""
+    check_required_token "evidenceClaimQueue.aggregations.riskLevelCounts" "\"riskLevelCounts\""
+    check_required_token "evidenceClaimQueue.aggregations.reliabilityLevelCounts" "\"reliabilityLevelCounts\""
+    check_required_token "evidenceClaimQueue.aggregations.conflictCaseCount" "\"conflictCaseCount\""
+    check_required_token "evidenceClaimQueue.aggregations.unansweredCaseCount" "\"unansweredCaseCount\""
     if [[ -n "$REQUIRED_KEYS_MISSING" ]]; then
       STATUS="payload_invalid"
       REQUEST_ERROR="required_keys_missing"
@@ -549,6 +638,8 @@ main() {
 
   if [[ -f "$OUTPUT_JSON" ]]; then
     FAIRNESS_TOTAL_MATCHED="$(extract_first_number "$OUTPUT_JSON" "totalMatched")"
+    FAIRNESS_SCANNED_CASES="$(extract_first_number "$OUTPUT_JSON" "scannedCases")"
+    FAIRNESS_BENCHMARK_ATTENTION_COUNT="$(extract_first_number "$OUTPUT_JSON" "benchmark_attention_required")"
     REGISTRY_INVALID_COUNT="$(extract_first_number "$OUTPUT_JSON" "invalidCount")"
     TRUST_ITEM_COUNT="$(count_token "$OUTPUT_JSON" "\"verdictVerified\"")"
     TRUST_ERROR_COUNT="$(extract_first_number "$OUTPUT_JSON" "errorCount")"
@@ -564,6 +655,15 @@ main() {
     OPS_TRUST_CHALLENGE_QUEUE_COUNT="$(extract_first_number "$OUTPUT_JSON" "trustChallengeQueueCount")"
     OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT="$(extract_first_number "$OUTPUT_JSON" "trustChallengeHighPriorityCount")"
     OPS_POLICY_SIM_BLOCKED_COUNT="$(extract_first_number "$OUTPUT_JSON" "policySimulationBlockedCount")"
+    OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "registryPromptToolRiskCount")"
+    OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "registryPromptToolHighRiskCount")"
+    OPS_EVIDENCE_CLAIM_QUEUE_COUNT="$(extract_first_number "$OUTPUT_JSON" "evidenceClaimQueueCount")"
+    OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "evidenceClaimHighRiskCount")"
+    OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT="$(extract_first_number "$OUTPUT_JSON" "evidenceClaimConflictCaseCount")"
+    OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT="$(extract_first_number "$OUTPUT_JSON" "evidenceClaimUnansweredClaimCaseCount")"
+    OPS_COURTROOM_DRILLDOWN_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomDrilldownCount")"
+    OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomDrilldownHighRiskCount")"
+    OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomDrilldownReviewRequiredCount")"
   fi
 
   FINISHED_AT="$(iso_now)"

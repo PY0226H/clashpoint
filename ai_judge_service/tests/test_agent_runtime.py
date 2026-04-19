@@ -61,6 +61,22 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(judge_result.output.get("runtimeVersion"), "courtroom_agent_runtime_mvp_v1")
         self.assertEqual(judge_result.output.get("workflowVersion"), "courtroom_8agent_chain_v1")
         self.assertEqual(
+            judge_result.output.get("roleContractVersion"),
+            "courtroom_role_contract_v1",
+        )
+        self.assertEqual(
+            judge_result.output.get("workflowContractVersion"),
+            "courtroom_workflow_contract_v1",
+        )
+        self.assertEqual(
+            judge_result.output.get("artifactContractVersion"),
+            "courtroom_artifact_contract_v1",
+        )
+        self.assertEqual(
+            judge_result.output.get("stageContractVersion"),
+            "courtroom_stage_contract_v1",
+        )
+        self.assertEqual(
             judge_result.output.get("roleOrder"),
             [
                 ROLE_CLERK,
@@ -88,6 +104,14 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(role_rows, list)
         self.assertEqual(role_rows[0]["state"], "active")
         self.assertEqual(role_rows[-1]["state"], "deferred")
+        self.assertEqual(role_rows[0]["stageTag"], "blinded")
+        self.assertEqual(role_rows[-1]["stageTag"], "opinion_written")
+        self.assertEqual(role_rows[0]["activationScope"], "phase_and_final")
+        self.assertEqual(role_rows[-1]["activationScope"], "final_only")
+        self.assertEqual(role_rows[0]["contractVersion"], "courtroom_role_contract_v1")
+        self.assertIsInstance(role_rows[0]["contract"], dict)
+        self.assertEqual(role_rows[0]["contract"]["version"], "courtroom_role_contract_v1")
+        self.assertEqual(role_rows[0]["contract"]["stageTag"], "blinded")
         self.assertEqual(role_rows[0]["outputArtifacts"], ["case_dossier"])
         self.assertEqual(role_rows[-1]["inputArtifacts"], ["final_verdict"])
 
@@ -129,6 +153,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(isinstance(final_artifacts, list) and len(final_artifacts) == 8)
         assert isinstance(final_artifacts, list)
         self.assertTrue(all(bool(item.get("available")) for item in final_artifacts))
+        final_roles = final_judge_result.output.get("roles")
+        self.assertTrue(isinstance(final_roles, list) and len(final_roles) == 8)
+        assert isinstance(final_roles, list)
+        self.assertTrue(all(bool(row.get("active")) for row in final_roles))
+        self.assertTrue(
+            all(str(row.get("contractVersion") or "") == "courtroom_role_contract_v1" for row in final_roles)
+        )
         self.assertEqual(
             len(final_judge_result.output.get("activeRoles", [])),
             8,
