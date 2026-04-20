@@ -8,6 +8,15 @@ from app.app_factory import create_app, create_default_app, create_runtime, requ
 from app.applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
 )
+from app.applications.fairness_case_contract import (
+    CASE_FAIRNESS_AGGREGATIONS_KEYS,
+    CASE_FAIRNESS_DETAIL_TOP_LEVEL_KEYS,
+    CASE_FAIRNESS_FILTER_KEYS,
+    CASE_FAIRNESS_ITEM_KEYS,
+    CASE_FAIRNESS_LIST_TOP_LEVEL_KEYS,
+    validate_case_fairness_detail_contract,
+    validate_case_fairness_list_contract,
+)
 from app.applications.fairness_dashboard_contract import (
     FAIRNESS_DASHBOARD_FILTER_KEYS,
     FAIRNESS_DASHBOARD_GATE_DISTRIBUTION_KEYS,
@@ -22,6 +31,13 @@ from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     validate_ops_read_model_pack_v5_contract,
+)
+from app.applications.panel_runtime_profile_contract import (
+    PANEL_RUNTIME_PROFILE_AGGREGATIONS_KEYS,
+    PANEL_RUNTIME_PROFILE_FILTER_KEYS,
+    PANEL_RUNTIME_PROFILE_ITEM_KEYS,
+    PANEL_RUNTIME_PROFILE_TOP_LEVEL_KEYS,
+    validate_panel_runtime_profile_contract,
 )
 from app.models import (
     CaseCreateRequest,
@@ -4946,6 +4962,27 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invalid_sort_resp.status_code, 422)
         self.assertIn("invalid_trust_sort_by", invalid_sort_resp.text)
 
+    async def test_trust_challenge_ops_queue_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        with patch(
+            "app.app_factory._validate_trust_challenge_ops_queue_contract",
+            side_effect=ValueError("trust_challenge_queue_missing_keys:items"),
+        ):
+            resp = await self._get(
+                app=app,
+                path="/internal/judge/trust/challenges/ops-queue?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_challenge_ops_queue_contract_violation")
+        self.assertIn("trust_challenge_queue_missing_keys:items", detail["message"])
+
     async def test_phase_dispatch_should_mark_callback_failed_receipt_when_callback_raises(
         self,
     ) -> None:
@@ -5496,6 +5533,112 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("reviewDecisions", verify_payload["challengeReview"])
         self.assertNotIn("openAlertIds", verify_payload["challengeReview"])
         self.assertNotIn("payload", verify_payload["auditAnchor"])
+
+    async def test_trust_public_verify_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(8106)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_trust_public_verify_contract",
+            side_effect=ValueError("trust_public_verify_missing_keys:verifyPayload"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/trust/public-verify?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_public_verify_contract_violation")
+        self.assertIn("trust_public_verify_missing_keys:verifyPayload", detail["message"])
+
+    async def test_trust_kernel_version_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(8107)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_trust_kernel_version_contract",
+            side_effect=ValueError("trust_kernel_version_missing_keys:item"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/trust/kernel-version?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_kernel_version_contract_violation")
+        self.assertIn("trust_kernel_version_missing_keys:item", detail["message"])
 
     async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -6224,7 +6367,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         detail_payload = detail_resp.json()
         self.assertEqual(detail_payload["caseId"], case_id)
         self.assertEqual(detail_payload["dispatchType"], "final")
+        self.assertEqual(set(detail_payload.keys()), set(CASE_FAIRNESS_DETAIL_TOP_LEVEL_KEYS))
+        validate_case_fairness_detail_contract(detail_payload)
         item = detail_payload["item"]
+        self.assertEqual(set(item.keys()), set(CASE_FAIRNESS_ITEM_KEYS))
         self.assertEqual(item["caseId"], case_id)
         self.assertIn(item["gateConclusion"], {"auto_passed", "review_required", "benchmark_attention_required"})
         self.assertIsInstance(item["panelDisagreement"]["runtimeProfiles"], dict)
@@ -6240,6 +6386,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(list_resp.status_code, 200)
         list_payload = list_resp.json()
+        self.assertEqual(set(list_payload.keys()), set(CASE_FAIRNESS_LIST_TOP_LEVEL_KEYS))
+        self.assertEqual(set(list_payload["aggregations"].keys()), set(CASE_FAIRNESS_AGGREGATIONS_KEYS))
+        self.assertEqual(set(list_payload["filters"].keys()), set(CASE_FAIRNESS_FILTER_KEYS))
+        validate_case_fairness_list_contract(list_payload)
         self.assertGreaterEqual(list_payload["count"], 1)
         self.assertGreaterEqual(list_payload["returned"], 1)
         self.assertTrue(any(row["caseId"] == case_id for row in list_payload["items"]))
@@ -6409,6 +6559,80 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(invalid_sort_order_resp.status_code, 422)
         self.assertIn("invalid_sort_order", invalid_sort_order_resp.text)
+
+    async def test_fairness_case_list_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        with patch(
+            "app.app_factory._validate_case_fairness_list_contract",
+            side_effect=ValueError("fairness_case_list_missing_keys:items"),
+        ):
+            resp = await self._get(
+                app=app,
+                path="/internal/judge/fairness/cases?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "fairness_case_list_contract_violation")
+        self.assertIn("fairness_case_list_missing_keys:items", detail["message"])
+
+    async def test_fairness_case_detail_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(7625)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_case_fairness_detail_contract",
+            side_effect=ValueError("fairness_case_detail_missing_keys:item"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/fairness/cases/{case_id}?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "fairness_case_detail_contract_violation")
+        self.assertIn("fairness_case_detail_missing_keys:item", detail["message"])
 
     async def test_fairness_dashboard_route_should_return_overview_trends_and_top_risk(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -7140,8 +7364,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(list_resp.status_code, 200)
         payload = list_resp.json()
+        self.assertEqual(set(payload.keys()), set(PANEL_RUNTIME_PROFILE_TOP_LEVEL_KEYS))
+        self.assertEqual(set(payload["aggregations"].keys()), set(PANEL_RUNTIME_PROFILE_AGGREGATIONS_KEYS))
+        self.assertEqual(set(payload["filters"].keys()), set(PANEL_RUNTIME_PROFILE_FILTER_KEYS))
+        validate_panel_runtime_profile_contract(payload)
         self.assertGreaterEqual(payload["count"], 3)
         self.assertGreaterEqual(payload["returned"], 3)
+        self.assertEqual(set(payload["items"][0].keys()), set(PANEL_RUNTIME_PROFILE_ITEM_KEYS))
         self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeA"], 1)
         self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeB"], 1)
         self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeC"], 1)
@@ -7262,6 +7491,27 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bad_sort_order_resp.status_code, 422)
         self.assertIn("invalid_panel_runtime_sort_order", bad_sort_order_resp.text)
+
+    async def test_panel_runtime_profile_ops_view_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        with patch(
+            "app.app_factory._validate_panel_runtime_profile_contract",
+            side_effect=ValueError("panel_runtime_profile_missing_keys:items"),
+        ):
+            resp = await self._get(
+                app=app,
+                path="/internal/judge/panels/runtime/profiles?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "panel_runtime_profile_contract_violation")
+        self.assertIn("panel_runtime_profile_missing_keys:items", detail["message"])
 
     async def test_panel_runtime_readiness_route_should_return_groups_and_simulations(
         self,

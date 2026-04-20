@@ -1,0 +1,36 @@
+{
+  "module": "ai-judge-runtime-ops-pack",
+  "status": "env_blocked",
+  "run_id": "20260420T002339Z-ai-judge-runtime-ops-pack",
+  "started_at": "2026-04-20T00:23:39Z",
+  "finished_at": "2026-04-20T00:23:40Z",
+  "allow_local_reference": "false",
+  "evidence_dir": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence",
+  "stages": [
+    {
+      "stage": "fairness_benchmark_freeze",
+      "status": "env_blocked",
+      "ingest_status": "skipped",
+      "threshold_decision": "pending",
+      "exit_code": 0
+    },
+    {
+      "stage": "runtime_sla_freeze",
+      "status": "env_blocked",
+      "threshold_decision": "pending",
+      "exit_code": 0
+    },
+    {
+      "stage": "real_env_evidence_closure",
+      "status": "env_blocked",
+      "threshold_decision": "",
+      "exit_code": 0
+    },
+    {
+      "stage": "stage_closure_evidence",
+      "status": "pass",
+      "threshold_decision": "",
+      "exit_code": 0
+    }
+  ]
+}

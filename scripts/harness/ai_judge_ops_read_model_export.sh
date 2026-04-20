@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT=""
 BASE_URL="${AI_JUDGE_OPS_READ_MODEL_BASE_URL:-}"
 PACK_PATH="${AI_JUDGE_OPS_READ_MODEL_PATH:-/internal/judge/ops/read-model/pack}"
+CASE_FAIRNESS_PATH="${AI_JUDGE_OPS_CASE_FAIRNESS_PATH:-/internal/judge/fairness/cases}"
+PANEL_RUNTIME_PROFILE_PATH="${AI_JUDGE_OPS_PANEL_RUNTIME_PROFILE_PATH:-/internal/judge/panels/runtime/profiles}"
+TRUST_CHALLENGE_QUEUE_PATH="${AI_JUDGE_OPS_TRUST_CHALLENGE_QUEUE_PATH:-/internal/judge/trust/challenges/ops-queue}"
 INTERNAL_KEY="${AI_JUDGE_OPS_READ_MODEL_INTERNAL_KEY:-${AI_JUDGE_INTERNAL_KEY:-}}"
 REQUEST_TIMEOUT_SECS="${AI_JUDGE_OPS_READ_MODEL_TIMEOUT_SECS:-8}"
 
@@ -35,12 +38,22 @@ STARTED_AT=""
 FINISHED_AT=""
 STATUS="unknown"
 HTTP_CODE=""
+CASE_FAIRNESS_HTTP_CODE=""
+PANEL_RUNTIME_PROFILE_HTTP_CODE=""
+TRUST_CHALLENGE_QUEUE_HTTP_CODE=""
 REQUEST_ERROR=""
 REQUIRED_KEYS_MISSING=""
 
 FAIRNESS_TOTAL_MATCHED="0"
 FAIRNESS_SCANNED_CASES="0"
 FAIRNESS_BENCHMARK_ATTENTION_COUNT="0"
+CASE_FAIRNESS_TOTAL_MATCHED="0"
+CASE_FAIRNESS_RETURNED="0"
+PANEL_RUNTIME_PROFILE_TOTAL_MATCHED="0"
+PANEL_RUNTIME_PROFILE_RETURNED="0"
+TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED="0"
+TRUST_CHALLENGE_QUEUE_RETURNED="0"
+TRUST_CHALLENGE_QUEUE_ERROR_COUNT="0"
 REGISTRY_INVALID_COUNT="0"
 TRUST_ITEM_COUNT="0"
 TRUST_ERROR_COUNT="0"
@@ -66,6 +79,10 @@ OPS_COURTROOM_DRILLDOWN_COUNT="0"
 OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT="0"
 OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT="0"
 
+CASE_FAIRNESS_OUTPUT_JSON=""
+PANEL_RUNTIME_PROFILE_OUTPUT_JSON=""
+TRUST_CHALLENGE_QUEUE_OUTPUT_JSON=""
+
 usage() {
   cat <<'USAGE'
 用法:
@@ -74,6 +91,9 @@ usage() {
     --base-url <url> \
     --internal-key <key> \
     [--pack-path <path>] \
+    [--case-fairness-path <path>] \
+    [--panel-runtime-profile-path <path>] \
+    [--trust-challenge-queue-path <path>] \
     [--timeout-secs <int>] \
     [--dispatch-type <phase|final>] \
     [--policy-version <version>] \
@@ -183,13 +203,48 @@ count_token() {
   printf '%s' "${count:-0}"
 }
 
-check_required_token() {
+check_required_token_in_file() {
   local label="$1"
   local token="$2"
-  if grep -Fq "$token" "$OUTPUT_JSON"; then
+  local file="$3"
+  if grep -Fq "$token" "$file"; then
     return
   fi
   REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${label}"
+}
+
+fetch_json() {
+  local label="$1"
+  local url="$2"
+  local output_file="$3"
+  local http_code_var="$4"
+  local timeout_secs="$5"
+  local stderr_file="$ROOT/artifacts/harness/${RUN_ID}.${label}.curl.stderr.log"
+  local code
+  set +e
+  code="$(curl \
+    -sS \
+    -o "$output_file" \
+    -w "%{http_code}" \
+    --connect-timeout "$timeout_secs" \
+    --max-time "$timeout_secs" \
+    -H "x-ai-internal-key: $INTERNAL_KEY" \
+    "$url" \
+    2>"$stderr_file")"
+  local curl_code="$?"
+  set -e
+  printf -v "$http_code_var" '%s' "$code"
+  if [[ "$curl_code" -ne 0 ]]; then
+    STATUS="request_failed"
+    REQUEST_ERROR="${label}_curl_exit_${curl_code}"
+    return 1
+  fi
+  if ! [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+    STATUS="request_failed"
+    REQUEST_ERROR="${label}_http_${code:-000}"
+    return 1
+  fi
+  return 0
 }
 
 parse_args() {
@@ -205,6 +260,18 @@ parse_args() {
         ;;
       --pack-path)
         PACK_PATH="${2:-}"
+        shift 2
+        ;;
+      --case-fairness-path)
+        CASE_FAIRNESS_PATH="${2:-}"
+        shift 2
+        ;;
+      --panel-runtime-profile-path)
+        PANEL_RUNTIME_PROFILE_PATH="${2:-}"
+        shift 2
+        ;;
+      --trust-challenge-queue-path)
+        TRUST_CHALLENGE_QUEUE_PATH="${2:-}"
         shift 2
         ;;
       --internal-key)
@@ -322,11 +389,21 @@ write_output_env() {
 AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=$STATUS
 OPS_READ_MODEL_REQUEST_URL=$request_url
 OPS_READ_MODEL_HTTP_CODE=${HTTP_CODE:-000}
+OPS_CASE_FAIRNESS_HTTP_CODE=${CASE_FAIRNESS_HTTP_CODE:-000}
+OPS_PANEL_RUNTIME_PROFILE_HTTP_CODE=${PANEL_RUNTIME_PROFILE_HTTP_CODE:-000}
+OPS_TRUST_CHALLENGE_QUEUE_HTTP_CODE=${TRUST_CHALLENGE_QUEUE_HTTP_CODE:-000}
 OPS_READ_MODEL_ERROR=$REQUEST_ERROR
 OPS_READ_MODEL_REQUIRED_KEYS_MISSING=$REQUIRED_KEYS_MISSING
 OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=$FAIRNESS_TOTAL_MATCHED
 OPS_READ_MODEL_FAIRNESS_SCANNED_CASES=$FAIRNESS_SCANNED_CASES
 OPS_READ_MODEL_FAIRNESS_BENCHMARK_ATTENTION_COUNT=$FAIRNESS_BENCHMARK_ATTENTION_COUNT
+OPS_READ_MODEL_CASE_FAIRNESS_TOTAL_MATCHED=$CASE_FAIRNESS_TOTAL_MATCHED
+OPS_READ_MODEL_CASE_FAIRNESS_RETURNED=$CASE_FAIRNESS_RETURNED
+OPS_READ_MODEL_PANEL_RUNTIME_PROFILE_TOTAL_MATCHED=$PANEL_RUNTIME_PROFILE_TOTAL_MATCHED
+OPS_READ_MODEL_PANEL_RUNTIME_PROFILE_RETURNED=$PANEL_RUNTIME_PROFILE_RETURNED
+OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED=$TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED
+OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_RETURNED=$TRUST_CHALLENGE_QUEUE_RETURNED
+OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_ERROR_COUNT=$TRUST_CHALLENGE_QUEUE_ERROR_COUNT
 OPS_READ_MODEL_REGISTRY_INVALID_COUNT=$REGISTRY_INVALID_COUNT
 OPS_READ_MODEL_TRUST_ITEM_COUNT=$TRUST_ITEM_COUNT
 OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
@@ -370,31 +447,38 @@ write_output_md() {
 1. fairness_total_matched：\`$FAIRNESS_TOTAL_MATCHED\`
 2. fairness_scanned_cases：\`$FAIRNESS_SCANNED_CASES\`
 3. fairness_benchmark_attention_count：\`$FAIRNESS_BENCHMARK_ATTENTION_COUNT\`
-4. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
-5. trust_item_count：\`$TRUST_ITEM_COUNT\`
-6. trust_error_count：\`$TRUST_ERROR_COUNT\`
-7. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
-8. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
-9. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-10. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
-11. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
-12. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
-13. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
-14. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
-15. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
-16. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
-17. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
-18. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-19. registry_prompt_tool_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
-20. registry_prompt_tool_high_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
-21. evidence_claim_queue_count：\`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
-22. evidence_claim_high_risk_count：\`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
-23. evidence_claim_conflict_case_count：\`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
-24. evidence_claim_unanswered_case_count：\`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
-25. courtroom_drilldown_count：\`$OPS_COURTROOM_DRILLDOWN_COUNT\`
-26. courtroom_drilldown_high_risk_count：\`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
-27. courtroom_drilldown_review_required_count：\`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
-28. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+4. case_fairness_total_matched：\`$CASE_FAIRNESS_TOTAL_MATCHED\`
+5. case_fairness_returned：\`$CASE_FAIRNESS_RETURNED\`
+6. panel_runtime_profile_total_matched：\`$PANEL_RUNTIME_PROFILE_TOTAL_MATCHED\`
+7. panel_runtime_profile_returned：\`$PANEL_RUNTIME_PROFILE_RETURNED\`
+8. trust_challenge_queue_total_matched：\`$TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED\`
+9. trust_challenge_queue_returned：\`$TRUST_CHALLENGE_QUEUE_RETURNED\`
+10. trust_challenge_queue_error_count：\`$TRUST_CHALLENGE_QUEUE_ERROR_COUNT\`
+11. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
+12. trust_item_count：\`$TRUST_ITEM_COUNT\`
+13. trust_error_count：\`$TRUST_ERROR_COUNT\`
+14. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+15. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+16. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+17. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
+18. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
+19. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
+20. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
+21. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+22. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+23. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+24. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+25. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+26. registry_prompt_tool_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
+27. registry_prompt_tool_high_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
+28. evidence_claim_queue_count：\`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
+29. evidence_claim_high_risk_count：\`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
+30. evidence_claim_conflict_case_count：\`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
+31. evidence_claim_unanswered_case_count：\`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
+32. courtroom_drilldown_count：\`$OPS_COURTROOM_DRILLDOWN_COUNT\`
+33. courtroom_drilldown_high_risk_count：\`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
+34. courtroom_drilldown_review_required_count：\`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
+35. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -414,6 +498,13 @@ write_summary_json() {
     "fairness_total_matched": $FAIRNESS_TOTAL_MATCHED,
     "fairness_scanned_cases": $FAIRNESS_SCANNED_CASES,
     "fairness_benchmark_attention_count": $FAIRNESS_BENCHMARK_ATTENTION_COUNT,
+    "case_fairness_total_matched": $CASE_FAIRNESS_TOTAL_MATCHED,
+    "case_fairness_returned": $CASE_FAIRNESS_RETURNED,
+    "panel_runtime_profile_total_matched": $PANEL_RUNTIME_PROFILE_TOTAL_MATCHED,
+    "panel_runtime_profile_returned": $PANEL_RUNTIME_PROFILE_RETURNED,
+    "trust_challenge_queue_total_matched": $TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED,
+    "trust_challenge_queue_returned": $TRUST_CHALLENGE_QUEUE_RETURNED,
+    "trust_challenge_queue_error_count": $TRUST_CHALLENGE_QUEUE_ERROR_COUNT,
     "registry_invalid_count": $REGISTRY_INVALID_COUNT,
     "trust_item_count": $TRUST_ITEM_COUNT,
     "trust_error_count": $TRUST_ERROR_COUNT,
@@ -441,6 +532,9 @@ write_summary_json() {
   },
   "artifacts": {
     "output_json": "$(json_escape "$OUTPUT_JSON")",
+    "case_fairness_output_json": "$(json_escape "$CASE_FAIRNESS_OUTPUT_JSON")",
+    "panel_runtime_profile_output_json": "$(json_escape "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON")",
+    "trust_challenge_queue_output_json": "$(json_escape "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON")",
     "output_md": "$(json_escape "$OUTPUT_MD")",
     "output_env": "$(json_escape "$OUTPUT_ENV")"
   }
@@ -464,31 +558,38 @@ write_summary_md() {
 1. fairness_total_matched: \`$FAIRNESS_TOTAL_MATCHED\`
 2. fairness_scanned_cases: \`$FAIRNESS_SCANNED_CASES\`
 3. fairness_benchmark_attention_count: \`$FAIRNESS_BENCHMARK_ATTENTION_COUNT\`
-4. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
-5. trust_item_count: \`$TRUST_ITEM_COUNT\`
-6. trust_error_count: \`$TRUST_ERROR_COUNT\`
-7. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
-8. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
-9. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-10. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
-11. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
-12. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
-13. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
-14. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
-15. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
-16. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
-17. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
-18. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-19. registry_prompt_tool_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
-20. registry_prompt_tool_high_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
-21. evidence_claim_queue_count: \`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
-22. evidence_claim_high_risk_count: \`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
-23. evidence_claim_conflict_case_count: \`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
-24. evidence_claim_unanswered_case_count: \`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
-25. courtroom_drilldown_count: \`$OPS_COURTROOM_DRILLDOWN_COUNT\`
-26. courtroom_drilldown_high_risk_count: \`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
-27. courtroom_drilldown_review_required_count: \`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
-28. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+4. case_fairness_total_matched: \`$CASE_FAIRNESS_TOTAL_MATCHED\`
+5. case_fairness_returned: \`$CASE_FAIRNESS_RETURNED\`
+6. panel_runtime_profile_total_matched: \`$PANEL_RUNTIME_PROFILE_TOTAL_MATCHED\`
+7. panel_runtime_profile_returned: \`$PANEL_RUNTIME_PROFILE_RETURNED\`
+8. trust_challenge_queue_total_matched: \`$TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED\`
+9. trust_challenge_queue_returned: \`$TRUST_CHALLENGE_QUEUE_RETURNED\`
+10. trust_challenge_queue_error_count: \`$TRUST_CHALLENGE_QUEUE_ERROR_COUNT\`
+11. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
+12. trust_item_count: \`$TRUST_ITEM_COUNT\`
+13. trust_error_count: \`$TRUST_ERROR_COUNT\`
+14. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+15. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+16. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+17. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
+18. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
+19. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
+20. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
+21. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+22. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+23. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+24. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+25. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+26. registry_prompt_tool_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
+27. registry_prompt_tool_high_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
+28. evidence_claim_queue_count: \`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
+29. evidence_claim_high_risk_count: \`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
+30. evidence_claim_conflict_case_count: \`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
+31. evidence_claim_unanswered_case_count: \`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
+32. courtroom_drilldown_count: \`$OPS_COURTROOM_DRILLDOWN_COUNT\`
+33. courtroom_drilldown_high_risk_count: \`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
+34. courtroom_drilldown_review_required_count: \`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
+35. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -548,7 +649,32 @@ main() {
   if [[ "$normalized_path" != /* ]]; then
     normalized_path="/$normalized_path"
   fi
-  request_url="${request_url%/}${normalized_path}"
+  local normalized_case_fairness_path
+  normalized_case_fairness_path="${CASE_FAIRNESS_PATH:-/internal/judge/fairness/cases}"
+  if [[ "$normalized_case_fairness_path" != /* ]]; then
+    normalized_case_fairness_path="/$normalized_case_fairness_path"
+  fi
+  local normalized_panel_runtime_profile_path
+  normalized_panel_runtime_profile_path="${PANEL_RUNTIME_PROFILE_PATH:-/internal/judge/panels/runtime/profiles}"
+  if [[ "$normalized_panel_runtime_profile_path" != /* ]]; then
+    normalized_panel_runtime_profile_path="/$normalized_panel_runtime_profile_path"
+  fi
+  local normalized_trust_challenge_queue_path
+  normalized_trust_challenge_queue_path="${TRUST_CHALLENGE_QUEUE_PATH:-/internal/judge/trust/challenges/ops-queue}"
+  if [[ "$normalized_trust_challenge_queue_path" != /* ]]; then
+    normalized_trust_challenge_queue_path="/$normalized_trust_challenge_queue_path"
+  fi
+
+  CASE_FAIRNESS_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.case-fairness.json"
+  PANEL_RUNTIME_PROFILE_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.panel-runtime-profiles.json"
+  TRUST_CHALLENGE_QUEUE_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.trust-challenge-queue.json"
+  ensure_parent_dir "$CASE_FAIRNESS_OUTPUT_JSON"
+  ensure_parent_dir "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+  ensure_parent_dir "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+
+  local request_base
+  request_base="${request_url%/}"
+  request_url="${request_base}${normalized_path}"
   request_url="$(append_query_param "$request_url" "dispatch_type" "$DISPATCH_TYPE")"
   request_url="$(append_query_param "$request_url" "policy_version" "$POLICY_VERSION")"
   request_url="$(append_query_param "$request_url" "window_days" "$WINDOW_DAYS")"
@@ -567,69 +693,184 @@ main() {
   request_url="$(append_query_param "$request_url" "panel_group_limit" "$PANEL_GROUP_LIMIT")"
   request_url="$(append_query_param "$request_url" "panel_attention_limit" "$PANEL_ATTENTION_LIMIT")"
 
+  local fairness_url
+  fairness_url="${request_base}${normalized_case_fairness_path}"
+  fairness_url="$(append_query_param "$fairness_url" "dispatch_type" "$DISPATCH_TYPE")"
+  fairness_url="$(append_query_param "$fairness_url" "policy_version" "$POLICY_VERSION")"
+  fairness_url="$(append_query_param "$fairness_url" "sort_by" "updated_at")"
+  fairness_url="$(append_query_param "$fairness_url" "sort_order" "desc")"
+  fairness_url="$(append_query_param "$fairness_url" "offset" "0")"
+  local fairness_limit
+  fairness_limit="$(trim "$CASE_SCAN_LIMIT")"
+  if ! [[ "$fairness_limit" =~ ^[0-9]+$ ]] || [[ "$fairness_limit" -le 0 ]]; then
+    fairness_limit="50"
+  fi
+  if [[ "$fairness_limit" -gt 200 ]]; then
+    fairness_limit="200"
+  fi
+  fairness_url="$(append_query_param "$fairness_url" "limit" "$fairness_limit")"
+
+  local panel_runtime_profile_url
+  panel_runtime_profile_url="${request_base}${normalized_panel_runtime_profile_path}"
+  panel_runtime_profile_url="$(append_query_param "$panel_runtime_profile_url" "dispatch_type" "$DISPATCH_TYPE")"
+  panel_runtime_profile_url="$(append_query_param "$panel_runtime_profile_url" "policy_version" "$POLICY_VERSION")"
+  panel_runtime_profile_url="$(append_query_param "$panel_runtime_profile_url" "sort_by" "updated_at")"
+  panel_runtime_profile_url="$(append_query_param "$panel_runtime_profile_url" "sort_order" "desc")"
+  panel_runtime_profile_url="$(append_query_param "$panel_runtime_profile_url" "offset" "0")"
+  local panel_runtime_profile_limit
+  panel_runtime_profile_limit="$(trim "$PANEL_PROFILE_SCAN_LIMIT")"
+  if ! [[ "$panel_runtime_profile_limit" =~ ^[0-9]+$ ]] || [[ "$panel_runtime_profile_limit" -le 0 ]]; then
+    panel_runtime_profile_limit="50"
+  fi
+  if [[ "$panel_runtime_profile_limit" -gt 200 ]]; then
+    panel_runtime_profile_limit="200"
+  fi
+  panel_runtime_profile_url="$(append_query_param "$panel_runtime_profile_url" "limit" "$panel_runtime_profile_limit")"
+
+  local trust_challenge_queue_url
+  trust_challenge_queue_url="${request_base}${normalized_trust_challenge_queue_path}"
+  trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "dispatch_type" "$DISPATCH_TYPE")"
+  trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "challenge_state" "open")"
+  trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "sort_by" "priority_score")"
+  trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "sort_order" "desc")"
+  trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "offset" "0")"
+  local trust_challenge_queue_limit
+  trust_challenge_queue_limit="$(trim "$TOP_LIMIT")"
+  if ! [[ "$trust_challenge_queue_limit" =~ ^[0-9]+$ ]] || [[ "$trust_challenge_queue_limit" -le 0 ]]; then
+    trust_challenge_queue_limit="50"
+  fi
+  if [[ "$trust_challenge_queue_limit" -gt 200 ]]; then
+    trust_challenge_queue_limit="200"
+  fi
+  trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "limit" "$trust_challenge_queue_limit")"
+
   local timeout_secs
   timeout_secs="$(trim "$REQUEST_TIMEOUT_SECS")"
   if ! [[ "$timeout_secs" =~ ^[0-9]+$ ]] || [[ "$timeout_secs" -le 0 ]]; then
     timeout_secs="8"
   fi
 
-  local stderr_file
-  stderr_file="$ROOT/artifacts/harness/${RUN_ID}.curl.stderr.log"
-  set +e
-  HTTP_CODE="$(curl \
-    -sS \
-    -o "$OUTPUT_JSON" \
-    -w "%{http_code}" \
-    --connect-timeout "$timeout_secs" \
-    --max-time "$timeout_secs" \
-    -H "x-ai-internal-key: $INTERNAL_KEY" \
-    "$request_url" \
-    2>"$stderr_file")"
-  local curl_code="$?"
-  set -e
-
-  if [[ "$curl_code" -ne 0 ]]; then
-    STATUS="request_failed"
-    REQUEST_ERROR="curl_exit_${curl_code}"
-  elif ! [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
-    STATUS="request_failed"
-    REQUEST_ERROR="http_${HTTP_CODE:-000}"
-  else
-    STATUS="pass"
+  STATUS="pass"
+  if ! fetch_json "pack" "$request_url" "$OUTPUT_JSON" HTTP_CODE "$timeout_secs"; then
+    :
+  fi
+  if [[ "$STATUS" == "pass" ]]; then
+    if ! fetch_json "case-fairness" "$fairness_url" "$CASE_FAIRNESS_OUTPUT_JSON" CASE_FAIRNESS_HTTP_CODE "$timeout_secs"; then
+      :
+    fi
+  fi
+  if [[ "$STATUS" == "pass" ]]; then
+    if ! fetch_json "panel-runtime-profiles" "$panel_runtime_profile_url" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON" PANEL_RUNTIME_PROFILE_HTTP_CODE "$timeout_secs"; then
+      :
+    fi
+  fi
+  if [[ "$STATUS" == "pass" ]]; then
+    if ! fetch_json "trust-challenge-queue" "$trust_challenge_queue_url" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" TRUST_CHALLENGE_QUEUE_HTTP_CODE "$timeout_secs"; then
+      :
+    fi
   fi
 
   if [[ "$STATUS" == "pass" ]]; then
-    check_required_token "pack.fairnessDashboard" "\"fairnessDashboard\""
-    check_required_token "pack.fairnessCalibrationAdvisor" "\"fairnessCalibrationAdvisor\""
-    check_required_token "pack.panelRuntimeReadiness" "\"panelRuntimeReadiness\""
-    check_required_token "pack.registryGovernance" "\"registryGovernance\""
-    check_required_token "pack.registryPromptToolGovernance" "\"registryPromptToolGovernance\""
-    check_required_token "pack.courtroomReadModel" "\"courtroomReadModel\""
-    check_required_token "pack.courtroomQueue" "\"courtroomQueue\""
-    check_required_token "pack.courtroomDrilldown" "\"courtroomDrilldown\""
-    check_required_token "pack.reviewQueue" "\"reviewQueue\""
-    check_required_token "pack.reviewTrustPriority" "\"reviewTrustPriority\""
-    check_required_token "pack.evidenceClaimQueue" "\"evidenceClaimQueue\""
-    check_required_token "pack.trustChallengeQueue" "\"trustChallengeQueue\""
-    check_required_token "pack.policyGateSimulation" "\"policyGateSimulation\""
-    check_required_token "pack.adaptiveSummary" "\"adaptiveSummary\""
-    check_required_token "pack.trustOverview" "\"trustOverview\""
-    check_required_token "pack.filters" "\"filters\""
-    check_required_token "fairnessDashboard.overview" "\"overview\""
-    check_required_token "fairnessDashboard.gateDistribution" "\"gateDistribution\""
-    check_required_token "fairnessDashboard.trends" "\"trends\""
-    check_required_token "fairnessDashboard.topRiskCases" "\"topRiskCases\""
-    check_required_token "fairnessDashboard.overview.scanTruncated" "\"scanTruncated\""
-    check_required_token "fairnessDashboard.trends.windowDays" "\"windowDays\""
-    check_required_token "fairnessDashboard.gateDistribution.benchmark_attention_required" "\"benchmark_attention_required\""
-    check_required_token "courtroomDrilldown.aggregations.totalConflictPairCount" "\"totalConflictPairCount\""
-    check_required_token "courtroomDrilldown.aggregations.totalUnansweredClaimCount" "\"totalUnansweredClaimCount\""
-    check_required_token "courtroomDrilldown.aggregations.totalDecisiveEvidenceCount" "\"totalDecisiveEvidenceCount\""
-    check_required_token "courtroomDrilldown.aggregations.totalPivotalMomentCount" "\"totalPivotalMomentCount\""
-    check_required_token "evidenceClaimQueue.aggregations.riskLevelCounts" "\"riskLevelCounts\""
-    check_required_token "evidenceClaimQueue.aggregations.reliabilityLevelCounts" "\"reliabilityLevelCounts\""
-    check_required_token "evidenceClaimQueue.aggregations.conflictCaseCount" "\"conflictCaseCount\""
-    check_required_token "evidenceClaimQueue.aggregations.unansweredCaseCount" "\"unansweredCaseCount\""
+    check_required_token_in_file "pack.fairnessDashboard" "\"fairnessDashboard\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.fairnessCalibrationAdvisor" "\"fairnessCalibrationAdvisor\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.panelRuntimeReadiness" "\"panelRuntimeReadiness\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.registryGovernance" "\"registryGovernance\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.registryPromptToolGovernance" "\"registryPromptToolGovernance\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.courtroomReadModel" "\"courtroomReadModel\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.courtroomQueue" "\"courtroomQueue\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.courtroomDrilldown" "\"courtroomDrilldown\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.reviewQueue" "\"reviewQueue\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.reviewTrustPriority" "\"reviewTrustPriority\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.evidenceClaimQueue" "\"evidenceClaimQueue\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.trustChallengeQueue" "\"trustChallengeQueue\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.policyGateSimulation" "\"policyGateSimulation\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.adaptiveSummary" "\"adaptiveSummary\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.trustOverview" "\"trustOverview\"" "$OUTPUT_JSON"
+    check_required_token_in_file "pack.filters" "\"filters\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.overview" "\"overview\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.gateDistribution" "\"gateDistribution\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.trends" "\"trends\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.topRiskCases" "\"topRiskCases\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.overview.scanTruncated" "\"scanTruncated\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.trends.windowDays" "\"windowDays\"" "$OUTPUT_JSON"
+    check_required_token_in_file "fairnessDashboard.gateDistribution.benchmark_attention_required" "\"benchmark_attention_required\"" "$OUTPUT_JSON"
+    check_required_token_in_file "courtroomDrilldown.aggregations.totalConflictPairCount" "\"totalConflictPairCount\"" "$OUTPUT_JSON"
+    check_required_token_in_file "courtroomDrilldown.aggregations.totalUnansweredClaimCount" "\"totalUnansweredClaimCount\"" "$OUTPUT_JSON"
+    check_required_token_in_file "courtroomDrilldown.aggregations.totalDecisiveEvidenceCount" "\"totalDecisiveEvidenceCount\"" "$OUTPUT_JSON"
+    check_required_token_in_file "courtroomDrilldown.aggregations.totalPivotalMomentCount" "\"totalPivotalMomentCount\"" "$OUTPUT_JSON"
+    check_required_token_in_file "evidenceClaimQueue.aggregations.riskLevelCounts" "\"riskLevelCounts\"" "$OUTPUT_JSON"
+    check_required_token_in_file "evidenceClaimQueue.aggregations.reliabilityLevelCounts" "\"reliabilityLevelCounts\"" "$OUTPUT_JSON"
+    check_required_token_in_file "evidenceClaimQueue.aggregations.conflictCaseCount" "\"conflictCaseCount\"" "$OUTPUT_JSON"
+    check_required_token_in_file "evidenceClaimQueue.aggregations.unansweredCaseCount" "\"unansweredCaseCount\"" "$OUTPUT_JSON"
+
+    check_required_token_in_file "caseFairness.count" "\"count\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.returned" "\"returned\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.items" "\"items\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations" "\"aggregations\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.filters" "\"filters\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.totalMatched" "\"totalMatched\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.reviewRequiredCount" "\"reviewRequiredCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.openReviewCount" "\"openReviewCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.driftBreachCount" "\"driftBreachCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.thresholdBreachCount" "\"thresholdBreachCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.shadowBreachCount" "\"shadowBreachCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.panelHighDisagreementCount" "\"panelHighDisagreementCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.withChallengeCount" "\"withChallengeCount\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.gateConclusionCounts" "\"gateConclusionCounts\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.winnerCounts" "\"winnerCounts\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.challengeStateCounts" "\"challengeStateCounts\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.aggregations.policyVersionCounts" "\"policyVersionCounts\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.filters.dispatchType" "\"dispatchType\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.filters.sortBy" "\"sortBy\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.filters.sortOrder" "\"sortOrder\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.filters.offset" "\"offset\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+    check_required_token_in_file "caseFairness.filters.limit" "\"limit\"" "$CASE_FAIRNESS_OUTPUT_JSON"
+
+    check_required_token_in_file "panelRuntimeProfiles.count" "\"count\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.returned" "\"returned\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.items" "\"items\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations" "\"aggregations\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters" "\"filters\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.totalMatched" "\"totalMatched\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.reviewRequiredCount" "\"reviewRequiredCount\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.openReviewCount" "\"openReviewCount\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.panelHighDisagreementCount" "\"panelHighDisagreementCount\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.avgPanelDisagreementRatio" "\"avgPanelDisagreementRatio\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byJudgeId" "\"byJudgeId\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byProfileId" "\"byProfileId\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byModelStrategy" "\"byModelStrategy\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byStrategySlot" "\"byStrategySlot\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byDomainSlot" "\"byDomainSlot\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byProfileSource" "\"byProfileSource\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.byPolicyVersion" "\"byPolicyVersion\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.aggregations.winnerCounts" "\"winnerCounts\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.dispatchType" "\"dispatchType\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.judgeId" "\"judgeId\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.profileSource" "\"profileSource\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.profileId" "\"profileId\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.modelStrategy" "\"modelStrategy\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.strategySlot" "\"strategySlot\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.domainSlot" "\"domainSlot\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.sortBy" "\"sortBy\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.sortOrder" "\"sortOrder\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.offset" "\"offset\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+    check_required_token_in_file "panelRuntimeProfiles.filters.limit" "\"limit\"" "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+
+    check_required_token_in_file "trustChallengeQueue.count" "\"count\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.returned" "\"returned\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.scanned" "\"scanned\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.skipped" "\"skipped\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.errorCount" "\"errorCount\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.items" "\"items\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.errors" "\"errors\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters" "\"filters\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.dispatchType" "\"dispatchType\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.challengeState" "\"challengeState\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.sortBy" "\"sortBy\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.sortOrder" "\"sortOrder\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.scanLimit" "\"scanLimit\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.offset" "\"offset\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    check_required_token_in_file "trustChallengeQueue.filters.limit" "\"limit\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
     if [[ -n "$REQUIRED_KEYS_MISSING" ]]; then
       STATUS="payload_invalid"
       REQUEST_ERROR="required_keys_missing"
@@ -665,6 +906,19 @@ main() {
     OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomDrilldownHighRiskCount")"
     OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT="$(extract_first_number "$OUTPUT_JSON" "courtroomDrilldownReviewRequiredCount")"
   fi
+  if [[ -f "$CASE_FAIRNESS_OUTPUT_JSON" ]]; then
+    CASE_FAIRNESS_TOTAL_MATCHED="$(extract_first_number "$CASE_FAIRNESS_OUTPUT_JSON" "totalMatched")"
+    CASE_FAIRNESS_RETURNED="$(extract_first_number "$CASE_FAIRNESS_OUTPUT_JSON" "returned")"
+  fi
+  if [[ -f "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON" ]]; then
+    PANEL_RUNTIME_PROFILE_TOTAL_MATCHED="$(extract_first_number "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON" "totalMatched")"
+    PANEL_RUNTIME_PROFILE_RETURNED="$(extract_first_number "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON" "returned")"
+  fi
+  if [[ -f "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" ]]; then
+    TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED="$(extract_first_number "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" "count")"
+    TRUST_CHALLENGE_QUEUE_RETURNED="$(extract_first_number "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" "returned")"
+    TRUST_CHALLENGE_QUEUE_ERROR_COUNT="$(extract_first_number "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" "errorCount")"
+  fi
 
   FINISHED_AT="$(iso_now)"
   write_output_env "$request_url"
@@ -675,8 +929,14 @@ main() {
   echo "ai_judge_ops_read_model_export_status: $STATUS"
   echo "ops_read_model_request_url: $request_url"
   echo "ops_read_model_http_code: ${HTTP_CODE:-000}"
+  echo "ops_case_fairness_http_code: ${CASE_FAIRNESS_HTTP_CODE:-000}"
+  echo "ops_panel_runtime_profile_http_code: ${PANEL_RUNTIME_PROFILE_HTTP_CODE:-000}"
+  echo "ops_trust_challenge_queue_http_code: ${TRUST_CHALLENGE_QUEUE_HTTP_CODE:-000}"
   echo "required_keys_missing: ${REQUIRED_KEYS_MISSING:-none}"
   echo "output_json: $OUTPUT_JSON"
+  echo "case_fairness_output_json: $CASE_FAIRNESS_OUTPUT_JSON"
+  echo "panel_runtime_profile_output_json: $PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
+  echo "trust_challenge_queue_output_json: $TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
   echo "output_md: $OUTPUT_MD"
   echo "output_env: $OUTPUT_ENV"
   echo "summary_json: $EMIT_JSON"

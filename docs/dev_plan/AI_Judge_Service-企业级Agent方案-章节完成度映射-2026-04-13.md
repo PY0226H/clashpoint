@@ -1,7 +1,7 @@
 # AI_Judge_Service 企业级 Agent 方案章节完成度映射（2026-04-13）
 
-更新时间：2026-04-19  
-状态：已更新（对齐 P22-M1~M5：courtroom 角色契约 + app_factory 拆分 + read-model 契约冻结 + ops 导出对齐 + 本地回归包 v4 已完成）  
+更新时间：2026-04-20  
+状态：已更新（对齐 P24-M1~M5：trust public-verify/ops-queue 契约冻结 + app_factory trust 视图拆分 + ops 导出 trust 对齐 + 本地回归包 v1）  
 映射对象：[AI_judge_service 企业级 Agent 服务设计方案（2026-04-13）](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md)
 
 ## 1. 判定口径
@@ -31,7 +31,7 @@
 | 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地（文档+实现一致） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md) | 当前开发轨迹与继承策略一致 |
 | 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_attestation.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_attestation.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | attestation + verify + challenge phaseB 已落地；公开可验证承诺与协议层扩展未进入主线 |
 | 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 部分落地 | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | 已守住主要边界，后续继续防止 NPC/Room QA 侵入官方裁决链 |
-| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase3 主线进行中） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [20260419T225103Z-ai-judge-stage-closure-execute.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260419T225103Z-ai-judge-stage-closure-execute.md) | Phase1/2 主链已收敛，当前进入 Phase3 的 P22 执行段（M1~M5 已完成） |
+| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase3 主线进行中） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [20260420T000027Z-ai-judge-stage-closure-execute.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260420T000027Z-ai-judge-stage-closure-execute.md) | Phase1/2 主链已收敛，当前进入 Phase3 的 P24 执行段（M1~M5 已完成，待 M6 文档一致性收口与 real-env pass window） |
 | 18. 最后产品判断 | 企业级裁判系统目标态 | 部分落地（明确推进） | 同上 | 方向正确，工程主链已显著成型；距离“完整目标态”仍有运营化与平台化差距 |
 
 ## 3. Agent 子项映射（方案第6章）
@@ -49,17 +49,17 @@
 
 ## 4. 关键结论（当前真实状态）
 
-1. 当前阶段已进入 `P22`，且 `M1~M5` 已完成，主链继续向“角色契约显式化 + 结构拆分可持续 + 契约冻结可验证 + 本地证据稳态”推进。
-2. 截至 2026-04-19 已完成：
-   - `courtroom role contract v1`：在 [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) 显式冻结 8 角色 stage/input/output/activation 契约，并在 `judgeTrace.agentRuntime` 透出版本字段。
-   - `app_factory split v5`：新增 [fairness_case_scan.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_case_scan.py)，下沉 fairness dashboard/calibration/advisor 的分页扫描逻辑。
-   - `read-model contract freeze v4`：新增 [review_queue_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/review_queue_contract.py)，并在 `/internal/judge/courtroom/drilldown-bundle`、`/internal/judge/evidence-claim/ops-queue` 接入契约校验与失败语义。
-   - `ops-export-and-artifact-hygiene v2`：增强 [ai_judge_ops_read_model_export.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_ops_read_model_export.sh) 对 drilldown/evidence-claim 冻结字段检查，且 [test_ai_judge_artifact_prune.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/tests/test_ai_judge_artifact_prune.sh) 持续通过。
-   - `local regression bundle v4`：完成 `ruff + pytest + runtime_ops_pack(local_reference)` 全量回归，最新工件为 [20260419T231353Z-ai-judge-runtime-ops-pack.summary.json](/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260419T231353Z-ai-judge-runtime-ops-pack.summary.json)。
-3. 当前主要阻塞项仍是 `real-env pass window`；本地侧 P22 主链处于可持续迭代状态。
+1. 当前阶段已进入 `P24`，主链继续向“Trust 关键读面契约冻结 + app_factory 结构拆分延续 + 导出链路 trust 对齐 + 本地回归证据稳态”推进。
+2. 截至 2026-04-20 已完成：
+   - `trust public-verify contract freeze v1`：新增 [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py)，并在 `/internal/judge/cases/{case_id}/trust/public-verify` 接入契约校验与 500 失败语义。
+   - `trust challenge ops-queue contract freeze v1`：新增 [trust_challenge_queue_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_queue_contract.py)，并在 `/internal/judge/trust/challenges/ops-queue` 接入契约校验与 500 失败语义。
+   - `app_factory split v7`：新增 [trust_ops_views.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_ops_views.py)，下沉 `public_verify` 与 `trust ops queue` 视图组装逻辑。
+   - `ops-export-trust-alignment v1`：增强 [ai_judge_ops_read_model_export.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_ops_read_model_export.sh)，新增 `trust/challenges/ops-queue` 请求校验链路与指标导出；脚本回归见 [test_ai_judge_ops_read_model_export.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/tests/test_ai_judge_ops_read_model_export.sh)。
+   - `local regression bundle v1`：完成 `ruff + pytest + runtime_ops_pack(local_reference)` 全量回归，最新工件为 [20260420T002141Z-ai-judge-runtime-ops-pack.summary.json](/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002141Z-ai-judge-runtime-ops-pack.summary.json)。
+3. 当前主要阻塞项仍是 `real-env pass window`；本地侧 P24 主链处于可持续迭代状态。
 
 ## 5. 下一步优先级（收口后）
 
-1. 完成 `ai-judge-p22-enterprise-consistency-refresh-v5` 文档一致性收口并回写当前计划。
-2. 在真实环境窗口可用后执行 `ai-judge-p22-real-env-pass-window-execute-on-env`，补齐 `pass` 证据。
-3. 执行 `ai-judge-p22-stage-closure-execute`，归档 P22 阶段计划与证据快照。
+1. 完成 `ai-judge-p24-enterprise-consistency-refresh-v1` 文档一致性收口并回写当前计划。
+2. 在真实环境窗口可用后执行 `ai-judge-p24-real-env-pass-window-execute-on-env`，补齐 `pass` 证据。
+3. 执行 `ai-judge-p24-stage-closure-execute`，归档 P24 阶段计划与证据快照。

@@ -35,6 +35,7 @@ cat >"$MOCK_BIN_OK/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 output_file=""
+request_url=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -o)
@@ -42,12 +43,14 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     *)
+      request_url="$1"
       shift 1
       ;;
   esac
 done
 if [[ -n "$output_file" ]]; then
-  cat >"$output_file" <<'JSON'
+  if [[ "$request_url" == *"/internal/judge/ops/read-model/pack"* ]]; then
+    cat >"$output_file" <<'JSON'
 {
   "generatedAt": "2026-04-17T09:00:00Z",
   "fairnessDashboard": {
@@ -172,6 +175,142 @@ if [[ -n "$output_file" ]]; then
   }
 }
 JSON
+  elif [[ "$request_url" == *"/internal/judge/fairness/cases"* ]]; then
+    cat >"$output_file" <<'JSON'
+{
+  "count": 15,
+  "returned": 12,
+  "items": [],
+  "aggregations": {
+    "totalMatched": 15,
+    "reviewRequiredCount": 4,
+    "openReviewCount": 2,
+    "driftBreachCount": 1,
+    "thresholdBreachCount": 1,
+    "shadowBreachCount": 1,
+    "panelHighDisagreementCount": 1,
+    "withChallengeCount": 2,
+    "gateConclusionCounts": {
+      "auto_passed": 9,
+      "review_required": 2,
+      "benchmark_attention_required": 3,
+      "unknown": 1
+    },
+    "winnerCounts": {
+      "pro": 7,
+      "con": 5,
+      "draw": 2,
+      "unknown": 1
+    },
+    "challengeStateCounts": {
+      "none": 13,
+      "under_review": 2
+    },
+    "policyVersionCounts": {
+      "v3-default": 15,
+      "unknown": 0
+    }
+  },
+  "filters": {
+    "status": null,
+    "dispatchType": "final",
+    "winner": null,
+    "policyVersion": "v3-default",
+    "hasDriftBreach": null,
+    "hasThresholdBreach": null,
+    "hasShadowBreach": null,
+    "hasOpenReview": null,
+    "gateConclusion": null,
+    "challengeState": null,
+    "sortBy": "updated_at",
+    "sortOrder": "desc",
+    "reviewRequired": null,
+    "panelHighDisagreement": null,
+    "offset": 0,
+    "limit": 200
+  }
+}
+JSON
+  elif [[ "$request_url" == *"/internal/judge/panels/runtime/profiles"* ]]; then
+    cat >"$output_file" <<'JSON'
+{
+  "count": 30,
+  "returned": 30,
+  "items": [],
+  "aggregations": {
+    "totalMatched": 30,
+    "reviewRequiredCount": 4,
+    "openReviewCount": 3,
+    "panelHighDisagreementCount": 2,
+    "avgPanelDisagreementRatio": 0.11,
+    "byJudgeId": {"judgeA": 10, "judgeB": 10, "judgeC": 10},
+    "byProfileId": {"panel-judgeA-weighted-v1": 10, "panel-judgeB-weighted-v1": 10, "panel-judgeC-weighted-v1": 10, "unknown": 0},
+    "byModelStrategy": {"deterministic_path_alignment": 30, "unknown": 0},
+    "byStrategySlot": {"path_alignment": 30, "unknown": 0},
+    "byDomainSlot": {"general": 30, "unknown": 0},
+    "byProfileSource": {"builtin_default": 30, "unknown": 0},
+    "byPolicyVersion": {"v3-default": 30, "unknown": 0},
+    "winnerCounts": {"pro": 12, "con": 10, "draw": 8, "unknown": 0}
+  },
+  "filters": {
+    "status": null,
+    "dispatchType": "final",
+    "winner": null,
+    "policyVersion": "v3-default",
+    "hasOpenReview": null,
+    "gateConclusion": null,
+    "challengeState": null,
+    "reviewRequired": null,
+    "panelHighDisagreement": null,
+    "judgeId": null,
+    "profileSource": null,
+    "profileId": null,
+    "modelStrategy": null,
+    "strategySlot": null,
+    "domainSlot": null,
+    "sortBy": "updated_at",
+    "sortOrder": "desc",
+    "offset": 0,
+    "limit": 200
+  }
+}
+JSON
+  elif [[ "$request_url" == *"/internal/judge/trust/challenges/ops-queue"* ]]; then
+    cat >"$output_file" <<'JSON'
+{
+  "count": 5,
+  "returned": 2,
+  "scanned": 12,
+  "skipped": 7,
+  "errorCount": 1,
+  "items": [
+    {"caseId": 901},
+    {"caseId": 902}
+  ],
+  "errors": [
+    {"caseId": 903, "statusCode": 404, "errorCode": "trust_receipt_not_found"}
+  ],
+  "filters": {
+    "status": null,
+    "dispatchType": "final",
+    "challengeState": "open",
+    "reviewState": null,
+    "priorityLevel": null,
+    "slaBucket": null,
+    "hasOpenAlert": null,
+    "sortBy": "priority_score",
+    "sortOrder": "desc",
+    "scanLimit": 500,
+    "offset": 0,
+    "limit": 10
+  }
+}
+JSON
+  else
+    cat >"$output_file" <<'JSON'
+{}
+JSON
+  fi
 fi
 printf '200'
 EOF
@@ -195,6 +334,13 @@ expect_contains "ok env status" "AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=pass" "$O
 expect_contains "ok env fairness matched" "OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=15" "$OK_ENV_OUT"
 expect_contains "ok env fairness scanned" "OPS_READ_MODEL_FAIRNESS_SCANNED_CASES=12" "$OK_ENV_OUT"
 expect_contains "ok env fairness benchmark attention" "OPS_READ_MODEL_FAIRNESS_BENCHMARK_ATTENTION_COUNT=1" "$OK_ENV_OUT"
+expect_contains "ok env case fairness matched" "OPS_READ_MODEL_CASE_FAIRNESS_TOTAL_MATCHED=15" "$OK_ENV_OUT"
+expect_contains "ok env case fairness returned" "OPS_READ_MODEL_CASE_FAIRNESS_RETURNED=12" "$OK_ENV_OUT"
+expect_contains "ok env panel runtime matched" "OPS_READ_MODEL_PANEL_RUNTIME_PROFILE_TOTAL_MATCHED=30" "$OK_ENV_OUT"
+expect_contains "ok env panel runtime returned" "OPS_READ_MODEL_PANEL_RUNTIME_PROFILE_RETURNED=30" "$OK_ENV_OUT"
+expect_contains "ok env trust queue matched" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED=5" "$OK_ENV_OUT"
+expect_contains "ok env trust queue returned" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_RETURNED=2" "$OK_ENV_OUT"
+expect_contains "ok env trust queue error count" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_ERROR_COUNT=1" "$OK_ENV_OUT"
 expect_contains "ok env invalid count" "OPS_READ_MODEL_REGISTRY_INVALID_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env trust item count" "OPS_READ_MODEL_TRUST_ITEM_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=5" "$OK_ENV_OUT"
@@ -218,6 +364,9 @@ expect_contains "ok env evidence claim unanswered case count" "OPS_READ_MODEL_EV
 expect_contains "ok env courtroom drilldown count" "OPS_READ_MODEL_COURTROOM_DRILLDOWN_COUNT=4" "$OK_ENV_OUT"
 expect_contains "ok env courtroom drilldown high risk count" "OPS_READ_MODEL_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env courtroom drilldown review required count" "OPS_READ_MODEL_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT=3" "$OK_ENV_OUT"
+expect_contains "ok stdout case fairness http" "ops_case_fairness_http_code: 200" "$OK_STDOUT"
+expect_contains "ok stdout panel profile http" "ops_panel_runtime_profile_http_code: 200" "$OK_STDOUT"
+expect_contains "ok stdout trust queue http" "ops_trust_challenge_queue_http_code: 200" "$OK_STDOUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 
 # 场景2：payload 缺少必填键 -> payload_invalid

@@ -1,0 +1,49 @@
+{
+  "run_id": "20260420T002339Z-ai-judge-runtime-sla-freeze",
+  "status": "env_blocked",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "latency_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_latency_baseline.env",
+  "fault_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fault_drill.env",
+  "trust_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_trust_attestation.env",
+  "env_marker": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env",
+  "environment_mode": "blocked",
+  "allow_local_reference": false,
+  "policy_version": "runtime-sla-v1",
+  "threshold_decision": "pending",
+  "needs_real_env_reconfirm": false,
+  "needs_remediation": false,
+  "metrics": {
+    "sample_size": "",
+    "p95_ms": "",
+    "p99_ms": "",
+    "callback_failure_recovery_pass": false,
+    "replay_consistency_pass": false,
+    "audit_alert_delivery_pass": false,
+    "trace_hash_coverage": "",
+    "commitment_coverage": "",
+    "attestation_gap": "",
+    "p95_ok": false,
+    "p99_ok": false,
+    "fault_ok": false,
+    "trace_ok": false,
+    "commitment_ok": false,
+    "gap_ok": false
+  },
+  "thresholds": {
+    "p95_ms_max": "1200",
+    "p99_ms_max": "2200",
+    "trace_hash_coverage_min": "0.99",
+    "commitment_coverage_min": "0.98",
+    "attestation_gap_max": "0.01"
+  },
+  "missing_keys": "",
+  "note": "environment not ready for runtime sla freeze",
+  "started_at": "2026-04-20T00:23:39Z",
+  "finished_at": "2026-04-20T00:23:39Z",
+  "outputs": {
+    "threshold_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_sla_thresholds.env",
+    "freeze_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Runtime_SLA_冻结口径-2026-04-20.md",
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002339Z-ai-judge-runtime-ops-pack/runtime_sla.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002339Z-ai-judge-runtime-ops-pack/runtime_sla.summary.md"
+  }
+}

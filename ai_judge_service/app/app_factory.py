@@ -71,6 +71,30 @@ from .applications import (
 from .applications import (
     verify_report_attestation as verify_report_attestation_v3,
 )
+from .applications.fairness_analysis import (
+    build_fairness_calibration_drift_summary as build_fairness_calibration_drift_summary_v3,
+)
+from .applications.fairness_analysis import (
+    build_fairness_calibration_risk_items as build_fairness_calibration_risk_items_v3,
+)
+from .applications.fairness_analysis import (
+    build_fairness_calibration_threshold_suggestions as build_fairness_calibration_threshold_suggestions_v3,
+)
+from .applications.fairness_analysis import (
+    build_fairness_dashboard_case_trends as build_fairness_dashboard_case_trends_v3,
+)
+from .applications.fairness_analysis import (
+    build_fairness_dashboard_run_trends as build_fairness_dashboard_run_trends_v3,
+)
+from .applications.fairness_analysis import (
+    build_fairness_dashboard_top_risk_cases as build_fairness_dashboard_top_risk_cases_v3,
+)
+from .applications.fairness_case_contract import (
+    validate_case_fairness_detail_contract as validate_case_fairness_detail_contract_v3,
+)
+from .applications.fairness_case_contract import (
+    validate_case_fairness_list_contract as validate_case_fairness_list_contract_v3,
+)
 from .applications.fairness_case_scan import (
     collect_fairness_case_items as collect_fairness_case_items_v3,
 )
@@ -85,6 +109,9 @@ from .applications.ops_read_model_pack import (
     summarize_ops_read_model_pack_review_items,
     summarize_ops_read_model_pack_trust_items,
 )
+from .applications.panel_runtime_profile_contract import (
+    validate_panel_runtime_profile_contract as validate_panel_runtime_profile_contract_v3,
+)
 from .applications.registry_ops_views import (
     build_registry_alert_ops_view as build_registry_alert_ops_view_v3,
 )
@@ -96,6 +123,24 @@ from .applications.review_queue_contract import (
 )
 from .applications.review_queue_contract import (
     validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
+)
+from .applications.trust_challenge_queue_contract import (
+    validate_trust_challenge_queue_contract as validate_trust_challenge_queue_contract_v3,
+)
+from .applications.trust_kernel_version_contract import (
+    validate_trust_kernel_version_contract as validate_trust_kernel_version_contract_v3,
+)
+from .applications.trust_ops_views import (
+    build_public_trust_verify_payload as build_public_trust_verify_payload_v3,
+)
+from .applications.trust_ops_views import (
+    build_trust_challenge_ops_queue_item as build_trust_challenge_ops_queue_item_v3,
+)
+from .applications.trust_ops_views import (
+    build_trust_challenge_ops_queue_payload as build_trust_challenge_ops_queue_payload_v3,
+)
+from .applications.trust_public_verify_contract import (
+    validate_trust_public_verify_contract as validate_trust_public_verify_contract_v3,
 )
 from .callback_client import (
     callback_final_failed,
@@ -2858,45 +2903,10 @@ def _build_fairness_dashboard_case_trends(
     items: list[dict[str, Any]],
     window_days: int,
 ) -> list[dict[str, Any]]:
-    window = max(1, min(int(window_days), 30))
-    now = datetime.now(timezone.utc)
-    date_keys = [
-        (now - timedelta(days=offset)).date().isoformat()
-        for offset in range(window - 1, -1, -1)
-    ]
-    counters: dict[str, dict[str, int]] = {
-        key: {
-            "totalCases": 0,
-            "reviewRequiredCount": 0,
-            "openReviewCount": 0,
-            "benchmarkAttentionCount": 0,
-        }
-        for key in date_keys
-    }
-    for item in items:
-        updated_at = _parse_iso_datetime(item.get("updatedAt"))
-        if updated_at is None:
-            continue
-        date_key = updated_at.date().isoformat()
-        row = counters.get(date_key)
-        if row is None:
-            continue
-        row["totalCases"] += 1
-        if bool(item.get("reviewRequired")):
-            row["reviewRequiredCount"] += 1
-        challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
-        if bool(challenge_link.get("hasOpenReview")):
-            row["openReviewCount"] += 1
-        if str(item.get("gateConclusion") or "").strip().lower() == "benchmark_attention_required":
-            row["benchmarkAttentionCount"] += 1
-
-    return [
-        {
-            "date": date_key,
-            **counters[date_key],
-        }
-        for date_key in date_keys
-    ]
+    return build_fairness_dashboard_case_trends_v3(
+        items=items,
+        window_days=window_days,
+    )
 
 
 def _build_fairness_dashboard_run_trends(
@@ -2905,72 +2915,11 @@ def _build_fairness_dashboard_run_trends(
     shadow_runs: list[FactFairnessShadowRun],
     window_days: int,
 ) -> dict[str, Any]:
-    window = max(1, min(int(window_days), 30))
-    now = datetime.now(timezone.utc)
-    window_from = now - timedelta(days=window)
-
-    benchmark_items: list[dict[str, Any]] = []
-    for row in benchmark_runs:
-        reported_at = _normalize_aware_datetime(row.reported_at)
-        if reported_at is None or reported_at < window_from:
-            continue
-        summary = row.summary if isinstance(row.summary, dict) else {}
-        drift = summary.get("drift") if isinstance(summary.get("drift"), dict) else {}
-        benchmark_items.append(
-            {
-                "runId": row.run_id,
-                "policyVersion": row.policy_version,
-                "environmentMode": row.environment_mode,
-                "status": row.status,
-                "thresholdDecision": row.threshold_decision,
-                "reportedAt": reported_at.isoformat(),
-                "hasThresholdBreach": bool(summary.get("hasThresholdBreach")),
-                "hasDriftBreach": bool(drift.get("hasDriftBreach")),
-                "thresholdBreaches": [
-                    str(item).strip()
-                    for item in (summary.get("thresholdBreaches") or [])
-                    if str(item).strip()
-                ],
-                "driftBreaches": [
-                    str(item).strip()
-                    for item in (drift.get("driftBreaches") or [])
-                    if str(item).strip()
-                ],
-            }
-        )
-
-    shadow_items: list[dict[str, Any]] = []
-    for row in shadow_runs:
-        reported_at = _normalize_aware_datetime(row.reported_at)
-        if reported_at is None or reported_at < window_from:
-            continue
-        summary = row.summary if isinstance(row.summary, dict) else {}
-        shadow_items.append(
-            {
-                "runId": row.run_id,
-                "policyVersion": row.policy_version,
-                "benchmarkRunId": row.benchmark_run_id,
-                "environmentMode": row.environment_mode,
-                "status": row.status,
-                "thresholdDecision": row.threshold_decision,
-                "reportedAt": reported_at.isoformat(),
-                "hasShadowBreach": (
-                    bool(summary.get("hasBreach")) or row.threshold_decision != "accepted"
-                ),
-                "breaches": [
-                    str(item).strip()
-                    for item in (summary.get("breaches") or [])
-                    if str(item).strip()
-                ],
-            }
-        )
-
-    benchmark_items.sort(key=lambda item: str(item.get("reportedAt") or ""), reverse=True)
-    shadow_items.sort(key=lambda item: str(item.get("reportedAt") or ""), reverse=True)
-    return {
-        "benchmarkRuns": benchmark_items[:50],
-        "shadowRuns": shadow_items[:50],
-    }
+    return build_fairness_dashboard_run_trends_v3(
+        benchmark_runs=benchmark_runs,
+        shadow_runs=shadow_runs,
+        window_days=window_days,
+    )
 
 
 def _build_fairness_dashboard_top_risk_cases(
@@ -2978,77 +2927,10 @@ def _build_fairness_dashboard_top_risk_cases(
     items: list[dict[str, Any]],
     top_limit: int,
 ) -> list[dict[str, Any]]:
-    limit = max(1, min(int(top_limit), 50))
-
-    risk_rows: list[dict[str, Any]] = []
-    for item in items:
-        risk_score = 0
-        risk_tags: list[str] = []
-        gate_conclusion = str(item.get("gateConclusion") or "").strip().lower()
-        if gate_conclusion == "benchmark_attention_required":
-            risk_score += 20
-            risk_tags.append("benchmark_attention")
-        if bool(item.get("reviewRequired")):
-            risk_score += 30
-            risk_tags.append("review_required")
-        panel = item.get("panelDisagreement") if isinstance(item.get("panelDisagreement"), dict) else {}
-        if bool(panel.get("high")):
-            risk_score += 20
-            risk_tags.append("panel_high_disagreement")
-        drift = item.get("driftSummary") if isinstance(item.get("driftSummary"), dict) else {}
-        if bool(drift.get("hasThresholdBreach")):
-            risk_score += 25
-            risk_tags.append("benchmark_threshold_breach")
-        if bool(drift.get("hasDriftBreach")):
-            risk_score += 15
-            risk_tags.append("benchmark_drift_breach")
-        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
-        if bool(shadow.get("hasShadowBreach")):
-            risk_score += 20
-            risk_tags.append("shadow_breach")
-        challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
-        if bool(challenge_link.get("hasOpenReview")):
-            risk_score += 10
-            risk_tags.append("open_review")
-        latest_challenge = (
-            challenge_link.get("latest")
-            if isinstance(challenge_link.get("latest"), dict)
-            else {}
-        )
-        challenge_state = str(latest_challenge.get("state") or "").strip()
-        if challenge_state:
-            risk_score += 5
-            risk_tags.append("challenge_active")
-
-        risk_rows.append(
-            {
-                "caseId": int(item.get("caseId") or 0),
-                "dispatchType": item.get("dispatchType"),
-                "updatedAt": item.get("updatedAt"),
-                "winner": item.get("winner"),
-                "gateConclusion": item.get("gateConclusion"),
-                "reviewRequired": bool(item.get("reviewRequired")),
-                "riskScore": risk_score,
-                "riskTags": risk_tags,
-                "panelDisagreementRatio": _safe_float(panel.get("ratio"), default=0.0),
-                "hasOpenReview": bool(challenge_link.get("hasOpenReview")),
-                "policyVersion": (
-                    str((drift.get("policyVersion") or "").strip())
-                    or str((shadow.get("policyVersion") or "").strip())
-                    or None
-                ),
-            }
-        )
-
-    risk_rows.sort(
-        key=lambda row: (
-            int(row.get("riskScore") or 0),
-            str(row.get("updatedAt") or ""),
-            int(row.get("caseId") or 0),
-        ),
-        reverse=True,
+    return build_fairness_dashboard_top_risk_cases_v3(
+        items=items,
+        top_limit=top_limit,
     )
-    return risk_rows[:limit]
 
 
 def _optional_float(value: Any) -> float | None:
@@ -3112,180 +2994,10 @@ def _build_fairness_calibration_threshold_suggestions(
     benchmark_runs: list[FactFairnessBenchmarkRun],
     shadow_runs: list[FactFairnessShadowRun],
 ) -> dict[str, Any]:
-    benchmark_draw_rates = [
-        item
-        for item in (_optional_float(row.draw_rate) for row in benchmark_runs)
-        if item is not None
-    ]
-    benchmark_side_bias = [
-        item
-        for item in (_optional_float(row.side_bias_delta) for row in benchmark_runs)
-        if item is not None
-    ]
-    benchmark_appeal_overturn = [
-        item
-        for item in (_optional_float(row.appeal_overturn_rate) for row in benchmark_runs)
-        if item is not None
-    ]
-    benchmark_sample_sizes = [
-        item
-        for item in (_optional_int(row.sample_size) for row in benchmark_runs)
-        if item is not None and item > 0
-    ]
-
-    benchmark_draw_rate_thresholds = [
-        item
-        for item in (
-            _pick_threshold_value(row.thresholds, "drawRateMax", "draw_rate_max")
-            if isinstance(row.thresholds, dict)
-            else None
-            for row in benchmark_runs
-        )
-        if item is not None
-    ]
-    benchmark_side_bias_thresholds = [
-        item
-        for item in (
-            _pick_threshold_value(
-                row.thresholds,
-                "sideBiasDeltaMax",
-                "side_bias_delta_max",
-            )
-            if isinstance(row.thresholds, dict)
-            else None
-            for row in benchmark_runs
-        )
-        if item is not None
-    ]
-    benchmark_appeal_thresholds = [
-        item
-        for item in (
-            _pick_threshold_value(
-                row.thresholds,
-                "appealOverturnRateMax",
-                "appeal_overturn_rate_max",
-            )
-            if isinstance(row.thresholds, dict)
-            else None
-            for row in benchmark_runs
-        )
-        if item is not None
-    ]
-
-    shadow_winner_flip_rates = [
-        item
-        for item in (_optional_float(row.winner_flip_rate) for row in shadow_runs)
-        if item is not None
-    ]
-    shadow_score_shift = [
-        item
-        for item in (_optional_float(row.score_shift_delta) for row in shadow_runs)
-        if item is not None
-    ]
-    shadow_review_delta = [
-        item
-        for item in (_optional_float(row.review_required_delta) for row in shadow_runs)
-        if item is not None
-    ]
-    shadow_sample_sizes = [
-        item
-        for item in (_optional_int(row.sample_size) for row in shadow_runs)
-        if item is not None and item > 0
-    ]
-    shadow_winner_flip_thresholds = [
-        item
-        for item in (
-            _pick_threshold_value(
-                row.thresholds,
-                "winnerFlipRateMax",
-                "winner_flip_rate_max",
-            )
-            if isinstance(row.thresholds, dict)
-            else None
-            for row in shadow_runs
-        )
-        if item is not None
-    ]
-    shadow_score_shift_thresholds = [
-        item
-        for item in (
-            _pick_threshold_value(
-                row.thresholds,
-                "scoreShiftDeltaMax",
-                "score_shift_delta_max",
-            )
-            if isinstance(row.thresholds, dict)
-            else None
-            for row in shadow_runs
-        )
-        if item is not None
-    ]
-    shadow_review_delta_thresholds = [
-        item
-        for item in (
-            _pick_threshold_value(
-                row.thresholds,
-                "reviewRequiredDeltaMax",
-                "review_required_delta_max",
-            )
-            if isinstance(row.thresholds, dict)
-            else None
-            for row in shadow_runs
-        )
-        if item is not None
-    ]
-
-    return {
-        "method": "local_observed_max_with_margin",
-        "benchmark": {
-            "drawRateMaxSuggested": _suggest_max_threshold(benchmark_draw_rates),
-            "sideBiasDeltaMaxSuggested": _suggest_max_threshold(benchmark_side_bias),
-            "appealOverturnRateMaxSuggested": _suggest_max_threshold(
-                benchmark_appeal_overturn
-            ),
-            "sampleSizeMinSuggested": _suggest_sample_size_floor(benchmark_sample_sizes),
-            "currentThresholdsObserved": {
-                "drawRateMax": (
-                    round(max(benchmark_draw_rate_thresholds), 4)
-                    if benchmark_draw_rate_thresholds
-                    else None
-                ),
-                "sideBiasDeltaMax": (
-                    round(max(benchmark_side_bias_thresholds), 4)
-                    if benchmark_side_bias_thresholds
-                    else None
-                ),
-                "appealOverturnRateMax": (
-                    round(max(benchmark_appeal_thresholds), 4)
-                    if benchmark_appeal_thresholds
-                    else None
-                ),
-            },
-        },
-        "shadow": {
-            "winnerFlipRateMaxSuggested": _suggest_max_threshold(shadow_winner_flip_rates),
-            "scoreShiftDeltaMaxSuggested": _suggest_max_threshold(shadow_score_shift),
-            "reviewRequiredDeltaMaxSuggested": _suggest_max_threshold(shadow_review_delta),
-            "sampleSizeMinSuggested": _suggest_sample_size_floor(shadow_sample_sizes),
-            "currentThresholdsObserved": {
-                "winnerFlipRateMax": (
-                    round(max(shadow_winner_flip_thresholds), 4)
-                    if shadow_winner_flip_thresholds
-                    else None
-                ),
-                "scoreShiftDeltaMax": (
-                    round(max(shadow_score_shift_thresholds), 4)
-                    if shadow_score_shift_thresholds
-                    else None
-                ),
-                "reviewRequiredDeltaMax": (
-                    round(max(shadow_review_delta_thresholds), 4)
-                    if shadow_review_delta_thresholds
-                    else None
-                ),
-            },
-        },
-    }
+    return build_fairness_calibration_threshold_suggestions_v3(
+        benchmark_runs=benchmark_runs,
+        shadow_runs=shadow_runs,
+    )
 
 
 def _build_fairness_calibration_drift_summary(
@@ -3293,61 +3005,10 @@ def _build_fairness_calibration_drift_summary(
     latest_benchmark_run: FactFairnessBenchmarkRun | None,
     latest_shadow_run: FactFairnessShadowRun | None,
 ) -> dict[str, Any]:
-    benchmark_summary = (
-        latest_benchmark_run.summary
-        if latest_benchmark_run is not None and isinstance(latest_benchmark_run.summary, dict)
-        else {}
+    return build_fairness_calibration_drift_summary_v3(
+        latest_benchmark_run=latest_benchmark_run,
+        latest_shadow_run=latest_shadow_run,
     )
-    drift_payload = (
-        benchmark_summary.get("drift")
-        if isinstance(benchmark_summary.get("drift"), dict)
-        else {}
-    )
-    benchmark_threshold_breaches = drift_payload.get("thresholdBreaches")
-    if not isinstance(benchmark_threshold_breaches, list):
-        benchmark_threshold_breaches = []
-    benchmark_drift_breaches = drift_payload.get("driftBreaches")
-    if not isinstance(benchmark_drift_breaches, list):
-        benchmark_drift_breaches = []
-
-    shadow_summary = (
-        latest_shadow_run.summary
-        if latest_shadow_run is not None and isinstance(latest_shadow_run.summary, dict)
-        else {}
-    )
-    shadow_breaches = shadow_summary.get("breaches")
-    if not isinstance(shadow_breaches, list):
-        shadow_breaches = []
-
-    return {
-        "benchmark": {
-            "latestRunId": latest_benchmark_run.run_id if latest_benchmark_run is not None else None,
-            "baselineRunId": str(drift_payload.get("baselineRunId") or "").strip() or None,
-            "thresholdBreaches": [
-                str(item).strip()
-                for item in benchmark_threshold_breaches
-                if str(item).strip()
-            ],
-            "driftBreaches": [
-                str(item).strip() for item in benchmark_drift_breaches if str(item).strip()
-            ],
-            "hasThresholdBreach": bool(drift_payload.get("hasThresholdBreach")),
-            "hasDriftBreach": bool(drift_payload.get("hasDriftBreach")),
-            "drawRateDelta": _optional_float(drift_payload.get("drawRateDelta")),
-            "sideBiasDeltaDelta": _optional_float(drift_payload.get("sideBiasDeltaDelta")),
-            "appealOverturnRateDelta": _optional_float(
-                drift_payload.get("appealOverturnRateDelta")
-            ),
-        },
-        "shadow": {
-            "latestRunId": latest_shadow_run.run_id if latest_shadow_run is not None else None,
-            "benchmarkRunId": (
-                latest_shadow_run.benchmark_run_id if latest_shadow_run is not None else None
-            ),
-            "breaches": [str(item).strip() for item in shadow_breaches if str(item).strip()],
-            "hasBreach": bool(shadow_summary.get("hasBreach")),
-        },
-    }
 
 
 def _build_fairness_calibration_risk_items(
@@ -3357,111 +3018,12 @@ def _build_fairness_calibration_risk_items(
     top_risk_cases: list[dict[str, Any]],
     risk_limit: int,
 ) -> list[dict[str, Any]]:
-    risk_items: list[dict[str, Any]] = []
-
-    for row in benchmark_runs:
-        summary = row.summary if isinstance(row.summary, dict) else {}
-        drift = summary.get("drift") if isinstance(summary.get("drift"), dict) else {}
-        threshold_breaches = drift.get("thresholdBreaches")
-        if not isinstance(threshold_breaches, list):
-            threshold_breaches = []
-        drift_breaches = drift.get("driftBreaches")
-        if not isinstance(drift_breaches, list):
-            drift_breaches = []
-
-        if row.threshold_decision == "violated" or row.status == "threshold_violation":
-            risk_items.append(
-                {
-                    "riskType": "benchmark_threshold_violation",
-                    "severity": "high",
-                    "source": "fairness_benchmark_run",
-                    "runId": row.run_id,
-                    "policyVersion": row.policy_version,
-                    "message": (
-                        "benchmark threshold violated"
-                        if not threshold_breaches
-                        else f"benchmark threshold violated: {','.join(str(item) for item in threshold_breaches)}"
-                    ),
-                    "reportedAt": row.reported_at.isoformat(),
-                }
-            )
-        if bool(drift.get("hasDriftBreach")):
-            risk_items.append(
-                {
-                    "riskType": "benchmark_drift_breach",
-                    "severity": "medium",
-                    "source": "fairness_benchmark_run",
-                    "runId": row.run_id,
-                    "policyVersion": row.policy_version,
-                    "message": (
-                        "benchmark drift breached"
-                        if not drift_breaches
-                        else f"benchmark drift breached: {','.join(str(item) for item in drift_breaches)}"
-                    ),
-                    "reportedAt": row.reported_at.isoformat(),
-                }
-            )
-
-    for row in shadow_runs:
-        summary = row.summary if isinstance(row.summary, dict) else {}
-        breaches = summary.get("breaches")
-        if not isinstance(breaches, list):
-            breaches = []
-        has_breach = bool(summary.get("hasBreach")) or row.threshold_decision == "violated"
-        if not has_breach and row.status != "threshold_violation":
-            continue
-        risk_items.append(
-            {
-                "riskType": "shadow_threshold_violation",
-                "severity": "high",
-                "source": "fairness_shadow_run",
-                "runId": row.run_id,
-                "policyVersion": row.policy_version,
-                "benchmarkRunId": row.benchmark_run_id,
-                "message": (
-                    "shadow threshold violated"
-                    if not breaches
-                    else f"shadow threshold violated: {','.join(str(item) for item in breaches)}"
-                ),
-                "reportedAt": row.reported_at.isoformat(),
-            }
-        )
-
-    for item in top_risk_cases:
-        if not isinstance(item, dict):
-            continue
-        try:
-            risk_score = int(item.get("riskScore") or 0)
-        except (TypeError, ValueError):
-            risk_score = 0
-        if risk_score < 40:
-            continue
-        severity = "high" if risk_score >= 70 else "medium"
-        risk_items.append(
-            {
-                "riskType": "case_risk_rank",
-                "severity": severity,
-                "source": "fairness_case_dashboard",
-                "caseId": int(item.get("caseId") or 0),
-                "policyVersion": str(item.get("policyVersion") or "").strip() or None,
-                "message": (
-                    f"case risk score={risk_score}, tags="
-                    f"{','.join(str(tag) for tag in (item.get('riskTags') or []))}"
-                ),
-                "updatedAt": str(item.get("updatedAt") or "").strip() or None,
-            }
-        )
-
-    severity_rank = {"high": 3, "medium": 2, "low": 1}
-    risk_items.sort(
-        key=lambda row: (
-            severity_rank.get(str(row.get("severity") or "").strip().lower(), 0),
-            str(row.get("reportedAt") or row.get("updatedAt") or ""),
-            str(row.get("runId") or row.get("caseId") or ""),
-        ),
-        reverse=True,
+    return build_fairness_calibration_risk_items_v3(
+        benchmark_runs=benchmark_runs,
+        shadow_runs=shadow_runs,
+        top_risk_cases=top_risk_cases,
+        risk_limit=risk_limit,
     )
-    return risk_items[: max(1, min(int(risk_limit), 200))]
 
 
 def _build_fairness_calibration_on_env_input_template() -> dict[str, Any]:
@@ -5808,6 +5370,30 @@ def _validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str
 
 def _validate_fairness_dashboard_contract(payload: dict[str, Any]) -> None:
     validate_fairness_dashboard_contract_v3(payload)
+
+
+def _validate_case_fairness_detail_contract(payload: dict[str, Any]) -> None:
+    validate_case_fairness_detail_contract_v3(payload)
+
+
+def _validate_case_fairness_list_contract(payload: dict[str, Any]) -> None:
+    validate_case_fairness_list_contract_v3(payload)
+
+
+def _validate_panel_runtime_profile_contract(payload: dict[str, Any]) -> None:
+    validate_panel_runtime_profile_contract_v3(payload)
+
+
+def _validate_trust_public_verify_contract(payload: dict[str, Any]) -> None:
+    validate_trust_public_verify_contract_v3(payload)
+
+
+def _validate_trust_challenge_ops_queue_contract(payload: dict[str, Any]) -> None:
+    validate_trust_challenge_queue_contract_v3(payload)
+
+
+def _validate_trust_kernel_version_contract(payload: dict[str, Any]) -> None:
+    validate_trust_kernel_version_contract_v3(payload)
 
 
 def _validate_courtroom_drilldown_bundle_contract(payload: dict[str, Any]) -> None:
@@ -11232,91 +10818,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         kernel_version: dict[str, Any],
         audit_anchor: dict[str, Any],
     ) -> dict[str, Any]:
-        attestation = (
-            verdict_attestation.get("attestation")
-            if isinstance(verdict_attestation.get("attestation"), dict)
-            else {}
+        return build_public_trust_verify_payload_v3(
+            commitment=commitment,
+            verdict_attestation=verdict_attestation,
+            challenge_review=challenge_review,
+            kernel_version=kernel_version,
+            audit_anchor=audit_anchor,
         )
-        attestation_hashes: dict[str, str] = {}
-        for key in ("commitmentHash", "verdictHash", "auditHash"):
-            token = str(attestation.get(key) or "").strip()
-            if token:
-                attestation_hashes[key] = token
-
-        mismatch_components_raw = verdict_attestation.get("mismatchComponents")
-        mismatch_components = (
-            [
-                str(item).strip()
-                for item in mismatch_components_raw
-                if str(item).strip()
-            ]
-            if isinstance(mismatch_components_raw, list)
-            else []
-        )
-        challenge_reasons_raw = challenge_review.get("challengeReasons")
-        challenge_reasons = (
-            [str(item).strip() for item in challenge_reasons_raw if str(item).strip()]
-            if isinstance(challenge_reasons_raw, list)
-            else []
-        )
-        total_challenges_raw = challenge_review.get("totalChallenges")
-        try:
-            total_challenges = int(total_challenges_raw)
-        except (TypeError, ValueError):
-            total_challenges = 0
-
-        return {
-            "caseCommitment": {
-                "version": commitment.get("version"),
-                "commitmentHash": commitment.get("commitmentHash"),
-                "requestHash": commitment.get("requestHash"),
-                "workflowHash": commitment.get("workflowHash"),
-                "reportHash": commitment.get("reportHash"),
-                "attestationCommitmentHash": commitment.get("attestationCommitmentHash"),
-            },
-            "verdictAttestation": {
-                "version": verdict_attestation.get("version"),
-                "registryHash": verdict_attestation.get("registryHash"),
-                "verified": bool(verdict_attestation.get("verified")),
-                "reason": verdict_attestation.get("reason"),
-                "mismatchComponents": mismatch_components,
-                "attestationHashes": attestation_hashes,
-            },
-            "challengeReview": {
-                "version": challenge_review.get("version"),
-                "registryHash": challenge_review.get("registryHash"),
-                "reviewState": challenge_review.get("reviewState"),
-                "reviewRequired": bool(challenge_review.get("reviewRequired")),
-                "challengeState": challenge_review.get("challengeState"),
-                "activeChallengeId": challenge_review.get("activeChallengeId"),
-                "totalChallenges": total_challenges,
-                "alertSummary": (
-                    dict(challenge_review.get("alertSummary"))
-                    if isinstance(challenge_review.get("alertSummary"), dict)
-                    else {}
-                ),
-                "challengeReasons": challenge_reasons,
-            },
-            "kernelVersion": {
-                "version": kernel_version.get("version"),
-                "registryHash": kernel_version.get("registryHash"),
-                "kernelHash": kernel_version.get("kernelHash"),
-                "kernelVector": (
-                    dict(kernel_version.get("kernelVector"))
-                    if isinstance(kernel_version.get("kernelVector"), dict)
-                    else {}
-                ),
-            },
-            "auditAnchor": {
-                "version": audit_anchor.get("version"),
-                "anchorHash": audit_anchor.get("anchorHash"),
-                "componentHashes": (
-                    dict(audit_anchor.get("componentHashes"))
-                    if isinstance(audit_anchor.get("componentHashes"), dict)
-                    else {}
-                ),
-            },
-        }
 
     @app.get("/internal/judge/cases/{case_id}/trust/commitment")
     async def get_judge_trust_case_commitment(
@@ -11531,73 +11039,35 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 continue
 
             active_challenge_id = str(challenge_review.get("activeChallengeId") or "").strip() or None
-            item_payload = {
-                "caseId": int(job.job_id),
-                "dispatchType": context.get("dispatchType"),
-                "traceId": context.get("traceId") or None,
-                "workflow": _serialize_workflow_job(job),
-                "trace": {
-                    "status": trace.status if trace is not None else None,
-                    "callbackStatus": (
-                        report_summary.get("callbackStatus")
-                        or (trace.callback_status if trace is not None else None)
-                    ),
-                    "callbackError": (
-                        report_summary.get("callbackError")
-                        or (trace.callback_error if trace is not None else None)
-                    ),
-                    "updatedAt": (
-                        trace.updated_at.isoformat() if trace is not None else None
-                    ),
-                },
-                "challengeReview": {
-                    "state": current_challenge_state,
-                    "activeChallengeId": active_challenge_id,
-                    "totalChallenges": int(challenge_review.get("totalChallenges") or 0),
-                    "reviewState": current_review_state,
-                    "reviewRequired": bool(challenge_review.get("reviewRequired")),
-                    "challengeReasons": (
-                        challenge_review.get("challengeReasons")
-                        if isinstance(challenge_review.get("challengeReasons"), list)
-                        else []
-                    ),
-                    "alertSummary": (
-                        challenge_review.get("alertSummary")
-                        if isinstance(challenge_review.get("alertSummary"), dict)
-                        else {}
-                    ),
-                    "openAlertIds": (
-                        challenge_review.get("openAlertIds")
-                        if isinstance(challenge_review.get("openAlertIds"), list)
-                        else []
-                    ),
-                    "timeline": (
-                        challenge_review.get("timeline")
-                        if isinstance(challenge_review.get("timeline"), list)
-                        else []
-                    ),
-                },
-                "priorityProfile": priority_profile,
-                "review": {
-                    "required": bool(challenge_review.get("reviewRequired")),
-                    "state": current_review_state,
-                    "workflowStatus": str(job.status or "").strip().lower() or None,
-                    "detailPath": f"/internal/judge/review/cases/{int(job.job_id)}",
-                },
+            workflow_payload = _serialize_workflow_job(job)
+            trace_payload = {
+                "status": trace.status if trace is not None else None,
+                "callbackStatus": (
+                    report_summary.get("callbackStatus")
+                    or (trace.callback_status if trace is not None else None)
+                ),
+                "callbackError": (
+                    report_summary.get("callbackError")
+                    or (trace.callback_error if trace is not None else None)
+                ),
+                "updatedAt": (
+                    trace.updated_at.isoformat() if trace is not None else None
+                ),
             }
+            item_payload = build_trust_challenge_ops_queue_item_v3(
+                case_id=int(job.job_id),
+                dispatch_type=context.get("dispatchType"),
+                trace_id=context.get("traceId"),
+                workflow=workflow_payload,
+                trace_payload=trace_payload,
+                challenge_review=challenge_review,
+                priority_profile=priority_profile,
+                active_challenge_id=active_challenge_id,
+            )
             item_payload["actionHints"] = _build_trust_challenge_action_hints(
                 challenge_review=item_payload["challengeReview"],
                 priority_profile=priority_profile,
             )
-            item_payload["actionPaths"] = {
-                "requestChallengePath": f"/internal/judge/cases/{int(job.job_id)}/trust/challenges/request",
-                "decisionPath": (
-                    f"/internal/judge/cases/{int(job.job_id)}/trust/challenges/{active_challenge_id}/decision"
-                    if active_challenge_id is not None
-                    else None
-                ),
-                "reviewDetailPath": f"/internal/judge/review/cases/{int(job.job_id)}",
-            }
             items.append(item_payload)
 
         items.sort(
@@ -11609,15 +11079,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         page_items = items[normalized_offset : normalized_offset + normalized_limit]
 
-        return {
-            "count": len(items),
-            "returned": len(page_items),
-            "scanned": len(jobs),
-            "skipped": max(0, len(jobs) - len(items)),
-            "errorCount": len(errors),
-            "items": page_items,
-            "errors": errors,
-            "filters": {
+        payload = build_trust_challenge_ops_queue_payload_v3(
+            items=items,
+            page_items=page_items,
+            jobs_count=len(jobs),
+            errors=errors,
+            filters={
                 "status": normalized_status,
                 "dispatchType": normalized_dispatch_type,
                 "challengeState": normalized_challenge_state,
@@ -11631,7 +11098,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "offset": normalized_offset,
                 "limit": normalized_limit,
             },
-        }
+        )
+        try:
+            _validate_trust_challenge_ops_queue_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_challenge_ops_queue_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.post("/internal/judge/cases/{case_id}/trust/challenges/request")
     async def request_judge_trust_challenge(
@@ -11948,12 +11426,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type=dispatch_type,
         )
         context = bundle["context"]
-        return {
+        payload = {
             "caseId": case_id,
             "dispatchType": context["dispatchType"],
             "traceId": context["traceId"],
             "item": bundle["kernelVersion"],
         }
+        try:
+            _validate_trust_kernel_version_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_kernel_version_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/audit-anchor")
     async def get_judge_trust_audit_anchor(
@@ -12023,7 +11512,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             kernel_version=kernel_version,
             include_payload=False,
         )
-        return {
+        payload = {
             "caseId": case_id,
             "dispatchType": context["dispatchType"],
             "traceId": context["traceId"],
@@ -12035,6 +11524,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 audit_anchor=audit_anchor,
             ),
         }
+        try:
+            _validate_trust_public_verify_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_public_verify_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.post("/internal/judge/cases/{case_id}/attestation/verify")
     async def verify_judge_report_attestation(
@@ -12910,11 +12410,22 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             latest_run=latest_run,
             latest_shadow_run=latest_shadow_run,
         )
-        return {
+        payload = {
             "caseId": case_id,
             "dispatchType": context["dispatchType"],
             "item": item,
         }
+        try:
+            _validate_case_fairness_detail_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "fairness_case_detail_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/fairness/cases")
     async def list_judge_case_fairness(
@@ -13119,7 +12630,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         total_count = len(items)
         aggregations = _build_case_fairness_aggregations(items)
         page_items = items[offset : offset + limit]
-        return {
+        payload = {
             "count": total_count,
             "returned": len(page_items),
             "items": page_items,
@@ -13143,6 +12654,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "limit": limit,
             },
         }
+        try:
+            _validate_case_fairness_list_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "fairness_case_list_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/fairness/dashboard")
     async def get_judge_fairness_dashboard(
@@ -14296,7 +13818,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         total_count = len(items)
         aggregations = _build_panel_runtime_profile_aggregations(items)
         page_items = items[offset : offset + limit]
-        return {
+        payload = {
             "count": total_count,
             "returned": len(page_items),
             "items": page_items,
@@ -14323,6 +13845,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "limit": limit,
             },
         }
+        try:
+            _validate_panel_runtime_profile_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "panel_runtime_profile_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/panels/runtime/readiness")
     async def get_panel_runtime_readiness(
