@@ -1,7 +1,7 @@
 # AI Judge Stage Closure Evidence 摘要
 
 1. 生成日期：2026-04-20
-2. 运行窗口：2026-04-20T01:10:09Z -> 2026-04-20T01:10:09Z
+2. 运行窗口：2026-04-20T01:39:12Z -> 2026-04-20T01:39:12Z
 3. 统一状态：`pass`
 4. plan_doc：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md`
 5. draft_script：`/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_stage_closure_draft.sh`
@@ -9,10 +9,10 @@
 ## 收口草案统计
 
 1. draft_status：`pass`
-2. completed_candidates_total：`7`
+2. completed_candidates_total：`8`
 3. todo_candidates_total：`4`
-4. draft_summary_json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011009Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json`
-5. draft_summary_md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011009Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md`
+4. draft_summary_json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T013912Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json`
+5. draft_summary_md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T013912Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md`
 
 ## runtime ops pack 关联
 
@@ -25,5 +25,5 @@
 
 1. stage closure env：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_stage_closure_evidence.env`
 2. stage closure doc：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`
-3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011008Z-ai-judge-runtime-ops-pack/stage_closure_evidence.summary.json`
-4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011008Z-ai-judge-runtime-ops-pack/stage_closure_evidence.summary.md`
+3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T013911Z-ai-judge-runtime-ops-pack/stage_closure_evidence.summary.json`
+4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T013911Z-ai-judge-runtime-ops-pack/stage_closure_evidence.summary.md`

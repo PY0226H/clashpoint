@@ -60,6 +60,9 @@ TRUST_CHALLENGE_QUEUE_RETURNED="0"
 TRUST_CHALLENGE_QUEUE_ERROR_COUNT="0"
 TRUST_PUBLIC_VERIFY_ENABLED="0"
 TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED="0"
+TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT="0"
+TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT="0"
+TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT="0"
 REGISTRY_INVALID_COUNT="0"
 TRUST_ITEM_COUNT="0"
 TRUST_ERROR_COUNT="0"
@@ -221,6 +224,34 @@ check_required_token_in_file() {
     return
   fi
   REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${label}"
+}
+
+check_required_flat_regex_in_file() {
+  local label="$1"
+  local regex="$2"
+  local file="$3"
+  local compact=""
+  if [[ -f "$file" ]]; then
+    compact="$(tr -d '[:space:]' <"$file" 2>/dev/null || true)"
+  fi
+  if [[ -n "$compact" ]] && printf '%s' "$compact" | grep -Eq -- "$regex"; then
+    return
+  fi
+  REQUIRED_KEYS_MISSING="${REQUIRED_KEYS_MISSING:+$REQUIRED_KEYS_MISSING;}${label}"
+}
+
+extract_flat_regex_flag() {
+  local file="$1"
+  local regex="$2"
+  local compact=""
+  if [[ -f "$file" ]]; then
+    compact="$(tr -d '[:space:]' <"$file" 2>/dev/null || true)"
+  fi
+  if [[ -n "$compact" ]] && printf '%s' "$compact" | grep -Eq -- "$regex"; then
+    printf '1'
+  else
+    printf '0'
+  fi
 }
 
 fetch_json() {
@@ -430,6 +461,9 @@ OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_ERROR_COUNT=$TRUST_CHALLENGE_QUEUE_ERROR_CO
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_ENABLED=$TRUST_PUBLIC_VERIFY_ENABLED
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CASE_ID=$TRUST_PUBLIC_VERIFY_CASE_ID
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED=$TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT=$TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT=$TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT=$TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT
 OPS_READ_MODEL_REGISTRY_INVALID_COUNT=$REGISTRY_INVALID_COUNT
 OPS_READ_MODEL_TRUST_ITEM_COUNT=$TRUST_ITEM_COUNT
 OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
@@ -484,6 +518,9 @@ write_output_md() {
 11. trust_public_verify_enabled：\`$TRUST_PUBLIC_VERIFY_ENABLED\`
 12. trust_public_verify_case_id：\`$TRUST_PUBLIC_VERIFY_CASE_ID\`
 13. trust_public_verify_verdict_verified：\`$TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED\`
+14. trust_public_verify_commitment_hash_present：\`$TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT\`
+15. trust_public_verify_verdict_registry_hash_present：\`$TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT\`
+16. trust_public_verify_challenge_registry_hash_present：\`$TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT\`
 14. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
 15. trust_item_count：\`$TRUST_ITEM_COUNT\`
 16. trust_error_count：\`$TRUST_ERROR_COUNT\`
@@ -539,6 +576,9 @@ write_summary_json() {
     "trust_public_verify_enabled": $TRUST_PUBLIC_VERIFY_ENABLED,
     "trust_public_verify_case_id": ${TRUST_PUBLIC_VERIFY_CASE_ID:-0},
     "trust_public_verify_verdict_verified": $TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED,
+    "trust_public_verify_commitment_hash_present": $TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT,
+    "trust_public_verify_verdict_registry_hash_present": $TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT,
+    "trust_public_verify_challenge_registry_hash_present": $TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT,
     "registry_invalid_count": $REGISTRY_INVALID_COUNT,
     "trust_item_count": $TRUST_ITEM_COUNT,
     "trust_error_count": $TRUST_ERROR_COUNT,
@@ -603,6 +643,9 @@ write_summary_md() {
 11. trust_public_verify_enabled: \`$TRUST_PUBLIC_VERIFY_ENABLED\`
 12. trust_public_verify_case_id: \`$TRUST_PUBLIC_VERIFY_CASE_ID\`
 13. trust_public_verify_verdict_verified: \`$TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED\`
+14. trust_public_verify_commitment_hash_present: \`$TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT\`
+15. trust_public_verify_verdict_registry_hash_present: \`$TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT\`
+16. trust_public_verify_challenge_registry_hash_present: \`$TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT\`
 14. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
 15. trust_item_count: \`$TRUST_ITEM_COUNT\`
 16. trust_error_count: \`$TRUST_ERROR_COUNT\`
@@ -966,8 +1009,9 @@ main() {
       check_required_token_in_file "trustPublicVerify.verifyPayload.challengeReview" "\"challengeReview\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
       check_required_token_in_file "trustPublicVerify.verifyPayload.kernelVersion" "\"kernelVersion\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
       check_required_token_in_file "trustPublicVerify.verifyPayload.auditAnchor" "\"auditAnchor\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
-      check_required_token_in_file "trustPublicVerify.caseCommitment.commitmentHash" "\"commitmentHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
-      check_required_token_in_file "trustPublicVerify.verdictAttestation.registryHash" "\"registryHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_flat_regex_in_file "trustPublicVerify.caseCommitment.commitmentHash" "\"caseCommitment\":\\{[^\\}]*\"commitmentHash\":\"[^\"]+\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_flat_regex_in_file "trustPublicVerify.verdictAttestation.registryHash" "\"verdictAttestation\":\\{[^\\}]*\"registryHash\":\"[^\"]+\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_flat_regex_in_file "trustPublicVerify.challengeReview.registryHash" "\"challengeReview\":\\{[^\\}]*\"registryHash\":\"[^\"]+\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
       check_required_token_in_file "trustPublicVerify.verdictAttestation.verified" "\"verified\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
       check_required_token_in_file "trustPublicVerify.verdictAttestation.mismatchComponents" "\"mismatchComponents\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
       check_required_token_in_file "trustPublicVerify.kernelVersion.kernelHash" "\"kernelHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
@@ -1027,6 +1071,9 @@ main() {
     else
       TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED="0"
     fi
+    TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT="$(extract_flat_regex_flag "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" "\"caseCommitment\":\\{[^\\}]*\"commitmentHash\":\"[^\"]+\"")"
+    TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT="$(extract_flat_regex_flag "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" "\"verdictAttestation\":\\{[^\\}]*\"registryHash\":\"[^\"]+\"")"
+    TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT="$(extract_flat_regex_flag "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" "\"challengeReview\":\\{[^\\}]*\"registryHash\":\"[^\"]+\"")"
   fi
 
   FINISHED_AT="$(iso_now)"

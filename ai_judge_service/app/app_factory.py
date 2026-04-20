@@ -121,6 +121,12 @@ from .applications.trust_audit_anchor_contract import (
 from .applications.trust_challenge_queue_contract import (
     validate_trust_challenge_queue_contract as validate_trust_challenge_queue_contract_v3,
 )
+from .applications.trust_challenge_review_contract import (
+    validate_trust_challenge_review_contract as validate_trust_challenge_review_contract_v3,
+)
+from .applications.trust_commitment_contract import (
+    validate_trust_commitment_contract as validate_trust_commitment_contract_v3,
+)
 from .applications.trust_kernel_version_contract import (
     validate_trust_kernel_version_contract as validate_trust_kernel_version_contract_v3,
 )
@@ -138,6 +144,24 @@ from .applications.trust_phasea_bundle import (
 )
 from .applications.trust_public_verify_contract import (
     validate_trust_public_verify_contract as validate_trust_public_verify_contract_v3,
+)
+from .applications.trust_read_routes import (
+    build_trust_item_route_payload as build_trust_item_route_payload_v3,
+)
+from .applications.trust_read_routes import (
+    build_trust_public_verify_route_payload as build_trust_public_verify_route_payload_v3,
+)
+from .applications.trust_read_routes import (
+    build_trust_report_context_from_receipt as build_trust_report_context_from_receipt_v3,
+)
+from .applications.trust_read_routes import (
+    choose_trust_read_dispatch_receipt as choose_trust_read_dispatch_receipt_v3,
+)
+from .applications.trust_read_routes import (
+    normalize_trust_read_dispatch_type as normalize_trust_read_dispatch_type_v3,
+)
+from .applications.trust_verdict_attestation_contract import (
+    validate_trust_verdict_attestation_contract as validate_trust_verdict_attestation_contract_v3,
 )
 from .callback_client import (
     callback_final_failed,
@@ -5387,6 +5411,18 @@ def _validate_trust_public_verify_contract(payload: dict[str, Any]) -> None:
 
 def _validate_trust_challenge_ops_queue_contract(payload: dict[str, Any]) -> None:
     validate_trust_challenge_queue_contract_v3(payload)
+
+
+def _validate_trust_challenge_review_contract(payload: dict[str, Any]) -> None:
+    validate_trust_challenge_review_contract_v3(payload)
+
+
+def _validate_trust_commitment_contract(payload: dict[str, Any]) -> None:
+    validate_trust_commitment_contract_v3(payload)
+
+
+def _validate_trust_verdict_attestation_contract(payload: dict[str, Any]) -> None:
+    validate_trust_verdict_attestation_contract_v3(payload)
 
 
 def _validate_trust_kernel_version_contract(payload: dict[str, Any]) -> None:
@@ -10688,12 +10724,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         not_found_detail: str,
         missing_report_detail: str,
     ) -> dict[str, Any]:
-        dispatch_type_normalized = str(dispatch_type or "auto").strip().lower()
-        if dispatch_type_normalized not in {"auto", "phase", "final"}:
+        try:
+            dispatch_type_normalized = normalize_trust_read_dispatch_type_v3(dispatch_type)
+        except ValueError:
             raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-
-        chosen_dispatch_type = dispatch_type_normalized
-        chosen_receipt = None
         if dispatch_type_normalized == "auto":
             final_receipt = await _get_dispatch_receipt(
                 dispatch_type="final",
@@ -10703,51 +10737,31 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 dispatch_type="phase",
                 job_id=case_id,
             )
-            chosen_receipt = final_receipt or phase_receipt
-            if chosen_receipt is None:
-                raise HTTPException(status_code=404, detail=not_found_detail)
-            chosen_dispatch_type = "final" if final_receipt is not None else "phase"
+            chosen_dispatch_type, chosen_receipt = choose_trust_read_dispatch_receipt_v3(
+                dispatch_type=dispatch_type_normalized,
+                final_receipt=final_receipt,
+                phase_receipt=phase_receipt,
+            )
         else:
-            chosen_receipt = await _get_dispatch_receipt(
+            explicit_receipt = await _get_dispatch_receipt(
                 dispatch_type=dispatch_type_normalized,
                 job_id=case_id,
             )
-            if chosen_receipt is None:
-                raise HTTPException(status_code=404, detail=not_found_detail)
-
-        response_payload = (
-            chosen_receipt.response if isinstance(chosen_receipt.response, dict) else {}
-        )
-        request_snapshot = (
-            chosen_receipt.request if isinstance(chosen_receipt.request, dict) else {}
-        )
-        report_payload = (
-            response_payload.get("reportPayload")
-            if isinstance(response_payload.get("reportPayload"), dict)
-            else None
-        )
-        if report_payload is None:
-            raise HTTPException(status_code=409, detail=missing_report_detail)
-        judge_trace = (
-            report_payload.get("judgeTrace")
-            if isinstance(report_payload.get("judgeTrace"), dict)
-            else {}
-        )
-        trace_id = str(
-            chosen_receipt.trace_id
-            or response_payload.get("traceId")
-            or request_snapshot.get("traceId")
-            or judge_trace.get("traceId")
-            or ""
-        ).strip()
-        return {
-            "dispatchType": chosen_dispatch_type,
-            "receipt": chosen_receipt,
-            "traceId": trace_id,
-            "requestSnapshot": request_snapshot,
-            "responsePayload": response_payload,
-            "reportPayload": report_payload,
-        }
+            chosen_dispatch_type, chosen_receipt = choose_trust_read_dispatch_receipt_v3(
+                dispatch_type=dispatch_type_normalized,
+                explicit_receipt=explicit_receipt,
+            )
+        if chosen_receipt is None:
+            raise HTTPException(status_code=404, detail=not_found_detail)
+        try:
+            return build_trust_report_context_from_receipt_v3(
+                dispatch_type=chosen_dispatch_type,
+                receipt=chosen_receipt,
+            )
+        except ValueError as err:
+            if str(err) == "trust_report_payload_missing":
+                raise HTTPException(status_code=409, detail=missing_report_detail) from err
+            raise
 
     async def _build_trust_phasea_bundle(
         *,
@@ -10810,12 +10824,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type=dispatch_type,
         )
         context = bundle["context"]
-        return {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "item": bundle["commitment"],
-        }
+        payload = build_trust_item_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            item=bundle["commitment"],
+        )
+        try:
+            _validate_trust_commitment_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_commitment_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/verdict-attestation")
     async def get_judge_trust_verdict_attestation(
@@ -10829,12 +10854,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type=dispatch_type,
         )
         context = bundle["context"]
-        return {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "item": bundle["verdictAttestation"],
-        }
+        payload = build_trust_item_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            item=bundle["verdictAttestation"],
+        )
+        try:
+            _validate_trust_verdict_attestation_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_verdict_attestation_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/challenges")
     async def get_judge_trust_challenge_review(
@@ -10848,12 +10884,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type=dispatch_type,
         )
         context = bundle["context"]
-        return {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "item": bundle["challengeReview"],
-        }
+        payload = build_trust_item_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            item=bundle["challengeReview"],
+        )
+        try:
+            _validate_trust_challenge_review_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_challenge_review_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/trust/challenges/ops-queue")
     async def list_judge_trust_challenge_ops_queue(
@@ -11398,12 +11445,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             dispatch_type=dispatch_type,
         )
         context = bundle["context"]
-        payload = {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "item": bundle["kernelVersion"],
-        }
+        payload = build_trust_item_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            item=bundle["kernelVersion"],
+        )
         try:
             _validate_trust_kernel_version_contract(payload)
         except ValueError as err:
@@ -11439,12 +11486,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             kernel_version=bundle["kernelVersion"],
             include_payload=include_payload,
         )
-        payload = {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "item": anchor,
-        }
+        payload = build_trust_item_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            item=anchor,
+        )
         try:
             _validate_trust_audit_anchor_contract(payload)
         except ValueError as err:
@@ -11495,18 +11542,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             kernel_version=kernel_version,
             include_payload=False,
         )
-        payload = {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "verifyPayload": _build_public_trust_verify_payload(
+        payload = build_trust_public_verify_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            verify_payload=_build_public_trust_verify_payload(
                 commitment=commitment,
                 verdict_attestation=verdict_attestation,
                 challenge_review=challenge_review,
                 kernel_version=kernel_version,
                 audit_anchor=audit_anchor,
             ),
-        }
+        )
         try:
             _validate_trust_public_verify_contract(payload)
         except ValueError as err:

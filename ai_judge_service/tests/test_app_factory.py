@@ -5587,6 +5587,165 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail["code"], "trust_public_verify_contract_violation")
         self.assertIn("trust_public_verify_missing_keys:verifyPayload", detail["message"])
 
+    async def test_trust_commitment_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(8109)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_trust_commitment_contract",
+            side_effect=ValueError("trust_commitment_missing_keys:item"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/trust/commitment?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_commitment_contract_violation")
+        self.assertIn("trust_commitment_missing_keys:item", detail["message"])
+
+    async def test_trust_verdict_attestation_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(8110)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_trust_verdict_attestation_contract",
+            side_effect=ValueError("trust_verdict_attestation_missing_keys:item"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/trust/verdict-attestation?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_verdict_attestation_contract_violation")
+        self.assertIn("trust_verdict_attestation_missing_keys:item", detail["message"])
+
+    async def test_trust_challenge_review_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(8111)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_trust_challenge_review_contract",
+            side_effect=ValueError("trust_challenge_review_missing_keys:item"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/trust/challenges?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_challenge_review_contract_violation")
+        self.assertIn("trust_challenge_review_missing_keys:item", detail["message"])
+
     async def test_trust_kernel_version_route_should_return_500_when_contract_validation_fails(
         self,
     ) -> None:

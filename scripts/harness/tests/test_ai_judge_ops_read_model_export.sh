@@ -377,6 +377,9 @@ expect_contains "ok env trust queue error count" "OPS_READ_MODEL_TRUST_CHALLENGE
 expect_contains "ok env trust public verify enabled" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_ENABLED=1" "$OK_ENV_OUT"
 expect_contains "ok env trust public verify case id" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CASE_ID=901" "$OK_ENV_OUT"
 expect_contains "ok env trust public verify verified" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED=1" "$OK_ENV_OUT"
+expect_contains "ok env trust commitment hash present" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env trust verdict registry hash present" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env trust challenge registry hash present" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT=1" "$OK_ENV_OUT"
 expect_contains "ok env invalid count" "OPS_READ_MODEL_REGISTRY_INVALID_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env trust item count" "OPS_READ_MODEL_TRUST_ITEM_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=5" "$OK_ENV_OUT"
@@ -406,7 +409,36 @@ expect_contains "ok stdout trust queue http" "ops_trust_challenge_queue_http_cod
 expect_contains "ok stdout trust public verify http" "ops_trust_public_verify_http_code: 200" "$OK_STDOUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 
-# 场景2：payload 缺少必填键 -> payload_invalid
+# 场景2：trust public verify 缺少 challenge registry hash -> payload_invalid
+WORK_TRUST_VERIFY_BAD="$TMP_DIR/trust-verify-bad"
+mkdir -p "$WORK_TRUST_VERIFY_BAD/docs/loadtest/evidence" "$WORK_TRUST_VERIFY_BAD/docs/dev_plan" "$WORK_TRUST_VERIFY_BAD/artifacts/harness"
+
+MOCK_BIN_TRUST_VERIFY_BAD="$TMP_DIR/mock-bin-trust-verify-bad"
+mkdir -p "$MOCK_BIN_TRUST_VERIFY_BAD"
+awk '!/challenge-registry-hash-901/' "$MOCK_BIN_OK/curl" >"$MOCK_BIN_TRUST_VERIFY_BAD/curl"
+chmod +x "$MOCK_BIN_TRUST_VERIFY_BAD/curl"
+
+TRUST_VERIFY_BAD_STDOUT="$TMP_DIR/trust-verify-bad.stdout"
+TRUST_VERIFY_BAD_ENV_OUT="$TMP_DIR/trust-verify-bad.ops.env"
+set +e
+PATH="$MOCK_BIN_TRUST_VERIFY_BAD:$PATH" bash "$SCRIPT" \
+  --root "$WORK_TRUST_VERIFY_BAD" \
+  --base-url "http://127.0.0.1:8787" \
+  --internal-key "test-key" \
+  --trust-public-verify-case-id 901 \
+  --output-env "$TRUST_VERIFY_BAD_ENV_OUT" >"$TRUST_VERIFY_BAD_STDOUT" 2>&1
+TRUST_VERIFY_BAD_CODE="$?"
+set -e
+if [[ "$TRUST_VERIFY_BAD_CODE" -eq 0 ]]; then
+  echo "[FAIL] trust verify missing registry hash should exit non-zero"
+  cat "$TRUST_VERIFY_BAD_STDOUT"
+  exit 1
+fi
+expect_contains "trust verify bad status stdout" "ai_judge_ops_read_model_export_status: payload_invalid" "$TRUST_VERIFY_BAD_STDOUT"
+expect_contains "trust verify bad missing challenge hash key" "trustPublicVerify.challengeReview.registryHash" "$TRUST_VERIFY_BAD_STDOUT"
+expect_contains "trust verify bad env status" "AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=payload_invalid" "$TRUST_VERIFY_BAD_ENV_OUT"
+
+# 场景3：payload 缺少必填键 -> payload_invalid
 WORK_BAD="$TMP_DIR/bad"
 mkdir -p "$WORK_BAD/docs/loadtest/evidence" "$WORK_BAD/docs/dev_plan" "$WORK_BAD/artifacts/harness"
 
@@ -455,7 +487,7 @@ expect_contains "bad status stdout" "ai_judge_ops_read_model_export_status: payl
 expect_contains "bad missing keys stdout" "required_keys_missing:" "$BAD_STDOUT"
 expect_contains "bad env status" "AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=payload_invalid" "$BAD_ENV_OUT"
 
-# 场景3：pack 顶层完整，但 fairnessDashboard 缺少冻结字段 -> payload_invalid
+# 场景4：pack 顶层完整，但 fairnessDashboard 缺少冻结字段 -> payload_invalid
 WORK_NESTED_BAD="$TMP_DIR/nested-bad"
 mkdir -p "$WORK_NESTED_BAD/docs/loadtest/evidence" "$WORK_NESTED_BAD/docs/dev_plan" "$WORK_NESTED_BAD/artifacts/harness"
 
