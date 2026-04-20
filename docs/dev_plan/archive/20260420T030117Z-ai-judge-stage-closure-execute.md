@@ -1,0 +1,156 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-20  
+当前主线：`AI_judge_service P27（Case 读面契约冻结 + Case 读路由结构下沉 + on-env 收口准备）`  
+当前状态：执行中（已完成 `ai-judge-stage-closure-execute`、`ai-judge-next-iteration-planning`、`ai-judge-p27-case-overview-contract-freeze-v1`、`ai-judge-p27-courtroom-read-model-contract-freeze-v1`、`ai-judge-p27-case-read-route-structure-split-v1`、`ai-judge-p27-ops-export-case-read-snapshot-alignment-v1`、`ai-judge-p27-local-regression-bundle-v1`、`ai-judge-p27-enterprise-consistency-refresh-v1`，下一步 `ai-judge-p27-stage-closure-execute`）
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接阶段收口归档：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260420T015331Z-ai-judge-stage-closure-execute.md`。
+2. 当前前提不变：仅本地开发环境可用，真实环境窗口不可用；所有 `pass` 结论严格区分 `on-env`。
+3. P27 聚焦企业方案第 7/8/10/13 章与架构方案第 4/5/10 章在“Case 主读面”上的剩余缺口：
+   - 冻结 `/internal/judge/cases/{case_id}` 聚合读面契约。
+   - 冻结 `/internal/judge/cases/{case_id}/courtroom-read-model` 读面契约。
+   - 下沉 Case 读路由的共用上下文/聚合逻辑，继续降低 `app_factory.py` 热点复杂度。
+4. 继续执行预发布硬切原则：不保留长期兼容层、双写、灰度并行或旧字段 alias。
+
+---
+
+## 2. 当前代码状态快照（P27 起点）
+
+截至 2026-04-20，`ai_judge_service` 当前状态：
+
+1. P26 本地主链已完成：
+   - Trust 三读面契约冻结：`trust/commitment`、`trust/verdict-attestation`、`trust/challenges`。
+   - Trust 读路由结构下沉：新增 `trust_read_routes.py`。
+   - `ops_read_model_export` 已补齐 `public-verify` 的 commitment/verdict/challenge 子指标导出与缺失检测。
+   - 本地回归包完成：`ruff + pytest + runtime_ops_pack(local_reference_ready)`。
+2. 当前主干能力已具备：dispatch / trace / replay / fairness / review / trust / courtroom / ops read model pack。
+3. 当前可见缺口：
+   - 仍需完成企业方案/架构方案/当前计划的一致性刷新与门禁复核。
+   - 仍需根据本轮回归证据执行阶段文档收口（真实环境项继续标记 `on-env`）。
+   - `real-env pass window` 仍是唯一环境阻塞项（最新探测为 `env_blocked`）。
+
+---
+
+## 3. P27 总目标
+
+1. 对齐企业方案“丰富判决展示 + 企业级可回放可运营”与架构方案“模块化单体 + 读路由结构下沉”目标。
+2. 将 Case 主读面推进到“契约冻结 + 500 合同失败语义 + 专项单测”。
+3. 持续削减 `app_factory` 聚合复杂度，为后续 Agent 平台化（Judge/NPC/Room QA）留出稳定扩展边界。
+4. 在无真实环境条件下完成可复现本地收口，不误报 `pass`。
+
+---
+
+## 4. P27 模块执行矩阵
+
+### 已完成/未完成矩阵
+
+| 模块 | 优先级 | 状态 | 本轮目标 | DoD（完成定义） | 验证方式 |
+| --- | --- | --- | --- | --- | --- |
+| `ai-judge-next-iteration-planning` | P0 | 已完成（2026-04-20） | 阶段收口后生成 P27 完整计划 | 当前计划切换到 P27，明确模块边界、阻塞项与执行顺序 | `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p27-case-overview-contract-freeze-v1` | P0 | 已完成（2026-04-20） | 冻结 `/internal/judge/cases/{case_id}` 聚合读面契约 | 新增 `case_overview_contract` 校验模块并接入路由返回链路；缺失关键字段返回 500 合同失败语义；补独立 contract 单测与路由失败分支测试 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "case_overview_contract"` + `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_case_overview_contract.py` |
+| `ai-judge-p27-courtroom-read-model-contract-freeze-v1` | P0 | 已完成（2026-04-20） | 冻结 `/internal/judge/cases/{case_id}/courtroom-read-model` 读面契约 | 新增 `courtroom_read_model_contract` 校验模块并接入路由返回链路；缺失关键字段返回 500 合同失败语义；补独立 contract 单测与路由失败分支测试 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "courtroom_read_model_contract"` + `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_courtroom_read_model_contract.py` |
+| `ai-judge-p27-case-read-route-structure-split-v1` | P1 | 已完成（2026-04-20） | 下沉 Case 读路由共用聚合逻辑 | 将 Case 读路由共用的 dispatch/context 解析、payload 组装下沉到 `app/applications/case_read_routes.py`；`app_factory` 仅保留编排与错误映射 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "get_judge_case or courtroom_read_model"` + `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_case_read_routes.py` |
+| `ai-judge-p27-ops-export-case-read-snapshot-alignment-v1` | P1 | 已完成（2026-04-20） | 导出链路补齐 Case 主读面子指标 | 在 `ai_judge_ops_read_model_export.sh` 补充 case-overview/courtroom-read-model 关键字段可选快照导出与缺失检测；脚本回归通过 | `bash scripts/harness/tests/test_ai_judge_ops_read_model_export.sh` |
+| `ai-judge-p27-local-regression-bundle-v1` | P2 | 已完成（2026-04-20） | 固化 P27 本地回归包 | 完成 `ruff + pytest + runtime_ops_pack(local_reference)` 并产出最新工件 | `cd ai_judge_service && ../scripts/py -m ruff check app tests` + `cd ai_judge_service && ../scripts/py -m pytest -q` + `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` |
+| `ai-judge-p27-enterprise-consistency-refresh-v1` | P2 | 已完成（2026-04-20） | 文档一致性刷新 | 更新章节完成度映射与当前计划，确保“企业方案/架构方案/代码口径”一致 | `bash scripts/quality/harness_docs_lint.sh` + `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p27-real-env-pass-window-execute-on-env` | P0（环境阻塞） | 阻塞（待真实环境窗口） | 真实环境 pass 冲刺 | `AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=pass` 且 `REAL_PASS_READY=true` | `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p27-stage-closure-execute` | P2 | 待执行 | 阶段收口执行 | 归档活动计划，`completed/todo` 同步，计划重置到下一轮入口 | `bash scripts/harness/ai_judge_stage_closure_execute.sh --root /Users/panyihang/Documents/EchoIsle` |
+
+### 下一开发模块建议
+
+1. `ai-judge-p27-stage-closure-execute`
+2. `ai-judge-p27-real-env-pass-window-execute-on-env`（仅真实环境窗口）
+3. `ai-judge-next-iteration-planning`（在下一阶段启动时执行）
+
+---
+
+## 5. 延后事项（不阻塞 P27）
+
+1. `real-env pass` 相关能力（严格 `on-env`）。
+2. `NPC Coach / Room QA` 正式业务策略与主链接入（等待你冻结 PRD 后再推进）。
+3. 协议化扩展（链上锚定 / ZK / ZKML）继续保持后置，不进入当前主链。
+
+---
+
+## 6. 执行顺序与依赖
+
+1. 先做 `case-overview-contract-freeze-v1`，稳住 Case 主聚合读面。
+2. 再做 `courtroom-read-model-contract-freeze-v1`，补齐 courtroom 读面冻结。
+3. 然后做 `case-read-route-structure-split-v1`，继续下沉 `app_factory` Case 读热点。
+4. 同步 `ops-export-case-read-snapshot-alignment-v1`，补齐导出链路 Case 主读面关键字段。
+5. 执行 `local-regression-bundle-v1` 与 `enterprise-consistency-refresh-v1`。
+6. 真实环境窗口就绪后推进 `on-env pass`，否则执行阶段收口。
+
+---
+
+## 7. 本阶段明确不做
+
+1. 不推进 `NPC Coach / Room QA` 正式功能开发。
+2. 不为未上线能力保留长期兼容层（alias/双写/灰度并行）。
+3. 不将 `local_reference_*` 或 `env_blocked` 表述为 `pass`。
+
+---
+
+## 8. 测试与验收基线
+
+1. `bash skills/python-venv-guard/scripts/assert_venv.sh --project /Users/panyihang/Documents/EchoIsle/ai_judge_service --venv /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv`
+2. `cd ai_judge_service && ../scripts/py -m ruff check app tests`
+3. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_ops_read_model_pack.py`
+4. `cd ai_judge_service && ../scripts/py -m pytest -q`
+5. `bash scripts/harness/tests/test_ai_judge_ops_read_model_export.sh`
+6. `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+7. `bash scripts/quality/harness_docs_lint.sh`
+8. `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle`
+
+---
+
+## 9. 风险与对策
+
+1. 风险：Case 主读面字段继续隐式漂移，导致上层消费不稳定。  
+   对策：P27-M1/M2 显式补 contract module + 500 失败语义 + 独立单测。
+2. 风险：`app_factory` 热点持续堆积，后续维护成本上升。  
+   对策：P27-M3 将 Case 读路由共用聚合逻辑下沉到 `app/applications`。
+3. 风险：ops 导出口径与 Case 主读面冻结字段失配。  
+   对策：P27-M4 在脚本层补 Case 快照子指标导出与关键字段检测。
+4. 风险：无真实环境导致状态误读。  
+   对策：严格区分 `env_blocked/local_reference` 与 `pass`，保留 `on-env` 单独收口。
+
+---
+
+## 10. 模块完成同步历史
+
+### 模块完成同步历史
+
+1. 2026-04-20：完成 `ai-judge-stage-closure-execute`，归档上一阶段到 `/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260420T015331Z-ai-judge-stage-closure-execute.md`。
+2. 2026-04-20：完成 `ai-judge-next-iteration-planning`，当前计划切换到 `P27`。
+3. 2026-04-20：完成 `ai-judge-p27-case-overview-contract-freeze-v1`，新增 `case_overview_contract` 模块并接入 `/internal/judge/cases/{case_id}` 500 契约失败语义与专项测试。
+4. 2026-04-20：完成 `ai-judge-p27-courtroom-read-model-contract-freeze-v1`，新增 `courtroom_read_model_contract` 模块并接入 `/internal/judge/cases/{case_id}/courtroom-read-model` 500 契约失败语义与专项测试。
+5. 2026-04-20：完成 `ai-judge-p27-case-read-route-structure-split-v1`，新增 `case_read_routes` 模块并下沉 Case 读路由共用 payload 组装逻辑（overview + courtroom）。
+6. 2026-04-20：完成 `ai-judge-p27-ops-export-case-read-snapshot-alignment-v1`，`ai_judge_ops_read_model_export.sh` 新增 case-overview/courtroom-read-model 快照导出、字段检测与失败语义，`test_ai_judge_ops_read_model_export.sh` 已补齐成功/失败覆盖并通过。
+7. 2026-04-20：完成 `ai-judge-p27-local-regression-bundle-v1`，本地回归包 `ruff + pytest + runtime_ops_pack --allow-local-reference` 全部通过，`ai_judge_runtime_ops_pack_status=local_reference_ready`。
+8. 2026-04-20：完成 `ai-judge-p27-enterprise-consistency-refresh-v1`，更新章节完成度映射并通过 `harness_docs_lint + ai_judge_plan_consistency_gate` 双门禁。
+
+---
+
+## 11. 本轮启动检查清单
+
+1. 开发前运行 `pre-module-prd-goal-guard`（按模块执行）。
+2. 涉及 API/DTO/错误码变更时，同轮同步调用方、测试与文档。
+3. 与真实环境有关结论必须标注 `on-env`，本地阶段不得宣称 `pass`。
+4. 每完成一个模块都回写当前计划矩阵与同步历史。
+
+---
+
+## 12. 架构方案第13章一致性校验（计划生成前置）
+
+1. **角色一致性**：继续沿用法庭式 8 Agent 边界，不新增绕过 Sentinel/Arbiter 的捷径路径。
+2. **数据一致性**：六对象主链仍是唯一裁决事实源，不引入平行 winner 写链。
+3. **门禁一致性**：fairness/review/registry/trust gate 不弱化；新增能力需显式标注主链或 advisory-only。
+4. **边界一致性**：`NPC/Room QA` 保持 `advisory_only`，不写官方裁决链。
+5. **跨层一致性**：契约变更同轮同步调用方、测试与文档，不保留长期双轨 alias。
+6. **收口一致性**：真实环境结论与本地参考结论分层表达，未获窗口前不宣称 `pass`。

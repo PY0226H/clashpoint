@@ -504,6 +504,49 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail_payload["judgeCore"]["version"], "v1")
         self.assertGreaterEqual(len(detail_payload["events"]), 2)
 
+    async def test_case_detail_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(9341)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_case_overview_contract",
+            side_effect=ValueError("case_overview_missing_keys:caseEvidence"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "case_overview_contract_violation")
+        self.assertIn("case_overview_missing_keys:caseEvidence", detail["message"])
+
     async def test_courtroom_read_model_route_should_aggregate_case_view(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
@@ -579,6 +622,48 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(missing_resp.status_code, 404)
         self.assertIn("courtroom_case_not_found", missing_resp.text)
+
+    async def test_courtroom_read_model_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(9342)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_courtroom_read_model_contract",
+            side_effect=ValueError("courtroom_read_model_missing_keys:report"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/courtroom-read-model?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "courtroom_read_model_contract_violation")
+        self.assertIn("courtroom_read_model_missing_keys:report", detail["message"])
 
     async def test_courtroom_cases_route_should_support_filters_sorting_and_pagination(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:

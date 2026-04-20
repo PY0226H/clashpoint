@@ -306,6 +306,50 @@ JSON
   }
 }
 JSON
+  elif [[ "$request_url" == *"/internal/judge/cases/901/courtroom-read-model"* ]]; then
+    cat >"$output_file" <<'JSON'
+{
+  "caseId": 901,
+  "dispatchType": "final",
+  "traceId": "trace-final-901",
+  "generatedAt": "2026-04-17T09:00:00Z",
+  "workflow": {
+    "status": "completed"
+  },
+  "judgeCore": {
+    "stage": "final",
+    "version": "judge-core-v3",
+    "eventSeq": 10
+  },
+  "callback": {
+    "status": "success",
+    "error": null
+  },
+  "report": {
+    "winner": "pro",
+    "reviewRequired": false,
+    "needsDrawVote": false,
+    "debateSummary": "summary",
+    "sideAnalysis": {
+      "pro": "pro analysis",
+      "con": "con analysis"
+    },
+    "verdictReason": "reason"
+  },
+  "courtroom": {
+    "pivotalMoments": []
+  },
+  "events": [],
+  "eventCount": 0,
+  "alerts": [],
+  "filters": {
+    "dispatchType": "final",
+    "includeEvents": false,
+    "includeAlerts": false,
+    "alertLimit": 100
+  }
+}
+JSON
   elif [[ "$request_url" == *"/internal/judge/cases/901/trust/public-verify"* ]]; then
     cat >"$output_file" <<'JSON'
 {
@@ -338,6 +382,66 @@ JSON
   }
 }
 JSON
+  elif [[ "$request_url" == *"/internal/judge/cases/901"* ]]; then
+    cat >"$output_file" <<'JSON'
+{
+  "caseId": 901,
+  "workflow": {
+    "status": "completed"
+  },
+  "trace": {
+    "traceId": "trace-final-901",
+    "status": "success",
+    "createdAt": "2026-04-17T09:00:00Z",
+    "updatedAt": "2026-04-17T09:00:01Z"
+  },
+  "receipts": {
+    "phase": null,
+    "final": {}
+  },
+  "latestDispatchType": "final",
+  "reportPayload": {
+    "debateSummary": "summary"
+  },
+  "verdictContract": {
+    "winner": "pro",
+    "needsDrawVote": false,
+    "reviewRequired": false
+  },
+  "caseEvidence": {
+    "evidenceCoverage": []
+  },
+  "winner": "pro",
+  "needsDrawVote": false,
+  "reviewRequired": false,
+  "callbackStatus": "success",
+  "callbackError": null,
+  "judgeCore": {
+    "stage": "final",
+    "version": "judge-core-v3",
+    "eventSeq": 10
+  },
+  "events": [
+    {
+      "eventSeq": 1,
+      "eventType": "judge.final.report",
+      "payload": {},
+      "createdAt": "2026-04-17T09:00:00Z"
+    }
+  ],
+  "alerts": [],
+  "replays": [
+    {
+      "dispatchType": "final",
+      "traceId": "trace-replay-901",
+      "replayedAt": "2026-04-17T09:01:00Z",
+      "winner": "pro",
+      "needsDrawVote": false,
+      "provider": "openai"
+    }
+  ]
+}
+JSON
   else
     cat >"$output_file" <<'JSON'
 {}
@@ -358,6 +462,9 @@ PATH="$MOCK_BIN_OK:$PATH" bash "$SCRIPT" \
   --base-url "http://127.0.0.1:8787" \
   --internal-key "test-key" \
   --trust-public-verify-case-id 901 \
+  --case-read-case-id 901 \
+  --case-read-include-events false \
+  --case-read-include-alerts false \
   --output-json "$OK_JSON_OUT" \
   --output-md "$OK_MD_OUT" \
   --output-env "$OK_ENV_OUT" >"$OK_STDOUT"
@@ -380,6 +487,14 @@ expect_contains "ok env trust public verify verified" "OPS_READ_MODEL_TRUST_PUBL
 expect_contains "ok env trust commitment hash present" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT=1" "$OK_ENV_OUT"
 expect_contains "ok env trust verdict registry hash present" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT=1" "$OK_ENV_OUT"
 expect_contains "ok env trust challenge registry hash present" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env case read enabled" "OPS_READ_MODEL_CASE_READ_ENABLED=1" "$OK_ENV_OUT"
+expect_contains "ok env case read case id" "OPS_READ_MODEL_CASE_READ_CASE_ID=901" "$OK_ENV_OUT"
+expect_contains "ok env case overview workflow present" "OPS_READ_MODEL_CASE_OVERVIEW_WORKFLOW_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env case overview verdict contract present" "OPS_READ_MODEL_CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env case overview case evidence present" "OPS_READ_MODEL_CASE_OVERVIEW_CASE_EVIDENCE_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env courtroom report present" "OPS_READ_MODEL_COURTROOM_REPORT_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env courtroom view present" "OPS_READ_MODEL_COURTROOM_VIEW_PRESENT=1" "$OK_ENV_OUT"
+expect_contains "ok env courtroom filters present" "OPS_READ_MODEL_COURTROOM_FILTERS_PRESENT=1" "$OK_ENV_OUT"
 expect_contains "ok env invalid count" "OPS_READ_MODEL_REGISTRY_INVALID_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env trust item count" "OPS_READ_MODEL_TRUST_ITEM_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=5" "$OK_ENV_OUT"
@@ -407,6 +522,8 @@ expect_contains "ok stdout case fairness http" "ops_case_fairness_http_code: 200
 expect_contains "ok stdout panel profile http" "ops_panel_runtime_profile_http_code: 200" "$OK_STDOUT"
 expect_contains "ok stdout trust queue http" "ops_trust_challenge_queue_http_code: 200" "$OK_STDOUT"
 expect_contains "ok stdout trust public verify http" "ops_trust_public_verify_http_code: 200" "$OK_STDOUT"
+expect_contains "ok stdout case overview http" "ops_case_overview_http_code: 200" "$OK_STDOUT"
+expect_contains "ok stdout courtroom read model http" "ops_courtroom_read_model_http_code: 200" "$OK_STDOUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 
 # 场景2：trust public verify 缺少 challenge registry hash -> payload_invalid
@@ -555,5 +672,114 @@ fi
 expect_contains "nested bad status stdout" "ai_judge_ops_read_model_export_status: payload_invalid" "$NESTED_BAD_STDOUT"
 expect_contains "nested bad missing fairness key" "fairnessDashboard.gateDistribution" "$NESTED_BAD_STDOUT"
 expect_contains "nested bad env status" "AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=payload_invalid" "$NESTED_BAD_ENV_OUT"
+
+# 场景5：case-read-case-id 非法 -> config_missing
+CASE_READ_INVALID_STDOUT="$TMP_DIR/case-read-invalid.stdout"
+set +e
+PATH="$MOCK_BIN_OK:$PATH" bash "$SCRIPT" \
+  --root "$WORK_OK" \
+  --base-url "http://127.0.0.1:8787" \
+  --internal-key "test-key" \
+  --case-read-case-id "bad-id" >"$CASE_READ_INVALID_STDOUT" 2>&1
+CASE_READ_INVALID_CODE="$?"
+set -e
+if [[ "$CASE_READ_INVALID_CODE" -eq 0 ]]; then
+  echo "[FAIL] case-read invalid id should exit non-zero"
+  cat "$CASE_READ_INVALID_STDOUT"
+  exit 1
+fi
+expect_contains "case read invalid status stdout" "ai_judge_ops_read_model_export_status: config_missing" "$CASE_READ_INVALID_STDOUT"
+expect_contains "case read invalid error stdout" "ops_read_model_error: case_read_case_id_invalid" "$CASE_READ_INVALID_STDOUT"
+
+# 场景6：case-read courtroom 缺少 filters -> payload_invalid
+WORK_CASE_READ_BAD="$TMP_DIR/case-read-bad"
+mkdir -p "$WORK_CASE_READ_BAD/docs/loadtest/evidence" "$WORK_CASE_READ_BAD/docs/dev_plan" "$WORK_CASE_READ_BAD/artifacts/harness"
+
+MOCK_BIN_CASE_READ_BAD="$TMP_DIR/mock-bin-case-read-bad"
+mkdir -p "$MOCK_BIN_CASE_READ_BAD"
+cat >"$MOCK_BIN_CASE_READ_BAD/curl" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+orig_args=("\$@")
+output_file=""
+request_url=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output_file="\${2:-}"
+      shift 2
+      ;;
+    *)
+      request_url="\$1"
+      shift 1
+      ;;
+  esac
+done
+if [[ "\$request_url" == *"/internal/judge/cases/901/courtroom-read-model"* ]]; then
+  if [[ -n "\$output_file" ]]; then
+    cat >"\$output_file" <<'JSON'
+{
+  "caseId": 901,
+  "dispatchType": "final",
+  "traceId": "trace-final-901",
+  "generatedAt": "2026-04-17T09:00:00Z",
+  "workflow": {
+    "status": "completed"
+  },
+  "judgeCore": {
+    "stage": "final",
+    "version": "judge-core-v3",
+    "eventSeq": 10
+  },
+  "callback": {
+    "status": "success",
+    "error": null
+  },
+  "report": {
+    "winner": "pro",
+    "reviewRequired": false,
+    "needsDrawVote": false,
+    "debateSummary": "summary",
+    "sideAnalysis": {
+      "pro": "pro analysis",
+      "con": "con analysis"
+    },
+    "verdictReason": "reason"
+  },
+  "courtroom": {
+    "pivotalMoments": []
+  },
+  "events": [],
+  "eventCount": 0,
+  "alerts": []
+}
+JSON
+  fi
+  printf '200'
+  exit 0
+fi
+exec "$MOCK_BIN_OK/curl" "\${orig_args[@]}"
+EOF
+chmod +x "$MOCK_BIN_CASE_READ_BAD/curl"
+
+CASE_READ_BAD_STDOUT="$TMP_DIR/case-read-bad.stdout"
+CASE_READ_BAD_ENV_OUT="$TMP_DIR/case-read-bad.ops.env"
+set +e
+PATH="$MOCK_BIN_CASE_READ_BAD:$PATH" bash "$SCRIPT" \
+  --root "$WORK_CASE_READ_BAD" \
+  --base-url "http://127.0.0.1:8787" \
+  --internal-key "test-key" \
+  --case-read-case-id 901 \
+  --output-env "$CASE_READ_BAD_ENV_OUT" >"$CASE_READ_BAD_STDOUT" 2>&1
+CASE_READ_BAD_CODE="$?"
+set -e
+if [[ "$CASE_READ_BAD_CODE" -eq 0 ]]; then
+  echo "[FAIL] case read missing filters should exit non-zero"
+  cat "$CASE_READ_BAD_STDOUT"
+  exit 1
+fi
+expect_contains "case read bad status stdout" "ai_judge_ops_read_model_export_status: payload_invalid" "$CASE_READ_BAD_STDOUT"
+expect_contains "case read bad missing filters key" "caseRead.courtroomReadModel.filters" "$CASE_READ_BAD_STDOUT"
+expect_contains "case read bad env status" "AI_JUDGE_OPS_READ_MODEL_EXPORT_STATUS=payload_invalid" "$CASE_READ_BAD_ENV_OUT"
 
 echo "all ai-judge ops read model export tests passed"

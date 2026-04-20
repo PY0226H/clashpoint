@@ -8,6 +8,8 @@ CASE_FAIRNESS_PATH="${AI_JUDGE_OPS_CASE_FAIRNESS_PATH:-/internal/judge/fairness/
 PANEL_RUNTIME_PROFILE_PATH="${AI_JUDGE_OPS_PANEL_RUNTIME_PROFILE_PATH:-/internal/judge/panels/runtime/profiles}"
 TRUST_CHALLENGE_QUEUE_PATH="${AI_JUDGE_OPS_TRUST_CHALLENGE_QUEUE_PATH:-/internal/judge/trust/challenges/ops-queue}"
 TRUST_PUBLIC_VERIFY_PATH_TEMPLATE="${AI_JUDGE_OPS_TRUST_PUBLIC_VERIFY_PATH_TEMPLATE:-/internal/judge/cases/:case_id/trust/public-verify}"
+CASE_OVERVIEW_PATH_TEMPLATE="${AI_JUDGE_OPS_CASE_OVERVIEW_PATH_TEMPLATE:-/internal/judge/cases/:case_id}"
+COURTROOM_READ_MODEL_PATH_TEMPLATE="${AI_JUDGE_OPS_COURTROOM_READ_MODEL_PATH_TEMPLATE:-/internal/judge/cases/:case_id/courtroom-read-model}"
 INTERNAL_KEY="${AI_JUDGE_OPS_READ_MODEL_INTERNAL_KEY:-${AI_JUDGE_INTERNAL_KEY:-}}"
 REQUEST_TIMEOUT_SECS="${AI_JUDGE_OPS_READ_MODEL_TIMEOUT_SECS:-8}"
 
@@ -30,6 +32,9 @@ PANEL_GROUP_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_GROUP_LIMIT:-50}"
 PANEL_ATTENTION_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_ATTENTION_LIMIT:-20}"
 TRUST_PUBLIC_VERIFY_CASE_ID="${AI_JUDGE_OPS_TRUST_PUBLIC_VERIFY_CASE_ID:-}"
 TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD="${AI_JUDGE_OPS_TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD:-false}"
+CASE_READ_CASE_ID="${AI_JUDGE_OPS_CASE_READ_CASE_ID:-}"
+CASE_READ_INCLUDE_EVENTS="${AI_JUDGE_OPS_CASE_READ_INCLUDE_EVENTS:-false}"
+CASE_READ_INCLUDE_ALERTS="${AI_JUDGE_OPS_CASE_READ_INCLUDE_ALERTS:-false}"
 
 OUTPUT_JSON=""
 OUTPUT_MD=""
@@ -45,6 +50,8 @@ CASE_FAIRNESS_HTTP_CODE=""
 PANEL_RUNTIME_PROFILE_HTTP_CODE=""
 TRUST_CHALLENGE_QUEUE_HTTP_CODE=""
 TRUST_PUBLIC_VERIFY_HTTP_CODE=""
+CASE_OVERVIEW_HTTP_CODE=""
+COURTROOM_READ_MODEL_HTTP_CODE=""
 REQUEST_ERROR=""
 REQUIRED_KEYS_MISSING=""
 
@@ -63,6 +70,13 @@ TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED="0"
 TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT="0"
 TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT="0"
 TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT="0"
+CASE_READ_ENABLED="0"
+CASE_OVERVIEW_WORKFLOW_PRESENT="0"
+CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT="0"
+CASE_OVERVIEW_CASE_EVIDENCE_PRESENT="0"
+COURTROOM_REPORT_PRESENT="0"
+COURTROOM_VIEW_PRESENT="0"
+COURTROOM_FILTERS_PRESENT="0"
 REGISTRY_INVALID_COUNT="0"
 TRUST_ITEM_COUNT="0"
 TRUST_ERROR_COUNT="0"
@@ -92,6 +106,8 @@ CASE_FAIRNESS_OUTPUT_JSON=""
 PANEL_RUNTIME_PROFILE_OUTPUT_JSON=""
 TRUST_CHALLENGE_QUEUE_OUTPUT_JSON=""
 TRUST_PUBLIC_VERIFY_OUTPUT_JSON=""
+CASE_OVERVIEW_OUTPUT_JSON=""
+COURTROOM_READ_MODEL_OUTPUT_JSON=""
 
 usage() {
   cat <<'USAGE'
@@ -105,6 +121,8 @@ usage() {
     [--panel-runtime-profile-path <path>] \
     [--trust-challenge-queue-path <path>] \
     [--trust-public-verify-path-template <path-template>] \
+    [--case-overview-path-template <path-template>] \
+    [--courtroom-read-model-path-template <path-template>] \
     [--timeout-secs <int>] \
     [--dispatch-type <phase|final>] \
     [--policy-version <version>] \
@@ -125,6 +143,9 @@ usage() {
     [--panel-attention-limit <int>] \
     [--trust-public-verify-case-id <int>] \
     [--trust-public-verify-include-payload <true|false>] \
+    [--case-read-case-id <int>] \
+    [--case-read-include-events <true|false>] \
+    [--case-read-include-alerts <true|false>] \
     [--output-json <path>] \
     [--output-md <path>] \
     [--output-env <path>] \
@@ -319,6 +340,14 @@ parse_args() {
         TRUST_PUBLIC_VERIFY_PATH_TEMPLATE="${2:-}"
         shift 2
         ;;
+      --case-overview-path-template)
+        CASE_OVERVIEW_PATH_TEMPLATE="${2:-}"
+        shift 2
+        ;;
+      --courtroom-read-model-path-template)
+        COURTROOM_READ_MODEL_PATH_TEMPLATE="${2:-}"
+        shift 2
+        ;;
       --internal-key)
         INTERNAL_KEY="${2:-}"
         shift 2
@@ -403,6 +432,18 @@ parse_args() {
         TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD="${2:-}"
         shift 2
         ;;
+      --case-read-case-id)
+        CASE_READ_CASE_ID="${2:-}"
+        shift 2
+        ;;
+      --case-read-include-events)
+        CASE_READ_INCLUDE_EVENTS="${2:-}"
+        shift 2
+        ;;
+      --case-read-include-alerts)
+        CASE_READ_INCLUDE_ALERTS="${2:-}"
+        shift 2
+        ;;
       --output-json)
         OUTPUT_JSON="${2:-}"
         shift 2
@@ -446,6 +487,8 @@ OPS_CASE_FAIRNESS_HTTP_CODE=${CASE_FAIRNESS_HTTP_CODE:-000}
 OPS_PANEL_RUNTIME_PROFILE_HTTP_CODE=${PANEL_RUNTIME_PROFILE_HTTP_CODE:-000}
 OPS_TRUST_CHALLENGE_QUEUE_HTTP_CODE=${TRUST_CHALLENGE_QUEUE_HTTP_CODE:-000}
 OPS_TRUST_PUBLIC_VERIFY_HTTP_CODE=${TRUST_PUBLIC_VERIFY_HTTP_CODE:-000}
+OPS_CASE_OVERVIEW_HTTP_CODE=${CASE_OVERVIEW_HTTP_CODE:-000}
+OPS_COURTROOM_READ_MODEL_HTTP_CODE=${COURTROOM_READ_MODEL_HTTP_CODE:-000}
 OPS_READ_MODEL_ERROR=$REQUEST_ERROR
 OPS_READ_MODEL_REQUIRED_KEYS_MISSING=$REQUIRED_KEYS_MISSING
 OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=$FAIRNESS_TOTAL_MATCHED
@@ -464,6 +507,16 @@ OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED=$TRUST_PUBLIC_VERIFY_VERDICT
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT=$TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT=$TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT=$TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT
+OPS_READ_MODEL_CASE_READ_ENABLED=$CASE_READ_ENABLED
+OPS_READ_MODEL_CASE_READ_CASE_ID=$CASE_READ_CASE_ID
+OPS_READ_MODEL_CASE_READ_INCLUDE_EVENTS=$CASE_READ_INCLUDE_EVENTS
+OPS_READ_MODEL_CASE_READ_INCLUDE_ALERTS=$CASE_READ_INCLUDE_ALERTS
+OPS_READ_MODEL_CASE_OVERVIEW_WORKFLOW_PRESENT=$CASE_OVERVIEW_WORKFLOW_PRESENT
+OPS_READ_MODEL_CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT=$CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT
+OPS_READ_MODEL_CASE_OVERVIEW_CASE_EVIDENCE_PRESENT=$CASE_OVERVIEW_CASE_EVIDENCE_PRESENT
+OPS_READ_MODEL_COURTROOM_REPORT_PRESENT=$COURTROOM_REPORT_PRESENT
+OPS_READ_MODEL_COURTROOM_VIEW_PRESENT=$COURTROOM_VIEW_PRESENT
+OPS_READ_MODEL_COURTROOM_FILTERS_PRESENT=$COURTROOM_FILTERS_PRESENT
 OPS_READ_MODEL_REGISTRY_INVALID_COUNT=$REGISTRY_INVALID_COUNT
 OPS_READ_MODEL_TRUST_ITEM_COUNT=$TRUST_ITEM_COUNT
 OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
@@ -489,6 +542,8 @@ OPS_READ_MODEL_COURTROOM_DRILLDOWN_COUNT=$OPS_COURTROOM_DRILLDOWN_COUNT
 OPS_READ_MODEL_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT=$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT
 OPS_READ_MODEL_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT=$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT
 OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_OUTPUT_JSON=$TRUST_PUBLIC_VERIFY_OUTPUT_JSON
+OPS_READ_MODEL_CASE_OVERVIEW_OUTPUT_JSON=$CASE_OVERVIEW_OUTPUT_JSON
+OPS_READ_MODEL_COURTROOM_READ_MODEL_OUTPUT_JSON=$COURTROOM_READ_MODEL_OUTPUT_JSON
 OPS_READ_MODEL_UPDATED_AT=$FINISHED_AT
 EOF
 }
@@ -502,6 +557,8 @@ write_output_md() {
 - 请求：\`$request_url\`
 - HTTP：\`${HTTP_CODE:-000}\`
 - 更新时间：\`$FINISHED_AT\`
+- case_overview_http：\`${CASE_OVERVIEW_HTTP_CODE:-000}\`
+- courtroom_read_model_http：\`${COURTROOM_READ_MODEL_HTTP_CODE:-000}\`
 
 ## 摘要
 
@@ -545,7 +602,15 @@ write_output_md() {
 35. courtroom_drilldown_count：\`$OPS_COURTROOM_DRILLDOWN_COUNT\`
 36. courtroom_drilldown_high_risk_count：\`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
 37. courtroom_drilldown_review_required_count：\`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
-38. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+38. case_read_enabled：\`$CASE_READ_ENABLED\`
+39. case_read_case_id：\`$CASE_READ_CASE_ID\`
+40. case_overview_workflow_present：\`$CASE_OVERVIEW_WORKFLOW_PRESENT\`
+41. case_overview_verdict_contract_present：\`$CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT\`
+42. case_overview_case_evidence_present：\`$CASE_OVERVIEW_CASE_EVIDENCE_PRESENT\`
+43. courtroom_report_present：\`$COURTROOM_REPORT_PRESENT\`
+44. courtroom_view_present：\`$COURTROOM_VIEW_PRESENT\`
+45. courtroom_filters_present：\`$COURTROOM_FILTERS_PRESENT\`
+46. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -559,6 +624,8 @@ write_summary_json() {
   "status": "$(json_escape "$STATUS")",
   "request_url": "$(json_escape "$request_url")",
   "http_code": "$(json_escape "${HTTP_CODE:-000}")",
+  "case_overview_http_code": "$(json_escape "${CASE_OVERVIEW_HTTP_CODE:-000}")",
+  "courtroom_read_model_http_code": "$(json_escape "${COURTROOM_READ_MODEL_HTTP_CODE:-000}")",
   "trust_public_verify_http_code": "$(json_escape "${TRUST_PUBLIC_VERIFY_HTTP_CODE:-000}")",
   "error": "$(json_escape "$REQUEST_ERROR")",
   "required_keys_missing": "$(json_escape "$REQUIRED_KEYS_MISSING")",
@@ -579,6 +646,14 @@ write_summary_json() {
     "trust_public_verify_commitment_hash_present": $TRUST_PUBLIC_VERIFY_COMMITMENT_HASH_PRESENT,
     "trust_public_verify_verdict_registry_hash_present": $TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT,
     "trust_public_verify_challenge_registry_hash_present": $TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT,
+    "case_read_enabled": $CASE_READ_ENABLED,
+    "case_read_case_id": ${CASE_READ_CASE_ID:-0},
+    "case_overview_workflow_present": $CASE_OVERVIEW_WORKFLOW_PRESENT,
+    "case_overview_verdict_contract_present": $CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT,
+    "case_overview_case_evidence_present": $CASE_OVERVIEW_CASE_EVIDENCE_PRESENT,
+    "courtroom_report_present": $COURTROOM_REPORT_PRESENT,
+    "courtroom_view_present": $COURTROOM_VIEW_PRESENT,
+    "courtroom_filters_present": $COURTROOM_FILTERS_PRESENT,
     "registry_invalid_count": $REGISTRY_INVALID_COUNT,
     "trust_item_count": $TRUST_ITEM_COUNT,
     "trust_error_count": $TRUST_ERROR_COUNT,
@@ -610,6 +685,8 @@ write_summary_json() {
     "panel_runtime_profile_output_json": "$(json_escape "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON")",
     "trust_challenge_queue_output_json": "$(json_escape "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON")",
     "trust_public_verify_output_json": "$(json_escape "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON")",
+    "case_overview_output_json": "$(json_escape "$CASE_OVERVIEW_OUTPUT_JSON")",
+    "courtroom_read_model_output_json": "$(json_escape "$COURTROOM_READ_MODEL_OUTPUT_JSON")",
     "output_md": "$(json_escape "$OUTPUT_MD")",
     "output_env": "$(json_escape "$OUTPUT_ENV")"
   }
@@ -626,6 +703,8 @@ write_summary_md() {
 - status: \`$STATUS\`
 - request_url: \`$request_url\`
 - http_code: \`${HTTP_CODE:-000}\`
+- case_overview_http_code: \`${CASE_OVERVIEW_HTTP_CODE:-000}\`
+- courtroom_read_model_http_code: \`${COURTROOM_READ_MODEL_HTTP_CODE:-000}\`
 - error: \`${REQUEST_ERROR:-none}\`
 
 ## Metrics
@@ -670,7 +749,15 @@ write_summary_md() {
 35. courtroom_drilldown_count: \`$OPS_COURTROOM_DRILLDOWN_COUNT\`
 36. courtroom_drilldown_high_risk_count: \`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
 37. courtroom_drilldown_review_required_count: \`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
-38. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+38. case_read_enabled: \`$CASE_READ_ENABLED\`
+39. case_read_case_id: \`$CASE_READ_CASE_ID\`
+40. case_overview_workflow_present: \`$CASE_OVERVIEW_WORKFLOW_PRESENT\`
+41. case_overview_verdict_contract_present: \`$CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT\`
+42. case_overview_case_evidence_present: \`$CASE_OVERVIEW_CASE_EVIDENCE_PRESENT\`
+43. courtroom_report_present: \`$COURTROOM_REPORT_PRESENT\`
+44. courtroom_view_present: \`$COURTROOM_VIEW_PRESENT\`
+45. courtroom_filters_present: \`$COURTROOM_FILTERS_PRESENT\`
+46. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -750,6 +837,16 @@ main() {
   if [[ "$normalized_trust_public_verify_path_template" != /* ]]; then
     normalized_trust_public_verify_path_template="/$normalized_trust_public_verify_path_template"
   fi
+  local normalized_case_overview_path_template
+  normalized_case_overview_path_template="${CASE_OVERVIEW_PATH_TEMPLATE:-/internal/judge/cases/:case_id}"
+  if [[ "$normalized_case_overview_path_template" != /* ]]; then
+    normalized_case_overview_path_template="/$normalized_case_overview_path_template"
+  fi
+  local normalized_courtroom_read_model_path_template
+  normalized_courtroom_read_model_path_template="${COURTROOM_READ_MODEL_PATH_TEMPLATE:-/internal/judge/cases/:case_id/courtroom-read-model}"
+  if [[ "$normalized_courtroom_read_model_path_template" != /* ]]; then
+    normalized_courtroom_read_model_path_template="/$normalized_courtroom_read_model_path_template"
+  fi
 
   TRUST_PUBLIC_VERIFY_CASE_ID="$(trim "$TRUST_PUBLIC_VERIFY_CASE_ID")"
   if [[ -n "$TRUST_PUBLIC_VERIFY_CASE_ID" ]]; then
@@ -769,14 +866,44 @@ main() {
     TRUST_PUBLIC_VERIFY_ENABLED="1"
   fi
 
+  CASE_READ_CASE_ID="$(trim "$CASE_READ_CASE_ID")"
+  CASE_READ_INCLUDE_EVENTS="$(trim "$CASE_READ_INCLUDE_EVENTS")"
+  CASE_READ_INCLUDE_ALERTS="$(trim "$CASE_READ_INCLUDE_ALERTS")"
+  if [[ "$CASE_READ_INCLUDE_EVENTS" != "true" ]]; then
+    CASE_READ_INCLUDE_EVENTS="false"
+  fi
+  if [[ "$CASE_READ_INCLUDE_ALERTS" != "true" ]]; then
+    CASE_READ_INCLUDE_ALERTS="false"
+  fi
+  if [[ -n "$CASE_READ_CASE_ID" ]]; then
+    if ! [[ "$CASE_READ_CASE_ID" =~ ^[0-9]+$ ]] || [[ "$CASE_READ_CASE_ID" -le 0 ]]; then
+      STATUS="config_missing"
+      REQUEST_ERROR="case_read_case_id_invalid"
+      HTTP_CODE="000"
+      FINISHED_AT="$(iso_now)"
+      write_output_env ""
+      write_output_md ""
+      write_summary_json ""
+      write_summary_md ""
+      echo "ai_judge_ops_read_model_export_status: $STATUS"
+      echo "ops_read_model_error: $REQUEST_ERROR"
+      exit 1
+    fi
+    CASE_READ_ENABLED="1"
+  fi
+
   CASE_FAIRNESS_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.case-fairness.json"
   PANEL_RUNTIME_PROFILE_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.panel-runtime-profiles.json"
   TRUST_CHALLENGE_QUEUE_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.trust-challenge-queue.json"
   TRUST_PUBLIC_VERIFY_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.trust-public-verify.json"
+  CASE_OVERVIEW_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.case-overview.json"
+  COURTROOM_READ_MODEL_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.courtroom-read-model.json"
   ensure_parent_dir "$CASE_FAIRNESS_OUTPUT_JSON"
   ensure_parent_dir "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
   ensure_parent_dir "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
   ensure_parent_dir "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+  ensure_parent_dir "$CASE_OVERVIEW_OUTPUT_JSON"
+  ensure_parent_dir "$COURTROOM_READ_MODEL_OUTPUT_JSON"
 
   local request_base
   request_base="${request_url%/}"
@@ -866,6 +993,37 @@ main() {
       trust_public_verify_url="$(append_query_param "$trust_public_verify_url" "include_payload" "false")"
     fi
   fi
+  local case_overview_url=""
+  local courtroom_read_model_url=""
+  if [[ "$CASE_READ_ENABLED" == "1" ]]; then
+    local case_overview_path
+    case_overview_path="${normalized_case_overview_path_template//\{case_id\}/$CASE_READ_CASE_ID}"
+    case_overview_path="${case_overview_path//:case_id/$CASE_READ_CASE_ID}"
+    if [[ "$case_overview_path" == "$normalized_case_overview_path_template" ]]; then
+      case_overview_path="${case_overview_path%/}/$CASE_READ_CASE_ID"
+    fi
+    case_overview_url="${request_base}${case_overview_path}"
+
+    local courtroom_read_model_path
+    courtroom_read_model_path="${normalized_courtroom_read_model_path_template//\{case_id\}/$CASE_READ_CASE_ID}"
+    courtroom_read_model_path="${courtroom_read_model_path//:case_id/$CASE_READ_CASE_ID}"
+    if [[ "$courtroom_read_model_path" == "$normalized_courtroom_read_model_path_template" ]]; then
+      courtroom_read_model_path="${courtroom_read_model_path%/}/$CASE_READ_CASE_ID"
+    fi
+    local case_read_alert_limit
+    case_read_alert_limit="$(trim "$AUDIT_LIMIT")"
+    if ! [[ "$case_read_alert_limit" =~ ^[0-9]+$ ]] || [[ "$case_read_alert_limit" -le 0 ]]; then
+      case_read_alert_limit="200"
+    fi
+    if [[ "$case_read_alert_limit" -gt 500 ]]; then
+      case_read_alert_limit="500"
+    fi
+    courtroom_read_model_url="${request_base}${courtroom_read_model_path}"
+    courtroom_read_model_url="$(append_query_param "$courtroom_read_model_url" "dispatch_type" "$DISPATCH_TYPE")"
+    courtroom_read_model_url="$(append_query_param "$courtroom_read_model_url" "include_events" "$CASE_READ_INCLUDE_EVENTS")"
+    courtroom_read_model_url="$(append_query_param "$courtroom_read_model_url" "include_alerts" "$CASE_READ_INCLUDE_ALERTS")"
+    courtroom_read_model_url="$(append_query_param "$courtroom_read_model_url" "alert_limit" "$case_read_alert_limit")"
+  fi
 
   local timeout_secs
   timeout_secs="$(trim "$REQUEST_TIMEOUT_SECS")"
@@ -894,6 +1052,16 @@ main() {
   fi
   if [[ "$STATUS" == "pass" && "$TRUST_PUBLIC_VERIFY_ENABLED" == "1" ]]; then
     if ! fetch_json "trust-public-verify" "$trust_public_verify_url" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" TRUST_PUBLIC_VERIFY_HTTP_CODE "$timeout_secs"; then
+      :
+    fi
+  fi
+  if [[ "$STATUS" == "pass" && "$CASE_READ_ENABLED" == "1" ]]; then
+    if ! fetch_json "case-overview" "$case_overview_url" "$CASE_OVERVIEW_OUTPUT_JSON" CASE_OVERVIEW_HTTP_CODE "$timeout_secs"; then
+      :
+    fi
+  fi
+  if [[ "$STATUS" == "pass" && "$CASE_READ_ENABLED" == "1" ]]; then
+    if ! fetch_json "courtroom-read-model" "$courtroom_read_model_url" "$COURTROOM_READ_MODEL_OUTPUT_JSON" COURTROOM_READ_MODEL_HTTP_CODE "$timeout_secs"; then
       :
     fi
   fi
@@ -1017,6 +1185,32 @@ main() {
       check_required_token_in_file "trustPublicVerify.kernelVersion.kernelHash" "\"kernelHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
       check_required_token_in_file "trustPublicVerify.auditAnchor.anchorHash" "\"anchorHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
     fi
+    if [[ "$CASE_READ_ENABLED" == "1" ]]; then
+      check_required_token_in_file "caseRead.caseOverview.caseId" "\"caseId\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.workflow" "\"workflow\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.trace" "\"trace\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.receipts" "\"receipts\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.reportPayload" "\"reportPayload\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.verdictContract" "\"verdictContract\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.caseEvidence" "\"caseEvidence\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.judgeCore" "\"judgeCore\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.events" "\"events\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.alerts" "\"alerts\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.caseOverview.replays" "\"replays\"" "$CASE_OVERVIEW_OUTPUT_JSON"
+
+      check_required_token_in_file "caseRead.courtroomReadModel.caseId" "\"caseId\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.dispatchType" "\"dispatchType\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.generatedAt" "\"generatedAt\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.callback" "\"callback\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.report" "\"report\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.courtroom" "\"courtroom\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.events" "\"events\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.alerts" "\"alerts\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.filters" "\"filters\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.report.debateSummary" "\"debateSummary\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.report.sideAnalysis" "\"sideAnalysis\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+      check_required_token_in_file "caseRead.courtroomReadModel.report.verdictReason" "\"verdictReason\"" "$COURTROOM_READ_MODEL_OUTPUT_JSON"
+    fi
     if [[ -n "$REQUIRED_KEYS_MISSING" ]]; then
       STATUS="payload_invalid"
       REQUEST_ERROR="required_keys_missing"
@@ -1075,6 +1269,16 @@ main() {
     TRUST_PUBLIC_VERIFY_VERDICT_REGISTRY_HASH_PRESENT="$(extract_flat_regex_flag "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" "\"verdictAttestation\":\\{[^\\}]*\"registryHash\":\"[^\"]+\"")"
     TRUST_PUBLIC_VERIFY_CHALLENGE_REGISTRY_HASH_PRESENT="$(extract_flat_regex_flag "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" "\"challengeReview\":\\{[^\\}]*\"registryHash\":\"[^\"]+\"")"
   fi
+  if [[ "$CASE_READ_ENABLED" == "1" && -f "$CASE_OVERVIEW_OUTPUT_JSON" ]]; then
+    CASE_OVERVIEW_WORKFLOW_PRESENT="$(extract_flat_regex_flag "$CASE_OVERVIEW_OUTPUT_JSON" "\"workflow\":\\{")"
+    CASE_OVERVIEW_VERDICT_CONTRACT_PRESENT="$(extract_flat_regex_flag "$CASE_OVERVIEW_OUTPUT_JSON" "\"verdictContract\":\\{")"
+    CASE_OVERVIEW_CASE_EVIDENCE_PRESENT="$(extract_flat_regex_flag "$CASE_OVERVIEW_OUTPUT_JSON" "\"caseEvidence\":\\{")"
+  fi
+  if [[ "$CASE_READ_ENABLED" == "1" && -f "$COURTROOM_READ_MODEL_OUTPUT_JSON" ]]; then
+    COURTROOM_REPORT_PRESENT="$(extract_flat_regex_flag "$COURTROOM_READ_MODEL_OUTPUT_JSON" "\"report\":\\{")"
+    COURTROOM_VIEW_PRESENT="$(extract_flat_regex_flag "$COURTROOM_READ_MODEL_OUTPUT_JSON" "\"courtroom\":\\{")"
+    COURTROOM_FILTERS_PRESENT="$(extract_flat_regex_flag "$COURTROOM_READ_MODEL_OUTPUT_JSON" "\"filters\":\\{")"
+  fi
 
   FINISHED_AT="$(iso_now)"
   write_output_env "$request_url"
@@ -1089,12 +1293,16 @@ main() {
   echo "ops_panel_runtime_profile_http_code: ${PANEL_RUNTIME_PROFILE_HTTP_CODE:-000}"
   echo "ops_trust_challenge_queue_http_code: ${TRUST_CHALLENGE_QUEUE_HTTP_CODE:-000}"
   echo "ops_trust_public_verify_http_code: ${TRUST_PUBLIC_VERIFY_HTTP_CODE:-000}"
+  echo "ops_case_overview_http_code: ${CASE_OVERVIEW_HTTP_CODE:-000}"
+  echo "ops_courtroom_read_model_http_code: ${COURTROOM_READ_MODEL_HTTP_CODE:-000}"
   echo "required_keys_missing: ${REQUIRED_KEYS_MISSING:-none}"
   echo "output_json: $OUTPUT_JSON"
   echo "case_fairness_output_json: $CASE_FAIRNESS_OUTPUT_JSON"
   echo "panel_runtime_profile_output_json: $PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
   echo "trust_challenge_queue_output_json: $TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
   echo "trust_public_verify_output_json: $TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+  echo "case_overview_output_json: $CASE_OVERVIEW_OUTPUT_JSON"
+  echo "courtroom_read_model_output_json: $COURTROOM_READ_MODEL_OUTPUT_JSON"
   echo "output_md: $OUTPUT_MD"
   echo "output_env: $OUTPUT_ENV"
   echo "summary_json: $EMIT_JSON"

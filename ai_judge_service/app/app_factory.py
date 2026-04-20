@@ -62,6 +62,21 @@ from .applications import (
 from .applications import (
     verify_report_attestation as verify_report_attestation_v3,
 )
+from .applications.case_overview_contract import (
+    validate_case_overview_contract as validate_case_overview_contract_v3,
+)
+from .applications.case_read_routes import (
+    build_case_courtroom_read_model_payload as build_case_courtroom_read_model_payload_v3,
+)
+from .applications.case_read_routes import (
+    build_case_overview_payload as build_case_overview_payload_v3,
+)
+from .applications.case_read_routes import (
+    build_case_overview_replay_items as build_case_overview_replay_items_v3,
+)
+from .applications.courtroom_read_model_contract import (
+    validate_courtroom_read_model_contract as validate_courtroom_read_model_contract_v3,
+)
 from .applications.fairness_analysis import (
     build_fairness_calibration_drift_summary as build_fairness_calibration_drift_summary_v3,
 )
@@ -5393,6 +5408,14 @@ def _validate_fairness_dashboard_contract(payload: dict[str, Any]) -> None:
     validate_fairness_dashboard_contract_v3(payload)
 
 
+def _validate_case_overview_contract(payload: dict[str, Any]) -> None:
+    validate_case_overview_contract_v3(payload)
+
+
+def _validate_courtroom_read_model_contract(payload: dict[str, Any]) -> None:
+    validate_courtroom_read_model_contract_v3(payload)
+
+
 def _validate_case_fairness_detail_contract(payload: dict[str, Any]) -> None:
     validate_case_fairness_detail_contract_v3(payload)
 
@@ -9221,35 +9244,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             workflow_job=workflow_job,
             workflow_events=workflow_events,
         )
-        if replay_records:
-            replay_items = [
-                {
-                    "dispatchType": item.dispatch_type,
-                    "traceId": item.trace_id,
-                    "replayedAt": item.created_at.isoformat(),
-                    "winner": item.winner,
-                    "needsDrawVote": item.needs_draw_vote,
-                    "provider": item.provider,
-                }
-                for item in replay_records
-            ]
-        else:
-            replay_items = [
-                {
-                    "dispatchType": None,
-                    "traceId": trace.trace_id if trace is not None else None,
-                    "replayedAt": item.replayed_at.isoformat(),
-                    "winner": item.winner,
-                    "needsDrawVote": item.needs_draw_vote,
-                    "provider": item.provider,
-                }
-                for item in (trace.replays if trace is not None else [])
-            ]
-
-        return {
-            "caseId": case_id,
-            "workflow": _serialize_workflow_job(workflow_job) if workflow_job else None,
-            "trace": (
+        replay_items = build_case_overview_replay_items_v3(
+            replay_records=replay_records,
+            trace=trace,
+        )
+        payload = build_case_overview_payload_v3(
+            case_id=case_id,
+            workflow=_serialize_workflow_job(workflow_job) if workflow_job else None,
+            trace=(
                 {
                     "traceId": trace.trace_id,
                     "status": trace.status,
@@ -9259,25 +9261,29 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 if trace is not None
                 else None
             ),
-            "receipts": {
+            receipts={
                 "phase": _serialize_dispatch_receipt(phase_receipt) if phase_receipt else None,
                 "final": _serialize_dispatch_receipt(final_receipt) if final_receipt else None,
             },
-            "latestDispatchType": "final" if final_receipt is not None else ("phase" if phase_receipt is not None else None),
-            "reportPayload": report_payload,
-            "verdictContract": verdict_contract,
-            "caseEvidence": case_evidence,
-            "winner": winner,
-            "needsDrawVote": (
+            latest_dispatch_type=(
+                "final"
+                if final_receipt is not None
+                else ("phase" if phase_receipt is not None else None)
+            ),
+            report_payload=report_payload,
+            verdict_contract=verdict_contract,
+            case_evidence=case_evidence,
+            winner=winner,
+            needs_draw_vote=(
                 verdict_contract.get("needsDrawVote")
                 if verdict_contract.get("needsDrawVote") is not None
                 else (winner == "draw" if winner is not None else None)
             ),
-            "reviewRequired": bool(verdict_contract.get("reviewRequired")),
-            "callbackStatus": callback_status,
-            "callbackError": callback_error,
-            "judgeCore": judge_core_view,
-            "events": [
+            review_required=bool(verdict_contract.get("reviewRequired")),
+            callback_status=callback_status,
+            callback_error=callback_error,
+            judge_core=judge_core_view,
+            events=[
                 {
                     "eventSeq": item.event_seq,
                     "eventType": item.event_type,
@@ -9286,9 +9292,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 }
                 for item in workflow_events
             ],
-            "alerts": [_serialize_alert_item(item) for item in alerts],
-            "replays": replay_items,
-        }
+            alerts=[_serialize_alert_item(item) for item in alerts],
+            replays=replay_items,
+        )
+        try:
+            _validate_case_overview_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "case_overview_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/cases/{case_id}/claim-ledger")
     async def get_judge_case_claim_ledger(
@@ -9384,64 +9401,41 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             else []
         )
 
-        response_payload = {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"] or None,
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "workflow": _serialize_workflow_job(workflow_job) if workflow_job is not None else None,
-            "judgeCore": judge_core_view,
-            "callback": {
-                "status": callback_status,
-                "error": callback_error,
-            },
-            "report": {
-                "winner": str(context["reportPayload"].get("winner") or "").strip().lower() or None,
-                "reviewRequired": bool(context["reportPayload"].get("reviewRequired")),
-                "needsDrawVote": bool(context["reportPayload"].get("needsDrawVote")),
-                "debateSummary": (
-                    context["reportPayload"].get("debateSummary")
-                    if isinstance(context["reportPayload"].get("debateSummary"), str)
-                    else None
-                ),
-                "sideAnalysis": (
-                    context["reportPayload"].get("sideAnalysis")
-                    if isinstance(context["reportPayload"].get("sideAnalysis"), dict)
-                    else {}
-                ),
-                "verdictReason": (
-                    context["reportPayload"].get("verdictReason")
-                    if isinstance(context["reportPayload"].get("verdictReason"), str)
-                    else None
-                ),
-            },
-            "courtroom": courtroom_read_model,
-            "events": (
-                [
-                    {
-                        "eventSeq": item.event_seq,
-                        "eventType": item.event_type,
-                        "payload": item.payload,
-                        "createdAt": item.created_at.isoformat(),
-                    }
-                    for item in workflow_events
-                ]
-                if include_events
-                else []
-            ),
-            "eventCount": len(workflow_events),
-            "alerts": (
-                [_serialize_alert_item(item) for item in alert_items]
-                if include_alerts
-                else []
-            ),
-            "filters": {
-                "dispatchType": context["dispatchType"],
-                "includeEvents": bool(include_events),
-                "includeAlerts": bool(include_alerts),
-                "alertLimit": int(alert_limit),
-            },
-        }
+        response_payload = build_case_courtroom_read_model_payload_v3(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"] or None,
+            workflow=_serialize_workflow_job(workflow_job) if workflow_job is not None else None,
+            judge_core=judge_core_view,
+            callback_status=callback_status,
+            callback_error=callback_error,
+            report_payload=context["reportPayload"],
+            courtroom=courtroom_read_model,
+            events=[
+                {
+                    "eventSeq": item.event_seq,
+                    "eventType": item.event_type,
+                    "payload": item.payload,
+                    "createdAt": item.created_at.isoformat(),
+                }
+                for item in workflow_events
+            ],
+            event_count=len(workflow_events),
+            alerts=[_serialize_alert_item(item) for item in alert_items],
+            include_events=bool(include_events),
+            include_alerts=bool(include_alerts),
+            alert_limit=int(alert_limit),
+        )
+        try:
+            _validate_courtroom_read_model_contract(response_payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "courtroom_read_model_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
         return response_payload
 
     @app.get("/internal/judge/courtroom/cases")
