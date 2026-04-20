@@ -1,7 +1,7 @@
 # AI Judge Real Env Window Closure 摘要
 
 1. 生成日期：2026-04-20
-2. 运行窗口：2026-04-20T00:23:39Z -> 2026-04-20T00:23:40Z
+2. 运行窗口：2026-04-20T01:10:07Z -> 2026-04-20T01:10:09Z
 3. 统一状态：`env_blocked`
 4. environment_mode：`blocked`
 5. marker_ready：`false`
@@ -32,5 +32,5 @@
 
 1. closure env：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_window_closure.env`
 2. closure doc：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_window_closure.md`
-3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002339Z-ai-judge-real-env-window-closure.summary.json`
-4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002339Z-ai-judge-real-env-window-closure.summary.md`
+3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011007Z-ai-judge-real-env-window-closure.summary.json`
+4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011007Z-ai-judge-real-env-window-closure.summary.md`

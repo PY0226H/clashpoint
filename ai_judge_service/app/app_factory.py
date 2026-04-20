@@ -30,16 +30,10 @@ from .applications import (
     build_audit_anchor_export as build_audit_anchor_export_v3,
 )
 from .applications import (
-    build_case_commitment_registry as build_case_commitment_registry_v3,
-)
-from .applications import (
     build_challenge_review_registry as build_challenge_review_registry_v3,
 )
 from .applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
-)
-from .applications import (
-    build_judge_kernel_registry as build_judge_kernel_registry_v3,
 )
 from .applications import (
     build_phase_report_payload as build_phase_report_payload_v3_phase,
@@ -49,9 +43,6 @@ from .applications import (
 )
 from .applications import (
     build_replay_report_summary as build_replay_report_summary_v3,
-)
-from .applications import (
-    build_verdict_attestation_registry as build_verdict_attestation_registry_v3,
 )
 from .applications import (
     build_verdict_contract as build_verdict_contract_v3,
@@ -124,6 +115,9 @@ from .applications.review_queue_contract import (
 from .applications.review_queue_contract import (
     validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
 )
+from .applications.trust_audit_anchor_contract import (
+    validate_trust_audit_anchor_contract as validate_trust_audit_anchor_contract_v3,
+)
 from .applications.trust_challenge_queue_contract import (
     validate_trust_challenge_queue_contract as validate_trust_challenge_queue_contract_v3,
 )
@@ -138,6 +132,9 @@ from .applications.trust_ops_views import (
 )
 from .applications.trust_ops_views import (
     build_trust_challenge_ops_queue_payload as build_trust_challenge_ops_queue_payload_v3,
+)
+from .applications.trust_phasea_bundle import (
+    build_trust_phasea_bundle as build_trust_phasea_bundle_v3,
 )
 from .applications.trust_public_verify_contract import (
     validate_trust_public_verify_contract as validate_trust_public_verify_contract_v3,
@@ -5394,6 +5391,10 @@ def _validate_trust_challenge_ops_queue_contract(payload: dict[str, Any]) -> Non
 
 def _validate_trust_kernel_version_contract(payload: dict[str, Any]) -> None:
     validate_trust_kernel_version_contract_v3(payload)
+
+
+def _validate_trust_audit_anchor_contract(payload: dict[str, Any]) -> None:
+    validate_trust_audit_anchor_contract_v3(payload)
 
 
 def _validate_courtroom_drilldown_bundle_contract(payload: dict[str, Any]) -> None:
@@ -10762,53 +10763,24 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         workflow_job = await _workflow_get_job(job_id=case_id)
         workflow_events = list(await _workflow_list_events(job_id=case_id))
         alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
-        verify_result = _verify_report_attestation(
-            report_payload=context["reportPayload"],
-            dispatch_type=context["dispatchType"],
+        workflow_snapshot = (
+            _serialize_workflow_job(workflow_job)
+            if workflow_job is not None
+            else None
         )
-        commitment = build_case_commitment_registry_v3(
+        bundle_payload = build_trust_phasea_bundle_v3(
             case_id=case_id,
             dispatch_type=context["dispatchType"],
             trace_id=context["traceId"],
             request_snapshot=context["requestSnapshot"],
-            workflow_snapshot=(
-                _serialize_workflow_job(workflow_job)
-                if workflow_job is not None
-                else None
-            ),
             report_payload=context["reportPayload"],
-        )
-        verdict_attestation = build_verdict_attestation_registry_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            report_payload=context["reportPayload"],
-            verify_result=verify_result,
-        )
-        challenge_review = build_challenge_review_registry_v3(
-            case_id=case_id,
-            trace_id=context["traceId"],
+            workflow_snapshot=workflow_snapshot,
             workflow_status=workflow_job.status if workflow_job is not None else None,
             workflow_events=workflow_events,
             alerts=alerts,
-            report_payload=context["reportPayload"],
-        )
-        kernel_version = build_judge_kernel_registry_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            report_payload=context["reportPayload"],
-            workflow_events=workflow_events,
             provider=runtime.settings.provider,
         )
-        return {
-            "context": context,
-            "verifyResult": verify_result,
-            "commitment": commitment,
-            "verdictAttestation": verdict_attestation,
-            "challengeReview": challenge_review,
-            "kernelVersion": kernel_version,
-        }
+        return {"context": context, **bundle_payload}
 
     def _build_public_trust_verify_payload(
         *,
@@ -11467,12 +11439,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             kernel_version=bundle["kernelVersion"],
             include_payload=include_payload,
         )
-        return {
+        payload = {
             "caseId": case_id,
             "dispatchType": context["dispatchType"],
             "traceId": context["traceId"],
             "item": anchor,
         }
+        try:
+            _validate_trust_audit_anchor_contract(payload)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "trust_audit_anchor_contract_violation",
+                    "message": str(err),
+                },
+            ) from err
+        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/public-verify")
     async def get_judge_trust_public_verify(

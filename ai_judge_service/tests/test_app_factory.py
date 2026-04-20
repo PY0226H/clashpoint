@@ -5640,6 +5640,59 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail["code"], "trust_kernel_version_contract_violation")
         self.assertIn("trust_kernel_version_missing_keys:item", detail["message"])
 
+    async def test_trust_audit_anchor_route_should_return_500_when_contract_validation_fails(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+        case_id = _unique_case_id(8108)
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=_build_phase_request(
+                case_id=case_id,
+                idempotency_key=f"phase:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=_build_final_request(
+                case_id=case_id,
+                idempotency_key=f"final:{case_id}",
+                judge_policy_version="v3-default",
+            ).model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        with patch(
+            "app.app_factory._validate_trust_audit_anchor_contract",
+            side_effect=ValueError("trust_audit_anchor_missing_keys:item"),
+        ):
+            resp = await self._get(
+                app=app,
+                path=f"/internal/judge/cases/{case_id}/trust/audit-anchor?dispatch_type=final",
+                internal_key=runtime.settings.ai_internal_key,
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "trust_audit_anchor_contract_violation")
+        self.assertIn("trust_audit_anchor_missing_keys:item", detail["message"])
+
     async def test_receipt_route_should_fallback_to_fact_repository_when_trace_missing(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None

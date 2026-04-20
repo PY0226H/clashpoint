@@ -306,6 +306,38 @@ JSON
   }
 }
 JSON
+  elif [[ "$request_url" == *"/internal/judge/cases/901/trust/public-verify"* ]]; then
+    cat >"$output_file" <<'JSON'
+{
+  "caseId": 901,
+  "dispatchType": "final",
+  "traceId": "trace-final-901",
+  "verifyPayload": {
+    "caseCommitment": {
+      "version": "trust-phaseA-case-commitment-v1",
+      "commitmentHash": "sha256:commitment-hash-901"
+    },
+    "verdictAttestation": {
+      "version": "trust-phaseA-verdict-attestation-v1",
+      "registryHash": "sha256:verdict-registry-hash-901",
+      "verified": true,
+      "mismatchComponents": []
+    },
+    "challengeReview": {
+      "version": "trust-phaseB-challenge-review-v1",
+      "registryHash": "sha256:challenge-registry-hash-901"
+    },
+    "kernelVersion": {
+      "version": "trust-phaseA-kernel-version-v1",
+      "kernelHash": "sha256:kernel-hash-901"
+    },
+    "auditAnchor": {
+      "version": "trust-phaseA-audit-anchor-v1",
+      "anchorHash": "sha256:audit-anchor-hash-901"
+    }
+  }
+}
+JSON
   else
     cat >"$output_file" <<'JSON'
 {}
@@ -325,6 +357,7 @@ PATH="$MOCK_BIN_OK:$PATH" bash "$SCRIPT" \
   --root "$WORK_OK" \
   --base-url "http://127.0.0.1:8787" \
   --internal-key "test-key" \
+  --trust-public-verify-case-id 901 \
   --output-json "$OK_JSON_OUT" \
   --output-md "$OK_MD_OUT" \
   --output-env "$OK_ENV_OUT" >"$OK_STDOUT"
@@ -341,6 +374,9 @@ expect_contains "ok env panel runtime returned" "OPS_READ_MODEL_PANEL_RUNTIME_PR
 expect_contains "ok env trust queue matched" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED=5" "$OK_ENV_OUT"
 expect_contains "ok env trust queue returned" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_RETURNED=2" "$OK_ENV_OUT"
 expect_contains "ok env trust queue error count" "OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_ERROR_COUNT=1" "$OK_ENV_OUT"
+expect_contains "ok env trust public verify enabled" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_ENABLED=1" "$OK_ENV_OUT"
+expect_contains "ok env trust public verify case id" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CASE_ID=901" "$OK_ENV_OUT"
+expect_contains "ok env trust public verify verified" "OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED=1" "$OK_ENV_OUT"
 expect_contains "ok env invalid count" "OPS_READ_MODEL_REGISTRY_INVALID_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env trust item count" "OPS_READ_MODEL_TRUST_ITEM_COUNT=2" "$OK_ENV_OUT"
 expect_contains "ok env adaptive action count" "OPS_READ_MODEL_ADAPTIVE_RECOMMENDED_ACTION_COUNT=5" "$OK_ENV_OUT"
@@ -367,6 +403,7 @@ expect_contains "ok env courtroom drilldown review required count" "OPS_READ_MOD
 expect_contains "ok stdout case fairness http" "ops_case_fairness_http_code: 200" "$OK_STDOUT"
 expect_contains "ok stdout panel profile http" "ops_panel_runtime_profile_http_code: 200" "$OK_STDOUT"
 expect_contains "ok stdout trust queue http" "ops_trust_challenge_queue_http_code: 200" "$OK_STDOUT"
+expect_contains "ok stdout trust public verify http" "ops_trust_public_verify_http_code: 200" "$OK_STDOUT"
 expect_contains "ok md title" "# AI Judge Ops Read Model 导出快照" "$OK_MD_OUT"
 
 # 场景2：payload 缺少必填键 -> payload_invalid

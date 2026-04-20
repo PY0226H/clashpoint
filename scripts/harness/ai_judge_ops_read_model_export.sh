@@ -7,6 +7,7 @@ PACK_PATH="${AI_JUDGE_OPS_READ_MODEL_PATH:-/internal/judge/ops/read-model/pack}"
 CASE_FAIRNESS_PATH="${AI_JUDGE_OPS_CASE_FAIRNESS_PATH:-/internal/judge/fairness/cases}"
 PANEL_RUNTIME_PROFILE_PATH="${AI_JUDGE_OPS_PANEL_RUNTIME_PROFILE_PATH:-/internal/judge/panels/runtime/profiles}"
 TRUST_CHALLENGE_QUEUE_PATH="${AI_JUDGE_OPS_TRUST_CHALLENGE_QUEUE_PATH:-/internal/judge/trust/challenges/ops-queue}"
+TRUST_PUBLIC_VERIFY_PATH_TEMPLATE="${AI_JUDGE_OPS_TRUST_PUBLIC_VERIFY_PATH_TEMPLATE:-/internal/judge/cases/:case_id/trust/public-verify}"
 INTERNAL_KEY="${AI_JUDGE_OPS_READ_MODEL_INTERNAL_KEY:-${AI_JUDGE_INTERNAL_KEY:-}}"
 REQUEST_TIMEOUT_SECS="${AI_JUDGE_OPS_READ_MODEL_TIMEOUT_SECS:-8}"
 
@@ -27,6 +28,8 @@ CALIBRATION_SHADOW_LIMIT="${AI_JUDGE_OPS_READ_MODEL_CALIBRATION_SHADOW_LIMIT:-20
 PANEL_PROFILE_SCAN_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_PROFILE_SCAN_LIMIT:-600}"
 PANEL_GROUP_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_GROUP_LIMIT:-50}"
 PANEL_ATTENTION_LIMIT="${AI_JUDGE_OPS_READ_MODEL_PANEL_ATTENTION_LIMIT:-20}"
+TRUST_PUBLIC_VERIFY_CASE_ID="${AI_JUDGE_OPS_TRUST_PUBLIC_VERIFY_CASE_ID:-}"
+TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD="${AI_JUDGE_OPS_TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD:-false}"
 
 OUTPUT_JSON=""
 OUTPUT_MD=""
@@ -41,6 +44,7 @@ HTTP_CODE=""
 CASE_FAIRNESS_HTTP_CODE=""
 PANEL_RUNTIME_PROFILE_HTTP_CODE=""
 TRUST_CHALLENGE_QUEUE_HTTP_CODE=""
+TRUST_PUBLIC_VERIFY_HTTP_CODE=""
 REQUEST_ERROR=""
 REQUIRED_KEYS_MISSING=""
 
@@ -54,6 +58,8 @@ PANEL_RUNTIME_PROFILE_RETURNED="0"
 TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED="0"
 TRUST_CHALLENGE_QUEUE_RETURNED="0"
 TRUST_CHALLENGE_QUEUE_ERROR_COUNT="0"
+TRUST_PUBLIC_VERIFY_ENABLED="0"
+TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED="0"
 REGISTRY_INVALID_COUNT="0"
 TRUST_ITEM_COUNT="0"
 TRUST_ERROR_COUNT="0"
@@ -82,6 +88,7 @@ OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT="0"
 CASE_FAIRNESS_OUTPUT_JSON=""
 PANEL_RUNTIME_PROFILE_OUTPUT_JSON=""
 TRUST_CHALLENGE_QUEUE_OUTPUT_JSON=""
+TRUST_PUBLIC_VERIFY_OUTPUT_JSON=""
 
 usage() {
   cat <<'USAGE'
@@ -94,6 +101,7 @@ usage() {
     [--case-fairness-path <path>] \
     [--panel-runtime-profile-path <path>] \
     [--trust-challenge-queue-path <path>] \
+    [--trust-public-verify-path-template <path-template>] \
     [--timeout-secs <int>] \
     [--dispatch-type <phase|final>] \
     [--policy-version <version>] \
@@ -112,6 +120,8 @@ usage() {
     [--panel-profile-scan-limit <int>] \
     [--panel-group-limit <int>] \
     [--panel-attention-limit <int>] \
+    [--trust-public-verify-case-id <int>] \
+    [--trust-public-verify-include-payload <true|false>] \
     [--output-json <path>] \
     [--output-md <path>] \
     [--output-env <path>] \
@@ -274,6 +284,10 @@ parse_args() {
         TRUST_CHALLENGE_QUEUE_PATH="${2:-}"
         shift 2
         ;;
+      --trust-public-verify-path-template)
+        TRUST_PUBLIC_VERIFY_PATH_TEMPLATE="${2:-}"
+        shift 2
+        ;;
       --internal-key)
         INTERNAL_KEY="${2:-}"
         shift 2
@@ -350,6 +364,14 @@ parse_args() {
         PANEL_ATTENTION_LIMIT="${2:-}"
         shift 2
         ;;
+      --trust-public-verify-case-id)
+        TRUST_PUBLIC_VERIFY_CASE_ID="${2:-}"
+        shift 2
+        ;;
+      --trust-public-verify-include-payload)
+        TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD="${2:-}"
+        shift 2
+        ;;
       --output-json)
         OUTPUT_JSON="${2:-}"
         shift 2
@@ -392,6 +414,7 @@ OPS_READ_MODEL_HTTP_CODE=${HTTP_CODE:-000}
 OPS_CASE_FAIRNESS_HTTP_CODE=${CASE_FAIRNESS_HTTP_CODE:-000}
 OPS_PANEL_RUNTIME_PROFILE_HTTP_CODE=${PANEL_RUNTIME_PROFILE_HTTP_CODE:-000}
 OPS_TRUST_CHALLENGE_QUEUE_HTTP_CODE=${TRUST_CHALLENGE_QUEUE_HTTP_CODE:-000}
+OPS_TRUST_PUBLIC_VERIFY_HTTP_CODE=${TRUST_PUBLIC_VERIFY_HTTP_CODE:-000}
 OPS_READ_MODEL_ERROR=$REQUEST_ERROR
 OPS_READ_MODEL_REQUIRED_KEYS_MISSING=$REQUIRED_KEYS_MISSING
 OPS_READ_MODEL_FAIRNESS_TOTAL_MATCHED=$FAIRNESS_TOTAL_MATCHED
@@ -404,6 +427,9 @@ OPS_READ_MODEL_PANEL_RUNTIME_PROFILE_RETURNED=$PANEL_RUNTIME_PROFILE_RETURNED
 OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED=$TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED
 OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_RETURNED=$TRUST_CHALLENGE_QUEUE_RETURNED
 OPS_READ_MODEL_TRUST_CHALLENGE_QUEUE_ERROR_COUNT=$TRUST_CHALLENGE_QUEUE_ERROR_COUNT
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_ENABLED=$TRUST_PUBLIC_VERIFY_ENABLED
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_CASE_ID=$TRUST_PUBLIC_VERIFY_CASE_ID
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED=$TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED
 OPS_READ_MODEL_REGISTRY_INVALID_COUNT=$REGISTRY_INVALID_COUNT
 OPS_READ_MODEL_TRUST_ITEM_COUNT=$TRUST_ITEM_COUNT
 OPS_READ_MODEL_TRUST_ERROR_COUNT=$TRUST_ERROR_COUNT
@@ -428,6 +454,7 @@ OPS_READ_MODEL_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT=$OPS_EVIDENCE_CLAIM_UNANSWER
 OPS_READ_MODEL_COURTROOM_DRILLDOWN_COUNT=$OPS_COURTROOM_DRILLDOWN_COUNT
 OPS_READ_MODEL_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT=$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT
 OPS_READ_MODEL_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT=$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT
+OPS_READ_MODEL_TRUST_PUBLIC_VERIFY_OUTPUT_JSON=$TRUST_PUBLIC_VERIFY_OUTPUT_JSON
 OPS_READ_MODEL_UPDATED_AT=$FINISHED_AT
 EOF
 }
@@ -454,31 +481,34 @@ write_output_md() {
 8. trust_challenge_queue_total_matched：\`$TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED\`
 9. trust_challenge_queue_returned：\`$TRUST_CHALLENGE_QUEUE_RETURNED\`
 10. trust_challenge_queue_error_count：\`$TRUST_CHALLENGE_QUEUE_ERROR_COUNT\`
-11. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
-12. trust_item_count：\`$TRUST_ITEM_COUNT\`
-13. trust_error_count：\`$TRUST_ERROR_COUNT\`
-14. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
-15. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
-16. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-17. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
-18. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
-19. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
-20. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
-21. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
-22. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
-23. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
-24. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
-25. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-26. registry_prompt_tool_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
-27. registry_prompt_tool_high_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
-28. evidence_claim_queue_count：\`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
-29. evidence_claim_high_risk_count：\`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
-30. evidence_claim_conflict_case_count：\`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
-31. evidence_claim_unanswered_case_count：\`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
-32. courtroom_drilldown_count：\`$OPS_COURTROOM_DRILLDOWN_COUNT\`
-33. courtroom_drilldown_high_risk_count：\`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
-34. courtroom_drilldown_review_required_count：\`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
-35. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
+11. trust_public_verify_enabled：\`$TRUST_PUBLIC_VERIFY_ENABLED\`
+12. trust_public_verify_case_id：\`$TRUST_PUBLIC_VERIFY_CASE_ID\`
+13. trust_public_verify_verdict_verified：\`$TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED\`
+14. registry_invalid_count：\`$REGISTRY_INVALID_COUNT\`
+15. trust_item_count：\`$TRUST_ITEM_COUNT\`
+16. trust_error_count：\`$TRUST_ERROR_COUNT\`
+17. adaptive_recommended_action_count：\`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+18. adaptive_panel_attention_group_count：\`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+19. adaptive_calibration_high_risk_count：\`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+20. courtroom_sample_count：\`$OPS_COURTROOM_SAMPLE_COUNT\`
+21. courtroom_queue_count：\`$OPS_COURTROOM_QUEUE_COUNT\`
+22. review_queue_count：\`$OPS_REVIEW_QUEUE_COUNT\`
+23. review_high_risk_count：\`$OPS_REVIEW_HIGH_RISK_COUNT\`
+24. review_trust_priority_count：\`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+25. review_unified_high_priority_count：\`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+26. trust_challenge_queue_count：\`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+27. trust_challenge_high_priority_count：\`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+28. policy_sim_blocked_count：\`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+29. registry_prompt_tool_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
+30. registry_prompt_tool_high_risk_count：\`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
+31. evidence_claim_queue_count：\`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
+32. evidence_claim_high_risk_count：\`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
+33. evidence_claim_conflict_case_count：\`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
+34. evidence_claim_unanswered_case_count：\`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
+35. courtroom_drilldown_count：\`$OPS_COURTROOM_DRILLDOWN_COUNT\`
+36. courtroom_drilldown_high_risk_count：\`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
+37. courtroom_drilldown_review_required_count：\`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
+38. required_keys_missing：\`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -492,6 +522,7 @@ write_summary_json() {
   "status": "$(json_escape "$STATUS")",
   "request_url": "$(json_escape "$request_url")",
   "http_code": "$(json_escape "${HTTP_CODE:-000}")",
+  "trust_public_verify_http_code": "$(json_escape "${TRUST_PUBLIC_VERIFY_HTTP_CODE:-000}")",
   "error": "$(json_escape "$REQUEST_ERROR")",
   "required_keys_missing": "$(json_escape "$REQUIRED_KEYS_MISSING")",
   "metrics": {
@@ -505,6 +536,9 @@ write_summary_json() {
     "trust_challenge_queue_total_matched": $TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED,
     "trust_challenge_queue_returned": $TRUST_CHALLENGE_QUEUE_RETURNED,
     "trust_challenge_queue_error_count": $TRUST_CHALLENGE_QUEUE_ERROR_COUNT,
+    "trust_public_verify_enabled": $TRUST_PUBLIC_VERIFY_ENABLED,
+    "trust_public_verify_case_id": ${TRUST_PUBLIC_VERIFY_CASE_ID:-0},
+    "trust_public_verify_verdict_verified": $TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED,
     "registry_invalid_count": $REGISTRY_INVALID_COUNT,
     "trust_item_count": $TRUST_ITEM_COUNT,
     "trust_error_count": $TRUST_ERROR_COUNT,
@@ -535,6 +569,7 @@ write_summary_json() {
     "case_fairness_output_json": "$(json_escape "$CASE_FAIRNESS_OUTPUT_JSON")",
     "panel_runtime_profile_output_json": "$(json_escape "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON")",
     "trust_challenge_queue_output_json": "$(json_escape "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON")",
+    "trust_public_verify_output_json": "$(json_escape "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON")",
     "output_md": "$(json_escape "$OUTPUT_MD")",
     "output_env": "$(json_escape "$OUTPUT_ENV")"
   }
@@ -565,31 +600,34 @@ write_summary_md() {
 8. trust_challenge_queue_total_matched: \`$TRUST_CHALLENGE_QUEUE_TOTAL_MATCHED\`
 9. trust_challenge_queue_returned: \`$TRUST_CHALLENGE_QUEUE_RETURNED\`
 10. trust_challenge_queue_error_count: \`$TRUST_CHALLENGE_QUEUE_ERROR_COUNT\`
-11. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
-12. trust_item_count: \`$TRUST_ITEM_COUNT\`
-13. trust_error_count: \`$TRUST_ERROR_COUNT\`
-14. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
-15. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
-16. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
-17. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
-18. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
-19. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
-20. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
-21. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
-22. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
-23. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
-24. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
-25. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
-26. registry_prompt_tool_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
-27. registry_prompt_tool_high_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
-28. evidence_claim_queue_count: \`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
-29. evidence_claim_high_risk_count: \`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
-30. evidence_claim_conflict_case_count: \`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
-31. evidence_claim_unanswered_case_count: \`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
-32. courtroom_drilldown_count: \`$OPS_COURTROOM_DRILLDOWN_COUNT\`
-33. courtroom_drilldown_high_risk_count: \`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
-34. courtroom_drilldown_review_required_count: \`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
-35. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
+11. trust_public_verify_enabled: \`$TRUST_PUBLIC_VERIFY_ENABLED\`
+12. trust_public_verify_case_id: \`$TRUST_PUBLIC_VERIFY_CASE_ID\`
+13. trust_public_verify_verdict_verified: \`$TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED\`
+14. registry_invalid_count: \`$REGISTRY_INVALID_COUNT\`
+15. trust_item_count: \`$TRUST_ITEM_COUNT\`
+16. trust_error_count: \`$TRUST_ERROR_COUNT\`
+17. adaptive_recommended_action_count: \`$ADAPTIVE_RECOMMENDED_ACTION_COUNT\`
+18. adaptive_panel_attention_group_count: \`$ADAPTIVE_PANEL_ATTENTION_GROUP_COUNT\`
+19. adaptive_calibration_high_risk_count: \`$ADAPTIVE_CALIBRATION_HIGH_RISK_COUNT\`
+20. courtroom_sample_count: \`$OPS_COURTROOM_SAMPLE_COUNT\`
+21. courtroom_queue_count: \`$OPS_COURTROOM_QUEUE_COUNT\`
+22. review_queue_count: \`$OPS_REVIEW_QUEUE_COUNT\`
+23. review_high_risk_count: \`$OPS_REVIEW_HIGH_RISK_COUNT\`
+24. review_trust_priority_count: \`$OPS_REVIEW_TRUST_PRIORITY_COUNT\`
+25. review_unified_high_priority_count: \`$OPS_REVIEW_UNIFIED_HIGH_PRIORITY_COUNT\`
+26. trust_challenge_queue_count: \`$OPS_TRUST_CHALLENGE_QUEUE_COUNT\`
+27. trust_challenge_high_priority_count: \`$OPS_TRUST_CHALLENGE_HIGH_PRIORITY_COUNT\`
+28. policy_sim_blocked_count: \`$OPS_POLICY_SIM_BLOCKED_COUNT\`
+29. registry_prompt_tool_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_RISK_COUNT\`
+30. registry_prompt_tool_high_risk_count: \`$OPS_REGISTRY_PROMPT_TOOL_HIGH_RISK_COUNT\`
+31. evidence_claim_queue_count: \`$OPS_EVIDENCE_CLAIM_QUEUE_COUNT\`
+32. evidence_claim_high_risk_count: \`$OPS_EVIDENCE_CLAIM_HIGH_RISK_COUNT\`
+33. evidence_claim_conflict_case_count: \`$OPS_EVIDENCE_CLAIM_CONFLICT_CASE_COUNT\`
+34. evidence_claim_unanswered_case_count: \`$OPS_EVIDENCE_CLAIM_UNANSWERED_CASE_COUNT\`
+35. courtroom_drilldown_count: \`$OPS_COURTROOM_DRILLDOWN_COUNT\`
+36. courtroom_drilldown_high_risk_count: \`$OPS_COURTROOM_DRILLDOWN_HIGH_RISK_COUNT\`
+37. courtroom_drilldown_review_required_count: \`$OPS_COURTROOM_DRILLDOWN_REVIEW_REQUIRED_COUNT\`
+38. required_keys_missing: \`${REQUIRED_KEYS_MISSING:-none}\`
 EOF
 }
 
@@ -664,13 +702,38 @@ main() {
   if [[ "$normalized_trust_challenge_queue_path" != /* ]]; then
     normalized_trust_challenge_queue_path="/$normalized_trust_challenge_queue_path"
   fi
+  local normalized_trust_public_verify_path_template
+  normalized_trust_public_verify_path_template="${TRUST_PUBLIC_VERIFY_PATH_TEMPLATE:-/internal/judge/cases/:case_id/trust/public-verify}"
+  if [[ "$normalized_trust_public_verify_path_template" != /* ]]; then
+    normalized_trust_public_verify_path_template="/$normalized_trust_public_verify_path_template"
+  fi
+
+  TRUST_PUBLIC_VERIFY_CASE_ID="$(trim "$TRUST_PUBLIC_VERIFY_CASE_ID")"
+  if [[ -n "$TRUST_PUBLIC_VERIFY_CASE_ID" ]]; then
+    if ! [[ "$TRUST_PUBLIC_VERIFY_CASE_ID" =~ ^[0-9]+$ ]] || [[ "$TRUST_PUBLIC_VERIFY_CASE_ID" -le 0 ]]; then
+      STATUS="config_missing"
+      REQUEST_ERROR="trust_public_verify_case_id_invalid"
+      HTTP_CODE="000"
+      FINISHED_AT="$(iso_now)"
+      write_output_env ""
+      write_output_md ""
+      write_summary_json ""
+      write_summary_md ""
+      echo "ai_judge_ops_read_model_export_status: $STATUS"
+      echo "ops_read_model_error: $REQUEST_ERROR"
+      exit 1
+    fi
+    TRUST_PUBLIC_VERIFY_ENABLED="1"
+  fi
 
   CASE_FAIRNESS_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.case-fairness.json"
   PANEL_RUNTIME_PROFILE_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.panel-runtime-profiles.json"
   TRUST_CHALLENGE_QUEUE_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.trust-challenge-queue.json"
+  TRUST_PUBLIC_VERIFY_OUTPUT_JSON="$ROOT/artifacts/harness/${RUN_ID}.trust-public-verify.json"
   ensure_parent_dir "$CASE_FAIRNESS_OUTPUT_JSON"
   ensure_parent_dir "$PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
   ensure_parent_dir "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+  ensure_parent_dir "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
 
   local request_base
   request_base="${request_url%/}"
@@ -744,6 +807,23 @@ main() {
   fi
   trust_challenge_queue_url="$(append_query_param "$trust_challenge_queue_url" "limit" "$trust_challenge_queue_limit")"
 
+  local trust_public_verify_url=""
+  if [[ "$TRUST_PUBLIC_VERIFY_ENABLED" == "1" ]]; then
+    local trust_public_verify_path
+    trust_public_verify_path="${normalized_trust_public_verify_path_template//\{case_id\}/$TRUST_PUBLIC_VERIFY_CASE_ID}"
+    trust_public_verify_path="${trust_public_verify_path//:case_id/$TRUST_PUBLIC_VERIFY_CASE_ID}"
+    if [[ "$trust_public_verify_path" == "$normalized_trust_public_verify_path_template" ]]; then
+      trust_public_verify_path="${trust_public_verify_path%/}/$TRUST_PUBLIC_VERIFY_CASE_ID"
+    fi
+    trust_public_verify_url="${request_base}${trust_public_verify_path}"
+    trust_public_verify_url="$(append_query_param "$trust_public_verify_url" "dispatch_type" "$DISPATCH_TYPE")"
+    if [[ "$TRUST_PUBLIC_VERIFY_INCLUDE_PAYLOAD" == "true" ]]; then
+      trust_public_verify_url="$(append_query_param "$trust_public_verify_url" "include_payload" "true")"
+    else
+      trust_public_verify_url="$(append_query_param "$trust_public_verify_url" "include_payload" "false")"
+    fi
+  fi
+
   local timeout_secs
   timeout_secs="$(trim "$REQUEST_TIMEOUT_SECS")"
   if ! [[ "$timeout_secs" =~ ^[0-9]+$ ]] || [[ "$timeout_secs" -le 0 ]]; then
@@ -766,6 +846,11 @@ main() {
   fi
   if [[ "$STATUS" == "pass" ]]; then
     if ! fetch_json "trust-challenge-queue" "$trust_challenge_queue_url" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" TRUST_CHALLENGE_QUEUE_HTTP_CODE "$timeout_secs"; then
+      :
+    fi
+  fi
+  if [[ "$STATUS" == "pass" && "$TRUST_PUBLIC_VERIFY_ENABLED" == "1" ]]; then
+    if ! fetch_json "trust-public-verify" "$trust_public_verify_url" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" TRUST_PUBLIC_VERIFY_HTTP_CODE "$timeout_secs"; then
       :
     fi
   fi
@@ -871,6 +956,23 @@ main() {
     check_required_token_in_file "trustChallengeQueue.filters.scanLimit" "\"scanLimit\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
     check_required_token_in_file "trustChallengeQueue.filters.offset" "\"offset\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
     check_required_token_in_file "trustChallengeQueue.filters.limit" "\"limit\"" "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+    if [[ "$TRUST_PUBLIC_VERIFY_ENABLED" == "1" ]]; then
+      check_required_token_in_file "trustPublicVerify.caseId" "\"caseId\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.dispatchType" "\"dispatchType\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.traceId" "\"traceId\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verifyPayload" "\"verifyPayload\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verifyPayload.caseCommitment" "\"caseCommitment\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verifyPayload.verdictAttestation" "\"verdictAttestation\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verifyPayload.challengeReview" "\"challengeReview\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verifyPayload.kernelVersion" "\"kernelVersion\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verifyPayload.auditAnchor" "\"auditAnchor\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.caseCommitment.commitmentHash" "\"commitmentHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verdictAttestation.registryHash" "\"registryHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verdictAttestation.verified" "\"verified\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.verdictAttestation.mismatchComponents" "\"mismatchComponents\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.kernelVersion.kernelHash" "\"kernelHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+      check_required_token_in_file "trustPublicVerify.auditAnchor.anchorHash" "\"anchorHash\"" "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
+    fi
     if [[ -n "$REQUIRED_KEYS_MISSING" ]]; then
       STATUS="payload_invalid"
       REQUEST_ERROR="required_keys_missing"
@@ -919,6 +1021,13 @@ main() {
     TRUST_CHALLENGE_QUEUE_RETURNED="$(extract_first_number "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" "returned")"
     TRUST_CHALLENGE_QUEUE_ERROR_COUNT="$(extract_first_number "$TRUST_CHALLENGE_QUEUE_OUTPUT_JSON" "errorCount")"
   fi
+  if [[ "$TRUST_PUBLIC_VERIFY_ENABLED" == "1" && -f "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON" ]]; then
+    if grep -Fq '"verified": true' "$TRUST_PUBLIC_VERIFY_OUTPUT_JSON"; then
+      TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED="1"
+    else
+      TRUST_PUBLIC_VERIFY_VERDICT_VERIFIED="0"
+    fi
+  fi
 
   FINISHED_AT="$(iso_now)"
   write_output_env "$request_url"
@@ -932,11 +1041,13 @@ main() {
   echo "ops_case_fairness_http_code: ${CASE_FAIRNESS_HTTP_CODE:-000}"
   echo "ops_panel_runtime_profile_http_code: ${PANEL_RUNTIME_PROFILE_HTTP_CODE:-000}"
   echo "ops_trust_challenge_queue_http_code: ${TRUST_CHALLENGE_QUEUE_HTTP_CODE:-000}"
+  echo "ops_trust_public_verify_http_code: ${TRUST_PUBLIC_VERIFY_HTTP_CODE:-000}"
   echo "required_keys_missing: ${REQUIRED_KEYS_MISSING:-none}"
   echo "output_json: $OUTPUT_JSON"
   echo "case_fairness_output_json: $CASE_FAIRNESS_OUTPUT_JSON"
   echo "panel_runtime_profile_output_json: $PANEL_RUNTIME_PROFILE_OUTPUT_JSON"
   echo "trust_challenge_queue_output_json: $TRUST_CHALLENGE_QUEUE_OUTPUT_JSON"
+  echo "trust_public_verify_output_json: $TRUST_PUBLIC_VERIFY_OUTPUT_JSON"
   echo "output_md: $OUTPUT_MD"
   echo "output_env: $OUTPUT_ENV"
   echo "summary_json: $EMIT_JSON"

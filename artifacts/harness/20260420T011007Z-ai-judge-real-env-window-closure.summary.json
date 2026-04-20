@@ -1,0 +1,40 @@
+{
+  "module": "ai-judge-real-env-window-closure",
+  "status": "env_blocked",
+  "run_id": "20260420T011007Z-ai-judge-real-env-window-closure",
+  "started_at": "2026-04-20T01:10:07Z",
+  "finished_at": "2026-04-20T01:10:09Z",
+  "environment_mode": "blocked",
+  "marker_ready": "false",
+  "allow_local_reference": "false",
+  "stages": [
+    {
+      "stage": "p5_real_calibration_on_env",
+      "status": "env_blocked",
+      "exit_code": 0
+    },
+    {
+      "stage": "runtime_ops_pack",
+      "status": "env_blocked",
+      "exit_code": 0
+    }
+  ],
+  "runtime_ops": {
+    "fairness_status": "env_blocked",
+    "fairness_ingest_status": "skipped",
+    "runtime_sla_status": "env_blocked",
+    "real_env_closure_status": "env_blocked",
+    "stage_closure_evidence_status": "pass"
+  },
+  "real_pass": {
+    "ready": false,
+    "blocker_codes": "real_env_marker_not_ready,p5_status_not_pass,runtime_ops_status_not_pass,fairness_status_not_pass,runtime_sla_status_not_pass,real_env_closure_status_not_pass",
+    "blocker_hints": "设置 docs/loadtest/evidence/ai_judge_p5_real_env.env 中 REAL_CALIBRATION_ENV_READY=true || P5 real calibration 当前为 'env_blocked'，需提升到 pass || runtime ops pack 当前为 'env_blocked'，需提升到 pass || fairness freeze 当前为 'env_blocked'，需提升到 pass || runtime SLA freeze 当前为 'env_blocked'，需提升到 pass || real env evidence closure 当前为 'env_blocked'，需提升到 pass"
+  },
+  "outputs": {
+    "output_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_window_closure.env",
+    "output_doc": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_window_closure.md",
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011007Z-ai-judge-real-env-window-closure.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011007Z-ai-judge-real-env-window-closure.summary.md"
+  }
+}

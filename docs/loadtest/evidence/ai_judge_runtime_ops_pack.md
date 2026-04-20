@@ -1,7 +1,7 @@
 # AI Judge Runtime Ops Pack 收口摘要
 
 1. 生成日期：2026-04-20
-2. 运行窗口：2026-04-20T00:23:39Z -> 2026-04-20T00:23:40Z
+2. 运行窗口：2026-04-20T01:10:08Z -> 2026-04-20T01:10:09Z
 3. 统一状态：`env_blocked`
 4. allow_local_reference：`false`
 5. evidence_dir：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence`
@@ -19,5 +19,5 @@
 
 1. pack env: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.env`
 2. pack doc: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
-3. pack json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002339Z-ai-judge-real-env-window-closure/runtime_ops_pack.summary.json`
-4. pack md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T002339Z-ai-judge-real-env-window-closure/runtime_ops_pack.summary.md`
+3. pack json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011007Z-ai-judge-real-env-window-closure/runtime_ops_pack.summary.json`
+4. pack md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T011007Z-ai-judge-real-env-window-closure/runtime_ops_pack.summary.md`
