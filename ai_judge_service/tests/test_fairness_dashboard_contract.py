@@ -28,9 +28,8 @@ class FairnessDashboardContractTests(unittest.TestCase):
                 "shadowBreachCount": 1,
             },
             "gateDistribution": {
-                "auto_passed": 1,
-                "review_required": 0,
-                "benchmark_attention_required": 1,
+                "pass_through": 1,
+                "blocked_to_draw": 1,
                 "unknown": 0,
             },
             "trends": {
@@ -53,7 +52,7 @@ class FairnessDashboardContractTests(unittest.TestCase):
                     "dispatchType": "final",
                     "updatedAt": "2026-04-19T00:00:00Z",
                     "winner": "pro",
-                    "gateConclusion": "benchmark_attention_required",
+                    "gateConclusion": "blocked_to_draw",
                     "reviewRequired": True,
                     "riskScore": 85,
                     "riskTags": ["shadow_breach"],
@@ -102,8 +101,8 @@ class FairnessDashboardContractTests(unittest.TestCase):
 
     def test_validate_fairness_dashboard_contract_should_fail_on_gate_sum_mismatch(self) -> None:
         payload = self._build_payload()
-        payload["gateDistribution"]["auto_passed"] = 0
-        payload["gateDistribution"]["review_required"] = 0
+        payload["gateDistribution"]["pass_through"] = 0
+        payload["gateDistribution"]["blocked_to_draw"] = 0
 
         with self.assertRaises(ValueError) as ctx:
             validate_fairness_dashboard_contract(payload)

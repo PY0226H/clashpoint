@@ -136,7 +136,13 @@ def build_fairness_dashboard_case_trends(
         challenge_link = item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
         if bool(challenge_link.get("hasOpenReview")):
             row["openReviewCount"] += 1
-        if str(item.get("gateConclusion") or "").strip().lower() == "benchmark_attention_required":
+        drift = item.get("driftSummary") if isinstance(item.get("driftSummary"), dict) else {}
+        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
+        if (
+            bool(drift.get("hasThresholdBreach"))
+            or bool(drift.get("hasDriftBreach"))
+            or bool(shadow.get("hasShadowBreach"))
+        ):
             row["benchmarkAttentionCount"] += 1
 
     return [
@@ -233,10 +239,6 @@ def build_fairness_dashboard_top_risk_cases(
     for item in items:
         risk_score = 0
         risk_tags: list[str] = []
-        gate_conclusion = str(item.get("gateConclusion") or "").strip().lower()
-        if gate_conclusion == "benchmark_attention_required":
-            risk_score += 20
-            risk_tags.append("benchmark_attention")
         if bool(item.get("reviewRequired")):
             risk_score += 30
             risk_tags.append("review_required")
@@ -245,13 +247,21 @@ def build_fairness_dashboard_top_risk_cases(
             risk_score += 20
             risk_tags.append("panel_high_disagreement")
         drift = item.get("driftSummary") if isinstance(item.get("driftSummary"), dict) else {}
+        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
+        has_benchmark_attention = (
+            bool(drift.get("hasThresholdBreach"))
+            or bool(drift.get("hasDriftBreach"))
+            or bool(shadow.get("hasShadowBreach"))
+        )
+        if has_benchmark_attention:
+            risk_score += 20
+            risk_tags.append("benchmark_attention")
         if bool(drift.get("hasThresholdBreach")):
             risk_score += 25
             risk_tags.append("benchmark_threshold_breach")
         if bool(drift.get("hasDriftBreach")):
             risk_score += 15
             risk_tags.append("benchmark_drift_breach")
-        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
         if bool(shadow.get("hasShadowBreach")):
             risk_score += 20
             risk_tags.append("shadow_breach")

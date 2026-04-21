@@ -1,7 +1,7 @@
 # AI_Judge_Service 企业级 Agent 方案章节完成度映射（2026-04-13）
 
 更新时间：2026-04-20  
-状态：已更新（对齐 P27-M1~M5：Case 双读面契约冻结 + Case 读路由结构下沉 + ops 导出 case-read 快照补齐 + 本地回归包 v1）  
+状态：已更新（对齐 P29-M1~M5：judge command/runtime 下沉 + trace/replay 路由拆分 + fairness read-model 硬切 + judge workflow 合同断言 + 本地回归包）  
 映射对象：[AI_judge_service 企业级 Agent 服务设计方案（2026-04-13）](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md)
 
 ## 1. 判定口径
@@ -31,7 +31,7 @@
 | 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地（文档+实现一致） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md) | 当前开发轨迹与继承策略一致 |
 | 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_attestation.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_attestation.py), [trust_commitment_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_commitment_contract.py), [trust_verdict_attestation_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_verdict_attestation_contract.py), [trust_challenge_review_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_review_contract.py) | Trust PhaseA/PhaseB 三读面契约冻结已完成，公开可验证承诺与协议层扩展仍未进入主线 |
 | 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 部分落地 | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | 已守住主要边界，后续继续防止 NPC/Room QA 侵入官方裁决链 |
-| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase3 主线进行中） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [20260420T015331Z-ai-judge-stage-closure-execute.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260420T015331Z-ai-judge-stage-closure-execute.md) | Phase1/2 主链已收敛，当前处于 Phase3 的 P27 执行段（M1~M5 已完成，下一步是一致性文档收口与 real-env pass window） |
+| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase3 主线进行中） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [20260420T052218Z-ai-judge-stage-closure-execute.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260420T052218Z-ai-judge-stage-closure-execute.md) | Phase1/2 主链已收敛，当前处于 Phase3 的 P29 执行段（M1~M5 已完成，下一步是本地收口文档刷新与 real-env pass window） |
 | 18. 最后产品判断 | 企业级裁判系统目标态 | 部分落地（明确推进） | 同上 | 方向正确，工程主链已显著成型；距离“完整目标态”仍有运营化与平台化差距 |
 
 ## 3. Agent 子项映射（方案第6章）
@@ -49,17 +49,17 @@
 
 ## 4. 关键结论（当前真实状态）
 
-1. 当前阶段已进入 `P27`，主链继续向“Case 双读面契约冻结 + Case 读路由结构下沉 + case-read 快照导出补齐 + 本地回归证据稳态”推进。
+1. 当前阶段已进入 `P29`，主链继续向“Judge Command 编排下沉 + trace/replay 读面结构化 + fairness/read-model 语义硬切 + workflow 合同断言”推进。
 2. 截至 2026-04-20 已完成：
-   - `case overview contract freeze v1`：新增 [case_overview_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/case_overview_contract.py)，并在 `/internal/judge/cases/{case_id}` 接入 500 契约失败语义。
-   - `courtroom read model contract freeze v1`：新增 [courtroom_read_model_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/courtroom_read_model_contract.py)，并在 `/internal/judge/cases/{case_id}/courtroom-read-model` 接入 500 契约失败语义。
-   - `case read route structure split v1`：新增 [case_read_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/case_read_routes.py)，将 Case 读路由的 payload 组装从 [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) 下沉到应用层。
-   - `ops-export-case-read-snapshot-alignment v1`：增强 [ai_judge_ops_read_model_export.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_ops_read_model_export.sh)，补齐 case-overview/courtroom-read-model 快照导出、字段检测与失败语义；脚本回归见 [test_ai_judge_ops_read_model_export.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/tests/test_ai_judge_ops_read_model_export.sh)。
-   - `local regression bundle v1`：完成 `ruff + pytest + runtime_ops_pack(local_reference)` 全量回归，最新工件为 [20260420T024132Z-ai-judge-runtime-ops-pack.summary.json](/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T024132Z-ai-judge-runtime-ops-pack.summary.json)。
-3. 当前主要阻塞项仍是 `real-env pass window`；本地侧 P27 主链处于可持续迭代状态。
+   - `judge command runtime split v1`：新增 [judge_dispatch_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_dispatch_runtime.py)，phase/final callback failover 与 workflow payload 下沉。
+   - `trace/replay route split v1`：新增 [judge_trace_replay_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_trace_replay_routes.py)，统一 dispatch 选择与 trace/replay 路由读面组装。
+   - `fairness read-model hardcut v1`：`gateDecision/gateConclusion` 读面主语义统一为 `pass_through/blocked_to_draw`，同步更新 fairness 相关合同与测试。
+   - `judge workflow contract assert v1`：在 [judge_trace_summary.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_trace_summary.py) 增加 phase/final trace summary 合同校验，并在 [replay_audit_ops.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/replay_audit_ops.py) 保留 `judgeWorkflow/roleNodes`。
+   - `local regression bundle`：完成 `ruff + pytest -q + runtime_ops_pack(local_reference_ready)`，最新工件为 [20260420T062335Z-ai-judge-runtime-ops-pack.summary.json](/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T062335Z-ai-judge-runtime-ops-pack.summary.json)。
+3. 当前主要阻塞项仍是 `real-env pass window`；本地侧 P29 主链已进入可收口状态。
 
 ## 5. 下一步优先级（收口后）
 
-1. 完成 `ai-judge-p27-enterprise-consistency-refresh-v1` 文档一致性收口并回写当前计划。
-2. 在真实环境窗口可用后执行 `ai-judge-p27-real-env-pass-window-execute-on-env`，补齐 `pass` 证据。
-3. 执行 `ai-judge-p27-stage-closure-execute`，归档 P27 阶段计划与证据快照。
+1. 完成 `ai-judge-p29-enterprise-consistency-refresh-v1` 文档一致性收口并回写当前计划。
+2. 在真实环境窗口可用后执行 `ai-judge-p29-real-env-pass-window-execute-on-env`，补齐 `pass` 证据。
+3. 执行 `ai-judge-p29-stage-closure-execute`，归档 P29 阶段计划与证据快照。

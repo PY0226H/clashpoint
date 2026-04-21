@@ -20,7 +20,7 @@ class PanelRuntimeProfileContractTests(unittest.TestCase):
             "workflowStatus": "completed",
             "updatedAt": "2026-04-19T00:00:00Z",
             "winner": "pro",
-            "gateConclusion": "auto_passed",
+            "gateConclusion": "pass_through",
             "reviewRequired": False,
             "hasOpenReview": False,
             "challengeState": None,

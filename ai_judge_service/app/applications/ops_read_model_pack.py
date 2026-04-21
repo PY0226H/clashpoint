@@ -19,6 +19,7 @@ OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "policyGateSimulation",
     "adaptiveSummary",
     "trustOverview",
+    "judgeWorkflowCoverage",
     "filters",
 )
 
@@ -145,6 +146,15 @@ _OPS_READ_MODEL_PACK_V5_FILTER_POSITIVE_INT_KEYS: tuple[str, ...] = (
     "panelProfileScanLimit",
     "panelGroupLimit",
     "panelAttentionLimit",
+)
+OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS: tuple[str, ...] = (
+    "totalCases",
+    "fullCount",
+    "partialCount",
+    "missingCount",
+    "invalidOrderCount",
+    "missingRoleCounts",
+    "fullCoverageRate",
 )
 
 
@@ -412,6 +422,65 @@ def summarize_ops_read_model_pack_review_items(
     }
 
 
+def build_ops_read_model_pack_judge_workflow_coverage(
+    *,
+    role_nodes_rows: list[list[dict[str, Any]] | None],
+    expected_role_order: tuple[str, ...],
+) -> dict[str, Any]:
+    total_cases = len(role_nodes_rows)
+    full_count = 0
+    partial_count = 0
+    missing_count = 0
+    invalid_order_count = 0
+    missing_role_counts = {role: 0 for role in expected_role_order}
+
+    expected_roles = list(expected_role_order)
+    expected_role_set = set(expected_role_order)
+    for role_nodes in role_nodes_rows:
+        if not isinstance(role_nodes, list) or not role_nodes:
+            missing_count += 1
+            for role in expected_role_order:
+                missing_role_counts[role] += 1
+            continue
+
+        normalized_rows = [row for row in role_nodes if isinstance(row, dict)]
+        normalized_roles = [
+            str(row.get("role") or "").strip().lower()
+            for row in normalized_rows
+            if str(row.get("role") or "").strip()
+        ]
+        present_roles = set(normalized_roles)
+        for role in expected_role_order:
+            if role not in present_roles:
+                missing_role_counts[role] += 1
+
+        has_complete_set = present_roles.issuperset(expected_role_set)
+        has_expected_order = normalized_roles == expected_roles
+        has_expected_size = len(normalized_rows) == len(expected_role_order)
+        has_expected_seq = all(
+            normalized_rows[idx].get("seq") == idx + 1
+            for idx in range(min(len(normalized_rows), len(expected_role_order)))
+        )
+        if has_complete_set and has_expected_order and has_expected_size and has_expected_seq:
+            full_count += 1
+            continue
+
+        partial_count += 1
+        if not has_expected_order or not has_expected_seq:
+            invalid_order_count += 1
+
+    full_coverage_rate = round(float(full_count) / float(total_cases), 4) if total_cases > 0 else 0.0
+    return {
+        "totalCases": total_cases,
+        "fullCount": full_count,
+        "partialCount": partial_count,
+        "missingCount": missing_count,
+        "invalidOrderCount": invalid_order_count,
+        "missingRoleCounts": missing_role_counts,
+        "fullCoverageRate": full_coverage_rate,
+    }
+
+
 def _require_keys(*, section: str, payload: dict[str, Any], required_keys: tuple[str, ...]) -> None:
     missing = [key for key in required_keys if key not in payload]
     if missing:
@@ -549,6 +618,47 @@ def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
     if int(trust_overview.get("verifiedCount") or 0) > int(trust_overview.get("count") or 0):
         raise ValueError("ops_read_model_pack_trustOverview_verifiedCount_exceeds_count")
 
+    judge_workflow_coverage = payload.get("judgeWorkflowCoverage")
+    if not isinstance(judge_workflow_coverage, dict):
+        raise ValueError("ops_read_model_pack_judgeWorkflowCoverage_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_judgeWorkflowCoverage",
+        payload=judge_workflow_coverage,
+        required_keys=OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
+    )
+    for field in (
+        "totalCases",
+        "fullCount",
+        "partialCount",
+        "missingCount",
+        "invalidOrderCount",
+    ):
+        _require_non_negative_int(
+            section="ops_read_model_pack_judgeWorkflowCoverage",
+            field=field,
+            value=judge_workflow_coverage.get(field),
+        )
+    missing_role_counts = judge_workflow_coverage.get("missingRoleCounts")
+    if not isinstance(missing_role_counts, dict):
+        raise ValueError("ops_read_model_pack_judgeWorkflowCoverage_missingRoleCounts_not_dict")
+    for role, count in missing_role_counts.items():
+        _require_non_negative_int(
+            section="ops_read_model_pack_judgeWorkflowCoverage_missingRoleCounts",
+            field=str(role),
+            value=count,
+        )
+    total_cases = int(judge_workflow_coverage.get("totalCases") or 0)
+    full_count = int(judge_workflow_coverage.get("fullCount") or 0)
+    partial_count = int(judge_workflow_coverage.get("partialCount") or 0)
+    missing_count = int(judge_workflow_coverage.get("missingCount") or 0)
+    if full_count + partial_count + missing_count != total_cases:
+        raise ValueError("ops_read_model_pack_judgeWorkflowCoverage_count_mismatch")
+    full_coverage_rate = judge_workflow_coverage.get("fullCoverageRate")
+    if isinstance(full_coverage_rate, bool) or not isinstance(full_coverage_rate, (int, float)):
+        raise ValueError("ops_read_model_pack_judgeWorkflowCoverage_fullCoverageRate_invalid")
+    if float(full_coverage_rate) < 0.0 or float(full_coverage_rate) > 1.0:
+        raise ValueError("ops_read_model_pack_judgeWorkflowCoverage_fullCoverageRate_invalid")
+
     filters = payload.get("filters")
     if not isinstance(filters, dict):
         raise ValueError("ops_read_model_pack_filters_not_dict")
@@ -595,6 +705,7 @@ def build_ops_read_model_pack_v5_payload(
     policy_gate_simulation: dict[str, Any],
     adaptive_summary: dict[str, Any],
     trust_overview: dict[str, Any],
+    judge_workflow_coverage: dict[str, Any],
     pack_filters: dict[str, Any],
 ) -> dict[str, Any]:
     payload = {
@@ -621,6 +732,7 @@ def build_ops_read_model_pack_v5_payload(
         "policyGateSimulation": policy_gate_simulation,
         "adaptiveSummary": adaptive_summary,
         "trustOverview": trust_overview,
+        "judgeWorkflowCoverage": judge_workflow_coverage,
         "filters": pack_filters,
     }
     validate_ops_read_model_pack_v5_contract(payload)

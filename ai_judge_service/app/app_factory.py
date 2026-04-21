@@ -4,7 +4,7 @@ import asyncio
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -107,9 +107,74 @@ from .applications.fairness_case_scan import (
 from .applications.fairness_dashboard_contract import (
     validate_fairness_dashboard_contract as validate_fairness_dashboard_contract_v3,
 )
+from .applications.judge_app_domain import JUDGE_ROLE_ORDER
+from .applications.judge_dispatch_runtime import (
+    CALLBACK_STATUS_FAILED_CALLBACK_FAILED as CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
+)
+from .applications.judge_dispatch_runtime import (
+    CALLBACK_STATUS_FAILED_REPORTED as CALLBACK_STATUS_FAILED_REPORTED_V3,
+)
+from .applications.judge_dispatch_runtime import (
+    CALLBACK_STATUS_REPORTED as CALLBACK_STATUS_REPORTED_V3,
+)
+from .applications.judge_dispatch_runtime import (
+    build_final_dispatch_accepted_response as build_final_dispatch_accepted_response_v3,
+)
+from .applications.judge_dispatch_runtime import (
+    build_final_workflow_register_payload as build_final_workflow_register_payload_v3,
+)
+from .applications.judge_dispatch_runtime import (
+    build_final_workflow_reported_payload as build_final_workflow_reported_payload_v3,
+)
+from .applications.judge_dispatch_runtime import (
+    build_phase_dispatch_accepted_response as build_phase_dispatch_accepted_response_v3,
+)
+from .applications.judge_dispatch_runtime import (
+    build_phase_workflow_register_payload as build_phase_workflow_register_payload_v3,
+)
+from .applications.judge_dispatch_runtime import (
+    build_phase_workflow_reported_payload as build_phase_workflow_reported_payload_v3,
+)
+from .applications.judge_dispatch_runtime import (
+    deliver_report_callback_with_failed_fallback as deliver_report_callback_with_failed_fallback_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_replay_reports_list_payload as build_replay_reports_list_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_replay_route_payload as build_replay_route_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_trace_route_payload as build_trace_route_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_trace_route_replay_items as build_trace_route_replay_items_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    choose_replay_dispatch_receipt as choose_replay_dispatch_receipt_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    extract_replay_request_snapshot as extract_replay_request_snapshot_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    normalize_replay_dispatch_type as normalize_replay_dispatch_type_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    resolve_replay_trace_id as resolve_replay_trace_id_v3,
+)
+from .applications.judge_trace_summary import (
+    build_trace_report_summary as build_trace_report_summary_v3,
+)
+from .applications.judge_workflow_roles import (
+    build_final_judge_workflow_payload as build_final_judge_workflow_payload_v3,
+)
+from .applications.judge_workflow_roles import (
+    build_phase_judge_workflow_payload as build_phase_judge_workflow_payload_v3,
+)
 from .applications.ops_read_model_pack import (
     build_ops_read_model_pack_adaptive_summary,
     build_ops_read_model_pack_filters,
+    build_ops_read_model_pack_judge_workflow_coverage,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
@@ -118,11 +183,90 @@ from .applications.ops_read_model_pack import (
 from .applications.panel_runtime_profile_contract import (
     validate_panel_runtime_profile_contract as validate_panel_runtime_profile_contract_v3,
 )
+from .applications.panel_runtime_routes import (
+    build_panel_runtime_profiles_payload as build_panel_runtime_profiles_payload_v3,
+)
+from .applications.panel_runtime_routes import (
+    build_panel_runtime_readiness_payload as build_panel_runtime_readiness_payload_v3,
+)
 from .applications.registry_ops_views import (
     build_registry_alert_ops_view as build_registry_alert_ops_view_v3,
 )
 from .applications.registry_ops_views import (
     build_registry_audit_ops_view as build_registry_audit_ops_view_v3,
+)
+from .applications.registry_routes import RegistryRouteError as RegistryRouteErrorV3
+from .applications.registry_routes import (
+    build_policy_domain_judge_families_payload as build_policy_domain_judge_families_payload_v3,
+)
+from .applications.registry_routes import (
+    build_policy_gate_simulation_payload as build_policy_gate_simulation_payload_v3,
+)
+from .applications.registry_routes import (
+    build_policy_registry_dependency_health_payload as build_policy_registry_dependency_health_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_activate_payload as build_registry_activate_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_audits_payload as build_registry_audits_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_governance_overview_payload as build_registry_governance_overview_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_profile_payload as build_registry_profile_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_profiles_payload as build_registry_profiles_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_prompt_tool_governance_payload as build_registry_prompt_tool_governance_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_publish_payload as build_registry_publish_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_release_payload as build_registry_release_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_releases_payload as build_registry_releases_payload_v3,
+)
+from .applications.registry_routes import (
+    build_registry_rollback_payload as build_registry_rollback_payload_v3,
+)
+from .applications.registry_routes import (
+    parse_registry_publish_request_payload as parse_registry_publish_request_payload_v3,
+)
+from .applications.review_alert_routes import (
+    ReviewRouteError as ReviewRouteError_v3,
+)
+from .applications.review_alert_routes import (
+    build_alert_ops_view_payload as build_alert_ops_view_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_alert_outbox_delivery_payload as build_alert_outbox_delivery_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_alert_outbox_list_payload as build_alert_outbox_list_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_alert_status_transition_payload as build_alert_status_transition_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_case_alerts_payload as build_case_alerts_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_review_case_decision_payload as build_review_case_decision_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_review_case_detail_payload as build_review_case_detail_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_review_cases_list_payload as build_review_cases_list_payload_v3,
+)
+from .applications.review_alert_routes import (
+    normalize_review_case_filters as normalize_review_case_filters_v3,
 )
 from .applications.review_queue_contract import (
     validate_courtroom_drilldown_bundle_contract as validate_courtroom_drilldown_bundle_contract_v3,
@@ -390,9 +534,13 @@ PANEL_RUNTIME_PROFILE_DEFAULTS = {
     },
 }
 CASE_FAIRNESS_GATE_CONCLUSIONS = {
-    "auto_passed",
-    "review_required",
-    "benchmark_attention_required",
+    "pass_through",
+    "blocked_to_draw",
+}
+FAIRNESS_GATE_DECISION_ALIASES = {
+    "auto_passed": "pass_through",
+    "review_required": "blocked_to_draw",
+    "blocked_failed": "blocked_to_draw",
 }
 CASE_FAIRNESS_CHALLENGE_STATES = {
     TRUST_CHALLENGE_STATE_REQUESTED,
@@ -1388,13 +1536,12 @@ def _build_courtroom_read_model_view(
         if isinstance(verdict_ledger.get("pivotalMoments"), list)
         else []
     )
-    gate_decision = str(arbitration.get("gateDecision") or "").strip().lower()
+    gate_decision = _normalize_fairness_gate_decision(
+        arbitration.get("gateDecision"),
+        review_required=bool(payload.get("reviewRequired")),
+    )
     if not gate_decision:
-        gate_decision = (
-            "review_required"
-            if bool(payload.get("reviewRequired"))
-            else "auto_passed"
-        )
+        gate_decision = "blocked_to_draw" if bool(payload.get("reviewRequired")) else "pass_through"
 
     return {
         "recorder": {
@@ -1689,7 +1836,13 @@ def _build_courtroom_read_model_light_summary(
             "panelHighDisagreement": bool(fairness_summary.get("panelHighDisagreement")),
         },
         "fairness": {
-            "gateDecision": str(fairness.get("gateDecision") or "").strip().lower() or None,
+            "gateDecision": (
+                _normalize_fairness_gate_decision(
+                    fairness.get("gateDecision"),
+                    review_required=bool(fairness.get("reviewRequired")),
+                )
+                or None
+            ),
             "reviewRequired": bool(fairness.get("reviewRequired")),
             "auditAlertCount": int(fairness.get("auditAlertCount") or 0),
             "degradationLevel": fairness.get("degradationLevel"),
@@ -1879,7 +2032,13 @@ def _build_courtroom_drilldown_bundle_view(
             ),
         },
         "fairness": {
-            "gateDecision": str(fairness.get("gateDecision") or "").strip().lower() or None,
+            "gateDecision": (
+                _normalize_fairness_gate_decision(
+                    fairness.get("gateDecision"),
+                    review_required=bool(fairness.get("reviewRequired")),
+                )
+                or None
+            ),
             "reviewRequired": bool(fairness.get("reviewRequired")),
             "auditAlertCount": int(fairness.get("auditAlertCount") or 0),
             "degradationLevel": fairness.get("degradationLevel"),
@@ -2794,9 +2953,27 @@ def _normalize_case_fairness_gate_conclusion(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip().lower()
-    if not normalized:
-        return None
-    return normalized
+    return normalized or None
+
+
+def _normalize_fairness_gate_decision(
+    value: Any,
+    *,
+    review_required: bool | None = None,
+) -> str:
+    token = str(value or "").strip().lower()
+    if token in CASE_FAIRNESS_GATE_CONCLUSIONS:
+        return token
+    alias = FAIRNESS_GATE_DECISION_ALIASES.get(token)
+    if alias in CASE_FAIRNESS_GATE_CONCLUSIONS:
+        return alias
+    if review_required is True:
+        return "blocked_to_draw"
+    if review_required is False:
+        return "pass_through"
+    if not token:
+        return "pass_through"
+    return ""
 
 
 def _normalize_case_fairness_challenge_state(value: str | None) -> str | None:
@@ -4856,6 +5033,16 @@ def _build_case_fairness_item(
         if isinstance(judge_trace.get("panelRuntimeProfiles"), dict)
         else {}
     )
+    verdict_ledger = (
+        report_payload.get("verdictLedger")
+        if isinstance(report_payload.get("verdictLedger"), dict)
+        else {}
+    )
+    arbitration = (
+        verdict_ledger.get("arbitration")
+        if isinstance(verdict_ledger.get("arbitration"), dict)
+        else {}
+    )
     winner = str(report_payload.get("winner") or "").strip().lower() or None
     review_required = bool(report_payload.get("reviewRequired"))
     error_codes = [
@@ -4895,19 +5082,12 @@ def _build_case_fairness_item(
     )
     if latest_shadow_run is not None and latest_shadow_run.threshold_decision != "accepted":
         has_shadow_breach = True
-    gate_conclusion = "review_required" if review_required else "auto_passed"
-    if (
-        latest_run is not None
-        and latest_run.threshold_decision != "accepted"
-        and gate_conclusion != "review_required"
-    ):
-        gate_conclusion = "benchmark_attention_required"
-    if (
-        latest_shadow_run is not None
-        and latest_shadow_run.threshold_decision != "accepted"
-        and gate_conclusion != "review_required"
-    ):
-        gate_conclusion = "benchmark_attention_required"
+    gate_conclusion = _normalize_fairness_gate_decision(
+        arbitration.get("gateDecision") or fairness_summary.get("gateDecision"),
+        review_required=review_required,
+    )
+    if not gate_conclusion:
+        gate_conclusion = "blocked_to_draw" if review_required else "pass_through"
 
     return {
         "caseId": case_id,
@@ -5168,20 +5348,15 @@ def _build_trace_report_summary(
     payload: dict[str, Any] | None,
     callback_status: str,
     callback_error: str | None,
+    judge_workflow: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    report_payload = payload if isinstance(payload, dict) else {}
-    alerts = report_payload.get("auditAlerts")
-    if not isinstance(alerts, list):
-        alerts = []
-    winner = str(report_payload.get("winner") or "").strip().lower() or None
-    return {
-        "dispatchType": dispatch_type,
-        "payload": report_payload,
-        "winner": winner,
-        "auditAlerts": [item for item in alerts if isinstance(item, dict)],
-        "callbackStatus": callback_status,
-        "callbackError": callback_error,
-    }
+    return build_trace_report_summary_v3(
+        dispatch_type=dispatch_type,
+        payload=payload,
+        callback_status=callback_status,
+        callback_error=callback_error,
+        judge_workflow=judge_workflow,
+    )
 
 
 def _resolve_idempotency_or_raise(
@@ -5488,6 +5663,28 @@ def _build_final_report_payload(
         judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
         fairness_thresholds=fairness_thresholds,
         panel_runtime_profiles=panel_runtime_profiles,
+    )
+
+
+def _build_phase_judge_workflow_payload(
+    *,
+    request: PhaseDispatchRequest,
+    report_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return build_phase_judge_workflow_payload_v3(
+        request=request,
+        report_payload=report_payload,
+    )
+
+
+def _build_final_judge_workflow_payload(
+    *,
+    request: FinalDispatchRequest,
+    report_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return build_final_judge_workflow_payload_v3(
+        request=request,
+        report_payload=report_payload,
     )
 
 
@@ -6742,14 +6939,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
         profiles = runtime.prompt_registry_runtime.list_profiles()
-        return {
-            "defaultVersion": runtime.prompt_registry_runtime.default_version,
-            "count": len(profiles),
-            "items": [
-                _serialize_prompt_profile(runtime, profile=item)
-                for item in profiles
-            ],
-        }
+        return build_registry_profiles_payload_v3(
+            default_version=runtime.prompt_registry_runtime.default_version,
+            profiles=profiles,
+            serializer=lambda item: _serialize_prompt_profile(runtime, profile=item),
+        )
 
     @app.get("/internal/judge/registries/prompts/{prompt_version}")
     async def get_prompt_registry(
@@ -6761,9 +6955,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         profile = runtime.prompt_registry_runtime.get_profile(prompt_version)
         if profile is None:
             raise HTTPException(status_code=404, detail="prompt_registry_not_found")
-        return {
-            "item": _serialize_prompt_profile(runtime, profile=profile),
-        }
+        return build_registry_profile_payload_v3(
+            profile=profile,
+            serializer=lambda item: _serialize_prompt_profile(runtime, profile=item),
+        )
 
     @app.get("/internal/judge/registries/tools")
     async def list_tool_registries(
@@ -6772,14 +6967,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
         profiles = runtime.tool_registry_runtime.list_profiles()
-        return {
-            "defaultVersion": runtime.tool_registry_runtime.default_version,
-            "count": len(profiles),
-            "items": [
-                _serialize_tool_profile(runtime, profile=item)
-                for item in profiles
-            ],
-        }
+        return build_registry_profiles_payload_v3(
+            default_version=runtime.tool_registry_runtime.default_version,
+            profiles=profiles,
+            serializer=lambda item: _serialize_tool_profile(runtime, profile=item),
+        )
 
     @app.get("/internal/judge/registries/tools/{toolset_version}")
     async def get_tool_registry(
@@ -6791,9 +6983,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         profile = runtime.tool_registry_runtime.get_profile(toolset_version)
         if profile is None:
             raise HTTPException(status_code=404, detail="tool_registry_not_found")
-        return {
-            "item": _serialize_tool_profile(runtime, profile=profile),
-        }
+        return build_registry_profile_payload_v3(
+            profile=profile,
+            serializer=lambda item: _serialize_tool_profile(runtime, profile=item),
+        )
 
     @app.get("/internal/judge/registries/policy/dependencies/health")
     async def get_policy_registry_dependency_health(
@@ -6811,89 +7004,43 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        selected_policy_version = (
-            str(policy_version or "").strip()
-            or runtime.policy_registry_runtime.default_version
-        )
-        selected_item = await _evaluate_policy_registry_dependency_health(
-            policy_version=selected_policy_version,
-        )
-        if selected_item.get("code") == "policy_registry_not_found":
-            raise HTTPException(status_code=404, detail="policy_registry_not_found")
-        items: list[dict[str, Any]] = [selected_item]
-        if include_all_versions:
-            policy_versions: list[str] = []
-            seen_versions: set[str] = set()
-            for row in runtime.policy_registry_runtime.list_profiles():
-                version_token = str(getattr(row, "version", "") or "").strip()
-                if not version_token or version_token in seen_versions:
-                    continue
-                seen_versions.add(version_token)
-                policy_versions.append(version_token)
-            if selected_policy_version not in seen_versions:
-                policy_versions.insert(0, selected_policy_version)
-            items = []
-            for version_token in policy_versions[: max(1, min(int(limit), 200))]:
-                dependency_item = await _evaluate_policy_registry_dependency_health(
-                    policy_version=version_token,
-                )
-                if dependency_item.get("code") == "policy_registry_not_found":
-                    continue
-                items.append(dependency_item)
-        normalized_trend_status = _normalize_registry_dependency_trend_status(
-            trend_status
-        )
-        if (
-            normalized_trend_status is not None
-            and normalized_trend_status not in REGISTRY_DEPENDENCY_TREND_STATUS_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_trend_status")
-        alerts: list[Any] = []
-        if include_overview or include_trend:
-            alerts = await _list_audit_alerts(job_id=0, status=None, limit=5000)
-        dependency_overview = None
-        if include_overview:
-            dependency_overview = _build_registry_dependency_overview(
-                items=items,
-                alerts=alerts,
-                registry_type=REGISTRY_TYPE_POLICY,
-                window_minutes=overview_window_minutes,
+        try:
+            return await build_policy_registry_dependency_health_payload_v3(
+                policy_version=policy_version,
+                default_policy_version=runtime.policy_registry_runtime.default_version,
+                default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
+                default_tool_registry_version=runtime.tool_registry_runtime.default_version,
+                include_all_versions=include_all_versions,
+                include_overview=include_overview,
+                include_trend=include_trend,
+                trend_status=trend_status,
+                trend_policy_version=trend_policy_version,
+                trend_offset=trend_offset,
+                trend_limit=trend_limit,
+                overview_window_minutes=overview_window_minutes,
+                limit=limit,
+                list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
+                evaluate_policy_registry_dependency_health=(
+                    lambda version: _evaluate_policy_registry_dependency_health(
+                        policy_version=version,
+                    )
+                ),
+                normalize_registry_dependency_trend_status=(
+                    _normalize_registry_dependency_trend_status
+                ),
+                dependency_trend_status_values=REGISTRY_DEPENDENCY_TREND_STATUS_VALUES,
+                list_audit_alerts=_list_audit_alerts,
+                build_registry_dependency_overview=_build_registry_dependency_overview,
+                build_registry_dependency_trend=_build_registry_dependency_trend,
             )
-        dependency_trend = None
-        if include_trend:
-            dependency_trend = _build_registry_dependency_trend(
-                alerts=alerts,
-                registry_type=REGISTRY_TYPE_POLICY,
-                window_minutes=overview_window_minutes,
-                status_filter=normalized_trend_status,
-                policy_version_filter=trend_policy_version,
-                offset=trend_offset,
-                limit=trend_limit,
-            )
-        return {
-            "activeVersions": {
-                "policyVersion": runtime.policy_registry_runtime.default_version,
-                "promptRegistryVersion": runtime.prompt_registry_runtime.default_version,
-                "toolRegistryVersion": runtime.tool_registry_runtime.default_version,
-            },
-            "selectedPolicyVersion": selected_policy_version,
-            "item": selected_item,
-            "count": len(items),
-            "items": items,
-            "includeAllVersions": bool(include_all_versions),
-            "includeOverview": bool(include_overview),
-            "includeTrend": bool(include_trend),
-            "trendStatus": normalized_trend_status,
-            "trendPolicyVersion": (
-                str(trend_policy_version or "").strip() or None
-            ),
-            "trendOffset": int(trend_offset),
-            "trendLimit": int(trend_limit),
-            "overviewWindowMinutes": int(overview_window_minutes),
-            "dependencyOverview": dependency_overview,
-            "dependencyTrend": dependency_trend,
-            "limit": int(limit),
-        }
+        except ValueError as err:
+            if str(err) == "invalid_trend_status":
+                raise HTTPException(status_code=422, detail="invalid_trend_status") from err
+            raise
+        except LookupError as err:
+            if str(err) == "policy_registry_not_found":
+                raise HTTPException(status_code=404, detail="policy_registry_not_found") from err
+            raise
 
     @app.get("/internal/judge/registries/governance/overview")
     async def get_registry_governance_overview(
@@ -6905,285 +7052,31 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-
-        policy_profiles = runtime.policy_registry_runtime.list_profiles()
-        prompt_profiles = runtime.prompt_registry_runtime.list_profiles()
-        tool_profiles = runtime.tool_registry_runtime.list_profiles()
-
-        dependency_rows: list[dict[str, Any]] = []
-        dependency_invalid_count = 0
-        dependency_by_prompt_registry: dict[str, int] = {}
-        dependency_by_tool_registry: dict[str, int] = {}
-        dependency_issue_code_counts: dict[str, int] = {}
-        for profile in policy_profiles[: max(1, min(int(dependency_limit), 500))]:
-            dependency_payload = await _evaluate_policy_registry_dependency_health(
-                policy_version=str(getattr(profile, "version", "") or "").strip(),
-            )
-            issue_codes = [
-                str(row.get("code") or "").strip()
-                for row in (dependency_payload.get("issues") or [])
-                if isinstance(row, dict) and str(row.get("code") or "").strip()
-            ]
-            prompt_registry_version = (
-                str(dependency_payload.get("promptRegistryVersion") or "").strip() or "unknown"
-            )
-            tool_registry_version = (
-                str(dependency_payload.get("toolRegistryVersion") or "").strip() or "unknown"
-            )
-            dependency_by_prompt_registry[prompt_registry_version] = (
-                dependency_by_prompt_registry.get(prompt_registry_version, 0) + 1
-            )
-            dependency_by_tool_registry[tool_registry_version] = (
-                dependency_by_tool_registry.get(tool_registry_version, 0) + 1
-            )
-            for code in issue_codes:
-                dependency_issue_code_counts[code] = (
-                    dependency_issue_code_counts.get(code, 0) + 1
+        return await build_registry_governance_overview_payload_v3(
+            dependency_limit=dependency_limit,
+            usage_preview_limit=usage_preview_limit,
+            release_limit=release_limit,
+            audit_limit=audit_limit,
+            default_policy_version=runtime.policy_registry_runtime.default_version,
+            default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
+            default_tool_registry_version=runtime.tool_registry_runtime.default_version,
+            policy_registry_type=REGISTRY_TYPE_POLICY,
+            prompt_registry_type="prompt",
+            tool_registry_type="tool",
+            list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
+            list_prompt_profiles=runtime.prompt_registry_runtime.list_profiles,
+            list_tool_profiles=runtime.tool_registry_runtime.list_profiles,
+            evaluate_policy_registry_dependency_health=(
+                lambda version: _evaluate_policy_registry_dependency_health(
+                    policy_version=version,
                 )
-            if not bool(dependency_payload.get("ok")):
-                dependency_invalid_count += 1
-            dependency_rows.append(
-                {
-                    "policyVersion": str(dependency_payload.get("policyVersion") or "").strip()
-                    or str(getattr(profile, "version", "") or "").strip()
-                    or None,
-                    "ok": bool(dependency_payload.get("ok")),
-                    "code": str(dependency_payload.get("code") or "").strip() or None,
-                    "promptRegistryVersion": (
-                        str(dependency_payload.get("promptRegistryVersion") or "").strip()
-                        or None
-                    ),
-                    "toolRegistryVersion": (
-                        str(dependency_payload.get("toolRegistryVersion") or "").strip()
-                        or None
-                    ),
-                    "issueCodes": issue_codes,
-                }
-            )
-
-        prompt_refs_by_policy: dict[str, list[str]] = {}
-        tool_refs_by_policy: dict[str, list[str]] = {}
-        for profile in policy_profiles:
-            policy_version = str(getattr(profile, "version", "") or "").strip()
-            prompt_version = str(getattr(profile, "prompt_registry_version", "") or "").strip()
-            tool_version = str(getattr(profile, "tool_registry_version", "") or "").strip()
-            if prompt_version:
-                prompt_refs_by_policy.setdefault(prompt_version, []).append(policy_version)
-            if tool_version:
-                tool_refs_by_policy.setdefault(tool_version, []).append(policy_version)
-
-        preview_cap = max(1, min(int(usage_preview_limit), 200))
-        domain_family_overview = _build_policy_domain_judge_family_overview(
-            policy_profiles=policy_profiles,
-            active_policy_version=runtime.policy_registry_runtime.default_version,
-            preview_limit=preview_cap,
-            include_versions=True,
+            ),
+            list_releases=runtime.registry_product_runtime.list_releases,
+            list_audits=runtime.registry_product_runtime.list_audits,
+            build_policy_domain_judge_family_overview=(
+                _build_policy_domain_judge_family_overview
+            ),
         )
-        prompt_usage_rows: list[dict[str, Any]] = []
-        for profile in prompt_profiles:
-            version_token = str(getattr(profile, "version", "") or "").strip()
-            refs = prompt_refs_by_policy.get(version_token, [])
-            prompt_usage_rows.append(
-                {
-                    "version": version_token or None,
-                    "isActive": version_token == runtime.prompt_registry_runtime.default_version,
-                    "referencedByPolicyCount": len(refs),
-                    "referencedPolicyVersions": refs[:preview_cap],
-                    "hasMorePolicyRefs": len(refs) > preview_cap,
-                }
-            )
-        prompt_usage_rows.sort(
-            key=lambda row: (
-                -int(row.get("referencedByPolicyCount") or 0),
-                str(row.get("version") or ""),
-            )
-        )
-
-        tool_usage_rows: list[dict[str, Any]] = []
-        for profile in tool_profiles:
-            version_token = str(getattr(profile, "version", "") or "").strip()
-            refs = tool_refs_by_policy.get(version_token, [])
-            tool_usage_rows.append(
-                {
-                    "version": version_token or None,
-                    "isActive": version_token == runtime.tool_registry_runtime.default_version,
-                    "referencedByPolicyCount": len(refs),
-                    "referencedPolicyVersions": refs[:preview_cap],
-                    "hasMorePolicyRefs": len(refs) > preview_cap,
-                }
-            )
-        tool_usage_rows.sort(
-            key=lambda row: (
-                -int(row.get("referencedByPolicyCount") or 0),
-                str(row.get("version") or ""),
-            )
-        )
-
-        known_prompt_versions = {
-            str(getattr(profile, "version", "") or "").strip()
-            for profile in prompt_profiles
-            if str(getattr(profile, "version", "") or "").strip()
-        }
-        known_tool_versions = {
-            str(getattr(profile, "version", "") or "").strip()
-            for profile in tool_profiles
-            if str(getattr(profile, "version", "") or "").strip()
-        }
-        missing_prompt_refs = sorted(
-            {
-                str(getattr(profile, "prompt_registry_version", "") or "").strip()
-                for profile in policy_profiles
-                if str(getattr(profile, "prompt_registry_version", "") or "").strip()
-                and str(getattr(profile, "prompt_registry_version", "") or "").strip()
-                not in known_prompt_versions
-            }
-        )
-        missing_tool_refs = sorted(
-            {
-                str(getattr(profile, "tool_registry_version", "") or "").strip()
-                for profile in policy_profiles
-                if str(getattr(profile, "tool_registry_version", "") or "").strip()
-                and str(getattr(profile, "tool_registry_version", "") or "").strip()
-                not in known_tool_versions
-            }
-        )
-
-        release_state: dict[str, dict[str, Any]] = {}
-        for registry_type in (
-            REGISTRY_TYPE_POLICY,
-            "prompt",
-            "tool",
-        ):
-            releases = await runtime.registry_product_runtime.list_releases(
-                registry_type=registry_type,
-                limit=max(1, min(int(release_limit), 200)),
-                include_payload=False,
-            )
-            active_release = next(
-                (row for row in releases if bool(row.get("isActive"))),
-                None,
-            )
-            latest_release = releases[0] if releases else None
-            release_state[registry_type] = {
-                "count": len(releases),
-                "activeVersion": (
-                    str(active_release.get("version") or "").strip()
-                    if isinstance(active_release, dict)
-                    else None
-                ),
-                "latestVersion": (
-                    str(latest_release.get("version") or "").strip()
-                    if isinstance(latest_release, dict)
-                    else None
-                ),
-                "hasRollbackCandidate": len(releases) > 1,
-                "versionPreview": [
-                    str(row.get("version") or "").strip()
-                    for row in releases[:preview_cap]
-                    if str(row.get("version") or "").strip()
-                ],
-            }
-
-        audit_counts_by_registry_type: dict[str, int] = {}
-        audit_counts_by_action: dict[str, int] = {}
-        latest_rollback_by_registry_type: dict[str, dict[str, Any] | None] = {}
-        latest_action_by_registry_type: dict[str, dict[str, Any] | None] = {}
-        for registry_type in (
-            REGISTRY_TYPE_POLICY,
-            "prompt",
-            "tool",
-        ):
-            audits = await runtime.registry_product_runtime.list_audits(
-                registry_type=registry_type,
-                limit=max(1, min(int(audit_limit), 200)),
-            )
-            audit_counts_by_registry_type[registry_type] = len(audits)
-            latest_action = audits[0] if audits else None
-            latest_action_by_registry_type[registry_type] = (
-                {
-                    "registryType": registry_type,
-                    "action": str(latest_action.get("action") or "").strip() or None,
-                    "version": str(latest_action.get("version") or "").strip() or None,
-                    "actor": str(latest_action.get("actor") or "").strip() or None,
-                    "reason": str(latest_action.get("reason") or "").strip() or None,
-                    "createdAt": str(latest_action.get("createdAt") or "").strip() or None,
-                }
-                if isinstance(latest_action, dict)
-                else None
-            )
-            latest_rollback = next(
-                (
-                    row
-                    for row in audits
-                    if str(row.get("action") or "").strip().lower()
-                    == "rollback"
-                ),
-                None,
-            )
-            latest_rollback_by_registry_type[registry_type] = (
-                {
-                    "registryType": registry_type,
-                    "action": "rollback",
-                    "version": str(latest_rollback.get("version") or "").strip() or None,
-                    "actor": str(latest_rollback.get("actor") or "").strip() or None,
-                    "reason": str(latest_rollback.get("reason") or "").strip() or None,
-                    "createdAt": str(latest_rollback.get("createdAt") or "").strip() or None,
-                }
-                if isinstance(latest_rollback, dict)
-                else None
-            )
-            for row in audits:
-                action_token = str(row.get("action") or "").strip().lower() or "unknown"
-                audit_counts_by_action[action_token] = (
-                    audit_counts_by_action.get(action_token, 0) + 1
-                )
-
-        return {
-            "activeVersions": {
-                "policyVersion": runtime.policy_registry_runtime.default_version,
-                "promptRegistryVersion": runtime.prompt_registry_runtime.default_version,
-                "toolRegistryVersion": runtime.tool_registry_runtime.default_version,
-            },
-            "dependencyHealth": {
-                "count": len(dependency_rows),
-                "invalidCount": dependency_invalid_count,
-                "items": dependency_rows,
-                "byPromptRegistryVersion": dict(
-                    sorted(dependency_by_prompt_registry.items(), key=lambda kv: kv[0])
-                ),
-                "byToolRegistryVersion": dict(
-                    sorted(dependency_by_tool_registry.items(), key=lambda kv: kv[0])
-                ),
-                "issueCodeCounts": dict(
-                    sorted(dependency_issue_code_counts.items(), key=lambda kv: kv[0])
-                ),
-            },
-            "reverseUsage": {
-                "prompts": prompt_usage_rows,
-                "tools": tool_usage_rows,
-                "missingPromptRegistryRefs": missing_prompt_refs,
-                "missingToolRegistryRefs": missing_tool_refs,
-            },
-            "domainJudgeFamilies": domain_family_overview,
-            "releaseState": release_state,
-            "auditSummary": {
-                "countsByRegistryType": dict(
-                    sorted(audit_counts_by_registry_type.items(), key=lambda kv: kv[0])
-                ),
-                "countsByAction": dict(
-                    sorted(audit_counts_by_action.items(), key=lambda kv: kv[0])
-                ),
-                "latestActionByRegistryType": latest_action_by_registry_type,
-                "latestRollbackByRegistryType": latest_rollback_by_registry_type,
-                "auditLimitPerRegistryType": max(1, min(int(audit_limit), 200)),
-            },
-            "filters": {
-                "dependencyLimit": max(1, min(int(dependency_limit), 500)),
-                "usagePreviewLimit": preview_cap,
-                "releaseLimit": max(1, min(int(release_limit), 200)),
-                "auditLimit": max(1, min(int(audit_limit), 200)),
-            },
-        }
 
     @app.get("/internal/judge/registries/prompt-tool/governance")
     async def get_registry_prompt_tool_governance(
@@ -7194,165 +7087,44 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         audit_limit: int = Query(default=100, ge=1, le=200),
         risk_limit: int = Query(default=50, ge=1, le=500),
     ) -> dict[str, Any]:
-        governance_overview = await get_registry_governance_overview(
-            x_ai_internal_key=x_ai_internal_key,
+        require_internal_key(runtime.settings, x_ai_internal_key)
+        await _ensure_registry_runtime_ready()
+        governance_overview = await build_registry_governance_overview_payload_v3(
             dependency_limit=dependency_limit,
             usage_preview_limit=usage_preview_limit,
             release_limit=release_limit,
             audit_limit=audit_limit,
-        )
-        dependency_health = (
-            governance_overview.get("dependencyHealth")
-            if isinstance(governance_overview.get("dependencyHealth"), dict)
-            else {}
-        )
-        reverse_usage = (
-            governance_overview.get("reverseUsage")
-            if isinstance(governance_overview.get("reverseUsage"), dict)
-            else {}
-        )
-        release_state = (
-            governance_overview.get("releaseState")
-            if isinstance(governance_overview.get("releaseState"), dict)
-            else {}
-        )
-        audit_summary = (
-            governance_overview.get("auditSummary")
-            if isinstance(governance_overview.get("auditSummary"), dict)
-            else {}
-        )
-
-        dependency_items = (
-            dependency_health.get("items")
-            if isinstance(dependency_health.get("items"), list)
-            else []
-        )
-        prompt_usage_rows_raw = (
-            reverse_usage.get("prompts")
-            if isinstance(reverse_usage.get("prompts"), list)
-            else []
-        )
-        tool_usage_rows_raw = (
-            reverse_usage.get("tools")
-            if isinstance(reverse_usage.get("tools"), list)
-            else []
-        )
-        missing_prompt_refs = sorted(
-            {
-                str(item).strip()
-                for item in (reverse_usage.get("missingPromptRegistryRefs") or [])
-                if str(item).strip()
-            }
-        )
-        missing_tool_refs = sorted(
-            {
-                str(item).strip()
-                for item in (reverse_usage.get("missingToolRegistryRefs") or [])
-                if str(item).strip()
-            }
-        )
-        prompt_usage_rows, unreferenced_prompt_count = (
-            _build_registry_prompt_tool_usage_rows(usage_rows=prompt_usage_rows_raw)
-        )
-        tool_usage_rows, unreferenced_tool_count = (
-            _build_registry_prompt_tool_usage_rows(usage_rows=tool_usage_rows_raw)
-        )
-        all_risk_items = _build_registry_prompt_tool_risk_items(
-            dependency_items=dependency_items,
-            prompt_usage_rows=prompt_usage_rows,
-            tool_usage_rows=tool_usage_rows,
-            missing_prompt_refs=missing_prompt_refs,
-            missing_tool_refs=missing_tool_refs,
-            release_state=release_state,
-        )
-        effective_risk_limit = max(1, min(int(risk_limit), 500))
-        risk_items = all_risk_items[:effective_risk_limit]
-        action_hints = _build_registry_prompt_tool_action_hints(risk_items=all_risk_items)
-
-        high_risk_count = sum(
-            1
-            for item in all_risk_items
-            if str(item.get("severity") or "").strip().lower() == "high"
-        )
-        medium_risk_count = sum(
-            1
-            for item in all_risk_items
-            if str(item.get("severity") or "").strip().lower() == "medium"
-        )
-        low_risk_count = sum(
-            1
-            for item in all_risk_items
-            if str(item.get("severity") or "").strip().lower() == "low"
-        )
-
-        if high_risk_count > 0:
-            risk_level = "high"
-        elif medium_risk_count > 0:
-            risk_level = "medium"
-        elif low_risk_count > 0:
-            risk_level = "low"
-        else:
-            risk_level = "healthy"
-
-        try:
-            dependency_invalid_count = max(
-                0, int(dependency_health.get("invalidCount") or 0)
-            )
-        except (TypeError, ValueError):
-            dependency_invalid_count = 0
-
-        return {
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "activeVersions": governance_overview.get("activeVersions"),
-            "summary": {
-                "riskLevel": risk_level,
-                "dependencyInvalidCount": dependency_invalid_count,
-                "missingPromptRefCount": len(missing_prompt_refs),
-                "missingToolRefCount": len(missing_tool_refs),
-                "unreferencedPromptCount": unreferenced_prompt_count,
-                "unreferencedToolCount": unreferenced_tool_count,
-                "highRiskCount": high_risk_count,
-                "mediumRiskCount": medium_risk_count,
-                "lowRiskCount": low_risk_count,
-                "riskTotalCount": len(all_risk_items),
-                "riskReturned": len(risk_items),
-                "riskTruncated": len(all_risk_items) > len(risk_items),
-            },
-            "dependencyHealth": {
-                "count": dependency_health.get("count"),
-                "invalidCount": dependency_invalid_count,
-                "issueCodeCounts": (
-                    dependency_health.get("issueCodeCounts")
-                    if isinstance(dependency_health.get("issueCodeCounts"), dict)
-                    else {}
-                ),
-                "items": dependency_items,
-            },
-            "promptToolUsage": {
-                "prompts": prompt_usage_rows,
-                "tools": tool_usage_rows,
-                "missingPromptRegistryRefs": missing_prompt_refs,
-                "missingToolRegistryRefs": missing_tool_refs,
-            },
-            "releaseState": release_state,
-            "auditSummary": audit_summary,
-            "domainJudgeFamilies": governance_overview.get("domainJudgeFamilies"),
-            "riskItems": risk_items,
-            "actionHints": action_hints,
-            "filters": {
-                "dependencyLimit": max(1, min(int(dependency_limit), 500)),
-                "usagePreviewLimit": max(1, min(int(usage_preview_limit), 200)),
-                "releaseLimit": max(1, min(int(release_limit), 200)),
-                "auditLimit": max(1, min(int(audit_limit), 200)),
-                "riskLimit": effective_risk_limit,
-            },
-            "notes": [
-                (
-                    "prompt/tool governance view is read-only; actionHints never "
-                    "trigger publish, activate, or rollback automatically."
+            default_policy_version=runtime.policy_registry_runtime.default_version,
+            default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
+            default_tool_registry_version=runtime.tool_registry_runtime.default_version,
+            policy_registry_type=REGISTRY_TYPE_POLICY,
+            prompt_registry_type="prompt",
+            tool_registry_type="tool",
+            list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
+            list_prompt_profiles=runtime.prompt_registry_runtime.list_profiles,
+            list_tool_profiles=runtime.tool_registry_runtime.list_profiles,
+            evaluate_policy_registry_dependency_health=(
+                lambda version: _evaluate_policy_registry_dependency_health(
+                    policy_version=version,
                 )
-            ],
-        }
+            ),
+            list_releases=runtime.registry_product_runtime.list_releases,
+            list_audits=runtime.registry_product_runtime.list_audits,
+            build_policy_domain_judge_family_overview=(
+                _build_policy_domain_judge_family_overview
+            ),
+        )
+        return build_registry_prompt_tool_governance_payload_v3(
+            governance_overview=governance_overview,
+            dependency_limit=dependency_limit,
+            usage_preview_limit=usage_preview_limit,
+            release_limit=release_limit,
+            audit_limit=audit_limit,
+            risk_limit=risk_limit,
+            build_registry_prompt_tool_usage_rows=_build_registry_prompt_tool_usage_rows,
+            build_registry_prompt_tool_risk_items=_build_registry_prompt_tool_risk_items,
+            build_registry_prompt_tool_action_hints=_build_registry_prompt_tool_action_hints,
+        )
 
     @app.get("/internal/judge/registries/policy/domain-families")
     async def list_policy_domain_judge_families(
@@ -7362,20 +7134,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        overview = _build_policy_domain_judge_family_overview(
+        return build_policy_domain_judge_families_payload_v3(
+            default_policy_version=runtime.policy_registry_runtime.default_version,
             policy_profiles=runtime.policy_registry_runtime.list_profiles(),
-            active_policy_version=runtime.policy_registry_runtime.default_version,
             preview_limit=preview_limit,
             include_versions=include_versions,
+            build_policy_domain_judge_family_overview=(
+                _build_policy_domain_judge_family_overview
+            ),
         )
-        return {
-            "activePolicyVersion": runtime.policy_registry_runtime.default_version,
-            "domainJudgeFamilies": overview,
-            "filters": {
-                "previewLimit": max(1, min(int(preview_limit), 200)),
-                "includeVersions": bool(include_versions),
-            },
-        }
 
     @app.get("/internal/judge/registries/policy/gate-simulation")
     async def simulate_policy_release_gate(
@@ -7386,119 +7153,36 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        selected_policy_version = (
-            str(policy_version or "").strip()
-            or runtime.policy_registry_runtime.default_version
-        )
-        if not selected_policy_version:
-            raise HTTPException(status_code=422, detail="invalid_policy_version")
-
-        policy_versions: list[str] = []
-        if include_all_versions:
-            seen_versions: set[str] = set()
-            for row in runtime.policy_registry_runtime.list_profiles():
-                version_token = str(getattr(row, "version", "") or "").strip()
-                if not version_token or version_token in seen_versions:
-                    continue
-                seen_versions.add(version_token)
-                policy_versions.append(version_token)
-            if selected_policy_version not in seen_versions:
-                policy_versions.insert(0, selected_policy_version)
-        else:
-            policy_versions = [selected_policy_version]
-
-        evaluated_items: list[dict[str, Any]] = []
-        for version_token in policy_versions[: max(1, min(int(limit), 200))]:
-            profile = runtime.policy_registry_runtime.get_profile(version_token)
-            if profile is None:
-                if version_token == selected_policy_version:
-                    raise HTTPException(status_code=404, detail="policy_registry_not_found")
-                continue
-            profile_payload = _serialize_policy_profile(runtime, profile=profile)
-            metadata = (
-                profile_payload.get("metadata")
-                if isinstance(profile_payload.get("metadata"), dict)
-                else {}
+        try:
+            return await build_policy_gate_simulation_payload_v3(
+                policy_version=policy_version,
+                default_policy_version=runtime.policy_registry_runtime.default_version,
+                include_all_versions=include_all_versions,
+                limit=limit,
+                list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
+                get_policy_profile=runtime.policy_registry_runtime.get_profile,
+                serialize_policy_profile=(
+                    lambda profile: _serialize_policy_profile(runtime, profile=profile)
+                ),
+                evaluate_policy_registry_dependency_health=(
+                    lambda version: _evaluate_policy_registry_dependency_health(
+                        policy_version=version,
+                    )
+                ),
+                evaluate_policy_release_fairness_gate=(
+                    lambda version: _evaluate_policy_release_fairness_gate(
+                        policy_version=version,
+                    )
+                ),
             )
-            dependency_health = await _evaluate_policy_registry_dependency_health(
-                policy_version=version_token,
-            )
-            fairness_gate = await _evaluate_policy_release_fairness_gate(
-                policy_version=version_token,
-            )
-            failing_components: list[str] = []
-            if not bool(dependency_health.get("ok")):
-                failing_components.append("dependency_health")
-            if not bool(fairness_gate.get("passed")):
-                failing_components.append("fairness_gate")
-            if not bool(metadata.get("domainJudgeFamilyValid")):
-                failing_components.append("domain_judge_family")
-            simulated_passed = len(failing_components) == 0
-
-            evaluated_items.append(
-                {
-                    "policyVersion": version_token,
-                    "topicDomain": str(profile_payload.get("topicDomain") or "").strip() or "general",
-                    "domainJudgeFamily": {
-                        "family": str(metadata.get("domainJudgeFamily") or "").strip() or None,
-                        "valid": bool(metadata.get("domainJudgeFamilyValid")),
-                        "errorCode": str(metadata.get("domainJudgeFamilyError") or "").strip() or None,
-                    },
-                    "dependencyHealth": dependency_health,
-                    "fairnessGate": fairness_gate,
-                    "simulatedGate": {
-                        "passed": simulated_passed,
-                        "status": "pass" if simulated_passed else "blocked",
-                        "code": (
-                            "registry_policy_gate_simulation_passed"
-                            if simulated_passed
-                            else "registry_policy_gate_simulation_blocked"
-                        ),
-                        "reason": (
-                            "all checks passed"
-                            if simulated_passed
-                            else f"blocked by {','.join(failing_components)}"
-                        ),
-                        "failingComponents": failing_components,
-                    },
-                }
-            )
-
-        pass_count = 0
-        blocked_count = 0
-        for row in evaluated_items:
-            simulated_gate = (
-                row.get("simulatedGate")
-                if isinstance(row.get("simulatedGate"), dict)
-                else {}
-            )
-            if bool(simulated_gate.get("passed")):
-                pass_count += 1
-            else:
-                blocked_count += 1
-
-        return {
-            "activePolicyVersion": runtime.policy_registry_runtime.default_version,
-            "selectedPolicyVersion": selected_policy_version,
-            "count": len(evaluated_items),
-            "items": evaluated_items,
-            "summary": {
-                "passCount": pass_count,
-                "blockedCount": blocked_count,
-                "advisoryOnly": True,
-            },
-            "filters": {
-                "policyVersion": selected_policy_version,
-                "includeAllVersions": bool(include_all_versions),
-                "limit": max(1, min(int(limit), 200)),
-            },
-            "notes": [
-                (
-                    "simulation is advisory-only and never triggers publish/activate "
-                    "or emits registry gate alerts."
-                )
-            ],
-        }
+        except ValueError as err:
+            if str(err) == "invalid_policy_version":
+                raise HTTPException(status_code=422, detail="invalid_policy_version") from err
+            raise
+        except LookupError as err:
+            if str(err) == "policy_registry_not_found":
+                raise HTTPException(status_code=404, detail="policy_registry_not_found") from err
+            raise
 
     @app.post("/internal/judge/registries/{registry_type}/publish")
     async def publish_registry_release(
@@ -7513,124 +7197,40 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="invalid_payload")
-        version = str(payload.get("version") or "").strip()
-        profile_payload = payload.get("profile")
-        if not isinstance(profile_payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_registry_profile")
-        activate = bool(payload.get("activate"))
-        override_fairness_gate = bool(
-            _extract_optional_bool(
-                payload,
-                "override_fairness_gate",
-                "overrideFairnessGate",
-            )
-        )
-        actor = str(payload.get("actor") or "").strip() or None
-        reason = str(payload.get("reason") or "").strip() or None
-
-        await _ensure_registry_runtime_ready()
-        registry_type_token = str(registry_type or "").strip().lower()
-        fairness_gate: dict[str, Any] | None = None
-        fairness_alert: dict[str, Any] | None = None
-        dependency_alert: dict[str, Any] | None = None
-        dependency_alert_resolved: list[dict[str, Any]] = []
-        dependency_health: dict[str, Any] | None = None
-        policy_domain_judge_family: str | None = None
-        if registry_type_token == REGISTRY_TYPE_POLICY:
-            try:
-                profile_payload, policy_domain_judge_family = (
-                    _enforce_policy_domain_judge_family_profile_payload(
-                        profile_payload=profile_payload,
-                    )
-                )
-            except ValueError as err:
-                raise HTTPException(status_code=422, detail=str(err)) from err
-            dependency_health = await _evaluate_policy_registry_dependency_health(
-                policy_version=version,
-                profile_payload=profile_payload,
-            )
-            if not bool(dependency_health.get("ok")):
-                dependency_alert = await _emit_registry_dependency_health_alert(
-                    registry_type=registry_type_token,
-                    version=version,
-                    dependency_health=dependency_health,
-                    action="publish",
-                )
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "registry_policy_dependency_invalid",
-                        "dependency": dependency_health,
-                        "alert": dependency_alert,
-                    },
-                )
-            dependency_alert_resolved = await _resolve_registry_dependency_health_alerts(
-                registry_type=registry_type_token,
-                version=version,
-                actor=actor,
-                reason=reason,
-                action="publish",
-            )
-        if registry_type_token == REGISTRY_TYPE_POLICY and activate:
-            fairness_gate = await _evaluate_policy_release_fairness_gate(
-                policy_version=version,
-            )
-            if not bool(fairness_gate.get("passed")):
-                if override_fairness_gate:
-                    if reason is None:
-                        raise HTTPException(
-                            status_code=422,
-                            detail="registry_fairness_gate_override_reason_required",
-                        )
-                    fairness_alert = await _emit_registry_fairness_gate_alert(
-                        registry_type=registry_type_token,
-                        version=version,
-                        gate_result=fairness_gate,
-                        override_applied=True,
-                        actor=actor,
-                        reason=reason,
-                    )
-                else:
-                    fairness_alert = await _emit_registry_fairness_gate_alert(
-                        registry_type=registry_type_token,
-                        version=version,
-                        gate_result=fairness_gate,
-                        override_applied=False,
-                        actor=actor,
-                        reason=reason,
-                    )
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "registry_fairness_gate_blocked",
-                            "gate": fairness_gate,
-                            "alert": fairness_alert,
-                        },
-                    )
-
-        extra_details_payload: dict[str, Any] = {}
-        if dependency_health is not None:
-            extra_details_payload["dependencyHealth"] = dict(dependency_health)
-        if fairness_gate is not None:
-            extra_details_payload["fairnessGate"] = {
-                **(fairness_gate or {}),
-                "overrideApplied": bool(
-                    override_fairness_gate
-                    and fairness_gate is not None
-                    and not bool(fairness_gate.get("passed"))
-                ),
-            }
-        extra_details = extra_details_payload or None
         try:
-            item = await runtime.registry_product_runtime.publish_release(
-                registry_type=registry_type,
-                version=version,
-                profile_payload=profile_payload,
-                actor=actor,
-                reason=reason,
-                activate=activate,
-                extra_details=extra_details,
+            parsed = parse_registry_publish_request_payload_v3(
+                payload=payload,
+                extract_optional_bool=_extract_optional_bool,
             )
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
+        await _ensure_registry_runtime_ready()
+        try:
+            return await build_registry_publish_payload_v3(
+                registry_type=registry_type,
+                version=parsed["version"],
+                profile_payload=parsed["profilePayload"],
+                activate=bool(parsed["activate"]),
+                override_fairness_gate=bool(parsed["overrideFairnessGate"]),
+                actor=parsed["actor"],
+                reason=parsed["reason"],
+                policy_registry_type=REGISTRY_TYPE_POLICY,
+                enforce_policy_domain_judge_family_profile_payload=(
+                    _enforce_policy_domain_judge_family_profile_payload
+                ),
+                evaluate_policy_registry_dependency_health=(
+                    _evaluate_policy_registry_dependency_health
+                ),
+                emit_registry_dependency_health_alert=_emit_registry_dependency_health_alert,
+                resolve_registry_dependency_health_alerts=(
+                    _resolve_registry_dependency_health_alerts
+                ),
+                evaluate_policy_release_fairness_gate=_evaluate_policy_release_fairness_gate,
+                emit_registry_fairness_gate_alert=_emit_registry_fairness_gate_alert,
+                publish_release=runtime.registry_product_runtime.publish_release,
+            )
+        except RegistryRouteErrorV3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
         except LookupError as err:
             raise HTTPException(status_code=404, detail=str(err)) from err
         except ValueError as err:
@@ -7645,19 +7245,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "policy_domain_family_topic_domain_mismatch",
                 "invalid_prompt_profile",
                 "invalid_tool_profile",
+                "registry_fairness_gate_override_reason_required",
             }:
                 raise HTTPException(status_code=422, detail=code) from err
             raise HTTPException(status_code=422, detail="registry_publish_invalid") from err
-        return {
-            "ok": True,
-            "item": item,
-            "policyDomainJudgeFamily": policy_domain_judge_family,
-            "dependencyHealth": dependency_health,
-            "dependencyAlert": dependency_alert,
-            "resolvedDependencyAlerts": dependency_alert_resolved,
-            "fairnessGate": fairness_gate,
-            "alert": fairness_alert,
-        }
 
     @app.post("/internal/judge/registries/{registry_type}/{version}/activate")
     async def activate_registry_release(
@@ -7670,110 +7261,38 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        registry_type_token = str(registry_type or "").strip().lower()
-        fairness_gate: dict[str, Any] | None = None
-        fairness_alert: dict[str, Any] | None = None
-        dependency_alert: dict[str, Any] | None = None
-        dependency_alert_resolved: list[dict[str, Any]] = []
-        dependency_health: dict[str, Any] | None = None
-        if registry_type_token == REGISTRY_TYPE_POLICY:
-            dependency_health = await _evaluate_policy_registry_dependency_health(
-                policy_version=version,
-            )
-            if not bool(dependency_health.get("ok")):
-                dependency_alert = await _emit_registry_dependency_health_alert(
-                    registry_type=registry_type_token,
-                    version=version,
-                    dependency_health=dependency_health,
-                    action="activate",
-                )
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "registry_policy_dependency_blocked",
-                        "dependency": dependency_health,
-                        "alert": dependency_alert,
-                    },
-                )
-            dependency_alert_resolved = await _resolve_registry_dependency_health_alerts(
-                registry_type=registry_type_token,
-                version=version,
-                actor=actor,
-                reason=reason,
-                action="activate",
-            )
-            fairness_gate = await _evaluate_policy_release_fairness_gate(
-                policy_version=version,
-            )
-            if not bool(fairness_gate.get("passed")):
-                if override_fairness_gate:
-                    if reason is None:
-                        raise HTTPException(
-                            status_code=422,
-                            detail="registry_fairness_gate_override_reason_required",
-                        )
-                    fairness_alert = await _emit_registry_fairness_gate_alert(
-                        registry_type=registry_type_token,
-                        version=version,
-                        gate_result=fairness_gate,
-                        override_applied=True,
-                        actor=actor,
-                        reason=reason,
-                    )
-                else:
-                    fairness_alert = await _emit_registry_fairness_gate_alert(
-                        registry_type=registry_type_token,
-                        version=version,
-                        gate_result=fairness_gate,
-                        override_applied=False,
-                        actor=actor,
-                        reason=reason,
-                    )
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "registry_fairness_gate_blocked",
-                            "gate": fairness_gate,
-                            "alert": fairness_alert,
-                        },
-                    )
-        extra_details_payload: dict[str, Any] = {}
-        if dependency_health is not None:
-            extra_details_payload["dependencyHealth"] = dict(dependency_health)
-        if fairness_gate is not None:
-            extra_details_payload["fairnessGate"] = {
-                **(fairness_gate or {}),
-                "overrideApplied": bool(
-                    override_fairness_gate
-                    and fairness_gate is not None
-                    and not bool(fairness_gate.get("passed"))
-                ),
-            }
-        extra_details = extra_details_payload or None
         try:
-            item = await runtime.registry_product_runtime.activate_release(
+            return await build_registry_activate_payload_v3(
                 registry_type=registry_type,
                 version=version,
                 actor=actor,
                 reason=reason,
-                extra_details=extra_details,
+                override_fairness_gate=override_fairness_gate,
+                policy_registry_type=REGISTRY_TYPE_POLICY,
+                evaluate_policy_registry_dependency_health=(
+                    _evaluate_policy_registry_dependency_health
+                ),
+                emit_registry_dependency_health_alert=_emit_registry_dependency_health_alert,
+                resolve_registry_dependency_health_alerts=(
+                    _resolve_registry_dependency_health_alerts
+                ),
+                evaluate_policy_release_fairness_gate=_evaluate_policy_release_fairness_gate,
+                emit_registry_fairness_gate_alert=_emit_registry_fairness_gate_alert,
+                activate_release=runtime.registry_product_runtime.activate_release,
             )
+        except RegistryRouteErrorV3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
         except LookupError as err:
             raise HTTPException(status_code=404, detail="registry_version_not_found") from err
         except ValueError as err:
             code = str(err)
-            if code in {"invalid_registry_type", "invalid_registry_version"}:
+            if code in {
+                "invalid_registry_type",
+                "invalid_registry_version",
+                "registry_fairness_gate_override_reason_required",
+            }:
                 raise HTTPException(status_code=422, detail=code) from err
             raise HTTPException(status_code=422, detail="registry_activate_invalid") from err
-        return {
-            "ok": True,
-            "item": item,
-            "dependencyHealth": dependency_health,
-            "dependencyAlert": dependency_alert,
-            "resolvedDependencyAlerts": dependency_alert_resolved,
-            "fairnessGate": fairness_gate,
-            "alert": fairness_alert,
-        }
 
     @app.post("/internal/judge/registries/{registry_type}/rollback")
     async def rollback_registry_release(
@@ -7786,11 +7305,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
         try:
-            item = await runtime.registry_product_runtime.rollback_release(
+            return await build_registry_rollback_payload_v3(
                 registry_type=registry_type,
                 target_version=target_version,
                 actor=actor,
                 reason=reason,
+                rollback_release=runtime.registry_product_runtime.rollback_release,
             )
         except LookupError as err:
             raise HTTPException(status_code=404, detail="registry_version_not_found") from err
@@ -7803,10 +7323,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             }:
                 raise HTTPException(status_code=409 if code == "registry_rollback_target_not_found" else 422, detail=code) from err
             raise HTTPException(status_code=422, detail="registry_rollback_invalid") from err
-        return {
-            "ok": True,
-            "item": item,
-        }
 
     @app.get("/internal/judge/registries/{registry_type}/audits")
     async def list_registry_audits(
@@ -7824,45 +7340,32 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        normalized_action = _normalize_registry_audit_action(action)
-        if (
-            normalized_action is not None
-            and normalized_action not in REGISTRY_AUDIT_ACTION_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_registry_audit_action")
-
         try:
-            fetch_limit = max(1, min(int(limit) + int(offset), 200))
-            items = await runtime.registry_product_runtime.list_audits(
+            return await build_registry_audits_payload_v3(
                 registry_type=registry_type,
-                limit=fetch_limit,
+                action=action,
+                version=version,
+                actor=actor,
+                gate_code=gate_code,
+                override_applied=override_applied,
+                include_gate_view=include_gate_view,
+                link_limit=link_limit,
+                offset=offset,
+                limit=limit,
+                normalize_registry_audit_action=_normalize_registry_audit_action,
+                registry_audit_action_values=REGISTRY_AUDIT_ACTION_VALUES,
+                list_registry_audits=runtime.registry_product_runtime.list_audits,
+                list_audit_alerts=_list_audit_alerts,
+                list_alert_outbox=runtime.trace_store.list_alert_outbox,
+                build_registry_audit_ops_view=_build_registry_audit_ops_view,
             )
         except ValueError as err:
             code = str(err)
+            if code == "invalid_registry_audit_action":
+                raise HTTPException(status_code=422, detail=code) from err
             if code == "invalid_registry_type":
                 raise HTTPException(status_code=422, detail=code) from err
             raise HTTPException(status_code=422, detail="registry_audit_query_invalid") from err
-        alerts: list[Any] = []
-        outbox_events: list[Any] = []
-        if include_gate_view:
-            alerts = await _list_audit_alerts(job_id=0, status=None, limit=5000)
-            outbox_events = runtime.trace_store.list_alert_outbox(limit=500)
-        payload = _build_registry_audit_ops_view(
-            registry_type=registry_type,
-            audit_items=items,
-            alerts=alerts,
-            outbox_events=outbox_events,
-            action=normalized_action,
-            version=version,
-            actor=actor,
-            gate_code=gate_code,
-            override_applied=override_applied,
-            include_gate_view=include_gate_view,
-            link_limit=link_limit,
-            offset=offset,
-            limit=limit,
-        )
-        return payload
 
     @app.get("/internal/judge/registries/{registry_type}/releases")
     async def list_registry_releases(
@@ -7884,13 +7387,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             if code == "invalid_registry_type":
                 raise HTTPException(status_code=422, detail=code) from err
             raise HTTPException(status_code=422, detail="registry_release_query_invalid") from err
-        return {
-            "registryType": str(registry_type or "").strip().lower(),
-            "count": len(items),
-            "items": items,
-            "limit": limit,
-            "includePayload": bool(include_payload),
-        }
+        return build_registry_releases_payload_v3(
+            registry_type=registry_type,
+            items=items,
+            limit=limit,
+            include_payload=include_payload,
+        )
 
     @app.get("/internal/judge/registries/{registry_type}/releases/{version}")
     async def get_registry_release(
@@ -7912,9 +7414,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             raise HTTPException(status_code=422, detail="registry_release_query_invalid") from err
         if item is None:
             raise HTTPException(status_code=404, detail="registry_version_not_found")
-        return {
-            "item": item,
-        }
+        return build_registry_release_payload_v3(item=item)
 
     @app.post("/internal/judge/cases")
     async def create_judge_case(
@@ -8278,17 +7778,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             tool_registry_version=policy_profile.tool_registry_version,
         )
 
-        response = {
-            "accepted": True,
-            "dispatchType": "phase",
-            "status": "queued",
-            "caseId": parsed.case_id,
-            "scopeId": parsed.scope_id,
-            "sessionId": parsed.session_id,
-            "phaseNo": parsed.phase_no,
-            "messageCount": parsed.message_count,
-            "traceId": parsed.trace_id,
-        }
+        response = build_phase_dispatch_accepted_response_v3(request=parsed)
         request_payload = parsed.model_dump(mode="json")
         workflow_job = _build_workflow_job(
             dispatch_type="phase",
@@ -8330,17 +7820,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         await _workflow_register_and_mark_blinded(
             job=workflow_job,
-            event_payload={
-                "dispatchType": "phase",
-                "scopeId": parsed.scope_id,
-                "sessionId": parsed.session_id,
-                "phaseNo": parsed.phase_no,
-                "messageCount": parsed.message_count,
-                "traceId": parsed.trace_id,
-                "policyVersion": policy_profile.version,
-                "promptVersion": prompt_profile.version,
-                "toolsetVersion": tool_profile.version,
-            },
+            event_payload=build_phase_workflow_register_payload_v3(
+                request=parsed,
+                policy_version=policy_profile.version,
+                prompt_version=prompt_profile.version,
+                toolset_version=tool_profile.version,
+            ),
         )
 
         phase_report_payload = await build_phase_report_payload_v3_phase(
@@ -8376,93 +7861,110 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             report_payload=phase_report_payload,
             request_payload=request_payload,
         )
-        try:
-            callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
-                runtime=runtime,
-                callback_fn=_report_callback_fn_for_dispatch(runtime, "phase"),
-                job_id=parsed.case_id,
-                payload=phase_report_payload,
-            )
-        except Exception as err:
-            error_code = "phase_callback_retry_exhausted"
-            error_message = str(err)
-            failed_payload = _build_failed_callback_payload(
+        phase_judge_workflow_payload = _build_phase_judge_workflow_payload(
+            request=parsed,
+            report_payload=phase_report_payload,
+        )
+        phase_callback_outcome = await deliver_report_callback_with_failed_fallback_v3(
+            job_id=parsed.case_id,
+            report_payload=phase_report_payload,
+            report_callback_fn=_report_callback_fn_for_dispatch(runtime, "phase"),
+            failed_callback_fn=_failed_callback_fn_for_dispatch(runtime, "phase"),
+            invoke_with_retry=(
+                lambda callback_fn, job_id, payload: _invoke_v3_callback_with_retry(
+                    runtime=runtime,
+                    callback_fn=callback_fn,
+                    job_id=job_id,
+                    payload=payload,
+                )
+            ),
+            build_failed_payload=lambda error_message: _build_failed_callback_payload(
                 case_id=parsed.case_id,
                 dispatch_type="phase",
                 trace_id=parsed.trace_id,
-                error_code=error_code,
+                error_code="phase_callback_retry_exhausted",
                 error_message=error_message,
                 degradation_level=int(phase_report_payload.get("degradationLevel") or 0),
-            )
-            try:
-                failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
-                    runtime=runtime,
-                    callback_fn=_failed_callback_fn_for_dispatch(runtime, "phase"),
-                    job_id=parsed.case_id,
-                    payload=failed_payload,
-                )
-            except Exception as failed_err:
-                receipt_response = _with_error_contract(
-                    {
-                        **response,
-                        "status": "callback_failed",
-                        "callbackStatus": "failed_callback_failed",
-                        "callbackError": error_message,
-                        "reportPayload": phase_report_payload,
-                        "failedCallbackPayload": failed_payload,
-                        "failedCallbackError": str(failed_err),
-                    },
-                    error_code="phase_failed_callback_failed",
-                    error_message=str(failed_err),
-                    dispatch_type="phase",
-                    trace_id=parsed.trace_id,
-                    retryable=False,
-                    category="callback_delivery",
-                    details={"reportError": error_message},
-                )
-                await _persist_dispatch_receipt(
-                    dispatch_type="phase",
-                    job_id=parsed.case_id,
-                    scope_id=parsed.scope_id,
-                    session_id=parsed.session_id,
-                    trace_id=parsed.trace_id,
-                    idempotency_key=parsed.idempotency_key,
-                    rubric_version=parsed.rubric_version,
-                    judge_policy_version=parsed.judge_policy_version,
-                    topic_domain=parsed.topic_domain,
-                    retrieval_profile=parsed.retrieval_profile,
-                    phase_no=parsed.phase_no,
-                    phase_start_no=None,
-                    phase_end_no=None,
-                    message_start_id=parsed.message_start_id,
-                    message_end_id=parsed.message_end_id,
-                    message_count=parsed.message_count,
-                    status="callback_failed",
-                    request_payload=request_payload,
-                    response_payload=receipt_response,
-                )
-                runtime.trace_store.register_failure(
-                    job_id=parsed.case_id,
-                    response=receipt_response,
-                    callback_status="failed_callback_failed",
-                    callback_error=str(failed_err),
-                )
-                await _workflow_mark_failed(
-                    job_id=parsed.case_id,
-                    error_code="phase_failed_callback_failed",
-                    error_message=str(failed_err),
-                    event_payload={
-                        "dispatchType": "phase",
-                        "phaseNo": parsed.phase_no,
-                        "callbackStatus": "failed_callback_failed",
-                    },
-                )
-                runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"phase_failed_callback_failed: {failed_err}",
-                ) from failed_err
+            ),
+        )
 
+        if phase_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3:
+            error_message = str(phase_callback_outcome.report_error or "")
+            failed_error = str(phase_callback_outcome.failed_error or "unknown")
+            failed_payload = (
+                dict(phase_callback_outcome.failed_payload)
+                if isinstance(phase_callback_outcome.failed_payload, dict)
+                else {}
+            )
+            receipt_response = _with_error_contract(
+                {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "failed_callback_failed",
+                    "callbackError": error_message,
+                    "reportPayload": phase_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackError": failed_error,
+                },
+                error_code="phase_failed_callback_failed",
+                error_message=failed_error,
+                dispatch_type="phase",
+                trace_id=parsed.trace_id,
+                retryable=False,
+                category="callback_delivery",
+                details={"reportError": error_message},
+            )
+            await _persist_dispatch_receipt(
+                dispatch_type="phase",
+                job_id=parsed.case_id,
+                scope_id=parsed.scope_id,
+                session_id=parsed.session_id,
+                trace_id=parsed.trace_id,
+                idempotency_key=parsed.idempotency_key,
+                rubric_version=parsed.rubric_version,
+                judge_policy_version=parsed.judge_policy_version,
+                topic_domain=parsed.topic_domain,
+                retrieval_profile=parsed.retrieval_profile,
+                phase_no=parsed.phase_no,
+                phase_start_no=None,
+                phase_end_no=None,
+                message_start_id=parsed.message_start_id,
+                message_end_id=parsed.message_end_id,
+                message_count=parsed.message_count,
+                status="callback_failed",
+                request_payload=request_payload,
+                response_payload=receipt_response,
+            )
+            runtime.trace_store.register_failure(
+                job_id=parsed.case_id,
+                response=receipt_response,
+                callback_status="failed_callback_failed",
+                callback_error=failed_error,
+            )
+            await _workflow_mark_failed(
+                job_id=parsed.case_id,
+                error_code="phase_failed_callback_failed",
+                error_message=failed_error,
+                event_payload=build_phase_workflow_reported_payload_v3(
+                    request=parsed,
+                    callback_status="failed_callback_failed",
+                ),
+            )
+            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
+            raise HTTPException(
+                status_code=502,
+                detail=f"phase_failed_callback_failed: {failed_error}",
+            )
+
+        if phase_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_REPORTED_V3:
+            error_message = str(phase_callback_outcome.report_error or "")
+            failed_payload = (
+                dict(phase_callback_outcome.failed_payload)
+                if isinstance(phase_callback_outcome.failed_payload, dict)
+                else {}
+            )
+            failed_attempts = int(phase_callback_outcome.failed_attempts or 0)
+            failed_retries = int(phase_callback_outcome.failed_retries or 0)
             receipt_response = _with_error_contract(
                 {
                     **response,
@@ -8474,7 +7976,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "failedCallbackAttempts": failed_attempts,
                     "failedCallbackRetries": failed_retries,
                 },
-                error_code=error_code,
+                error_code="phase_callback_retry_exhausted",
                 error_message=error_message,
                 dispatch_type="phase",
                 trace_id=parsed.trace_id,
@@ -8514,20 +8016,24 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
             await _workflow_mark_failed(
                 job_id=parsed.case_id,
-                error_code=error_code,
+                error_code="phase_callback_retry_exhausted",
                 error_message=error_message,
-                event_payload={
-                    "dispatchType": "phase",
-                    "phaseNo": parsed.phase_no,
-                    "callbackStatus": "failed_reported",
-                },
+                event_payload=build_phase_workflow_reported_payload_v3(
+                    request=parsed,
+                    callback_status="failed_reported",
+                ),
             )
             runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(status_code=502, detail=f"phase_callback_failed: {err}") from err
+            raise HTTPException(status_code=502, detail=f"phase_callback_failed: {error_message}")
 
+        if phase_callback_outcome.callback_status != CALLBACK_STATUS_REPORTED_V3:
+            raise RuntimeError("phase_callback_outcome_status_invalid")
+
+        callback_attempts = int(phase_callback_outcome.callback_attempts or 0)
+        callback_retries = int(phase_callback_outcome.callback_retries or 0)
         reported_response = {
             **response,
-            "callbackStatus": "reported",
+            "callbackStatus": CALLBACK_STATUS_REPORTED_V3,
             "callbackAttempts": callback_attempts,
             "callbackRetries": callback_retries,
             "reportPayload": phase_report_payload,
@@ -8562,15 +8068,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 payload=phase_report_payload,
                 callback_status="reported",
                 callback_error=None,
+                judge_workflow=phase_judge_workflow_payload,
             ),
         )
         await _workflow_mark_completed(
             job_id=parsed.case_id,
-            event_payload={
-                "dispatchType": "phase",
-                "phaseNo": parsed.phase_no,
-                "callbackStatus": "reported",
-            },
+            event_payload=build_phase_workflow_reported_payload_v3(
+                request=parsed,
+                callback_status=CALLBACK_STATUS_REPORTED_V3,
+            ),
         )
         runtime.trace_store.set_idempotency_success(
             key=parsed.idempotency_key,
@@ -8629,17 +8135,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             tool_registry_version=policy_profile.tool_registry_version,
         )
 
-        response = {
-            "accepted": True,
-            "dispatchType": "final",
-            "status": "queued",
-            "caseId": parsed.case_id,
-            "scopeId": parsed.scope_id,
-            "sessionId": parsed.session_id,
-            "phaseStartNo": parsed.phase_start_no,
-            "phaseEndNo": parsed.phase_end_no,
-            "traceId": parsed.trace_id,
-        }
+        response = build_final_dispatch_accepted_response_v3(request=parsed)
         request_payload = parsed.model_dump(mode="json")
         workflow_job = _build_workflow_job(
             dispatch_type="final",
@@ -8681,17 +8177,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         await _workflow_register_and_mark_blinded(
             job=workflow_job,
-            event_payload={
-                "dispatchType": "final",
-                "scopeId": parsed.scope_id,
-                "sessionId": parsed.session_id,
-                "phaseStartNo": parsed.phase_start_no,
-                "phaseEndNo": parsed.phase_end_no,
-                "traceId": parsed.trace_id,
-                "policyVersion": policy_profile.version,
-                "promptVersion": prompt_profile.version,
-                "toolsetVersion": tool_profile.version,
-            },
+            event_payload=build_final_workflow_register_payload_v3(
+                request=parsed,
+                policy_version=policy_profile.version,
+                prompt_version=prompt_profile.version,
+                toolset_version=tool_profile.version,
+            ),
         )
 
         phase_receipts = await _list_dispatch_receipts(
@@ -8735,6 +8226,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             trace_id=parsed.trace_id,
             report_payload=final_report_payload,
             request_payload=request_payload,
+        )
+        final_judge_workflow_payload = _build_final_judge_workflow_payload(
+            request=parsed,
+            report_payload=final_report_payload,
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
@@ -8914,94 +8409,108 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 detail="final_contract_blocked: missing_critical_fields",
             )
 
-        try:
-            callback_attempts, callback_retries = await _invoke_v3_callback_with_retry(
-                runtime=runtime,
-                callback_fn=_report_callback_fn_for_dispatch(runtime, "final"),
-                job_id=parsed.case_id,
-                payload=final_report_payload,
-            )
-        except Exception as err:
-            error_code = "final_callback_retry_exhausted"
-            error_message = str(err)
-            failed_payload = _build_failed_callback_payload(
+        final_callback_outcome = await deliver_report_callback_with_failed_fallback_v3(
+            job_id=parsed.case_id,
+            report_payload=final_report_payload,
+            report_callback_fn=_report_callback_fn_for_dispatch(runtime, "final"),
+            failed_callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
+            invoke_with_retry=(
+                lambda callback_fn, job_id, payload: _invoke_v3_callback_with_retry(
+                    runtime=runtime,
+                    callback_fn=callback_fn,
+                    job_id=job_id,
+                    payload=payload,
+                )
+            ),
+            build_failed_payload=lambda error_message: _build_failed_callback_payload(
                 case_id=parsed.case_id,
                 dispatch_type="final",
                 trace_id=parsed.trace_id,
-                error_code=error_code,
+                error_code="final_callback_retry_exhausted",
                 error_message=error_message,
                 degradation_level=int(final_report_payload.get("degradationLevel") or 0),
-            )
-            try:
-                failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
-                    runtime=runtime,
-                    callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
-                    job_id=parsed.case_id,
-                    payload=failed_payload,
-                )
-            except Exception as failed_err:
-                receipt_response = _with_error_contract(
-                    {
-                        **response,
-                        "status": "callback_failed",
-                        "callbackStatus": "failed_callback_failed",
-                        "callbackError": error_message,
-                        "reportPayload": final_report_payload,
-                        "failedCallbackPayload": failed_payload,
-                        "failedCallbackError": str(failed_err),
-                    },
-                    error_code="final_failed_callback_failed",
-                    error_message=str(failed_err),
-                    dispatch_type="final",
-                    trace_id=parsed.trace_id,
-                    retryable=False,
-                    category="callback_delivery",
-                    details={"reportError": error_message},
-                )
-                await _persist_dispatch_receipt(
-                    dispatch_type="final",
-                    job_id=parsed.case_id,
-                    scope_id=parsed.scope_id,
-                    session_id=parsed.session_id,
-                    trace_id=parsed.trace_id,
-                    idempotency_key=parsed.idempotency_key,
-                    rubric_version=parsed.rubric_version,
-                    judge_policy_version=parsed.judge_policy_version,
-                    topic_domain=parsed.topic_domain,
-                    retrieval_profile=None,
-                    phase_no=None,
-                    phase_start_no=parsed.phase_start_no,
-                    phase_end_no=parsed.phase_end_no,
-                    message_start_id=None,
-                    message_end_id=None,
-                    message_count=None,
-                    status="callback_failed",
-                    request_payload=request_payload,
-                    response_payload=receipt_response,
-                )
-                runtime.trace_store.register_failure(
-                    job_id=parsed.case_id,
-                    response=receipt_response,
-                    callback_status="failed_callback_failed",
-                    callback_error=str(failed_err),
-                )
-                await _workflow_mark_failed(
-                    job_id=parsed.case_id,
-                    error_code="final_failed_callback_failed",
-                    error_message=str(failed_err),
-                    event_payload={
-                        "dispatchType": "final",
-                        "phaseStartNo": parsed.phase_start_no,
-                        "phaseEndNo": parsed.phase_end_no,
-                        "callbackStatus": "failed_callback_failed",
-                    },
-                )
-                runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"final_failed_callback_failed: {failed_err}",
-                ) from failed_err
+            ),
+        )
 
+        if final_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3:
+            error_message = str(final_callback_outcome.report_error or "")
+            failed_error = str(final_callback_outcome.failed_error or "unknown")
+            failed_payload = (
+                dict(final_callback_outcome.failed_payload)
+                if isinstance(final_callback_outcome.failed_payload, dict)
+                else {}
+            )
+            receipt_response = _with_error_contract(
+                {
+                    **response,
+                    "status": "callback_failed",
+                    "callbackStatus": "failed_callback_failed",
+                    "callbackError": error_message,
+                    "reportPayload": final_report_payload,
+                    "failedCallbackPayload": failed_payload,
+                    "failedCallbackError": failed_error,
+                },
+                error_code="final_failed_callback_failed",
+                error_message=failed_error,
+                dispatch_type="final",
+                trace_id=parsed.trace_id,
+                retryable=False,
+                category="callback_delivery",
+                details={"reportError": error_message},
+            )
+            await _persist_dispatch_receipt(
+                dispatch_type="final",
+                job_id=parsed.case_id,
+                scope_id=parsed.scope_id,
+                session_id=parsed.session_id,
+                trace_id=parsed.trace_id,
+                idempotency_key=parsed.idempotency_key,
+                rubric_version=parsed.rubric_version,
+                judge_policy_version=parsed.judge_policy_version,
+                topic_domain=parsed.topic_domain,
+                retrieval_profile=None,
+                phase_no=None,
+                phase_start_no=parsed.phase_start_no,
+                phase_end_no=parsed.phase_end_no,
+                message_start_id=None,
+                message_end_id=None,
+                message_count=None,
+                status="callback_failed",
+                request_payload=request_payload,
+                response_payload=receipt_response,
+            )
+            runtime.trace_store.register_failure(
+                job_id=parsed.case_id,
+                response=receipt_response,
+                callback_status="failed_callback_failed",
+                callback_error=failed_error,
+            )
+            await _workflow_mark_failed(
+                job_id=parsed.case_id,
+                error_code="final_failed_callback_failed",
+                error_message=failed_error,
+                event_payload={
+                    "dispatchType": "final",
+                    "phaseStartNo": parsed.phase_start_no,
+                    "phaseEndNo": parsed.phase_end_no,
+                    "callbackStatus": "failed_callback_failed",
+                },
+            )
+            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
+            raise HTTPException(
+                status_code=502,
+                detail=f"final_failed_callback_failed: {failed_error}",
+            )
+
+        if final_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_REPORTED_V3:
+            error_message = str(final_callback_outcome.report_error or "")
+            failed_payload = (
+                dict(final_callback_outcome.failed_payload)
+                if isinstance(final_callback_outcome.failed_payload, dict)
+                else {}
+            )
+            failed_attempts = int(final_callback_outcome.failed_attempts or 0)
+            failed_retries = int(final_callback_outcome.failed_retries or 0)
             receipt_response = _with_error_contract(
                 {
                     **response,
@@ -9013,7 +8522,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "failedCallbackAttempts": failed_attempts,
                     "failedCallbackRetries": failed_retries,
                 },
-                error_code=error_code,
+                error_code="final_callback_retry_exhausted",
                 error_message=error_message,
                 dispatch_type="final",
                 trace_id=parsed.trace_id,
@@ -9053,7 +8562,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
             await _workflow_mark_failed(
                 job_id=parsed.case_id,
-                error_code=error_code,
+                error_code="final_callback_retry_exhausted",
                 error_message=error_message,
                 event_payload={
                     "dispatchType": "final",
@@ -9063,11 +8572,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 },
             )
             runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(status_code=502, detail=f"final_callback_failed: {err}") from err
+            raise HTTPException(status_code=502, detail=f"final_callback_failed: {error_message}")
 
+        if final_callback_outcome.callback_status != CALLBACK_STATUS_REPORTED_V3:
+            raise RuntimeError("final_callback_outcome_status_invalid")
+
+        callback_attempts = int(final_callback_outcome.callback_attempts or 0)
+        callback_retries = int(final_callback_outcome.callback_retries or 0)
         reported_response = {
             **response,
-            "callbackStatus": "reported",
+            "callbackStatus": CALLBACK_STATUS_REPORTED_V3,
             "callbackAttempts": callback_attempts,
             "callbackRetries": callback_retries,
             "reportPayload": final_report_payload,
@@ -9096,28 +8610,21 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         runtime.trace_store.register_success(
             job_id=parsed.case_id,
             response=reported_response,
-            callback_status="reported",
+            callback_status=CALLBACK_STATUS_REPORTED_V3,
             report_summary=_build_trace_report_summary(
                 dispatch_type="final",
                 payload=final_report_payload,
                 callback_status="reported",
                 callback_error=None,
+                judge_workflow=final_judge_workflow_payload,
             ),
         )
         review_required = bool(final_report_payload.get("reviewRequired"))
-        workflow_event_payload = {
-            "dispatchType": "final",
-            "phaseStartNo": parsed.phase_start_no,
-            "phaseEndNo": parsed.phase_end_no,
-            "callbackStatus": "reported",
-            "winner": final_report_payload.get("winner"),
-            "reviewRequired": review_required,
-            "errorCodes": (
-                final_report_payload.get("errorCodes")
-                if isinstance(final_report_payload.get("errorCodes"), list)
-                else []
-            ),
-        }
+        workflow_event_payload = build_final_workflow_reported_payload_v3(
+            request=parsed,
+            report_payload=final_report_payload,
+            callback_status=CALLBACK_STATUS_REPORTED_V3,
+        )
         if review_required:
             await _workflow_mark_review_required(
                 job_id=parsed.case_id,
@@ -10450,46 +9957,25 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="judge_trace_not_found")
         replay_records = await _list_replay_records(job_id=case_id, limit=50)
-        replay_items = (
-            [
-                {
-                    "replayedAt": item.created_at.isoformat(),
-                    "winner": item.winner,
-                    "needsDrawVote": item.needs_draw_vote,
-                    "provider": item.provider,
-                }
-                for item in replay_records
-            ]
-            if replay_records
-            else [
-                {
-                    "replayedAt": item.replayed_at.isoformat(),
-                    "winner": item.winner,
-                    "needsDrawVote": item.needs_draw_vote,
-                    "provider": item.provider,
-                }
-                for item in record.replays
-            ]
+        replay_items = build_trace_route_replay_items_v3(
+            replay_records=replay_records,
+            trace_record=record,
         )
-        return {
-            "caseId": record.job_id,
-            "traceId": record.trace_id,
-            "status": record.status,
-            "createdAt": record.created_at.isoformat(),
-            "updatedAt": record.updated_at.isoformat(),
-            "callbackStatus": record.callback_status,
-            "callbackError": record.callback_error,
-            "response": record.response,
-            "request": record.request,
-            "reportSummary": record.report_summary,
-            "verdictContract": _build_verdict_contract(
-                record.report_summary.get("payload")
-                if isinstance(record.report_summary, dict)
-                and isinstance(record.report_summary.get("payload"), dict)
-                else {}
-            ),
-            "replays": replay_items,
-        }
+        report_summary = (
+            record.report_summary if isinstance(record.report_summary, dict) else {}
+        )
+        report_payload = (
+            report_summary.get("payload")
+            if isinstance(report_summary.get("payload"), dict)
+            else {}
+        )
+        verdict_contract = _build_verdict_contract(report_payload)
+        return build_trace_route_payload_v3(
+            record=record,
+            report_summary=report_summary,
+            verdict_contract=verdict_contract,
+            replay_items=replay_items,
+        )
 
     @app.post("/internal/judge/cases/{case_id}/replay")
     async def replay_judge_job(
@@ -10498,12 +9984,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type: str = Query(default="auto"),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        dispatch_type_normalized = str(dispatch_type or "auto").strip().lower()
-        if dispatch_type_normalized not in {"auto", "phase", "final"}:
+        try:
+            dispatch_type_normalized = normalize_replay_dispatch_type_v3(dispatch_type)
+        except ValueError:
             raise HTTPException(status_code=422, detail="invalid_dispatch_type")
 
-        chosen_dispatch_type = dispatch_type_normalized
-        chosen_receipt = None
         if dispatch_type_normalized == "auto":
             final_receipt = await _get_dispatch_receipt(
                 dispatch_type="final",
@@ -10513,22 +9998,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 dispatch_type="phase",
                 job_id=case_id,
             )
-            chosen_receipt = final_receipt or phase_receipt
-            if chosen_receipt is None:
-                raise HTTPException(status_code=404, detail="replay_receipt_not_found")
-            chosen_dispatch_type = "final" if final_receipt is not None else "phase"
+            chosen_dispatch_type, chosen_receipt = choose_replay_dispatch_receipt_v3(
+                dispatch_type=dispatch_type_normalized,
+                final_receipt=final_receipt,
+                phase_receipt=phase_receipt,
+            )
         else:
-            chosen_receipt = await _get_dispatch_receipt(
+            explicit_receipt = await _get_dispatch_receipt(
                 dispatch_type=dispatch_type_normalized,
                 job_id=case_id,
             )
-            if chosen_receipt is None:
-                raise HTTPException(status_code=404, detail="replay_receipt_not_found")
+            chosen_dispatch_type, chosen_receipt = choose_replay_dispatch_receipt_v3(
+                dispatch_type=dispatch_type_normalized,
+                explicit_receipt=explicit_receipt,
+            )
+        if chosen_receipt is None:
+            raise HTTPException(status_code=404, detail="replay_receipt_not_found")
 
-        request_snapshot = (
-            chosen_receipt.request if isinstance(chosen_receipt.request, dict) else {}
+        request_snapshot = extract_replay_request_snapshot_v3(chosen_receipt)
+        trace_id = resolve_replay_trace_id_v3(
+            receipt=chosen_receipt,
+            request_snapshot=request_snapshot,
         )
-        trace_id = str(chosen_receipt.trace_id or request_snapshot.get("traceId") or "").strip()
         if not trace_id:
             raise HTTPException(status_code=409, detail="replay_missing_trace_id")
         await _ensure_registry_runtime_ready()
@@ -10695,21 +10186,21 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "dispatchType": chosen_dispatch_type,
             },
         )
-        replayed_at = replay_row.created_at.isoformat()
+        replayed_at = replay_row.created_at
         verdict_contract = _build_verdict_contract(report_payload)
 
-        return {
-            "caseId": case_id,
-            "dispatchType": chosen_dispatch_type,
-            "replayedAt": replayed_at,
-            "reportPayload": report_payload,
-            "verdictContract": verdict_contract,
-            "winner": winner,
-            "needsDrawVote": needs_draw_vote,
-            "traceId": trace_id,
-            "judgeCoreStage": JUDGE_CORE_STAGE_REPLAY_COMPUTED,
-            "judgeCoreVersion": JUDGE_CORE_VERSION,
-        }
+        return build_replay_route_payload_v3(
+            case_id=case_id,
+            dispatch_type=chosen_dispatch_type,
+            replayed_at=replayed_at,
+            report_payload=report_payload,
+            verdict_contract=verdict_contract,
+            winner=winner,
+            needs_draw_vote=needs_draw_vote,
+            trace_id=trace_id,
+            judge_core_stage=JUDGE_CORE_STAGE_REPLAY_COMPUTED,
+            judge_core_version=JUDGE_CORE_VERSION,
+        )
 
     async def _resolve_report_context_for_case(
         *,
@@ -11633,25 +11124,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             items = [_build_replay_report_payload(record) for record in records]
         else:
             items = [_build_replay_report_summary(record) for record in records]
-        return {
-            "count": len(items),
-            "items": items,
-            "filters": {
-                "status": status,
-                "winner": winner,
-                "callbackStatus": callback_status,
-                "traceId": trace_id,
-                "createdAfter": normalized_created_after.isoformat()
-                if normalized_created_after
-                else None,
-                "createdBefore": normalized_created_before.isoformat()
-                if normalized_created_before
-                else None,
-                "hasAuditAlert": has_audit_alert,
-                "limit": limit,
-                "includeReport": include_report,
-            },
-        }
+        return build_replay_reports_list_payload_v3(
+            items=items,
+            status=status,
+            winner=winner,
+            callback_status=callback_status,
+            trace_id=trace_id,
+            created_after=normalized_created_after,
+            created_before=normalized_created_before,
+            has_audit_alert=has_audit_alert,
+            limit=limit,
+            include_report=include_report,
+        )
 
     def _normalize_fairness_environment_mode(
         value: str | None,
@@ -12774,11 +12258,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 "shadowBreachCount": int(aggregations.get("shadowBreachCount") or 0),
             },
             "gateDistribution": {
-                "auto_passed": int(gate_distribution.get("auto_passed") or 0),
-                "review_required": int(gate_distribution.get("review_required") or 0),
-                "benchmark_attention_required": int(
-                    gate_distribution.get("benchmark_attention_required") or 0
-                ),
+                "pass_through": int(gate_distribution.get("pass_through") or 0),
+                "blocked_to_draw": int(gate_distribution.get("blocked_to_draw") or 0),
                 "unknown": int(gate_distribution.get("unknown") or 0),
             },
             "trends": {
@@ -13333,6 +12814,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         courtroom_items: list[dict[str, Any]] = []
         courtroom_errors: list[dict[str, Any]] = []
         courtroom_case_ids: list[int] = []
+        judge_workflow_role_nodes_rows: list[list[dict[str, Any]] | None] = []
         top_risk_cases = (
             fairness_dashboard.get("topRiskCases")
             if isinstance(fairness_dashboard.get("topRiskCases"), list)
@@ -13353,6 +12835,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             seen_case_ids.add(case_id)
             courtroom_case_ids.append(case_id)
         for case_id in courtroom_case_ids:
+            trace = runtime.trace_store.get_trace(case_id)
+            report_summary = (
+                trace.report_summary
+                if trace is not None and isinstance(trace.report_summary, dict)
+                else {}
+            )
+            role_nodes = report_summary.get("roleNodes")
+            if isinstance(role_nodes, list):
+                judge_workflow_role_nodes_rows.append(
+                    [row for row in role_nodes if isinstance(row, dict)]
+                )
+            else:
+                judge_workflow_role_nodes_rows.append(None)
             try:
                 courtroom_payload = await get_judge_case_courtroom_read_model(
                     case_id=case_id,
@@ -13431,7 +12926,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                         else {}
                     ).get("winner"),
                     "reviewRequired": bool(fairness_view.get("reviewRequired")),
-                    "gateDecision": str(fairness_view.get("gateDecision") or "").strip() or None,
+                    "gateDecision": (
+                        _normalize_fairness_gate_decision(
+                            fairness_view.get("gateDecision"),
+                            review_required=bool(fairness_view.get("reviewRequired")),
+                        )
+                        or None
+                    ),
                     "keyClaimCount": key_claim_count,
                     "decisiveEvidenceCount": len(decisive_refs),
                     "pivotalMomentCount": len(pivotal_moments),
@@ -13648,6 +13149,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             review_required_count=trust_summary["reviewRequiredCount"],
             open_challenge_count=trust_summary["openChallengeCount"],
         )
+        judge_workflow_coverage = build_ops_read_model_pack_judge_workflow_coverage(
+            role_nodes_rows=judge_workflow_role_nodes_rows,
+            expected_role_order=JUDGE_ROLE_ORDER,
+        )
         pack_filters = build_ops_read_model_pack_filters(
             dispatch_type=dispatch_type,
             policy_version=policy_version,
@@ -13689,6 +13194,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 policy_gate_simulation=policy_gate_simulation,
                 adaptive_summary=adaptive_summary,
                 trust_overview=trust_overview,
+                judge_workflow_coverage=judge_workflow_coverage,
                 pack_filters=pack_filters,
             )
         except ValueError as err:
@@ -13744,133 +13250,41 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         normalized_sort_order = _normalize_panel_runtime_profile_sort_order(sort_order)
         if normalized_sort_order not in {"asc", "desc"}:
             raise HTTPException(status_code=422, detail="invalid_panel_runtime_sort_order")
-
-        fairness_case_items: list[dict[str, Any]] = []
-        fairness_offset = 0
-        while True:
-            fairness_page = await list_judge_case_fairness(
+        try:
+            return await build_panel_runtime_profiles_payload_v3(
+                list_judge_case_fairness=list_judge_case_fairness,
+                build_panel_runtime_profile_item=_build_panel_runtime_profile_item,
+                build_panel_runtime_profile_sort_key=_build_panel_runtime_profile_sort_key,
+                build_panel_runtime_profile_aggregations=_build_panel_runtime_profile_aggregations,
+                validate_panel_runtime_profile_contract=_validate_panel_runtime_profile_contract,
+                panel_judge_ids=PANEL_JUDGE_IDS,
                 x_ai_internal_key=x_ai_internal_key,
                 status=status,
                 dispatch_type=dispatch_type,
                 winner=winner,
                 policy_version=policy_version,
-                has_drift_breach=None,
-                has_threshold_breach=None,
-                has_shadow_breach=None,
                 has_open_review=has_open_review,
                 gate_conclusion=gate_conclusion,
                 challenge_state=challenge_state,
-                sort_by="updated_at",
-                sort_order="desc",
                 review_required=review_required,
                 panel_high_disagreement=panel_high_disagreement,
-                offset=fairness_offset,
-                limit=200,
+                normalized_judge_id=normalized_judge_id,
+                normalized_profile_source=normalized_profile_source,
+                normalized_profile_id=normalized_profile_id,
+                normalized_model_strategy=normalized_model_strategy,
+                normalized_strategy_slot=normalized_strategy_slot,
+                normalized_domain_slot=normalized_domain_slot,
+                normalized_sort_by=normalized_sort_by,
+                normalized_sort_order=normalized_sort_order,
+                normalized_status=_normalize_workflow_status(status),
+                normalized_dispatch_type=str(dispatch_type or "").strip().lower() or None,
+                normalized_winner=str(winner or "").strip().lower() or None,
+                normalized_policy_version=str(policy_version or "").strip() or None,
+                normalized_gate_conclusion=_normalize_case_fairness_gate_conclusion(gate_conclusion),
+                normalized_challenge_state=_normalize_case_fairness_challenge_state(challenge_state),
+                offset=offset,
+                limit=limit,
             )
-            page_items = (
-                fairness_page.get("items")
-                if isinstance(fairness_page.get("items"), list)
-                else []
-            )
-            if not page_items:
-                break
-            fairness_case_items.extend(page_items)
-            if len(page_items) < 200:
-                break
-            fairness_offset += 200
-
-        items: list[dict[str, Any]] = []
-        for case_item in fairness_case_items:
-            panel = (
-                case_item.get("panelDisagreement")
-                if isinstance(case_item.get("panelDisagreement"), dict)
-                else {}
-            )
-            runtime_profiles = (
-                panel.get("runtimeProfiles")
-                if isinstance(panel.get("runtimeProfiles"), dict)
-                else {}
-            )
-            for judge in PANEL_JUDGE_IDS:
-                runtime_profile = (
-                    runtime_profiles.get(judge)
-                    if isinstance(runtime_profiles.get(judge), dict)
-                    else {}
-                )
-                item = _build_panel_runtime_profile_item(
-                    case_item=case_item,
-                    judge_id=judge,
-                    runtime_profile=runtime_profile,
-                )
-                if normalized_judge_id is not None and item.get("judgeId") != normalized_judge_id:
-                    continue
-                if (
-                    normalized_profile_source is not None
-                    and str(item.get("profileSource") or "").strip().lower()
-                    != normalized_profile_source
-                ):
-                    continue
-                if (
-                    normalized_profile_id is not None
-                    and str(item.get("profileId") or "").strip() != normalized_profile_id
-                ):
-                    continue
-                if (
-                    normalized_model_strategy is not None
-                    and str(item.get("modelStrategy") or "").strip() != normalized_model_strategy
-                ):
-                    continue
-                if (
-                    normalized_strategy_slot is not None
-                    and str(item.get("strategySlot") or "").strip() != normalized_strategy_slot
-                ):
-                    continue
-                if (
-                    normalized_domain_slot is not None
-                    and str(item.get("domainSlot") or "").strip() != normalized_domain_slot
-                ):
-                    continue
-                items.append(item)
-
-        items.sort(
-            key=lambda row: _build_panel_runtime_profile_sort_key(
-                item=row,
-                sort_by=normalized_sort_by,
-            ),
-            reverse=(normalized_sort_order == "desc"),
-        )
-        total_count = len(items)
-        aggregations = _build_panel_runtime_profile_aggregations(items)
-        page_items = items[offset : offset + limit]
-        payload = {
-            "count": total_count,
-            "returned": len(page_items),
-            "items": page_items,
-            "aggregations": aggregations,
-            "filters": {
-                "status": _normalize_workflow_status(status),
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "winner": str(winner or "").strip().lower() or None,
-                "policyVersion": str(policy_version or "").strip() or None,
-                "hasOpenReview": has_open_review,
-                "gateConclusion": _normalize_case_fairness_gate_conclusion(gate_conclusion),
-                "challengeState": _normalize_case_fairness_challenge_state(challenge_state),
-                "reviewRequired": review_required,
-                "panelHighDisagreement": panel_high_disagreement,
-                "judgeId": normalized_judge_id,
-                "profileSource": normalized_profile_source,
-                "profileId": normalized_profile_id,
-                "modelStrategy": normalized_model_strategy,
-                "strategySlot": normalized_strategy_slot,
-                "domainSlot": normalized_domain_slot,
-                "sortBy": normalized_sort_by,
-                "sortOrder": normalized_sort_order,
-                "offset": offset,
-                "limit": limit,
-            },
-        }
-        try:
-            _validate_panel_runtime_profile_contract(payload)
         except ValueError as err:
             raise HTTPException(
                 status_code=500,
@@ -13879,7 +13293,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     "message": str(err),
                 },
             ) from err
-        return payload
 
     @app.get("/internal/judge/panels/runtime/readiness")
     async def get_panel_runtime_readiness(
@@ -13907,103 +13320,41 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         normalized_scan_limit = max(50, min(int(profile_scan_limit), 5000))
         normalized_group_limit = max(1, min(int(group_limit), 200))
         normalized_attention_limit = max(1, min(int(attention_limit), 100))
-
-        collected_items: list[dict[str, Any]] = []
-        offset = 0
-        total_count: int | None = None
-        while len(collected_items) < normalized_scan_limit:
-            batch_limit = min(200, normalized_scan_limit - len(collected_items))
-            page = await list_panel_runtime_profiles(
-                x_ai_internal_key=x_ai_internal_key,
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                policy_version=policy_version,
-                has_open_review=has_open_review,
-                gate_conclusion=gate_conclusion,
-                challenge_state=challenge_state,
-                review_required=review_required,
-                panel_high_disagreement=panel_high_disagreement,
-                judge_id=judge_id,
-                profile_source=profile_source,
-                profile_id=profile_id,
-                model_strategy=model_strategy,
-                strategy_slot=strategy_slot,
-                domain_slot=domain_slot,
-                sort_by="updated_at",
-                sort_order="desc",
-                offset=offset,
-                limit=batch_limit,
-            )
-            if total_count is None:
-                total_count = int(page.get("count") or 0)
-            page_items = page.get("items") if isinstance(page.get("items"), list) else []
-            if not page_items:
-                break
-            collected_items.extend(page_items)
-            if len(page_items) < batch_limit:
-                break
-            offset += batch_limit
-
-        readiness = _build_panel_runtime_readiness_summary(
-            items=collected_items,
-            group_limit=normalized_group_limit,
-            attention_limit=normalized_attention_limit,
+        return await build_panel_runtime_readiness_payload_v3(
+            list_panel_runtime_profiles=list_panel_runtime_profiles,
+            build_panel_runtime_readiness_summary=_build_panel_runtime_readiness_summary,
+            x_ai_internal_key=x_ai_internal_key,
+            status=status,
+            dispatch_type=dispatch_type,
+            winner=winner,
+            policy_version=policy_version,
+            has_open_review=has_open_review,
+            gate_conclusion=gate_conclusion,
+            challenge_state=challenge_state,
+            review_required=review_required,
+            panel_high_disagreement=panel_high_disagreement,
+            judge_id=judge_id,
+            profile_source=profile_source,
+            profile_id=profile_id,
+            model_strategy=model_strategy,
+            strategy_slot=strategy_slot,
+            domain_slot=domain_slot,
+            normalized_status=_normalize_workflow_status(status),
+            normalized_dispatch_type=str(dispatch_type or "").strip().lower() or None,
+            normalized_winner=str(winner or "").strip().lower() or None,
+            normalized_policy_version=str(policy_version or "").strip() or None,
+            normalized_gate_conclusion=_normalize_case_fairness_gate_conclusion(gate_conclusion),
+            normalized_challenge_state=_normalize_case_fairness_challenge_state(challenge_state),
+            normalized_judge_id=str(judge_id or "").strip() or None,
+            normalized_profile_source=_normalize_panel_runtime_profile_source(profile_source),
+            normalized_profile_id=str(profile_id or "").strip() or None,
+            normalized_model_strategy=str(model_strategy or "").strip() or None,
+            normalized_strategy_slot=str(strategy_slot or "").strip() or None,
+            normalized_domain_slot=str(domain_slot or "").strip() or None,
+            normalized_scan_limit=normalized_scan_limit,
+            normalized_group_limit=normalized_group_limit,
+            normalized_attention_limit=normalized_attention_limit,
         )
-        overview = readiness.get("overview") if isinstance(readiness.get("overview"), dict) else {}
-        total_matched = int(total_count or 0)
-        scanned_records = len(collected_items)
-        return {
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "overview": {
-                "totalMatched": total_matched,
-                "scannedRecords": scanned_records,
-                "scanTruncated": scanned_records < total_matched,
-                "totalGroups": int(overview.get("totalGroups") or 0),
-                "attentionGroupCount": int(overview.get("attentionGroupCount") or 0),
-                "readinessCounts": (
-                    overview.get("readinessCounts")
-                    if isinstance(overview.get("readinessCounts"), dict)
-                    else {"ready": 0, "watch": 0, "attention": 0}
-                ),
-            },
-            "groups": (
-                readiness.get("groups")
-                if isinstance(readiness.get("groups"), list)
-                else []
-            ),
-            "attentionGroups": (
-                readiness.get("attentionGroups")
-                if isinstance(readiness.get("attentionGroups"), list)
-                else []
-            ),
-            "notes": [
-                (
-                    "simulations are advisory-only readiness suggestions and never "
-                    "change official winner semantics or auto-switch active policy."
-                ),
-            ],
-            "filters": {
-                "status": _normalize_workflow_status(status),
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "winner": str(winner or "").strip().lower() or None,
-                "policyVersion": str(policy_version or "").strip() or None,
-                "hasOpenReview": has_open_review,
-                "gateConclusion": _normalize_case_fairness_gate_conclusion(gate_conclusion),
-                "challengeState": _normalize_case_fairness_challenge_state(challenge_state),
-                "reviewRequired": review_required,
-                "panelHighDisagreement": panel_high_disagreement,
-                "judgeId": str(judge_id or "").strip() or None,
-                "profileSource": _normalize_panel_runtime_profile_source(profile_source),
-                "profileId": str(profile_id or "").strip() or None,
-                "modelStrategy": str(model_strategy or "").strip() or None,
-                "strategySlot": str(strategy_slot or "").strip() or None,
-                "domainSlot": str(domain_slot or "").strip() or None,
-                "profileScanLimit": normalized_scan_limit,
-                "groupLimit": normalized_group_limit,
-                "attentionLimit": normalized_attention_limit,
-            },
-        }
 
     @app.get("/internal/judge/review/cases")
     async def list_judge_review_jobs(
@@ -14021,224 +13372,72 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_status = _normalize_workflow_status(status)
-        if normalized_status is None or normalized_status not in WORKFLOW_STATUSES:
-            raise HTTPException(status_code=422, detail="invalid_workflow_status")
-        normalized_dispatch_type = (
-            str(dispatch_type or "").strip().lower() or None
-        )
-        if normalized_dispatch_type not in {None, "phase", "final"}:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
-        if (
-            normalized_risk_level is not None
-            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
-        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
-        if (
-            normalized_sla_bucket is not None
-            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
-        normalized_challenge_state = _normalize_trust_challenge_state_filter(challenge_state)
-        if (
-            normalized_challenge_state is not None
-            and normalized_challenge_state != "open"
-            and normalized_challenge_state not in CASE_FAIRNESS_CHALLENGE_STATES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_challenge_state")
-        normalized_trust_review_state = _normalize_trust_challenge_review_state(
-            trust_review_state
-        )
-        if (
-            normalized_trust_review_state is not None
-            and normalized_trust_review_state not in TRUST_CHALLENGE_REVIEW_STATE_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_trust_review_state")
-        normalized_unified_priority_level = _normalize_trust_challenge_priority_level(
-            unified_priority_level
-        )
-        if (
-            normalized_unified_priority_level is not None
-            and normalized_unified_priority_level not in TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_unified_priority_level")
-        normalized_sort_by = _normalize_review_case_sort_by(sort_by)
-        if normalized_sort_by not in REVIEW_CASE_SORT_FIELDS:
-            raise HTTPException(status_code=422, detail="invalid_review_sort_by")
-        normalized_sort_order = _normalize_review_case_sort_order(sort_order)
-        if normalized_sort_order not in {"asc", "desc"}:
-            raise HTTPException(status_code=422, detail="invalid_review_sort_order")
-        normalized_scan_limit = max(20, min(int(scan_limit), 1000))
-
-        jobs = await _workflow_list_jobs(
-            status=normalized_status,
-            dispatch_type=normalized_dispatch_type,
-            limit=normalized_scan_limit,
-        )
-        items: list[dict[str, Any]] = []
-        now = datetime.now(timezone.utc)
-        for job in jobs:
-            trace = runtime.trace_store.get_trace(job.job_id)
-            report_summary = (
-                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+        try:
+            normalized_filters = normalize_review_case_filters_v3(
+                status=status,
+                dispatch_type=dispatch_type,
+                risk_level=risk_level,
+                sla_bucket=sla_bucket,
+                challenge_state=challenge_state,
+                trust_review_state=trust_review_state,
+                unified_priority_level=unified_priority_level,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                scan_limit=scan_limit,
+                normalize_workflow_status=_normalize_workflow_status,
+                workflow_statuses=WORKFLOW_STATUSES,
+                normalize_review_case_risk_level=_normalize_review_case_risk_level,
+                review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
+                normalize_review_case_sla_bucket=_normalize_review_case_sla_bucket,
+                review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
+                normalize_trust_challenge_state_filter=_normalize_trust_challenge_state_filter,
+                case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
+                normalize_trust_challenge_review_state=_normalize_trust_challenge_review_state,
+                trust_challenge_review_state_values=TRUST_CHALLENGE_REVIEW_STATE_VALUES,
+                normalize_trust_challenge_priority_level=_normalize_trust_challenge_priority_level,
+                trust_challenge_priority_level_values=TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES,
+                normalize_review_case_sort_by=_normalize_review_case_sort_by,
+                review_case_sort_fields=REVIEW_CASE_SORT_FIELDS,
+                normalize_review_case_sort_order=_normalize_review_case_sort_order,
             )
-            report_payload = (
-                report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
+            return await build_review_cases_list_payload_v3(
+                normalized_status=str(normalized_filters["status"]),
+                normalized_dispatch_type=cast(
+                    str | None, normalized_filters["dispatchType"]
+                ),
+                normalized_risk_level=cast(
+                    str | None, normalized_filters["riskLevel"]
+                ),
+                normalized_sla_bucket=cast(
+                    str | None, normalized_filters["slaBucket"]
+                ),
+                normalized_challenge_state=cast(
+                    str | None, normalized_filters["challengeState"]
+                ),
+                normalized_trust_review_state=cast(
+                    str | None, normalized_filters["trustReviewState"]
+                ),
+                normalized_unified_priority_level=cast(
+                    str | None, normalized_filters["unifiedPriorityLevel"]
+                ),
+                normalized_sort_by=str(normalized_filters["sortBy"]),
+                normalized_sort_order=str(normalized_filters["sortOrder"]),
+                normalized_scan_limit=int(normalized_filters["scanLimit"]),
+                limit=limit,
+                trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
+                workflow_list_jobs=_workflow_list_jobs,
+                get_trace=runtime.trace_store.get_trace,
+                workflow_list_events=_workflow_list_events,
+                list_audit_alerts=_list_audit_alerts,
+                build_challenge_review_registry=build_challenge_review_registry_v3,
+                build_review_case_risk_profile=_build_review_case_risk_profile,
+                build_trust_challenge_priority_profile=_build_trust_challenge_priority_profile,
+                build_review_trust_unified_priority_profile=_build_review_trust_unified_priority_profile,
+                serialize_workflow_job=_serialize_workflow_job,
+                build_review_case_sort_key=_build_review_case_sort_key,
             )
-            workflow_events = list(await _workflow_list_events(job_id=job.job_id))
-            alerts = await _list_audit_alerts(job_id=job.job_id, status=None, limit=200)
-            trace_id = str(
-                (trace.trace_id if trace is not None else "")
-                or job.trace_id
-                or report_summary.get("traceId")
-                or ""
-            ).strip()
-            challenge_review = build_challenge_review_registry_v3(
-                case_id=job.job_id,
-                trace_id=trace_id,
-                workflow_status=job.status,
-                workflow_events=workflow_events,
-                alerts=alerts,
-                report_payload=report_payload,
-            )
-            error_codes = report_payload.get("errorCodes")
-            audit_alerts = report_summary.get("auditAlerts")
-            risk_profile = _build_review_case_risk_profile(
-                workflow=job,
-                report_payload=report_payload,
-                report_summary=report_summary,
-                now=now,
-            )
-            trust_priority_profile = _build_trust_challenge_priority_profile(
-                workflow=job,
-                challenge_review=challenge_review,
-                report_payload=report_payload,
-                report_summary=report_summary,
-                now=now,
-            )
-            unified_priority_profile = _build_review_trust_unified_priority_profile(
-                risk_profile=risk_profile,
-                trust_priority_profile=trust_priority_profile,
-                challenge_review=challenge_review,
-            )
-            items.append(
-                {
-                    "workflow": _serialize_workflow_job(job),
-                    "winner": report_summary.get("winner"),
-                    "reviewRequired": bool(report_payload.get("reviewRequired")),
-                    "fairnessSummary": (
-                        report_payload.get("fairnessSummary")
-                        if isinstance(report_payload.get("fairnessSummary"), dict)
-                        else None
-                    ),
-                    "errorCodes": error_codes if isinstance(error_codes, list) else [],
-                    "auditAlertCount": (
-                        len(audit_alerts)
-                        if isinstance(audit_alerts, list)
-                        else 0
-                    ),
-                    "callbackStatus": report_summary.get("callbackStatus"),
-                    "riskProfile": risk_profile,
-                    "trustChallenge": {
-                        "state": str(challenge_review.get("challengeState") or "").strip().lower() or None,
-                        "reviewState": str(challenge_review.get("reviewState") or "").strip().lower() or None,
-                        "activeChallengeId": (
-                            str(challenge_review.get("activeChallengeId") or "").strip() or None
-                        ),
-                        "totalChallenges": int(challenge_review.get("totalChallenges") or 0),
-                        "openAlertIds": (
-                            challenge_review.get("openAlertIds")
-                            if isinstance(challenge_review.get("openAlertIds"), list)
-                            else []
-                        ),
-                        "challengeReasons": (
-                            challenge_review.get("challengeReasons")
-                            if isinstance(challenge_review.get("challengeReasons"), list)
-                            else []
-                        ),
-                    },
-                    "trustPriorityProfile": trust_priority_profile,
-                    "unifiedPriorityProfile": unified_priority_profile,
-                }
-            )
-        filtered_items: list[dict[str, Any]] = []
-        for row in items:
-            risk_profile = (
-                row.get("riskProfile")
-                if isinstance(row.get("riskProfile"), dict)
-                else {}
-            )
-            trust_challenge = (
-                row.get("trustChallenge")
-                if isinstance(row.get("trustChallenge"), dict)
-                else {}
-            )
-            unified_priority = (
-                row.get("unifiedPriorityProfile")
-                if isinstance(row.get("unifiedPriorityProfile"), dict)
-                else {}
-            )
-            if (
-                normalized_risk_level is not None
-                and str(risk_profile.get("level") or "").strip().lower() != normalized_risk_level
-            ):
-                continue
-            if (
-                normalized_sla_bucket is not None
-                and str(unified_priority.get("slaBucket") or "").strip().lower() != normalized_sla_bucket
-            ):
-                continue
-            challenge_state_value = str(trust_challenge.get("state") or "").strip().lower()
-            if normalized_challenge_state == "open":
-                if challenge_state_value not in TRUST_CHALLENGE_OPEN_STATES:
-                    continue
-            elif (
-                normalized_challenge_state is not None
-                and challenge_state_value != normalized_challenge_state
-            ):
-                continue
-            if (
-                normalized_trust_review_state is not None
-                and str(trust_challenge.get("reviewState") or "").strip().lower()
-                != normalized_trust_review_state
-            ):
-                continue
-            if (
-                normalized_unified_priority_level is not None
-                and str(unified_priority.get("level") or "").strip().lower()
-                != normalized_unified_priority_level
-            ):
-                continue
-            filtered_items.append(row)
-        filtered_items.sort(
-            key=lambda row: _build_review_case_sort_key(
-                item=row,
-                sort_by=normalized_sort_by,
-            ),
-            reverse=(normalized_sort_order == "desc"),
-        )
-        page_items = filtered_items[:limit]
-        return {
-            "count": len(filtered_items),
-            "returned": len(page_items),
-            "scanned": len(items),
-            "items": page_items,
-            "filters": {
-                "status": normalized_status,
-                "dispatchType": normalized_dispatch_type,
-                "riskLevel": normalized_risk_level,
-                "slaBucket": normalized_sla_bucket,
-                "challengeState": normalized_challenge_state,
-                "trustReviewState": normalized_trust_review_state,
-                "unifiedPriorityLevel": normalized_unified_priority_level,
-                "sortBy": normalized_sort_by,
-                "sortOrder": normalized_sort_order,
-                "scanLimit": normalized_scan_limit,
-                "limit": limit,
-            },
-        }
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
 
     @app.get("/internal/judge/review/cases/{case_id}")
     async def get_judge_review_job(
@@ -14246,46 +13445,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        if workflow_job is None:
-            raise HTTPException(status_code=404, detail="review_job_not_found")
-        workflow_events = await _workflow_list_events(job_id=case_id)
-        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
-        trace = runtime.trace_store.get_trace(case_id)
-        report_summary = (
-            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-        )
-        report_payload = (
-            report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
-        )
-        return {
-            "job": _serialize_workflow_job(workflow_job),
-            "reportPayload": report_payload,
-            "winner": report_summary.get("winner"),
-            "reviewRequired": bool(report_payload.get("reviewRequired")),
-            "callbackStatus": report_summary.get("callbackStatus"),
-            "callbackError": report_summary.get("callbackError"),
-            "trace": (
-                {
-                    "traceId": trace.trace_id,
-                    "status": trace.status,
-                    "createdAt": trace.created_at.isoformat(),
-                    "updatedAt": trace.updated_at.isoformat(),
-                }
-                if trace is not None
-                else None
-            ),
-            "events": [
-                {
-                    "eventSeq": item.event_seq,
-                    "eventType": item.event_type,
-                    "payload": item.payload,
-                    "createdAt": item.created_at.isoformat(),
-                }
-                for item in workflow_events
-            ],
-            "alerts": [_serialize_alert_item(item) for item in alerts],
-        }
+        try:
+            return await build_review_case_detail_payload_v3(
+                case_id=case_id,
+                workflow_get_job=_workflow_get_job,
+                workflow_list_events=_workflow_list_events,
+                list_audit_alerts=_list_audit_alerts,
+                get_trace=runtime.trace_store.get_trace,
+                serialize_workflow_job=_serialize_workflow_job,
+                serialize_alert_item=_serialize_alert_item,
+            )
+        except LookupError as err:
+            raise HTTPException(status_code=404, detail=str(err)) from err
 
     @app.post("/internal/judge/review/cases/{case_id}/decision")
     async def decide_judge_review_job(
@@ -14296,57 +13467,24 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         reason: str | None = Query(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_decision = str(decision or "").strip().lower()
-        if normalized_decision not in {"approve", "reject"}:
-            raise HTTPException(status_code=422, detail="invalid_review_decision")
-
-        current_job = await _workflow_get_job(job_id=case_id)
-        if current_job is None:
-            raise HTTPException(status_code=404, detail="review_job_not_found")
-        # 复核决策只允许消费 review_required 队列，避免绕过主状态机直接改裁决状态。
-        if current_job.status != "review_required":
-            raise HTTPException(status_code=409, detail="review_job_not_pending")
-
-        event_payload = {
-            "dispatchType": current_job.dispatch_type,
-            "reviewDecision": normalized_decision,
-            "reviewActor": str(actor or "").strip() or "system",
-            "reviewReason": str(reason or "").strip() or None,
-        }
-        resolved_alert_ids: list[str] = []
-        if normalized_decision == "approve":
-            event_payload["judgeCoreStage"] = "review_approved"
-            await _workflow_mark_completed(
-                job_id=case_id,
-                event_payload=event_payload,
+        try:
+            return await build_review_case_decision_payload_v3(
+                case_id=case_id,
+                decision=decision,
+                actor=actor,
+                reason=reason,
+                workflow_get_job=_workflow_get_job,
+                workflow_mark_completed=_workflow_mark_completed,
+                workflow_mark_failed=_workflow_mark_failed,
+                resolve_open_alerts_for_review=_resolve_open_alerts_for_review,
+                serialize_workflow_job=_serialize_workflow_job,
             )
-            transitioned = await _workflow_get_job(job_id=case_id)
-            if transitioned is None:
-                raise HTTPException(status_code=404, detail="review_job_not_found")
-            resolved_alert_ids = await _resolve_open_alerts_for_review(
-                job_id=case_id,
-                actor=event_payload["reviewActor"],
-                reason=event_payload["reviewReason"] or "review_approved",
-            )
-        else:
-            reject_reason = event_payload["reviewReason"] or "review rejected by reviewer"
-            event_payload["judgeCoreStage"] = "review_rejected"
-            await _workflow_mark_failed(
-                job_id=case_id,
-                error_code="review_rejected",
-                error_message=reject_reason,
-                event_payload=event_payload,
-            )
-            transitioned = await _workflow_get_job(job_id=case_id)
-            if transitioned is None:
-                raise HTTPException(status_code=404, detail="review_job_not_found")
-
-        return {
-            "ok": True,
-            "job": _serialize_workflow_job(transitioned),
-            "decision": normalized_decision,
-            "resolvedAlertIds": resolved_alert_ids,
-        }
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
+        except LookupError as err:
+            raise HTTPException(status_code=404, detail=str(err)) from err
+        except ReviewRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     @app.get("/internal/judge/cases/{case_id}/alerts")
     async def list_judge_job_alerts(
@@ -14356,49 +13494,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        items = await _list_audit_alerts(
-            job_id=case_id,
+        return await build_case_alerts_payload_v3(
+            case_id=case_id,
             status=status,
             limit=limit,
+            list_audit_alerts=_list_audit_alerts,
+            serialize_alert_item=_serialize_alert_item,
         )
-        return {
-            "caseId": case_id,
-            "count": len(items),
-            "items": [_serialize_alert_item(item) for item in items],
-        }
-
-    async def _transition_alert_status(
-        *,
-        job_id: int,
-        alert_id: str,
-        to_status: str,
-        actor: str | None,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        row = runtime.trace_store.transition_audit_alert(
-            job_id=job_id,
-            alert_id=alert_id,
-            to_status=to_status,
-            actor=actor,
-            reason=reason,
-        )
-        if row is None:
-            raise HTTPException(status_code=409, detail="invalid_alert_status_transition")
-        await _sync_audit_alert_to_facts(alert=row)
-        transitioned = await runtime.workflow_runtime.facts.transition_audit_alert(
-            alert_id=alert_id,
-            to_status=to_status,
-            now=row.updated_at,
-        )
-        if transitioned is None:
-            raise HTTPException(status_code=409, detail="invalid_alert_status_transition")
-        return {
-            "ok": True,
-            "caseId": job_id,
-            "alertId": alert_id,
-            "status": transitioned.status,
-            "item": _serialize_alert_item(transitioned),
-        }
 
     @app.post("/internal/judge/cases/{case_id}/alerts/{alert_id}/ack")
     async def ack_judge_job_alert(
@@ -14409,13 +13511,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         reason: str | None = Query(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _transition_alert_status(
-            job_id=case_id,
-            alert_id=alert_id,
-            to_status="acked",
-            actor=actor,
-            reason=reason,
-        )
+        try:
+            return await build_alert_status_transition_payload_v3(
+                job_id=case_id,
+                alert_id=alert_id,
+                to_status="acked",
+                actor=actor,
+                reason=reason,
+                transition_audit_alert=runtime.trace_store.transition_audit_alert,
+                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
+                serialize_alert_item=_serialize_alert_item,
+            )
+        except ReviewRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     @app.post("/internal/judge/cases/{case_id}/alerts/{alert_id}/resolve")
     async def resolve_judge_job_alert(
@@ -14426,13 +13535,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         reason: str | None = Query(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _transition_alert_status(
-            job_id=case_id,
-            alert_id=alert_id,
-            to_status="resolved",
-            actor=actor,
-            reason=reason,
-        )
+        try:
+            return await build_alert_status_transition_payload_v3(
+                job_id=case_id,
+                alert_id=alert_id,
+                to_status="resolved",
+                actor=actor,
+                reason=reason,
+                transition_audit_alert=runtime.trace_store.transition_audit_alert,
+                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
+                serialize_alert_item=_serialize_alert_item,
+            )
+        except ReviewRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     @app.get("/internal/judge/alerts/ops-view")
     async def list_judge_alert_ops_view(
@@ -14453,51 +13569,35 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=500),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_alert_type = str(alert_type or "").strip() or None
-        if (
-            normalized_alert_type is not None
-            and normalized_alert_type not in OPS_REGISTRY_ALERT_TYPES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_alert_type")
-        normalized_status = _normalize_ops_alert_status(status)
-        if (
-            normalized_status is not None
-            and normalized_status not in OPS_ALERT_STATUS_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_alert_status")
-        normalized_delivery_status = _normalize_ops_alert_delivery_status(
-            delivery_status
-        )
-        if (
-            normalized_delivery_status is not None
-            and normalized_delivery_status not in OPS_ALERT_DELIVERY_STATUS_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_delivery_status")
-        normalized_fields_mode = _normalize_ops_alert_fields_mode(fields_mode)
-        if normalized_fields_mode not in OPS_ALERT_FIELDS_MODE_VALUES:
-            raise HTTPException(status_code=422, detail="invalid_fields_mode")
-
-        alerts = await _list_audit_alerts(job_id=0, status=None, limit=5000)
-        outbox_events = runtime.trace_store.list_alert_outbox(limit=200)
-        payload = _build_registry_alert_ops_view(
-            alerts=alerts,
-            outbox_events=outbox_events,
-            alert_type=normalized_alert_type,
-            status=normalized_status,
-            delivery_status=normalized_delivery_status,
-            registry_type=registry_type,
-            policy_version=policy_version,
-            gate_code=gate_code,
-            gate_actor=gate_actor,
-            override_applied=override_applied,
-            fields_mode=normalized_fields_mode,
-            include_trend=include_trend,
-            trend_window_minutes=trend_window_minutes,
-            trend_bucket_minutes=trend_bucket_minutes,
-            offset=offset,
-            limit=limit,
-        )
-        return payload
+        try:
+            return await build_alert_ops_view_payload_v3(
+                alert_type=alert_type,
+                status=status,
+                delivery_status=delivery_status,
+                registry_type=registry_type,
+                policy_version=policy_version,
+                gate_code=gate_code,
+                gate_actor=gate_actor,
+                override_applied=override_applied,
+                fields_mode=fields_mode,
+                include_trend=include_trend,
+                trend_window_minutes=trend_window_minutes,
+                trend_bucket_minutes=trend_bucket_minutes,
+                offset=offset,
+                limit=limit,
+                normalize_ops_alert_status=_normalize_ops_alert_status,
+                normalize_ops_alert_delivery_status=_normalize_ops_alert_delivery_status,
+                normalize_ops_alert_fields_mode=_normalize_ops_alert_fields_mode,
+                ops_registry_alert_types=OPS_REGISTRY_ALERT_TYPES,
+                ops_alert_status_values=OPS_ALERT_STATUS_VALUES,
+                ops_alert_delivery_status_values=OPS_ALERT_DELIVERY_STATUS_VALUES,
+                ops_alert_fields_mode_values=OPS_ALERT_FIELDS_MODE_VALUES,
+                list_audit_alerts=_list_audit_alerts,
+                list_alert_outbox=runtime.trace_store.list_alert_outbox,
+                build_registry_alert_ops_view=_build_registry_alert_ops_view,
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
 
     @app.get("/internal/judge/alerts/outbox")
     async def list_judge_alert_outbox(
@@ -14510,14 +13610,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             delivery_status=delivery_status,
             limit=limit,
         )
-        return {
-            "count": len(rows),
-            "items": [_serialize_outbox_event(item) for item in rows],
-            "filters": {
-                "deliveryStatus": delivery_status,
-                "limit": limit,
-            },
-        }
+        return build_alert_outbox_list_payload_v3(
+            rows=rows,
+            delivery_status=delivery_status,
+            limit=limit,
+            serialize_outbox_event=_serialize_outbox_event,
+        )
 
     @app.post("/internal/judge/alerts/outbox/{event_id}/delivery")
     async def mark_judge_alert_outbox_delivery(
@@ -14532,12 +13630,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             delivery_status=delivery_status,
             error_message=error_message,
         )
-        if item is None:
-            raise HTTPException(status_code=404, detail="alert_outbox_event_not_found")
-        return {
-            "ok": True,
-            "item": _serialize_outbox_event(item),
-        }
+        try:
+            return build_alert_outbox_delivery_payload_v3(
+                item=item,
+                serialize_outbox_event=_serialize_outbox_event,
+            )
+        except LookupError as err:
+            raise HTTPException(status_code=404, detail=str(err)) from err
 
     @app.get("/internal/judge/rag/diagnostics")
     async def get_rag_diagnostics(

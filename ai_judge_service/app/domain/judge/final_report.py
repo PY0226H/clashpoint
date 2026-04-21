@@ -38,6 +38,8 @@ PANEL_RUNTIME_PROFILE_DEFAULTS = {
     },
 }
 
+_FINAL_ARBITRATION_GATE_DECISIONS = {"pass_through", "blocked_to_draw"}
+
 
 def _safe_float(value: Any, *, default: float = 0.0) -> float:
     try:
@@ -1092,8 +1094,18 @@ def _evaluate_fairness_gate(
         )
 
     review_required = bool(error_codes)
+    review_reason_codes: list[str] = []
+    seen_reason_codes: set[str] = set()
+    for code in error_codes:
+        token = str(code).strip()
+        if token and token not in seen_reason_codes:
+            review_reason_codes.append(token)
+            seen_reason_codes.add(token)
+    gate_decision = "blocked_to_draw" if review_required else "pass_through"
     summary = {
         "phase": "phase2",
+        "gateDecision": gate_decision,
+        "reviewReasons": review_reason_codes,
         "swapInstability": swap_instability,
         "styleShiftInstability": style_shift_instability,
         "panelHighDisagreement": panel_high_disagreement,
@@ -1401,10 +1413,41 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
 
     verdict_ledger = payload.get("verdictLedger")
     fairness_summary = payload.get("fairnessSummary")
+    fairness_gate_decision: str | None = None
+    fairness_review_reasons: list[str] | None = None
     if not isinstance(fairness_summary, dict):
         missing.append("fairnessSummary")
-    elif not isinstance(fairness_summary.get("reviewRequired"), bool):
-        missing.append("fairnessSummary.reviewRequired")
+    else:
+        if not isinstance(fairness_summary.get("reviewRequired"), bool):
+            missing.append("fairnessSummary.reviewRequired")
+        elif (
+            isinstance(review_required, bool)
+            and bool(fairness_summary.get("reviewRequired")) != review_required
+        ):
+            missing.append("fairnessSummary.reviewRequired_mismatch")
+
+        fairness_gate_decision = (
+            str(fairness_summary.get("gateDecision") or "").strip().lower() or None
+        )
+        if (
+            fairness_gate_decision is not None
+            and fairness_gate_decision not in _FINAL_ARBITRATION_GATE_DECISIONS
+        ):
+            missing.append("fairnessSummary.gateDecision_invalid")
+
+        raw_review_reasons = fairness_summary.get("reviewReasons")
+        if raw_review_reasons is None:
+            fairness_review_reasons = None
+        elif not isinstance(raw_review_reasons, list):
+            missing.append("fairnessSummary.reviewReasons")
+        else:
+            fairness_review_reasons = []
+            for row in raw_review_reasons:
+                token = str(row).strip()
+                if token:
+                    fairness_review_reasons.append(token)
+            if len(fairness_review_reasons) != len(raw_review_reasons):
+                missing.append("fairnessSummary.reviewReasons.invalid_item")
     if not isinstance(verdict_ledger, dict):
         missing.append("verdictLedger")
     else:
@@ -1432,8 +1475,13 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             missing.append("verdictLedger.arbitration.decisionPath")
         if not isinstance(arbitration.get("fairnessGateApplied"), bool):
             missing.append("verdictLedger.arbitration.fairnessGateApplied")
-        if not str(arbitration.get("gateDecision") or "").strip():
+        gate_decision = str(arbitration.get("gateDecision") or "").strip().lower()
+        if not gate_decision:
             missing.append("verdictLedger.arbitration.gateDecision")
+        elif gate_decision not in _FINAL_ARBITRATION_GATE_DECISIONS:
+            missing.append("verdictLedger.arbitration.gateDecision_invalid")
+        if fairness_gate_decision is not None and gate_decision and fairness_gate_decision != gate_decision:
+            missing.append("verdictLedger.arbitration.gateDecision_fairness_mismatch")
         arbitration_winner = str(arbitration.get("winnerAfterArbitration") or "").strip().lower()
         if arbitration_winner not in {"pro", "con", "draw"}:
             missing.append("verdictLedger.arbitration.winnerAfterArbitration")
@@ -1456,6 +1504,12 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             and winner != "draw"
         ):
             missing.append("verdictLedger.arbitration.reviewRequired_winner_not_draw")
+        if isinstance(arbitration.get("reviewRequired"), bool):
+            arbitration_review_required = bool(arbitration.get("reviewRequired"))
+            if arbitration_review_required and gate_decision != "blocked_to_draw":
+                missing.append("verdictLedger.arbitration.reviewRequired_gate_decision_invalid")
+            if (not arbitration_review_required) and gate_decision == "blocked_to_draw":
+                missing.append("verdictLedger.arbitration.pass_through_gate_decision_invalid")
 
     opinion_pack = payload.get("opinionPack")
     if not isinstance(opinion_pack, dict):
@@ -1502,10 +1556,28 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
         missing.append("rejudgeTriggered")
     if not isinstance(payload.get("needsDrawVote"), bool):
         missing.append("needsDrawVote")
-    if not isinstance(payload.get("errorCodes"), list):
+    error_codes = payload.get("errorCodes")
+    if not isinstance(error_codes, list):
         missing.append("errorCodes")
+        error_codes = []
+    normalized_error_codes = {str(item).strip() for item in error_codes if str(item).strip()}
     if not isinstance(payload.get("degradationLevel"), int):
         missing.append("degradationLevel")
+    elif isinstance(review_required, bool) and review_required and int(payload.get("degradationLevel") or 0) <= 0:
+        missing.append("degradationLevel.review_required_not_degraded")
+
+    if isinstance(review_required, bool) and review_required:
+        if "fairness_gate_review_required" not in normalized_error_codes:
+            missing.append("errorCodes.fairness_gate_review_required_missing")
+        if fairness_review_reasons is None:
+            missing.append("fairnessSummary.reviewReasons")
+        elif not fairness_review_reasons:
+            missing.append("fairnessSummary.reviewReasons_empty")
+    if isinstance(fairness_review_reasons, list):
+        for code in fairness_review_reasons:
+            if code not in normalized_error_codes:
+                missing.append("fairnessSummary.reviewReasons_not_in_errorCodes")
+                break
 
     claim_graph = payload.get("claimGraph")
     if not isinstance(claim_graph, dict):

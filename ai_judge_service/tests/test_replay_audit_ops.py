@@ -105,6 +105,34 @@ def test_build_replay_report_payload_and_summary_should_normalize_winner_and_cou
         needs_draw_vote=True,
         provider="mock",
     )
+    judge_workflow = {
+        "judgeWorkflow": {
+            "caseDossier": {
+                "caseId": 701,
+                "dispatchType": "final",
+                "roleOrder": [
+                    "clerk",
+                    "recorder",
+                    "claim_graph",
+                    "evidence",
+                    "panel",
+                    "fairness_sentinel",
+                    "chief_arbiter",
+                    "opinion_writer",
+                ],
+            },
+            "claimGraph": {"stats": {}},
+            "evidenceBundle": {"entries": []},
+            "panelBundle": {"judges": {}},
+            "fairnessGate": {"decision": "blocked_to_draw", "reviewRequired": True},
+            "verdict": {
+                "winner": "draw",
+                "needsDrawVote": True,
+                "reviewRequired": True,
+            },
+            "opinion": {"sideAnalysis": {}},
+        }
+    }
     record = SimpleNamespace(
         job_id=701,
         trace_id="trace-701",
@@ -120,6 +148,22 @@ def test_build_replay_report_payload_and_summary_should_normalize_winner_and_cou
             "auditAlerts": [{"id": "a1"}],
             "callbackStatus": "reported",
             "callbackError": None,
+            "judgeWorkflow": judge_workflow,
+            "roleNodes": [
+                {"seq": 1, "role": "clerk", "section": "caseDossier", "status": "completed"},
+                {"seq": 2, "role": "recorder", "section": "claimGraph", "status": "completed"},
+                {"seq": 3, "role": "claim_graph", "section": "claimGraph", "status": "completed"},
+                {"seq": 4, "role": "evidence", "section": "evidenceBundle", "status": "completed"},
+                {"seq": 5, "role": "panel", "section": "panelBundle", "status": "completed"},
+                {
+                    "seq": 6,
+                    "role": "fairness_sentinel",
+                    "section": "fairnessGate",
+                    "status": "completed",
+                },
+                {"seq": 7, "role": "chief_arbiter", "section": "verdict", "status": "completed"},
+                {"seq": 8, "role": "opinion_writer", "section": "opinion", "status": "completed"},
+            ],
         },
         created_at=now,
         updated_at=now,

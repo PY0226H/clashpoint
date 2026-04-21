@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -124,6 +125,8 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert payload["reviewRequired"] is False
     assert isinstance(payload["debateSummary"], str) and payload["debateSummary"]
     assert isinstance(payload["fairnessSummary"], dict)
+    assert payload["fairnessSummary"]["gateDecision"] == "pass_through"
+    assert payload["fairnessSummary"]["reviewReasons"] == []
     assert isinstance(payload["sideAnalysis"], dict)
     assert isinstance(payload["claimGraph"], dict)
     assert isinstance(payload["claimGraphSummary"], dict)
@@ -368,6 +371,8 @@ def test_build_final_report_payload_should_trigger_style_shift_instability_gate(
     assert "fairness_gate_review_required" in payload["errorCodes"]
     assert payload["verdictLedger"]["arbitration"]["gateDecision"] == "blocked_to_draw"
     assert payload["verdictLedger"]["arbitration"]["reviewRequired"] is True
+    assert payload["fairnessSummary"]["gateDecision"] == "blocked_to_draw"
+    assert "style_shift_instability" in payload["fairnessSummary"]["reviewReasons"]
     assert "blocked_to_draw" in payload["debateSummary"]
     assert any(item.get("type") == "style_shift_instability" for item in payload["auditAlerts"])
 
@@ -677,6 +682,60 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
     assert "verdictLedger" in missing
     assert "opinionPack" in missing
     assert "judgeTrace" in missing
+
+
+def test_validate_final_report_payload_contract_should_enforce_fairness_review_contract() -> None:
+    request = FinalDispatchRequest(
+        case_id=9016,
+        scope_id=1,
+        session_id=316,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9016",
+        idempotency_key="final:9016",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={
+                    "reportPayload": _build_phase_payload(
+                        pro=60.9,
+                        con=60.0,
+                        msg_offset=0,
+                        agent2_pro=60.9,
+                        agent2_con=60.0,
+                    )
+                },
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+    )
+    assert payload["reviewRequired"] is True
+    assert validate_final_report_payload_contract(payload) == []
+
+    missing_reasons_payload = copy.deepcopy(payload)
+    missing_reasons_payload["fairnessSummary"].pop("reviewReasons", None)
+    missing = validate_final_report_payload_contract(missing_reasons_payload)
+    assert "fairnessSummary.reviewReasons" in missing
+
+    invalid_gate_payload = copy.deepcopy(payload)
+    invalid_gate_payload["verdictLedger"]["arbitration"]["gateDecision"] = "review_required"
+    missing = validate_final_report_payload_contract(invalid_gate_payload)
+    assert "verdictLedger.arbitration.gateDecision_invalid" in missing
+
+    missing_gate_code_payload = copy.deepcopy(payload)
+    missing_gate_code_payload["errorCodes"] = [
+        code for code in payload["errorCodes"] if code != "fairness_gate_review_required"
+    ]
+    missing = validate_final_report_payload_contract(missing_gate_code_payload)
+    assert "errorCodes.fairness_gate_review_required_missing" in missing
 
 
 class JudgeMainlinePhaseTests(unittest.IsolatedAsyncioTestCase):

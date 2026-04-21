@@ -23,7 +23,7 @@ class FairnessCaseContractTests(unittest.TestCase):
             "updatedAt": "2026-04-19T00:00:00Z",
             "winner": "pro",
             "reviewRequired": False,
-            "gateConclusion": "auto_passed",
+            "gateConclusion": "pass_through",
             "errorCodes": [],
             "panelDisagreement": {
                 "high": False,
@@ -71,9 +71,8 @@ class FairnessCaseContractTests(unittest.TestCase):
                 "panelHighDisagreementCount": 0,
                 "withChallengeCount": 0,
                 "gateConclusionCounts": {
-                    "auto_passed": 2,
-                    "review_required": 0,
-                    "benchmark_attention_required": 0,
+                    "pass_through": 2,
+                    "blocked_to_draw": 0,
                     "unknown": 0,
                 },
                 "winnerCounts": {
@@ -141,7 +140,7 @@ class FairnessCaseContractTests(unittest.TestCase):
 
     def test_validate_case_fairness_list_contract_should_fail_on_aggregation_mismatch(self) -> None:
         payload = self._build_list_payload()
-        payload["aggregations"]["gateConclusionCounts"]["auto_passed"] = 1
+        payload["aggregations"]["gateConclusionCounts"]["pass_through"] = 1
 
         with self.assertRaises(ValueError) as ctx:
             validate_case_fairness_list_contract(payload)

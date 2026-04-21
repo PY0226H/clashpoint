@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .judge_trace_summary import validate_trace_report_summary_contract
+
 
 def _normalize_winner(value: Any) -> str | None:
     normalized = str(value or "").strip().lower()
@@ -183,26 +185,44 @@ def build_replay_report_payload(record: Any) -> dict[str, Any]:
 
     callback_status = report_summary.get("callbackStatus") or record.callback_status
     callback_error = report_summary.get("callbackError") or record.callback_error
+    dispatch_type = str(report_summary.get("dispatchType") or "").strip().lower()
+    if not dispatch_type:
+        dispatch_type = (
+            str(response.get("dispatchType") or "").strip().lower()
+            if isinstance(response, dict)
+            else ""
+        )
+    if not dispatch_type:
+        dispatch_type = "unknown"
+
+    normalized_summary = {
+        "dispatchType": dispatch_type,
+        "payload": payload,
+        "winner": winner_text,
+        "auditAlerts": audit_alerts,
+        "callbackStatus": callback_status,
+        "callbackError": callback_error,
+    }
+    if isinstance(report_summary.get("judgeWorkflow"), dict):
+        normalized_summary["judgeWorkflow"] = report_summary.get("judgeWorkflow")
+    if isinstance(report_summary.get("roleNodes"), list):
+        normalized_summary["roleNodes"] = report_summary.get("roleNodes")
+    if dispatch_type in {"phase", "final"}:
+        validate_trace_report_summary_contract(normalized_summary)
 
     verdict_contract = build_verdict_contract(payload)
     return {
         "caseId": record.job_id,
         "traceId": record.trace_id,
         "status": record.status,
-        "dispatchType": report_summary.get("dispatchType"),
+        "dispatchType": dispatch_type,
         "request": request,
         "payload": payload,
         "winner": winner_text,
         "auditAlerts": audit_alerts,
         "callbackStatus": callback_status,
         "callbackError": callback_error,
-        "reportSummary": {
-            "payload": payload,
-            "winner": winner_text,
-            "auditAlerts": audit_alerts,
-            "callbackStatus": callback_status,
-            "callbackError": callback_error,
-        },
+        "reportSummary": normalized_summary,
         "callbackResult": {
             "callbackStatus": callback_status,
             "callbackError": callback_error,

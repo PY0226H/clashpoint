@@ -825,3 +825,8 @@
 | 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|---|---|---|
 | `ai-judge-p27-real-env-pass-window-execute-on-env`（仅真实环境窗口） | ai-judge-stage-closure-execute | 环境依赖 | 当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口 | REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后 | 完成该模块并产出 real-env 证据工件，状态达到 pass | 执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence |
+
+### C36. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| `ai-judge-p30-real-env-pass-window-execute-on-env`（等待真实环境窗口后触发） | ai-judge-stage-closure-execute | 环境依赖 | 当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口 | REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后 | 完成该模块并产出 real-env 证据工件，状态达到 pass | 执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence |

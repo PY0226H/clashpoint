@@ -28,6 +28,7 @@ from app.applications.fairness_dashboard_contract import (
 from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
     OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
+    OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     validate_ops_read_model_pack_v5_contract,
@@ -604,7 +605,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(courtroom["fairness"]["summary"], dict)
         self.assertIn(
             courtroom["fairness"]["gateDecision"],
-            {"auto_passed", "review_required", "blocked_to_draw", "pass_through"},
+            {"pass_through", "blocked_to_draw"},
         )
         self.assertIsInstance(courtroom["opinion"]["userReport"], dict)
         self.assertIsInstance(courtroom["governance"]["policySnapshot"], dict)
@@ -688,11 +689,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "phase": "phase2",
                     "panelHighDisagreement": True,
                     "reviewRequired": True,
+                    "gateDecision": "blocked_to_draw",
+                    "reviewReasons": ["judge_panel_high_disagreement"],
                 },
                 "verdictLedger": {
                     "arbitration": {
                         "reviewRequired": True,
-                        "gateDecision": "review_required",
+                        "gateDecision": "blocked_to_draw",
                     },
                 },
                 "errorCodes": [
@@ -921,11 +924,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "phase": "phase2",
                     "panelHighDisagreement": True,
                     "reviewRequired": True,
+                    "gateDecision": "blocked_to_draw",
+                    "reviewReasons": ["judge_panel_high_disagreement"],
                 },
                 "verdictLedger": {
                     "arbitration": {
                         "reviewRequired": True,
-                        "gateDecision": "review_required",
+                        "gateDecision": "blocked_to_draw",
                     },
                     "pivotalMoments": [
                         {"id": "pivot-high-1", "phaseNo": 1},
@@ -976,7 +981,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 "verdictLedger": {
                     "arbitration": {
                         "reviewRequired": False,
-                        "gateDecision": "auto_passed",
+                        "gateDecision": "pass_through",
                     },
                     "pivotalMoments": [],
                 },
@@ -1257,11 +1262,13 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "phase": "phase2",
                     "panelHighDisagreement": True,
                     "reviewRequired": True,
+                    "gateDecision": "blocked_to_draw",
+                    "reviewReasons": ["judge_panel_high_disagreement"],
                 },
                 "verdictLedger": {
                     "arbitration": {
                         "reviewRequired": True,
-                        "gateDecision": "review_required",
+                        "gateDecision": "blocked_to_draw",
                     },
                 },
                 "claimGraphSummary": {
@@ -1308,7 +1315,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 "verdictLedger": {
                     "arbitration": {
                         "reviewRequired": False,
-                        "gateDecision": "auto_passed",
+                        "gateDecision": "pass_through",
                     },
                 },
                 "claimGraphSummary": {
@@ -4185,6 +4192,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 "panelHighDisagreement": False,
                 "panelDisagreementRatio": 0.0,
                 "reviewRequired": True,
+                "gateDecision": "blocked_to_draw",
+                "reviewReasons": ["style_shift_instability"],
             },
             "judgeTrace": {"traceId": "trace-final-7401"},
             "auditAlerts": [{"type": "style_shift_instability"}],
@@ -4335,6 +4344,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 "phase": "phase2",
                 "panelHighDisagreement": True,
                 "reviewRequired": True,
+                "gateDecision": "blocked_to_draw",
+                "reviewReasons": ["judge_panel_high_disagreement"],
             },
             "auditAlerts": [{"type": "judge_panel_high_disagreement"}],
             "errorCodes": ["judge_panel_high_disagreement", "fairness_gate_review_required"],
@@ -4542,6 +4553,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     "phase": "phase2",
                     "panelHighDisagreement": panel_high_disagreement,
                     "reviewRequired": True,
+                    "gateDecision": "blocked_to_draw",
+                    "reviewReasons": [str(error_codes[0]) if error_codes else "review_required"],
                 },
                 "auditAlerts": audit_alerts,
                 "errorCodes": error_codes,
@@ -4568,7 +4581,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return _build_review_payload(
                 trace_id=f"trace-final-{low_risk_case_id}",
                 panel_high_disagreement=False,
-                error_codes=[],
+                error_codes=["fairness_gate_review_required"],
                 audit_alerts=[],
             )
 
@@ -4690,6 +4703,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     else {}
                 )
                 fairness_summary["reviewRequired"] = True
+                fairness_summary["gateDecision"] = "blocked_to_draw"
+                fairness_summary["reviewReasons"] = ["review_required"]
                 payload["fairnessSummary"] = fairness_summary
                 verdict_ledger = (
                     payload.get("verdictLedger")
@@ -4702,10 +4717,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                     else {}
                 )
                 arbitration["reviewRequired"] = True
-                arbitration["gateDecision"] = "review_required"
+                arbitration["gateDecision"] = "blocked_to_draw"
                 verdict_ledger["arbitration"] = arbitration
                 payload["verdictLedger"] = verdict_ledger
-                payload["errorCodes"] = ["review_required"]
+                payload["errorCodes"] = ["review_required", "fairness_gate_review_required"]
+                payload["degradationLevel"] = max(1, int(payload.get("degradationLevel") or 0))
             return payload
 
         with patch(
@@ -5370,6 +5386,70 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             replay_claim_ledger.case_dossier.get("phase", {}).get("endNo"),
             final_req.phase_end_no,
         )
+
+    async def test_trace_and_replay_report_should_keep_judge_workflow_summary_contract(
+        self,
+    ) -> None:
+        async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=noop_callback,
+            callback_final_report_impl=noop_callback,
+            callback_phase_failed_impl=noop_callback,
+            callback_final_failed_impl=noop_callback,
+        )
+        app = create_app(runtime)
+
+        case_id = _unique_case_id(5401)
+        phase_req = _build_phase_request(case_id=case_id, idempotency_key=f"phase:{case_id}")
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        final_req = _build_final_request(case_id=case_id, idempotency_key=f"final:{case_id}")
+        final_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/final/dispatch",
+            payload=final_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(final_resp.status_code, 200)
+
+        trace_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trace",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(trace_resp.status_code, 200)
+        trace_payload = trace_resp.json()
+        trace_summary = trace_payload["reportSummary"]
+        self.assertEqual(trace_summary["dispatchType"], "final")
+        self.assertIsInstance(trace_summary["judgeWorkflow"], dict)
+        self.assertIsInstance(trace_summary["roleNodes"], list)
+        self.assertEqual(len(trace_summary["roleNodes"]), 8)
+        self.assertEqual(trace_summary["roleNodes"][0]["role"], "clerk")
+        self.assertEqual(trace_summary["roleNodes"][-1]["role"], "opinion_writer")
+
+        replay_report_resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/replay/report",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(replay_report_resp.status_code, 200)
+        replay_report_payload = replay_report_resp.json()
+        replay_summary = replay_report_payload["reportSummary"]
+        self.assertEqual(replay_summary["dispatchType"], "final")
+        self.assertIsInstance(replay_summary["judgeWorkflow"], dict)
+        self.assertIsInstance(replay_summary["roleNodes"], list)
+        self.assertEqual(len(replay_summary["roleNodes"]), 8)
+        self.assertEqual(replay_summary["roleNodes"][0]["role"], "clerk")
+        self.assertEqual(replay_summary["roleNodes"][-1]["role"], "opinion_writer")
 
     async def test_attestation_verify_should_use_auto_dispatch_and_return_verified(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -6669,7 +6749,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         item = detail_payload["item"]
         self.assertEqual(set(item.keys()), set(CASE_FAIRNESS_ITEM_KEYS))
         self.assertEqual(item["caseId"], case_id)
-        self.assertIn(item["gateConclusion"], {"auto_passed", "review_required", "benchmark_attention_required"})
+        self.assertIn(item["gateConclusion"], {"pass_through", "blocked_to_draw"})
         self.assertIsInstance(item["panelDisagreement"]["runtimeProfiles"], dict)
         self.assertIn("judgeA", item["panelDisagreement"]["runtimeProfiles"])
         self.assertEqual(item["driftSummary"]["latestRun"]["runId"], run_id)
@@ -7051,7 +7131,11 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(payload["gateDistribution"], dict)
         self.assertGreaterEqual(payload["overview"]["totalMatched"], 1)
         self.assertGreaterEqual(payload["overview"]["shadowBreachCount"], 1)
-        self.assertGreaterEqual(payload["gateDistribution"]["benchmark_attention_required"], 1)
+        self.assertGreaterEqual(
+            payload["gateDistribution"]["pass_through"]
+            + payload["gateDistribution"]["blocked_to_draw"],
+            1,
+        )
         self.assertTrue(any(row["caseId"] == case_id for row in payload["topRiskCases"]))
         self.assertTrue(
             any(
@@ -7480,6 +7564,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             set(OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS),
         )
         self.assertEqual(
+            set(payload["judgeWorkflowCoverage"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS),
+        )
+        self.assertEqual(
             set(payload["filters"].keys()),
             set(OPS_READ_MODEL_PACK_V5_FILTER_KEYS),
         )
@@ -7499,6 +7587,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(payload["policyGateSimulation"], dict)
         self.assertIsInstance(payload["adaptiveSummary"], dict)
         self.assertIsInstance(payload["trustOverview"], dict)
+        self.assertIsInstance(payload["judgeWorkflowCoverage"], dict)
         self.assertGreaterEqual(
             payload["fairnessDashboard"]["overview"]["totalMatched"],
             1,
@@ -7576,6 +7665,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(row["caseId"] == case_id for row in payload["trustOverview"]["items"])
         )
+        self.assertGreaterEqual(payload["judgeWorkflowCoverage"]["totalCases"], 1)
+        self.assertGreaterEqual(payload["judgeWorkflowCoverage"]["fullCount"], 1)
+        self.assertLessEqual(payload["judgeWorkflowCoverage"]["fullCoverageRate"], 1.0)
         self.assertEqual(payload["filters"]["dispatchType"], "final")
         self.assertEqual(payload["filters"]["policyVersion"], "v3-default")
         self.assertEqual(payload["filters"]["trustCaseLimit"], 3)

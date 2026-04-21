@@ -5,10 +5,12 @@ import unittest
 from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
     OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
+    OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     build_ops_read_model_pack_adaptive_summary,
     build_ops_read_model_pack_filters,
+    build_ops_read_model_pack_judge_workflow_coverage,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
@@ -89,6 +91,24 @@ class OpsReadModelPackTests(unittest.TestCase):
                 "errorCount": 0,
                 "items": [],
                 "errors": [],
+            },
+            "judgeWorkflowCoverage": {
+                "totalCases": 0,
+                "fullCount": 0,
+                "partialCount": 0,
+                "missingCount": 0,
+                "invalidOrderCount": 0,
+                "missingRoleCounts": {
+                    "clerk": 0,
+                    "recorder": 0,
+                    "claim_graph": 0,
+                    "evidence": 0,
+                    "panel": 0,
+                    "fairness_sentinel": 0,
+                    "chief_arbiter": 0,
+                    "opinion_writer": 0,
+                },
+                "fullCoverageRate": 0.0,
             },
             "filters": filters or {
                 "dispatchType": "final",
@@ -177,6 +197,49 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(payload["verifiedCount"], 0)
         self.assertEqual(payload["reviewRequiredCount"], 2)
         self.assertEqual(payload["openChallengeCount"], 3)
+
+    def test_build_ops_read_model_pack_judge_workflow_coverage_should_count_full_partial_missing(
+        self,
+    ) -> None:
+        payload = build_ops_read_model_pack_judge_workflow_coverage(
+            role_nodes_rows=[
+                [
+                    {"seq": 1, "role": "clerk"},
+                    {"seq": 2, "role": "recorder"},
+                    {"seq": 3, "role": "claim_graph"},
+                    {"seq": 4, "role": "evidence"},
+                    {"seq": 5, "role": "panel"},
+                    {"seq": 6, "role": "fairness_sentinel"},
+                    {"seq": 7, "role": "chief_arbiter"},
+                    {"seq": 8, "role": "opinion_writer"},
+                ],
+                [
+                    {"seq": 1, "role": "clerk"},
+                    {"seq": 2, "role": "recorder"},
+                ],
+                None,
+            ],
+            expected_role_order=(
+                "clerk",
+                "recorder",
+                "claim_graph",
+                "evidence",
+                "panel",
+                "fairness_sentinel",
+                "chief_arbiter",
+                "opinion_writer",
+            ),
+        )
+        self.assertEqual(
+            set(payload.keys()),
+            set(OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS),
+        )
+        self.assertEqual(payload["totalCases"], 3)
+        self.assertEqual(payload["fullCount"], 1)
+        self.assertEqual(payload["partialCount"], 1)
+        self.assertEqual(payload["missingCount"], 1)
+        self.assertGreaterEqual(payload["missingRoleCounts"]["panel"], 2)
+        self.assertAlmostEqual(payload["fullCoverageRate"], 0.3333, places=4)
 
     def test_build_ops_read_model_pack_filters_should_clamp_limits(self) -> None:
         payload = build_ops_read_model_pack_filters(
@@ -287,6 +350,7 @@ class OpsReadModelPackTests(unittest.TestCase):
             policy_gate_simulation=seed["policyGateSimulation"],
             adaptive_summary=seed["adaptiveSummary"],
             trust_overview=seed["trustOverview"],
+            judge_workflow_coverage=seed["judgeWorkflowCoverage"],
             pack_filters=seed["filters"],
         )
         self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))

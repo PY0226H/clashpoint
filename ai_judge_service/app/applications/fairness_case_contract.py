@@ -99,9 +99,8 @@ CASE_FAIRNESS_FILTER_KEYS: tuple[str, ...] = (
 )
 
 CASE_FAIRNESS_GATE_COUNT_KEYS: tuple[str, ...] = (
-    "auto_passed",
-    "review_required",
-    "benchmark_attention_required",
+    "pass_through",
+    "blocked_to_draw",
     "unknown",
 )
 

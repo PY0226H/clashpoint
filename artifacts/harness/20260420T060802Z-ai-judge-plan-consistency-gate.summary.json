@@ -1,0 +1,27 @@
+{
+  "run_id": "20260420T060802Z-ai-judge-plan-consistency-gate",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "arch_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md",
+  "consistency_section_found": true,
+  "arch_checklist_found": true,
+  "checks": [
+    {"label":"角色一致性","status":"pass","answer":"8 Agent 职责必须完整映射，不能被错误合并或绕过。"},
+    {"label":"数据一致性","status":"pass","answer":"`case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 保持唯一主链语义。"},
+    {"label":"门禁一致性","status":"pass","answer":"`Fairness Sentinel` 仍在终判前，override/阻断必须可审计。"},
+    {"label":"边界一致性","status":"pass","answer":"`NPC/Room QA` 继续保持 `advisory_only`，不写官方裁决链。"},
+    {"label":"跨层一致性","status":"pass","answer":"契约变更同轮同步调用方、测试与文档，不保留长期双轨 alias。"},
+    {"label":"收口一致性","status":"pass","answer":"real-env 项继续区分 `local_reference_ready` 与 `pass`，不混淆口径。"}
+  ],
+  "missing_items": [],
+  "empty_items": [],
+  "placeholder_items": [],
+  "arch_missing_items": [],
+  "started_at": "2026-04-20T06:08:02Z",
+  "finished_at": "2026-04-20T06:08:02Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T060802Z-ai-judge-plan-consistency-gate.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260420T060802Z-ai-judge-plan-consistency-gate.summary.md"
+  }
+}
