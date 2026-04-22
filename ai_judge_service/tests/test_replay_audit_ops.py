@@ -121,16 +121,43 @@ def test_build_replay_report_payload_and_summary_should_normalize_winner_and_cou
                     "opinion_writer",
                 ],
             },
-            "claimGraph": {"stats": {}},
-            "evidenceBundle": {"entries": []},
-            "panelBundle": {"judges": {}},
-            "fairnessGate": {"decision": "blocked_to_draw", "reviewRequired": True},
+            "claimGraph": {
+                "stats": {},
+                "items": [],
+                "unansweredClaimIds": [],
+            },
+            "evidenceBundle": {
+                "entries": [],
+                "sourceCitations": [],
+                "conflictSources": [],
+                "stats": {},
+            },
+            "panelBundle": {
+                "topWinner": "draw",
+                "disagreementRatio": 0.0,
+                "judges": {},
+            },
+            "fairnessGate": {
+                "decision": "blocked_to_draw",
+                "reviewRequired": True,
+                "reasons": [],
+                "auditAlertIds": [],
+            },
             "verdict": {
                 "winner": "draw",
                 "needsDrawVote": True,
                 "reviewRequired": True,
+                "decisionPath": [
+                    "judge_panel",
+                    "fairness_sentinel",
+                    "chief_arbiter",
+                ],
             },
-            "opinion": {"sideAnalysis": {}},
+            "opinion": {
+                "debateSummary": "summary",
+                "sideAnalysis": {},
+                "verdictReason": "reason",
+            },
         }
     }
     record = SimpleNamespace(

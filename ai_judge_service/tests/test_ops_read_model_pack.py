@@ -4,13 +4,19 @@ import unittest
 
 from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
+    OPS_READ_MODEL_PACK_V5_CASE_CHAIN_COVERAGE_KEYS,
+    OPS_READ_MODEL_PACK_V5_FAIRNESS_GATE_OVERVIEW_KEYS,
     OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
     OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
+    OPS_READ_MODEL_PACK_V5_POLICY_KERNEL_BINDING_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     build_ops_read_model_pack_adaptive_summary,
+    build_ops_read_model_pack_case_chain_coverage,
+    build_ops_read_model_pack_fairness_gate_overview,
     build_ops_read_model_pack_filters,
     build_ops_read_model_pack_judge_workflow_coverage,
+    build_ops_read_model_pack_policy_kernel_binding,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
@@ -109,6 +115,54 @@ class OpsReadModelPackTests(unittest.TestCase):
                     "opinion_writer": 0,
                 },
                 "fullCoverageRate": 0.0,
+            },
+            "caseChainCoverage": {
+                "totalCases": 0,
+                "completeCount": 0,
+                "missingAnyCount": 0,
+                "fullCoverageRate": 0.0,
+                "missingAnyRate": 0.0,
+                "byObjectPresence": {
+                    "caseDossier": 0,
+                    "claimGraph": 0,
+                    "evidenceBundle": 0,
+                    "verdictLedger": 0,
+                    "fairnessReport": 0,
+                    "opinionPack": 0,
+                },
+            },
+            "fairnessGateOverview": {
+                "totalCases": 0,
+                "caseDecisionCounts": {
+                    "pass_through": 0,
+                    "blocked_to_draw": 0,
+                    "unknown": 0,
+                },
+                "caseReviewRequiredCount": 0,
+                "policyVersionCount": 0,
+                "policyGateDecisionCounts": {
+                    "blocked": 0,
+                    "override_activated": 0,
+                    "pass": 0,
+                },
+                "policyGateSourceCounts": {},
+                "policyOverrideAppliedCount": 0,
+            },
+            "policyKernelBinding": {
+                "activePolicyVersion": "v3-default",
+                "trackedPolicyVersionCount": 1,
+                "kernelBoundPolicyCount": 1,
+                "missingKernelBindingCount": 0,
+                "casePolicyVersionCount": 0,
+                "missingCasePolicyVersionCount": 0,
+                "caseMissingKernelBindingCount": 0,
+                "overrideAppliedPolicyCount": 0,
+                "casePolicyVersionCounts": {},
+                "gateDecisionCounts": {
+                    "blocked": 0,
+                    "override_activated": 0,
+                    "pass": 0,
+                },
             },
             "filters": filters or {
                 "dispatchType": "final",
@@ -278,6 +332,120 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(payload["panelGroupLimit"], 200)
         self.assertEqual(payload["panelAttentionLimit"], 1)
 
+    def test_build_ops_read_model_pack_case_chain_coverage_should_count_object_presence(self) -> None:
+        payload = build_ops_read_model_pack_case_chain_coverage(
+            chain_rows=[
+                {
+                    "caseDossier": True,
+                    "claimGraph": True,
+                    "evidenceBundle": True,
+                    "verdictLedger": True,
+                    "fairnessReport": True,
+                    "opinionPack": True,
+                },
+                {
+                    "caseDossier": True,
+                    "claimGraph": False,
+                    "evidenceBundle": True,
+                    "verdictLedger": False,
+                    "fairnessReport": True,
+                    "opinionPack": False,
+                },
+            ]
+        )
+        self.assertEqual(
+            set(payload.keys()),
+            set(OPS_READ_MODEL_PACK_V5_CASE_CHAIN_COVERAGE_KEYS),
+        )
+        self.assertEqual(payload["totalCases"], 2)
+        self.assertEqual(payload["completeCount"], 1)
+        self.assertEqual(payload["missingAnyCount"], 1)
+        self.assertEqual(payload["byObjectPresence"]["claimGraph"], 1)
+
+    def test_build_ops_read_model_pack_fairness_gate_overview_should_summarize_case_and_policy(
+        self,
+    ) -> None:
+        payload = build_ops_read_model_pack_fairness_gate_overview(
+            courtroom_items=[
+                {"gateDecision": "pass_through", "reviewRequired": False},
+                {"gateDecision": "blocked_to_draw", "reviewRequired": True},
+                {"gateDecision": "", "reviewRequired": False},
+            ],
+            policy_gate_rows=[
+                {
+                    "policyVersion": "v3-default",
+                    "gateDecision": "blocked",
+                    "gateSource": "benchmark",
+                    "overrideApplied": False,
+                },
+                {
+                    "policyVersion": "v3-exp",
+                    "gateDecision": "pass",
+                    "gateSource": "shadow",
+                    "overrideApplied": True,
+                },
+            ],
+        )
+        self.assertEqual(
+            set(payload.keys()),
+            set(OPS_READ_MODEL_PACK_V5_FAIRNESS_GATE_OVERVIEW_KEYS),
+        )
+        self.assertEqual(payload["caseDecisionCounts"]["pass_through"], 1)
+        self.assertEqual(payload["caseDecisionCounts"]["blocked_to_draw"], 1)
+        self.assertEqual(payload["caseDecisionCounts"]["unknown"], 1)
+        self.assertEqual(payload["policyVersionCount"], 2)
+        self.assertEqual(payload["policyGateDecisionCounts"]["override_activated"], 1)
+        self.assertEqual(payload["policyGateSourceCounts"]["benchmark"], 1)
+
+    def test_build_ops_read_model_pack_policy_kernel_binding_should_summarize_binding_health(
+        self,
+    ) -> None:
+        payload = build_ops_read_model_pack_policy_kernel_binding(
+            active_policy_version="v3-default",
+            governance_dependency_items=[
+                {
+                    "policyVersion": "v3-default",
+                    "policyKernelVersion": "policy-kernel-binding-v1",
+                    "policyKernelHash": "hash-1",
+                },
+                {
+                    "policyVersion": "v3-exp",
+                    "policyKernelVersion": None,
+                    "policyKernelHash": None,
+                },
+            ],
+            policy_gate_rows=[
+                {
+                    "policyVersion": "v3-default",
+                    "gateDecision": "pass",
+                    "gateSource": "benchmark",
+                    "overrideApplied": False,
+                },
+                {
+                    "policyVersion": "v3-exp",
+                    "gateDecision": "blocked",
+                    "gateSource": "shadow",
+                    "overrideApplied": True,
+                },
+            ],
+            courtroom_items=[
+                {"policyVersion": "v3-default"},
+                {"policyVersion": "v3-exp"},
+                {"policyVersion": None},
+            ],
+        )
+        self.assertEqual(
+            set(payload.keys()),
+            set(OPS_READ_MODEL_PACK_V5_POLICY_KERNEL_BINDING_KEYS),
+        )
+        self.assertEqual(payload["trackedPolicyVersionCount"], 2)
+        self.assertEqual(payload["kernelBoundPolicyCount"], 1)
+        self.assertEqual(payload["missingKernelBindingCount"], 1)
+        self.assertEqual(payload["casePolicyVersionCount"], 2)
+        self.assertEqual(payload["missingCasePolicyVersionCount"], 1)
+        self.assertEqual(payload["caseMissingKernelBindingCount"], 1)
+        self.assertEqual(payload["overrideAppliedPolicyCount"], 1)
+
     def test_validate_ops_read_model_pack_v5_contract_should_pass_for_stable_payload(self) -> None:
         payload = self._build_pack_payload()
         self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))
@@ -351,6 +519,9 @@ class OpsReadModelPackTests(unittest.TestCase):
             adaptive_summary=seed["adaptiveSummary"],
             trust_overview=seed["trustOverview"],
             judge_workflow_coverage=seed["judgeWorkflowCoverage"],
+            case_chain_coverage=seed["caseChainCoverage"],
+            fairness_gate_overview=seed["fairnessGateOverview"],
+            policy_kernel_binding=seed["policyKernelBinding"],
             pack_filters=seed["filters"],
         )
         self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))

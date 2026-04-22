@@ -597,6 +597,7 @@ class RegistryProductRuntime:
                     "mismatchedPromptVersions": [],
                     "missingToolIds": [],
                     "policyProfile": None,
+                    "policyKernel": None,
                     "promptRegistrySnapshot": None,
                     "toolRegistrySnapshot": None,
                 }
@@ -919,6 +920,7 @@ class RegistryProductRuntime:
             "promptVersionsAligned": not mismatched_prompt_versions,
             "toolIdsCovered": not missing_tool_ids,
         }
+        policy_kernel = PolicyRegistryRuntime.build_kernel_snapshot(policy_profile)
         return {
             "ok": not issues,
             "code": "dependency_ok" if not issues else "policy_registry_dependency_invalid",
@@ -932,6 +934,7 @@ class RegistryProductRuntime:
             "mismatchedPromptVersions": mismatched_prompt_versions,
             "missingToolIds": missing_tool_ids,
             "policyProfile": PolicyRegistryRuntime.serialize_profile(policy_profile),
+            "policyKernel": policy_kernel,
             "promptRegistrySnapshot": (
                 PromptRegistryRuntime.serialize_profile(prompt_profile)
                 if prompt_profile is not None

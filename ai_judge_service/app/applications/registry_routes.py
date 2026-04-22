@@ -551,6 +551,11 @@ async def build_registry_governance_overview_payload(
         tool_registry_version = (
             str(dependency_payload.get("toolRegistryVersion") or "").strip() or "unknown"
         )
+        policy_kernel = (
+            dependency_payload.get("policyKernel")
+            if isinstance(dependency_payload.get("policyKernel"), dict)
+            else {}
+        )
         dependency_by_prompt_registry[prompt_registry_version] = (
             dependency_by_prompt_registry.get(prompt_registry_version, 0) + 1
         )
@@ -575,6 +580,12 @@ async def build_registry_governance_overview_payload(
                 ),
                 "toolRegistryVersion": (
                     str(dependency_payload.get("toolRegistryVersion") or "").strip() or None
+                ),
+                "policyKernelVersion": (
+                    str(policy_kernel.get("version") or "").strip() or None
+                ),
+                "policyKernelHash": (
+                    str(policy_kernel.get("kernelHash") or "").strip() or None
                 ),
                 "issueCodes": issue_codes,
             }

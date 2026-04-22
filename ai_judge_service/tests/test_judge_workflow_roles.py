@@ -205,16 +205,43 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
                             "opinion_writer",
                         ],
                     },
-                    "claimGraph": {},
-                    "evidenceBundle": {},
-                    "panelBundle": {},
-                    "fairnessGate": {"decision": "pass_through", "reviewRequired": False},
+                    "claimGraph": {
+                        "stats": {},
+                        "items": [],
+                        "unansweredClaimIds": [],
+                    },
+                    "evidenceBundle": {
+                        "entries": [],
+                        "sourceCitations": [],
+                        "conflictSources": [],
+                        "stats": {},
+                    },
+                    "panelBundle": {
+                        "topWinner": "pro",
+                        "disagreementRatio": 0.0,
+                        "judges": {},
+                    },
+                    "fairnessGate": {
+                        "decision": "pass_through",
+                        "reviewRequired": False,
+                        "reasons": [],
+                        "auditAlertIds": [],
+                    },
                     "verdict": {
                         "winner": "pro",
                         "needsDrawVote": False,
                         "reviewRequired": False,
+                        "decisionPath": [
+                            "judge_panel",
+                            "fairness_sentinel",
+                            "chief_arbiter",
+                        ],
                     },
-                    "opinion": {"sideAnalysis": {}},
+                    "opinion": {
+                        "debateSummary": "",
+                        "sideAnalysis": {},
+                        "verdictReason": "",
+                    },
                 }
             },
         )

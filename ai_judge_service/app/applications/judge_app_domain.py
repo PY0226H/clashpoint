@@ -23,6 +23,39 @@ JUDGE_WORKFLOW_SECTION_KEYS: tuple[str, ...] = (
     "verdict",
     "opinion",
 )
+JUDGE_CLAIM_GRAPH_KEYS: tuple[str, ...] = (
+    "stats",
+    "items",
+    "unansweredClaimIds",
+)
+JUDGE_EVIDENCE_BUNDLE_KEYS: tuple[str, ...] = (
+    "entries",
+    "sourceCitations",
+    "conflictSources",
+    "stats",
+)
+JUDGE_PANEL_BUNDLE_KEYS: tuple[str, ...] = (
+    "topWinner",
+    "disagreementRatio",
+    "judges",
+)
+JUDGE_FAIRNESS_GATE_KEYS: tuple[str, ...] = (
+    "decision",
+    "reviewRequired",
+    "reasons",
+    "auditAlertIds",
+)
+JUDGE_VERDICT_KEYS: tuple[str, ...] = (
+    "winner",
+    "needsDrawVote",
+    "reviewRequired",
+    "decisionPath",
+)
+JUDGE_OPINION_KEYS: tuple[str, ...] = (
+    "debateSummary",
+    "sideAnalysis",
+    "verdictReason",
+)
 
 _ALLOWED_DISPATCH_TYPES = {"phase", "final"}
 _ALLOWED_WINNERS = {"pro", "con", "draw"}
@@ -250,38 +283,128 @@ def validate_judge_app_domain_payload(payload: dict[str, Any]) -> None:
     claim_graph = workflow.get("claimGraph")
     if not isinstance(claim_graph, dict):
         raise ValueError("judge_workflow_claim_graph_not_dict")
+    _assert_required_keys(
+        section="judge_workflow_claim_graph",
+        payload=claim_graph,
+        keys=JUDGE_CLAIM_GRAPH_KEYS,
+    )
+    if not isinstance(claim_graph.get("stats"), dict):
+        raise ValueError("judge_workflow_claim_graph_stats_not_dict")
+    if not isinstance(claim_graph.get("items"), list):
+        raise ValueError("judge_workflow_claim_graph_items_not_list")
+    if not isinstance(claim_graph.get("unansweredClaimIds"), list):
+        raise ValueError("judge_workflow_claim_graph_unanswered_claim_ids_not_list")
+
     evidence_bundle = workflow.get("evidenceBundle")
     if not isinstance(evidence_bundle, dict):
         raise ValueError("judge_workflow_evidence_bundle_not_dict")
+    _assert_required_keys(
+        section="judge_workflow_evidence_bundle",
+        payload=evidence_bundle,
+        keys=JUDGE_EVIDENCE_BUNDLE_KEYS,
+    )
+    if not isinstance(evidence_bundle.get("entries"), list):
+        raise ValueError("judge_workflow_evidence_bundle_entries_not_list")
+    if not isinstance(evidence_bundle.get("sourceCitations"), list):
+        raise ValueError("judge_workflow_evidence_bundle_source_citations_not_list")
+    if not isinstance(evidence_bundle.get("conflictSources"), list):
+        raise ValueError("judge_workflow_evidence_bundle_conflict_sources_not_list")
+    if not isinstance(evidence_bundle.get("stats"), dict):
+        raise ValueError("judge_workflow_evidence_bundle_stats_not_dict")
+
     panel_bundle = workflow.get("panelBundle")
     if not isinstance(panel_bundle, dict):
         raise ValueError("judge_workflow_panel_bundle_not_dict")
+    _assert_required_keys(
+        section="judge_workflow_panel_bundle",
+        payload=panel_bundle,
+        keys=JUDGE_PANEL_BUNDLE_KEYS,
+    )
+    panel_top_winner = panel_bundle.get("topWinner")
+    if panel_top_winner is not None and str(panel_top_winner).strip().lower() not in _ALLOWED_WINNERS:
+        raise ValueError("judge_workflow_panel_bundle_top_winner_invalid")
+    disagreement_ratio = panel_bundle.get("disagreementRatio")
+    if isinstance(disagreement_ratio, bool) or not isinstance(disagreement_ratio, (int, float)):
+        raise ValueError("judge_workflow_panel_bundle_disagreement_ratio_invalid")
+    if float(disagreement_ratio) < 0.0 or float(disagreement_ratio) > 1.0:
+        raise ValueError("judge_workflow_panel_bundle_disagreement_ratio_invalid")
+    if not isinstance(panel_bundle.get("judges"), dict):
+        raise ValueError("judge_workflow_panel_bundle_judges_not_dict")
 
     fairness_gate = workflow.get("fairnessGate")
     if not isinstance(fairness_gate, dict):
         raise ValueError("judge_workflow_fairness_gate_not_dict")
+    _assert_required_keys(
+        section="judge_workflow_fairness_gate",
+        payload=fairness_gate,
+        keys=JUDGE_FAIRNESS_GATE_KEYS,
+    )
     fairness_decision = str(fairness_gate.get("decision") or "").strip().lower()
     if fairness_decision not in _ALLOWED_FAIRNESS_DECISIONS:
         raise ValueError("judge_workflow_fairness_gate_decision_invalid")
     if not isinstance(fairness_gate.get("reviewRequired"), bool):
         raise ValueError("judge_workflow_fairness_gate_review_required_not_bool")
+    if not isinstance(fairness_gate.get("reasons"), list):
+        raise ValueError("judge_workflow_fairness_gate_reasons_not_list")
+    if not isinstance(fairness_gate.get("auditAlertIds"), list):
+        raise ValueError("judge_workflow_fairness_gate_audit_alert_ids_not_list")
 
     verdict = workflow.get("verdict")
     if not isinstance(verdict, dict):
         raise ValueError("judge_workflow_verdict_not_dict")
+    _assert_required_keys(
+        section="judge_workflow_verdict",
+        payload=verdict,
+        keys=JUDGE_VERDICT_KEYS,
+    )
     winner = verdict.get("winner")
     if winner is not None:
         winner_token = str(winner).strip().lower()
         if winner_token not in _ALLOWED_WINNERS:
             raise ValueError("judge_workflow_verdict_winner_invalid")
+    else:
+        winner_token = None
+        if dispatch_type == "final":
+            raise ValueError("judge_workflow_verdict_winner_missing_for_final")
     if not isinstance(verdict.get("needsDrawVote"), bool):
         raise ValueError("judge_workflow_verdict_needs_draw_vote_not_bool")
-    if not isinstance(verdict.get("reviewRequired"), bool):
+    verdict_review_required = verdict.get("reviewRequired")
+    if not isinstance(verdict_review_required, bool):
         raise ValueError("judge_workflow_verdict_review_required_not_bool")
+    decision_path = verdict.get("decisionPath")
+    if not isinstance(decision_path, list):
+        raise ValueError("judge_workflow_verdict_decision_path_not_list")
+    normalized_path = [
+        str(item or "").strip().lower()
+        for item in decision_path
+        if str(item or "").strip()
+    ]
+    if not normalized_path:
+        raise ValueError("judge_workflow_verdict_decision_path_empty")
+
+    fairness_review_required = bool(fairness_gate.get("reviewRequired"))
+    if fairness_review_required != bool(verdict_review_required):
+        raise ValueError("judge_workflow_fairness_verdict_review_required_mismatch")
+    if fairness_decision == "blocked_to_draw" and not fairness_review_required:
+        raise ValueError("judge_workflow_fairness_gate_blocked_to_draw_without_review")
+    if fairness_decision == "pass_through" and fairness_review_required:
+        raise ValueError("judge_workflow_fairness_gate_pass_through_with_review")
+    if (
+        dispatch_type == "final"
+        and bool(verdict_review_required)
+        and winner_token is not None
+        and winner_token != "draw"
+    ):
+        raise ValueError("judge_workflow_verdict_review_required_winner_not_draw")
 
     opinion = workflow.get("opinion")
     if not isinstance(opinion, dict):
         raise ValueError("judge_workflow_opinion_not_dict")
+    _assert_required_keys(
+        section="judge_workflow_opinion",
+        payload=opinion,
+        keys=JUDGE_OPINION_KEYS,
+    )
     side_analysis = opinion.get("sideAnalysis")
     if not isinstance(side_analysis, dict):
         raise ValueError("judge_workflow_opinion_side_analysis_not_dict")

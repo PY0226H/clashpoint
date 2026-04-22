@@ -74,6 +74,52 @@ class JudgeAppDomainTests(unittest.TestCase):
             validate_judge_app_domain_payload(payload)
         self.assertIn("judge_workflow_fairness_gate_decision_invalid", str(ctx.exception))
 
+    def test_validate_judge_app_domain_payload_should_fail_on_claim_graph_missing_required_key(
+        self,
+    ) -> None:
+        payload = build_judge_role_domain_state(
+            case_id=12004,
+            dispatch_type="phase",
+        ).to_payload()
+        del payload[JUDGE_WORKFLOW_ROOT_KEY]["claimGraph"]["unansweredClaimIds"]
+        with self.assertRaises(ValueError) as ctx:
+            validate_judge_app_domain_payload(payload)
+        self.assertIn("judge_workflow_claim_graph_missing_keys", str(ctx.exception))
+
+    def test_validate_judge_app_domain_payload_should_fail_on_fairness_verdict_review_mismatch(
+        self,
+    ) -> None:
+        payload = build_judge_role_domain_state(
+            case_id=12005,
+            dispatch_type="final",
+        ).to_payload()
+        payload[JUDGE_WORKFLOW_ROOT_KEY]["fairnessGate"]["reviewRequired"] = True
+        payload[JUDGE_WORKFLOW_ROOT_KEY]["fairnessGate"]["decision"] = "blocked_to_draw"
+        payload[JUDGE_WORKFLOW_ROOT_KEY]["verdict"]["reviewRequired"] = False
+        payload[JUDGE_WORKFLOW_ROOT_KEY]["verdict"]["winner"] = "draw"
+        with self.assertRaises(ValueError) as ctx:
+            validate_judge_app_domain_payload(payload)
+        self.assertIn(
+            "judge_workflow_fairness_verdict_review_required_mismatch",
+            str(ctx.exception),
+        )
+
+    def test_validate_judge_app_domain_payload_should_fail_when_final_review_required_winner_not_draw(
+        self,
+    ) -> None:
+        payload = build_judge_role_domain_state(
+            case_id=12006,
+            dispatch_type="final",
+            fairness_gate={"decision": "blocked_to_draw", "reviewRequired": True},
+            verdict={"winner": "pro", "reviewRequired": True},
+        ).to_payload()
+        with self.assertRaises(ValueError) as ctx:
+            validate_judge_app_domain_payload(payload)
+        self.assertIn(
+            "judge_workflow_verdict_review_required_winner_not_draw",
+            str(ctx.exception),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

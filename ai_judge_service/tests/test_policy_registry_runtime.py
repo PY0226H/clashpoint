@@ -135,6 +135,27 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         self.assertIsNone(ok.error_code)
         self.assertIsNotNone(ok.profile)
 
+    def test_build_kernel_snapshot_should_be_stable_and_bind_policy_versions(self) -> None:
+        runtime = build_policy_registry_runtime(settings=_build_settings())
+        profile = runtime.get_profile("v3-default")
+        self.assertIsNotNone(profile)
+        assert profile is not None
+
+        first = runtime.build_kernel_snapshot(profile)
+        second = runtime.build_kernel_snapshot(profile)
+        self.assertEqual(first, second)
+        self.assertEqual(first["version"], "policy-kernel-binding-v1")
+        self.assertTrue(str(first["kernelHash"] or "").strip())
+        self.assertEqual(first["kernelVector"]["policyVersion"], "v3-default")
+        self.assertEqual(
+            first["kernelVector"]["promptRegistryVersion"],
+            profile.prompt_registry_version,
+        )
+        self.assertEqual(
+            first["kernelVector"]["toolRegistryVersion"],
+            profile.tool_registry_version,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

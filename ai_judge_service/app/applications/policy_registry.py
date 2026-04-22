@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -103,6 +104,36 @@ class PolicyRegistryRuntime:
             "toolIds": list(profile.tool_ids),
             "fairnessThresholds": dict(profile.fairness_thresholds),
         }
+
+    @staticmethod
+    def build_kernel_snapshot(profile: JudgePolicyProfile) -> dict[str, Any]:
+        kernel_vector = {
+            "policyVersion": profile.version,
+            "rubricVersion": profile.rubric_version,
+            "topicDomain": profile.topic_domain,
+            "promptRegistryVersion": profile.prompt_registry_version,
+            "toolRegistryVersion": profile.tool_registry_version,
+            "promptVersions": dict(profile.prompt_versions),
+            "toolIds": list(profile.tool_ids),
+        }
+        return {
+            "version": "policy-kernel-binding-v1",
+            "kernelVector": kernel_vector,
+            "kernelHash": _sha256_hex(kernel_vector),
+        }
+
+
+def _stable_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _sha256_hex(value: Any) -> str:
+    return hashlib.sha256(_stable_json_bytes(value)).hexdigest()
 
 
 def _normalize_prompt_versions(raw: Any, defaults: dict[str, str]) -> dict[str, str]:

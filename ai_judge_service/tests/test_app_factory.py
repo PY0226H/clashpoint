@@ -2211,6 +2211,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
         suffix = _unique_case_id(9214)
         version = f"policy-health-{suffix}"
+        actor = f"dependency-health-actor-{suffix}"
         publish_resp = await self._post_json(
             app=app,
             path="/internal/judge/registries/policy/publish",
@@ -2228,6 +2229,15 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(publish_resp.status_code, 200)
+        activate_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{version}/activate"
+                f"?override_fairness_gate=true&actor={actor}&reason=dependency_health_override_probe"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 200)
 
         health_resp = await self._get(
             app=app,
@@ -2248,13 +2258,31 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["item"]["ok"])
         self.assertTrue(payload["item"]["checks"]["promptRegistryExists"])
         self.assertTrue(payload["item"]["checks"]["toolRegistryExists"])
+        self.assertIsInstance(payload["item"]["policyKernel"], dict)
+        self.assertEqual(
+            payload["item"]["policyKernel"]["version"],
+            "policy-kernel-binding-v1",
+        )
+        self.assertTrue(str(payload["item"]["policyKernel"]["kernelHash"] or "").strip())
+        self.assertEqual(
+            payload["item"]["policyKernel"]["kernelVector"]["policyVersion"],
+            version,
+        )
         self.assertEqual(payload["activeVersions"]["policyVersion"], runtime.policy_registry_runtime.default_version)
         overview = payload["dependencyOverview"]
         self.assertIsInstance(overview, dict)
         self.assertEqual(overview["registryType"], "policy")
         self.assertGreaterEqual(overview["counts"]["trackedPolicyVersions"], 1)
+        self.assertIn("gateDecisionCounts", overview)
         self.assertIn("byPolicyVersion", overview)
         self.assertTrue(any(row["policyVersion"] == version for row in overview["byPolicyVersion"]))
+        target_overview = next(row for row in overview["byPolicyVersion"] if row["policyVersion"] == version)
+        self.assertEqual(target_overview["policyKernelVersion"], "policy-kernel-binding-v1")
+        self.assertTrue(str(target_overview["policyKernelHash"] or "").strip())
+        self.assertEqual(target_overview["latestGateDecision"], "override_activated")
+        self.assertTrue(bool(target_overview["overrideApplied"]))
+        self.assertEqual(target_overview["overrideActor"], actor)
+        self.assertEqual(target_overview["latestGateSource"], "benchmark")
         trend = payload["dependencyTrend"]
         self.assertIsInstance(trend, dict)
         self.assertEqual(trend["registryType"], "policy")
@@ -2442,6 +2470,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         assert invalid_row is not None
         self.assertFalse(bool(invalid_row["ok"]))
         self.assertIn("prompt_registry_version_not_found", invalid_row["issueCodes"])
+        self.assertEqual(invalid_row["policyKernelVersion"], "policy-kernel-binding-v1")
+        self.assertTrue(str(invalid_row["policyKernelHash"] or "").strip())
         self.assertIn(f"promptset-missing-{suffix}", dependency["byPromptRegistryVersion"])
 
         reverse_usage = payload["reverseUsage"]
@@ -7588,6 +7618,9 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(payload["adaptiveSummary"], dict)
         self.assertIsInstance(payload["trustOverview"], dict)
         self.assertIsInstance(payload["judgeWorkflowCoverage"], dict)
+        self.assertIsInstance(payload["caseChainCoverage"], dict)
+        self.assertIsInstance(payload["fairnessGateOverview"], dict)
+        self.assertIsInstance(payload["policyKernelBinding"], dict)
         self.assertGreaterEqual(
             payload["fairnessDashboard"]["overview"]["totalMatched"],
             1,
@@ -7668,6 +7701,26 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(payload["judgeWorkflowCoverage"]["totalCases"], 1)
         self.assertGreaterEqual(payload["judgeWorkflowCoverage"]["fullCount"], 1)
         self.assertLessEqual(payload["judgeWorkflowCoverage"]["fullCoverageRate"], 1.0)
+        self.assertGreaterEqual(payload["caseChainCoverage"]["totalCases"], 1)
+        self.assertGreaterEqual(payload["caseChainCoverage"]["completeCount"], 1)
+        self.assertIn("byObjectPresence", payload["caseChainCoverage"])
+        self.assertIn("caseDossier", payload["caseChainCoverage"]["byObjectPresence"])
+        self.assertGreaterEqual(payload["fairnessGateOverview"]["totalCases"], 1)
+        self.assertIn("caseDecisionCounts", payload["fairnessGateOverview"])
+        self.assertIn("policyGateDecisionCounts", payload["fairnessGateOverview"])
+        self.assertIn("policyGateSourceCounts", payload["fairnessGateOverview"])
+        self.assertIn("gateDecisionCounts", payload["policyKernelBinding"])
+        self.assertGreaterEqual(payload["policyKernelBinding"]["trackedPolicyVersionCount"], 1)
+        self.assertGreaterEqual(payload["policyKernelBinding"]["kernelBoundPolicyCount"], 1)
+        self.assertIn("v3-default", payload["policyKernelBinding"]["casePolicyVersionCounts"])
+        courtroom_item = payload["courtroomReadModel"]["items"][0]
+        self.assertIn("policyVersion", courtroom_item)
+        self.assertIn("policyKernelVersion", courtroom_item)
+        self.assertIn("policyKernelHash", courtroom_item)
+        self.assertIn("policyGateDecision", courtroom_item)
+        self.assertIn("policyGateSource", courtroom_item)
+        self.assertIn("policyOverrideApplied", courtroom_item)
+        self.assertEqual(courtroom_item["policyVersion"], "v3-default")
         self.assertEqual(payload["filters"]["dispatchType"], "final")
         self.assertEqual(payload["filters"]["policyVersion"], "v3-default")
         self.assertEqual(payload["filters"]["trustCaseLimit"], 3)

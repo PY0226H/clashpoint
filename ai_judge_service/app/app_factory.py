@@ -107,6 +107,36 @@ from .applications.fairness_case_scan import (
 from .applications.fairness_dashboard_contract import (
     validate_fairness_dashboard_contract as validate_fairness_dashboard_contract_v3,
 )
+from .applications.fairness_runtime_routes import (
+    FairnessRouteError as FairnessRouteError_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_benchmark_list_payload as build_fairness_benchmark_list_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_benchmark_upsert_payload as build_fairness_benchmark_upsert_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_calibration_pack_payload as build_fairness_calibration_pack_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_case_detail_payload as build_fairness_case_detail_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_case_list_payload as build_fairness_case_list_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_dashboard_payload as build_fairness_dashboard_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_policy_calibration_advisor_payload as build_fairness_policy_calibration_advisor_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_shadow_list_payload as build_fairness_shadow_list_payload_v3,
+)
+from .applications.fairness_runtime_routes import (
+    build_fairness_shadow_upsert_payload as build_fairness_shadow_upsert_payload_v3,
+)
 from .applications.judge_app_domain import JUDGE_ROLE_ORDER
 from .applications.judge_dispatch_runtime import (
     CALLBACK_STATUS_FAILED_CALLBACK_FAILED as CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
@@ -139,13 +169,37 @@ from .applications.judge_dispatch_runtime import (
     deliver_report_callback_with_failed_fallback as deliver_report_callback_with_failed_fallback_v3,
 )
 from .applications.judge_trace_replay_routes import (
+    ReplayContextDependencyPack as ReplayContextDependencyPack_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    ReplayFinalizeDependencyPack as ReplayFinalizeDependencyPack_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    ReplayReadRouteError as ReplayReadRouteError_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    ReplayReportDependencyPack as ReplayReportDependencyPack_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_replay_post_route_payload as build_replay_post_route_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_replay_report_route_payload as build_replay_report_route_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
     build_replay_reports_list_payload as build_replay_reports_list_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_replay_reports_route_payload as build_replay_reports_route_payload_v3,
 )
 from .applications.judge_trace_replay_routes import (
     build_replay_route_payload as build_replay_route_payload_v3,
 )
 from .applications.judge_trace_replay_routes import (
     build_trace_route_payload as build_trace_route_payload_v3,
+)
+from .applications.judge_trace_replay_routes import (
+    build_trace_route_read_payload as build_trace_route_read_payload_v3,
 )
 from .applications.judge_trace_replay_routes import (
     build_trace_route_replay_items as build_trace_route_replay_items_v3,
@@ -173,8 +227,12 @@ from .applications.judge_workflow_roles import (
 )
 from .applications.ops_read_model_pack import (
     build_ops_read_model_pack_adaptive_summary,
+    build_ops_read_model_pack_case_chain_coverage,
+    build_ops_read_model_pack_fairness_gate_overview,
     build_ops_read_model_pack_filters,
     build_ops_read_model_pack_judge_workflow_coverage,
+    build_ops_read_model_pack_policy_kernel_binding,
+    build_ops_read_model_pack_route_payload,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
@@ -277,11 +335,26 @@ from .applications.review_queue_contract import (
 from .applications.trust_audit_anchor_contract import (
     validate_trust_audit_anchor_contract as validate_trust_audit_anchor_contract_v3,
 )
+from .applications.trust_challenge_ops_queue_routes import (
+    TrustChallengeOpsQueueRouteError as TrustChallengeOpsQueueRouteError_v3,
+)
+from .applications.trust_challenge_ops_queue_routes import (
+    build_trust_challenge_ops_queue_route_payload as build_trust_challenge_ops_queue_route_payload_v3,
+)
 from .applications.trust_challenge_queue_contract import (
     validate_trust_challenge_queue_contract as validate_trust_challenge_queue_contract_v3,
 )
 from .applications.trust_challenge_review_contract import (
     validate_trust_challenge_review_contract as validate_trust_challenge_review_contract_v3,
+)
+from .applications.trust_challenge_runtime_routes import (
+    TrustChallengeRouteError as TrustChallengeRouteError_v3,
+)
+from .applications.trust_challenge_runtime_routes import (
+    build_trust_challenge_decision_payload as build_trust_challenge_decision_payload_v3,
+)
+from .applications.trust_challenge_runtime_routes import (
+    build_trust_challenge_request_payload as build_trust_challenge_request_payload_v3,
 )
 from .applications.trust_commitment_contract import (
     validate_trust_commitment_contract as validate_trust_commitment_contract_v3,
@@ -298,26 +371,29 @@ from .applications.trust_ops_views import (
 from .applications.trust_ops_views import (
     build_trust_challenge_ops_queue_payload as build_trust_challenge_ops_queue_payload_v3,
 )
-from .applications.trust_phasea_bundle import (
-    build_trust_phasea_bundle as build_trust_phasea_bundle_v3,
-)
 from .applications.trust_public_verify_contract import (
     validate_trust_public_verify_contract as validate_trust_public_verify_contract_v3,
 )
 from .applications.trust_read_routes import (
-    build_trust_item_route_payload as build_trust_item_route_payload_v3,
+    TrustReadRouteError as TrustReadRouteError_v3,
 )
 from .applications.trust_read_routes import (
-    build_trust_public_verify_route_payload as build_trust_public_verify_route_payload_v3,
+    build_trust_attestation_verify_payload as build_trust_attestation_verify_payload_v3,
 )
 from .applications.trust_read_routes import (
-    build_trust_report_context_from_receipt as build_trust_report_context_from_receipt_v3,
+    build_trust_audit_anchor_route_payload as build_trust_audit_anchor_route_payload_v3,
 )
 from .applications.trust_read_routes import (
-    choose_trust_read_dispatch_receipt as choose_trust_read_dispatch_receipt_v3,
+    build_trust_phasea_bundle_for_case as build_trust_phasea_bundle_for_case_v3,
 )
 from .applications.trust_read_routes import (
-    normalize_trust_read_dispatch_type as normalize_trust_read_dispatch_type_v3,
+    build_trust_public_verify_bundle_payload as build_trust_public_verify_bundle_payload_v3,
+)
+from .applications.trust_read_routes import (
+    build_validated_trust_item_route_payload as build_validated_trust_item_route_payload_v3,
+)
+from .applications.trust_read_routes import (
+    resolve_trust_report_context_for_case as resolve_trust_report_context_for_case_v3,
 )
 from .applications.trust_verdict_attestation_contract import (
     validate_trust_verdict_attestation_contract as validate_trust_verdict_attestation_contract_v3,
@@ -1084,25 +1160,6 @@ def _attach_report_attestation(
         report_payload=report_payload,
         dispatch_type=dispatch_type,
     )
-
-
-def _verify_report_attestation(
-    *,
-    report_payload: dict[str, Any],
-    dispatch_type: str,
-) -> dict[str, Any]:
-    return verify_report_attestation_v3(
-        report_payload=report_payload,
-        dispatch_type=dispatch_type,
-    )
-
-
-def _build_replay_report_payload(record: Any) -> dict[str, Any]:
-    return build_replay_report_payload_v3(record)
-
-
-def _build_replay_report_summary(record: Any) -> dict[str, Any]:
-    return build_replay_report_summary_v3(record)
 
 
 def _build_verdict_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -3954,21 +4011,48 @@ def _build_registry_dependency_overview(
         version = str(item.get("policyVersion") or "").strip()
         if not version:
             continue
+        policy_kernel = (
+            item.get("policyKernel")
+            if isinstance(item.get("policyKernel"), dict)
+            else {}
+        )
         row = by_policy_version.setdefault(
             version,
             {
                 "policyVersion": version,
                 "dependencyOk": bool(item.get("ok")),
+                "policyKernelVersion": (
+                    str(policy_kernel.get("version") or "").strip() or None
+                ),
+                "policyKernelHash": (
+                    str(policy_kernel.get("kernelHash") or "").strip() or None
+                ),
                 "totalAlerts": 0,
                 "openBlockedCount": 0,
                 "resolvedCount": 0,
                 "recentChanges": 0,
                 "lastStatus": None,
                 "lastUpdatedAt": None,
+                "latestGateDecision": None,
+                "latestGateCode": None,
+                "latestGateSource": None,
+                "overrideApplied": None,
+                "overrideActor": None,
+                "overrideReason": None,
+                "gateUpdatedAt": None,
                 "_latestUpdatedAt": None,
+                "_latestGateUpdatedAt": None,
             },
         )
         row["dependencyOk"] = bool(item.get("ok"))
+        if row.get("policyKernelVersion") is None:
+            row["policyKernelVersion"] = (
+                str(policy_kernel.get("version") or "").strip() or None
+            )
+        if row.get("policyKernelHash") is None:
+            row["policyKernelHash"] = (
+                str(policy_kernel.get("kernelHash") or "").strip() or None
+            )
 
     total_alerts = 0
     open_blocked_count = 0
@@ -4003,13 +4087,23 @@ def _build_registry_dependency_overview(
             {
                 "policyVersion": version,
                 "dependencyOk": None,
+                "policyKernelVersion": None,
+                "policyKernelHash": None,
                 "totalAlerts": 0,
                 "openBlockedCount": 0,
                 "resolvedCount": 0,
                 "recentChanges": 0,
                 "lastStatus": None,
                 "lastUpdatedAt": None,
+                "latestGateDecision": None,
+                "latestGateCode": None,
+                "latestGateSource": None,
+                "overrideApplied": None,
+                "overrideActor": None,
+                "overrideReason": None,
+                "gateUpdatedAt": None,
                 "_latestUpdatedAt": None,
+                "_latestGateUpdatedAt": None,
             },
         )
         row["totalAlerts"] += 1
@@ -4035,9 +4129,82 @@ def _build_registry_dependency_overview(
             else:
                 recent_status_counts["unknown"] += 1
 
+    gate_decision_counts = {
+        "blocked": 0,
+        "override_activated": 0,
+        "pass": 0,
+    }
+    for alert in alerts:
+        alert_type = str(getattr(alert, "alert_type", "") or "").strip()
+        if alert_type not in {
+            REGISTRY_FAIRNESS_ALERT_TYPE_BLOCKED,
+            REGISTRY_FAIRNESS_ALERT_TYPE_OVERRIDE,
+        }:
+            continue
+        details = (
+            dict(getattr(alert, "details"))
+            if isinstance(getattr(alert, "details", None), dict)
+            else {}
+        )
+        if str(details.get("registryType") or "").strip().lower() != normalized_registry_type:
+            continue
+        version = str(details.get("version") or "").strip() or "unknown"
+        gate_payload = details.get("gate") if isinstance(details.get("gate"), dict) else {}
+        updated_at = _normalize_aware_datetime(
+            getattr(alert, "updated_at", None)
+        ) or _normalize_aware_datetime(getattr(alert, "created_at", None)) or now
+
+        row = by_policy_version.setdefault(
+            version,
+            {
+                "policyVersion": version,
+                "dependencyOk": None,
+                "policyKernelVersion": None,
+                "policyKernelHash": None,
+                "totalAlerts": 0,
+                "openBlockedCount": 0,
+                "resolvedCount": 0,
+                "recentChanges": 0,
+                "lastStatus": None,
+                "lastUpdatedAt": None,
+                "latestGateDecision": None,
+                "latestGateCode": None,
+                "latestGateSource": None,
+                "overrideApplied": None,
+                "overrideActor": None,
+                "overrideReason": None,
+                "gateUpdatedAt": None,
+                "_latestUpdatedAt": None,
+                "_latestGateUpdatedAt": None,
+            },
+        )
+        override_applied = bool(details.get("overrideApplied"))
+        if override_applied:
+            gate_decision = "override_activated"
+        elif bool(gate_payload.get("passed")):
+            gate_decision = "pass"
+        else:
+            gate_decision = "blocked"
+        gate_decision_counts[gate_decision] = gate_decision_counts.get(gate_decision, 0) + 1
+
+        latest_gate_updated_at = row.get("_latestGateUpdatedAt")
+        if (
+            not isinstance(latest_gate_updated_at, datetime)
+            or updated_at >= latest_gate_updated_at
+        ):
+            row["_latestGateUpdatedAt"] = updated_at
+            row["latestGateDecision"] = gate_decision
+            row["latestGateCode"] = str(gate_payload.get("code") or "").strip() or None
+            row["latestGateSource"] = str(gate_payload.get("source") or "").strip() or None
+            row["overrideApplied"] = override_applied
+            row["overrideActor"] = str(details.get("actor") or "").strip() or None
+            row["overrideReason"] = str(details.get("reason") or "").strip() or None
+            row["gateUpdatedAt"] = updated_at.isoformat()
+
     version_rows = list(by_policy_version.values())
     for row in version_rows:
         row.pop("_latestUpdatedAt", None)
+        row.pop("_latestGateUpdatedAt", None)
     version_rows.sort(
         key=lambda row: (
             -int(row.get("totalAlerts") or 0),
@@ -4061,6 +4228,7 @@ def _build_registry_dependency_overview(
             "recentChanges": recent_total,
         },
         "recentStatusCounts": recent_status_counts,
+        "gateDecisionCounts": gate_decision_counts,
         "byPolicyVersion": version_rows,
     }
 
@@ -7034,12 +7202,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 build_registry_dependency_trend=_build_registry_dependency_trend,
             )
         except ValueError as err:
-            if str(err) == "invalid_trend_status":
-                raise HTTPException(status_code=422, detail="invalid_trend_status") from err
+            _raise_http_422_for_known_value_error(
+                err=err,
+                details_by_code={"invalid_trend_status": "invalid_trend_status"},
+            )
             raise
         except LookupError as err:
-            if str(err) == "policy_registry_not_found":
-                raise HTTPException(status_code=404, detail="policy_registry_not_found") from err
+            _raise_policy_registry_not_found_lookup_error(err=err)
             raise
 
     @app.get("/internal/judge/registries/governance/overview")
@@ -7176,13 +7345,66 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 ),
             )
         except ValueError as err:
-            if str(err) == "invalid_policy_version":
-                raise HTTPException(status_code=422, detail="invalid_policy_version") from err
+            _raise_http_422_for_known_value_error(
+                err=err,
+                details_by_code={"invalid_policy_version": "invalid_policy_version"},
+            )
             raise
         except LookupError as err:
-            if str(err) == "policy_registry_not_found":
-                raise HTTPException(status_code=404, detail="policy_registry_not_found") from err
+            _raise_policy_registry_not_found_lookup_error(err=err)
             raise
+
+    async def _read_json_object_or_raise_422(*, request: Request) -> dict[str, Any]:
+        try:
+            payload = await request.json()
+        except Exception as err:
+            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="invalid_payload")
+        return payload
+
+    def _raise_http_422_from_value_error(*, err: ValueError) -> None:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+    def _raise_http_404_from_lookup_error(*, err: LookupError) -> None:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+
+    def _raise_http_422_for_known_value_error(
+        *,
+        err: ValueError,
+        details_by_code: dict[str, str],
+    ) -> None:
+        code = str(err)
+        detail = details_by_code.get(code)
+        if detail is not None:
+            raise HTTPException(status_code=422, detail=detail) from err
+
+    def _raise_policy_registry_not_found_lookup_error(*, err: LookupError) -> None:
+        if str(err) == "policy_registry_not_found":
+            raise HTTPException(status_code=404, detail="policy_registry_not_found") from err
+
+    def _raise_http_500_contract_violation(*, err: ValueError, code: str) -> None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": str(code),
+                "message": str(err),
+            },
+        ) from err
+
+    def _raise_registry_value_error(
+        *,
+        err: ValueError,
+        default_detail: str,
+        unprocessable_codes: set[str],
+        conflict_codes: set[str] | None = None,
+    ) -> None:
+        code = str(err)
+        if isinstance(conflict_codes, set) and code in conflict_codes:
+            raise HTTPException(status_code=409, detail=code) from err
+        if code in unprocessable_codes:
+            raise HTTPException(status_code=422, detail=code) from err
+        raise HTTPException(status_code=422, detail=default_detail) from err
 
     @app.post("/internal/judge/registries/{registry_type}/publish")
     async def publish_registry_release(
@@ -7191,22 +7413,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            payload = await request.json()
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_payload")
+        payload = await _read_json_object_or_raise_422(request=request)
         try:
             parsed = parse_registry_publish_request_payload_v3(
                 payload=payload,
                 extract_optional_bool=_extract_optional_bool,
             )
         except ValueError as err:
-            raise HTTPException(status_code=422, detail=str(err)) from err
+            _raise_http_422_from_value_error(err=err)
         await _ensure_registry_runtime_ready()
         try:
-            return await build_registry_publish_payload_v3(
+            return await _run_registry_route_guard(
+                build_registry_publish_payload_v3(
                 registry_type=registry_type,
                 version=parsed["version"],
                 profile_payload=parsed["profilePayload"],
@@ -7229,26 +7447,25 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 emit_registry_fairness_gate_alert=_emit_registry_fairness_gate_alert,
                 publish_release=runtime.registry_product_runtime.publish_release,
             )
-        except RegistryRouteErrorV3 as err:
-            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+            )
         except LookupError as err:
-            raise HTTPException(status_code=404, detail=str(err)) from err
+            _raise_http_404_from_lookup_error(err=err)
         except ValueError as err:
-            code = str(err)
-            if code == "registry_version_already_exists":
-                raise HTTPException(status_code=409, detail=code) from err
-            if code in {
-                "invalid_registry_type",
-                "invalid_registry_version",
-                "invalid_policy_profile",
-                "invalid_policy_domain_judge_family",
-                "policy_domain_family_topic_domain_mismatch",
-                "invalid_prompt_profile",
-                "invalid_tool_profile",
-                "registry_fairness_gate_override_reason_required",
-            }:
-                raise HTTPException(status_code=422, detail=code) from err
-            raise HTTPException(status_code=422, detail="registry_publish_invalid") from err
+            _raise_registry_value_error(
+                err=err,
+                default_detail="registry_publish_invalid",
+                unprocessable_codes={
+                    "invalid_registry_type",
+                    "invalid_registry_version",
+                    "invalid_policy_profile",
+                    "invalid_policy_domain_judge_family",
+                    "policy_domain_family_topic_domain_mismatch",
+                    "invalid_prompt_profile",
+                    "invalid_tool_profile",
+                    "registry_fairness_gate_override_reason_required",
+                },
+                conflict_codes={"registry_version_already_exists"},
+            )
 
     @app.post("/internal/judge/registries/{registry_type}/{version}/activate")
     async def activate_registry_release(
@@ -7262,7 +7479,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
         try:
-            return await build_registry_activate_payload_v3(
+            return await _run_registry_route_guard(
+                build_registry_activate_payload_v3(
                 registry_type=registry_type,
                 version=version,
                 actor=actor,
@@ -7280,19 +7498,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 emit_registry_fairness_gate_alert=_emit_registry_fairness_gate_alert,
                 activate_release=runtime.registry_product_runtime.activate_release,
             )
-        except RegistryRouteErrorV3 as err:
-            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+            )
         except LookupError as err:
             raise HTTPException(status_code=404, detail="registry_version_not_found") from err
         except ValueError as err:
-            code = str(err)
-            if code in {
-                "invalid_registry_type",
-                "invalid_registry_version",
-                "registry_fairness_gate_override_reason_required",
-            }:
-                raise HTTPException(status_code=422, detail=code) from err
-            raise HTTPException(status_code=422, detail="registry_activate_invalid") from err
+            _raise_registry_value_error(
+                err=err,
+                default_detail="registry_activate_invalid",
+                unprocessable_codes={
+                    "invalid_registry_type",
+                    "invalid_registry_version",
+                    "registry_fairness_gate_override_reason_required",
+                },
+            )
 
     @app.post("/internal/judge/registries/{registry_type}/rollback")
     async def rollback_registry_release(
@@ -7315,14 +7533,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         except LookupError as err:
             raise HTTPException(status_code=404, detail="registry_version_not_found") from err
         except ValueError as err:
-            code = str(err)
-            if code in {
-                "invalid_registry_type",
-                "invalid_registry_version",
-                "registry_rollback_target_not_found",
-            }:
-                raise HTTPException(status_code=409 if code == "registry_rollback_target_not_found" else 422, detail=code) from err
-            raise HTTPException(status_code=422, detail="registry_rollback_invalid") from err
+            _raise_registry_value_error(
+                err=err,
+                default_detail="registry_rollback_invalid",
+                unprocessable_codes={
+                    "invalid_registry_type",
+                    "invalid_registry_version",
+                },
+                conflict_codes={"registry_rollback_target_not_found"},
+            )
 
     @app.get("/internal/judge/registries/{registry_type}/audits")
     async def list_registry_audits(
@@ -7360,12 +7579,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 build_registry_audit_ops_view=_build_registry_audit_ops_view,
             )
         except ValueError as err:
-            code = str(err)
-            if code == "invalid_registry_audit_action":
-                raise HTTPException(status_code=422, detail=code) from err
-            if code == "invalid_registry_type":
-                raise HTTPException(status_code=422, detail=code) from err
-            raise HTTPException(status_code=422, detail="registry_audit_query_invalid") from err
+            _raise_registry_value_error(
+                err=err,
+                default_detail="registry_audit_query_invalid",
+                unprocessable_codes={
+                    "invalid_registry_audit_action",
+                    "invalid_registry_type",
+                },
+            )
 
     @app.get("/internal/judge/registries/{registry_type}/releases")
     async def list_registry_releases(
@@ -7383,10 +7604,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 include_payload=include_payload,
             )
         except ValueError as err:
-            code = str(err)
-            if code == "invalid_registry_type":
-                raise HTTPException(status_code=422, detail=code) from err
-            raise HTTPException(status_code=422, detail="registry_release_query_invalid") from err
+            _raise_registry_value_error(
+                err=err,
+                default_detail="registry_release_query_invalid",
+                unprocessable_codes={"invalid_registry_type"},
+            )
         return build_registry_releases_payload_v3(
             registry_type=registry_type,
             items=items,
@@ -7408,10 +7630,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 version=version,
             )
         except ValueError as err:
-            code = str(err)
-            if code in {"invalid_registry_type", "invalid_registry_version"}:
-                raise HTTPException(status_code=422, detail=code) from err
-            raise HTTPException(status_code=422, detail="registry_release_query_invalid") from err
+            _raise_registry_value_error(
+                err=err,
+                default_detail="registry_release_query_invalid",
+                unprocessable_codes={
+                    "invalid_registry_type",
+                    "invalid_registry_version",
+                },
+            )
         if item is None:
             raise HTTPException(status_code=404, detail="registry_version_not_found")
         return build_registry_release_payload_v3(item=item)
@@ -7422,12 +7648,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            raw_payload = await request.json()
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
-        if not isinstance(raw_payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_payload")
+        raw_payload = await _read_json_object_or_raise_422(request=request)
         try:
             parsed = CaseCreateRequest.model_validate(raw_payload)
         except ValidationError as err:
@@ -7735,12 +7956,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            raw_payload = await request.json()
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
-        if not isinstance(raw_payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_payload")
+        raw_payload = await _read_json_object_or_raise_422(request=request)
         sensitive_hits = _find_sensitive_key_hits(raw_payload)
         if sensitive_hits:
             await _handle_blindization_rejection(
@@ -8092,12 +8308,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            raw_payload = await request.json()
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
-        if not isinstance(raw_payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_payload")
+        raw_payload = await _read_json_object_or_raise_422(request=request)
         sensitive_hits = _find_sensitive_key_hits(raw_payload)
         if sensitive_hits:
             await _handle_blindization_rejection(
@@ -8805,13 +9016,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             _validate_case_overview_contract(payload)
         except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "case_overview_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
+            _raise_http_500_contract_violation(
+                err=err,
+                code="case_overview_contract_violation",
+            )
         return payload
 
     @app.get("/internal/judge/cases/{case_id}/claim-ledger")
@@ -8936,13 +9144,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             _validate_courtroom_read_model_contract(response_payload)
         except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "courtroom_read_model_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
+            _raise_http_500_contract_violation(
+                err=err,
+                code="courtroom_read_model_contract_violation",
+            )
         return response_payload
 
     @app.get("/internal/judge/courtroom/cases")
@@ -9497,13 +9702,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             _validate_courtroom_drilldown_bundle_contract(payload)
         except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "courtroom_drilldown_bundle_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
+            _raise_http_500_contract_violation(
+                err=err,
+                code="courtroom_drilldown_bundle_contract_violation",
+            )
         return payload
 
     @app.get("/internal/judge/evidence-claim/ops-queue")
@@ -9855,13 +10057,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             _validate_evidence_claim_ops_queue_contract(payload)
         except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "evidence_claim_ops_queue_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
+            _raise_http_500_contract_violation(
+                err=err,
+                code="evidence_claim_ops_queue_contract_violation",
+            )
         return payload
 
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
@@ -9947,34 +10146,201 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             execution_result=execution_result,
         )
 
+    def _build_replay_context_dependencies() -> ReplayContextDependencyPack_v3:
+        return ReplayContextDependencyPack_v3(
+            normalize_replay_dispatch_type=normalize_replay_dispatch_type_v3,
+            get_dispatch_receipt=_get_dispatch_receipt,
+            choose_replay_dispatch_receipt=choose_replay_dispatch_receipt_v3,
+            extract_replay_request_snapshot=extract_replay_request_snapshot_v3,
+            resolve_replay_trace_id=resolve_replay_trace_id_v3,
+        )
+
+    def _resolve_policy_profile_for_replay(
+        *,
+        judge_policy_version: str,
+        rubric_version: str,
+        topic_domain: str,
+    ) -> Any:
+        return _resolve_policy_profile_or_raise(
+            runtime=runtime,
+            judge_policy_version=judge_policy_version,
+            rubric_version=rubric_version,
+            topic_domain=topic_domain,
+        )
+
+    def _resolve_prompt_profile_for_replay(*, prompt_registry_version: str) -> Any:
+        return _resolve_prompt_profile_or_raise(
+            runtime=runtime,
+            prompt_registry_version=prompt_registry_version,
+        )
+
+    def _resolve_tool_profile_for_replay(*, tool_registry_version: str) -> Any:
+        return _resolve_tool_profile_or_raise(
+            runtime=runtime,
+            tool_registry_version=tool_registry_version,
+        )
+
+    def _build_final_report_payload_for_replay(
+        *,
+        request: FinalDispatchRequest,
+        phase_receipts: list[Any],
+        fairness_thresholds: dict[str, float],
+        panel_runtime_profiles: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        return _build_final_report_payload(
+            runtime=runtime,
+            request=request,
+            phase_receipts=phase_receipts,
+            fairness_thresholds=fairness_thresholds,
+            panel_runtime_profiles=panel_runtime_profiles,
+        )
+
+    async def _attach_judge_agent_runtime_trace_for_replay(
+        *,
+        report_payload: dict[str, Any],
+        dispatch_type: str,
+        case_id: int,
+        scope_id: int,
+        session_id: int,
+        trace_id: str,
+        phase_no: int | None = None,
+        phase_start_no: int | None = None,
+        phase_end_no: int | None = None,
+    ) -> None:
+        await _attach_judge_agent_runtime_trace(
+            runtime=runtime,
+            report_payload=report_payload,
+            dispatch_type=dispatch_type,
+            case_id=case_id,
+            scope_id=scope_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            phase_no=phase_no,
+            phase_start_no=phase_start_no,
+            phase_end_no=phase_end_no,
+        )
+
+    def _attach_policy_trace_snapshot_for_replay(
+        *,
+        report_payload: dict[str, Any],
+        profile: Any,
+        prompt_profile: Any,
+        tool_profile: Any,
+    ) -> None:
+        _attach_policy_trace_snapshot(
+            runtime=runtime,
+            report_payload=report_payload,
+            profile=profile,
+            prompt_profile=prompt_profile,
+            tool_profile=tool_profile,
+        )
+
+    def _build_replay_report_dependencies() -> ReplayReportDependencyPack_v3:
+        # replay 主路由只保留 HTTP 语义，重算编排统一在 applications 层完成。
+        return ReplayReportDependencyPack_v3(
+            ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
+            final_request_model_validate=FinalDispatchRequest.model_validate,
+            phase_request_model_validate=PhaseDispatchRequest.model_validate,
+            validate_final_dispatch_request=_validate_final_dispatch_request,
+            validate_phase_dispatch_request=_validate_phase_dispatch_request,
+            resolve_policy_profile=_resolve_policy_profile_for_replay,
+            resolve_prompt_profile=_resolve_prompt_profile_for_replay,
+            resolve_tool_profile=_resolve_tool_profile_for_replay,
+            list_dispatch_receipts=_list_dispatch_receipts,
+            build_final_report_payload=_build_final_report_payload_for_replay,
+            resolve_panel_runtime_profiles=_resolve_panel_runtime_profiles,
+            build_phase_report_payload=build_phase_report_payload_v3_phase,
+            attach_judge_agent_runtime_trace=_attach_judge_agent_runtime_trace_for_replay,
+            attach_policy_trace_snapshot=_attach_policy_trace_snapshot_for_replay,
+            attach_report_attestation=_attach_report_attestation,
+            validate_final_report_payload_contract=_validate_final_report_payload_contract,
+            settings=runtime.settings,
+            gateway_runtime=runtime.gateway_runtime,
+        )
+
+    def _build_replay_finalize_dependencies() -> ReplayFinalizeDependencyPack_v3:
+        return ReplayFinalizeDependencyPack_v3(
+            provider=runtime.settings.provider,
+            get_trace=runtime.trace_store.get_trace,
+            trace_register_start=runtime.trace_store.register_start,
+            trace_mark_replay=runtime.trace_store.mark_replay,
+            append_replay_record=_append_replay_record,
+            workflow_mark_replay=_workflow_mark_replay,
+            upsert_claim_ledger_record=_upsert_claim_ledger_record,
+            build_verdict_contract=_build_verdict_contract,
+            build_replay_route_payload=build_replay_route_payload_v3,
+            safe_float=_safe_float,
+            resolve_winner=_resolve_winner,
+            draw_margin=0.8,
+            judge_core_stage=JUDGE_CORE_STAGE_REPLAY_COMPUTED,
+            judge_core_version=JUDGE_CORE_VERSION,
+        )
+
+    async def _run_replay_read_guard(self_awaitable: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except ReplayReadRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_trust_read_guard(self_awaitable: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except TrustReadRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    def _run_trust_read_guard_sync(builder: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        try:
+            return builder()
+        except TrustReadRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_trust_challenge_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except (TrustChallengeRouteError_v3, TrustChallengeOpsQueueRouteError_v3) as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_fairness_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except FairnessRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_review_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except ReviewRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_registry_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except RegistryRouteErrorV3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
     @app.get("/internal/judge/cases/{case_id}/trace")
     async def get_judge_job_trace(
         case_id: int,
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        record = runtime.trace_store.get_trace(case_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="judge_trace_not_found")
-        replay_records = await _list_replay_records(job_id=case_id, limit=50)
-        replay_items = build_trace_route_replay_items_v3(
-            replay_records=replay_records,
-            trace_record=record,
-        )
-        report_summary = (
-            record.report_summary if isinstance(record.report_summary, dict) else {}
-        )
-        report_payload = (
-            report_summary.get("payload")
-            if isinstance(report_summary.get("payload"), dict)
-            else {}
-        )
-        verdict_contract = _build_verdict_contract(report_payload)
-        return build_trace_route_payload_v3(
-            record=record,
-            report_summary=report_summary,
-            verdict_contract=verdict_contract,
-            replay_items=replay_items,
+        return await _run_replay_read_guard(
+            build_trace_route_read_payload_v3(
+                case_id=case_id,
+                get_trace=runtime.trace_store.get_trace,
+                list_replay_records=_list_replay_records,
+                build_trace_route_replay_items=build_trace_route_replay_items_v3,
+                build_verdict_contract=_build_verdict_contract,
+                build_trace_route_payload=build_trace_route_payload_v3,
+            )
         )
 
     @app.post("/internal/judge/cases/{case_id}/replay")
@@ -9984,222 +10350,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type: str = Query(default="auto"),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            dispatch_type_normalized = normalize_replay_dispatch_type_v3(dispatch_type)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-
-        if dispatch_type_normalized == "auto":
-            final_receipt = await _get_dispatch_receipt(
-                dispatch_type="final",
-                job_id=case_id,
+        return await _run_replay_read_guard(
+            build_replay_post_route_payload_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                context_dependencies=_build_replay_context_dependencies(),
+                report_dependencies=_build_replay_report_dependencies(),
+                finalize_dependencies=_build_replay_finalize_dependencies(),
             )
-            phase_receipt = await _get_dispatch_receipt(
-                dispatch_type="phase",
-                job_id=case_id,
-            )
-            chosen_dispatch_type, chosen_receipt = choose_replay_dispatch_receipt_v3(
-                dispatch_type=dispatch_type_normalized,
-                final_receipt=final_receipt,
-                phase_receipt=phase_receipt,
-            )
-        else:
-            explicit_receipt = await _get_dispatch_receipt(
-                dispatch_type=dispatch_type_normalized,
-                job_id=case_id,
-            )
-            chosen_dispatch_type, chosen_receipt = choose_replay_dispatch_receipt_v3(
-                dispatch_type=dispatch_type_normalized,
-                explicit_receipt=explicit_receipt,
-            )
-        if chosen_receipt is None:
-            raise HTTPException(status_code=404, detail="replay_receipt_not_found")
-
-        request_snapshot = extract_replay_request_snapshot_v3(chosen_receipt)
-        trace_id = resolve_replay_trace_id_v3(
-            receipt=chosen_receipt,
-            request_snapshot=request_snapshot,
-        )
-        if not trace_id:
-            raise HTTPException(status_code=409, detail="replay_missing_trace_id")
-        await _ensure_registry_runtime_ready()
-
-        report_payload: dict[str, Any]
-        if chosen_dispatch_type == "final":
-            try:
-                final_request = FinalDispatchRequest.model_validate(request_snapshot)
-            except ValidationError as err:
-                raise HTTPException(status_code=409, detail=f"replay_invalid_final_request: {err}") from err
-            _validate_final_dispatch_request(final_request)
-            policy_profile = _resolve_policy_profile_or_raise(
-                runtime=runtime,
-                judge_policy_version=final_request.judge_policy_version,
-                rubric_version=final_request.rubric_version,
-                topic_domain=final_request.topic_domain,
-            )
-            prompt_profile = _resolve_prompt_profile_or_raise(
-                runtime=runtime,
-                prompt_registry_version=policy_profile.prompt_registry_version,
-            )
-            tool_profile = _resolve_tool_profile_or_raise(
-                runtime=runtime,
-                tool_registry_version=policy_profile.tool_registry_version,
-            )
-            phase_receipts = await _list_dispatch_receipts(
-                dispatch_type="phase",
-                session_id=final_request.session_id,
-                status="reported",
-                limit=1000,
-            )
-            report_payload = _build_final_report_payload(
-                runtime=runtime,
-                request=final_request,
-                phase_receipts=phase_receipts,
-                fairness_thresholds=policy_profile.fairness_thresholds,
-                panel_runtime_profiles=_resolve_panel_runtime_profiles(profile=policy_profile),
-            )
-            await _attach_judge_agent_runtime_trace(
-                runtime=runtime,
-                report_payload=report_payload,
-                dispatch_type="final",
-                case_id=final_request.case_id,
-                scope_id=final_request.scope_id,
-                session_id=final_request.session_id,
-                trace_id=final_request.trace_id,
-                phase_start_no=final_request.phase_start_no,
-                phase_end_no=final_request.phase_end_no,
-            )
-            _attach_policy_trace_snapshot(
-                runtime=runtime,
-                report_payload=report_payload,
-                profile=policy_profile,
-                prompt_profile=prompt_profile,
-                tool_profile=tool_profile,
-            )
-            _attach_report_attestation(
-                report_payload=report_payload,
-                dispatch_type="final",
-            )
-            replay_contract_missing = _validate_final_report_payload_contract(report_payload)
-            if replay_contract_missing:
-                raise HTTPException(
-                    status_code=409,
-                    detail="replay_final_contract_violation: missing_fields="
-                    + ",".join(replay_contract_missing[:12]),
-                )
-        else:
-            try:
-                phase_request = PhaseDispatchRequest.model_validate(request_snapshot)
-            except ValidationError as err:
-                raise HTTPException(status_code=409, detail=f"replay_invalid_phase_request: {err}") from err
-            _validate_phase_dispatch_request(phase_request)
-            policy_profile = _resolve_policy_profile_or_raise(
-                runtime=runtime,
-                judge_policy_version=phase_request.judge_policy_version,
-                rubric_version=phase_request.rubric_version,
-                topic_domain=phase_request.topic_domain,
-            )
-            prompt_profile = _resolve_prompt_profile_or_raise(
-                runtime=runtime,
-                prompt_registry_version=policy_profile.prompt_registry_version,
-            )
-            tool_profile = _resolve_tool_profile_or_raise(
-                runtime=runtime,
-                tool_registry_version=policy_profile.tool_registry_version,
-            )
-            report_payload = await build_phase_report_payload_v3_phase(
-                request=phase_request,
-                settings=runtime.settings,
-                gateway_runtime=runtime.gateway_runtime,
-            )
-            await _attach_judge_agent_runtime_trace(
-                runtime=runtime,
-                report_payload=report_payload,
-                dispatch_type="phase",
-                case_id=phase_request.case_id,
-                scope_id=phase_request.scope_id,
-                session_id=phase_request.session_id,
-                trace_id=phase_request.trace_id,
-                phase_no=phase_request.phase_no,
-            )
-            _attach_policy_trace_snapshot(
-                runtime=runtime,
-                report_payload=report_payload,
-                profile=policy_profile,
-                prompt_profile=prompt_profile,
-                tool_profile=tool_profile,
-            )
-            _attach_report_attestation(
-                report_payload=report_payload,
-                dispatch_type="phase",
-            )
-
-        await _upsert_claim_ledger_record(
-            case_id=case_id,
-            dispatch_type=chosen_dispatch_type,
-            trace_id=trace_id,
-            report_payload=report_payload,
-            request_payload=request_snapshot,
-        )
-        winner = str(report_payload.get("winner") or "").strip().lower()
-        if winner not in {"pro", "con", "draw"}:
-            agent3 = (
-                report_payload.get("agent3WeightedScore")
-                if isinstance(report_payload.get("agent3WeightedScore"), dict)
-                else {}
-            )
-            winner = _resolve_winner(
-                _safe_float(agent3.get("pro"), default=50.0),
-                _safe_float(agent3.get("con"), default=50.0),
-                margin=0.8,
-            )
-        needs_draw_vote = bool(report_payload.get("needsDrawVote")) if "needsDrawVote" in report_payload else winner == "draw"
-
-        if runtime.trace_store.get_trace(case_id) is None:
-            runtime.trace_store.register_start(
-                job_id=case_id,
-                trace_id=trace_id,
-                request=request_snapshot,
-            )
-        runtime.trace_store.mark_replay(
-            job_id=case_id,
-            winner=winner,
-            needs_draw_vote=needs_draw_vote,
-            provider=runtime.settings.provider,
-        )
-        replay_row = await _append_replay_record(
-            dispatch_type=chosen_dispatch_type,
-            job_id=case_id,
-            trace_id=trace_id,
-            winner=winner,
-            needs_draw_vote=needs_draw_vote,
-            provider=runtime.settings.provider,
-            report_payload=report_payload,
-        )
-        await _workflow_mark_replay(
-            job_id=case_id,
-            dispatch_type=chosen_dispatch_type,
-            event_payload={
-                "traceId": trace_id,
-                "winner": winner,
-                "needsDrawVote": needs_draw_vote,
-                "dispatchType": chosen_dispatch_type,
-            },
-        )
-        replayed_at = replay_row.created_at
-        verdict_contract = _build_verdict_contract(report_payload)
-
-        return build_replay_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=chosen_dispatch_type,
-            replayed_at=replayed_at,
-            report_payload=report_payload,
-            verdict_contract=verdict_contract,
-            winner=winner,
-            needs_draw_vote=needs_draw_vote,
-            trace_id=trace_id,
-            judge_core_stage=JUDGE_CORE_STAGE_REPLAY_COMPUTED,
-            judge_core_version=JUDGE_CORE_VERSION,
         )
 
     async def _resolve_report_context_for_case(
@@ -10209,92 +10367,32 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         not_found_detail: str,
         missing_report_detail: str,
     ) -> dict[str, Any]:
-        try:
-            dispatch_type_normalized = normalize_trust_read_dispatch_type_v3(dispatch_type)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-        if dispatch_type_normalized == "auto":
-            final_receipt = await _get_dispatch_receipt(
-                dispatch_type="final",
-                job_id=case_id,
+        return await _run_trust_read_guard(
+            resolve_trust_report_context_for_case_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                get_dispatch_receipt=_get_dispatch_receipt,
+                not_found_detail=not_found_detail,
+                missing_report_detail=missing_report_detail,
             )
-            phase_receipt = await _get_dispatch_receipt(
-                dispatch_type="phase",
-                job_id=case_id,
-            )
-            chosen_dispatch_type, chosen_receipt = choose_trust_read_dispatch_receipt_v3(
-                dispatch_type=dispatch_type_normalized,
-                final_receipt=final_receipt,
-                phase_receipt=phase_receipt,
-            )
-        else:
-            explicit_receipt = await _get_dispatch_receipt(
-                dispatch_type=dispatch_type_normalized,
-                job_id=case_id,
-            )
-            chosen_dispatch_type, chosen_receipt = choose_trust_read_dispatch_receipt_v3(
-                dispatch_type=dispatch_type_normalized,
-                explicit_receipt=explicit_receipt,
-            )
-        if chosen_receipt is None:
-            raise HTTPException(status_code=404, detail=not_found_detail)
-        try:
-            return build_trust_report_context_from_receipt_v3(
-                dispatch_type=chosen_dispatch_type,
-                receipt=chosen_receipt,
-            )
-        except ValueError as err:
-            if str(err) == "trust_report_payload_missing":
-                raise HTTPException(status_code=409, detail=missing_report_detail) from err
-            raise
+        )
 
     async def _build_trust_phasea_bundle(
         *,
         case_id: int,
         dispatch_type: str,
     ) -> dict[str, Any]:
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="trust_receipt_not_found",
-            missing_report_detail="trust_report_payload_missing",
-        )
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        workflow_events = list(await _workflow_list_events(job_id=case_id))
-        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
-        workflow_snapshot = (
-            _serialize_workflow_job(workflow_job)
-            if workflow_job is not None
-            else None
-        )
-        bundle_payload = build_trust_phasea_bundle_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            request_snapshot=context["requestSnapshot"],
-            report_payload=context["reportPayload"],
-            workflow_snapshot=workflow_snapshot,
-            workflow_status=workflow_job.status if workflow_job is not None else None,
-            workflow_events=workflow_events,
-            alerts=alerts,
-            provider=runtime.settings.provider,
-        )
-        return {"context": context, **bundle_payload}
-
-    def _build_public_trust_verify_payload(
-        *,
-        commitment: dict[str, Any],
-        verdict_attestation: dict[str, Any],
-        challenge_review: dict[str, Any],
-        kernel_version: dict[str, Any],
-        audit_anchor: dict[str, Any],
-    ) -> dict[str, Any]:
-        return build_public_trust_verify_payload_v3(
-            commitment=commitment,
-            verdict_attestation=verdict_attestation,
-            challenge_review=challenge_review,
-            kernel_version=kernel_version,
-            audit_anchor=audit_anchor,
+        return await _run_trust_read_guard(
+            build_trust_phasea_bundle_for_case_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                get_dispatch_receipt=_get_dispatch_receipt,
+                get_workflow_job=_workflow_get_job,
+                list_workflow_events=_workflow_list_events,
+                list_audit_alerts=_list_audit_alerts,
+                serialize_workflow_job=_serialize_workflow_job,
+                provider=runtime.settings.provider,
+            )
         )
 
     @app.get("/internal/judge/cases/{case_id}/trust/commitment")
@@ -10308,24 +10406,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             case_id=case_id,
             dispatch_type=dispatch_type,
         )
-        context = bundle["context"]
-        payload = build_trust_item_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            item=bundle["commitment"],
+        return _run_trust_read_guard_sync(
+            lambda: build_validated_trust_item_route_payload_v3(
+                case_id=case_id,
+                bundle=bundle,
+                item_key="commitment",
+                validate_contract=_validate_trust_commitment_contract,
+                violation_code="trust_commitment_contract_violation",
+            )
         )
-        try:
-            _validate_trust_commitment_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_commitment_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/verdict-attestation")
     async def get_judge_trust_verdict_attestation(
@@ -10338,24 +10427,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             case_id=case_id,
             dispatch_type=dispatch_type,
         )
-        context = bundle["context"]
-        payload = build_trust_item_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            item=bundle["verdictAttestation"],
+        return _run_trust_read_guard_sync(
+            lambda: build_validated_trust_item_route_payload_v3(
+                case_id=case_id,
+                bundle=bundle,
+                item_key="verdictAttestation",
+                validate_contract=_validate_trust_verdict_attestation_contract,
+                violation_code="trust_verdict_attestation_contract_violation",
+            )
         )
-        try:
-            _validate_trust_verdict_attestation_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_verdict_attestation_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/challenges")
     async def get_judge_trust_challenge_review(
@@ -10368,24 +10448,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             case_id=case_id,
             dispatch_type=dispatch_type,
         )
-        context = bundle["context"]
-        payload = build_trust_item_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            item=bundle["challengeReview"],
+        return _run_trust_read_guard_sync(
+            lambda: build_validated_trust_item_route_payload_v3(
+                case_id=case_id,
+                bundle=bundle,
+                item_key="challengeReview",
+                validate_contract=_validate_trust_challenge_review_contract,
+                violation_code="trust_challenge_review_contract_violation",
+            )
         )
-        try:
-            _validate_trust_challenge_review_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_challenge_review_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/trust/challenges/ops-queue")
     async def list_judge_trust_challenge_ops_queue(
@@ -10404,216 +10475,46 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_status = _normalize_workflow_status(status)
-        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
-            raise HTTPException(status_code=422, detail="invalid_workflow_status")
-        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
-        if normalized_dispatch_type not in {"auto", "phase", "final"}:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-        workflow_dispatch_filter = (
-            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        return await _run_trust_challenge_guard(
+            build_trust_challenge_ops_queue_route_payload_v3(
+                status=status,
+                dispatch_type=dispatch_type,
+                challenge_state=challenge_state,
+                review_state=review_state,
+                priority_level=priority_level,
+                sla_bucket=sla_bucket,
+                has_open_alert=has_open_alert,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                scan_limit=scan_limit,
+                offset=offset,
+                limit=limit,
+                normalize_workflow_status=_normalize_workflow_status,
+                workflow_statuses=WORKFLOW_STATUSES,
+                normalize_trust_challenge_state_filter=_normalize_trust_challenge_state_filter,
+                case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
+                normalize_trust_challenge_review_state=_normalize_trust_challenge_review_state,
+                trust_challenge_review_state_values=TRUST_CHALLENGE_REVIEW_STATE_VALUES,
+                normalize_trust_challenge_priority_level=_normalize_trust_challenge_priority_level,
+                trust_challenge_priority_level_values=TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES,
+                normalize_trust_challenge_sla_bucket=_normalize_trust_challenge_sla_bucket,
+                trust_challenge_sla_bucket_values=TRUST_CHALLENGE_SLA_BUCKET_VALUES,
+                normalize_trust_challenge_sort_by=_normalize_trust_challenge_sort_by,
+                trust_challenge_sort_fields=TRUST_CHALLENGE_SORT_FIELDS,
+                normalize_trust_challenge_sort_order=_normalize_trust_challenge_sort_order,
+                trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
+                workflow_list_jobs=_workflow_list_jobs,
+                build_trust_phasea_bundle=_build_trust_phasea_bundle,
+                get_trace=runtime.trace_store.get_trace,
+                build_trust_challenge_priority_profile=_build_trust_challenge_priority_profile,
+                serialize_workflow_job=_serialize_workflow_job,
+                build_trust_challenge_ops_queue_item=build_trust_challenge_ops_queue_item_v3,
+                build_trust_challenge_action_hints=_build_trust_challenge_action_hints,
+                build_trust_challenge_sort_key=_build_trust_challenge_sort_key,
+                build_trust_challenge_ops_queue_payload=build_trust_challenge_ops_queue_payload_v3,
+                validate_trust_challenge_ops_queue_contract=_validate_trust_challenge_ops_queue_contract,
+            )
         )
-
-        normalized_challenge_state = _normalize_trust_challenge_state_filter(challenge_state)
-        if (
-            normalized_challenge_state is not None
-            and normalized_challenge_state != "open"
-            and normalized_challenge_state not in CASE_FAIRNESS_CHALLENGE_STATES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_trust_challenge_state")
-        normalized_review_state = _normalize_trust_challenge_review_state(review_state)
-        if (
-            normalized_review_state is not None
-            and normalized_review_state not in TRUST_CHALLENGE_REVIEW_STATE_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_trust_review_state")
-        normalized_priority_level = _normalize_trust_challenge_priority_level(priority_level)
-        if (
-            normalized_priority_level is not None
-            and normalized_priority_level not in TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_trust_priority_level")
-        normalized_sla_bucket = _normalize_trust_challenge_sla_bucket(sla_bucket)
-        if (
-            normalized_sla_bucket is not None
-            and normalized_sla_bucket not in TRUST_CHALLENGE_SLA_BUCKET_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_trust_sla_bucket")
-        normalized_sort_by = _normalize_trust_challenge_sort_by(sort_by)
-        if normalized_sort_by not in TRUST_CHALLENGE_SORT_FIELDS:
-            raise HTTPException(status_code=422, detail="invalid_trust_sort_by")
-        normalized_sort_order = _normalize_trust_challenge_sort_order(sort_order)
-        if normalized_sort_order not in {"asc", "desc"}:
-            raise HTTPException(status_code=422, detail="invalid_trust_sort_order")
-        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
-        normalized_offset = max(0, int(offset))
-        normalized_limit = max(1, min(int(limit), 200))
-
-        jobs = await _workflow_list_jobs(
-            status=normalized_status,
-            dispatch_type=workflow_dispatch_filter,
-            limit=normalized_scan_limit,
-        )
-        now = datetime.now(timezone.utc)
-        items: list[dict[str, Any]] = []
-        errors: list[dict[str, Any]] = []
-        for job in jobs:
-            try:
-                bundle = await _build_trust_phasea_bundle(
-                    case_id=job.job_id,
-                    dispatch_type=normalized_dispatch_type,
-                )
-            except HTTPException as err:
-                error_code = str(err.detail or "").strip() or "trust_case_unavailable"
-                if error_code in {
-                    "trust_receipt_not_found",
-                    "trust_report_payload_missing",
-                }:
-                    errors.append(
-                        {
-                            "caseId": int(job.job_id),
-                            "statusCode": int(err.status_code),
-                            "errorCode": error_code,
-                        }
-                    )
-                    continue
-                raise
-
-            challenge_review = (
-                bundle.get("challengeReview")
-                if isinstance(bundle.get("challengeReview"), dict)
-                else {}
-            )
-            current_challenge_state = (
-                str(challenge_review.get("challengeState") or "").strip().lower() or None
-            )
-            if normalized_challenge_state == "open":
-                if current_challenge_state not in TRUST_CHALLENGE_OPEN_STATES:
-                    continue
-            elif (
-                normalized_challenge_state is not None
-                and current_challenge_state != normalized_challenge_state
-            ):
-                continue
-
-            current_review_state = (
-                str(challenge_review.get("reviewState") or "").strip().lower() or None
-            )
-            if (
-                normalized_review_state is not None
-                and current_review_state != normalized_review_state
-            ):
-                continue
-
-            context = bundle["context"] if isinstance(bundle.get("context"), dict) else {}
-            report_payload = (
-                context.get("reportPayload")
-                if isinstance(context.get("reportPayload"), dict)
-                else {}
-            )
-            trace = runtime.trace_store.get_trace(job.job_id)
-            report_summary = (
-                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-            )
-            priority_profile = _build_trust_challenge_priority_profile(
-                workflow=job,
-                challenge_review=challenge_review,
-                report_payload=report_payload,
-                report_summary=report_summary,
-                now=now,
-            )
-            if (
-                normalized_priority_level is not None
-                and str(priority_profile.get("level") or "").strip().lower()
-                != normalized_priority_level
-            ):
-                continue
-            if (
-                normalized_sla_bucket is not None
-                and str(priority_profile.get("slaBucket") or "").strip().lower()
-                != normalized_sla_bucket
-            ):
-                continue
-            if (
-                has_open_alert is not None
-                and (
-                    int(priority_profile.get("openAlertCount") or 0) > 0
-                ) != bool(has_open_alert)
-            ):
-                continue
-
-            active_challenge_id = str(challenge_review.get("activeChallengeId") or "").strip() or None
-            workflow_payload = _serialize_workflow_job(job)
-            trace_payload = {
-                "status": trace.status if trace is not None else None,
-                "callbackStatus": (
-                    report_summary.get("callbackStatus")
-                    or (trace.callback_status if trace is not None else None)
-                ),
-                "callbackError": (
-                    report_summary.get("callbackError")
-                    or (trace.callback_error if trace is not None else None)
-                ),
-                "updatedAt": (
-                    trace.updated_at.isoformat() if trace is not None else None
-                ),
-            }
-            item_payload = build_trust_challenge_ops_queue_item_v3(
-                case_id=int(job.job_id),
-                dispatch_type=context.get("dispatchType"),
-                trace_id=context.get("traceId"),
-                workflow=workflow_payload,
-                trace_payload=trace_payload,
-                challenge_review=challenge_review,
-                priority_profile=priority_profile,
-                active_challenge_id=active_challenge_id,
-            )
-            item_payload["actionHints"] = _build_trust_challenge_action_hints(
-                challenge_review=item_payload["challengeReview"],
-                priority_profile=priority_profile,
-            )
-            items.append(item_payload)
-
-        items.sort(
-            key=lambda row: _build_trust_challenge_sort_key(
-                item=row,
-                sort_by=normalized_sort_by,
-            ),
-            reverse=(normalized_sort_order == "desc"),
-        )
-        page_items = items[normalized_offset : normalized_offset + normalized_limit]
-
-        payload = build_trust_challenge_ops_queue_payload_v3(
-            items=items,
-            page_items=page_items,
-            jobs_count=len(jobs),
-            errors=errors,
-            filters={
-                "status": normalized_status,
-                "dispatchType": normalized_dispatch_type,
-                "challengeState": normalized_challenge_state,
-                "reviewState": normalized_review_state,
-                "priorityLevel": normalized_priority_level,
-                "slaBucket": normalized_sla_bucket,
-                "hasOpenAlert": has_open_alert,
-                "sortBy": normalized_sort_by,
-                "sortOrder": normalized_sort_order,
-                "scanLimit": normalized_scan_limit,
-                "offset": normalized_offset,
-                "limit": normalized_limit,
-            },
-        )
-        try:
-            _validate_trust_challenge_ops_queue_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_challenge_ops_queue_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.post("/internal/judge/cases/{case_id}/trust/challenges/request")
     async def request_judge_trust_challenge(
@@ -10626,113 +10527,29 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         auto_accept: bool = Query(default=True),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_reason_code = str(reason_code or "").strip().lower()
-        if not normalized_reason_code:
-            raise HTTPException(status_code=422, detail="invalid_challenge_reason_code")
-        actor = str(requested_by or "").strip() or "ops"
-        reason_text = str(reason or "").strip() or None
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="trust_receipt_not_found",
-            missing_report_detail="trust_report_payload_missing",
-        )
-        current_job = await _workflow_get_job(job_id=case_id)
-        if current_job is None:
-            raise HTTPException(status_code=404, detail="review_job_not_found")
-        if current_job.status in {"blocked_failed", "archived"}:
-            raise HTTPException(status_code=409, detail="challenge_request_not_allowed")
-
-        challenge_id = _new_challenge_id(case_id=case_id)
-        base_payload = {
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "challengeId": challenge_id,
-            "challengeReasonCode": normalized_reason_code,
-            "challengeReason": reason_text,
-            "challengeRequestedBy": actor,
-            "challengeActor": actor,
-        }
-        await _workflow_append_event(
-            job_id=case_id,
-            event_type=TRUST_CHALLENGE_EVENT_TYPE,
-            event_payload={
-                **base_payload,
-                "challengeState": TRUST_CHALLENGE_STATE_REQUESTED,
-            },
-            not_found_detail="review_job_not_found",
-        )
-
-        if current_job.status != "review_required":
-            # challenge 受理后强制进入 review_required 队列，避免绕过复核主状态机。
-            await _workflow_mark_review_required(
-                job_id=case_id,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
-                    "judgeCoreStage": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
-                },
+        return await _run_trust_challenge_guard(
+            build_trust_challenge_request_payload_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                reason_code=reason_code,
+                reason=reason,
+                requested_by=requested_by,
+                auto_accept=auto_accept,
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                workflow_get_job=_workflow_get_job,
+                workflow_append_event=_workflow_append_event,
+                workflow_mark_review_required=_workflow_mark_review_required,
+                build_trust_phasea_bundle=_build_trust_phasea_bundle,
+                new_challenge_id=_new_challenge_id,
+                upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
+                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                serialize_workflow_job=_serialize_workflow_job,
+                trust_challenge_event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                trust_challenge_state_requested=TRUST_CHALLENGE_STATE_REQUESTED,
+                trust_challenge_state_accepted=TRUST_CHALLENGE_STATE_ACCEPTED,
+                trust_challenge_state_under_review=TRUST_CHALLENGE_STATE_UNDER_REVIEW,
             )
-
-        if auto_accept:
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_ACCEPTED,
-                    "challengeAcceptedBy": actor,
-                },
-                not_found_detail="review_job_not_found",
-            )
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
-                    "challengeActor": actor,
-                },
-                not_found_detail="review_job_not_found",
-            )
-
-        alert = runtime.trace_store.upsert_audit_alert(
-            job_id=case_id,
-            scope_id=current_job.scope_id,
-            trace_id=context["traceId"],
-            alert_type="trust_challenge_requested",
-            severity="warning",
-            title="AI Judge Trust Challenge Requested",
-            message=f"challenge requested ({normalized_reason_code})",
-            details={
-                "dispatchType": context["dispatchType"],
-                "challengeId": challenge_id,
-                "reasonCode": normalized_reason_code,
-                "reason": reason_text,
-                "requestedBy": actor,
-            },
         )
-        await _sync_audit_alert_to_facts(alert=alert)
-
-        bundle = await _build_trust_phasea_bundle(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-        )
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        return {
-            "ok": True,
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "challengeId": challenge_id,
-            "alertId": alert.alert_id,
-            "job": (
-                _serialize_workflow_job(workflow_job)
-                if workflow_job is not None
-                else None
-            ),
-            "item": bundle["challengeReview"],
-        }
 
     @app.post("/internal/judge/cases/{case_id}/trust/challenges/{challenge_id}/decision")
     async def decide_judge_trust_challenge(
@@ -10745,178 +10562,33 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         reason: str | None = Query(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_decision = str(decision or "").strip().lower()
-        if normalized_decision not in {"accept", "uphold", "overturn", "draw", "close"}:
-            raise HTTPException(status_code=422, detail="invalid_challenge_decision")
-        normalized_challenge_id = str(challenge_id or "").strip()
-        if not normalized_challenge_id:
-            raise HTTPException(status_code=422, detail="invalid_challenge_id")
-
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="trust_receipt_not_found",
-            missing_report_detail="trust_report_payload_missing",
+        return await _run_trust_challenge_guard(
+            build_trust_challenge_decision_payload_v3(
+                case_id=case_id,
+                challenge_id=challenge_id,
+                dispatch_type=dispatch_type,
+                decision=decision,
+                actor=actor,
+                reason=reason,
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                workflow_get_job=_workflow_get_job,
+                workflow_append_event=_workflow_append_event,
+                workflow_mark_review_required=_workflow_mark_review_required,
+                workflow_mark_completed=_workflow_mark_completed,
+                workflow_mark_draw_pending_vote=runtime.workflow_runtime.orchestrator.mark_draw_pending_vote,
+                resolve_open_alerts_for_review=_resolve_open_alerts_for_review,
+                build_trust_phasea_bundle=_build_trust_phasea_bundle,
+                serialize_workflow_job=_serialize_workflow_job,
+                trust_challenge_event_type=TRUST_CHALLENGE_EVENT_TYPE,
+                trust_challenge_state_closed=TRUST_CHALLENGE_STATE_CLOSED,
+                trust_challenge_state_accepted=TRUST_CHALLENGE_STATE_ACCEPTED,
+                trust_challenge_state_under_review=TRUST_CHALLENGE_STATE_UNDER_REVIEW,
+                trust_challenge_state_verdict_upheld=TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
+                trust_challenge_state_verdict_overturned=TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED,
+                trust_challenge_state_draw_after_review=TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+                workflow_transition_error_cls=WorkflowTransitionError,
+            )
         )
-        current_job = await _workflow_get_job(job_id=case_id)
-        if current_job is None:
-            raise HTTPException(status_code=404, detail="review_job_not_found")
-        actor_text = str(actor or "").strip() or "ops"
-        reason_text = str(reason or "").strip() or None
-
-        before_bundle = await _build_trust_phasea_bundle(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-        )
-        challenge_item = next(
-            (
-                item
-                for item in (
-                    before_bundle["challengeReview"].get("challenges")
-                    if isinstance(before_bundle["challengeReview"].get("challenges"), list)
-                    else []
-                )
-                if str(item.get("challengeId") or "") == normalized_challenge_id
-            ),
-            None,
-        )
-        if challenge_item is None:
-            raise HTTPException(status_code=404, detail="trust_challenge_not_found")
-        if str(challenge_item.get("currentState") or "") == TRUST_CHALLENGE_STATE_CLOSED:
-            raise HTTPException(status_code=409, detail="trust_challenge_already_closed")
-
-        base_payload = {
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "challengeId": normalized_challenge_id,
-            "challengeActor": actor_text,
-            "challengeDecision": normalized_decision,
-            "challengeDecisionReason": reason_text,
-        }
-        resolved_alert_ids: list[str] = []
-        updated_job: WorkflowJob | None = current_job
-
-        if normalized_decision == "accept":
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_ACCEPTED,
-                    "challengeAcceptedBy": actor_text,
-                },
-            )
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
-                },
-            )
-            if current_job.status != "review_required":
-                await _workflow_mark_review_required(
-                    job_id=case_id,
-                    event_payload={
-                        **base_payload,
-                        "challengeState": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
-                        "judgeCoreStage": TRUST_CHALLENGE_STATE_UNDER_REVIEW,
-                    },
-                )
-                updated_job = await _workflow_get_job(job_id=case_id)
-        elif normalized_decision == "uphold":
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
-                    "reviewDecision": "approve",
-                    "reviewActor": actor_text,
-                    "reviewReason": reason_text or "challenge_upheld",
-                },
-            )
-            if current_job.status == "review_required":
-                await _workflow_mark_completed(
-                    job_id=case_id,
-                    event_payload={
-                        **base_payload,
-                        "reviewDecision": "approve",
-                        "reviewActor": actor_text,
-                        "reviewReason": reason_text or "challenge_upheld",
-                        "judgeCoreStage": "review_approved",
-                    },
-                )
-                resolved_alert_ids = await _resolve_open_alerts_for_review(
-                    job_id=case_id,
-                    actor=actor_text,
-                    reason=reason_text or "challenge_upheld",
-                )
-                updated_job = await _workflow_get_job(job_id=case_id)
-        elif normalized_decision in {"overturn", "draw"}:
-            overturned_state = (
-                TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED
-                if normalized_decision == "overturn"
-                else TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW
-            )
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": overturned_state,
-                },
-            )
-            draw_payload = {
-                **base_payload,
-                "challengeState": TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
-                "judgeCoreStage": TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
-            }
-            try:
-                await runtime.workflow_runtime.orchestrator.mark_draw_pending_vote(
-                    job_id=case_id,
-                    event_payload=draw_payload,
-                )
-                updated_job = await _workflow_get_job(job_id=case_id)
-            except WorkflowTransitionError:
-                pass
-            await _workflow_append_event(
-                job_id=case_id,
-                event_type=TRUST_CHALLENGE_EVENT_TYPE,
-                event_payload={
-                    **base_payload,
-                    "challengeState": TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
-                },
-            )
-
-        await _workflow_append_event(
-            job_id=case_id,
-            event_type=TRUST_CHALLENGE_EVENT_TYPE,
-            event_payload={
-                **base_payload,
-                "challengeState": TRUST_CHALLENGE_STATE_CLOSED,
-                "challengeClosedBy": actor_text,
-                "challengeCloseReason": reason_text,
-            },
-        )
-
-        after_bundle = await _build_trust_phasea_bundle(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-        )
-        if updated_job is None:
-            updated_job = await _workflow_get_job(job_id=case_id)
-        return {
-            "ok": True,
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            "challengeId": normalized_challenge_id,
-            "decision": normalized_decision,
-            "resolvedAlertIds": resolved_alert_ids,
-            "job": _serialize_workflow_job(updated_job) if updated_job is not None else None,
-            "item": after_bundle["challengeReview"],
-        }
 
     @app.get("/internal/judge/cases/{case_id}/trust/kernel-version")
     async def get_judge_trust_kernel_version(
@@ -10929,24 +10601,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             case_id=case_id,
             dispatch_type=dispatch_type,
         )
-        context = bundle["context"]
-        payload = build_trust_item_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            item=bundle["kernelVersion"],
+        return _run_trust_read_guard_sync(
+            lambda: build_validated_trust_item_route_payload_v3(
+                case_id=case_id,
+                bundle=bundle,
+                item_key="kernelVersion",
+                validate_contract=_validate_trust_kernel_version_contract,
+                violation_code="trust_kernel_version_contract_violation",
+            )
         )
-        try:
-            _validate_trust_kernel_version_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_kernel_version_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/audit-anchor")
     async def get_judge_trust_audit_anchor(
@@ -10960,34 +10623,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             case_id=case_id,
             dispatch_type=dispatch_type,
         )
-        context = bundle["context"]
-        anchor = build_audit_anchor_export_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            case_commitment=bundle["commitment"],
-            verdict_attestation=bundle["verdictAttestation"],
-            challenge_review=bundle["challengeReview"],
-            kernel_version=bundle["kernelVersion"],
-            include_payload=include_payload,
+        return _run_trust_read_guard_sync(
+            lambda: build_trust_audit_anchor_route_payload_v3(
+                case_id=case_id,
+                bundle=bundle,
+                include_payload=include_payload,
+                build_audit_anchor_export=build_audit_anchor_export_v3,
+                validate_contract=_validate_trust_audit_anchor_contract,
+                violation_code="trust_audit_anchor_contract_violation",
+            )
         )
-        payload = build_trust_item_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            item=anchor,
-        )
-        try:
-            _validate_trust_audit_anchor_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_audit_anchor_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/cases/{case_id}/trust/public-verify")
     async def get_judge_trust_public_verify(
@@ -11000,56 +10645,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             case_id=case_id,
             dispatch_type=dispatch_type,
         )
-        context = bundle["context"]
-        commitment = (
-            dict(bundle["commitment"]) if isinstance(bundle.get("commitment"), dict) else {}
+        return _run_trust_read_guard_sync(
+            lambda: build_trust_public_verify_bundle_payload_v3(
+                case_id=case_id,
+                bundle=bundle,
+                build_audit_anchor_export=build_audit_anchor_export_v3,
+                build_public_verify_payload=build_public_trust_verify_payload_v3,
+                validate_contract=_validate_trust_public_verify_contract,
+                violation_code="trust_public_verify_contract_violation",
+            )
         )
-        verdict_attestation = (
-            dict(bundle["verdictAttestation"])
-            if isinstance(bundle.get("verdictAttestation"), dict)
-            else {}
-        )
-        challenge_review = (
-            dict(bundle["challengeReview"])
-            if isinstance(bundle.get("challengeReview"), dict)
-            else {}
-        )
-        kernel_version = (
-            dict(bundle["kernelVersion"]) if isinstance(bundle.get("kernelVersion"), dict) else {}
-        )
-        audit_anchor = build_audit_anchor_export_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            case_commitment=commitment,
-            verdict_attestation=verdict_attestation,
-            challenge_review=challenge_review,
-            kernel_version=kernel_version,
-            include_payload=False,
-        )
-        payload = build_trust_public_verify_route_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            verify_payload=_build_public_trust_verify_payload(
-                commitment=commitment,
-                verdict_attestation=verdict_attestation,
-                challenge_review=challenge_review,
-                kernel_version=kernel_version,
-                audit_anchor=audit_anchor,
-            ),
-        )
-        try:
-            _validate_trust_public_verify_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "trust_public_verify_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.post("/internal/judge/cases/{case_id}/attestation/verify")
     async def verify_judge_report_attestation(
@@ -11058,22 +10663,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type: str = Query(default="auto"),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="attestation_receipt_not_found",
-            missing_report_detail="attestation_report_payload_missing",
+        return await _run_trust_read_guard(
+            build_trust_attestation_verify_payload_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                get_dispatch_receipt=_get_dispatch_receipt,
+                verify_report_attestation=verify_report_attestation_v3,
+            )
         )
-        verify_result = _verify_report_attestation(
-            report_payload=context["reportPayload"],
-            dispatch_type=context["dispatchType"],
-        )
-        return {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "traceId": context["traceId"],
-            **verify_result,
-        }
 
     @app.get("/internal/judge/cases/{case_id}/replay/report")
     async def get_judge_replay_report(
@@ -11081,17 +10678,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        record = runtime.trace_store.get_trace(case_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="judge_trace_not_found")
-        payload = _build_replay_report_payload(record)
-        claim_ledger_record = await _get_claim_ledger_record(case_id=case_id, dispatch_type=None)
-        if claim_ledger_record is not None:
-            payload["claimLedger"] = _serialize_claim_ledger_record(
-                claim_ledger_record,
-                include_payload=True,
+        return await _run_replay_read_guard(
+            build_replay_report_route_payload_v3(
+                case_id=case_id,
+                get_trace=runtime.trace_store.get_trace,
+                build_replay_report_payload=build_replay_report_payload_v3,
+                get_claim_ledger_record=_get_claim_ledger_record,
+                serialize_claim_ledger_record=_serialize_claim_ledger_record,
             )
-        return payload
+        )
 
     @app.get("/internal/judge/cases/replay/reports")
     async def list_judge_replay_reports(
@@ -11107,77 +10702,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         include_report: bool = Query(default=False),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_created_after = _normalize_query_datetime(created_after)
-        normalized_created_before = _normalize_query_datetime(created_before)
-        query = TraceQuery(
+        return build_replay_reports_route_payload_v3(
             status=status,
             winner=winner,
             callback_status=callback_status,
             trace_id=trace_id,
-            created_after=normalized_created_after,
-            created_before=normalized_created_before,
-            has_audit_alert=has_audit_alert,
-            limit=limit,
-        )
-        records = runtime.trace_store.list_traces(query=query)
-        if include_report:
-            items = [_build_replay_report_payload(record) for record in records]
-        else:
-            items = [_build_replay_report_summary(record) for record in records]
-        return build_replay_reports_list_payload_v3(
-            items=items,
-            status=status,
-            winner=winner,
-            callback_status=callback_status,
-            trace_id=trace_id,
-            created_after=normalized_created_after,
-            created_before=normalized_created_before,
+            created_after=created_after,
+            created_before=created_before,
             has_audit_alert=has_audit_alert,
             limit=limit,
             include_report=include_report,
+            normalize_query_datetime=_normalize_query_datetime,
+            trace_query_cls=TraceQuery,
+            list_traces=runtime.trace_store.list_traces,
+            build_replay_report_payload=build_replay_report_payload_v3,
+            build_replay_report_summary=build_replay_report_summary_v3,
+            build_replay_reports_list_payload=build_replay_reports_list_payload_v3,
         )
-
-    def _normalize_fairness_environment_mode(
-        value: str | None,
-        *,
-        strict: bool = False,
-    ) -> str | None:
-        token = str(value or "").strip().lower()
-        if not token:
-            return None if strict else "blocked"
-        if token in {"real", "local_reference", "blocked"}:
-            return token
-        return None if strict else "blocked"
-
-    def _normalize_fairness_status(
-        value: str | None,
-        *,
-        strict: bool = False,
-    ) -> str | None:
-        token = str(value or "").strip().lower()
-        if not token:
-            return None if strict else "pending_data"
-        if token in {
-            "pass",
-            "local_reference_frozen",
-            "pending_data",
-            "threshold_violation",
-            "env_blocked",
-            "evidence_missing",
-        }:
-            return token
-        return None if strict else "pending_data"
-
-    def _normalize_fairness_threshold_decision(value: str | None) -> str:
-        token = str(value or "").strip().lower()
-        if token in {"accepted", "violated", "pending"}:
-            return token
-        return "pending"
-
-    def _metric_delta(current: float | None, baseline: float | None) -> float | None:
-        if current is None or baseline is None:
-            return None
-        return round(current - baseline, 8)
 
     @app.post("/internal/judge/fairness/benchmark-runs")
     async def upsert_judge_fairness_benchmark_run(
@@ -11185,341 +10726,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            raw_payload = await request.json()
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
-        if not isinstance(raw_payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_payload")
-
-        run_id = _extract_optional_str(raw_payload, "run_id", "runId")
-        if run_id is None:
-            raise HTTPException(status_code=422, detail="invalid_fairness_run_id")
-        policy_version = (
-            _extract_optional_str(raw_payload, "policy_version", "policyVersion")
-            or "fairness-benchmark-v1"
-        )
-        environment_mode = _normalize_fairness_environment_mode(
-            _extract_optional_str(raw_payload, "environment_mode", "environmentMode"),
-            strict=False,
-        )
-        assert environment_mode is not None
-        status = _normalize_fairness_status(
-            _extract_optional_str(raw_payload, "status"),
-            strict=False,
-        )
-        assert status is not None
-        threshold_decision = _normalize_fairness_threshold_decision(
-            _extract_optional_str(raw_payload, "threshold_decision", "thresholdDecision")
-        )
-
-        thresholds_payload = (
-            raw_payload.get("thresholds")
-            if isinstance(raw_payload.get("thresholds"), dict)
-            else {}
-        )
-        metrics_payload = (
-            raw_payload.get("metrics")
-            if isinstance(raw_payload.get("metrics"), dict)
-            else {}
-        )
-        summary_payload = (
-            raw_payload.get("summary")
-            if isinstance(raw_payload.get("summary"), dict)
-            else {}
-        )
-        note = (
-            _extract_optional_str(raw_payload, "note")
-            or _extract_optional_str(summary_payload, "note")
-            or ""
-        )
-
-        sample_size = _extract_optional_int(raw_payload, "sample_size", "sampleSize")
-        if sample_size is None:
-            sample_size = _extract_optional_int(metrics_payload, "sample_size", "sampleSize")
-        draw_rate = _extract_optional_float(raw_payload, "draw_rate", "drawRate")
-        if draw_rate is None:
-            draw_rate = _extract_optional_float(metrics_payload, "draw_rate", "drawRate")
-        side_bias_delta = _extract_optional_float(
-            raw_payload,
-            "side_bias_delta",
-            "sideBiasDelta",
-        )
-        if side_bias_delta is None:
-            side_bias_delta = _extract_optional_float(
-                metrics_payload,
-                "side_bias_delta",
-                "sideBiasDelta",
+        raw_payload = await _read_json_object_or_raise_422(request=request)
+        return await _run_fairness_route_guard(
+            build_fairness_benchmark_upsert_payload_v3(
+                raw_payload=raw_payload,
+                extract_optional_int=_extract_optional_int,
+                extract_optional_float=_extract_optional_float,
+                extract_optional_str=_extract_optional_str,
+                extract_optional_bool=_extract_optional_bool,
+                extract_optional_datetime=_extract_optional_datetime,
+                list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+                upsert_fairness_benchmark_run=_upsert_fairness_benchmark_run,
+                upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
+                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                serialize_alert_item=_serialize_alert_item,
+                serialize_fairness_benchmark_run=_serialize_fairness_benchmark_run,
             )
-        appeal_overturn_rate = _extract_optional_float(
-            raw_payload,
-            "appeal_overturn_rate",
-            "appealOverturnRate",
         )
-        if appeal_overturn_rate is None:
-            appeal_overturn_rate = _extract_optional_float(
-                metrics_payload,
-                "appeal_overturn_rate",
-                "appealOverturnRate",
-            )
-
-        draw_rate_max = _extract_optional_float(raw_payload, "draw_rate_max", "drawRateMax")
-        if draw_rate_max is None:
-            draw_rate_max = _extract_optional_float(
-                thresholds_payload,
-                "draw_rate_max",
-                "drawRateMax",
-            )
-        side_bias_delta_max = _extract_optional_float(
-            raw_payload,
-            "side_bias_delta_max",
-            "sideBiasDeltaMax",
-        )
-        if side_bias_delta_max is None:
-            side_bias_delta_max = _extract_optional_float(
-                thresholds_payload,
-                "side_bias_delta_max",
-                "sideBiasDeltaMax",
-            )
-        appeal_overturn_rate_max = _extract_optional_float(
-            raw_payload,
-            "appeal_overturn_rate_max",
-            "appealOverturnRateMax",
-        )
-        if appeal_overturn_rate_max is None:
-            appeal_overturn_rate_max = _extract_optional_float(
-                thresholds_payload,
-                "appeal_overturn_rate_max",
-                "appealOverturnRateMax",
-            )
-
-        draw_rate_drift_max = _extract_optional_float(
-            raw_payload,
-            "draw_rate_drift_max",
-            "drawRateDriftMax",
-        )
-        if draw_rate_drift_max is None:
-            draw_rate_drift_max = _extract_optional_float(
-                thresholds_payload,
-                "draw_rate_drift_max",
-                "drawRateDriftMax",
-            )
-        side_bias_delta_drift_max = _extract_optional_float(
-            raw_payload,
-            "side_bias_delta_drift_max",
-            "sideBiasDeltaDriftMax",
-        )
-        if side_bias_delta_drift_max is None:
-            side_bias_delta_drift_max = _extract_optional_float(
-                thresholds_payload,
-                "side_bias_delta_drift_max",
-                "sideBiasDeltaDriftMax",
-            )
-        appeal_overturn_rate_drift_max = _extract_optional_float(
-            raw_payload,
-            "appeal_overturn_rate_drift_max",
-            "appealOverturnRateDriftMax",
-        )
-        if appeal_overturn_rate_drift_max is None:
-            appeal_overturn_rate_drift_max = _extract_optional_float(
-                thresholds_payload,
-                "appeal_overturn_rate_drift_max",
-                "appealOverturnRateDriftMax",
-            )
-
-        runs = await _list_fairness_benchmark_runs(
-            policy_version=policy_version,
-            limit=200,
-        )
-        baseline_run = next(
-            (
-                row
-                for row in runs
-                if row.run_id != run_id
-                and row.threshold_decision == "accepted"
-                and row.status in {"pass", "local_reference_frozen"}
-            ),
-            None,
-        )
-        baseline_draw_rate = baseline_run.draw_rate if baseline_run is not None else None
-        baseline_side_bias_delta = baseline_run.side_bias_delta if baseline_run is not None else None
-        baseline_appeal_overturn_rate = (
-            baseline_run.appeal_overturn_rate if baseline_run is not None else None
-        )
-
-        draw_rate_delta = _metric_delta(draw_rate, baseline_draw_rate)
-        side_bias_delta_delta = _metric_delta(side_bias_delta, baseline_side_bias_delta)
-        appeal_overturn_rate_delta = _metric_delta(
-            appeal_overturn_rate,
-            baseline_appeal_overturn_rate,
-        )
-        draw_rate_delta_abs = abs(draw_rate_delta) if draw_rate_delta is not None else None
-        side_bias_delta_delta_abs = (
-            abs(side_bias_delta_delta) if side_bias_delta_delta is not None else None
-        )
-        appeal_overturn_rate_delta_abs = (
-            abs(appeal_overturn_rate_delta)
-            if appeal_overturn_rate_delta is not None
-            else None
-        )
-
-        threshold_breaches: list[str] = []
-        if draw_rate_max is not None and draw_rate is not None and draw_rate > draw_rate_max:
-            threshold_breaches.append("draw_rate")
-        if (
-            side_bias_delta_max is not None
-            and side_bias_delta is not None
-            and side_bias_delta > side_bias_delta_max
-        ):
-            threshold_breaches.append("side_bias_delta")
-        if (
-            appeal_overturn_rate_max is not None
-            and appeal_overturn_rate is not None
-            and appeal_overturn_rate > appeal_overturn_rate_max
-        ):
-            threshold_breaches.append("appeal_overturn_rate")
-
-        drift_breaches: list[str] = []
-        if (
-            draw_rate_drift_max is not None
-            and draw_rate_delta_abs is not None
-            and draw_rate_delta_abs > draw_rate_drift_max
-        ):
-            drift_breaches.append("draw_rate")
-        if (
-            side_bias_delta_drift_max is not None
-            and side_bias_delta_delta_abs is not None
-            and side_bias_delta_delta_abs > side_bias_delta_drift_max
-        ):
-            drift_breaches.append("side_bias_delta")
-        if (
-            appeal_overturn_rate_drift_max is not None
-            and appeal_overturn_rate_delta_abs is not None
-            and appeal_overturn_rate_delta_abs > appeal_overturn_rate_drift_max
-        ):
-            drift_breaches.append("appeal_overturn_rate")
-
-        has_threshold_breach = bool(threshold_breaches) or status == "threshold_violation"
-        has_drift_breach = bool(drift_breaches)
-        needs_remediation = bool(
-            _extract_optional_bool(raw_payload, "needs_remediation", "needsRemediation")
-        ) or has_threshold_breach or has_drift_breach or threshold_decision == "violated"
-        needs_real_env_reconfirm_override = _extract_optional_bool(
-            raw_payload,
-            "needs_real_env_reconfirm",
-            "needsRealEnvReconfirm",
-        )
-        needs_real_env_reconfirm = (
-            bool(needs_real_env_reconfirm_override)
-            if needs_real_env_reconfirm_override is not None
-            else environment_mode != "real"
-        )
-        reported_at = _extract_optional_datetime(raw_payload, "reported_at", "reportedAt")
-        source = _extract_optional_str(raw_payload, "source") or "manual"
-        reported_by = _extract_optional_str(raw_payload, "reported_by", "reportedBy") or "system"
-
-        normalized_thresholds = dict(thresholds_payload)
-        normalized_thresholds["drawRateMax"] = draw_rate_max
-        normalized_thresholds["sideBiasDeltaMax"] = side_bias_delta_max
-        normalized_thresholds["appealOverturnRateMax"] = appeal_overturn_rate_max
-        normalized_thresholds["drawRateDriftMax"] = draw_rate_drift_max
-        normalized_thresholds["sideBiasDeltaDriftMax"] = side_bias_delta_drift_max
-        normalized_thresholds["appealOverturnRateDriftMax"] = appeal_overturn_rate_drift_max
-        normalized_thresholds = {
-            key: value for key, value in normalized_thresholds.items() if value is not None
-        }
-
-        normalized_metrics = dict(metrics_payload)
-        normalized_metrics["sampleSize"] = sample_size
-        normalized_metrics["drawRate"] = draw_rate
-        normalized_metrics["sideBiasDelta"] = side_bias_delta
-        normalized_metrics["appealOverturnRate"] = appeal_overturn_rate
-        normalized_metrics["drawRateDelta"] = draw_rate_delta
-        normalized_metrics["sideBiasDeltaDelta"] = side_bias_delta_delta
-        normalized_metrics["appealOverturnRateDelta"] = appeal_overturn_rate_delta
-        normalized_metrics = {
-            key: value for key, value in normalized_metrics.items() if value is not None
-        }
-
-        drift_summary = {
-            "baselineRunId": baseline_run.run_id if baseline_run is not None else None,
-            "baselineReportedAt": (
-                baseline_run.reported_at.isoformat() if baseline_run is not None else None
-            ),
-            "drawRateDelta": draw_rate_delta,
-            "sideBiasDeltaDelta": side_bias_delta_delta,
-            "appealOverturnRateDelta": appeal_overturn_rate_delta,
-            "thresholdBreaches": threshold_breaches,
-            "driftBreaches": drift_breaches,
-            "hasThresholdBreach": has_threshold_breach,
-            "hasDriftBreach": has_drift_breach,
-        }
-        normalized_summary = dict(summary_payload)
-        if note:
-            normalized_summary["note"] = note
-        normalized_summary["drift"] = drift_summary
-
-        row = await _upsert_fairness_benchmark_run(
-            run_id=run_id,
-            policy_version=policy_version,
-            environment_mode=environment_mode,
-            status=status,
-            threshold_decision=threshold_decision,
-            needs_real_env_reconfirm=needs_real_env_reconfirm,
-            needs_remediation=needs_remediation,
-            sample_size=sample_size,
-            draw_rate=draw_rate,
-            side_bias_delta=side_bias_delta,
-            appeal_overturn_rate=appeal_overturn_rate,
-            thresholds=normalized_thresholds,
-            metrics=normalized_metrics,
-            summary=normalized_summary,
-            source=source,
-            reported_by=reported_by,
-            reported_at=reported_at,
-        )
-
-        alert_item: dict[str, Any] | None = None
-        if has_threshold_breach or has_drift_breach:
-            alert_type = (
-                "fairness_benchmark_threshold_violation"
-                if has_threshold_breach
-                else "fairness_benchmark_drift_violation"
-            )
-            severity = "critical" if has_threshold_breach else "warning"
-            breached_items = threshold_breaches if has_threshold_breach else drift_breaches
-            message = (
-                f"fairness benchmark run breached: run_id={run_id}; "
-                f"breaches={','.join(breached_items)}"
-            )
-            alert = runtime.trace_store.upsert_audit_alert(
-                job_id=0,
-                scope_id=1,
-                trace_id=f"fairness-benchmark:{run_id}",
-                alert_type=alert_type,
-                severity=severity,
-                title="AI Judge Fairness Benchmark Drift",
-                message=message,
-                details={
-                    "runId": run_id,
-                    "policyVersion": policy_version,
-                    "environmentMode": environment_mode,
-                    "status": status,
-                    "thresholdDecision": threshold_decision,
-                    "metrics": normalized_metrics,
-                    "thresholds": normalized_thresholds,
-                    "drift": drift_summary,
-                },
-            )
-            await _sync_audit_alert_to_facts(alert=alert)
-            alert_item = _serialize_alert_item(alert)
-
-        return {
-            "ok": True,
-            "item": _serialize_fairness_benchmark_run(row),
-            "drift": drift_summary,
-            "alert": alert_item,
-        }
 
     @app.get("/internal/judge/fairness/benchmark-runs")
     async def list_judge_fairness_benchmark_runs(
@@ -11530,287 +10753,40 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_policy_version = (
-            str(policy_version or "").strip() if policy_version is not None else None
+        return await _run_fairness_route_guard(
+            build_fairness_benchmark_list_payload_v3(
+                policy_version=policy_version,
+                environment_mode=environment_mode,
+                status=status,
+                limit=limit,
+                list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+                serialize_fairness_benchmark_run=_serialize_fairness_benchmark_run,
+            )
         )
-        if normalized_policy_version == "":
-            normalized_policy_version = None
-        normalized_environment_mode = _normalize_fairness_environment_mode(
-            environment_mode,
-            strict=True,
-        )
-        if environment_mode is not None and normalized_environment_mode is None:
-            raise HTTPException(status_code=422, detail="invalid_environment_mode")
-        normalized_status = _normalize_fairness_status(status, strict=True)
-        if status is not None and normalized_status is None:
-            raise HTTPException(status_code=422, detail="invalid_fairness_status")
-
-        rows = await _list_fairness_benchmark_runs(
-            policy_version=normalized_policy_version,
-            environment_mode=normalized_environment_mode,
-            status=normalized_status,
-            limit=limit,
-        )
-        return {
-            "count": len(rows),
-            "items": [_serialize_fairness_benchmark_run(row) for row in rows],
-            "filters": {
-                "policyVersion": normalized_policy_version,
-                "environmentMode": normalized_environment_mode,
-                "status": normalized_status,
-                "limit": limit,
-            },
-        }
-
     @app.post("/internal/judge/fairness/shadow-runs")
     async def upsert_judge_fairness_shadow_run(
         request: Request,
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            raw_payload = await request.json()
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=f"invalid_json: {err}") from err
-        if not isinstance(raw_payload, dict):
-            raise HTTPException(status_code=422, detail="invalid_payload")
-
-        run_id = _extract_optional_str(raw_payload, "run_id", "runId")
-        if run_id is None:
-            raise HTTPException(status_code=422, detail="invalid_fairness_shadow_run_id")
-        policy_version = (
-            _extract_optional_str(raw_payload, "policy_version", "policyVersion")
-            or "fairness-benchmark-v1"
-        )
-        benchmark_run_id = _extract_optional_str(raw_payload, "benchmark_run_id", "benchmarkRunId")
-        environment_mode = _normalize_fairness_environment_mode(
-            _extract_optional_str(raw_payload, "environment_mode", "environmentMode"),
-            strict=False,
-        )
-        assert environment_mode is not None
-        status = _normalize_fairness_status(
-            _extract_optional_str(raw_payload, "status"),
-            strict=False,
-        )
-        assert status is not None
-        threshold_decision = _normalize_fairness_threshold_decision(
-            _extract_optional_str(raw_payload, "threshold_decision", "thresholdDecision")
-        )
-        thresholds_payload = (
-            raw_payload.get("thresholds")
-            if isinstance(raw_payload.get("thresholds"), dict)
-            else {}
-        )
-        metrics_payload = (
-            raw_payload.get("metrics")
-            if isinstance(raw_payload.get("metrics"), dict)
-            else {}
-        )
-        summary_payload = (
-            raw_payload.get("summary")
-            if isinstance(raw_payload.get("summary"), dict)
-            else {}
-        )
-        note = (
-            _extract_optional_str(raw_payload, "note")
-            or _extract_optional_str(summary_payload, "note")
-            or ""
-        )
-        sample_size = _extract_optional_int(raw_payload, "sample_size", "sampleSize")
-        if sample_size is None:
-            sample_size = _extract_optional_int(metrics_payload, "sample_size", "sampleSize")
-        winner_flip_rate = _extract_optional_float(
-            raw_payload,
-            "winner_flip_rate",
-            "winnerFlipRate",
-        )
-        if winner_flip_rate is None:
-            winner_flip_rate = _extract_optional_float(
-                metrics_payload,
-                "winner_flip_rate",
-                "winnerFlipRate",
+        raw_payload = await _read_json_object_or_raise_422(request=request)
+        return await _run_fairness_route_guard(
+            build_fairness_shadow_upsert_payload_v3(
+                raw_payload=raw_payload,
+                extract_optional_int=_extract_optional_int,
+                extract_optional_float=_extract_optional_float,
+                extract_optional_str=_extract_optional_str,
+                extract_optional_bool=_extract_optional_bool,
+                extract_optional_datetime=_extract_optional_datetime,
+                list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+                list_fairness_shadow_runs=_list_fairness_shadow_runs,
+                upsert_fairness_shadow_run=_upsert_fairness_shadow_run,
+                upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
+                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                serialize_alert_item=_serialize_alert_item,
+                serialize_fairness_shadow_run=_serialize_fairness_shadow_run,
             )
-        score_shift_delta = _extract_optional_float(
-            raw_payload,
-            "score_shift_delta",
-            "scoreShiftDelta",
         )
-        if score_shift_delta is None:
-            score_shift_delta = _extract_optional_float(
-                metrics_payload,
-                "score_shift_delta",
-                "scoreShiftDelta",
-            )
-        review_required_delta = _extract_optional_float(
-            raw_payload,
-            "review_required_delta",
-            "reviewRequiredDelta",
-        )
-        if review_required_delta is None:
-            review_required_delta = _extract_optional_float(
-                metrics_payload,
-                "review_required_delta",
-                "reviewRequiredDelta",
-            )
-
-        winner_flip_rate_max = _extract_optional_float(
-            raw_payload,
-            "winner_flip_rate_max",
-            "winnerFlipRateMax",
-        )
-        if winner_flip_rate_max is None:
-            winner_flip_rate_max = _extract_optional_float(
-                thresholds_payload,
-                "winner_flip_rate_max",
-                "winnerFlipRateMax",
-            )
-        score_shift_delta_max = _extract_optional_float(
-            raw_payload,
-            "score_shift_delta_max",
-            "scoreShiftDeltaMax",
-        )
-        if score_shift_delta_max is None:
-            score_shift_delta_max = _extract_optional_float(
-                thresholds_payload,
-                "score_shift_delta_max",
-                "scoreShiftDeltaMax",
-            )
-        review_required_delta_max = _extract_optional_float(
-            raw_payload,
-            "review_required_delta_max",
-            "reviewRequiredDeltaMax",
-        )
-        if review_required_delta_max is None:
-            review_required_delta_max = _extract_optional_float(
-                thresholds_payload,
-                "review_required_delta_max",
-                "reviewRequiredDeltaMax",
-            )
-
-        if benchmark_run_id is None:
-            benchmark_runs = await _list_fairness_benchmark_runs(
-                policy_version=policy_version,
-                limit=1,
-            )
-            benchmark_run_id = benchmark_runs[0].run_id if benchmark_runs else None
-
-        breaches: list[str] = []
-        if (
-            winner_flip_rate_max is not None
-            and winner_flip_rate is not None
-            and winner_flip_rate > winner_flip_rate_max
-        ):
-            breaches.append("winner_flip_rate")
-        if (
-            score_shift_delta_max is not None
-            and score_shift_delta is not None
-            and score_shift_delta > score_shift_delta_max
-        ):
-            breaches.append("score_shift_delta")
-        if (
-            review_required_delta_max is not None
-            and review_required_delta is not None
-            and review_required_delta > review_required_delta_max
-        ):
-            breaches.append("review_required_delta")
-
-        has_breach = bool(breaches)
-        needs_remediation = bool(
-            _extract_optional_bool(raw_payload, "needs_remediation", "needsRemediation")
-        ) or has_breach or threshold_decision == "violated"
-        needs_real_env_reconfirm_override = _extract_optional_bool(
-            raw_payload,
-            "needs_real_env_reconfirm",
-            "needsRealEnvReconfirm",
-        )
-        needs_real_env_reconfirm = (
-            bool(needs_real_env_reconfirm_override)
-            if needs_real_env_reconfirm_override is not None
-            else environment_mode != "real"
-        )
-        reported_at = _extract_optional_datetime(raw_payload, "reported_at", "reportedAt")
-        source = _extract_optional_str(raw_payload, "source") or "manual"
-        reported_by = _extract_optional_str(raw_payload, "reported_by", "reportedBy") or "system"
-
-        normalized_thresholds = dict(thresholds_payload)
-        normalized_thresholds["winnerFlipRateMax"] = winner_flip_rate_max
-        normalized_thresholds["scoreShiftDeltaMax"] = score_shift_delta_max
-        normalized_thresholds["reviewRequiredDeltaMax"] = review_required_delta_max
-        normalized_thresholds = {
-            key: value for key, value in normalized_thresholds.items() if value is not None
-        }
-
-        normalized_metrics = dict(metrics_payload)
-        normalized_metrics["sampleSize"] = sample_size
-        normalized_metrics["winnerFlipRate"] = winner_flip_rate
-        normalized_metrics["scoreShiftDelta"] = score_shift_delta
-        normalized_metrics["reviewRequiredDelta"] = review_required_delta
-        normalized_metrics = {
-            key: value for key, value in normalized_metrics.items() if value is not None
-        }
-
-        normalized_summary = dict(summary_payload)
-        if note:
-            normalized_summary["note"] = note
-        normalized_summary["hasBreach"] = has_breach
-        normalized_summary["breaches"] = breaches
-        normalized_summary["benchmarkRunId"] = benchmark_run_id
-
-        row = await _upsert_fairness_shadow_run(
-            run_id=run_id,
-            policy_version=policy_version,
-            benchmark_run_id=benchmark_run_id,
-            environment_mode=environment_mode,
-            status=status,
-            threshold_decision=threshold_decision,
-            needs_real_env_reconfirm=needs_real_env_reconfirm,
-            needs_remediation=needs_remediation,
-            sample_size=sample_size,
-            winner_flip_rate=winner_flip_rate,
-            score_shift_delta=score_shift_delta,
-            review_required_delta=review_required_delta,
-            thresholds=normalized_thresholds,
-            metrics=normalized_metrics,
-            summary=normalized_summary,
-            source=source,
-            reported_by=reported_by,
-            reported_at=reported_at,
-        )
-
-        alert_item: dict[str, Any] | None = None
-        if has_breach:
-            alert = runtime.trace_store.upsert_audit_alert(
-                job_id=0,
-                scope_id=1,
-                trace_id=f"fairness-shadow:{run_id}",
-                alert_type="fairness_shadow_threshold_violation",
-                severity="warning",
-                title="AI Judge Fairness Shadow Drift",
-                message=(
-                    f"fairness shadow run breached: run_id={run_id}; "
-                    f"breaches={','.join(breaches)}"
-                ),
-                details={
-                    "runId": run_id,
-                    "policyVersion": policy_version,
-                    "benchmarkRunId": benchmark_run_id,
-                    "environmentMode": environment_mode,
-                    "status": status,
-                    "thresholdDecision": threshold_decision,
-                    "metrics": normalized_metrics,
-                    "thresholds": normalized_thresholds,
-                    "breaches": breaches,
-                },
-            )
-            await _sync_audit_alert_to_facts(alert=alert)
-            alert_item = _serialize_alert_item(alert)
-
-        return {
-            "ok": True,
-            "item": _serialize_fairness_shadow_run(row),
-            "breaches": breaches,
-            "alert": alert_item,
-        }
 
     @app.get("/internal/judge/fairness/shadow-runs")
     async def list_judge_fairness_shadow_runs(
@@ -11822,45 +10798,17 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_policy_version = (
-            str(policy_version or "").strip() if policy_version is not None else None
+        return await _run_fairness_route_guard(
+            build_fairness_shadow_list_payload_v3(
+                policy_version=policy_version,
+                benchmark_run_id=benchmark_run_id,
+                environment_mode=environment_mode,
+                status=status,
+                limit=limit,
+                list_fairness_shadow_runs=_list_fairness_shadow_runs,
+                serialize_fairness_shadow_run=_serialize_fairness_shadow_run,
+            )
         )
-        if normalized_policy_version == "":
-            normalized_policy_version = None
-        normalized_benchmark_run_id = (
-            str(benchmark_run_id or "").strip() if benchmark_run_id is not None else None
-        )
-        if normalized_benchmark_run_id == "":
-            normalized_benchmark_run_id = None
-        normalized_environment_mode = _normalize_fairness_environment_mode(
-            environment_mode,
-            strict=True,
-        )
-        if environment_mode is not None and normalized_environment_mode is None:
-            raise HTTPException(status_code=422, detail="invalid_environment_mode")
-        normalized_status = _normalize_fairness_status(status, strict=True)
-        if status is not None and normalized_status is None:
-            raise HTTPException(status_code=422, detail="invalid_fairness_status")
-
-        rows = await _list_fairness_shadow_runs(
-            policy_version=normalized_policy_version,
-            benchmark_run_id=normalized_benchmark_run_id,
-            environment_mode=normalized_environment_mode,
-            status=normalized_status,
-            limit=limit,
-        )
-        return {
-            "count": len(rows),
-            "items": [_serialize_fairness_shadow_run(row) for row in rows],
-            "filters": {
-                "policyVersion": normalized_policy_version,
-                "benchmarkRunId": normalized_benchmark_run_id,
-                "environmentMode": normalized_environment_mode,
-                "status": normalized_status,
-                "limit": limit,
-            },
-        }
-
     @app.get("/internal/judge/fairness/cases/{case_id}")
     async def get_judge_case_fairness(
         case_id: int,
@@ -11868,72 +10816,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         dispatch_type: str = Query(default="auto"),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="fairness_case_not_found",
-            missing_report_detail="fairness_report_payload_missing",
-        )
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        workflow_events = (
-            await _workflow_list_events(job_id=case_id)
-            if workflow_job is not None
-            else []
-        )
-        report_payload = (
-            context["reportPayload"] if isinstance(context["reportPayload"], dict) else {}
-        )
-        judge_trace = (
-            report_payload.get("judgeTrace")
-            if isinstance(report_payload.get("judgeTrace"), dict)
-            else {}
-        )
-        policy_version = (
-            str((judge_trace.get("policyRegistry") or {}).get("version") or "").strip()
-            if isinstance(judge_trace.get("policyRegistry"), dict)
-            else ""
-        )
-        latest_run = None
-        if policy_version:
-            runs = await _list_fairness_benchmark_runs(
-                policy_version=policy_version,
-                limit=1,
+        return await _run_fairness_route_guard(
+            build_fairness_case_detail_payload_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                workflow_get_job=_workflow_get_job,
+                workflow_list_events=_workflow_list_events,
+                list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+                list_fairness_shadow_runs=_list_fairness_shadow_runs,
+                build_case_fairness_item=_build_case_fairness_item,
+                validate_case_fairness_detail_contract=_validate_case_fairness_detail_contract,
             )
-            latest_run = runs[0] if runs else None
-        latest_shadow_run = None
-        if policy_version:
-            shadow_runs = await _list_fairness_shadow_runs(
-                policy_version=policy_version,
-                limit=1,
-            )
-            latest_shadow_run = shadow_runs[0] if shadow_runs else None
-
-        item = _build_case_fairness_item(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=str(context["traceId"] or ""),
-            workflow_job=workflow_job,
-            workflow_events=workflow_events,
-            report_payload=report_payload,
-            latest_run=latest_run,
-            latest_shadow_run=latest_shadow_run,
         )
-        payload = {
-            "caseId": case_id,
-            "dispatchType": context["dispatchType"],
-            "item": item,
-        }
-        try:
-            _validate_case_fairness_detail_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "fairness_case_detail_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/fairness/cases")
     async def list_judge_case_fairness(
@@ -11956,223 +10851,44 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_status = _normalize_workflow_status(status)
-        if status is not None and normalized_status is None:
-            raise HTTPException(status_code=422, detail="invalid_workflow_status")
-        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
-            raise HTTPException(status_code=422, detail="invalid_workflow_status")
-        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or None
-        if normalized_dispatch_type not in {None, "phase", "final"}:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-        normalized_winner = str(winner or "").strip().lower() or None
-        if normalized_winner not in {None, "pro", "con", "draw"}:
-            raise HTTPException(status_code=422, detail="invalid_winner")
-        normalized_policy_version = (
-            str(policy_version or "").strip() if policy_version is not None else None
+        return await _run_fairness_route_guard(
+            build_fairness_case_list_payload_v3(
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                policy_version=policy_version,
+                has_drift_breach=has_drift_breach,
+                has_threshold_breach=has_threshold_breach,
+                has_shadow_breach=has_shadow_breach,
+                has_open_review=has_open_review,
+                gate_conclusion=gate_conclusion,
+                challenge_state=challenge_state,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                review_required=review_required,
+                panel_high_disagreement=panel_high_disagreement,
+                offset=offset,
+                limit=limit,
+                normalize_workflow_status=_normalize_workflow_status,
+                workflow_statuses=WORKFLOW_STATUSES,
+                normalize_case_fairness_sort_by=_normalize_case_fairness_sort_by,
+                case_fairness_sort_fields=CASE_FAIRNESS_SORT_FIELDS,
+                normalize_case_fairness_sort_order=_normalize_case_fairness_sort_order,
+                normalize_case_fairness_gate_conclusion=_normalize_case_fairness_gate_conclusion,
+                case_fairness_gate_conclusions=CASE_FAIRNESS_GATE_CONCLUSIONS,
+                normalize_case_fairness_challenge_state=_normalize_case_fairness_challenge_state,
+                case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
+                workflow_list_jobs=_workflow_list_jobs,
+                get_trace=runtime.trace_store.get_trace,
+                workflow_list_events=_workflow_list_events,
+                list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+                list_fairness_shadow_runs=_list_fairness_shadow_runs,
+                build_case_fairness_item=_build_case_fairness_item,
+                build_case_fairness_sort_key=_build_case_fairness_sort_key,
+                build_case_fairness_aggregations=_build_case_fairness_aggregations,
+                validate_case_fairness_list_contract=_validate_case_fairness_list_contract,
+            )
         )
-        if normalized_policy_version == "":
-            normalized_policy_version = None
-        normalized_sort_by = _normalize_case_fairness_sort_by(sort_by)
-        if normalized_sort_by not in CASE_FAIRNESS_SORT_FIELDS:
-            raise HTTPException(status_code=422, detail="invalid_sort_by")
-        normalized_sort_order = _normalize_case_fairness_sort_order(sort_order)
-        if normalized_sort_order not in {"asc", "desc"}:
-            raise HTTPException(status_code=422, detail="invalid_sort_order")
-        normalized_gate_conclusion = _normalize_case_fairness_gate_conclusion(gate_conclusion)
-        if (
-            normalized_gate_conclusion is not None
-            and normalized_gate_conclusion not in CASE_FAIRNESS_GATE_CONCLUSIONS
-        ):
-            raise HTTPException(status_code=422, detail="invalid_gate_conclusion")
-        normalized_challenge_state = _normalize_case_fairness_challenge_state(challenge_state)
-        if (
-            normalized_challenge_state is not None
-            and normalized_challenge_state not in CASE_FAIRNESS_CHALLENGE_STATES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_challenge_state")
-
-        jobs = await _workflow_list_jobs(
-            status=normalized_status,
-            dispatch_type=normalized_dispatch_type,
-            limit=max(limit, limit + offset),
-        )
-        benchmark_cache: dict[str, FactFairnessBenchmarkRun | None] = {}
-        shadow_cache: dict[str, FactFairnessShadowRun | None] = {}
-        items: list[dict[str, Any]] = []
-        for job in jobs:
-            trace = runtime.trace_store.get_trace(job.job_id)
-            report_summary = (
-                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-            )
-            report_payload = (
-                report_summary.get("payload")
-                if isinstance(report_summary.get("payload"), dict)
-                else {}
-            )
-            if not report_payload:
-                continue
-            workflow_events = await _workflow_list_events(job_id=job.job_id)
-            trace_id = (
-                str(
-                    (trace.trace_id if trace is not None else "")
-                    or report_summary.get("traceId")
-                    or ""
-                ).strip()
-            )
-            dispatch_type_token = (
-                str(report_summary.get("dispatchType") or "").strip().lower()
-                or job.dispatch_type
-            )
-            judge_trace = (
-                report_payload.get("judgeTrace")
-                if isinstance(report_payload.get("judgeTrace"), dict)
-                else {}
-            )
-            policy_version = (
-                str((judge_trace.get("policyRegistry") or {}).get("version") or "").strip()
-                if isinstance(judge_trace.get("policyRegistry"), dict)
-                else ""
-            )
-            latest_run: FactFairnessBenchmarkRun | None = None
-            if policy_version:
-                if policy_version not in benchmark_cache:
-                    runs = await _list_fairness_benchmark_runs(
-                        policy_version=policy_version,
-                        limit=1,
-                    )
-                    benchmark_cache[policy_version] = runs[0] if runs else None
-                latest_run = benchmark_cache.get(policy_version)
-            latest_shadow_run: FactFairnessShadowRun | None = None
-            if policy_version:
-                if policy_version not in shadow_cache:
-                    shadow_runs = await _list_fairness_shadow_runs(
-                        policy_version=policy_version,
-                        limit=1,
-                    )
-                    shadow_cache[policy_version] = shadow_runs[0] if shadow_runs else None
-                latest_shadow_run = shadow_cache.get(policy_version)
-            item = _build_case_fairness_item(
-                case_id=job.job_id,
-                dispatch_type=dispatch_type_token,
-                trace_id=trace_id,
-                workflow_job=job,
-                workflow_events=workflow_events,
-                report_payload=report_payload,
-                latest_run=latest_run,
-                latest_shadow_run=latest_shadow_run,
-            )
-            if normalized_winner is not None and item.get("winner") != normalized_winner:
-                continue
-            drift_summary = (
-                item.get("driftSummary")
-                if isinstance(item.get("driftSummary"), dict)
-                else {}
-            )
-            if (
-                normalized_policy_version is not None
-                and str(drift_summary.get("policyVersion") or "").strip()
-                != normalized_policy_version
-            ):
-                continue
-            if (
-                has_drift_breach is not None
-                and bool(drift_summary.get("hasDriftBreach")) != has_drift_breach
-            ):
-                continue
-            if (
-                has_threshold_breach is not None
-                and bool(drift_summary.get("hasThresholdBreach")) != has_threshold_breach
-            ):
-                continue
-            shadow_summary = (
-                item.get("shadowSummary")
-                if isinstance(item.get("shadowSummary"), dict)
-                else {}
-            )
-            if (
-                has_shadow_breach is not None
-                and bool(shadow_summary.get("hasShadowBreach")) != has_shadow_breach
-            ):
-                continue
-            challenge_link = (
-                item.get("challengeLink")
-                if isinstance(item.get("challengeLink"), dict)
-                else {}
-            )
-            if (
-                has_open_review is not None
-                and bool(challenge_link.get("hasOpenReview")) != has_open_review
-            ):
-                continue
-            if (
-                normalized_gate_conclusion is not None
-                and str(item.get("gateConclusion") or "").strip().lower()
-                != normalized_gate_conclusion
-            ):
-                continue
-            if review_required is not None and bool(item.get("reviewRequired")) != review_required:
-                continue
-            if panel_high_disagreement is not None and bool(
-                ((item.get("panelDisagreement") or {}).get("high"))
-            ) != panel_high_disagreement:
-                continue
-            if normalized_challenge_state is not None:
-                latest_challenge = (
-                    challenge_link.get("latest")
-                    if isinstance(challenge_link, dict)
-                    else None
-                )
-                latest_state = (
-                    str(latest_challenge.get("state") or "").strip()
-                    if isinstance(latest_challenge, dict)
-                    else ""
-                )
-                if latest_state != normalized_challenge_state:
-                    continue
-            items.append(item)
-
-        items.sort(
-            key=lambda row: _build_case_fairness_sort_key(item=row, sort_by=normalized_sort_by),
-            reverse=(normalized_sort_order == "desc"),
-        )
-        total_count = len(items)
-        aggregations = _build_case_fairness_aggregations(items)
-        page_items = items[offset : offset + limit]
-        payload = {
-            "count": total_count,
-            "returned": len(page_items),
-            "items": page_items,
-            "aggregations": aggregations,
-            "filters": {
-                "status": normalized_status,
-                "dispatchType": normalized_dispatch_type,
-                "winner": normalized_winner,
-                "policyVersion": normalized_policy_version,
-                "hasDriftBreach": has_drift_breach,
-                "hasThresholdBreach": has_threshold_breach,
-                "hasShadowBreach": has_shadow_breach,
-                "hasOpenReview": has_open_review,
-                "gateConclusion": normalized_gate_conclusion,
-                "challengeState": normalized_challenge_state,
-                "sortBy": normalized_sort_by,
-                "sortOrder": normalized_sort_order,
-                "reviewRequired": review_required,
-                "panelHighDisagreement": panel_high_disagreement,
-                "offset": offset,
-                "limit": limit,
-            },
-        }
-        try:
-            _validate_case_fairness_list_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "fairness_case_list_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/fairness/dashboard")
     async def get_judge_fairness_dashboard(
@@ -12187,114 +10903,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         case_scan_limit: int = Query(default=200, ge=20, le=1000),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        collected_items, total_count = await collect_fairness_case_items_v3(
-            fetch_page=lambda offset, limit: list_judge_case_fairness(
+        return await _run_fairness_route_guard(
+            build_fairness_dashboard_payload_v3(
                 x_ai_internal_key=x_ai_internal_key,
                 status=status,
                 dispatch_type=dispatch_type,
                 winner=winner,
                 policy_version=policy_version,
-                has_drift_breach=None,
-                has_threshold_breach=None,
-                has_shadow_breach=None,
-                has_open_review=None,
-                gate_conclusion=None,
                 challenge_state=challenge_state,
-                sort_by="updated_at",
-                sort_order="desc",
-                review_required=None,
-                panel_high_disagreement=None,
-                offset=offset,
-                limit=limit,
-            ),
-            scan_limit=case_scan_limit,
-            page_limit=200,
+                window_days=window_days,
+                top_limit=top_limit,
+                case_scan_limit=case_scan_limit,
+                collect_fairness_case_items=collect_fairness_case_items_v3,
+                list_judge_case_fairness=list_judge_case_fairness,
+                build_case_fairness_aggregations=_build_case_fairness_aggregations,
+                build_fairness_dashboard_case_trends=_build_fairness_dashboard_case_trends,
+                build_fairness_dashboard_run_trends=_build_fairness_dashboard_run_trends,
+                build_fairness_dashboard_top_risk_cases=_build_fairness_dashboard_top_risk_cases,
+                list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+                list_fairness_shadow_runs=_list_fairness_shadow_runs,
+                validate_fairness_dashboard_contract=_validate_fairness_dashboard_contract,
+            )
         )
-
-        aggregations = _build_case_fairness_aggregations(collected_items)
-        gate_distribution = (
-            aggregations.get("gateConclusionCounts")
-            if isinstance(aggregations.get("gateConclusionCounts"), dict)
-            else {}
-        )
-        case_trends = _build_fairness_dashboard_case_trends(
-            items=collected_items,
-            window_days=window_days,
-        )
-        normalized_policy_version = str(policy_version or "").strip() or None
-        benchmark_runs = await _list_fairness_benchmark_runs(
-            policy_version=normalized_policy_version,
-            limit=200,
-        )
-        shadow_runs = await _list_fairness_shadow_runs(
-            policy_version=normalized_policy_version,
-            limit=200,
-        )
-        run_trends = _build_fairness_dashboard_run_trends(
-            benchmark_runs=benchmark_runs,
-            shadow_runs=shadow_runs,
-            window_days=window_days,
-        )
-        top_risk_cases = _build_fairness_dashboard_top_risk_cases(
-            items=collected_items,
-            top_limit=top_limit,
-        )
-        generated_at = datetime.now(timezone.utc).isoformat()
-        total_matched = int(total_count or 0)
-        scanned_count = len(collected_items)
-        payload = {
-            "generatedAt": generated_at,
-            "overview": {
-                "totalMatched": total_matched,
-                "scannedCases": scanned_count,
-                "scanTruncated": scanned_count < total_matched,
-                "reviewRequiredCount": int(aggregations.get("reviewRequiredCount") or 0),
-                "openReviewCount": int(aggregations.get("openReviewCount") or 0),
-                "panelHighDisagreementCount": int(
-                    aggregations.get("panelHighDisagreementCount") or 0
-                ),
-                "driftBreachCount": int(aggregations.get("driftBreachCount") or 0),
-                "thresholdBreachCount": int(aggregations.get("thresholdBreachCount") or 0),
-                "shadowBreachCount": int(aggregations.get("shadowBreachCount") or 0),
-            },
-            "gateDistribution": {
-                "pass_through": int(gate_distribution.get("pass_through") or 0),
-                "blocked_to_draw": int(gate_distribution.get("blocked_to_draw") or 0),
-                "unknown": int(gate_distribution.get("unknown") or 0),
-            },
-            "trends": {
-                "windowDays": int(window_days),
-                "caseDaily": case_trends,
-                "benchmarkRuns": run_trends.get("benchmarkRuns")
-                if isinstance(run_trends.get("benchmarkRuns"), list)
-                else [],
-                "shadowRuns": run_trends.get("shadowRuns")
-                if isinstance(run_trends.get("shadowRuns"), list)
-                else [],
-            },
-            "topRiskCases": top_risk_cases,
-            "filters": {
-                "status": status,
-                "dispatchType": dispatch_type,
-                "winner": winner,
-                "policyVersion": normalized_policy_version,
-                "challengeState": challenge_state,
-                "windowDays": int(window_days),
-                "topLimit": int(top_limit),
-                "caseScanLimit": int(case_scan_limit),
-            },
-        }
-        try:
-            _validate_fairness_dashboard_contract(payload)
-        except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "fairness_dashboard_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return payload
 
     @app.get("/internal/judge/fairness/calibration-pack")
     async def get_judge_fairness_calibration_pack(
@@ -12310,142 +10940,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         shadow_limit: int = Query(default=200, ge=1, le=500),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_policy_version = str(policy_version or "").strip() or None
-        normalized_benchmark_limit = max(1, min(int(benchmark_limit), 500))
-        normalized_shadow_limit = max(1, min(int(shadow_limit), 500))
-        normalized_risk_limit = max(1, min(int(risk_limit), 200))
-        collected_items, total_count = await collect_fairness_case_items_v3(
-            fetch_page=lambda offset, limit: list_judge_case_fairness(
-                x_ai_internal_key=x_ai_internal_key,
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                policy_version=normalized_policy_version,
-                has_drift_breach=None,
-                has_threshold_breach=None,
-                has_shadow_breach=None,
-                has_open_review=None,
-                gate_conclusion=None,
-                challenge_state=challenge_state,
-                sort_by="updated_at",
-                sort_order="desc",
-                review_required=None,
-                panel_high_disagreement=None,
-                offset=offset,
-                limit=limit,
-            ),
-            scan_limit=case_scan_limit,
-            page_limit=200,
+        return await build_fairness_calibration_pack_payload_v3(
+            x_ai_internal_key=x_ai_internal_key,
+            dispatch_type=dispatch_type,
+            status=status,
+            winner=winner,
+            policy_version=policy_version,
+            challenge_state=challenge_state,
+            case_scan_limit=case_scan_limit,
+            risk_limit=risk_limit,
+            benchmark_limit=benchmark_limit,
+            shadow_limit=shadow_limit,
+            collect_fairness_case_items=collect_fairness_case_items_v3,
+            list_judge_case_fairness=list_judge_case_fairness,
+            list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+            list_fairness_shadow_runs=_list_fairness_shadow_runs,
+            build_fairness_dashboard_top_risk_cases=_build_fairness_dashboard_top_risk_cases,
+            build_fairness_calibration_threshold_suggestions=_build_fairness_calibration_threshold_suggestions,
+            build_fairness_calibration_drift_summary=_build_fairness_calibration_drift_summary,
+            build_fairness_calibration_risk_items=_build_fairness_calibration_risk_items,
+            build_fairness_calibration_on_env_input_template=_build_fairness_calibration_on_env_input_template,
         )
-
-        benchmark_runs = await _list_fairness_benchmark_runs(
-            policy_version=normalized_policy_version,
-            limit=normalized_benchmark_limit,
-        )
-        shadow_runs = await _list_fairness_shadow_runs(
-            policy_version=normalized_policy_version,
-            limit=normalized_shadow_limit,
-        )
-
-        sorted_benchmark_runs = sorted(
-            benchmark_runs,
-            key=lambda row: (
-                row.reported_at.isoformat() if row.reported_at is not None else ""
-            ),
-            reverse=True,
-        )
-        sorted_shadow_runs = sorted(
-            shadow_runs,
-            key=lambda row: (
-                row.reported_at.isoformat() if row.reported_at is not None else ""
-            ),
-            reverse=True,
-        )
-        latest_benchmark_run = (
-            sorted_benchmark_runs[0] if sorted_benchmark_runs else None
-        )
-        latest_shadow_run = sorted_shadow_runs[0] if sorted_shadow_runs else None
-
-        top_risk_cases = _build_fairness_dashboard_top_risk_cases(
-            items=collected_items,
-            top_limit=normalized_risk_limit,
-        )
-        threshold_suggestions = _build_fairness_calibration_threshold_suggestions(
-            benchmark_runs=sorted_benchmark_runs,
-            shadow_runs=sorted_shadow_runs,
-        )
-        drift_summary = _build_fairness_calibration_drift_summary(
-            latest_benchmark_run=latest_benchmark_run,
-            latest_shadow_run=latest_shadow_run,
-        )
-        risk_items = _build_fairness_calibration_risk_items(
-            benchmark_runs=sorted_benchmark_runs,
-            shadow_runs=sorted_shadow_runs,
-            top_risk_cases=top_risk_cases,
-            risk_limit=normalized_risk_limit,
-        )
-
-        high_risk_count = 0
-        benchmark_threshold_violation_count = 0
-        shadow_threshold_violation_count = 0
-        drift_breach_count = 0
-        case_risk_count = 0
-        for item in risk_items:
-            if not isinstance(item, dict):
-                continue
-            risk_type = str(item.get("riskType") or "").strip()
-            severity = str(item.get("severity") or "").strip().lower()
-            if severity == "high":
-                high_risk_count += 1
-            if risk_type == "benchmark_threshold_violation":
-                benchmark_threshold_violation_count += 1
-            elif risk_type == "shadow_threshold_violation":
-                shadow_threshold_violation_count += 1
-            elif risk_type == "benchmark_drift_breach":
-                drift_breach_count += 1
-            elif risk_type == "case_risk_rank":
-                case_risk_count += 1
-
-        total_matched = int(total_count or 0)
-        scanned_cases = len(collected_items)
-        return {
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "overview": {
-                "policyVersion": normalized_policy_version,
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "totalMatched": total_matched,
-                "scannedCases": scanned_cases,
-                "scanTruncated": scanned_cases < total_matched,
-                "benchmarkRunCount": len(sorted_benchmark_runs),
-                "shadowRunCount": len(sorted_shadow_runs),
-                "latestBenchmarkRunId": (
-                    latest_benchmark_run.run_id if latest_benchmark_run is not None else None
-                ),
-                "latestShadowRunId": (
-                    latest_shadow_run.run_id if latest_shadow_run is not None else None
-                ),
-                "highRiskCount": high_risk_count,
-                "benchmarkThresholdViolationCount": benchmark_threshold_violation_count,
-                "shadowThresholdViolationCount": shadow_threshold_violation_count,
-                "driftBreachCount": drift_breach_count,
-                "caseRiskCount": case_risk_count,
-            },
-            "thresholdSuggestions": threshold_suggestions,
-            "driftSummary": drift_summary,
-            "riskItems": risk_items,
-            "onEnvInputTemplate": _build_fairness_calibration_on_env_input_template(),
-            "filters": {
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "status": str(status or "").strip() or None,
-                "winner": str(winner or "").strip().lower() or None,
-                "policyVersion": normalized_policy_version,
-                "challengeState": str(challenge_state or "").strip() or None,
-                "caseScanLimit": int(case_scan_limit),
-                "riskLimit": normalized_risk_limit,
-                "benchmarkLimit": normalized_benchmark_limit,
-                "shadowLimit": normalized_shadow_limit,
-            },
-        }
 
     @app.get("/internal/judge/fairness/policy-calibration-advisor")
     async def get_judge_fairness_policy_calibration_advisor(
@@ -12461,169 +10976,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         shadow_limit: int = Query(default=200, ge=1, le=500),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_policy_version = str(policy_version or "").strip() or None
-        normalized_benchmark_limit = max(1, min(int(benchmark_limit), 500))
-        normalized_shadow_limit = max(1, min(int(shadow_limit), 500))
-        normalized_risk_limit = max(1, min(int(risk_limit), 200))
-        collected_items, total_count = await collect_fairness_case_items_v3(
-            fetch_page=lambda offset, limit: list_judge_case_fairness(
-                x_ai_internal_key=x_ai_internal_key,
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                policy_version=normalized_policy_version,
-                has_drift_breach=None,
-                has_threshold_breach=None,
-                has_shadow_breach=None,
-                has_open_review=None,
-                gate_conclusion=None,
-                challenge_state=challenge_state,
-                sort_by="updated_at",
-                sort_order="desc",
-                review_required=None,
-                panel_high_disagreement=None,
-                offset=offset,
-                limit=limit,
-            ),
-            scan_limit=case_scan_limit,
-            page_limit=200,
+        return await build_fairness_policy_calibration_advisor_payload_v3(
+            x_ai_internal_key=x_ai_internal_key,
+            dispatch_type=dispatch_type,
+            status=status,
+            winner=winner,
+            policy_version=policy_version,
+            challenge_state=challenge_state,
+            case_scan_limit=case_scan_limit,
+            risk_limit=risk_limit,
+            benchmark_limit=benchmark_limit,
+            shadow_limit=shadow_limit,
+            collect_fairness_case_items=collect_fairness_case_items_v3,
+            list_judge_case_fairness=list_judge_case_fairness,
+            list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
+            list_fairness_shadow_runs=_list_fairness_shadow_runs,
+            build_fairness_dashboard_top_risk_cases=_build_fairness_dashboard_top_risk_cases,
+            build_fairness_calibration_threshold_suggestions=_build_fairness_calibration_threshold_suggestions,
+            build_fairness_calibration_drift_summary=_build_fairness_calibration_drift_summary,
+            build_fairness_calibration_risk_items=_build_fairness_calibration_risk_items,
+            evaluate_policy_release_fairness_gate=_evaluate_policy_release_fairness_gate,
+            build_fairness_policy_calibration_recommended_actions=_build_fairness_policy_calibration_recommended_actions,
         )
-
-        benchmark_runs = await _list_fairness_benchmark_runs(
-            policy_version=normalized_policy_version,
-            limit=normalized_benchmark_limit,
-        )
-        shadow_runs = await _list_fairness_shadow_runs(
-            policy_version=normalized_policy_version,
-            limit=normalized_shadow_limit,
-        )
-        sorted_benchmark_runs = sorted(
-            benchmark_runs,
-            key=lambda row: (
-                row.reported_at.isoformat() if row.reported_at is not None else ""
-            ),
-            reverse=True,
-        )
-        sorted_shadow_runs = sorted(
-            shadow_runs,
-            key=lambda row: (
-                row.reported_at.isoformat() if row.reported_at is not None else ""
-            ),
-            reverse=True,
-        )
-        latest_benchmark_run = (
-            sorted_benchmark_runs[0] if sorted_benchmark_runs else None
-        )
-        latest_shadow_run = sorted_shadow_runs[0] if sorted_shadow_runs else None
-        inferred_policy_version = (
-            normalized_policy_version
-            or (
-                latest_benchmark_run.policy_version
-                if latest_benchmark_run is not None
-                else None
-            )
-            or (
-                latest_shadow_run.policy_version
-                if latest_shadow_run is not None
-                else None
-            )
-        )
-
-        top_risk_cases = _build_fairness_dashboard_top_risk_cases(
-            items=collected_items,
-            top_limit=normalized_risk_limit,
-        )
-        threshold_suggestions = _build_fairness_calibration_threshold_suggestions(
-            benchmark_runs=sorted_benchmark_runs,
-            shadow_runs=sorted_shadow_runs,
-        )
-        drift_summary = _build_fairness_calibration_drift_summary(
-            latest_benchmark_run=latest_benchmark_run,
-            latest_shadow_run=latest_shadow_run,
-        )
-        risk_items = _build_fairness_calibration_risk_items(
-            benchmark_runs=sorted_benchmark_runs,
-            shadow_runs=sorted_shadow_runs,
-            top_risk_cases=top_risk_cases,
-            risk_limit=normalized_risk_limit,
-        )
-        release_gate = (
-            await _evaluate_policy_release_fairness_gate(
-                policy_version=inferred_policy_version,
-            )
-            if inferred_policy_version is not None
-            else {
-                "passed": False,
-                "code": "registry_fairness_gate_no_policy_context",
-                "message": "no policy context for fairness gate evaluation",
-                "source": "benchmark",
-                "benchmarkGatePassed": False,
-                "shadowGateApplied": False,
-                "shadowGatePassed": None,
-                "thresholdDecision": None,
-                "needsRemediation": None,
-                "latestRun": None,
-                "latestShadowRun": None,
-            }
-        )
-        recommended_actions = _build_fairness_policy_calibration_recommended_actions(
-            release_gate=release_gate,
-            policy_version=inferred_policy_version,
-            risk_items=risk_items,
-        )
-
-        high_risk_count = sum(
-            1
-            for item in risk_items
-            if isinstance(item, dict)
-            and str(item.get("severity") or "").strip().lower() == "high"
-        )
-        total_matched = int(total_count or 0)
-        scanned_cases = len(collected_items)
-        return {
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "overview": {
-                "policyVersion": inferred_policy_version,
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "totalMatched": total_matched,
-                "scannedCases": scanned_cases,
-                "scanTruncated": scanned_cases < total_matched,
-                "benchmarkRunCount": len(sorted_benchmark_runs),
-                "shadowRunCount": len(sorted_shadow_runs),
-                "latestBenchmarkRunId": (
-                    latest_benchmark_run.run_id if latest_benchmark_run is not None else None
-                ),
-                "latestShadowRunId": (
-                    latest_shadow_run.run_id if latest_shadow_run is not None else None
-                ),
-                "highRiskCount": high_risk_count,
-                "releaseGatePassed": bool(release_gate.get("passed")),
-                "releaseGateCode": str(release_gate.get("code") or "").strip() or None,
-            },
-            "thresholdSuggestions": threshold_suggestions,
-            "driftSummary": drift_summary,
-            "releaseGate": release_gate,
-            "recommendedActions": recommended_actions,
-            "riskItems": risk_items,
-            "filters": {
-                "dispatchType": str(dispatch_type or "").strip().lower() or None,
-                "status": str(status or "").strip() or None,
-                "winner": str(winner or "").strip().lower() or None,
-                "policyVersion": normalized_policy_version,
-                "effectivePolicyVersion": inferred_policy_version,
-                "challengeState": str(challenge_state or "").strip() or None,
-                "caseScanLimit": int(case_scan_limit),
-                "riskLimit": normalized_risk_limit,
-                "benchmarkLimit": normalized_benchmark_limit,
-                "shadowLimit": normalized_shadow_limit,
-            },
-            "notes": [
-                (
-                    "recommendedActions are advisory only and do not auto-publish "
-                    "or auto-activate policy versions."
-                ),
-            ],
-        }
 
     @app.get("/internal/judge/ops/read-model/pack")
     async def get_judge_ops_read_model_pack(
@@ -12647,565 +11021,60 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         panel_attention_limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        fairness_dashboard = await get_judge_fairness_dashboard(
-            x_ai_internal_key=x_ai_internal_key,
-            status=None,
-            dispatch_type=dispatch_type,
-            winner=None,
-            policy_version=policy_version,
-            challenge_state=None,
-            window_days=window_days,
-            top_limit=top_limit,
-            case_scan_limit=case_scan_limit,
-        )
-        governance_overview = await get_registry_governance_overview(
-            x_ai_internal_key=x_ai_internal_key,
-            dependency_limit=dependency_limit,
-            usage_preview_limit=usage_preview_limit,
-            release_limit=release_limit,
-            audit_limit=audit_limit,
-        )
-        registry_prompt_tool_governance = await get_registry_prompt_tool_governance(
-            x_ai_internal_key=x_ai_internal_key,
-            dependency_limit=dependency_limit,
-            usage_preview_limit=usage_preview_limit,
-            release_limit=release_limit,
-            audit_limit=audit_limit,
-            risk_limit=calibration_risk_limit,
-        )
-        fairness_calibration_advisor = await get_judge_fairness_policy_calibration_advisor(
-            x_ai_internal_key=x_ai_internal_key,
-            dispatch_type=dispatch_type,
-            status=None,
-            winner=None,
-            policy_version=policy_version,
-            challenge_state=None,
-            case_scan_limit=case_scan_limit,
-            risk_limit=calibration_risk_limit,
-            benchmark_limit=calibration_benchmark_limit,
-            shadow_limit=calibration_shadow_limit,
-        )
-        panel_runtime_readiness = await get_panel_runtime_readiness(
-            x_ai_internal_key=x_ai_internal_key,
-            status=None,
-            dispatch_type=dispatch_type,
-            winner=None,
-            policy_version=policy_version,
-            has_open_review=None,
-            gate_conclusion=None,
-            challenge_state=None,
-            review_required=None,
-            panel_high_disagreement=None,
-            judge_id=None,
-            profile_source=None,
-            profile_id=None,
-            model_strategy=None,
-            strategy_slot=None,
-            domain_slot=None,
-            profile_scan_limit=panel_profile_scan_limit,
-            group_limit=panel_group_limit,
-            attention_limit=panel_attention_limit,
-        )
-        queue_limit = max(1, min(int(top_limit) * 5, 200))
-        courtroom_queue = await list_judge_courtroom_cases(
-            x_ai_internal_key=x_ai_internal_key,
-            status=None,
-            dispatch_type="auto",
-            winner=None,
-            review_required=None,
-            risk_level=None,
-            sla_bucket=None,
-            updated_from=None,
-            updated_to=None,
-            sort_by="risk_score",
-            sort_order="desc",
-            scan_limit=case_scan_limit,
-            offset=0,
-            limit=min(queue_limit, 200),
-        )
-        courtroom_drilldown = await list_judge_courtroom_drilldown_bundle(
-            x_ai_internal_key=x_ai_internal_key,
-            status=None,
-            dispatch_type="auto",
-            winner=None,
-            review_required=None,
-            risk_level=None,
-            sla_bucket=None,
-            updated_from=None,
-            updated_to=None,
-            sort_by="risk_score",
-            sort_order="desc",
-            scan_limit=case_scan_limit,
-            offset=0,
-            limit=min(queue_limit, 200),
-            claim_preview_limit=10,
-            evidence_preview_limit=10,
-            panel_preview_limit=10,
-        )
-        evidence_claim_queue = await list_judge_evidence_claim_ops_queue(
-            x_ai_internal_key=x_ai_internal_key,
-            status=None,
-            dispatch_type="auto",
-            winner=None,
-            review_required=None,
-            risk_level=None,
-            sla_bucket=None,
-            reliability_level=None,
-            has_conflict=None,
-            has_unanswered_claim=None,
-            updated_from=None,
-            updated_to=None,
-            sort_by="risk_score",
-            sort_order="desc",
-            scan_limit=case_scan_limit,
-            offset=0,
-            limit=min(queue_limit, 200),
-        )
-        trust_challenge_queue = await list_judge_trust_challenge_ops_queue(
-            x_ai_internal_key=x_ai_internal_key,
-            status=None,
-            dispatch_type="auto",
-            challenge_state="open",
-            review_state=None,
-            priority_level=None,
-            sla_bucket=None,
-            has_open_alert=None,
-            sort_by="priority_score",
-            sort_order="desc",
-            scan_limit=case_scan_limit,
-            offset=0,
-            limit=min(queue_limit, 200),
-        )
-        review_queue = await list_judge_review_jobs(
-            x_ai_internal_key=x_ai_internal_key,
-            status="review_required",
-            dispatch_type=dispatch_type,
-            risk_level=None,
-            sla_bucket=None,
-            challenge_state=None,
-            trust_review_state=None,
-            unified_priority_level=None,
-            sort_by="risk_score",
-            sort_order="desc",
-            scan_limit=case_scan_limit,
-            limit=queue_limit,
-        )
-        review_trust_priority = await list_judge_review_jobs(
-            x_ai_internal_key=x_ai_internal_key,
-            status="review_required",
-            dispatch_type=dispatch_type,
-            risk_level=None,
-            sla_bucket=None,
-            challenge_state=None,
-            trust_review_state=None,
-            unified_priority_level=None,
-            sort_by="unified_priority_score",
-            sort_order="desc",
-            scan_limit=case_scan_limit,
-            limit=queue_limit,
-        )
-        policy_gate_simulation = await simulate_policy_release_gate(
-            x_ai_internal_key=x_ai_internal_key,
-            policy_version=policy_version,
-            include_all_versions=False,
-            limit=10,
-        )
-
-        courtroom_items: list[dict[str, Any]] = []
-        courtroom_errors: list[dict[str, Any]] = []
-        courtroom_case_ids: list[int] = []
-        judge_workflow_role_nodes_rows: list[list[dict[str, Any]] | None] = []
-        top_risk_cases = (
-            fairness_dashboard.get("topRiskCases")
-            if isinstance(fairness_dashboard.get("topRiskCases"), list)
-            else []
-        )
-        seen_case_ids: set[int] = set()
-        for row in top_risk_cases:
-            if len(courtroom_case_ids) >= int(top_limit):
-                break
-            if not isinstance(row, dict):
-                continue
-            try:
-                case_id = int(row.get("caseId") or 0)
-            except (TypeError, ValueError):
-                continue
-            if case_id <= 0 or case_id in seen_case_ids:
-                continue
-            seen_case_ids.add(case_id)
-            courtroom_case_ids.append(case_id)
-        for case_id in courtroom_case_ids:
-            trace = runtime.trace_store.get_trace(case_id)
-            report_summary = (
-                trace.report_summary
-                if trace is not None and isinstance(trace.report_summary, dict)
-                else {}
-            )
-            role_nodes = report_summary.get("roleNodes")
-            if isinstance(role_nodes, list):
-                judge_workflow_role_nodes_rows.append(
-                    [row for row in role_nodes if isinstance(row, dict)]
-                )
-            else:
-                judge_workflow_role_nodes_rows.append(None)
-            try:
-                courtroom_payload = await get_judge_case_courtroom_read_model(
-                    case_id=case_id,
-                    x_ai_internal_key=x_ai_internal_key,
-                    dispatch_type="auto",
-                    include_events=False,
-                    include_alerts=False,
-                    alert_limit=50,
-                )
-            except HTTPException as err:
-                courtroom_errors.append(
-                    {
-                        "caseId": case_id,
-                        "statusCode": int(err.status_code),
-                        "errorCode": str(err.detail),
-                    }
-                )
-                continue
-            courtroom_view = (
-                courtroom_payload.get("courtroom")
-                if isinstance(courtroom_payload.get("courtroom"), dict)
-                else {}
-            )
-            claim_view = (
-                courtroom_view.get("claim")
-                if isinstance(courtroom_view.get("claim"), dict)
-                else {}
-            )
-            evidence_view = (
-                courtroom_view.get("evidence")
-                if isinstance(courtroom_view.get("evidence"), dict)
-                else {}
-            )
-            panel_view = (
-                courtroom_view.get("panel")
-                if isinstance(courtroom_view.get("panel"), dict)
-                else {}
-            )
-            fairness_view = (
-                courtroom_view.get("fairness")
-                if isinstance(courtroom_view.get("fairness"), dict)
-                else {}
-            )
-            opinion_view = (
-                courtroom_view.get("opinion")
-                if isinstance(courtroom_view.get("opinion"), dict)
-                else {}
-            )
-            key_claims = (
-                claim_view.get("keyClaimsBySide")
-                if isinstance(claim_view.get("keyClaimsBySide"), dict)
-                else {}
-            )
-            key_claim_count = 0
-            for side in ("pro", "con"):
-                entries = key_claims.get(side)
-                if isinstance(entries, list):
-                    key_claim_count += len(entries)
-            decisive_refs = (
-                evidence_view.get("decisiveEvidenceRefs")
-                if isinstance(evidence_view.get("decisiveEvidenceRefs"), list)
-                else []
-            )
-            pivotal_moments = (
-                panel_view.get("pivotalMoments")
-                if isinstance(panel_view.get("pivotalMoments"), list)
-                else []
-            )
-            courtroom_items.append(
-                {
-                    "caseId": case_id,
-                    "dispatchType": courtroom_payload.get("dispatchType"),
-                    "winner": (
-                        courtroom_payload.get("report", {})
-                        if isinstance(courtroom_payload.get("report"), dict)
-                        else {}
-                    ).get("winner"),
-                    "reviewRequired": bool(fairness_view.get("reviewRequired")),
-                    "gateDecision": (
-                        _normalize_fairness_gate_decision(
-                            fairness_view.get("gateDecision"),
-                            review_required=bool(fairness_view.get("reviewRequired")),
-                        )
-                        or None
-                    ),
-                    "keyClaimCount": key_claim_count,
-                    "decisiveEvidenceCount": len(decisive_refs),
-                    "pivotalMomentCount": len(pivotal_moments),
-                    "debateSummary": (
-                        opinion_view.get("debateSummary")
-                        if isinstance(opinion_view.get("debateSummary"), str)
-                        else None
-                    ),
-                }
-            )
-
-        trust_items: list[dict[str, Any]] = []
-        trust_errors: list[dict[str, Any]] = []
-        trust_case_ids: list[int] = []
-        if include_case_trust:
-            top_risk_cases = (
-                fairness_dashboard.get("topRiskCases")
-                if isinstance(fairness_dashboard.get("topRiskCases"), list)
-                else []
-            )
-            seen_case_ids: set[int] = set()
-            for row in top_risk_cases:
-                if len(trust_case_ids) >= int(trust_case_limit):
-                    break
-                if not isinstance(row, dict):
-                    continue
-                try:
-                    case_id = int(row.get("caseId") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if case_id <= 0 or case_id in seen_case_ids:
-                    continue
-                seen_case_ids.add(case_id)
-                trust_case_ids.append(case_id)
-
-            for case_id in trust_case_ids:
-                try:
-                    trust_payload = await get_judge_trust_public_verify(
-                        case_id=case_id,
-                        x_ai_internal_key=x_ai_internal_key,
-                        dispatch_type="auto",
-                    )
-                except HTTPException as err:
-                    trust_errors.append(
-                        {
-                            "caseId": case_id,
-                            "statusCode": int(err.status_code),
-                            "errorCode": str(err.detail),
-                        }
-                    )
-                    continue
-                verify_payload = (
-                    trust_payload.get("verifyPayload")
-                    if isinstance(trust_payload.get("verifyPayload"), dict)
-                    else {}
-                )
-                verdict_attestation = (
-                    verify_payload.get("verdictAttestation")
-                    if isinstance(verify_payload.get("verdictAttestation"), dict)
-                    else {}
-                )
-                challenge_review = (
-                    verify_payload.get("challengeReview")
-                    if isinstance(verify_payload.get("challengeReview"), dict)
-                    else {}
-                )
-                challenge_state = str(challenge_review.get("challengeState") or "").strip().lower() or None
-                try:
-                    total_challenges = int(challenge_review.get("totalChallenges") or 0)
-                except (TypeError, ValueError):
-                    total_challenges = 0
-                trust_items.append(
-                    {
-                        "caseId": case_id,
-                        "dispatchType": trust_payload.get("dispatchType"),
-                        "traceId": trust_payload.get("traceId"),
-                        "verdictVerified": bool(verdict_attestation.get("verified")),
-                        "verdictReason": (
-                            str(verdict_attestation.get("reason") or "").strip() or None
-                        ),
-                        "reviewRequired": bool(challenge_review.get("reviewRequired")),
-                        "challengeState": challenge_state,
-                        "totalChallenges": max(0, total_challenges),
-                    }
-                )
-
-        trust_summary = summarize_ops_read_model_pack_trust_items(
-            trust_items=trust_items,
-            open_challenge_states=TRUST_CHALLENGE_OPEN_STATES,
-        )
-
-        advisor_overview = (
-            fairness_calibration_advisor.get("overview")
-            if isinstance(fairness_calibration_advisor.get("overview"), dict)
-            else {}
-        )
-        release_gate = (
-            fairness_calibration_advisor.get("releaseGate")
-            if isinstance(fairness_calibration_advisor.get("releaseGate"), dict)
-            else {}
-        )
-        recommended_actions = (
-            fairness_calibration_advisor.get("recommendedActions")
-            if isinstance(fairness_calibration_advisor.get("recommendedActions"), list)
-            else []
-        )
-        readiness_overview = (
-            panel_runtime_readiness.get("overview")
-            if isinstance(panel_runtime_readiness.get("overview"), dict)
-            else {}
-        )
-        readiness_counts = (
-            readiness_overview.get("readinessCounts")
-            if isinstance(readiness_overview.get("readinessCounts"), dict)
-            else {}
-        )
-        review_items = (
-            review_queue.get("items")
-            if isinstance(review_queue.get("items"), list)
-            else []
-        )
-        review_trust_priority_items = (
-            review_trust_priority.get("items")
-            if isinstance(review_trust_priority.get("items"), list)
-            else []
-        )
-        trust_challenge_queue_items = (
-            trust_challenge_queue.get("items")
-            if isinstance(trust_challenge_queue.get("items"), list)
-            else []
-        )
-        review_summary = summarize_ops_read_model_pack_review_items(
-            review_items=review_items,
-            review_trust_priority_items=review_trust_priority_items,
-            trust_challenge_queue_items=trust_challenge_queue_items,
-            open_challenge_states=TRUST_CHALLENGE_OPEN_STATES,
-        )
-        simulation_summary = (
-            policy_gate_simulation.get("summary")
-            if isinstance(policy_gate_simulation.get("summary"), dict)
-            else {}
-        )
-        registry_prompt_tool_risk_items = (
-            registry_prompt_tool_governance.get("riskItems")
-            if isinstance(registry_prompt_tool_governance.get("riskItems"), list)
-            else []
-        )
-        registry_prompt_tool_high_risk_count = sum(
-            1
-            for row in registry_prompt_tool_risk_items
-            if isinstance(row, dict)
-            and str(row.get("severity") or "").strip().lower() == "high"
-        )
-        evidence_claim_aggregations = (
-            evidence_claim_queue.get("aggregations")
-            if isinstance(evidence_claim_queue.get("aggregations"), dict)
-            else {}
-        )
-        evidence_claim_risk_counts = (
-            evidence_claim_aggregations.get("riskLevelCounts")
-            if isinstance(evidence_claim_aggregations.get("riskLevelCounts"), dict)
-            else {}
-        )
-        courtroom_drilldown_aggregations = (
-            courtroom_drilldown.get("aggregations")
-            if isinstance(courtroom_drilldown.get("aggregations"), dict)
-            else {}
-        )
-        adaptive_summary = build_ops_read_model_pack_adaptive_summary(
-            release_gate=release_gate,
-            advisor_overview=advisor_overview,
-            recommended_action_count=len(recommended_actions),
-            readiness_counts=readiness_counts,
-            readiness_overview=readiness_overview,
-            review_queue_count=int(review_queue.get("count") or 0),
-            review_high_risk_count=review_summary["reviewHighRiskCount"],
-            review_urgent_count=review_summary["reviewUrgentCount"],
-            review_trust_priority_count=int(review_trust_priority.get("count") or 0),
-            review_unified_high_priority_count=review_summary["reviewUnifiedHighPriorityCount"],
-            review_trust_open_challenge_count=review_summary["reviewTrustOpenChallengeCount"],
-            policy_simulation_blocked_count=int(simulation_summary.get("blockedCount") or 0),
-            courtroom_sample_count=len(courtroom_items),
-            courtroom_queue_count=int(courtroom_queue.get("count") or 0),
-            courtroom_drilldown_count=int(courtroom_drilldown.get("count") or 0),
-            courtroom_drilldown_review_required_count=int(
-                courtroom_drilldown_aggregations.get("reviewRequiredCount") or 0
-            ),
-            courtroom_drilldown_high_risk_count=int(
-                courtroom_drilldown_aggregations.get("highRiskCount") or 0
-            ),
-            evidence_claim_queue_count=int(evidence_claim_queue.get("count") or 0),
-            evidence_claim_high_risk_count=int(evidence_claim_risk_counts.get("high") or 0),
-            evidence_claim_conflict_case_count=int(
-                evidence_claim_aggregations.get("conflictCaseCount") or 0
-            ),
-            evidence_claim_unanswered_claim_case_count=int(
-                evidence_claim_aggregations.get("unansweredClaimCaseCount")
-                or evidence_claim_aggregations.get("unansweredCaseCount")
-                or 0
-            ),
-            trust_challenge_queue_count=int(trust_challenge_queue.get("count") or 0),
-            trust_challenge_high_priority_count=review_summary["trustChallengeHighPriorityCount"],
-            trust_challenge_urgent_count=review_summary["trustChallengeUrgentCount"],
-            registry_prompt_tool_risk_count=len(registry_prompt_tool_risk_items),
-            registry_prompt_tool_high_risk_count=registry_prompt_tool_high_risk_count,
-        )
-        trust_overview = build_ops_read_model_pack_trust_overview(
-            include_case_trust=include_case_trust,
-            trust_case_limit=trust_case_limit,
-            trust_case_ids=trust_case_ids,
-            trust_items=trust_items,
-            trust_errors=trust_errors,
-            verified_count=trust_summary["verifiedCount"],
-            review_required_count=trust_summary["reviewRequiredCount"],
-            open_challenge_count=trust_summary["openChallengeCount"],
-        )
-        judge_workflow_coverage = build_ops_read_model_pack_judge_workflow_coverage(
-            role_nodes_rows=judge_workflow_role_nodes_rows,
-            expected_role_order=JUDGE_ROLE_ORDER,
-        )
-        pack_filters = build_ops_read_model_pack_filters(
-            dispatch_type=dispatch_type,
-            policy_version=policy_version,
-            window_days=window_days,
-            top_limit=top_limit,
-            case_scan_limit=case_scan_limit,
-            include_case_trust=include_case_trust,
-            trust_case_limit=trust_case_limit,
-            dependency_limit=dependency_limit,
-            usage_preview_limit=usage_preview_limit,
-            release_limit=release_limit,
-            audit_limit=audit_limit,
-            calibration_risk_limit=calibration_risk_limit,
-            calibration_benchmark_limit=calibration_benchmark_limit,
-            calibration_shadow_limit=calibration_shadow_limit,
-            panel_profile_scan_limit=panel_profile_scan_limit,
-            panel_group_limit=panel_group_limit,
-            panel_attention_limit=panel_attention_limit,
-        )
-
         try:
-            pack_payload = build_ops_read_model_pack_v5_payload(
-                generated_at=datetime.now(timezone.utc).isoformat(),
-                fairness_dashboard=fairness_dashboard,
-                fairness_calibration_advisor=fairness_calibration_advisor,
-                panel_runtime_readiness=panel_runtime_readiness,
-                registry_governance=governance_overview,
-                registry_prompt_tool_governance=registry_prompt_tool_governance,
-                courtroom_case_ids=courtroom_case_ids,
-                courtroom_requested_case_limit=top_limit,
-                courtroom_items=courtroom_items,
-                courtroom_errors=courtroom_errors,
-                courtroom_queue=courtroom_queue,
-                courtroom_drilldown=courtroom_drilldown,
-                review_queue=review_queue,
-                review_trust_priority=review_trust_priority,
-                evidence_claim_queue=evidence_claim_queue,
-                trust_challenge_queue=trust_challenge_queue,
-                policy_gate_simulation=policy_gate_simulation,
-                adaptive_summary=adaptive_summary,
-                trust_overview=trust_overview,
-                judge_workflow_coverage=judge_workflow_coverage,
-                pack_filters=pack_filters,
+            return await build_ops_read_model_pack_route_payload(
+                x_ai_internal_key=x_ai_internal_key,
+                dispatch_type=dispatch_type,
+                policy_version=policy_version,
+                window_days=window_days,
+                top_limit=top_limit,
+                case_scan_limit=case_scan_limit,
+                include_case_trust=include_case_trust,
+                trust_case_limit=trust_case_limit,
+                dependency_limit=dependency_limit,
+                usage_preview_limit=usage_preview_limit,
+                release_limit=release_limit,
+                audit_limit=audit_limit,
+                calibration_risk_limit=calibration_risk_limit,
+                calibration_benchmark_limit=calibration_benchmark_limit,
+                calibration_shadow_limit=calibration_shadow_limit,
+                panel_profile_scan_limit=panel_profile_scan_limit,
+                panel_group_limit=panel_group_limit,
+                panel_attention_limit=panel_attention_limit,
+                trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
+                judge_role_order=JUDGE_ROLE_ORDER,
+                get_trace=runtime.trace_store.get_trace,
+                get_judge_fairness_dashboard=get_judge_fairness_dashboard,
+                get_registry_governance_overview=get_registry_governance_overview,
+                get_registry_prompt_tool_governance=get_registry_prompt_tool_governance,
+                get_policy_registry_dependency_health=get_policy_registry_dependency_health,
+                get_judge_fairness_policy_calibration_advisor=get_judge_fairness_policy_calibration_advisor,
+                get_panel_runtime_readiness=get_panel_runtime_readiness,
+                list_judge_courtroom_cases=list_judge_courtroom_cases,
+                list_judge_courtroom_drilldown_bundle=list_judge_courtroom_drilldown_bundle,
+                list_judge_evidence_claim_ops_queue=list_judge_evidence_claim_ops_queue,
+                list_judge_trust_challenge_ops_queue=list_judge_trust_challenge_ops_queue,
+                list_judge_review_jobs=list_judge_review_jobs,
+                simulate_policy_release_gate=simulate_policy_release_gate,
+                get_judge_case_courtroom_read_model=get_judge_case_courtroom_read_model,
+                get_judge_trust_public_verify=get_judge_trust_public_verify,
+                normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
+                summarize_ops_read_model_pack_trust_items_fn=summarize_ops_read_model_pack_trust_items,
+                summarize_ops_read_model_pack_review_items_fn=summarize_ops_read_model_pack_review_items,
+                build_ops_read_model_pack_case_chain_coverage_fn=build_ops_read_model_pack_case_chain_coverage,
+                build_ops_read_model_pack_fairness_gate_overview_fn=build_ops_read_model_pack_fairness_gate_overview,
+                build_ops_read_model_pack_policy_kernel_binding_fn=build_ops_read_model_pack_policy_kernel_binding,
+                build_ops_read_model_pack_adaptive_summary_fn=build_ops_read_model_pack_adaptive_summary,
+                build_ops_read_model_pack_trust_overview_fn=build_ops_read_model_pack_trust_overview,
+                build_ops_read_model_pack_judge_workflow_coverage_fn=build_ops_read_model_pack_judge_workflow_coverage,
+                build_ops_read_model_pack_filters_fn=build_ops_read_model_pack_filters,
+                build_ops_read_model_pack_v5_payload_fn=build_ops_read_model_pack_v5_payload,
             )
         except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "ops_read_model_pack_v5_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
-        return pack_payload
+            _raise_http_500_contract_violation(
+                err=err,
+                code="ops_read_model_pack_v5_contract_violation",
+            )
 
     @app.get("/internal/judge/panels/runtime/profiles")
     async def list_panel_runtime_profiles(
@@ -13286,13 +11155,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 limit=limit,
             )
         except ValueError as err:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "panel_runtime_profile_contract_violation",
-                    "message": str(err),
-                },
-            ) from err
+            _raise_http_500_contract_violation(
+                err=err,
+                code="panel_runtime_profile_contract_violation",
+            )
 
     @app.get("/internal/judge/panels/runtime/readiness")
     async def get_panel_runtime_readiness(
@@ -13437,7 +11303,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 build_review_case_sort_key=_build_review_case_sort_key,
             )
         except ValueError as err:
-            raise HTTPException(status_code=422, detail=str(err)) from err
+            _raise_http_422_from_value_error(err=err)
 
     @app.get("/internal/judge/review/cases/{case_id}")
     async def get_judge_review_job(
@@ -13456,7 +11322,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 serialize_alert_item=_serialize_alert_item,
             )
         except LookupError as err:
-            raise HTTPException(status_code=404, detail=str(err)) from err
+            _raise_http_404_from_lookup_error(err=err)
 
     @app.post("/internal/judge/review/cases/{case_id}/decision")
     async def decide_judge_review_job(
@@ -13468,7 +11334,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         try:
-            return await build_review_case_decision_payload_v3(
+            return await _run_review_route_guard(
+                build_review_case_decision_payload_v3(
                 case_id=case_id,
                 decision=decision,
                 actor=actor,
@@ -13479,12 +11346,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 resolve_open_alerts_for_review=_resolve_open_alerts_for_review,
                 serialize_workflow_job=_serialize_workflow_job,
             )
+            )
         except ValueError as err:
-            raise HTTPException(status_code=422, detail=str(err)) from err
+            _raise_http_422_from_value_error(err=err)
         except LookupError as err:
-            raise HTTPException(status_code=404, detail=str(err)) from err
-        except ReviewRouteError_v3 as err:
-            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+            _raise_http_404_from_lookup_error(err=err)
 
     @app.get("/internal/judge/cases/{case_id}/alerts")
     async def list_judge_job_alerts(
@@ -13502,6 +11368,28 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             serialize_alert_item=_serialize_alert_item,
         )
 
+    async def _transition_judge_alert_status(
+        *,
+        case_id: int,
+        alert_id: str,
+        to_status: str,
+        actor: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return await _run_review_route_guard(
+            build_alert_status_transition_payload_v3(
+                job_id=case_id,
+                alert_id=alert_id,
+                to_status=to_status,
+                actor=actor,
+                reason=reason,
+                transition_audit_alert=runtime.trace_store.transition_audit_alert,
+                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
+                serialize_alert_item=_serialize_alert_item,
+            )
+        )
+
     @app.post("/internal/judge/cases/{case_id}/alerts/{alert_id}/ack")
     async def ack_judge_job_alert(
         case_id: int,
@@ -13511,20 +11399,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         reason: str | None = Query(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            return await build_alert_status_transition_payload_v3(
-                job_id=case_id,
-                alert_id=alert_id,
-                to_status="acked",
-                actor=actor,
-                reason=reason,
-                transition_audit_alert=runtime.trace_store.transition_audit_alert,
-                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
-                facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
-                serialize_alert_item=_serialize_alert_item,
-            )
-        except ReviewRouteError_v3 as err:
-            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+        return await _transition_judge_alert_status(
+            case_id=case_id,
+            alert_id=alert_id,
+            to_status="acked",
+            actor=actor,
+            reason=reason,
+        )
 
     @app.post("/internal/judge/cases/{case_id}/alerts/{alert_id}/resolve")
     async def resolve_judge_job_alert(
@@ -13535,20 +11416,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         reason: str | None = Query(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        try:
-            return await build_alert_status_transition_payload_v3(
-                job_id=case_id,
-                alert_id=alert_id,
-                to_status="resolved",
-                actor=actor,
-                reason=reason,
-                transition_audit_alert=runtime.trace_store.transition_audit_alert,
-                sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
-                facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
-                serialize_alert_item=_serialize_alert_item,
-            )
-        except ReviewRouteError_v3 as err:
-            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+        return await _transition_judge_alert_status(
+            case_id=case_id,
+            alert_id=alert_id,
+            to_status="resolved",
+            actor=actor,
+            reason=reason,
+        )
 
     @app.get("/internal/judge/alerts/ops-view")
     async def list_judge_alert_ops_view(
@@ -13597,7 +11471,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 build_registry_alert_ops_view=_build_registry_alert_ops_view,
             )
         except ValueError as err:
-            raise HTTPException(status_code=422, detail=str(err)) from err
+            _raise_http_422_from_value_error(err=err)
 
     @app.get("/internal/judge/alerts/outbox")
     async def list_judge_alert_outbox(
@@ -13636,7 +11510,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 serialize_outbox_event=_serialize_outbox_event,
             )
         except LookupError as err:
-            raise HTTPException(status_code=404, detail=str(err)) from err
+            _raise_http_404_from_lookup_error(err=err)
 
     @app.get("/internal/judge/rag/diagnostics")
     async def get_rag_diagnostics(
