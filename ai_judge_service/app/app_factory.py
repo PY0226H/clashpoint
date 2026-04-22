@@ -316,19 +316,22 @@ from .applications.panel_runtime_routes import (
     build_panel_runtime_readiness_route_payload as build_panel_runtime_readiness_route_payload_v3,
 )
 from .applications.registry_governance_routes import (
-    build_policy_domain_judge_families_route_payload as build_policy_domain_judge_families_route_payload_v3,
+    RegistryGovernanceRouteDependencyPack as RegistryGovernanceRouteDependencyPack_v3,
 )
 from .applications.registry_governance_routes import (
-    build_policy_gate_simulation_route_payload as build_policy_gate_simulation_route_payload_v3,
+    build_policy_domain_judge_families_route_payload_from_pack as build_policy_domain_judge_families_route_payload_from_pack_v3,
 )
 from .applications.registry_governance_routes import (
-    build_policy_registry_dependency_health_route_payload as build_policy_registry_dependency_health_route_payload_v3,
+    build_policy_gate_simulation_route_payload_from_pack as build_policy_gate_simulation_route_payload_from_pack_v3,
 )
 from .applications.registry_governance_routes import (
-    build_registry_governance_overview_route_payload as build_registry_governance_overview_route_payload_v3,
+    build_policy_registry_dependency_health_route_payload_from_pack as build_policy_registry_dependency_health_route_payload_from_pack_v3,
 )
 from .applications.registry_governance_routes import (
-    build_registry_prompt_tool_governance_route_payload as build_registry_prompt_tool_governance_route_payload_v3,
+    build_registry_governance_overview_route_payload_from_pack as build_registry_governance_overview_route_payload_from_pack_v3,
+)
+from .applications.registry_governance_routes import (
+    build_registry_prompt_tool_governance_route_payload_from_pack as build_registry_prompt_tool_governance_route_payload_from_pack_v3,
 )
 from .applications.registry_ops_views import (
     build_registry_alert_ops_view as build_registry_alert_ops_view_v3,
@@ -7227,6 +7230,50 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             serializer=lambda item: _serialize_tool_profile(runtime, profile=item),
         )
 
+    def _build_registry_governance_route_dependency_pack() -> (
+        RegistryGovernanceRouteDependencyPack_v3
+    ):
+        return RegistryGovernanceRouteDependencyPack_v3(
+            default_policy_version=runtime.policy_registry_runtime.default_version,
+            default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
+            default_tool_registry_version=runtime.tool_registry_runtime.default_version,
+            policy_registry_type=REGISTRY_TYPE_POLICY,
+            prompt_registry_type="prompt",
+            tool_registry_type="tool",
+            list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
+            list_prompt_profiles=runtime.prompt_registry_runtime.list_profiles,
+            list_tool_profiles=runtime.tool_registry_runtime.list_profiles,
+            get_policy_profile=runtime.policy_registry_runtime.get_profile,
+            serialize_policy_profile=(
+                lambda profile: _serialize_policy_profile(runtime, profile=profile)
+            ),
+            evaluate_policy_registry_dependency_health=(
+                lambda version: _evaluate_policy_registry_dependency_health(
+                    policy_version=version,
+                )
+            ),
+            evaluate_policy_release_fairness_gate=(
+                lambda version: _evaluate_policy_release_fairness_gate(
+                    policy_version=version,
+                )
+            ),
+            list_releases=runtime.registry_product_runtime.list_releases,
+            list_audits=runtime.registry_product_runtime.list_audits,
+            normalize_registry_dependency_trend_status=(
+                _normalize_registry_dependency_trend_status
+            ),
+            dependency_trend_status_values=REGISTRY_DEPENDENCY_TREND_STATUS_VALUES,
+            list_audit_alerts=_list_audit_alerts,
+            build_registry_dependency_overview=_build_registry_dependency_overview,
+            build_registry_dependency_trend=_build_registry_dependency_trend,
+            build_policy_domain_judge_family_overview=(
+                _build_policy_domain_judge_family_overview
+            ),
+            build_registry_prompt_tool_usage_rows=_build_registry_prompt_tool_usage_rows,
+            build_registry_prompt_tool_risk_items=_build_registry_prompt_tool_risk_items,
+            build_registry_prompt_tool_action_hints=_build_registry_prompt_tool_action_hints,
+        )
+
     @app.get("/internal/judge/registries/policy/dependencies/health")
     async def get_policy_registry_dependency_health(
         x_ai_internal_key: str | None = Header(default=None),
@@ -7243,12 +7290,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
+        dependency_pack = _build_registry_governance_route_dependency_pack()
         return await _run_registry_route_guard(
-            build_policy_registry_dependency_health_route_payload_v3(
+            build_policy_registry_dependency_health_route_payload_from_pack_v3(
+                pack=dependency_pack,
                 policy_version=policy_version,
-                default_policy_version=runtime.policy_registry_runtime.default_version,
-                default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
-                default_tool_registry_version=runtime.tool_registry_runtime.default_version,
                 include_all_versions=include_all_versions,
                 include_overview=include_overview,
                 include_trend=include_trend,
@@ -7258,19 +7304,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 trend_limit=trend_limit,
                 overview_window_minutes=overview_window_minutes,
                 limit=limit,
-                list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
-                evaluate_policy_registry_dependency_health=(
-                    lambda version: _evaluate_policy_registry_dependency_health(
-                        policy_version=version,
-                    )
-                ),
-                normalize_registry_dependency_trend_status=(
-                    _normalize_registry_dependency_trend_status
-                ),
-                dependency_trend_status_values=REGISTRY_DEPENDENCY_TREND_STATUS_VALUES,
-                list_audit_alerts=_list_audit_alerts,
-                build_registry_dependency_overview=_build_registry_dependency_overview,
-                build_registry_dependency_trend=_build_registry_dependency_trend,
             )
         )
 
@@ -7284,30 +7317,15 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        return await build_registry_governance_overview_route_payload_v3(
-            dependency_limit=dependency_limit,
-            usage_preview_limit=usage_preview_limit,
-            release_limit=release_limit,
-            audit_limit=audit_limit,
-            default_policy_version=runtime.policy_registry_runtime.default_version,
-            default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
-            default_tool_registry_version=runtime.tool_registry_runtime.default_version,
-            policy_registry_type=REGISTRY_TYPE_POLICY,
-            prompt_registry_type="prompt",
-            tool_registry_type="tool",
-            list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
-            list_prompt_profiles=runtime.prompt_registry_runtime.list_profiles,
-            list_tool_profiles=runtime.tool_registry_runtime.list_profiles,
-            evaluate_policy_registry_dependency_health=(
-                lambda version: _evaluate_policy_registry_dependency_health(
-                    policy_version=version,
-                )
-            ),
-            list_releases=runtime.registry_product_runtime.list_releases,
-            list_audits=runtime.registry_product_runtime.list_audits,
-            build_policy_domain_judge_family_overview=(
-                _build_policy_domain_judge_family_overview
-            ),
+        dependency_pack = _build_registry_governance_route_dependency_pack()
+        return await _run_registry_route_guard(
+            build_registry_governance_overview_route_payload_from_pack_v3(
+                pack=dependency_pack,
+                dependency_limit=dependency_limit,
+                usage_preview_limit=usage_preview_limit,
+                release_limit=release_limit,
+                audit_limit=audit_limit,
+            )
         )
 
     @app.get("/internal/judge/registries/prompt-tool/governance")
@@ -7321,34 +7339,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        return await build_registry_prompt_tool_governance_route_payload_v3(
-            dependency_limit=dependency_limit,
-            usage_preview_limit=usage_preview_limit,
-            release_limit=release_limit,
-            audit_limit=audit_limit,
-            risk_limit=risk_limit,
-            default_policy_version=runtime.policy_registry_runtime.default_version,
-            default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
-            default_tool_registry_version=runtime.tool_registry_runtime.default_version,
-            policy_registry_type=REGISTRY_TYPE_POLICY,
-            prompt_registry_type="prompt",
-            tool_registry_type="tool",
-            list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
-            list_prompt_profiles=runtime.prompt_registry_runtime.list_profiles,
-            list_tool_profiles=runtime.tool_registry_runtime.list_profiles,
-            evaluate_policy_registry_dependency_health=(
-                lambda version: _evaluate_policy_registry_dependency_health(
-                    policy_version=version,
-                )
-            ),
-            list_releases=runtime.registry_product_runtime.list_releases,
-            list_audits=runtime.registry_product_runtime.list_audits,
-            build_policy_domain_judge_family_overview=(
-                _build_policy_domain_judge_family_overview
-            ),
-            build_registry_prompt_tool_usage_rows=_build_registry_prompt_tool_usage_rows,
-            build_registry_prompt_tool_risk_items=_build_registry_prompt_tool_risk_items,
-            build_registry_prompt_tool_action_hints=_build_registry_prompt_tool_action_hints,
+        dependency_pack = _build_registry_governance_route_dependency_pack()
+        return await _run_registry_route_guard(
+            build_registry_prompt_tool_governance_route_payload_from_pack_v3(
+                pack=dependency_pack,
+                dependency_limit=dependency_limit,
+                usage_preview_limit=usage_preview_limit,
+                release_limit=release_limit,
+                audit_limit=audit_limit,
+                risk_limit=risk_limit,
+            )
         )
 
     @app.get("/internal/judge/registries/policy/domain-families")
@@ -7359,14 +7359,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        return await build_policy_domain_judge_families_route_payload_v3(
-            default_policy_version=runtime.policy_registry_runtime.default_version,
-            policy_profiles=runtime.policy_registry_runtime.list_profiles(),
-            preview_limit=preview_limit,
-            include_versions=include_versions,
-            build_policy_domain_judge_family_overview=(
-                _build_policy_domain_judge_family_overview
-            ),
+        dependency_pack = _build_registry_governance_route_dependency_pack()
+        return await _run_registry_route_guard(
+            build_policy_domain_judge_families_route_payload_from_pack_v3(
+                pack=dependency_pack,
+                preview_limit=preview_limit,
+                include_versions=include_versions,
+            )
         )
 
     @app.get("/internal/judge/registries/policy/gate-simulation")
@@ -7378,27 +7377,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
+        dependency_pack = _build_registry_governance_route_dependency_pack()
         return await _run_registry_route_guard(
-            build_policy_gate_simulation_route_payload_v3(
+            build_policy_gate_simulation_route_payload_from_pack_v3(
+                pack=dependency_pack,
                 policy_version=policy_version,
-                default_policy_version=runtime.policy_registry_runtime.default_version,
                 include_all_versions=include_all_versions,
                 limit=limit,
-                list_policy_profiles=runtime.policy_registry_runtime.list_profiles,
-                get_policy_profile=runtime.policy_registry_runtime.get_profile,
-                serialize_policy_profile=(
-                    lambda profile: _serialize_policy_profile(runtime, profile=profile)
-                ),
-                evaluate_policy_registry_dependency_health=(
-                    lambda version: _evaluate_policy_registry_dependency_health(
-                        policy_version=version,
-                    )
-                ),
-                evaluate_policy_release_fairness_gate=(
-                    lambda version: _evaluate_policy_release_fairness_gate(
-                        policy_version=version,
-                    )
-                ),
             )
         )
 
