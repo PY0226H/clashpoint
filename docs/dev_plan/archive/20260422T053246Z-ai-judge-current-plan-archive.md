@@ -1,0 +1,206 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-22  
+当前主线：`AI_judge_service P32（app_factory 剩余热点收口 + Judge Command/Read 路由分层完成 + real-env pass 准备）`  
+当前状态：执行中（已完成本轮计划重置与旧计划归档；`ai-judge-p32-app-factory-hotspot-split-v3` 已完成前十一批：registry governance 路由下沉 + NPC/Room QA 路由下沉 + cases create 命令路由下沉 + phase/final dispatch preflight 命令编排下沉 + blindization rejection 命令编排下沉 + phase/final callback retry 主链分支下沉 + final contract blocked 分支下沉 + final dispatch report 物化编排下沉 + phase dispatch report 物化编排下沉 + phase/final callback 发起编排下沉 + case overview 读路由编排下沉）
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接归档：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260422T015729Z-ai-judge-current-plan-archive.md`。
+2. 上一轮 P31 已完成主链项：`six-object contract hardening`、`policy-kernel binding hardening`、`ops-read-model-pack v7`、`local regression bundle`、`enterprise consistency refresh`。
+3. P31 未收口项明确顺延到 P32：
+   - `app_factory` 剩余热点未完成。
+   - `real-env pass window` 仅能保持 `on-env` 阻塞状态。
+4. 本轮目标不是新增业务能力，而是把现有企业方案主链继续工程化下沉，降低路由耦合并保持契约稳定。
+
+---
+
+## 2. 当前代码状态快照（P32 起点）
+
+截至 2026-04-22，`ai_judge_service` 现状：
+
+1. 主链能力已具备：`trace/replay/failed callback/fairness/review/challenge/trust` 均可本地回归。
+2. `app_factory.py` 仍是主要结构热点（约 `11544` 行），剩余高耦合段集中在：
+   - `registry read/governance` 读路由。
+   - `create case + phase/final dispatch + blindization reject` 命令链。
+   - `case overview/courtroom/drilldown/evidence-claim queue` 聚合读链。
+   - `panel runtime profiles/readiness`。
+   - `review list/detail + alerts/outbox + rag diagnostics`。
+   - `NPC Coach/Room QA` 已下沉到 applications，剩余 `advisory-only` 边界断言补强。
+3. 当前环境前提不变：只有本地环境，所有真实环境结论继续标注 `on-env`，不可误标为 `pass`。
+
+---
+
+## 3. P32 总目标
+
+1. 完成 `app_factory` 剩余热点下沉，保持 API 输入输出与错误语义不变。
+2. 将 Judge 主链的命令侧与查询侧路由编排进一步迁移到 `app/applications/*`，形成稳定 dependency pack + guard 模式。
+3. 对齐企业方案与架构方案第 13 章一致性清单：
+   - 8 Agent 职责映射不塌缩。
+   - 六对象主链语义不漂移。
+   - Fairness Sentinel 仍在终判前且 override 可审计。
+   - `NPC/Room QA` 严格 `advisory-only`，不写官方裁决链。
+4. 形成下一次 real-env pass 窗口可直接执行的本地准备状态（`local_reference_ready`）。
+
+---
+
+## 4. P32 模块执行矩阵
+
+### 已完成/未完成矩阵
+
+| 模块 | 优先级 | 状态 | 本轮目标 | DoD（完成定义） | 验证方式 |
+| --- | --- | --- | --- | --- | --- |
+| `ai-judge-next-iteration-planning` | P0 | 已完成（2026-04-22） | 阶段收口后生成 P32 完整计划 | 当前计划切换到 P32，包含剩余 `app_factory` 热点清单 | `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p32-app-factory-hotspot-split-v3` | P0 | 进行中 | 继续完成 `app_factory` 热点拆分（承接 P31 前二十七批） | 前十一批已完成（2026-04-22）：1）新增 `app/applications/registry_governance_routes.py`，下沉 `dependency health/governance overview/prompt-tool governance/domain families/gate simulation` 路由编排，`dependency health` 与 `gate simulation` 已知错误映射改走 `RegistryRouteError -> _run_registry_route_guard`；2）新增 `app/applications/assistant_agent_routes.py`，下沉 `NPC Coach / Room QA` 路由编排并新增 `_run_assistant_agent_route_guard` 统一 `invalid_session_id` 错误映射；3）新增 `app/applications/judge_command_routes.py`，下沉 `POST /internal/judge/cases` 命令编排并新增 `_run_judge_command_route_guard`，保持 `idempotentReplay/case_already_exists/case_built` 语义不变；4）继续在 `judge_command_routes.py` 下沉 `phase/final dispatch` preflight（request validate/idempotency replay/registry profile resolve/queued receipt/workflow blinded transition），`app_factory` dispatch 路由前半段改为应用层编排，保持响应合同与错误语义不变；5）继续在 `judge_command_routes.py` 下沉 blindization rejection（含 failed callback reported/failed 两条分支），`app_factory` 删除 `_handle_blindization_rejection` 本体并改为 route guard + builder，保持 422/502 语义、receipt/trace/workflow failed 侧效一致；6）继续在 `judge_command_routes.py` 下沉 phase/final callback retry 主链分支（`reported/failed_reported/failed_callback_failed`），`app_factory` dispatch 路由 callback outcome 分支改为 route guard + builder，保持回执、trace、workflow 和幂等清理语义不变；7）继续在 `judge_command_routes.py` 下沉 final contract blocked 分支（含 blocked_failed_reported 与 final_failed_callback_failed 两条分支），`app_factory` final dispatch 路由对应分支改为 route guard + builder，保持 502 错误语义、alert/receipt/trace/workflow failed/幂等清理一致；8）继续在 `judge_command_routes.py` 下沉 final dispatch report 物化编排（phase receipts 聚合/final report build/runtime trace/policy trace/attestation/claim-ledger/contract validate），`app_factory` final dispatch 改为 route guard + materialization builder；9）继续在 `judge_command_routes.py` 下沉 phase dispatch report 物化编排（phase report build/runtime trace/policy trace/attestation/claim-ledger/workflow payload），`app_factory` phase dispatch 对应区段改为 route guard + materialization builder；10）继续在 `judge_command_routes.py` 下沉 phase/final callback 发起编排（delivery + failed payload 生成），`app_factory` 两个 dispatch 路由 callback delivery 段改为 route guard + delivery builder；11）继续在 `case_read_routes.py` 下沉 `GET /internal/judge/cases/{case_id}` 编排（workflow/receipt/trace/replay/alerts/claim-ledger 聚合 + overview payload 构建），`app_factory` 该路由改为 `_run_case_read_route_guard + build_case_overview_route_payload`；后续继续下沉剩余命令热点与 read/panel 模块热点 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_command_routes.py tests/test_registry_governance_routes.py tests/test_assistant_agent_routes.py tests/test_case_read_routes.py tests/test_app_factory.py -k "case_create_should_mark_case_built_and_support_idempotent_replay or case_create_should_reject_existing_case_with_new_idempotency_key or policy_registry_dependency_health_route or policy_gate_simulation_route or registry_governance_overview_route or registry_prompt_tool_governance_route or policy_domain_judge_families_route or npc_coach or room_qa or phase_dispatch_should_callback_and_support_idempotent_replay or final_dispatch_should_use_phase_receipts_and_callback or blindization_reject_should_return_422_and_trigger_failed_callback or blindization_reject_should_mark_workflow_failed_when_failed_callback_fails or final_contract_blocked_should_mark_workflow_failed_and_sync_alert or case_detail_route_should_return_404_when_case_missing"` + `cd ai_judge_service && ../scripts/py -m ruff check app/app_factory.py app/applications/judge_command_routes.py app/applications/case_read_routes.py app/applications/registry_governance_routes.py app/applications/assistant_agent_routes.py tests/test_judge_command_routes.py tests/test_case_read_routes.py tests/test_registry_governance_routes.py tests/test_assistant_agent_routes.py` |
+| `ai-judge-p32-judge-command-route-orchestrator-v1` | P0 | 进行中 | 下沉 `cases create + phase/final dispatch + blindization reject` 命令编排 | 前八批已完成：1）`POST /internal/judge/cases` 命令编排下沉到 `judge_command_routes.py`；2）`phase/final dispatch` preflight 编排下沉到 `judge_command_routes.py`，并保持 queued receipt/workflow blinded 注册语义不变；3）`blindization rejection` 编排（含 failed callback 成功/失败分支）下沉到 `judge_command_routes.py`，保持 422/502 错误语义不变；4）`phase/final dispatch` callback retry 主链分支下沉到 `judge_command_routes.py`，保持 reported/failure 分支与幂等清理一致；5）`final contract blocked` 分支下沉到 `judge_command_routes.py`，保持 blocked_failed_reported/final_failed_callback_failed 行为一致；6）`final dispatch report` 物化编排下沉到 `judge_command_routes.py`，保持 final receipt/trace/workflow 语义不变；7）`phase dispatch report` 物化编排下沉到 `judge_command_routes.py`，保持 phase receipt/trace/workflow 语义不变；8）`phase/final callback 发起` 编排下沉到 `judge_command_routes.py`，保持 callback retry payload 合同与失败语义不变；后续继续下沉 dispatch 余量与收束 `app_factory` 热点 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_command_routes.py tests/test_app_factory.py -k "case_create_should_mark_case_built_and_support_idempotent_replay or case_create_should_reject_existing_case_with_new_idempotency_key or phase_dispatch or final_dispatch or blindization or final_contract_blocked"` |
+| `ai-judge-p32-judge-read-route-orchestrator-v1` | P0 | 进行中 | 下沉 `case overview + courtroom + drilldown + evidence claim queue` 查询编排 | 第一批已完成：`GET /internal/judge/cases/{case_id}` 编排下沉到 `case_read_routes.py` 并接入 `_run_case_read_route_guard`；后续继续下沉 courtroom/drilldown/ops-queue 聚合读链 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_case_read_routes.py tests/test_app_factory.py -k "case_detail_route_should_return_404_when_case_missing or case_detail_route_should_return_500_when_contract_validation_fails or courtroom or drilldown or evidence_claim_ops_queue"` |
+| `ai-judge-p32-registry-governance-route-orchestrator-v1` | P1 | 待执行 | 下沉 policy registry governance/dependency/gate simulation 读面 | registry read/governance 路由与发布路由保持统一 guard/error contract 模式；不新增兼容 alias | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_policy_registry_runtime.py -k "policy_registry_dependency_health_route or policy_gate_simulation_route or registry_governance"` |
+| `ai-judge-p32-panel-review-alert-route-orchestrator-v1` | P1 | 待执行 | 下沉 panel runtime + review/alert/outbox 编排 | panel/review/alert 相关路由的重复归一化、过滤、合同校验逻辑下沉并保持行为不变 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py -k "panel_runtime or review or alert or outbox"` |
+| `ai-judge-p32-agent-advisory-boundary-hardening-v1` | P1 | 进行中 | 强化 `NPC Coach / Room QA` advisory-only 边界 | 第一批已完成：NPC/Room QA 路由编排已下沉到 applications 层并补齐基础路由单测；后续补强“不得写官方裁决链字段”的边界断言与集成回归 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_assistant_agent_routes.py tests/test_agent_runtime.py tests/test_app_factory.py -k "npc or room_qa or advisory"` |
+| `ai-judge-p32-local-regression-bundle-v1` | P2 | 待执行 | 固化 P32 本地回归证据 | `ruff + pytest -q + runtime_ops_pack(local_reference_ready)` 全通过并产出工件 | `cd ai_judge_service && ../scripts/py -m ruff check app tests` + `cd ai_judge_service && ../scripts/py -m pytest -q` + `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference` |
+| `ai-judge-p32-enterprise-consistency-refresh-v1` | P2 | 待执行 | 同步企业方案/架构方案/完成度映射/当前计划口径 | 文档口径一致且通过 harness 文档门禁 | `bash scripts/quality/harness_docs_lint.sh` + `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p32-real-env-pass-window-execute-on-env` | P0（环境阻塞） | 阻塞（待真实环境） | 真实环境 pass 收口 | `AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=pass` 且 `REAL_PASS_READY=true` | `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle` |
+| `ai-judge-p32-stage-closure-execute` | P2 | 待执行 | P32 阶段收口执行 | 归档活动计划并同步 `completed.md/todo.md` 最小必要快照 | `bash scripts/harness/ai_judge_stage_closure_execute.sh --root /Users/panyihang/Documents/EchoIsle` |
+
+### 下一开发模块建议
+
+1. `ai-judge-p32-app-factory-hotspot-split-v3`
+2. `ai-judge-p32-judge-command-route-orchestrator-v1`
+3. `ai-judge-p32-judge-read-route-orchestrator-v1`
+4. `ai-judge-p32-registry-governance-route-orchestrator-v1`
+5. `ai-judge-p32-panel-review-alert-route-orchestrator-v1`
+6. `ai-judge-p32-agent-advisory-boundary-hardening-v1`
+7. `ai-judge-p32-local-regression-bundle-v1`
+8. `ai-judge-p32-enterprise-consistency-refresh-v1`
+9. `ai-judge-p32-real-env-pass-window-execute-on-env`
+10. `ai-judge-p32-stage-closure-execute`
+
+---
+
+## 5. `app_factory` 剩余热点清单（P32 输入基线）
+
+1. `registry read/governance`：
+   - 第一批已完成路由编排下沉：`/internal/judge/registries/policy/dependencies/health`、`/internal/judge/registries/governance/overview`、`/internal/judge/registries/prompt-tool/governance`、`/internal/judge/registries/policy/domain-families`、`/internal/judge/registries/policy/gate-simulation`
+   - 后续关注点：继续压缩 route 依赖装配参数噪音，探索统一 dependency pack
+2. `judge command`：
+   - 已完成下沉：`/internal/judge/cases`，`phase/final dispatch preflight`，`blindization rejection`，`phase/final callback retry result`，`final contract blocked`，`final/phase dispatch report 物化编排`，`phase/final callback 发起编排`
+   - 待下沉：`/internal/judge/v3/phase/dispatch` 与 `/internal/judge/v3/final/dispatch` 的零散路由装配收口（非语义逻辑）
+3. `judge read/courtroom`：
+   - 已完成下沉：`/internal/judge/cases/{case_id}`
+   - 待下沉：
+   - `/internal/judge/cases/{case_id}/claim-ledger`
+   - `/internal/judge/cases/{case_id}/courtroom-read-model`
+   - `/internal/judge/courtroom/cases`
+   - `/internal/judge/courtroom/drilldown-bundle`
+   - `/internal/judge/evidence-claim/ops-queue`
+4. `panel/review/alert`：
+   - `/internal/judge/panels/runtime/profiles`
+   - `/internal/judge/panels/runtime/readiness`
+   - `/internal/judge/review/cases`
+   - `/internal/judge/review/cases/{case_id}`
+   - `/internal/judge/alerts/ops-view`
+   - `/internal/judge/alerts/outbox`
+5. 其他：
+   - `/internal/judge/rag/diagnostics`
+   - `NPC Coach / Room QA` 路由编排入口（已完成下沉到 `assistant_agent_routes.py`，仍待补强 advisory-only 边界断言）
+
+---
+
+## 6. 执行顺序（建议）
+
+1. 先做 `ai-judge-p32-app-factory-hotspot-split-v3`，并按“命令侧优先”切分：
+   - 先 `judge command`（create/dispatch/blindization）。
+   - 再 `judge read`（case/courtroom/evidence queue）。
+2. 第二步做 `registry + panel/review/alert` 读面编排下沉，统一 guard/error 合同。
+3. 第三步做 `NPC/Room QA advisory-only` 边界硬化与测试。
+4. 最后跑 `local regression bundle` 与 `enterprise consistency refresh`。
+5. 有真实环境窗口时再执行 `on-env pass`；若无窗口则执行 `stage closure`。
+
+---
+
+## 7. 延后事项（不阻塞 P32）
+
+1. 真实环境窗口验收（严格 `on-env`）。
+2. `NPC Coach / Room QA` 的完整产品策略与 PRD 冻结后再做业务功能扩展。
+3. 协议化扩展（链上锚定 / ZK / ZKML）继续后置，不进入当前官方裁决主链。
+
+---
+
+## 8. 本阶段明确不做
+
+1. 不新增未冻结 PRD 的 NPC/Room QA 业务能力。
+2. 不为未上线能力保留长期兼容层（alias/双写/灰度并行）。
+3. 不将本地验证结果描述为真实环境 `pass`。
+
+---
+
+## 9. 验收命令基线
+
+1. `bash skills/python-venv-guard/scripts/assert_venv.sh --project /Users/panyihang/Documents/EchoIsle/ai_judge_service --venv /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv`
+2. `cd ai_judge_service && ../scripts/py -m ruff check app tests`
+3. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py`
+4. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_policy_registry_runtime.py tests/test_ops_read_model_pack.py tests/test_judge_trace_replay_routes.py`
+5. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_agent_runtime.py tests/test_judge_workflow_roles.py tests/test_judge_trace_summary.py`
+6. `cd ai_judge_service && ../scripts/py -m pytest -q`
+7. `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+8. `bash scripts/quality/harness_docs_lint.sh`
+9. `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle`
+
+---
+
+## 10. 风险与对策
+
+1. 风险：路由下沉过程中引入行为漂移。  
+   对策：每批只做“编排迁移，不改业务语义”，以 `test_app_factory.py` 为回归主门禁。
+2. 风险：命令链下沉后 callback/receipt 链条产生时序差异。  
+   对策：先固化 dispatch 关键分支测试（success/failed_reported/failed_callback_failed）。
+3. 风险：read model 大批量下沉导致 contract 漏字段。  
+   对策：保持 contract 校验器不降级，违例保持 500 并补针对性测试。
+4. 风险：`NPC/Room QA` 边界不清造成主链污染。  
+   对策：固定 `advisory-only` 约束与测试，禁止写入 verdict/fairness/trust 官方链。
+5. 风险：无真实环境时收口口径混淆。  
+   对策：统一使用 `local_reference_ready` 与 `on-env` 双层表达。
+
+---
+
+## 11. 模块完成同步历史
+
+### 模块完成同步历史
+
+1. 2026-04-22：按你的要求先归档旧计划到 `/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260422T015729Z-ai-judge-current-plan-archive.md`。
+2. 2026-04-22：完成 `ai-judge-next-iteration-planning`，当前计划切换到 `P32`，并把 P31 未完成的 `app_factory` 剩余热点显式纳入本轮执行矩阵。
+3. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第一批，新增 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_governance_routes.py`，将 `policy dependency health / governance overview / prompt-tool governance / domain families / gate simulation` 路由编排从 `app_factory` 下沉到 applications 层；其中 `dependency health` 与 `gate simulation` 的已知错误映射统一改为 `RegistryRouteError -> _run_registry_route_guard`；新增 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_registry_governance_routes.py` 并通过 `ruff` 与定向 `pytest` 回归。
+4. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第二批，新增 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py`，将 `/internal/judge/apps/npc-coach/sessions/{session_id}/advice` 与 `/internal/judge/apps/room-qa/sessions/{session_id}/answer` 的路由编排下沉到 applications 层，`app_factory` 新增 `_run_assistant_agent_route_guard` 统一 `AssistantAgentRouteError -> HTTPException` 映射；新增 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_assistant_agent_routes.py` 并通过定向 `pytest` 回归。
+5. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第三批，新增 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py`，将 `POST /internal/judge/cases` 的命令编排（request validate/idempotency replay/registry profile resolve/workflow case_built transition/trace register/idempotency success）从 `app_factory` 下沉到 applications 层；`app_factory` 新增 `_run_judge_command_route_guard` 统一 `JudgeCommandRouteError -> HTTPException` 映射；新增 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 并通过定向 `pytest` 回归。
+6. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第四批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_phase_dispatch_preflight_route_payload` 与 `build_final_dispatch_preflight_route_payload`，将 `phase/final dispatch` 的 preflight 编排（request validate/idempotency replay/registry profile resolve/trace register/queued receipt/workflow blinded transition）从 `app_factory` 下沉到 applications 层；`app_factory` 两个 dispatch 路由前半段改为调用 `_run_judge_command_route_guard` + 新 preflight builder；并扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 phase/final preflight 成功、idempotent replay 与验证错误映射，定向 `pytest` 与 `ruff` 通过。
+7. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第五批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_blindization_rejection_route_payload`，将 blindization rejection 与 failed callback 分支（`failed_reported` / `failed_callback_failed`）从 `app_factory` 下沉到 applications 层；`app_factory` 删除 `_handle_blindization_rejection` 本体并在 phase/final dispatch 路由改为 `_run_judge_command_route_guard + build_blindization_rejection_route_payload`；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 blindization rejection 路由编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+8. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第六批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_phase_dispatch_callback_result_route_payload` 与 `build_final_dispatch_callback_result_route_payload`，将 phase/final callback retry 主链分支（`reported/failed_reported/failed_callback_failed`）从 `app_factory` 下沉到 applications 层；`app_factory` 两个 dispatch 路由 callback outcome 分支改为 `_run_judge_command_route_guard + callback_result_builder`；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 callback result 路由编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+9. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第七批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_final_contract_blocked_route_payload`，将 final contract blocked 分支（`blocked_failed_reported` / `final_failed_callback_failed`）从 `app_factory` 下沉到 applications 层；`app_factory` final dispatch 路由的 contract blocked 分支改为 `_run_judge_command_route_guard + build_final_contract_blocked_route_payload`；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 final contract blocked 路由编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+10. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第八批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_final_dispatch_report_materialization_route_payload`，将 final dispatch 中 phase receipts 聚合、final report 物化、runtime/policy trace 挂载、attestation、claim-ledger upsert 与 contract missing fields 校验编排从 `app_factory` 下沉到 applications 层；`app_factory` final dispatch 主链改为 `_run_judge_command_route_guard + report materialization builder`；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 final report 物化编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+11. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第九批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_phase_dispatch_report_materialization_route_payload`，将 phase dispatch 中 phase report 生成、runtime/policy trace 挂载、attestation、claim-ledger upsert 与 phase workflow payload 生成编排从 `app_factory` 下沉到 applications 层；`app_factory` phase dispatch 对应区段改为 `_run_judge_command_route_guard + report materialization builder`；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 phase report 物化编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+12. 2026-04-22：推进 `ai-judge-p32-app-factory-hotspot-split-v3` 第十批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py` 新增 `build_phase_dispatch_callback_delivery_route_payload` 与 `build_final_dispatch_callback_delivery_route_payload`，将 phase/final dispatch 中 callback 发起与 failed payload 构造编排从 `app_factory` 下沉到 applications 层；`app_factory` 两个 dispatch 路由 callback delivery 段改为 `_run_judge_command_route_guard + callback delivery builder`；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_judge_command_routes.py` 覆盖 callback delivery 路由编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+13. 2026-04-22：推进 `ai-judge-p32-judge-read-route-orchestrator-v1` 第一批，在 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/case_read_routes.py` 新增 `CaseReadRouteError` 与 `build_case_overview_route_payload`，将 `GET /internal/judge/cases/{case_id}` 的 workflow/receipt/trace/replay/alerts/claim-ledger 聚合与 overview payload 组装从 `app_factory` 下沉到 applications 层；`app_factory` 新增 `_run_case_read_route_guard` 并将该路由改为 guard + builder；扩展 `/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_case_read_routes.py` 覆盖 case_not_found 与聚合输出编排单测，并通过定向 `pytest` 与 `ruff` 回归。
+
+---
+
+## 12. 本轮启动检查清单
+
+1. 开发前运行 `pre-module-prd-goal-guard`（按模块执行）。
+2. 涉及 API/DTO/错误码变更时，同轮同步调用方、测试与文档。
+3. 与真实环境相关结论必须标注 `on-env`，本地阶段不得宣称 `pass`。
+4. 每完成一个模块都回写当前计划矩阵与同步历史。
+5. 严格通过架构方案第 13 章一致性检查清单后再进入下一轮计划生成。
+
+---
+
+## 13. 架构方案第13章一致性校验（计划生成前置）
+
+1. 角色一致性：P32 继续围绕 Judge 主链编排下沉，不合并或绕过 8 Agent 职责边界，且保持 `workflow_roles` 可追踪。
+2. 数据一致性：`case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 仍作为唯一主链语义，路由重构不改对象合同。
+3. 门禁一致性：`Fairness Sentinel` 仍在终判前生效，`policy gate` 与 override 审计字段继续通过 registry/read-model 主链暴露。
+4. 边界一致性：`NPC/Room QA` 仅保持 advisory-only，不写入官方 verdict/fairness/trust 账本。
+5. 跨层一致性：任何 API/DTO/错误码调整必须同轮更新 `chat_server` 调用方、测试与文档，不保留长期 alias 双轨。
+6. 收口一致性：真实环境项继续区分 `local_reference_ready` 与 `pass`，本地阶段仅输出可参考结论。
