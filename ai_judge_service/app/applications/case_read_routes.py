@@ -339,6 +339,264 @@ async def build_case_courtroom_read_model_route_payload(
     )
 
 
+async def build_case_courtroom_cases_route_payload(
+    *,
+    status: str | None,
+    dispatch_type: str,
+    winner: str | None,
+    review_required: bool | None,
+    risk_level: str | None,
+    sla_bucket: str | None,
+    updated_from: datetime | None,
+    updated_to: datetime | None,
+    sort_by: str,
+    sort_order: str,
+    scan_limit: int,
+    offset: int,
+    limit: int,
+    normalize_workflow_status: Callable[[str | None], str | None],
+    workflow_statuses: set[str],
+    normalize_review_case_risk_level: Callable[[str | None], str | None],
+    review_case_risk_level_values: set[str],
+    normalize_review_case_sla_bucket: Callable[[str | None], str | None],
+    review_case_sla_bucket_values: set[str],
+    normalize_query_datetime: Callable[[datetime | None], datetime | None],
+    normalize_courtroom_case_sort_by: Callable[[str | None], str],
+    normalize_courtroom_case_sort_order: Callable[[str | None], str],
+    courtroom_case_sort_fields: set[str],
+    workflow_list_jobs: Callable[..., Awaitable[list[Any]]],
+    resolve_report_context_for_case: Callable[..., Awaitable[dict[str, Any]]],
+    trace_get: Callable[[int], Any | None],
+    build_review_case_risk_profile: Callable[..., dict[str, Any]],
+    build_verdict_contract: Callable[[dict[str, Any]], dict[str, Any]],
+    build_case_evidence_view: Callable[..., dict[str, Any]],
+    build_courtroom_read_model_view: Callable[..., dict[str, Any]],
+    serialize_workflow_job: Callable[[Any], dict[str, Any]],
+    build_courtroom_read_model_light_summary: Callable[..., dict[str, Any]],
+    build_courtroom_case_sort_key: Callable[..., tuple[Any, ...]],
+) -> dict[str, Any]:
+    normalized_status = normalize_workflow_status(status)
+    if normalized_status is not None and normalized_status not in workflow_statuses:
+        raise CaseReadRouteError(status_code=422, detail="invalid_workflow_status")
+
+    normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+    if normalized_dispatch_type not in {"auto", "phase", "final"}:
+        raise CaseReadRouteError(status_code=422, detail="invalid_dispatch_type")
+    workflow_dispatch_filter = (
+        None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+    )
+
+    normalized_winner = str(winner or "").strip().lower() or None
+    if normalized_winner not in {None, "pro", "con", "draw"}:
+        raise CaseReadRouteError(status_code=422, detail="invalid_winner")
+
+    normalized_risk_level = normalize_review_case_risk_level(risk_level)
+    if (
+        normalized_risk_level is not None
+        and normalized_risk_level not in review_case_risk_level_values
+    ):
+        raise CaseReadRouteError(status_code=422, detail="invalid_review_risk_level")
+
+    normalized_sla_bucket = normalize_review_case_sla_bucket(sla_bucket)
+    if (
+        normalized_sla_bucket is not None
+        and normalized_sla_bucket not in review_case_sla_bucket_values
+    ):
+        raise CaseReadRouteError(status_code=422, detail="invalid_review_sla_bucket")
+
+    normalized_updated_from = normalize_query_datetime(updated_from)
+    normalized_updated_to = normalize_query_datetime(updated_to)
+    if (
+        normalized_updated_from is not None
+        and normalized_updated_to is not None
+        and normalized_updated_from > normalized_updated_to
+    ):
+        raise CaseReadRouteError(status_code=422, detail="invalid_updated_time_window")
+
+    normalized_sort_by = normalize_courtroom_case_sort_by(sort_by)
+    if normalized_sort_by not in courtroom_case_sort_fields:
+        raise CaseReadRouteError(status_code=422, detail="invalid_courtroom_sort_by")
+    normalized_sort_order = normalize_courtroom_case_sort_order(sort_order)
+    if normalized_sort_order not in {"asc", "desc"}:
+        raise CaseReadRouteError(status_code=422, detail="invalid_courtroom_sort_order")
+
+    normalized_scan_limit = max(20, min(int(scan_limit), 2000))
+    normalized_offset = max(0, int(offset))
+    normalized_limit = max(1, min(int(limit), 200))
+
+    jobs = await workflow_list_jobs(
+        status=normalized_status,
+        dispatch_type=workflow_dispatch_filter,
+        limit=normalized_scan_limit,
+    )
+    now = datetime.now(timezone.utc)
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for job in jobs:
+        updated_at = normalize_query_datetime(job.updated_at)
+        if (
+            normalized_updated_from is not None
+            and (updated_at is None or updated_at < normalized_updated_from)
+        ):
+            continue
+        if (
+            normalized_updated_to is not None
+            and (updated_at is None or updated_at > normalized_updated_to)
+        ):
+            continue
+
+        try:
+            context = await resolve_report_context_for_case(
+                case_id=job.job_id,
+                dispatch_type=normalized_dispatch_type,
+                not_found_detail="courtroom_case_not_found",
+                missing_report_detail="courtroom_report_payload_missing",
+            )
+        except Exception as err:
+            status_code = getattr(err, "status_code", None)
+            detail = getattr(err, "detail", None)
+            if not isinstance(status_code, int):
+                try:
+                    status_code = int(status_code)
+                except (TypeError, ValueError):
+                    raise
+            error_code = str(detail or "").strip() or "courtroom_case_unavailable"
+            if error_code in {
+                "courtroom_case_not_found",
+                "courtroom_report_payload_missing",
+            }:
+                errors.append(
+                    {
+                        "caseId": int(job.job_id),
+                        "statusCode": int(status_code),
+                        "errorCode": error_code,
+                    }
+                )
+                continue
+            _raise_route_error_from_http_exception(err)
+            raise
+
+        report_payload = (
+            context.get("reportPayload")
+            if isinstance(context.get("reportPayload"), dict)
+            else {}
+        )
+        winner_value = str(report_payload.get("winner") or "").strip().lower() or None
+        if normalized_winner is not None and winner_value != normalized_winner:
+            continue
+        report_review_required = bool(report_payload.get("reviewRequired"))
+        if review_required is not None and report_review_required != bool(review_required):
+            continue
+
+        trace = trace_get(job.job_id)
+        report_summary = (
+            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+        )
+        risk_profile = build_review_case_risk_profile(
+            workflow=job,
+            report_payload=report_payload,
+            report_summary=report_summary,
+            now=now,
+        )
+        if (
+            normalized_risk_level is not None
+            and str(risk_profile.get("level") or "").strip().lower() != normalized_risk_level
+        ):
+            continue
+        if (
+            normalized_sla_bucket is not None
+            and str(risk_profile.get("slaBucket") or "").strip().lower()
+            != normalized_sla_bucket
+        ):
+            continue
+
+        verdict_contract = build_verdict_contract(report_payload)
+        case_evidence = build_case_evidence_view(
+            report_payload=report_payload,
+            verdict_contract=verdict_contract,
+            claim_ledger_record=None,
+        )
+        courtroom_view = build_courtroom_read_model_view(
+            report_payload=report_payload,
+            case_evidence=case_evidence,
+        )
+        response_payload = (
+            context.get("responsePayload")
+            if isinstance(context.get("responsePayload"), dict)
+            else {}
+        )
+        callback_status = (
+            report_summary.get("callbackStatus")
+            or response_payload.get("callbackStatus")
+            or (trace.callback_status if trace is not None else None)
+        )
+        callback_error = (
+            report_summary.get("callbackError")
+            or response_payload.get("callbackError")
+            or (trace.callback_error if trace is not None else None)
+        )
+
+        items.append(
+            {
+                "caseId": int(job.job_id),
+                "dispatchType": context.get("dispatchType"),
+                "traceId": context.get("traceId") or None,
+                "workflow": serialize_workflow_job(job),
+                "winner": winner_value,
+                "reviewRequired": report_review_required,
+                "needsDrawVote": bool(report_payload.get("needsDrawVote")),
+                "callbackStatus": callback_status,
+                "callbackError": callback_error,
+                "riskProfile": risk_profile,
+                "courtroomSummary": build_courtroom_read_model_light_summary(
+                    courtroom_view=courtroom_view,
+                ),
+            }
+        )
+
+    items.sort(
+        key=lambda row: build_courtroom_case_sort_key(
+            item=row,
+            sort_by=normalized_sort_by,
+        ),
+        reverse=(normalized_sort_order == "desc"),
+    )
+    page_items = items[normalized_offset : normalized_offset + normalized_limit]
+
+    return {
+        "count": len(items),
+        "returned": len(page_items),
+        "scanned": len(jobs),
+        "skipped": max(0, len(jobs) - len(items)),
+        "errorCount": len(errors),
+        "items": page_items,
+        "errors": errors,
+        "filters": {
+            "status": normalized_status,
+            "dispatchType": normalized_dispatch_type,
+            "winner": normalized_winner,
+            "reviewRequired": review_required,
+            "riskLevel": normalized_risk_level,
+            "slaBucket": normalized_sla_bucket,
+            "updatedFrom": (
+                normalized_updated_from.isoformat()
+                if normalized_updated_from is not None
+                else None
+            ),
+            "updatedTo": (
+                normalized_updated_to.isoformat()
+                if normalized_updated_to is not None
+                else None
+            ),
+            "sortBy": normalized_sort_by,
+            "sortOrder": normalized_sort_order,
+            "scanLimit": normalized_scan_limit,
+            "offset": normalized_offset,
+            "limit": normalized_limit,
+        },
+    }
+
+
 def build_case_overview_replay_items(
     *,
     replay_records: list[Any],

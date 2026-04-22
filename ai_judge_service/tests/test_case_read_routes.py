@@ -9,6 +9,7 @@ from typing import Any
 from app.applications.case_read_routes import (
     CaseReadRouteError,
     build_case_claim_ledger_route_payload,
+    build_case_courtroom_cases_route_payload,
     build_case_courtroom_read_model_payload,
     build_case_courtroom_read_model_route_payload,
     build_case_overview_payload,
@@ -277,6 +278,136 @@ class CaseReadRoutesTests(unittest.TestCase):
         self.assertEqual(payload["event_count"], 1)
         self.assertEqual(payload["alerts"][0]["alertId"], "alert-1")
         self.assertEqual(payload["courtroom"]["recorder"]["ok"], True)
+
+    def test_build_case_courtroom_cases_route_payload_should_validate_query_values(self) -> None:
+        with self.assertRaises(CaseReadRouteError) as ctx:
+            asyncio.run(
+                build_case_courtroom_cases_route_payload(
+                    status=None,
+                    dispatch_type="auto",
+                    winner="invalid",
+                    review_required=None,
+                    risk_level=None,
+                    sla_bucket=None,
+                    updated_from=None,
+                    updated_to=None,
+                    sort_by="updated_at",
+                    sort_order="desc",
+                    scan_limit=500,
+                    offset=0,
+                    limit=50,
+                    normalize_workflow_status=lambda value: value,
+                    workflow_statuses={"queued", "review_required", "callback_reported"},
+                    normalize_review_case_risk_level=lambda value: value,
+                    review_case_risk_level_values={"low", "medium", "high"},
+                    normalize_review_case_sla_bucket=lambda value: value,
+                    review_case_sla_bucket_values={"healthy", "warning", "critical"},
+                    normalize_query_datetime=lambda value: value,
+                    normalize_courtroom_case_sort_by=lambda value: str(value or "").strip().lower(),
+                    normalize_courtroom_case_sort_order=lambda value: str(value or "").strip().lower(),
+                    courtroom_case_sort_fields={"updated_at", "risk_score", "case_id"},
+                    workflow_list_jobs=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    resolve_report_context_for_case=lambda **kwargs: asyncio.sleep(0, result={}),
+                    trace_get=lambda case_id: None,
+                    build_review_case_risk_profile=lambda **kwargs: {},
+                    build_verdict_contract=lambda payload: {},
+                    build_case_evidence_view=lambda **kwargs: {},
+                    build_courtroom_read_model_view=lambda **kwargs: {},
+                    serialize_workflow_job=lambda job: {},
+                    build_courtroom_read_model_light_summary=lambda **kwargs: {},
+                    build_courtroom_case_sort_key=lambda **kwargs: tuple(),
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "invalid_winner")
+
+    def test_build_case_courtroom_cases_route_payload_should_build_items(self) -> None:
+        created_at = datetime(2026, 4, 21, 0, 3, tzinfo=timezone.utc)
+        job = type(
+            "Job",
+            (),
+            {
+                "job_id": 9902,
+                "updated_at": created_at,
+                "status": "review_required",
+            },
+        )()
+        trace = _DummyTrace(trace_id="trace-9902", replays=[])
+        trace.report_summary = {"callbackStatus": "reported", "callbackError": None}
+        trace.callback_status = "reported"
+        trace.callback_error = None
+
+        payload = asyncio.run(
+            build_case_courtroom_cases_route_payload(
+                status="review_required",
+                dispatch_type="auto",
+                winner="draw",
+                review_required=True,
+                risk_level="high",
+                sla_bucket="critical",
+                updated_from=created_at,
+                updated_to=created_at,
+                sort_by="case_id",
+                sort_order="desc",
+                scan_limit=500,
+                offset=0,
+                limit=50,
+                normalize_workflow_status=lambda value: str(value or "").strip().lower() or None,
+                workflow_statuses={"queued", "review_required", "callback_reported"},
+                normalize_review_case_risk_level=lambda value: str(value or "").strip().lower() or None,
+                review_case_risk_level_values={"low", "medium", "high"},
+                normalize_review_case_sla_bucket=lambda value: str(value or "").strip().lower() or None,
+                review_case_sla_bucket_values={"healthy", "warning", "critical"},
+                normalize_query_datetime=lambda value: value,
+                normalize_courtroom_case_sort_by=lambda value: str(value or "").strip().lower(),
+                normalize_courtroom_case_sort_order=lambda value: str(value or "").strip().lower(),
+                courtroom_case_sort_fields={"updated_at", "risk_score", "case_id"},
+                workflow_list_jobs=lambda **kwargs: asyncio.sleep(0, result=[job]),
+                resolve_report_context_for_case=lambda **kwargs: asyncio.sleep(
+                    0,
+                    result={
+                        "dispatchType": "final",
+                        "traceId": "trace-9902",
+                        "reportPayload": {
+                            "winner": "draw",
+                            "reviewRequired": True,
+                            "needsDrawVote": True,
+                        },
+                        "responsePayload": {"callbackStatus": "reported"},
+                    },
+                ),
+                trace_get=lambda case_id: trace,
+                build_review_case_risk_profile=lambda **kwargs: {
+                    "level": "high",
+                    "slaBucket": "critical",
+                    "riskScore": 98,
+                },
+                build_verdict_contract=lambda payload: {"winner": payload.get("winner")},
+                build_case_evidence_view=lambda **kwargs: {"hasCaseDossier": True},
+                build_courtroom_read_model_view=lambda **kwargs: {"recorder": {"ok": True}},
+                serialize_workflow_job=lambda workflow_job: {
+                    "jobId": workflow_job.job_id,
+                    "status": workflow_job.status,
+                },
+                build_courtroom_read_model_light_summary=lambda **kwargs: {
+                    "recorder": kwargs.get("courtroom_view", {}).get("recorder", {}),
+                },
+                build_courtroom_case_sort_key=lambda **kwargs: (
+                    int(kwargs.get("item", {}).get("caseId", 0)),
+                ),
+            )
+        )
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["returned"], 1)
+        self.assertEqual(payload["errorCount"], 0)
+        item = payload["items"][0]
+        self.assertEqual(item["caseId"], 9902)
+        self.assertEqual(item["winner"], "draw")
+        self.assertTrue(item["reviewRequired"])
+        self.assertEqual(item["riskProfile"]["level"], "high")
+        self.assertEqual(payload["filters"]["dispatchType"], "auto")
+        self.assertEqual(payload["filters"]["winner"], "draw")
 
     def test_build_case_overview_replay_items_should_prefer_replay_records(self) -> None:
         records = [
