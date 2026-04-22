@@ -9,7 +9,10 @@ from app.applications.judge_command_routes import (
     JudgeCommandRouteError,
     build_blindization_rejection_route_payload,
     build_case_create_route_payload,
+    build_final_contract_blocked_route_payload,
+    build_final_dispatch_callback_result_route_payload,
     build_final_dispatch_preflight_route_payload,
+    build_phase_dispatch_callback_result_route_payload,
     build_phase_dispatch_preflight_route_payload,
 )
 from app.models import CaseCreateRequest, FinalDispatchRequest, PhaseDispatchRequest
@@ -657,6 +660,405 @@ class JudgeCommandRoutesTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 502)
         self.assertIn("phase_failed_callback_failed", str(ctx.exception.detail))
+
+    def test_build_phase_dispatch_callback_result_route_payload_should_raise_502_for_failed_reported(self) -> None:
+        parsed = SimpleNamespace(
+            case_id=5401,
+            scope_id=1,
+            session_id=5411,
+            trace_id="trace-phase-5401",
+            idempotency_key="phase:5401",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            retrieval_profile="hybrid_v1",
+            phase_no=3,
+            message_start_id=11,
+            message_end_id=12,
+            message_count=2,
+        )
+        callback_outcome = SimpleNamespace(
+            callback_status="failed_reported",
+            report_error="retry exhausted",
+            failed_payload={"errorCode": "phase_callback_retry_exhausted"},
+            failed_attempts=2,
+            failed_retries=1,
+        )
+        calls: dict[str, Any] = {}
+
+        def _with_error_contract(payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            out = dict(payload)
+            out["errorCode"] = kwargs.get("error_code")
+            return out
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["receipt"] = dict(kwargs)
+
+        def _trace_register_failure(**kwargs: Any) -> None:
+            calls["traceFailure"] = dict(kwargs)
+
+        async def _workflow_mark_failed(**kwargs: Any) -> None:
+            calls["workflowFailed"] = dict(kwargs)
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                build_phase_dispatch_callback_result_route_payload(
+                    parsed=parsed,
+                    response={"accepted": True, "dispatchType": "phase"},
+                    request_payload={"case_id": 5401},
+                    report_payload={"winner": "pro"},
+                    callback_outcome=callback_outcome,
+                    callback_status_reported="reported",
+                    callback_status_failed_reported="failed_reported",
+                    callback_status_failed_callback_failed="failed_callback_failed",
+                    with_error_contract=_with_error_contract,
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=_trace_register_failure,
+                    trace_register_success=lambda **kwargs: None,
+                    workflow_mark_failed=_workflow_mark_failed,
+                    workflow_mark_completed=lambda **kwargs: asyncio.sleep(0),
+                    build_phase_workflow_reported_payload=lambda **kwargs: {"callbackStatus": kwargs["callback_status"]},
+                    build_trace_report_summary=lambda **kwargs: {},
+                    clear_idempotency=lambda key: calls.update({"cleared": key}),
+                    set_idempotency_success=lambda **kwargs: None,
+                    idempotency_ttl_secs=3600,
+                    phase_judge_workflow_payload={"graph": "ok"},
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("phase_callback_failed", str(ctx.exception.detail))
+        self.assertEqual(calls["receipt"]["status"], "callback_failed")
+        self.assertEqual(calls["traceFailure"]["callback_status"], "failed_reported")
+        self.assertEqual(calls["workflowFailed"]["error_code"], "phase_callback_retry_exhausted")
+        self.assertEqual(calls["cleared"], "phase:5401")
+
+    def test_build_phase_dispatch_callback_result_route_payload_should_return_response_for_reported(self) -> None:
+        parsed = SimpleNamespace(
+            case_id=5402,
+            scope_id=1,
+            session_id=5412,
+            trace_id="trace-phase-5402",
+            idempotency_key="phase:5402",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            retrieval_profile="hybrid_v1",
+            phase_no=4,
+            message_start_id=21,
+            message_end_id=22,
+            message_count=2,
+        )
+        callback_outcome = SimpleNamespace(
+            callback_status="reported",
+            callback_attempts=1,
+            callback_retries=0,
+        )
+        calls: dict[str, Any] = {}
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["receipt"] = dict(kwargs)
+
+        def _trace_register_success(**kwargs: Any) -> None:
+            calls["traceSuccess"] = dict(kwargs)
+
+        async def _workflow_mark_completed(**kwargs: Any) -> None:
+            calls["workflowCompleted"] = dict(kwargs)
+
+        def _set_idempotency_success(**kwargs: Any) -> None:
+            calls["idempotencySuccess"] = dict(kwargs)
+
+        result = asyncio.run(
+            build_phase_dispatch_callback_result_route_payload(
+                parsed=parsed,
+                response={"accepted": True, "dispatchType": "phase"},
+                request_payload={"case_id": 5402},
+                report_payload={"winner": "con"},
+                callback_outcome=callback_outcome,
+                callback_status_reported="reported",
+                callback_status_failed_reported="failed_reported",
+                callback_status_failed_callback_failed="failed_callback_failed",
+                with_error_contract=lambda payload, **kwargs: dict(payload),
+                persist_dispatch_receipt=_persist_dispatch_receipt,
+                trace_register_failure=lambda **kwargs: None,
+                trace_register_success=_trace_register_success,
+                workflow_mark_failed=lambda **kwargs: asyncio.sleep(0),
+                workflow_mark_completed=_workflow_mark_completed,
+                build_phase_workflow_reported_payload=lambda **kwargs: {"callbackStatus": kwargs["callback_status"]},
+                build_trace_report_summary=lambda **kwargs: {"dispatchType": kwargs.get("dispatch_type")},
+                clear_idempotency=lambda key: None,
+                set_idempotency_success=_set_idempotency_success,
+                idempotency_ttl_secs=3600,
+                phase_judge_workflow_payload={"graph": "ok"},
+            )
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(calls["receipt"]["status"], "reported")
+        self.assertEqual(calls["traceSuccess"]["callback_status"], "reported")
+        self.assertEqual(calls["workflowCompleted"]["event_payload"]["callbackStatus"], "reported")
+        self.assertEqual(calls["idempotencySuccess"]["ttl_secs"], 3600)
+
+    def test_build_final_dispatch_callback_result_route_payload_should_raise_502_for_failed_callback_failed(self) -> None:
+        parsed = SimpleNamespace(
+            case_id=5501,
+            scope_id=1,
+            session_id=5511,
+            trace_id="trace-final-5501",
+            idempotency_key="final:5501",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            phase_start_no=1,
+            phase_end_no=4,
+        )
+        callback_outcome = SimpleNamespace(
+            callback_status="failed_callback_failed",
+            report_error="report failed",
+            failed_error="failed-callback-down",
+            failed_payload={"errorCode": "final_callback_retry_exhausted"},
+        )
+        calls: dict[str, Any] = {}
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["receipt"] = dict(kwargs)
+
+        def _trace_register_failure(**kwargs: Any) -> None:
+            calls["traceFailure"] = dict(kwargs)
+
+        async def _workflow_mark_failed(**kwargs: Any) -> None:
+            calls["workflowFailed"] = dict(kwargs)
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                build_final_dispatch_callback_result_route_payload(
+                    parsed=parsed,
+                    response={"accepted": True, "dispatchType": "final"},
+                    request_payload={"case_id": 5501},
+                    report_payload={"winner": "draw"},
+                    callback_outcome=callback_outcome,
+                    callback_status_reported="reported",
+                    callback_status_failed_reported="failed_reported",
+                    callback_status_failed_callback_failed="failed_callback_failed",
+                    with_error_contract=lambda payload, **kwargs: dict(payload),
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=_trace_register_failure,
+                    trace_register_success=lambda **kwargs: None,
+                    workflow_mark_failed=_workflow_mark_failed,
+                    workflow_mark_review_required=lambda **kwargs: asyncio.sleep(0),
+                    workflow_mark_completed=lambda **kwargs: asyncio.sleep(0),
+                    build_final_workflow_reported_payload=lambda **kwargs: {"callbackStatus": kwargs["callback_status"]},
+                    build_trace_report_summary=lambda **kwargs: {},
+                    clear_idempotency=lambda key: calls.update({"cleared": key}),
+                    set_idempotency_success=lambda **kwargs: None,
+                    idempotency_ttl_secs=3600,
+                    final_judge_workflow_payload={"graph": "ok"},
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("final_failed_callback_failed", str(ctx.exception.detail))
+        self.assertEqual(calls["receipt"]["status"], "callback_failed")
+        self.assertEqual(calls["traceFailure"]["callback_status"], "failed_callback_failed")
+        self.assertEqual(calls["workflowFailed"]["error_code"], "final_failed_callback_failed")
+        self.assertEqual(calls["cleared"], "final:5501")
+
+    def test_build_final_dispatch_callback_result_route_payload_should_mark_review_required_on_reported(self) -> None:
+        parsed = SimpleNamespace(
+            case_id=5502,
+            scope_id=1,
+            session_id=5512,
+            trace_id="trace-final-5502",
+            idempotency_key="final:5502",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            phase_start_no=1,
+            phase_end_no=6,
+        )
+        callback_outcome = SimpleNamespace(
+            callback_status="reported",
+            callback_attempts=1,
+            callback_retries=0,
+        )
+        calls: dict[str, Any] = {}
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["receipt"] = dict(kwargs)
+
+        def _trace_register_success(**kwargs: Any) -> None:
+            calls["traceSuccess"] = dict(kwargs)
+
+        async def _workflow_mark_review_required(**kwargs: Any) -> None:
+            calls["workflowReviewRequired"] = dict(kwargs)
+
+        def _set_idempotency_success(**kwargs: Any) -> None:
+            calls["idempotencySuccess"] = dict(kwargs)
+
+        result = asyncio.run(
+            build_final_dispatch_callback_result_route_payload(
+                parsed=parsed,
+                response={"accepted": True, "dispatchType": "final"},
+                request_payload={"case_id": 5502},
+                report_payload={"winner": "draw", "reviewRequired": True},
+                callback_outcome=callback_outcome,
+                callback_status_reported="reported",
+                callback_status_failed_reported="failed_reported",
+                callback_status_failed_callback_failed="failed_callback_failed",
+                with_error_contract=lambda payload, **kwargs: dict(payload),
+                persist_dispatch_receipt=_persist_dispatch_receipt,
+                trace_register_failure=lambda **kwargs: None,
+                trace_register_success=_trace_register_success,
+                workflow_mark_failed=lambda **kwargs: asyncio.sleep(0),
+                workflow_mark_review_required=_workflow_mark_review_required,
+                workflow_mark_completed=lambda **kwargs: asyncio.sleep(0),
+                build_final_workflow_reported_payload=lambda **kwargs: {
+                    "callbackStatus": kwargs["callback_status"],
+                    "reviewRequired": bool(kwargs["report_payload"].get("reviewRequired")),
+                },
+                build_trace_report_summary=lambda **kwargs: {"dispatchType": kwargs.get("dispatch_type")},
+                clear_idempotency=lambda key: None,
+                set_idempotency_success=_set_idempotency_success,
+                idempotency_ttl_secs=3600,
+                final_judge_workflow_payload={"graph": "ok"},
+            )
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(calls["receipt"]["status"], "reported")
+        self.assertEqual(calls["traceSuccess"]["callback_status"], "reported")
+        self.assertTrue(calls["workflowReviewRequired"]["event_payload"]["reviewRequired"])
+        self.assertEqual(calls["idempotencySuccess"]["ttl_secs"], 3600)
+
+    def test_build_final_contract_blocked_route_payload_should_raise_502_when_failed_callback_reported(
+        self,
+    ) -> None:
+        parsed = SimpleNamespace(
+            case_id=5601,
+            scope_id=1,
+            session_id=5611,
+            trace_id="trace-final-5601",
+            idempotency_key="final:5601",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            phase_start_no=1,
+            phase_end_no=5,
+        )
+        calls: dict[str, Any] = {}
+
+        def _upsert_audit_alert(**kwargs: Any) -> Any:
+            calls["alert"] = dict(kwargs)
+            return SimpleNamespace(alert_id="alert-final-5601")
+
+        async def _sync_audit_alert_to_facts(*, alert: Any) -> None:
+            calls["syncedAlertId"] = alert.alert_id
+
+        def _build_failed_callback_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["failedPayload"] = dict(kwargs)
+            return dict(kwargs)
+
+        async def _invoke_failed_callback_with_retry(*, case_id: int, payload: dict[str, Any]) -> tuple[int, int]:
+            calls["failedInvoke"] = {"caseId": case_id, "payload": dict(payload)}
+            return 1, 0
+
+        def _with_error_contract(payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            out = dict(payload)
+            out["errorCode"] = kwargs.get("error_code")
+            return out
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["receipt"] = dict(kwargs)
+
+        def _trace_register_failure(**kwargs: Any) -> None:
+            calls["traceFailure"] = dict(kwargs)
+
+        async def _workflow_mark_failed(**kwargs: Any) -> None:
+            calls["workflowFailed"] = dict(kwargs)
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                build_final_contract_blocked_route_payload(
+                    parsed=parsed,
+                    response={"accepted": True, "dispatchType": "final"},
+                    request_payload={"case_id": 5601},
+                    report_payload={"degradationLevel": 2},
+                    contract_missing_fields=["debateSummary", "sideAnalysis", "verdictReason"],
+                    upsert_audit_alert=_upsert_audit_alert,
+                    sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                    build_failed_callback_payload=_build_failed_callback_payload,
+                    invoke_failed_callback_with_retry=_invoke_failed_callback_with_retry,
+                    with_error_contract=_with_error_contract,
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=_trace_register_failure,
+                    workflow_mark_failed=_workflow_mark_failed,
+                    clear_idempotency=lambda key: calls.update({"cleared": key}),
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("final_contract_blocked", str(ctx.exception.detail))
+        self.assertEqual(calls["syncedAlertId"], "alert-final-5601")
+        self.assertEqual(calls["receipt"]["status"], "callback_failed")
+        self.assertEqual(calls["traceFailure"]["callback_status"], "blocked_failed_reported")
+        self.assertEqual(calls["workflowFailed"]["error_code"], "final_contract_blocked")
+        self.assertEqual(calls["cleared"], "final:5601")
+
+    def test_build_final_contract_blocked_route_payload_should_raise_502_when_failed_callback_fails(
+        self,
+    ) -> None:
+        parsed = SimpleNamespace(
+            case_id=5602,
+            scope_id=1,
+            session_id=5612,
+            trace_id="trace-final-5602",
+            idempotency_key="final:5602",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            phase_start_no=2,
+            phase_end_no=6,
+        )
+        calls: dict[str, Any] = {}
+
+        async def _raise_failed_callback(*, case_id: int, payload: dict[str, Any]) -> tuple[int, int]:
+            raise RuntimeError("final-failed-callback-down")
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["receipt"] = dict(kwargs)
+
+        def _trace_register_failure(**kwargs: Any) -> None:
+            calls["traceFailure"] = dict(kwargs)
+
+        async def _workflow_mark_failed(**kwargs: Any) -> None:
+            calls["workflowFailed"] = dict(kwargs)
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                build_final_contract_blocked_route_payload(
+                    parsed=parsed,
+                    response={"accepted": True, "dispatchType": "final"},
+                    request_payload={"case_id": 5602},
+                    report_payload={"degradationLevel": 1},
+                    contract_missing_fields=["debateSummary"],
+                    upsert_audit_alert=lambda **kwargs: SimpleNamespace(alert_id="alert-final-5602"),
+                    sync_audit_alert_to_facts=lambda **kwargs: asyncio.sleep(0),
+                    build_failed_callback_payload=lambda **kwargs: dict(kwargs),
+                    invoke_failed_callback_with_retry=_raise_failed_callback,
+                    with_error_contract=lambda payload, **kwargs: dict(payload),
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=_trace_register_failure,
+                    workflow_mark_failed=_workflow_mark_failed,
+                    clear_idempotency=lambda key: calls.update({"cleared": key}),
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("final_failed_callback_failed", str(ctx.exception.detail))
+        self.assertEqual(calls["receipt"]["status"], "callback_failed")
+        self.assertEqual(calls["traceFailure"]["callback_status"], "failed_callback_failed")
+        self.assertEqual(calls["workflowFailed"]["error_code"], "final_failed_callback_failed")
+        self.assertEqual(calls["cleared"], "final:5602")
 
 
 if __name__ == "__main__":

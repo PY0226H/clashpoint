@@ -156,7 +156,16 @@ from .applications.judge_command_routes import (
     build_case_create_route_payload as build_case_create_route_payload_v3,
 )
 from .applications.judge_command_routes import (
+    build_final_contract_blocked_route_payload as build_final_contract_blocked_route_payload_v3,
+)
+from .applications.judge_command_routes import (
+    build_final_dispatch_callback_result_route_payload as build_final_dispatch_callback_result_route_payload_v3,
+)
+from .applications.judge_command_routes import (
     build_final_dispatch_preflight_route_payload as build_final_dispatch_preflight_route_payload_v3,
+)
+from .applications.judge_command_routes import (
+    build_phase_dispatch_callback_result_route_payload as build_phase_dispatch_callback_result_route_payload_v3,
 )
 from .applications.judge_command_routes import (
     build_phase_dispatch_preflight_route_payload as build_phase_dispatch_preflight_route_payload_v3,
@@ -7840,203 +7849,30 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
         )
 
-        if phase_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3:
-            error_message = str(phase_callback_outcome.report_error or "")
-            failed_error = str(phase_callback_outcome.failed_error or "unknown")
-            failed_payload = (
-                dict(phase_callback_outcome.failed_payload)
-                if isinstance(phase_callback_outcome.failed_payload, dict)
-                else {}
-            )
-            receipt_response = _with_error_contract(
-                {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_callback_failed",
-                    "callbackError": error_message,
-                    "reportPayload": phase_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackError": failed_error,
-                },
-                error_code="phase_failed_callback_failed",
-                error_message=failed_error,
-                dispatch_type="phase",
-                trace_id=parsed.trace_id,
-                retryable=False,
-                category="callback_delivery",
-                details={"reportError": error_message},
-            )
-            await _persist_dispatch_receipt(
-                dispatch_type="phase",
-                job_id=parsed.case_id,
-                scope_id=parsed.scope_id,
-                session_id=parsed.session_id,
-                trace_id=parsed.trace_id,
-                idempotency_key=parsed.idempotency_key,
-                rubric_version=parsed.rubric_version,
-                judge_policy_version=parsed.judge_policy_version,
-                topic_domain=parsed.topic_domain,
-                retrieval_profile=parsed.retrieval_profile,
-                phase_no=parsed.phase_no,
-                phase_start_no=None,
-                phase_end_no=None,
-                message_start_id=parsed.message_start_id,
-                message_end_id=parsed.message_end_id,
-                message_count=parsed.message_count,
-                status="callback_failed",
+        return await _run_judge_command_route_guard(
+            build_phase_dispatch_callback_result_route_payload_v3(
+                parsed=parsed,
+                response=response,
                 request_payload=request_payload,
-                response_payload=receipt_response,
+                report_payload=phase_report_payload,
+                callback_outcome=phase_callback_outcome,
+                callback_status_reported=CALLBACK_STATUS_REPORTED_V3,
+                callback_status_failed_reported=CALLBACK_STATUS_FAILED_REPORTED_V3,
+                callback_status_failed_callback_failed=CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
+                with_error_contract=_with_error_contract,
+                persist_dispatch_receipt=_persist_dispatch_receipt,
+                trace_register_failure=runtime.trace_store.register_failure,
+                trace_register_success=runtime.trace_store.register_success,
+                workflow_mark_failed=_workflow_mark_failed,
+                workflow_mark_completed=_workflow_mark_completed,
+                build_phase_workflow_reported_payload=build_phase_workflow_reported_payload_v3,
+                build_trace_report_summary=_build_trace_report_summary,
+                clear_idempotency=runtime.trace_store.clear_idempotency,
+                set_idempotency_success=runtime.trace_store.set_idempotency_success,
+                idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
+                phase_judge_workflow_payload=phase_judge_workflow_payload,
             )
-            runtime.trace_store.register_failure(
-                job_id=parsed.case_id,
-                response=receipt_response,
-                callback_status="failed_callback_failed",
-                callback_error=failed_error,
-            )
-            await _workflow_mark_failed(
-                job_id=parsed.case_id,
-                error_code="phase_failed_callback_failed",
-                error_message=failed_error,
-                event_payload=build_phase_workflow_reported_payload_v3(
-                    request=parsed,
-                    callback_status="failed_callback_failed",
-                ),
-            )
-            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(
-                status_code=502,
-                detail=f"phase_failed_callback_failed: {failed_error}",
-            )
-
-        if phase_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_REPORTED_V3:
-            error_message = str(phase_callback_outcome.report_error or "")
-            failed_payload = (
-                dict(phase_callback_outcome.failed_payload)
-                if isinstance(phase_callback_outcome.failed_payload, dict)
-                else {}
-            )
-            failed_attempts = int(phase_callback_outcome.failed_attempts or 0)
-            failed_retries = int(phase_callback_outcome.failed_retries or 0)
-            receipt_response = _with_error_contract(
-                {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_reported",
-                    "callbackError": error_message,
-                    "reportPayload": phase_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackAttempts": failed_attempts,
-                    "failedCallbackRetries": failed_retries,
-                },
-                error_code="phase_callback_retry_exhausted",
-                error_message=error_message,
-                dispatch_type="phase",
-                trace_id=parsed.trace_id,
-                retryable=False,
-                category="callback_delivery",
-                details={
-                    "failedCallbackAttempts": failed_attempts,
-                    "failedCallbackRetries": failed_retries,
-                },
-            )
-            await _persist_dispatch_receipt(
-                dispatch_type="phase",
-                job_id=parsed.case_id,
-                scope_id=parsed.scope_id,
-                session_id=parsed.session_id,
-                trace_id=parsed.trace_id,
-                idempotency_key=parsed.idempotency_key,
-                rubric_version=parsed.rubric_version,
-                judge_policy_version=parsed.judge_policy_version,
-                topic_domain=parsed.topic_domain,
-                retrieval_profile=parsed.retrieval_profile,
-                phase_no=parsed.phase_no,
-                phase_start_no=None,
-                phase_end_no=None,
-                message_start_id=parsed.message_start_id,
-                message_end_id=parsed.message_end_id,
-                message_count=parsed.message_count,
-                status="callback_failed",
-                request_payload=request_payload,
-                response_payload=receipt_response,
-            )
-            runtime.trace_store.register_failure(
-                job_id=parsed.case_id,
-                response=receipt_response,
-                callback_status="failed_reported",
-                callback_error=error_message,
-            )
-            await _workflow_mark_failed(
-                job_id=parsed.case_id,
-                error_code="phase_callback_retry_exhausted",
-                error_message=error_message,
-                event_payload=build_phase_workflow_reported_payload_v3(
-                    request=parsed,
-                    callback_status="failed_reported",
-                ),
-            )
-            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(status_code=502, detail=f"phase_callback_failed: {error_message}")
-
-        if phase_callback_outcome.callback_status != CALLBACK_STATUS_REPORTED_V3:
-            raise RuntimeError("phase_callback_outcome_status_invalid")
-
-        callback_attempts = int(phase_callback_outcome.callback_attempts or 0)
-        callback_retries = int(phase_callback_outcome.callback_retries or 0)
-        reported_response = {
-            **response,
-            "callbackStatus": CALLBACK_STATUS_REPORTED_V3,
-            "callbackAttempts": callback_attempts,
-            "callbackRetries": callback_retries,
-            "reportPayload": phase_report_payload,
-        }
-        await _persist_dispatch_receipt(
-            dispatch_type="phase",
-            job_id=parsed.case_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            trace_id=parsed.trace_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=parsed.retrieval_profile,
-            phase_no=parsed.phase_no,
-            phase_start_no=None,
-            phase_end_no=None,
-            message_start_id=parsed.message_start_id,
-            message_end_id=parsed.message_end_id,
-            message_count=parsed.message_count,
-            status="reported",
-            request_payload=request_payload,
-            response_payload=reported_response,
         )
-        runtime.trace_store.register_success(
-            job_id=parsed.case_id,
-            response=reported_response,
-            callback_status="reported",
-            report_summary=_build_trace_report_summary(
-                dispatch_type="phase",
-                payload=phase_report_payload,
-                callback_status="reported",
-                callback_error=None,
-                judge_workflow=phase_judge_workflow_payload,
-            ),
-        )
-        await _workflow_mark_completed(
-            job_id=parsed.case_id,
-            event_payload=build_phase_workflow_reported_payload_v3(
-                request=parsed,
-                callback_status=CALLBACK_STATUS_REPORTED_V3,
-            ),
-        )
-        runtime.trace_store.set_idempotency_success(
-            key=parsed.idempotency_key,
-            job_id=parsed.case_id,
-            response=response,
-            ttl_secs=runtime.settings.idempotency_ttl_secs,
-        )
-        return response
 
     @app.post("/internal/judge/v3/final/dispatch")
     async def dispatch_judge_final(
@@ -8172,180 +8008,30 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
         contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
-            error_text = "final_contract_violation: missing_fields=" + ",".join(
-                contract_missing_fields[:12]
-            )
-            alert = runtime.trace_store.upsert_audit_alert(
-                job_id=parsed.case_id,
-                scope_id=parsed.scope_id,
-                trace_id=parsed.trace_id,
-                alert_type="final_contract_violation",
-                severity="critical",
-                title="AI Judge Final Contract Violation",
-                message=error_text,
-                details={
-                    "dispatchType": "final",
-                    "sessionId": parsed.session_id,
-                    "phaseRange": {
-                        "startNo": parsed.phase_start_no,
-                        "endNo": parsed.phase_end_no,
-                    },
-                    "missingFields": contract_missing_fields,
-                    "errorCode": "final_contract_blocked",
-                },
-            )
-            await _sync_audit_alert_to_facts(alert=alert)
-            failed_payload = _build_failed_callback_payload(
-                case_id=parsed.case_id,
-                dispatch_type="final",
-                trace_id=parsed.trace_id,
-                error_code="final_contract_blocked",
-                error_message=error_text,
-                audit_alert_ids=[alert.alert_id],
-                degradation_level=int(final_report_payload.get("degradationLevel") or 0),
-            )
-            try:
-                failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
-                    runtime=runtime,
-                    callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
-                    job_id=parsed.case_id,
-                    payload=failed_payload,
-                )
-            except Exception as failed_err:
-                receipt_response = _with_error_contract(
-                    {
-                        **response,
-                        "status": "callback_failed",
-                        "callbackStatus": "failed_callback_failed",
-                        "callbackError": error_text,
-                        "auditAlertIds": [alert.alert_id],
-                        "reportPayload": final_report_payload,
-                        "failedCallbackPayload": failed_payload,
-                        "failedCallbackError": str(failed_err),
-                    },
-                    error_code="final_failed_callback_failed",
-                    error_message=str(failed_err),
-                    dispatch_type="final",
-                    trace_id=parsed.trace_id,
-                    retryable=False,
-                    category="contract_blocked",
-                    details={
-                        "auditAlertId": alert.alert_id,
-                        "blockedReason": error_text,
-                    },
-                )
-                await _persist_dispatch_receipt(
-                    dispatch_type="final",
-                    job_id=parsed.case_id,
-                    scope_id=parsed.scope_id,
-                    session_id=parsed.session_id,
-                    trace_id=parsed.trace_id,
-                    idempotency_key=parsed.idempotency_key,
-                    rubric_version=parsed.rubric_version,
-                    judge_policy_version=parsed.judge_policy_version,
-                    topic_domain=parsed.topic_domain,
-                    retrieval_profile=None,
-                    phase_no=None,
-                    phase_start_no=parsed.phase_start_no,
-                    phase_end_no=parsed.phase_end_no,
-                    message_start_id=None,
-                    message_end_id=None,
-                    message_count=None,
-                    status="callback_failed",
+            await _run_judge_command_route_guard(
+                build_final_contract_blocked_route_payload_v3(
+                    parsed=parsed,
+                    response=response,
                     request_payload=request_payload,
-                    response_payload=receipt_response,
+                    report_payload=final_report_payload,
+                    contract_missing_fields=contract_missing_fields,
+                    upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
+                    sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
+                    build_failed_callback_payload=_build_failed_callback_payload,
+                    invoke_failed_callback_with_retry=(
+                        lambda *, case_id, payload: _invoke_v3_callback_with_retry(
+                            runtime=runtime,
+                            callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
+                            job_id=case_id,
+                            payload=payload,
+                        )
+                    ),
+                    with_error_contract=_with_error_contract,
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=runtime.trace_store.register_failure,
+                    workflow_mark_failed=_workflow_mark_failed,
+                    clear_idempotency=runtime.trace_store.clear_idempotency,
                 )
-                runtime.trace_store.register_failure(
-                    job_id=parsed.case_id,
-                    response=receipt_response,
-                    callback_status="failed_callback_failed",
-                    callback_error=str(failed_err),
-                )
-                await _workflow_mark_failed(
-                    job_id=parsed.case_id,
-                    error_code="final_failed_callback_failed",
-                    error_message=str(failed_err),
-                    event_payload={
-                        "dispatchType": "final",
-                        "phaseStartNo": parsed.phase_start_no,
-                        "phaseEndNo": parsed.phase_end_no,
-                        "callbackStatus": "failed_callback_failed",
-                    },
-                )
-                runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"final_failed_callback_failed: {failed_err}",
-                ) from failed_err
-
-            receipt_response = _with_error_contract(
-                {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "blocked_failed_reported",
-                    "callbackError": error_text,
-                    "auditAlertIds": [alert.alert_id],
-                    "reportPayload": final_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackAttempts": failed_attempts,
-                    "failedCallbackRetries": failed_retries,
-                },
-                error_code="final_contract_blocked",
-                error_message=error_text,
-                dispatch_type="final",
-                trace_id=parsed.trace_id,
-                retryable=False,
-                category="contract_blocked",
-                details={
-                    "auditAlertId": alert.alert_id,
-                    "failedCallbackAttempts": failed_attempts,
-                    "failedCallbackRetries": failed_retries,
-                    "missingFields": contract_missing_fields[:12],
-                },
-            )
-            await _persist_dispatch_receipt(
-                dispatch_type="final",
-                job_id=parsed.case_id,
-                scope_id=parsed.scope_id,
-                session_id=parsed.session_id,
-                trace_id=parsed.trace_id,
-                idempotency_key=parsed.idempotency_key,
-                rubric_version=parsed.rubric_version,
-                judge_policy_version=parsed.judge_policy_version,
-                topic_domain=parsed.topic_domain,
-                retrieval_profile=None,
-                phase_no=None,
-                phase_start_no=parsed.phase_start_no,
-                phase_end_no=parsed.phase_end_no,
-                message_start_id=None,
-                message_end_id=None,
-                message_count=None,
-                status="callback_failed",
-                request_payload=request_payload,
-                response_payload=receipt_response,
-            )
-            runtime.trace_store.register_failure(
-                job_id=parsed.case_id,
-                response=receipt_response,
-                callback_status="blocked_failed_reported",
-                callback_error=error_text,
-            )
-            await _workflow_mark_failed(
-                job_id=parsed.case_id,
-                error_code="final_contract_blocked",
-                error_message=error_text,
-                event_payload={
-                    "dispatchType": "final",
-                    "phaseStartNo": parsed.phase_start_no,
-                    "phaseEndNo": parsed.phase_end_no,
-                    "callbackStatus": "blocked_failed_reported",
-                    "missingFields": contract_missing_fields[:12],
-                },
-            )
-            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(
-                status_code=502,
-                detail="final_contract_blocked: missing_critical_fields",
             )
 
         final_callback_outcome = await deliver_report_callback_with_failed_fallback_v3(
@@ -8371,216 +8057,31 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
         )
 
-        if final_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3:
-            error_message = str(final_callback_outcome.report_error or "")
-            failed_error = str(final_callback_outcome.failed_error or "unknown")
-            failed_payload = (
-                dict(final_callback_outcome.failed_payload)
-                if isinstance(final_callback_outcome.failed_payload, dict)
-                else {}
-            )
-            receipt_response = _with_error_contract(
-                {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_callback_failed",
-                    "callbackError": error_message,
-                    "reportPayload": final_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackError": failed_error,
-                },
-                error_code="final_failed_callback_failed",
-                error_message=failed_error,
-                dispatch_type="final",
-                trace_id=parsed.trace_id,
-                retryable=False,
-                category="callback_delivery",
-                details={"reportError": error_message},
-            )
-            await _persist_dispatch_receipt(
-                dispatch_type="final",
-                job_id=parsed.case_id,
-                scope_id=parsed.scope_id,
-                session_id=parsed.session_id,
-                trace_id=parsed.trace_id,
-                idempotency_key=parsed.idempotency_key,
-                rubric_version=parsed.rubric_version,
-                judge_policy_version=parsed.judge_policy_version,
-                topic_domain=parsed.topic_domain,
-                retrieval_profile=None,
-                phase_no=None,
-                phase_start_no=parsed.phase_start_no,
-                phase_end_no=parsed.phase_end_no,
-                message_start_id=None,
-                message_end_id=None,
-                message_count=None,
-                status="callback_failed",
+        return await _run_judge_command_route_guard(
+            build_final_dispatch_callback_result_route_payload_v3(
+                parsed=parsed,
+                response=response,
                 request_payload=request_payload,
-                response_payload=receipt_response,
+                report_payload=final_report_payload,
+                callback_outcome=final_callback_outcome,
+                callback_status_reported=CALLBACK_STATUS_REPORTED_V3,
+                callback_status_failed_reported=CALLBACK_STATUS_FAILED_REPORTED_V3,
+                callback_status_failed_callback_failed=CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
+                with_error_contract=_with_error_contract,
+                persist_dispatch_receipt=_persist_dispatch_receipt,
+                trace_register_failure=runtime.trace_store.register_failure,
+                trace_register_success=runtime.trace_store.register_success,
+                workflow_mark_failed=_workflow_mark_failed,
+                workflow_mark_review_required=_workflow_mark_review_required,
+                workflow_mark_completed=_workflow_mark_completed,
+                build_final_workflow_reported_payload=build_final_workflow_reported_payload_v3,
+                build_trace_report_summary=_build_trace_report_summary,
+                clear_idempotency=runtime.trace_store.clear_idempotency,
+                set_idempotency_success=runtime.trace_store.set_idempotency_success,
+                idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
+                final_judge_workflow_payload=final_judge_workflow_payload,
             )
-            runtime.trace_store.register_failure(
-                job_id=parsed.case_id,
-                response=receipt_response,
-                callback_status="failed_callback_failed",
-                callback_error=failed_error,
-            )
-            await _workflow_mark_failed(
-                job_id=parsed.case_id,
-                error_code="final_failed_callback_failed",
-                error_message=failed_error,
-                event_payload={
-                    "dispatchType": "final",
-                    "phaseStartNo": parsed.phase_start_no,
-                    "phaseEndNo": parsed.phase_end_no,
-                    "callbackStatus": "failed_callback_failed",
-                },
-            )
-            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(
-                status_code=502,
-                detail=f"final_failed_callback_failed: {failed_error}",
-            )
-
-        if final_callback_outcome.callback_status == CALLBACK_STATUS_FAILED_REPORTED_V3:
-            error_message = str(final_callback_outcome.report_error or "")
-            failed_payload = (
-                dict(final_callback_outcome.failed_payload)
-                if isinstance(final_callback_outcome.failed_payload, dict)
-                else {}
-            )
-            failed_attempts = int(final_callback_outcome.failed_attempts or 0)
-            failed_retries = int(final_callback_outcome.failed_retries or 0)
-            receipt_response = _with_error_contract(
-                {
-                    **response,
-                    "status": "callback_failed",
-                    "callbackStatus": "failed_reported",
-                    "callbackError": error_message,
-                    "reportPayload": final_report_payload,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackAttempts": failed_attempts,
-                    "failedCallbackRetries": failed_retries,
-                },
-                error_code="final_callback_retry_exhausted",
-                error_message=error_message,
-                dispatch_type="final",
-                trace_id=parsed.trace_id,
-                retryable=False,
-                category="callback_delivery",
-                details={
-                    "failedCallbackAttempts": failed_attempts,
-                    "failedCallbackRetries": failed_retries,
-                },
-            )
-            await _persist_dispatch_receipt(
-                dispatch_type="final",
-                job_id=parsed.case_id,
-                scope_id=parsed.scope_id,
-                session_id=parsed.session_id,
-                trace_id=parsed.trace_id,
-                idempotency_key=parsed.idempotency_key,
-                rubric_version=parsed.rubric_version,
-                judge_policy_version=parsed.judge_policy_version,
-                topic_domain=parsed.topic_domain,
-                retrieval_profile=None,
-                phase_no=None,
-                phase_start_no=parsed.phase_start_no,
-                phase_end_no=parsed.phase_end_no,
-                message_start_id=None,
-                message_end_id=None,
-                message_count=None,
-                status="callback_failed",
-                request_payload=request_payload,
-                response_payload=receipt_response,
-            )
-            runtime.trace_store.register_failure(
-                job_id=parsed.case_id,
-                response=receipt_response,
-                callback_status="failed_reported",
-                callback_error=error_message,
-            )
-            await _workflow_mark_failed(
-                job_id=parsed.case_id,
-                error_code="final_callback_retry_exhausted",
-                error_message=error_message,
-                event_payload={
-                    "dispatchType": "final",
-                    "phaseStartNo": parsed.phase_start_no,
-                    "phaseEndNo": parsed.phase_end_no,
-                    "callbackStatus": "failed_reported",
-                },
-            )
-            runtime.trace_store.clear_idempotency(parsed.idempotency_key)
-            raise HTTPException(status_code=502, detail=f"final_callback_failed: {error_message}")
-
-        if final_callback_outcome.callback_status != CALLBACK_STATUS_REPORTED_V3:
-            raise RuntimeError("final_callback_outcome_status_invalid")
-
-        callback_attempts = int(final_callback_outcome.callback_attempts or 0)
-        callback_retries = int(final_callback_outcome.callback_retries or 0)
-        reported_response = {
-            **response,
-            "callbackStatus": CALLBACK_STATUS_REPORTED_V3,
-            "callbackAttempts": callback_attempts,
-            "callbackRetries": callback_retries,
-            "reportPayload": final_report_payload,
-        }
-        await _persist_dispatch_receipt(
-            dispatch_type="final",
-            job_id=parsed.case_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            trace_id=parsed.trace_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=None,
-            phase_no=None,
-            phase_start_no=parsed.phase_start_no,
-            phase_end_no=parsed.phase_end_no,
-            message_start_id=None,
-            message_end_id=None,
-            message_count=None,
-            status="reported",
-            request_payload=request_payload,
-            response_payload=reported_response,
         )
-        runtime.trace_store.register_success(
-            job_id=parsed.case_id,
-            response=reported_response,
-            callback_status=CALLBACK_STATUS_REPORTED_V3,
-            report_summary=_build_trace_report_summary(
-                dispatch_type="final",
-                payload=final_report_payload,
-                callback_status="reported",
-                callback_error=None,
-                judge_workflow=final_judge_workflow_payload,
-            ),
-        )
-        review_required = bool(final_report_payload.get("reviewRequired"))
-        workflow_event_payload = build_final_workflow_reported_payload_v3(
-            request=parsed,
-            report_payload=final_report_payload,
-            callback_status=CALLBACK_STATUS_REPORTED_V3,
-        )
-        if review_required:
-            await _workflow_mark_review_required(
-                job_id=parsed.case_id,
-                event_payload=workflow_event_payload,
-            )
-        else:
-            await _workflow_mark_completed(
-                job_id=parsed.case_id,
-                event_payload=workflow_event_payload,
-            )
-        runtime.trace_store.set_idempotency_success(
-            key=parsed.idempotency_key,
-            job_id=parsed.case_id,
-            response=response,
-            ttl_secs=runtime.settings.idempotency_ttl_secs,
-        )
-        return response
 
     @app.get("/internal/judge/v3/phase/cases/{case_id}/receipt")
     async def get_phase_dispatch_receipt(
