@@ -541,6 +541,25 @@ def build_alert_outbox_list_payload(
     }
 
 
+def build_alert_outbox_route_payload(
+    *,
+    delivery_status: str | None,
+    limit: int,
+    list_alert_outbox: Callable[..., list[Any]],
+    serialize_outbox_event: Callable[[Any], dict[str, Any]],
+) -> dict[str, Any]:
+    rows = list_alert_outbox(
+        delivery_status=delivery_status,
+        limit=limit,
+    )
+    return build_alert_outbox_list_payload(
+        rows=rows,
+        delivery_status=delivery_status,
+        limit=limit,
+        serialize_outbox_event=serialize_outbox_event,
+    )
+
+
 def build_alert_outbox_delivery_payload(
     *,
     item: Any | None,
@@ -551,4 +570,27 @@ def build_alert_outbox_delivery_payload(
     return {
         "ok": True,
         "item": serialize_outbox_event(item),
+    }
+
+
+def build_rag_diagnostics_payload(
+    *,
+    case_id: int,
+    get_trace: Callable[[int], Any | None],
+) -> dict[str, Any]:
+    record = get_trace(case_id)
+    if record is None:
+        raise LookupError("judge_trace_not_found")
+    report_summary = (
+        record.report_summary if isinstance(record.report_summary, dict) else {}
+    )
+    payload = report_summary.get("payload") if isinstance(report_summary.get("payload"), dict) else {}
+    return {
+        "caseId": case_id,
+        "traceId": record.trace_id,
+        "retrievalDiagnostics": payload.get("retrievalDiagnostics"),
+        "ragSources": payload.get("ragSources"),
+        "ragBackend": payload.get("ragBackend"),
+        "ragRequestedBackend": payload.get("ragRequestedBackend"),
+        "ragBackendFallbackReason": payload.get("ragBackendFallbackReason"),
     }

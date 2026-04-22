@@ -83,10 +83,16 @@ from .applications.case_read_routes import (
     build_case_courtroom_cases_route_payload as build_case_courtroom_cases_route_payload_v3,
 )
 from .applications.case_read_routes import (
+    build_case_courtroom_drilldown_bundle_route_payload as build_case_courtroom_drilldown_bundle_route_payload_v3,
+)
+from .applications.case_read_routes import (
     build_case_courtroom_read_model_payload as build_case_courtroom_read_model_payload_v3,
 )
 from .applications.case_read_routes import (
     build_case_courtroom_read_model_route_payload as build_case_courtroom_read_model_route_payload_v3,
+)
+from .applications.case_read_routes import (
+    build_case_evidence_claim_ops_queue_route_payload as build_case_evidence_claim_ops_queue_route_payload_v3,
 )
 from .applications.case_read_routes import (
     build_case_overview_payload as build_case_overview_payload_v3,
@@ -301,10 +307,13 @@ from .applications.panel_runtime_profile_contract import (
     validate_panel_runtime_profile_contract as validate_panel_runtime_profile_contract_v3,
 )
 from .applications.panel_runtime_routes import (
-    build_panel_runtime_profiles_payload as build_panel_runtime_profiles_payload_v3,
+    PanelRuntimeRouteError as PanelRuntimeRouteError_v3,
 )
 from .applications.panel_runtime_routes import (
-    build_panel_runtime_readiness_payload as build_panel_runtime_readiness_payload_v3,
+    build_panel_runtime_profiles_route_payload as build_panel_runtime_profiles_route_payload_v3,
+)
+from .applications.panel_runtime_routes import (
+    build_panel_runtime_readiness_route_payload as build_panel_runtime_readiness_route_payload_v3,
 )
 from .applications.registry_governance_routes import (
     build_policy_domain_judge_families_route_payload as build_policy_domain_judge_families_route_payload_v3,
@@ -365,13 +374,16 @@ from .applications.review_alert_routes import (
     build_alert_outbox_delivery_payload as build_alert_outbox_delivery_payload_v3,
 )
 from .applications.review_alert_routes import (
-    build_alert_outbox_list_payload as build_alert_outbox_list_payload_v3,
+    build_alert_outbox_route_payload as build_alert_outbox_route_payload_v3,
 )
 from .applications.review_alert_routes import (
     build_alert_status_transition_payload as build_alert_status_transition_payload_v3,
 )
 from .applications.review_alert_routes import (
     build_case_alerts_payload as build_case_alerts_payload_v3,
+)
+from .applications.review_alert_routes import (
+    build_rag_diagnostics_payload as build_rag_diagnostics_payload_v3,
 )
 from .applications.review_alert_routes import (
     build_review_case_decision_payload as build_review_case_decision_payload_v3,
@@ -8299,294 +8311,47 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         panel_preview_limit: int = Query(default=10, ge=1, le=100),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_status = _normalize_workflow_status(status)
-        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
-            raise HTTPException(status_code=422, detail="invalid_workflow_status")
-
-        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
-        if normalized_dispatch_type not in {"auto", "phase", "final"}:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-        workflow_dispatch_filter = (
-            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        payload = await _run_case_read_route_guard(
+            build_case_courtroom_drilldown_bundle_route_payload_v3(
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                review_required=review_required,
+                risk_level=risk_level,
+                sla_bucket=sla_bucket,
+                updated_from=updated_from,
+                updated_to=updated_to,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                scan_limit=scan_limit,
+                offset=offset,
+                limit=limit,
+                claim_preview_limit=claim_preview_limit,
+                evidence_preview_limit=evidence_preview_limit,
+                panel_preview_limit=panel_preview_limit,
+                normalize_workflow_status=_normalize_workflow_status,
+                workflow_statuses=WORKFLOW_STATUSES,
+                normalize_review_case_risk_level=_normalize_review_case_risk_level,
+                review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
+                normalize_review_case_sla_bucket=_normalize_review_case_sla_bucket,
+                review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
+                normalize_query_datetime=_normalize_query_datetime,
+                normalize_courtroom_case_sort_by=_normalize_courtroom_case_sort_by,
+                normalize_courtroom_case_sort_order=_normalize_courtroom_case_sort_order,
+                courtroom_case_sort_fields=COURTROOM_CASE_SORT_FIELDS,
+                workflow_list_jobs=_workflow_list_jobs,
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                trace_get=runtime.trace_store.get_trace,
+                build_review_case_risk_profile=_build_review_case_risk_profile,
+                build_verdict_contract=_build_verdict_contract,
+                build_case_evidence_view=_build_case_evidence_view,
+                build_courtroom_read_model_view=_build_courtroom_read_model_view,
+                build_courtroom_drilldown_bundle_view=_build_courtroom_drilldown_bundle_view,
+                build_courtroom_drilldown_action_hints=_build_courtroom_drilldown_action_hints,
+                serialize_workflow_job=_serialize_workflow_job,
+                build_courtroom_case_sort_key=_build_courtroom_case_sort_key,
+            )
         )
-
-        normalized_winner = str(winner or "").strip().lower() or None
-        if normalized_winner not in {None, "pro", "con", "draw"}:
-            raise HTTPException(status_code=422, detail="invalid_winner")
-
-        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
-        if (
-            normalized_risk_level is not None
-            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
-
-        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
-        if (
-            normalized_sla_bucket is not None
-            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
-
-        normalized_updated_from = _normalize_query_datetime(updated_from)
-        normalized_updated_to = _normalize_query_datetime(updated_to)
-        if (
-            normalized_updated_from is not None
-            and normalized_updated_to is not None
-            and normalized_updated_from > normalized_updated_to
-        ):
-            raise HTTPException(status_code=422, detail="invalid_updated_time_window")
-
-        normalized_sort_by = _normalize_courtroom_case_sort_by(sort_by)
-        if normalized_sort_by not in COURTROOM_CASE_SORT_FIELDS:
-            raise HTTPException(
-                status_code=422,
-                detail="invalid_courtroom_drilldown_sort_by",
-            )
-        normalized_sort_order = _normalize_courtroom_case_sort_order(sort_order)
-        if normalized_sort_order not in {"asc", "desc"}:
-            raise HTTPException(
-                status_code=422,
-                detail="invalid_courtroom_drilldown_sort_order",
-            )
-
-        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
-        normalized_offset = max(0, int(offset))
-        normalized_limit = max(1, min(int(limit), 200))
-        normalized_claim_preview_limit = max(1, min(int(claim_preview_limit), 100))
-        normalized_evidence_preview_limit = max(
-            1, min(int(evidence_preview_limit), 100)
-        )
-        normalized_panel_preview_limit = max(1, min(int(panel_preview_limit), 100))
-
-        jobs = await _workflow_list_jobs(
-            status=normalized_status,
-            dispatch_type=workflow_dispatch_filter,
-            limit=normalized_scan_limit,
-        )
-        now = datetime.now(timezone.utc)
-        items: list[dict[str, Any]] = []
-        errors: list[dict[str, Any]] = []
-        for job in jobs:
-            updated_at = _normalize_query_datetime(job.updated_at)
-            if (
-                normalized_updated_from is not None
-                and (updated_at is None or updated_at < normalized_updated_from)
-            ):
-                continue
-            if (
-                normalized_updated_to is not None
-                and (updated_at is None or updated_at > normalized_updated_to)
-            ):
-                continue
-
-            try:
-                context = await _resolve_report_context_for_case(
-                    case_id=job.job_id,
-                    dispatch_type=normalized_dispatch_type,
-                    not_found_detail="courtroom_case_not_found",
-                    missing_report_detail="courtroom_report_payload_missing",
-                )
-            except HTTPException as err:
-                error_code = str(err.detail or "").strip() or "courtroom_case_unavailable"
-                if error_code in {
-                    "courtroom_case_not_found",
-                    "courtroom_report_payload_missing",
-                }:
-                    errors.append(
-                        {
-                            "caseId": int(job.job_id),
-                            "statusCode": int(err.status_code),
-                            "errorCode": error_code,
-                        }
-                    )
-                    continue
-                raise
-
-            report_payload = (
-                context.get("reportPayload")
-                if isinstance(context.get("reportPayload"), dict)
-                else {}
-            )
-            winner_value = str(report_payload.get("winner") or "").strip().lower() or None
-            if normalized_winner is not None and winner_value != normalized_winner:
-                continue
-            report_review_required = bool(report_payload.get("reviewRequired"))
-            if review_required is not None and report_review_required != bool(review_required):
-                continue
-
-            trace = runtime.trace_store.get_trace(job.job_id)
-            report_summary = (
-                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-            )
-            risk_profile = _build_review_case_risk_profile(
-                workflow=job,
-                report_payload=report_payload,
-                report_summary=report_summary,
-                now=now,
-            )
-            if (
-                normalized_risk_level is not None
-                and str(risk_profile.get("level") or "").strip().lower()
-                != normalized_risk_level
-            ):
-                continue
-            if (
-                normalized_sla_bucket is not None
-                and str(risk_profile.get("slaBucket") or "").strip().lower()
-                != normalized_sla_bucket
-            ):
-                continue
-
-            try:
-                courtroom_payload = await get_judge_case_courtroom_read_model(
-                    case_id=job.job_id,
-                    x_ai_internal_key=x_ai_internal_key,
-                    dispatch_type=normalized_dispatch_type,
-                    include_events=False,
-                    include_alerts=False,
-                    alert_limit=50,
-                )
-            except HTTPException as err:
-                errors.append(
-                    {
-                        "caseId": int(job.job_id),
-                        "statusCode": int(err.status_code),
-                        "errorCode": str(err.detail),
-                    }
-                )
-                continue
-
-            courtroom_view = (
-                courtroom_payload.get("courtroom")
-                if isinstance(courtroom_payload.get("courtroom"), dict)
-                else {}
-            )
-            drilldown = _build_courtroom_drilldown_bundle_view(
-                courtroom_view=courtroom_view,
-                claim_preview_limit=normalized_claim_preview_limit,
-                evidence_preview_limit=normalized_evidence_preview_limit,
-                panel_preview_limit=normalized_panel_preview_limit,
-            )
-            callback = (
-                courtroom_payload.get("callback")
-                if isinstance(courtroom_payload.get("callback"), dict)
-                else {}
-            )
-            dispatch_type_value = (
-                str(context.get("dispatchType") or "").strip().lower() or "auto"
-            )
-            items.append(
-                {
-                    "caseId": int(job.job_id),
-                    "dispatchType": dispatch_type_value,
-                    "traceId": context.get("traceId") or None,
-                    "workflow": _serialize_workflow_job(job),
-                    "winner": winner_value,
-                    "reviewRequired": report_review_required,
-                    "needsDrawVote": bool(report_payload.get("needsDrawVote")),
-                    "callbackStatus": callback.get("status"),
-                    "callbackError": callback.get("error"),
-                    "riskProfile": risk_profile,
-                    "drilldown": drilldown,
-                    "actionHints": _build_courtroom_drilldown_action_hints(
-                        drilldown=drilldown,
-                    ),
-                    "detailPath": (
-                        f"/internal/judge/cases/{int(job.job_id)}/courtroom-read-model"
-                        f"?dispatch_type={dispatch_type_value}"
-                    ),
-                }
-            )
-
-        items.sort(
-            key=lambda row: _build_courtroom_case_sort_key(
-                item=row,
-                sort_by=normalized_sort_by,
-            ),
-            reverse=(normalized_sort_order == "desc"),
-        )
-        page_items = items[normalized_offset : normalized_offset + normalized_limit]
-
-        total_conflict_pairs = 0
-        total_unanswered_claims = 0
-        total_decisive_evidence = 0
-        total_pivotal_moments = 0
-        review_required_count = 0
-        high_risk_count = 0
-        for row in items:
-            drilldown = (
-                row.get("drilldown")
-                if isinstance(row.get("drilldown"), dict)
-                else {}
-            )
-            claim = drilldown.get("claim") if isinstance(drilldown.get("claim"), dict) else {}
-            evidence = (
-                drilldown.get("evidence")
-                if isinstance(drilldown.get("evidence"), dict)
-                else {}
-            )
-            panel = drilldown.get("panel") if isinstance(drilldown.get("panel"), dict) else {}
-            total_conflict_pairs += int(claim.get("conflictPairCount") or 0)
-            total_unanswered_claims += int(claim.get("unansweredClaimCount") or 0)
-            total_decisive_evidence += int(evidence.get("decisiveEvidenceCount") or 0)
-            total_pivotal_moments += int(panel.get("pivotalMomentCount") or 0)
-            if bool(row.get("reviewRequired")):
-                review_required_count += 1
-            risk_profile = (
-                row.get("riskProfile")
-                if isinstance(row.get("riskProfile"), dict)
-                else {}
-            )
-            if str(risk_profile.get("level") or "").strip().lower() == "high":
-                high_risk_count += 1
-
-        payload = {
-            "count": len(items),
-            "returned": len(page_items),
-            "scanned": len(jobs),
-            "skipped": max(0, len(jobs) - len(items)),
-            "errorCount": len(errors),
-            "items": page_items,
-            "errors": errors,
-            "aggregations": {
-                "totalConflictPairCount": total_conflict_pairs,
-                "totalUnansweredClaimCount": total_unanswered_claims,
-                "totalDecisiveEvidenceCount": total_decisive_evidence,
-                "totalPivotalMomentCount": total_pivotal_moments,
-                "reviewRequiredCount": review_required_count,
-                "highRiskCount": high_risk_count,
-            },
-            "filters": {
-                "status": normalized_status,
-                "dispatchType": normalized_dispatch_type,
-                "winner": normalized_winner,
-                "reviewRequired": review_required,
-                "riskLevel": normalized_risk_level,
-                "slaBucket": normalized_sla_bucket,
-                "updatedFrom": (
-                    normalized_updated_from.isoformat()
-                    if normalized_updated_from is not None
-                    else None
-                ),
-                "updatedTo": (
-                    normalized_updated_to.isoformat()
-                    if normalized_updated_to is not None
-                    else None
-                ),
-                "sortBy": normalized_sort_by,
-                "sortOrder": normalized_sort_order,
-                "scanLimit": normalized_scan_limit,
-                "offset": normalized_offset,
-                "limit": normalized_limit,
-                "claimPreviewLimit": normalized_claim_preview_limit,
-                "evidencePreviewLimit": normalized_evidence_preview_limit,
-                "panelPreviewLimit": normalized_panel_preview_limit,
-            },
-            "notes": [
-                "drilldown bundle is read-only and does not change verdict state.",
-            ],
-        }
         try:
             _validate_courtroom_drilldown_bundle_contract(payload)
         except ValueError as err:
@@ -8617,331 +8382,50 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_status = _normalize_workflow_status(status)
-        if normalized_status is not None and normalized_status not in WORKFLOW_STATUSES:
-            raise HTTPException(status_code=422, detail="invalid_workflow_status")
-
-        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
-        if normalized_dispatch_type not in {"auto", "phase", "final"}:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-        workflow_dispatch_filter = (
-            None if normalized_dispatch_type == "auto" else normalized_dispatch_type
+        payload = await _run_case_read_route_guard(
+            build_case_evidence_claim_ops_queue_route_payload_v3(
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                review_required=review_required,
+                risk_level=risk_level,
+                sla_bucket=sla_bucket,
+                reliability_level=reliability_level,
+                has_conflict=has_conflict,
+                has_unanswered_claim=has_unanswered_claim,
+                updated_from=updated_from,
+                updated_to=updated_to,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                scan_limit=scan_limit,
+                offset=offset,
+                limit=limit,
+                normalize_workflow_status=_normalize_workflow_status,
+                workflow_statuses=WORKFLOW_STATUSES,
+                normalize_review_case_risk_level=_normalize_review_case_risk_level,
+                review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
+                normalize_review_case_sla_bucket=_normalize_review_case_sla_bucket,
+                review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
+                normalize_evidence_claim_reliability_level=_normalize_evidence_claim_reliability_level,
+                evidence_claim_reliability_level_values=EVIDENCE_CLAIM_RELIABILITY_LEVEL_VALUES,
+                normalize_query_datetime=_normalize_query_datetime,
+                normalize_evidence_claim_queue_sort_by=_normalize_evidence_claim_queue_sort_by,
+                normalize_evidence_claim_queue_sort_order=_normalize_evidence_claim_queue_sort_order,
+                evidence_claim_queue_sort_fields=EVIDENCE_CLAIM_QUEUE_SORT_FIELDS,
+                workflow_list_jobs=_workflow_list_jobs,
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                trace_get=runtime.trace_store.get_trace,
+                build_review_case_risk_profile=_build_review_case_risk_profile,
+                build_verdict_contract=_build_verdict_contract,
+                build_case_evidence_view=_build_case_evidence_view,
+                build_courtroom_read_model_view=_build_courtroom_read_model_view,
+                build_courtroom_read_model_light_summary=_build_courtroom_read_model_light_summary,
+                build_evidence_claim_ops_profile=_build_evidence_claim_ops_profile,
+                build_evidence_claim_action_hints=_build_evidence_claim_action_hints,
+                serialize_workflow_job=_serialize_workflow_job,
+                build_evidence_claim_queue_sort_key=_build_evidence_claim_queue_sort_key,
+            )
         )
-
-        normalized_winner = str(winner or "").strip().lower() or None
-        if normalized_winner not in {None, "pro", "con", "draw"}:
-            raise HTTPException(status_code=422, detail="invalid_winner")
-
-        normalized_risk_level = _normalize_review_case_risk_level(risk_level)
-        if (
-            normalized_risk_level is not None
-            and normalized_risk_level not in REVIEW_CASE_RISK_LEVEL_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_risk_level")
-
-        normalized_sla_bucket = _normalize_review_case_sla_bucket(sla_bucket)
-        if (
-            normalized_sla_bucket is not None
-            and normalized_sla_bucket not in REVIEW_CASE_SLA_BUCKET_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_review_sla_bucket")
-
-        normalized_reliability_level = _normalize_evidence_claim_reliability_level(
-            reliability_level
-        )
-        if (
-            normalized_reliability_level is not None
-            and normalized_reliability_level
-            not in EVIDENCE_CLAIM_RELIABILITY_LEVEL_VALUES
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail="invalid_evidence_claim_reliability_level",
-            )
-
-        normalized_updated_from = _normalize_query_datetime(updated_from)
-        normalized_updated_to = _normalize_query_datetime(updated_to)
-        if (
-            normalized_updated_from is not None
-            and normalized_updated_to is not None
-            and normalized_updated_from > normalized_updated_to
-        ):
-            raise HTTPException(status_code=422, detail="invalid_updated_time_window")
-
-        normalized_sort_by = _normalize_evidence_claim_queue_sort_by(sort_by)
-        if normalized_sort_by not in EVIDENCE_CLAIM_QUEUE_SORT_FIELDS:
-            raise HTTPException(status_code=422, detail="invalid_evidence_claim_sort_by")
-        normalized_sort_order = _normalize_evidence_claim_queue_sort_order(sort_order)
-        if normalized_sort_order not in {"asc", "desc"}:
-            raise HTTPException(status_code=422, detail="invalid_evidence_claim_sort_order")
-
-        normalized_scan_limit = max(20, min(int(scan_limit), 2000))
-        normalized_offset = max(0, int(offset))
-        normalized_limit = max(1, min(int(limit), 200))
-
-        jobs = await _workflow_list_jobs(
-            status=normalized_status,
-            dispatch_type=workflow_dispatch_filter,
-            limit=normalized_scan_limit,
-        )
-        now = datetime.now(timezone.utc)
-        items: list[dict[str, Any]] = []
-        errors: list[dict[str, Any]] = []
-        for job in jobs:
-            updated_at = _normalize_query_datetime(job.updated_at)
-            if (
-                normalized_updated_from is not None
-                and (updated_at is None or updated_at < normalized_updated_from)
-            ):
-                continue
-            if (
-                normalized_updated_to is not None
-                and (updated_at is None or updated_at > normalized_updated_to)
-            ):
-                continue
-
-            try:
-                context = await _resolve_report_context_for_case(
-                    case_id=job.job_id,
-                    dispatch_type=normalized_dispatch_type,
-                    not_found_detail="courtroom_case_not_found",
-                    missing_report_detail="courtroom_report_payload_missing",
-                )
-            except HTTPException as err:
-                error_code = str(err.detail or "").strip() or "evidence_claim_case_unavailable"
-                if error_code in {
-                    "courtroom_case_not_found",
-                    "courtroom_report_payload_missing",
-                }:
-                    errors.append(
-                        {
-                            "caseId": int(job.job_id),
-                            "statusCode": int(err.status_code),
-                            "errorCode": error_code,
-                        }
-                    )
-                    continue
-                raise
-
-            report_payload = (
-                context.get("reportPayload")
-                if isinstance(context.get("reportPayload"), dict)
-                else {}
-            )
-            winner_value = str(report_payload.get("winner") or "").strip().lower() or None
-            if normalized_winner is not None and winner_value != normalized_winner:
-                continue
-
-            report_review_required = bool(report_payload.get("reviewRequired"))
-            if review_required is not None and report_review_required != bool(review_required):
-                continue
-
-            trace = runtime.trace_store.get_trace(job.job_id)
-            report_summary = (
-                trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-            )
-            risk_profile = _build_review_case_risk_profile(
-                workflow=job,
-                report_payload=report_payload,
-                report_summary=report_summary,
-                now=now,
-            )
-            if (
-                normalized_risk_level is not None
-                and str(risk_profile.get("level") or "").strip().lower()
-                != normalized_risk_level
-            ):
-                continue
-            if (
-                normalized_sla_bucket is not None
-                and str(risk_profile.get("slaBucket") or "").strip().lower()
-                != normalized_sla_bucket
-            ):
-                continue
-
-            verdict_contract = _build_verdict_contract(report_payload)
-            case_evidence = _build_case_evidence_view(
-                report_payload=report_payload,
-                verdict_contract=verdict_contract,
-                claim_ledger_record=None,
-            )
-            courtroom_view = _build_courtroom_read_model_view(
-                report_payload=report_payload,
-                case_evidence=case_evidence,
-            )
-            courtroom_summary = _build_courtroom_read_model_light_summary(
-                courtroom_view=courtroom_view,
-            )
-            ops_profile = _build_evidence_claim_ops_profile(
-                risk_profile=risk_profile,
-                courtroom_summary=courtroom_summary,
-            )
-            if (
-                has_conflict is not None
-                and bool(ops_profile.get("hasConflict")) != bool(has_conflict)
-            ):
-                continue
-            if (
-                has_unanswered_claim is not None
-                and bool(ops_profile.get("hasUnansweredClaim"))
-                != bool(has_unanswered_claim)
-            ):
-                continue
-            reliability = (
-                ops_profile.get("reliability")
-                if isinstance(ops_profile.get("reliability"), dict)
-                else {}
-            )
-            reliability_level_value = (
-                str(reliability.get("level") or "").strip().lower() or "unknown"
-            )
-            if (
-                normalized_reliability_level is not None
-                and reliability_level_value != normalized_reliability_level
-            ):
-                continue
-
-            callback_status = (
-                report_summary.get("callbackStatus")
-                or (
-                    context.get("responsePayload", {})
-                    if isinstance(context.get("responsePayload"), dict)
-                    else {}
-                ).get("callbackStatus")
-                or (trace.callback_status if trace is not None else None)
-            )
-            callback_error = (
-                report_summary.get("callbackError")
-                or (
-                    context.get("responsePayload", {})
-                    if isinstance(context.get("responsePayload"), dict)
-                    else {}
-                ).get("callbackError")
-                or (trace.callback_error if trace is not None else None)
-            )
-            dispatch_type_value = (
-                str(context.get("dispatchType") or "").strip().lower() or "auto"
-            )
-            items.append(
-                {
-                    "caseId": int(job.job_id),
-                    "dispatchType": dispatch_type_value,
-                    "traceId": context.get("traceId") or None,
-                    "workflow": _serialize_workflow_job(job),
-                    "winner": winner_value,
-                    "reviewRequired": report_review_required,
-                    "needsDrawVote": bool(report_payload.get("needsDrawVote")),
-                    "callbackStatus": callback_status,
-                    "callbackError": callback_error,
-                    "riskProfile": risk_profile,
-                    "courtroomSummary": courtroom_summary,
-                    "claimEvidenceProfile": ops_profile,
-                    "actionHints": _build_evidence_claim_action_hints(
-                        ops_profile=ops_profile,
-                        review_required=report_review_required,
-                    ),
-                    "detailPath": (
-                        f"/internal/judge/cases/{int(job.job_id)}/courtroom-read-model"
-                        f"?dispatch_type={dispatch_type_value}"
-                    ),
-                }
-            )
-
-        items.sort(
-            key=lambda row: _build_evidence_claim_queue_sort_key(
-                item=row,
-                sort_by=normalized_sort_by,
-            ),
-            reverse=(normalized_sort_order == "desc"),
-        )
-        page_items = items[normalized_offset : normalized_offset + normalized_limit]
-
-        risk_level_counts = {
-            "high": 0,
-            "medium": 0,
-            "low": 0,
-        }
-        reliability_level_counts = {
-            "high": 0,
-            "medium": 0,
-            "low": 0,
-            "unknown": 0,
-        }
-        conflict_case_count = 0
-        unanswered_case_count = 0
-        for row in items:
-            risk_profile = (
-                row.get("riskProfile")
-                if isinstance(row.get("riskProfile"), dict)
-                else {}
-            )
-            risk_level_value = str(risk_profile.get("level") or "").strip().lower()
-            if risk_level_value in risk_level_counts:
-                risk_level_counts[risk_level_value] += 1
-
-            ops_profile = (
-                row.get("claimEvidenceProfile")
-                if isinstance(row.get("claimEvidenceProfile"), dict)
-                else {}
-            )
-            if bool(ops_profile.get("hasConflict")):
-                conflict_case_count += 1
-            if bool(ops_profile.get("hasUnansweredClaim")):
-                unanswered_case_count += 1
-            reliability = (
-                ops_profile.get("reliability")
-                if isinstance(ops_profile.get("reliability"), dict)
-                else {}
-            )
-            reliability_level_value = str(
-                reliability.get("level") or ""
-            ).strip().lower()
-            if reliability_level_value in reliability_level_counts:
-                reliability_level_counts[reliability_level_value] += 1
-            else:
-                reliability_level_counts["unknown"] += 1
-
-        payload = {
-            "count": len(items),
-            "returned": len(page_items),
-            "scanned": len(jobs),
-            "skipped": max(0, len(jobs) - len(items)),
-            "errorCount": len(errors),
-            "items": page_items,
-            "errors": errors,
-            "aggregations": {
-                "riskLevelCounts": risk_level_counts,
-                "reliabilityLevelCounts": reliability_level_counts,
-                "conflictCaseCount": conflict_case_count,
-                "unansweredCaseCount": unanswered_case_count,
-            },
-            "filters": {
-                "status": normalized_status,
-                "dispatchType": normalized_dispatch_type,
-                "winner": normalized_winner,
-                "reviewRequired": review_required,
-                "riskLevel": normalized_risk_level,
-                "slaBucket": normalized_sla_bucket,
-                "reliabilityLevel": normalized_reliability_level,
-                "hasConflict": has_conflict,
-                "hasUnansweredClaim": has_unanswered_claim,
-                "updatedFrom": (
-                    normalized_updated_from.isoformat()
-                    if normalized_updated_from is not None
-                    else None
-                ),
-                "updatedTo": (
-                    normalized_updated_to.isoformat()
-                    if normalized_updated_to is not None
-                    else None
-                ),
-                "sortBy": normalized_sort_by,
-                "sortOrder": normalized_sort_order,
-                "scanLimit": normalized_scan_limit,
-                "offset": normalized_offset,
-                "limit": normalized_limit,
-            },
-        }
         try:
             _validate_evidence_claim_ops_queue_contract(payload)
         except ValueError as err:
@@ -9159,6 +8643,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             return await self_awaitable
         except ReviewRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_panel_runtime_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except PanelRuntimeRouteError_v3 as err:
             raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     async def _run_registry_route_guard(
@@ -9967,59 +9459,44 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_judge_id = str(judge_id or "").strip() or None
-        if normalized_judge_id is not None and normalized_judge_id not in PANEL_JUDGE_IDS:
-            raise HTTPException(status_code=422, detail="invalid_panel_judge_id")
-        normalized_profile_source = _normalize_panel_runtime_profile_source(profile_source)
-        if (
-            normalized_profile_source is not None
-            and normalized_profile_source not in PANEL_RUNTIME_PROFILE_SOURCE_VALUES
-        ):
-            raise HTTPException(status_code=422, detail="invalid_panel_profile_source")
-        normalized_profile_id = str(profile_id or "").strip() or None
-        normalized_model_strategy = str(model_strategy or "").strip() or None
-        normalized_strategy_slot = str(strategy_slot or "").strip() or None
-        normalized_domain_slot = str(domain_slot or "").strip() or None
-        normalized_sort_by = _normalize_panel_runtime_profile_sort_by(sort_by)
-        if normalized_sort_by not in PANEL_RUNTIME_PROFILE_SORT_FIELDS:
-            raise HTTPException(status_code=422, detail="invalid_panel_runtime_sort_by")
-        normalized_sort_order = _normalize_panel_runtime_profile_sort_order(sort_order)
-        if normalized_sort_order not in {"asc", "desc"}:
-            raise HTTPException(status_code=422, detail="invalid_panel_runtime_sort_order")
         try:
-            return await build_panel_runtime_profiles_payload_v3(
-                list_judge_case_fairness=list_judge_case_fairness,
-                build_panel_runtime_profile_item=_build_panel_runtime_profile_item,
-                build_panel_runtime_profile_sort_key=_build_panel_runtime_profile_sort_key,
-                build_panel_runtime_profile_aggregations=_build_panel_runtime_profile_aggregations,
-                validate_panel_runtime_profile_contract=_validate_panel_runtime_profile_contract,
-                panel_judge_ids=PANEL_JUDGE_IDS,
-                x_ai_internal_key=x_ai_internal_key,
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                policy_version=policy_version,
-                has_open_review=has_open_review,
-                gate_conclusion=gate_conclusion,
-                challenge_state=challenge_state,
-                review_required=review_required,
-                panel_high_disagreement=panel_high_disagreement,
-                normalized_judge_id=normalized_judge_id,
-                normalized_profile_source=normalized_profile_source,
-                normalized_profile_id=normalized_profile_id,
-                normalized_model_strategy=normalized_model_strategy,
-                normalized_strategy_slot=normalized_strategy_slot,
-                normalized_domain_slot=normalized_domain_slot,
-                normalized_sort_by=normalized_sort_by,
-                normalized_sort_order=normalized_sort_order,
-                normalized_status=_normalize_workflow_status(status),
-                normalized_dispatch_type=str(dispatch_type or "").strip().lower() or None,
-                normalized_winner=str(winner or "").strip().lower() or None,
-                normalized_policy_version=str(policy_version or "").strip() or None,
-                normalized_gate_conclusion=_normalize_case_fairness_gate_conclusion(gate_conclusion),
-                normalized_challenge_state=_normalize_case_fairness_challenge_state(challenge_state),
-                offset=offset,
-                limit=limit,
+            return await _run_panel_runtime_route_guard(
+                build_panel_runtime_profiles_route_payload_v3(
+                    list_judge_case_fairness=list_judge_case_fairness,
+                    build_panel_runtime_profile_item=_build_panel_runtime_profile_item,
+                    build_panel_runtime_profile_sort_key=_build_panel_runtime_profile_sort_key,
+                    build_panel_runtime_profile_aggregations=_build_panel_runtime_profile_aggregations,
+                    validate_panel_runtime_profile_contract=_validate_panel_runtime_profile_contract,
+                    panel_judge_ids=PANEL_JUDGE_IDS,
+                    panel_runtime_profile_source_values=PANEL_RUNTIME_PROFILE_SOURCE_VALUES,
+                    panel_runtime_profile_sort_fields=PANEL_RUNTIME_PROFILE_SORT_FIELDS,
+                    normalize_workflow_status=_normalize_workflow_status,
+                    normalize_panel_runtime_profile_source=_normalize_panel_runtime_profile_source,
+                    normalize_panel_runtime_profile_sort_by=_normalize_panel_runtime_profile_sort_by,
+                    normalize_panel_runtime_profile_sort_order=_normalize_panel_runtime_profile_sort_order,
+                    normalize_case_fairness_gate_conclusion=_normalize_case_fairness_gate_conclusion,
+                    normalize_case_fairness_challenge_state=_normalize_case_fairness_challenge_state,
+                    x_ai_internal_key=x_ai_internal_key,
+                    status=status,
+                    dispatch_type=dispatch_type,
+                    winner=winner,
+                    policy_version=policy_version,
+                    has_open_review=has_open_review,
+                    gate_conclusion=gate_conclusion,
+                    challenge_state=challenge_state,
+                    review_required=review_required,
+                    panel_high_disagreement=panel_high_disagreement,
+                    judge_id=judge_id,
+                    profile_source=profile_source,
+                    profile_id=profile_id,
+                    model_strategy=model_strategy,
+                    strategy_slot=strategy_slot,
+                    domain_slot=domain_slot,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                    offset=offset,
+                    limit=limit,
+                )
             )
         except ValueError as err:
             _raise_http_500_contract_violation(
@@ -10050,43 +9527,36 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         attention_limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_scan_limit = max(50, min(int(profile_scan_limit), 5000))
-        normalized_group_limit = max(1, min(int(group_limit), 200))
-        normalized_attention_limit = max(1, min(int(attention_limit), 100))
-        return await build_panel_runtime_readiness_payload_v3(
-            list_panel_runtime_profiles=list_panel_runtime_profiles,
-            build_panel_runtime_readiness_summary=_build_panel_runtime_readiness_summary,
-            x_ai_internal_key=x_ai_internal_key,
-            status=status,
-            dispatch_type=dispatch_type,
-            winner=winner,
-            policy_version=policy_version,
-            has_open_review=has_open_review,
-            gate_conclusion=gate_conclusion,
-            challenge_state=challenge_state,
-            review_required=review_required,
-            panel_high_disagreement=panel_high_disagreement,
-            judge_id=judge_id,
-            profile_source=profile_source,
-            profile_id=profile_id,
-            model_strategy=model_strategy,
-            strategy_slot=strategy_slot,
-            domain_slot=domain_slot,
-            normalized_status=_normalize_workflow_status(status),
-            normalized_dispatch_type=str(dispatch_type or "").strip().lower() or None,
-            normalized_winner=str(winner or "").strip().lower() or None,
-            normalized_policy_version=str(policy_version or "").strip() or None,
-            normalized_gate_conclusion=_normalize_case_fairness_gate_conclusion(gate_conclusion),
-            normalized_challenge_state=_normalize_case_fairness_challenge_state(challenge_state),
-            normalized_judge_id=str(judge_id or "").strip() or None,
-            normalized_profile_source=_normalize_panel_runtime_profile_source(profile_source),
-            normalized_profile_id=str(profile_id or "").strip() or None,
-            normalized_model_strategy=str(model_strategy or "").strip() or None,
-            normalized_strategy_slot=str(strategy_slot or "").strip() or None,
-            normalized_domain_slot=str(domain_slot or "").strip() or None,
-            normalized_scan_limit=normalized_scan_limit,
-            normalized_group_limit=normalized_group_limit,
-            normalized_attention_limit=normalized_attention_limit,
+        return await _run_panel_runtime_route_guard(
+            build_panel_runtime_readiness_route_payload_v3(
+                list_panel_runtime_profiles=list_panel_runtime_profiles,
+                build_panel_runtime_readiness_summary=_build_panel_runtime_readiness_summary,
+                panel_judge_ids=PANEL_JUDGE_IDS,
+                panel_runtime_profile_source_values=PANEL_RUNTIME_PROFILE_SOURCE_VALUES,
+                normalize_workflow_status=_normalize_workflow_status,
+                normalize_panel_runtime_profile_source=_normalize_panel_runtime_profile_source,
+                normalize_case_fairness_gate_conclusion=_normalize_case_fairness_gate_conclusion,
+                normalize_case_fairness_challenge_state=_normalize_case_fairness_challenge_state,
+                x_ai_internal_key=x_ai_internal_key,
+                status=status,
+                dispatch_type=dispatch_type,
+                winner=winner,
+                policy_version=policy_version,
+                has_open_review=has_open_review,
+                gate_conclusion=gate_conclusion,
+                challenge_state=challenge_state,
+                review_required=review_required,
+                panel_high_disagreement=panel_high_disagreement,
+                judge_id=judge_id,
+                profile_source=profile_source,
+                profile_id=profile_id,
+                model_strategy=model_strategy,
+                strategy_slot=strategy_slot,
+                domain_slot=domain_slot,
+                profile_scan_limit=profile_scan_limit,
+                group_limit=group_limit,
+                attention_limit=attention_limit,
+            )
         )
 
     @app.get("/internal/judge/review/cases")
@@ -10347,14 +9817,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        rows = runtime.trace_store.list_alert_outbox(
+        return build_alert_outbox_route_payload_v3(
             delivery_status=delivery_status,
             limit=limit,
-        )
-        return build_alert_outbox_list_payload_v3(
-            rows=rows,
-            delivery_status=delivery_status,
-            limit=limit,
+            list_alert_outbox=runtime.trace_store.list_alert_outbox,
             serialize_outbox_event=_serialize_outbox_event,
         )
 
@@ -10385,20 +9851,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        record = runtime.trace_store.get_trace(case_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="judge_trace_not_found")
-        report_summary = record.report_summary or {}
-        payload = report_summary.get("payload") or {}
-        return {
-            "caseId": case_id,
-            "traceId": record.trace_id,
-            "retrievalDiagnostics": payload.get("retrievalDiagnostics"),
-            "ragSources": payload.get("ragSources"),
-            "ragBackend": payload.get("ragBackend"),
-            "ragRequestedBackend": payload.get("ragRequestedBackend"),
-            "ragBackendFallbackReason": payload.get("ragBackendFallbackReason"),
-        }
+        try:
+            return build_rag_diagnostics_payload_v3(
+                case_id=case_id,
+                get_trace=runtime.trace_store.get_trace,
+            )
+        except LookupError as err:
+            _raise_http_404_from_lookup_error(err=err)
 
     return app
 
