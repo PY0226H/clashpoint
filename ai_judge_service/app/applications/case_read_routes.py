@@ -29,6 +29,22 @@ class CaseReadReplayRecord:
     provider: str | None
 
 
+def _raise_route_error_from_http_exception(err: Exception) -> None:
+    status_code = getattr(err, "status_code", None)
+    detail = getattr(err, "detail", None)
+    if isinstance(status_code, int):
+        raise CaseReadRouteError(status_code=status_code, detail=detail) from err
+    if status_code is not None:
+        try:
+            normalized_status_code = int(status_code)
+        except (TypeError, ValueError):
+            return
+        raise CaseReadRouteError(
+            status_code=normalized_status_code,
+            detail=detail,
+        ) from err
+
+
 async def build_case_overview_route_payload(
     *,
     case_id: int,
@@ -180,6 +196,146 @@ async def build_case_overview_route_payload(
         ],
         alerts=[serialize_alert_item(item) for item in alerts],
         replays=replay_items,
+    )
+
+
+async def build_case_claim_ledger_route_payload(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    limit: int,
+    list_claim_ledger_records: Callable[..., Awaitable[list[Any]]],
+    get_claim_ledger_record: Callable[..., Awaitable[Any | None]],
+    serialize_claim_ledger_record: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
+    if normalized_dispatch_type not in {"auto", "phase", "final"}:
+        raise CaseReadRouteError(status_code=422, detail="invalid_dispatch_type")
+
+    normalized_limit = max(1, min(int(limit), 200))
+    if normalized_dispatch_type == "auto":
+        records = await list_claim_ledger_records(case_id=case_id, limit=normalized_limit)
+        if not records:
+            raise CaseReadRouteError(status_code=404, detail="claim_ledger_not_found")
+        primary = records[0]
+    else:
+        primary = await get_claim_ledger_record(
+            case_id=case_id,
+            dispatch_type=normalized_dispatch_type,
+        )
+        if primary is None:
+            raise CaseReadRouteError(status_code=404, detail="claim_ledger_not_found")
+        records = [primary]
+
+    return {
+        "caseId": case_id,
+        "dispatchType": primary.dispatch_type,
+        "traceId": primary.trace_id,
+        "count": len(records),
+        "item": serialize_claim_ledger_record(primary, include_payload=True),
+        "items": [
+            serialize_claim_ledger_record(row, include_payload=False) for row in records
+        ],
+    }
+
+
+async def build_case_courtroom_read_model_route_payload(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    include_events: bool,
+    include_alerts: bool,
+    alert_limit: int,
+    resolve_report_context_for_case: Callable[..., Awaitable[dict[str, Any]]],
+    workflow_get_job: Callable[..., Awaitable[Any | None]],
+    workflow_list_events: Callable[..., Awaitable[list[Any]]],
+    trace_get: Callable[[int], Any | None],
+    get_claim_ledger_record: Callable[..., Awaitable[Any | None]],
+    build_verdict_contract: Callable[[dict[str, Any]], dict[str, Any]],
+    build_case_evidence_view: Callable[..., dict[str, Any]],
+    build_courtroom_read_model_view: Callable[..., dict[str, Any]],
+    build_judge_core_view: Callable[..., dict[str, Any] | None],
+    list_audit_alerts: Callable[..., Awaitable[list[Any]]],
+    build_case_courtroom_read_model_payload: Callable[..., dict[str, Any]],
+    serialize_workflow_job: Callable[[Any], dict[str, Any]],
+    serialize_alert_item: Callable[[Any], dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        context = await resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="courtroom_case_not_found",
+            missing_report_detail="courtroom_report_payload_missing",
+        )
+    except Exception as err:
+        _raise_route_error_from_http_exception(err)
+        raise
+
+    workflow_job = await workflow_get_job(job_id=case_id)
+    workflow_events = list(await workflow_list_events(job_id=case_id))
+    trace = trace_get(case_id)
+    report_summary = (
+        trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
+    )
+    callback_status = (
+        report_summary.get("callbackStatus")
+        or context["responsePayload"].get("callbackStatus")
+        or (trace.callback_status if trace is not None else None)
+    )
+    callback_error = (
+        report_summary.get("callbackError")
+        or context["responsePayload"].get("callbackError")
+        or (trace.callback_error if trace is not None else None)
+    )
+    claim_ledger_record = await get_claim_ledger_record(
+        case_id=case_id,
+        dispatch_type=context["dispatchType"],
+    )
+    verdict_contract = build_verdict_contract(context["reportPayload"])
+    case_evidence = build_case_evidence_view(
+        report_payload=context["reportPayload"],
+        verdict_contract=verdict_contract,
+        claim_ledger_record=claim_ledger_record,
+    )
+    courtroom_read_model = build_courtroom_read_model_view(
+        report_payload=context["reportPayload"],
+        case_evidence=case_evidence,
+    )
+    judge_core_view = build_judge_core_view(
+        workflow_job=workflow_job,
+        workflow_events=workflow_events,
+    )
+    normalized_alert_limit = max(1, min(int(alert_limit), 500))
+    alert_items = (
+        await list_audit_alerts(job_id=case_id, status=None, limit=normalized_alert_limit)
+        if include_alerts
+        else []
+    )
+
+    return build_case_courtroom_read_model_payload(
+        case_id=case_id,
+        dispatch_type=context["dispatchType"],
+        trace_id=context["traceId"] or None,
+        workflow=serialize_workflow_job(workflow_job) if workflow_job is not None else None,
+        judge_core=judge_core_view,
+        callback_status=callback_status,
+        callback_error=callback_error,
+        report_payload=context["reportPayload"],
+        courtroom=courtroom_read_model,
+        events=[
+            {
+                "eventSeq": item.event_seq,
+                "eventType": item.event_type,
+                "payload": item.payload,
+                "createdAt": item.created_at.isoformat(),
+            }
+            for item in workflow_events
+        ],
+        event_count=len(workflow_events),
+        alerts=[serialize_alert_item(item) for item in alert_items],
+        include_events=bool(include_events),
+        include_alerts=bool(include_alerts),
+        alert_limit=normalized_alert_limit,
     )
 
 

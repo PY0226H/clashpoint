@@ -8,7 +8,9 @@ from typing import Any
 
 from app.applications.case_read_routes import (
     CaseReadRouteError,
+    build_case_claim_ledger_route_payload,
     build_case_courtroom_read_model_payload,
+    build_case_courtroom_read_model_route_payload,
     build_case_overview_payload,
     build_case_overview_replay_items,
     build_case_overview_route_payload,
@@ -127,6 +129,154 @@ class CaseReadRoutesTests(unittest.TestCase):
         self.assertEqual(payload["workflow"]["jobId"], 9602)
         self.assertEqual(len(payload["events"]), 1)
         self.assertEqual(payload["alerts"][0]["alertId"], "a1")
+
+    def test_build_case_claim_ledger_route_payload_should_raise_422_for_invalid_dispatch_type(
+        self,
+    ) -> None:
+        with self.assertRaises(CaseReadRouteError) as ctx:
+            asyncio.run(
+                build_case_claim_ledger_route_payload(
+                    case_id=9701,
+                    dispatch_type="invalid",
+                    limit=20,
+                    list_claim_ledger_records=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    get_claim_ledger_record=lambda **kwargs: asyncio.sleep(0, result=None),
+                    serialize_claim_ledger_record=lambda item, include_payload: {},
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "invalid_dispatch_type")
+
+    def test_build_case_claim_ledger_route_payload_should_build_auto_records_payload(self) -> None:
+        primary = type(
+            "Ledger",
+            (),
+            {"dispatch_type": "final", "trace_id": "trace-9702"},
+        )()
+        secondary = type(
+            "Ledger",
+            (),
+            {"dispatch_type": "phase", "trace_id": "trace-9702-phase"},
+        )()
+
+        payload = asyncio.run(
+            build_case_claim_ledger_route_payload(
+                case_id=9702,
+                dispatch_type="auto",
+                limit=20,
+                list_claim_ledger_records=lambda **kwargs: asyncio.sleep(
+                    0,
+                    result=[primary, secondary],
+                ),
+                get_claim_ledger_record=lambda **kwargs: asyncio.sleep(0, result=None),
+                serialize_claim_ledger_record=lambda item, include_payload: {
+                    "dispatchType": item.dispatch_type,
+                    "traceId": item.trace_id,
+                    "includePayload": bool(include_payload),
+                },
+            )
+        )
+
+        self.assertEqual(payload["caseId"], 9702)
+        self.assertEqual(payload["dispatchType"], "final")
+        self.assertEqual(payload["traceId"], "trace-9702")
+        self.assertEqual(payload["count"], 2)
+        self.assertTrue(payload["item"]["includePayload"])
+        self.assertFalse(payload["items"][0]["includePayload"])
+        self.assertEqual(payload["items"][1]["dispatchType"], "phase")
+
+    def test_build_case_courtroom_read_model_route_payload_should_map_context_error(self) -> None:
+        class _ContextErr(Exception):
+            status_code = 404
+            detail = "courtroom_case_not_found"
+
+        async def _raise_context(**kwargs: Any) -> dict[str, Any]:
+            raise _ContextErr()
+
+        with self.assertRaises(CaseReadRouteError) as ctx:
+            asyncio.run(
+                build_case_courtroom_read_model_route_payload(
+                    case_id=9801,
+                    dispatch_type="auto",
+                    include_events=False,
+                    include_alerts=True,
+                    alert_limit=200,
+                    resolve_report_context_for_case=_raise_context,
+                    workflow_get_job=lambda **kwargs: asyncio.sleep(0, result=None),
+                    workflow_list_events=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    trace_get=lambda case_id: None,
+                    get_claim_ledger_record=lambda **kwargs: asyncio.sleep(0, result=None),
+                    build_verdict_contract=lambda payload: {},
+                    build_case_evidence_view=lambda **kwargs: {},
+                    build_courtroom_read_model_view=lambda **kwargs: {},
+                    build_judge_core_view=lambda **kwargs: None,
+                    list_audit_alerts=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    build_case_courtroom_read_model_payload=lambda **kwargs: {},
+                    serialize_workflow_job=lambda job: {},
+                    serialize_alert_item=lambda item: {},
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail, "courtroom_case_not_found")
+
+    def test_build_case_courtroom_read_model_route_payload_should_build_payload(self) -> None:
+        created_at = datetime(2026, 4, 21, 0, 2, tzinfo=timezone.utc)
+        trace = _DummyTrace(trace_id="trace-9802", replays=[])
+        trace.report_summary = {"callbackStatus": "reported", "callbackError": None}
+        trace.callback_status = "reported"
+        trace.callback_error = None
+
+        workflow_job = type("Job", (), {"job_id": 9802})()
+        workflow_event = type(
+            "Evt",
+            (),
+            {
+                "event_seq": 2,
+                "event_type": "judge.reported",
+                "payload": {"status": "reported"},
+                "created_at": created_at,
+            },
+        )()
+
+        payload = asyncio.run(
+            build_case_courtroom_read_model_route_payload(
+                case_id=9802,
+                dispatch_type="auto",
+                include_events=True,
+                include_alerts=True,
+                alert_limit=200,
+                resolve_report_context_for_case=lambda **kwargs: asyncio.sleep(
+                    0,
+                    result={
+                        "dispatchType": "final",
+                        "traceId": "trace-9802",
+                        "reportPayload": {"winner": "pro", "reviewRequired": False},
+                        "responsePayload": {"callbackStatus": "reported"},
+                    },
+                ),
+                workflow_get_job=lambda **kwargs: asyncio.sleep(0, result=workflow_job),
+                workflow_list_events=lambda **kwargs: asyncio.sleep(0, result=[workflow_event]),
+                trace_get=lambda case_id: trace,
+                get_claim_ledger_record=lambda **kwargs: asyncio.sleep(0, result={"dispatchType": "final"}),
+                build_verdict_contract=lambda report_payload: {"winner": report_payload.get("winner")},
+                build_case_evidence_view=lambda **kwargs: {"hasCaseDossier": True},
+                build_courtroom_read_model_view=lambda **kwargs: {"recorder": {"ok": True}},
+                build_judge_core_view=lambda **kwargs: {"stage": "reported", "version": "v1"},
+                list_audit_alerts=lambda **kwargs: asyncio.sleep(0, result=[{"alert_id": "alert-1"}]),
+                build_case_courtroom_read_model_payload=lambda **kwargs: dict(kwargs),
+                serialize_workflow_job=lambda job: {"jobId": job.job_id},
+                serialize_alert_item=lambda item: {"alertId": item["alert_id"]},
+            )
+        )
+
+        self.assertEqual(payload["case_id"], 9802)
+        self.assertEqual(payload["dispatch_type"], "final")
+        self.assertEqual(payload["trace_id"], "trace-9802")
+        self.assertEqual(payload["workflow"]["jobId"], 9802)
+        self.assertEqual(payload["callback_status"], "reported")
+        self.assertEqual(payload["event_count"], 1)
+        self.assertEqual(payload["alerts"][0]["alertId"], "alert-1")
+        self.assertEqual(payload["courtroom"]["recorder"]["ok"], True)
 
     def test_build_case_overview_replay_items_should_prefer_replay_records(self) -> None:
         records = [

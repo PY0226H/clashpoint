@@ -77,7 +77,13 @@ from .applications.case_read_routes import (
     CaseReadRouteError as CaseReadRouteError_v3,
 )
 from .applications.case_read_routes import (
+    build_case_claim_ledger_route_payload as build_case_claim_ledger_route_payload_v3,
+)
+from .applications.case_read_routes import (
     build_case_courtroom_read_model_payload as build_case_courtroom_read_model_payload_v3,
+)
+from .applications.case_read_routes import (
+    build_case_courtroom_read_model_route_payload as build_case_courtroom_read_model_route_payload_v3,
 )
 from .applications.case_read_routes import (
     build_case_overview_payload as build_case_overview_payload_v3,
@@ -8161,35 +8167,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         limit: int = Query(default=20, ge=1, le=200),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_dispatch_type = str(dispatch_type or "").strip().lower() or "auto"
-        if normalized_dispatch_type not in {"auto", "phase", "final"}:
-            raise HTTPException(status_code=422, detail="invalid_dispatch_type")
-
-        if normalized_dispatch_type == "auto":
-            records = await _list_claim_ledger_records(case_id=case_id, limit=limit)
-            if not records:
-                raise HTTPException(status_code=404, detail="claim_ledger_not_found")
-            primary = records[0]
-        else:
-            primary = await _get_claim_ledger_record(
+        return await _run_case_read_route_guard(
+            build_case_claim_ledger_route_payload_v3(
                 case_id=case_id,
-                dispatch_type=normalized_dispatch_type,
+                dispatch_type=dispatch_type,
+                limit=limit,
+                list_claim_ledger_records=_list_claim_ledger_records,
+                get_claim_ledger_record=_get_claim_ledger_record,
+                serialize_claim_ledger_record=_serialize_claim_ledger_record,
             )
-            if primary is None:
-                raise HTTPException(status_code=404, detail="claim_ledger_not_found")
-            records = [primary]
-
-        return {
-            "caseId": case_id,
-            "dispatchType": primary.dispatch_type,
-            "traceId": primary.trace_id,
-            "count": len(records),
-            "item": _serialize_claim_ledger_record(primary, include_payload=True),
-            "items": [
-                _serialize_claim_ledger_record(row, include_payload=False)
-                for row in records
-            ],
-        }
+        )
 
     @app.get("/internal/judge/cases/{case_id}/courtroom-read-model")
     async def get_judge_case_courtroom_read_model(
@@ -8201,76 +8188,27 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         alert_limit: int = Query(default=200, ge=1, le=500),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="courtroom_case_not_found",
-            missing_report_detail="courtroom_report_payload_missing",
-        )
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        workflow_events = list(await _workflow_list_events(job_id=case_id))
-        trace = runtime.trace_store.get_trace(case_id)
-        report_summary = (
-            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-        )
-        callback_status = (
-            report_summary.get("callbackStatus")
-            or context["responsePayload"].get("callbackStatus")
-            or (trace.callback_status if trace is not None else None)
-        )
-        callback_error = (
-            report_summary.get("callbackError")
-            or context["responsePayload"].get("callbackError")
-            or (trace.callback_error if trace is not None else None)
-        )
-        claim_ledger_record = await _get_claim_ledger_record(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-        )
-        verdict_contract = _build_verdict_contract(context["reportPayload"])
-        case_evidence = _build_case_evidence_view(
-            report_payload=context["reportPayload"],
-            verdict_contract=verdict_contract,
-            claim_ledger_record=claim_ledger_record,
-        )
-        courtroom_read_model = _build_courtroom_read_model_view(
-            report_payload=context["reportPayload"],
-            case_evidence=case_evidence,
-        )
-        judge_core_view = _build_judge_core_view(
-            workflow_job=workflow_job,
-            workflow_events=workflow_events,
-        )
-        alert_items = (
-            await _list_audit_alerts(job_id=case_id, status=None, limit=alert_limit)
-            if include_alerts
-            else []
-        )
-
-        response_payload = build_case_courtroom_read_model_payload_v3(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"] or None,
-            workflow=_serialize_workflow_job(workflow_job) if workflow_job is not None else None,
-            judge_core=judge_core_view,
-            callback_status=callback_status,
-            callback_error=callback_error,
-            report_payload=context["reportPayload"],
-            courtroom=courtroom_read_model,
-            events=[
-                {
-                    "eventSeq": item.event_seq,
-                    "eventType": item.event_type,
-                    "payload": item.payload,
-                    "createdAt": item.created_at.isoformat(),
-                }
-                for item in workflow_events
-            ],
-            event_count=len(workflow_events),
-            alerts=[_serialize_alert_item(item) for item in alert_items],
-            include_events=bool(include_events),
-            include_alerts=bool(include_alerts),
-            alert_limit=int(alert_limit),
+        response_payload = await _run_case_read_route_guard(
+            build_case_courtroom_read_model_route_payload_v3(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                include_events=include_events,
+                include_alerts=include_alerts,
+                alert_limit=alert_limit,
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                workflow_get_job=_workflow_get_job,
+                workflow_list_events=_workflow_list_events,
+                trace_get=runtime.trace_store.get_trace,
+                get_claim_ledger_record=_get_claim_ledger_record,
+                build_verdict_contract=_build_verdict_contract,
+                build_case_evidence_view=_build_case_evidence_view,
+                build_courtroom_read_model_view=_build_courtroom_read_model_view,
+                build_judge_core_view=_build_judge_core_view,
+                list_audit_alerts=_list_audit_alerts,
+                build_case_courtroom_read_model_payload=build_case_courtroom_read_model_payload_v3,
+                serialize_workflow_job=_serialize_workflow_job,
+                serialize_alert_item=_serialize_alert_item,
+            )
         )
         try:
             _validate_courtroom_read_model_contract(response_payload)
