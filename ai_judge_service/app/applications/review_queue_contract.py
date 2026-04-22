@@ -107,6 +107,24 @@ REVIEW_QUEUE_ERROR_KEYS: tuple[str, ...] = (
     "errorCode",
 )
 
+COURTROOM_DRILLDOWN_KEYS: tuple[str, ...] = (
+    "claim",
+    "evidence",
+    "panel",
+    "fairness",
+    "opinion",
+    "governance",
+)
+
+COURTROOM_SUMMARY_KEYS: tuple[str, ...] = (
+    "recorder",
+    "claim",
+    "evidence",
+    "panel",
+    "fairness",
+    "opinion",
+)
+
 
 def _to_non_negative_int(value: Any, *, default: int = 0) -> int:
     try:
@@ -203,6 +221,19 @@ def validate_courtroom_drilldown_bundle_contract(payload: dict[str, Any]) -> Non
     if not isinstance(notes, list):
         raise ValueError("courtroom_drilldown_bundle_notes_not_list")
 
+    items = payload.get("items")
+    assert isinstance(items, list)
+    for idx, row in enumerate(items):
+        assert isinstance(row, dict)
+        drilldown = row.get("drilldown")
+        if not isinstance(drilldown, dict):
+            raise ValueError(f"courtroom_drilldown_bundle_drilldown_not_dict:{idx}")
+        _require_keys(
+            section=f"courtroom_drilldown_bundle_drilldown_{idx}",
+            payload=drilldown,
+            keys=COURTROOM_DRILLDOWN_KEYS,
+        )
+
     aggregations = payload.get("aggregations")
     assert isinstance(aggregations, dict)
     for key in COURTROOM_DRILLDOWN_AGGREGATION_KEYS:
@@ -240,3 +271,16 @@ def validate_evidence_claim_ops_queue_contract(payload: dict[str, Any]) -> None:
     for key in ("conflictCaseCount", "unansweredCaseCount"):
         if _to_non_negative_int(aggregations.get(key), default=-1) < 0:
             raise ValueError(f"evidence_claim_ops_queue_{key}_invalid")
+
+    items = payload.get("items")
+    assert isinstance(items, list)
+    for idx, row in enumerate(items):
+        assert isinstance(row, dict)
+        courtroom_summary = row.get("courtroomSummary")
+        if not isinstance(courtroom_summary, dict):
+            raise ValueError(f"evidence_claim_ops_queue_courtroom_summary_not_dict:{idx}")
+        _require_keys(
+            section=f"evidence_claim_ops_queue_courtroom_summary_{idx}",
+            payload=courtroom_summary,
+            keys=COURTROOM_SUMMARY_KEYS,
+        )

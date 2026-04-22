@@ -40,6 +40,28 @@ CASE_OVERVIEW_JUDGE_CORE_KEYS: tuple[str, ...] = (
     "eventSeq",
 )
 
+CASE_OVERVIEW_CASE_EVIDENCE_KEYS: tuple[str, ...] = (
+    "caseDossier",
+    "claimGraph",
+    "evidenceLedger",
+    "verdictLedger",
+    "fairnessSummary",
+    "opinionPack",
+    "auditSummary",
+    "hasCaseDossier",
+    "hasClaimGraph",
+    "hasEvidenceLedger",
+    "hasVerdictLedger",
+    "hasOpinionPack",
+)
+
+CASE_OVERVIEW_CASE_EVIDENCE_AUDIT_SUMMARY_KEYS: tuple[str, ...] = (
+    "alertCount",
+    "auditAlerts",
+    "errorCodes",
+    "degradationLevel",
+)
+
 CASE_OVERVIEW_REPLAY_ITEM_KEYS: tuple[str, ...] = (
     "dispatchType",
     "traceId",
@@ -96,6 +118,13 @@ def _assert_optional_string(section: str, value: Any) -> None:
         raise ValueError(f"{section}_not_string")
 
 
+def _assert_optional_list(section: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise ValueError(f"{section}_not_list")
+
+
 def validate_case_overview_contract(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValueError("case_overview_payload_not_dict")
@@ -148,6 +177,47 @@ def validate_case_overview_contract(payload: dict[str, Any]) -> None:
     case_evidence = payload.get("caseEvidence")
     if not isinstance(case_evidence, dict):
         raise ValueError("case_overview_case_evidence_not_dict")
+    _assert_required_keys(
+        section="case_overview_case_evidence",
+        payload=case_evidence,
+        keys=CASE_OVERVIEW_CASE_EVIDENCE_KEYS,
+    )
+    for section, key in (
+        ("case_overview_case_evidence_case_dossier", "caseDossier"),
+        ("case_overview_case_evidence_claim_graph", "claimGraph"),
+        ("case_overview_case_evidence_evidence_ledger", "evidenceLedger"),
+        ("case_overview_case_evidence_verdict_ledger", "verdictLedger"),
+        ("case_overview_case_evidence_fairness_summary", "fairnessSummary"),
+        ("case_overview_case_evidence_opinion_pack", "opinionPack"),
+    ):
+        _assert_optional_dict(section, case_evidence.get(key))
+    audit_summary = case_evidence.get("auditSummary")
+    if not isinstance(audit_summary, dict):
+        raise ValueError("case_overview_case_evidence_audit_summary_not_dict")
+    _assert_required_keys(
+        section="case_overview_case_evidence_audit_summary",
+        payload=audit_summary,
+        keys=CASE_OVERVIEW_CASE_EVIDENCE_AUDIT_SUMMARY_KEYS,
+    )
+    if _non_negative_int(audit_summary.get("alertCount"), default=-1) < 0:
+        raise ValueError("case_overview_case_evidence_audit_summary_alert_count_invalid")
+    _assert_optional_list(
+        "case_overview_case_evidence_audit_summary_alerts",
+        audit_summary.get("auditAlerts"),
+    )
+    _assert_optional_list(
+        "case_overview_case_evidence_audit_summary_error_codes",
+        audit_summary.get("errorCodes"),
+    )
+    for key in (
+        "hasCaseDossier",
+        "hasClaimGraph",
+        "hasEvidenceLedger",
+        "hasVerdictLedger",
+        "hasOpinionPack",
+    ):
+        if not isinstance(case_evidence.get(key), bool):
+            raise ValueError(f"case_overview_case_evidence_{key}_not_bool")
 
     winner = payload.get("winner")
     if winner is not None:

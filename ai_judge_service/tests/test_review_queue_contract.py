@@ -28,7 +28,14 @@ class ReviewQueueContractTests(unittest.TestCase):
                     "callbackStatus": "reported",
                     "callbackError": None,
                     "riskProfile": {"level": "high"},
-                    "drilldown": {},
+                    "drilldown": {
+                        "claim": {},
+                        "evidence": {},
+                        "panel": {},
+                        "fairness": {},
+                        "opinion": {},
+                        "governance": {},
+                    },
                     "actionHints": ["review.queue.decide"],
                     "detailPath": "/internal/judge/cases/7001/courtroom-read-model",
                 }
@@ -82,7 +89,14 @@ class ReviewQueueContractTests(unittest.TestCase):
                     "callbackStatus": "reported",
                     "callbackError": None,
                     "riskProfile": {"level": "medium"},
-                    "courtroomSummary": {},
+                    "courtroomSummary": {
+                        "recorder": {},
+                        "claim": {},
+                        "evidence": {},
+                        "panel": {},
+                        "fairness": {},
+                        "opinion": {},
+                    },
                     "claimEvidenceProfile": {"reliability": {"level": "high"}},
                     "actionHints": ["evidence.upgrade_reliability"],
                     "detailPath": "/internal/judge/cases/7002/courtroom-read-model",
@@ -142,6 +156,19 @@ class ReviewQueueContractTests(unittest.TestCase):
             validate_evidence_claim_ops_queue_contract(payload)
         self.assertIn("evidence_claim_ops_queue_returned_count_mismatch", str(ctx.exception))
 
+    def test_validate_courtroom_drilldown_bundle_contract_should_fail_when_six_object_sections_missing(
+        self,
+    ) -> None:
+        payload = self._build_courtroom_payload()
+        payload["items"][0]["drilldown"].pop("governance")
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_courtroom_drilldown_bundle_contract(payload)
+        self.assertIn(
+            "courtroom_drilldown_bundle_drilldown_0_missing_keys:governance",
+            str(ctx.exception),
+        )
+
     def test_validate_evidence_claim_ops_queue_contract_should_fail_on_reliability_shape(self) -> None:
         payload = self._build_evidence_payload()
         payload["aggregations"]["reliabilityLevelCounts"].pop("unknown")
@@ -150,6 +177,19 @@ class ReviewQueueContractTests(unittest.TestCase):
             validate_evidence_claim_ops_queue_contract(payload)
         self.assertIn(
             "evidence_claim_ops_queue_reliability_level_counts_missing_keys",
+            str(ctx.exception),
+        )
+
+    def test_validate_evidence_claim_ops_queue_contract_should_fail_when_courtroom_summary_sections_missing(
+        self,
+    ) -> None:
+        payload = self._build_evidence_payload()
+        payload["items"][0]["courtroomSummary"].pop("opinion")
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_evidence_claim_ops_queue_contract(payload)
+        self.assertIn(
+            "evidence_claim_ops_queue_courtroom_summary_0_missing_keys:opinion",
             str(ctx.exception),
         )
 

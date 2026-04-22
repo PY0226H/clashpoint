@@ -26,7 +26,19 @@ class CourtroomReadModelContractTests(unittest.TestCase):
                 "sideAnalysis": {"pro": "p", "con": "c"},
                 "verdictReason": "reason",
             },
-            "courtroom": {"recorder": {}, "claim": {}, "evidence": {}},
+            "courtroom": {
+                "recorder": {"caseDossier": {}},
+                "claim": {"claimGraph": {}},
+                "evidence": {"evidenceLedger": {}},
+                "panel": {"panelDecisions": {}},
+                "fairness": {"summary": {}},
+                "opinion": {"sideAnalysis": {"pro": [], "con": []}},
+                "governance": {
+                    "policyVersion": "v3-default",
+                    "promptVersion": "promptset-v3",
+                    "toolsetVersion": "toolset-v3",
+                },
+            },
             "events": [],
             "eventCount": 2,
             "alerts": [],
@@ -62,6 +74,18 @@ class CourtroomReadModelContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             validate_courtroom_read_model_contract(payload)
         self.assertIn("courtroom_read_model_dispatch_type_invalid", str(ctx.exception))
+
+    def test_validate_courtroom_read_model_contract_should_fail_when_courtroom_lacks_six_object_keys(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["courtroom"]["claim"].pop("claimGraph")
+        with self.assertRaises(ValueError) as ctx:
+            validate_courtroom_read_model_contract(payload)
+        self.assertIn(
+            "courtroom_read_model_courtroom_claim_missing_keys:claimGraph",
+            str(ctx.exception),
+        )
 
 
 if __name__ == "__main__":

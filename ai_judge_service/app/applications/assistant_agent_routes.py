@@ -10,6 +10,58 @@ class AssistantAgentRouteError(Exception):
     detail: Any
 
 
+_OFFICIAL_VERDICT_CHAIN_KEYS = frozenset(
+    {
+        "winner",
+        "proscore",
+        "conscore",
+        "dimensionscores",
+        "verdictevidencerefs",
+        "auditalerts",
+        "errorcodes",
+        "degradationlevel",
+        "debatesummary",
+        "sideanalysis",
+        "verdictreason",
+        "finalrationale",
+        "verdictledger",
+        "fairnesssummary",
+        "fairnessgate",
+        "trustattestation",
+        "needsdrawvote",
+        "reviewrequired",
+        "dispatchtype",
+        "judgepolicyversion",
+        "rubricversion",
+        "ruleversion",
+        "officialverdictauthority",
+        "writesverdictledger",
+        "writesjudgetrace",
+    }
+)
+
+
+def _normalize_advisory_output_key(key: str) -> str:
+    return "".join(char for char in key.lower() if char.isalnum())
+
+
+def _is_official_verdict_chain_key(key: str) -> bool:
+    return _normalize_advisory_output_key(key) in _OFFICIAL_VERDICT_CHAIN_KEYS
+
+
+def sanitize_assistant_advisory_output(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        sanitized: dict[Any, Any] = {}
+        for key, value in payload.items():
+            if isinstance(key, str) and _is_official_verdict_chain_key(key):
+                continue
+            sanitized[key] = sanitize_assistant_advisory_output(value)
+        return sanitized
+    if isinstance(payload, list):
+        return [sanitize_assistant_advisory_output(item) for item in payload]
+    return payload
+
+
 def normalize_assistant_session_id(session_id: int) -> int:
     normalized_session_id = max(0, int(session_id))
     if normalized_session_id <= 0:

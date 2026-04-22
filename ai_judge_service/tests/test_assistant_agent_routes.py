@@ -10,6 +10,7 @@ from app.applications.assistant_agent_routes import (
     build_npc_coach_advice_route_payload,
     build_room_qa_answer_route_payload,
     normalize_assistant_session_id,
+    sanitize_assistant_advisory_output,
 )
 
 
@@ -122,6 +123,48 @@ class AssistantAgentRoutesTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertEqual(ctx.exception.detail, "invalid_session_id")
+
+    def test_sanitize_assistant_advisory_output_should_strip_official_verdict_fields(self) -> None:
+        payload = {
+            "accepted": True,
+            "advice": "先补齐证据链，再针对反驳漏洞推进。",
+            "winner": "pro",
+            "verdictReason": "official-chain-field",
+            "nested": {
+                "needsDrawVote": True,
+                "summary": "保留字段",
+                "trust_attestation": {
+                    "hash": "abc",
+                },
+            },
+            "items": [
+                {
+                    "dimensionScores": {"logic": 9},
+                    "note": "这条应保留",
+                },
+                {
+                    "final-rationale": "legacy-chain-field",
+                    "hint": "这条应保留",
+                },
+            ],
+        }
+
+        sanitized = sanitize_assistant_advisory_output(payload)
+
+        self.assertTrue(bool(sanitized["accepted"]))
+        self.assertEqual(
+            sanitized["advice"],
+            "先补齐证据链，再针对反驳漏洞推进。",
+        )
+        self.assertNotIn("winner", sanitized)
+        self.assertNotIn("verdictReason", sanitized)
+        self.assertNotIn("needsDrawVote", sanitized["nested"])
+        self.assertNotIn("trust_attestation", sanitized["nested"])
+        self.assertEqual(sanitized["nested"]["summary"], "保留字段")
+        self.assertNotIn("dimensionScores", sanitized["items"][0])
+        self.assertEqual(sanitized["items"][0]["note"], "这条应保留")
+        self.assertNotIn("final-rationale", sanitized["items"][1])
+        self.assertEqual(sanitized["items"][1]["hint"], "这条应保留")
 
 
 if __name__ == "__main__":

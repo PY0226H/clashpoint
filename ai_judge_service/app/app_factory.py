@@ -70,6 +70,9 @@ from .applications.assistant_agent_routes import (
 from .applications.assistant_agent_routes import (
     build_room_qa_answer_route_payload as build_room_qa_answer_route_payload_v3,
 )
+from .applications.assistant_agent_routes import (
+    sanitize_assistant_advisory_output as sanitize_assistant_advisory_output_v3,
+)
 from .applications.case_overview_contract import (
     validate_case_overview_contract as validate_case_overview_contract_v3,
 )
@@ -7116,7 +7119,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         execution_result: Any,
     ) -> dict[str, Any]:
         output = (
-            dict(execution_result.output)
+            cast(
+                dict[str, Any],
+                sanitize_assistant_advisory_output_v3(execution_result.output),
+            )
             if isinstance(execution_result.output, dict)
             else {}
         )

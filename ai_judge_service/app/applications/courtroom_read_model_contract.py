@@ -39,6 +39,23 @@ COURTROOM_READ_MODEL_FILTER_KEYS: tuple[str, ...] = (
     "alertLimit",
 )
 
+COURTROOM_READ_MODEL_COURTROOM_KEYS: tuple[str, ...] = (
+    "recorder",
+    "claim",
+    "evidence",
+    "panel",
+    "fairness",
+    "opinion",
+    "governance",
+)
+
+COURTROOM_RECORDER_KEYS: tuple[str, ...] = ("caseDossier",)
+COURTROOM_CLAIM_KEYS: tuple[str, ...] = ("claimGraph",)
+COURTROOM_EVIDENCE_KEYS: tuple[str, ...] = ("evidenceLedger",)
+COURTROOM_PANEL_KEYS: tuple[str, ...] = ("panelDecisions",)
+COURTROOM_FAIRNESS_KEYS: tuple[str, ...] = ("summary",)
+COURTROOM_OPINION_KEYS: tuple[str, ...] = ("sideAnalysis",)
+
 
 def _required_keys_missing(payload: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     return [key for key in keys if key not in payload]
@@ -145,6 +162,46 @@ def validate_courtroom_read_model_contract(payload: dict[str, Any]) -> None:
     courtroom = payload.get("courtroom")
     if not isinstance(courtroom, dict):
         raise ValueError("courtroom_read_model_courtroom_not_dict")
+    _assert_required_keys(
+        section="courtroom_read_model_courtroom",
+        payload=courtroom,
+        keys=COURTROOM_READ_MODEL_COURTROOM_KEYS,
+    )
+    for section, key, required_keys in (
+        (
+            "courtroom_read_model_courtroom_recorder",
+            "recorder",
+            COURTROOM_RECORDER_KEYS,
+        ),
+        ("courtroom_read_model_courtroom_claim", "claim", COURTROOM_CLAIM_KEYS),
+        (
+            "courtroom_read_model_courtroom_evidence",
+            "evidence",
+            COURTROOM_EVIDENCE_KEYS,
+        ),
+        ("courtroom_read_model_courtroom_panel", "panel", COURTROOM_PANEL_KEYS),
+        (
+            "courtroom_read_model_courtroom_fairness",
+            "fairness",
+            COURTROOM_FAIRNESS_KEYS,
+        ),
+        (
+            "courtroom_read_model_courtroom_opinion",
+            "opinion",
+            COURTROOM_OPINION_KEYS,
+        ),
+    ):
+        item = courtroom.get(key)
+        if not isinstance(item, dict):
+            raise ValueError(f"{section}_not_dict")
+        _assert_required_keys(
+            section=section,
+            payload=item,
+            keys=required_keys,
+        )
+    governance = courtroom.get("governance")
+    if not isinstance(governance, dict):
+        raise ValueError("courtroom_read_model_courtroom_governance_not_dict")
 
     events = payload.get("events")
     if not isinstance(events, list):

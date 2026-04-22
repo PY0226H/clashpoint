@@ -26,7 +26,25 @@ class CaseOverviewContractTests(unittest.TestCase):
             "latestDispatchType": "final",
             "reportPayload": {"winner": "pro"},
             "verdictContract": {"winner": "pro", "needsDrawVote": False, "reviewRequired": False},
-            "caseEvidence": {"hasCaseDossier": True},
+            "caseEvidence": {
+                "caseDossier": {"dispatchType": "final"},
+                "claimGraph": {"nodes": []},
+                "evidenceLedger": {"stats": {}},
+                "verdictLedger": {"panelDecisions": {}},
+                "fairnessSummary": {"gateDecision": "pass_through"},
+                "opinionPack": {"userReport": {}},
+                "auditSummary": {
+                    "alertCount": 0,
+                    "auditAlerts": [],
+                    "errorCodes": [],
+                    "degradationLevel": None,
+                },
+                "hasCaseDossier": True,
+                "hasClaimGraph": True,
+                "hasEvidenceLedger": True,
+                "hasVerdictLedger": True,
+                "hasOpinionPack": True,
+            },
             "winner": "pro",
             "needsDrawVote": False,
             "reviewRequired": False,
@@ -72,6 +90,15 @@ class CaseOverviewContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             validate_case_overview_contract(payload)
         self.assertIn("case_overview_latest_dispatch_type_invalid", str(ctx.exception))
+
+    def test_validate_case_overview_contract_should_fail_when_case_evidence_lacks_six_object_keys(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["caseEvidence"].pop("claimGraph")
+        with self.assertRaises(ValueError) as ctx:
+            validate_case_overview_contract(payload)
+        self.assertIn("case_overview_case_evidence_missing_keys", str(ctx.exception))
 
 
 if __name__ == "__main__":

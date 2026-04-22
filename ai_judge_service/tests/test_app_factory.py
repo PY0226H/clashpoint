@@ -40,6 +40,7 @@ from app.applications.panel_runtime_profile_contract import (
     PANEL_RUNTIME_PROFILE_TOP_LEVEL_KEYS,
     validate_panel_runtime_profile_contract,
 )
+from app.domain.agents import AgentExecutionResult
 from app.models import (
     CaseCreateRequest,
     FinalDispatchRequest,
@@ -3670,6 +3671,82 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(body["sharedContext"]["ruleVersion"], final_req.judge_policy_version)
         self.assertGreaterEqual(body["sharedContext"]["finalReceiptCount"], 1)
+
+    async def test_npc_coach_route_should_strip_official_verdict_chain_fields(
+        self,
+    ) -> None:
+        async def _noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        class _NpcAdvisoryTestExecutor:
+            async def execute(self, request: Any) -> AgentExecutionResult:
+                del request
+                return AgentExecutionResult(
+                    status="ok",
+                    output={
+                        "accepted": True,
+                        "advice": "建议先补强证据再推进反驳。",
+                        "winner": "pro",
+                        "verdictReason": "should_be_blocked",
+                        "nested": {
+                            "needsDrawVote": True,
+                            "hint": "保留字段",
+                        },
+                        "timeline": [
+                            {
+                                "dimensionScores": {"logic": 9},
+                                "note": "保留注记",
+                            }
+                        ],
+                    },
+                )
+
+        runtime = create_runtime(
+            settings=_build_settings(),
+            callback_phase_report_impl=_noop_callback,
+            callback_final_report_impl=_noop_callback,
+            callback_phase_failed_impl=_noop_callback,
+            callback_final_failed_impl=_noop_callback,
+        )
+        runtime.agent_runtime.registry._executors["npc_coach"] = _NpcAdvisoryTestExecutor()  # type: ignore[attr-defined]
+        app = create_app(runtime)
+
+        phase_case_id = _unique_case_id(9351)
+        phase_req = _build_phase_request(
+            case_id=phase_case_id,
+            idempotency_key=f"phase:{phase_case_id}",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+
+        npc_resp = await self._post_json(
+            app=app,
+            path=f"/internal/judge/apps/npc-coach/sessions/{phase_req.session_id}/advice",
+            payload={
+                "trace_id": f"trace-npc-{phase_case_id}",
+                "query": "请给我当前阶段的论点补强建议",
+                "side": "pro",
+                "caseId": phase_case_id,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(npc_resp.status_code, 200)
+        body = npc_resp.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertTrue(body["accepted"])
+        self.assertEqual(body["capabilityBoundary"]["mode"], "advisory_only")
+        self.assertFalse(bool(body["capabilityBoundary"]["officialVerdictAuthority"]))
+        self.assertNotIn("winner", body["output"])
+        self.assertNotIn("verdictReason", body["output"])
+        self.assertNotIn("needsDrawVote", body["output"]["nested"])
+        self.assertEqual(body["output"]["nested"]["hint"], "保留字段")
+        self.assertNotIn("dimensionScores", body["output"]["timeline"][0])
+        self.assertEqual(body["output"]["timeline"][0]["note"], "保留注记")
 
     async def test_phase_dispatch_should_callback_and_support_idempotent_replay(self) -> None:
         phase_callback_calls: list[tuple[int, dict]] = []
