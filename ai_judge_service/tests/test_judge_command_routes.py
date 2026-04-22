@@ -12,6 +12,7 @@ from app.applications.judge_command_routes import (
     build_final_contract_blocked_route_payload,
     build_final_dispatch_callback_result_route_payload,
     build_final_dispatch_preflight_route_payload,
+    build_final_dispatch_report_materialization_route_payload,
     build_phase_dispatch_callback_result_route_payload,
     build_phase_dispatch_preflight_route_payload,
 )
@@ -1059,6 +1060,88 @@ class JudgeCommandRoutesTests(unittest.TestCase):
         self.assertEqual(calls["traceFailure"]["callback_status"], "failed_callback_failed")
         self.assertEqual(calls["workflowFailed"]["error_code"], "final_failed_callback_failed")
         self.assertEqual(calls["cleared"], "final:5602")
+
+    def test_build_final_dispatch_report_materialization_route_payload_should_build_materialized_payload(
+        self,
+    ) -> None:
+        parsed = SimpleNamespace(
+            case_id=5701,
+            scope_id=1,
+            session_id=5711,
+            trace_id="trace-final-5701",
+            phase_start_no=1,
+            phase_end_no=7,
+        )
+        policy_profile = SimpleNamespace(
+            fairness_thresholds={"drawMargin": 0.8},
+            version="v3-default",
+        )
+        prompt_profile = SimpleNamespace(version="promptset-v3-default")
+        tool_profile = SimpleNamespace(version="toolset-v3-default")
+        calls: dict[str, Any] = {}
+
+        async def _list_dispatch_receipts(**kwargs: Any) -> list[Any]:
+            calls["phaseReceiptsQuery"] = dict(kwargs)
+            return [{"jobId": 5701, "status": "reported"}]
+
+        def _build_final_report_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["buildFinalReport"] = dict(kwargs)
+            return {"winner": "pro", "degradationLevel": 0}
+
+        def _resolve_panel_runtime_profiles(*, profile: Any) -> dict[str, dict[str, Any]]:
+            calls["panelRuntimeProfile"] = {"version": profile.version}
+            return {"default": {"enabled": True}}
+
+        async def _attach_judge_agent_runtime_trace(**kwargs: Any) -> None:
+            calls["attachRuntimeTrace"] = dict(kwargs)
+
+        def _attach_policy_trace_snapshot(**kwargs: Any) -> None:
+            calls["attachPolicyTrace"] = dict(kwargs)
+
+        def _attach_report_attestation(**kwargs: Any) -> None:
+            calls["attachAttestation"] = dict(kwargs)
+
+        async def _upsert_claim_ledger_record(**kwargs: Any) -> None:
+            calls["upsertClaimLedger"] = dict(kwargs)
+
+        def _build_final_judge_workflow_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["buildWorkflowPayload"] = dict(kwargs)
+            return {"edgeCount": 8}
+
+        def _validate_final_report_payload_contract(report_payload: dict[str, Any]) -> list[str]:
+            calls["validateContract"] = dict(report_payload)
+            return ["debateSummary"]
+
+        materialized = asyncio.run(
+            build_final_dispatch_report_materialization_route_payload(
+                parsed=parsed,
+                request_payload={"case_id": 5701},
+                policy_profile=policy_profile,
+                prompt_profile=prompt_profile,
+                tool_profile=tool_profile,
+                list_dispatch_receipts=_list_dispatch_receipts,
+                build_final_report_payload=_build_final_report_payload,
+                resolve_panel_runtime_profiles=_resolve_panel_runtime_profiles,
+                attach_judge_agent_runtime_trace=_attach_judge_agent_runtime_trace,
+                attach_policy_trace_snapshot=_attach_policy_trace_snapshot,
+                attach_report_attestation=_attach_report_attestation,
+                upsert_claim_ledger_record=_upsert_claim_ledger_record,
+                build_final_judge_workflow_payload=_build_final_judge_workflow_payload,
+                validate_final_report_payload_contract=_validate_final_report_payload_contract,
+            )
+        )
+
+        self.assertEqual(calls["phaseReceiptsQuery"]["dispatch_type"], "phase")
+        self.assertEqual(calls["phaseReceiptsQuery"]["session_id"], 5711)
+        self.assertEqual(calls["buildFinalReport"]["fairness_thresholds"]["drawMargin"], 0.8)
+        self.assertEqual(calls["attachRuntimeTrace"]["dispatch_type"], "final")
+        self.assertEqual(calls["attachPolicyTrace"]["profile"].version, "v3-default")
+        self.assertEqual(calls["attachAttestation"]["dispatch_type"], "final")
+        self.assertEqual(calls["upsertClaimLedger"]["dispatch_type"], "final")
+        self.assertEqual(calls["buildWorkflowPayload"]["request"].case_id, 5701)
+        self.assertEqual(materialized["reportPayload"]["winner"], "pro")
+        self.assertEqual(materialized["finalJudgeWorkflowPayload"]["edgeCount"], 8)
+        self.assertEqual(materialized["contractMissingFields"], ["debateSummary"])
 
 
 if __name__ == "__main__":

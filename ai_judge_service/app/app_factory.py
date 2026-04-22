@@ -165,6 +165,9 @@ from .applications.judge_command_routes import (
     build_final_dispatch_preflight_route_payload as build_final_dispatch_preflight_route_payload_v3,
 )
 from .applications.judge_command_routes import (
+    build_final_dispatch_report_materialization_route_payload as build_final_dispatch_report_materialization_route_payload_v3,
+)
+from .applications.judge_command_routes import (
     build_phase_dispatch_callback_result_route_payload as build_phase_dispatch_callback_result_route_payload_v3,
 )
 from .applications.judge_command_routes import (
@@ -7960,53 +7963,54 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         prompt_profile = preflight["promptProfile"]
         tool_profile = preflight["toolProfile"]
 
-        phase_receipts = await _list_dispatch_receipts(
-            dispatch_type="phase",
-            session_id=parsed.session_id,
-            status="reported",
-            limit=1000,
+        report_materialization = await _run_judge_command_route_guard(
+            build_final_dispatch_report_materialization_route_payload_v3(
+                parsed=parsed,
+                request_payload=request_payload,
+                policy_profile=policy_profile,
+                prompt_profile=prompt_profile,
+                tool_profile=tool_profile,
+                list_dispatch_receipts=_list_dispatch_receipts,
+                build_final_report_payload=(
+                    lambda *, request, phase_receipts, fairness_thresholds, panel_runtime_profiles: _build_final_report_payload(
+                        runtime=runtime,
+                        request=request,
+                        phase_receipts=phase_receipts,
+                        fairness_thresholds=fairness_thresholds,
+                        panel_runtime_profiles=panel_runtime_profiles,
+                    )
+                ),
+                resolve_panel_runtime_profiles=_resolve_panel_runtime_profiles,
+                attach_judge_agent_runtime_trace=(
+                    lambda **kwargs: _attach_judge_agent_runtime_trace(
+                        runtime=runtime,
+                        **kwargs,
+                    )
+                ),
+                attach_policy_trace_snapshot=(
+                    lambda *, report_payload, profile, prompt_profile, tool_profile: _attach_policy_trace_snapshot(
+                        runtime=runtime,
+                        report_payload=report_payload,
+                        profile=profile,
+                        prompt_profile=prompt_profile,
+                        tool_profile=tool_profile,
+                    )
+                ),
+                attach_report_attestation=_attach_report_attestation,
+                upsert_claim_ledger_record=_upsert_claim_ledger_record,
+                build_final_judge_workflow_payload=_build_final_judge_workflow_payload,
+                validate_final_report_payload_contract=_validate_final_report_payload_contract,
+            )
         )
-        final_report_payload = _build_final_report_payload(
-            runtime=runtime,
-            request=parsed,
-            phase_receipts=phase_receipts,
-            fairness_thresholds=policy_profile.fairness_thresholds,
-            panel_runtime_profiles=_resolve_panel_runtime_profiles(profile=policy_profile),
+        final_report_payload = cast(dict[str, Any], report_materialization["reportPayload"])
+        final_judge_workflow_payload = cast(
+            dict[str, Any],
+            report_materialization["finalJudgeWorkflowPayload"],
         )
-        await _attach_judge_agent_runtime_trace(
-            runtime=runtime,
-            report_payload=final_report_payload,
-            dispatch_type="final",
-            case_id=parsed.case_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            trace_id=parsed.trace_id,
-            phase_start_no=parsed.phase_start_no,
-            phase_end_no=parsed.phase_end_no,
+        contract_missing_fields = cast(
+            list[str],
+            report_materialization["contractMissingFields"],
         )
-        _attach_policy_trace_snapshot(
-            runtime=runtime,
-            report_payload=final_report_payload,
-            profile=policy_profile,
-            prompt_profile=prompt_profile,
-            tool_profile=tool_profile,
-        )
-        _attach_report_attestation(
-            report_payload=final_report_payload,
-            dispatch_type="final",
-        )
-        await _upsert_claim_ledger_record(
-            case_id=parsed.case_id,
-            dispatch_type="final",
-            trace_id=parsed.trace_id,
-            report_payload=final_report_payload,
-            request_payload=request_payload,
-        )
-        final_judge_workflow_payload = _build_final_judge_workflow_payload(
-            request=parsed,
-            report_payload=final_report_payload,
-        )
-        contract_missing_fields = _validate_final_report_payload_contract(final_report_payload)
         if contract_missing_fields:
             await _run_judge_command_route_guard(
                 build_final_contract_blocked_route_payload_v3(

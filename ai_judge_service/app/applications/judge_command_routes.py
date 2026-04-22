@@ -1236,3 +1236,71 @@ async def build_final_contract_blocked_route_payload(
         status_code=502,
         detail="final_contract_blocked: missing_critical_fields",
     )
+
+
+async def build_final_dispatch_report_materialization_route_payload(
+    *,
+    parsed: Any,
+    request_payload: dict[str, Any],
+    policy_profile: Any,
+    prompt_profile: Any,
+    tool_profile: Any,
+    list_dispatch_receipts: Callable[..., Awaitable[list[Any]]],
+    build_final_report_payload: Callable[..., dict[str, Any]],
+    resolve_panel_runtime_profiles: Callable[..., dict[str, dict[str, Any]]],
+    attach_judge_agent_runtime_trace: Callable[..., Awaitable[None]],
+    attach_policy_trace_snapshot: Callable[..., None],
+    attach_report_attestation: Callable[..., None],
+    upsert_claim_ledger_record: Callable[..., Awaitable[Any]],
+    build_final_judge_workflow_payload: Callable[..., dict[str, Any]],
+    validate_final_report_payload_contract: Callable[[dict[str, Any]], list[str]],
+) -> dict[str, Any]:
+    phase_receipts = await list_dispatch_receipts(
+        dispatch_type="phase",
+        session_id=parsed.session_id,
+        status="reported",
+        limit=1000,
+    )
+    report_payload = build_final_report_payload(
+        request=parsed,
+        phase_receipts=phase_receipts,
+        fairness_thresholds=policy_profile.fairness_thresholds,
+        panel_runtime_profiles=resolve_panel_runtime_profiles(profile=policy_profile),
+    )
+    await attach_judge_agent_runtime_trace(
+        report_payload=report_payload,
+        dispatch_type="final",
+        case_id=parsed.case_id,
+        scope_id=parsed.scope_id,
+        session_id=parsed.session_id,
+        trace_id=parsed.trace_id,
+        phase_start_no=parsed.phase_start_no,
+        phase_end_no=parsed.phase_end_no,
+    )
+    attach_policy_trace_snapshot(
+        report_payload=report_payload,
+        profile=policy_profile,
+        prompt_profile=prompt_profile,
+        tool_profile=tool_profile,
+    )
+    attach_report_attestation(
+        report_payload=report_payload,
+        dispatch_type="final",
+    )
+    await upsert_claim_ledger_record(
+        case_id=parsed.case_id,
+        dispatch_type="final",
+        trace_id=parsed.trace_id,
+        report_payload=report_payload,
+        request_payload=request_payload,
+    )
+    final_judge_workflow_payload = build_final_judge_workflow_payload(
+        request=parsed,
+        report_payload=report_payload,
+    )
+    contract_missing_fields = validate_final_report_payload_contract(report_payload)
+    return {
+        "reportPayload": report_payload,
+        "finalJudgeWorkflowPayload": final_judge_workflow_payload,
+        "contractMissingFields": contract_missing_fields,
+    }
