@@ -582,6 +582,111 @@ async def build_blindization_rejection_route_payload(
     raise JudgeCommandRouteError(status_code=422, detail=error_code)
 
 
+async def build_phase_dispatch_report_materialization_route_payload(
+    *,
+    parsed: Any,
+    request_payload: dict[str, Any],
+    policy_profile: Any,
+    prompt_profile: Any,
+    tool_profile: Any,
+    build_phase_report_payload: Callable[..., Awaitable[dict[str, Any]]],
+    attach_judge_agent_runtime_trace: Callable[..., Awaitable[None]],
+    attach_policy_trace_snapshot: Callable[..., None],
+    attach_report_attestation: Callable[..., None],
+    upsert_claim_ledger_record: Callable[..., Awaitable[Any]],
+    build_phase_judge_workflow_payload: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    report_payload = await build_phase_report_payload(request=parsed)
+    await attach_judge_agent_runtime_trace(
+        report_payload=report_payload,
+        dispatch_type="phase",
+        case_id=parsed.case_id,
+        scope_id=parsed.scope_id,
+        session_id=parsed.session_id,
+        trace_id=parsed.trace_id,
+        phase_no=parsed.phase_no,
+    )
+    attach_policy_trace_snapshot(
+        report_payload=report_payload,
+        profile=policy_profile,
+        prompt_profile=prompt_profile,
+        tool_profile=tool_profile,
+    )
+    attach_report_attestation(
+        report_payload=report_payload,
+        dispatch_type="phase",
+    )
+    await upsert_claim_ledger_record(
+        case_id=parsed.case_id,
+        dispatch_type="phase",
+        trace_id=parsed.trace_id,
+        report_payload=report_payload,
+        request_payload=request_payload,
+    )
+    phase_judge_workflow_payload = build_phase_judge_workflow_payload(
+        request=parsed,
+        report_payload=report_payload,
+    )
+    return {
+        "reportPayload": report_payload,
+        "phaseJudgeWorkflowPayload": phase_judge_workflow_payload,
+    }
+
+
+async def build_phase_dispatch_callback_delivery_route_payload(
+    *,
+    parsed: Any,
+    report_payload: dict[str, Any],
+    deliver_report_callback_with_failed_fallback: Callable[..., Awaitable[Any]],
+    report_callback_fn: Callable[..., Any],
+    failed_callback_fn: Callable[..., Any],
+    invoke_with_retry: Callable[..., Awaitable[tuple[int, int]]],
+    build_failed_callback_payload: Callable[..., dict[str, Any]],
+) -> Any:
+    return await deliver_report_callback_with_failed_fallback(
+        job_id=parsed.case_id,
+        report_payload=report_payload,
+        report_callback_fn=report_callback_fn,
+        failed_callback_fn=failed_callback_fn,
+        invoke_with_retry=invoke_with_retry,
+        build_failed_payload=lambda error_message: build_failed_callback_payload(
+            case_id=parsed.case_id,
+            dispatch_type="phase",
+            trace_id=parsed.trace_id,
+            error_code="phase_callback_retry_exhausted",
+            error_message=error_message,
+            degradation_level=int(report_payload.get("degradationLevel") or 0),
+        ),
+    )
+
+
+async def build_final_dispatch_callback_delivery_route_payload(
+    *,
+    parsed: Any,
+    report_payload: dict[str, Any],
+    deliver_report_callback_with_failed_fallback: Callable[..., Awaitable[Any]],
+    report_callback_fn: Callable[..., Any],
+    failed_callback_fn: Callable[..., Any],
+    invoke_with_retry: Callable[..., Awaitable[tuple[int, int]]],
+    build_failed_callback_payload: Callable[..., dict[str, Any]],
+) -> Any:
+    return await deliver_report_callback_with_failed_fallback(
+        job_id=parsed.case_id,
+        report_payload=report_payload,
+        report_callback_fn=report_callback_fn,
+        failed_callback_fn=failed_callback_fn,
+        invoke_with_retry=invoke_with_retry,
+        build_failed_payload=lambda error_message: build_failed_callback_payload(
+            case_id=parsed.case_id,
+            dispatch_type="final",
+            trace_id=parsed.trace_id,
+            error_code="final_callback_retry_exhausted",
+            error_message=error_message,
+            degradation_level=int(report_payload.get("degradationLevel") or 0),
+        ),
+    )
+
+
 async def build_phase_dispatch_callback_result_route_payload(
     *,
     parsed: Any,

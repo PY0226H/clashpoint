@@ -74,6 +74,9 @@ from .applications.case_overview_contract import (
     validate_case_overview_contract as validate_case_overview_contract_v3,
 )
 from .applications.case_read_routes import (
+    CaseReadRouteError as CaseReadRouteError_v3,
+)
+from .applications.case_read_routes import (
     build_case_courtroom_read_model_payload as build_case_courtroom_read_model_payload_v3,
 )
 from .applications.case_read_routes import (
@@ -81,6 +84,9 @@ from .applications.case_read_routes import (
 )
 from .applications.case_read_routes import (
     build_case_overview_replay_items as build_case_overview_replay_items_v3,
+)
+from .applications.case_read_routes import (
+    build_case_overview_route_payload as build_case_overview_route_payload_v3,
 )
 from .applications.courtroom_read_model_contract import (
     validate_courtroom_read_model_contract as validate_courtroom_read_model_contract_v3,
@@ -159,6 +165,9 @@ from .applications.judge_command_routes import (
     build_final_contract_blocked_route_payload as build_final_contract_blocked_route_payload_v3,
 )
 from .applications.judge_command_routes import (
+    build_final_dispatch_callback_delivery_route_payload as build_final_dispatch_callback_delivery_route_payload_v3,
+)
+from .applications.judge_command_routes import (
     build_final_dispatch_callback_result_route_payload as build_final_dispatch_callback_result_route_payload_v3,
 )
 from .applications.judge_command_routes import (
@@ -168,10 +177,16 @@ from .applications.judge_command_routes import (
     build_final_dispatch_report_materialization_route_payload as build_final_dispatch_report_materialization_route_payload_v3,
 )
 from .applications.judge_command_routes import (
+    build_phase_dispatch_callback_delivery_route_payload as build_phase_dispatch_callback_delivery_route_payload_v3,
+)
+from .applications.judge_command_routes import (
     build_phase_dispatch_callback_result_route_payload as build_phase_dispatch_callback_result_route_payload_v3,
 )
 from .applications.judge_command_routes import (
     build_phase_dispatch_preflight_route_payload as build_phase_dispatch_preflight_route_payload_v3,
+)
+from .applications.judge_command_routes import (
+    build_phase_dispatch_report_materialization_route_payload as build_phase_dispatch_report_materialization_route_payload_v3,
 )
 from .applications.judge_dispatch_runtime import (
     CALLBACK_STATUS_FAILED_CALLBACK_FAILED as CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
@@ -7792,64 +7807,62 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         prompt_profile = preflight["promptProfile"]
         tool_profile = preflight["toolProfile"]
 
-        phase_report_payload = await build_phase_report_payload_v3_phase(
-            request=parsed,
-            settings=runtime.settings,
-            gateway_runtime=runtime.gateway_runtime,
+        report_materialization = await _run_judge_command_route_guard(
+            build_phase_dispatch_report_materialization_route_payload_v3(
+                parsed=parsed,
+                request_payload=request_payload,
+                policy_profile=policy_profile,
+                prompt_profile=prompt_profile,
+                tool_profile=tool_profile,
+                build_phase_report_payload=(
+                    lambda *, request: build_phase_report_payload_v3_phase(
+                        request=request,
+                        settings=runtime.settings,
+                        gateway_runtime=runtime.gateway_runtime,
+                    )
+                ),
+                attach_judge_agent_runtime_trace=(
+                    lambda **kwargs: _attach_judge_agent_runtime_trace(
+                        runtime=runtime,
+                        **kwargs,
+                    )
+                ),
+                attach_policy_trace_snapshot=(
+                    lambda *, report_payload, profile, prompt_profile, tool_profile: _attach_policy_trace_snapshot(
+                        runtime=runtime,
+                        report_payload=report_payload,
+                        profile=profile,
+                        prompt_profile=prompt_profile,
+                        tool_profile=tool_profile,
+                    )
+                ),
+                attach_report_attestation=_attach_report_attestation,
+                upsert_claim_ledger_record=_upsert_claim_ledger_record,
+                build_phase_judge_workflow_payload=_build_phase_judge_workflow_payload,
+            )
         )
-        await _attach_judge_agent_runtime_trace(
-            runtime=runtime,
-            report_payload=phase_report_payload,
-            dispatch_type="phase",
-            case_id=parsed.case_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            trace_id=parsed.trace_id,
-            phase_no=parsed.phase_no,
+        phase_report_payload = cast(dict[str, Any], report_materialization["reportPayload"])
+        phase_judge_workflow_payload = cast(
+            dict[str, Any],
+            report_materialization["phaseJudgeWorkflowPayload"],
         )
-        _attach_policy_trace_snapshot(
-            runtime=runtime,
-            report_payload=phase_report_payload,
-            profile=policy_profile,
-            prompt_profile=prompt_profile,
-            tool_profile=tool_profile,
-        )
-        _attach_report_attestation(
-            report_payload=phase_report_payload,
-            dispatch_type="phase",
-        )
-        await _upsert_claim_ledger_record(
-            case_id=parsed.case_id,
-            dispatch_type="phase",
-            trace_id=parsed.trace_id,
-            report_payload=phase_report_payload,
-            request_payload=request_payload,
-        )
-        phase_judge_workflow_payload = _build_phase_judge_workflow_payload(
-            request=parsed,
-            report_payload=phase_report_payload,
-        )
-        phase_callback_outcome = await deliver_report_callback_with_failed_fallback_v3(
-            job_id=parsed.case_id,
-            report_payload=phase_report_payload,
-            report_callback_fn=_report_callback_fn_for_dispatch(runtime, "phase"),
-            failed_callback_fn=_failed_callback_fn_for_dispatch(runtime, "phase"),
-            invoke_with_retry=(
-                lambda callback_fn, job_id, payload: _invoke_v3_callback_with_retry(
-                    runtime=runtime,
-                    callback_fn=callback_fn,
-                    job_id=job_id,
-                    payload=payload,
-                )
-            ),
-            build_failed_payload=lambda error_message: _build_failed_callback_payload(
-                case_id=parsed.case_id,
-                dispatch_type="phase",
-                trace_id=parsed.trace_id,
-                error_code="phase_callback_retry_exhausted",
-                error_message=error_message,
-                degradation_level=int(phase_report_payload.get("degradationLevel") or 0),
-            ),
+        phase_callback_outcome = await _run_judge_command_route_guard(
+            build_phase_dispatch_callback_delivery_route_payload_v3(
+                parsed=parsed,
+                report_payload=phase_report_payload,
+                deliver_report_callback_with_failed_fallback=deliver_report_callback_with_failed_fallback_v3,
+                report_callback_fn=_report_callback_fn_for_dispatch(runtime, "phase"),
+                failed_callback_fn=_failed_callback_fn_for_dispatch(runtime, "phase"),
+                invoke_with_retry=(
+                    lambda callback_fn, job_id, payload: _invoke_v3_callback_with_retry(
+                        runtime=runtime,
+                        callback_fn=callback_fn,
+                        job_id=job_id,
+                        payload=payload,
+                    )
+                ),
+                build_failed_callback_payload=_build_failed_callback_payload,
+            )
         )
 
         return await _run_judge_command_route_guard(
@@ -8038,27 +8051,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 )
             )
 
-        final_callback_outcome = await deliver_report_callback_with_failed_fallback_v3(
-            job_id=parsed.case_id,
-            report_payload=final_report_payload,
-            report_callback_fn=_report_callback_fn_for_dispatch(runtime, "final"),
-            failed_callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
-            invoke_with_retry=(
-                lambda callback_fn, job_id, payload: _invoke_v3_callback_with_retry(
-                    runtime=runtime,
-                    callback_fn=callback_fn,
-                    job_id=job_id,
-                    payload=payload,
-                )
-            ),
-            build_failed_payload=lambda error_message: _build_failed_callback_payload(
-                case_id=parsed.case_id,
-                dispatch_type="final",
-                trace_id=parsed.trace_id,
-                error_code="final_callback_retry_exhausted",
-                error_message=error_message,
-                degradation_level=int(final_report_payload.get("degradationLevel") or 0),
-            ),
+        final_callback_outcome = await _run_judge_command_route_guard(
+            build_final_dispatch_callback_delivery_route_payload_v3(
+                parsed=parsed,
+                report_payload=final_report_payload,
+                deliver_report_callback_with_failed_fallback=deliver_report_callback_with_failed_fallback_v3,
+                report_callback_fn=_report_callback_fn_for_dispatch(runtime, "final"),
+                failed_callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
+                invoke_with_retry=(
+                    lambda callback_fn, job_id, payload: _invoke_v3_callback_with_retry(
+                        runtime=runtime,
+                        callback_fn=callback_fn,
+                        job_id=job_id,
+                        payload=payload,
+                    )
+                ),
+                build_failed_callback_payload=_build_failed_callback_payload,
+            )
         )
 
         return await _run_judge_command_route_guard(
@@ -8115,136 +8124,25 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        workflow_events = (
-            await _workflow_list_events(job_id=case_id)
-            if workflow_job is not None
-            else []
-        )
-        final_receipt = await _get_dispatch_receipt(dispatch_type="final", job_id=case_id)
-        phase_receipt = await _get_dispatch_receipt(dispatch_type="phase", job_id=case_id)
-        trace = runtime.trace_store.get_trace(case_id)
-        replay_records = await _list_replay_records(job_id=case_id, limit=50)
-        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
-        claim_ledger_record = await _get_claim_ledger_record(
-            case_id=case_id,
-            dispatch_type=None,
-        )
-        if (
-            workflow_job is None
-            and final_receipt is None
-            and phase_receipt is None
-            and trace is None
-            and not replay_records
-            and not alerts
-            and claim_ledger_record is None
-        ):
-            raise HTTPException(status_code=404, detail="case_not_found")
-
-        report_summary = (
-            trace.report_summary if trace and isinstance(trace.report_summary, dict) else {}
-        )
-        final_response = (
-            final_receipt.response if final_receipt and isinstance(final_receipt.response, dict) else {}
-        )
-        phase_response = (
-            phase_receipt.response if phase_receipt and isinstance(phase_receipt.response, dict) else {}
-        )
-        summary_payload = (
-            report_summary.get("payload")
-            if isinstance(report_summary.get("payload"), dict)
-            else {}
-        )
-        final_report_payload = (
-            final_response.get("reportPayload")
-            if isinstance(final_response.get("reportPayload"), dict)
-            else {}
-        )
-        phase_report_payload = (
-            phase_response.get("reportPayload")
-            if isinstance(phase_response.get("reportPayload"), dict)
-            else {}
-        )
-        report_payload = final_report_payload or summary_payload or phase_report_payload
-        verdict_contract = _build_verdict_contract(report_payload)
-        case_evidence = _build_case_evidence_view(
-            report_payload=report_payload,
-            verdict_contract=verdict_contract,
-            claim_ledger_record=claim_ledger_record,
-        )
-        winner_raw = (
-            report_summary.get("winner")
-            or verdict_contract.get("winner")
-            or final_response.get("winner")
-            or phase_response.get("winner")
-        )
-        winner = str(winner_raw or "").strip().lower() or None
-        callback_status = (
-            report_summary.get("callbackStatus")
-            or (trace.callback_status if trace is not None else None)
-            or final_response.get("callbackStatus")
-            or phase_response.get("callbackStatus")
-        )
-        callback_error = (
-            report_summary.get("callbackError")
-            or (trace.callback_error if trace is not None else None)
-            or final_response.get("callbackError")
-            or phase_response.get("callbackError")
-        )
-        judge_core_view = _build_judge_core_view(
-            workflow_job=workflow_job,
-            workflow_events=workflow_events,
-        )
-        replay_items = build_case_overview_replay_items_v3(
-            replay_records=replay_records,
-            trace=trace,
-        )
-        payload = build_case_overview_payload_v3(
-            case_id=case_id,
-            workflow=_serialize_workflow_job(workflow_job) if workflow_job else None,
-            trace=(
-                {
-                    "traceId": trace.trace_id,
-                    "status": trace.status,
-                    "createdAt": trace.created_at.isoformat(),
-                    "updatedAt": trace.updated_at.isoformat(),
-                }
-                if trace is not None
-                else None
-            ),
-            receipts={
-                "phase": _serialize_dispatch_receipt(phase_receipt) if phase_receipt else None,
-                "final": _serialize_dispatch_receipt(final_receipt) if final_receipt else None,
-            },
-            latest_dispatch_type=(
-                "final"
-                if final_receipt is not None
-                else ("phase" if phase_receipt is not None else None)
-            ),
-            report_payload=report_payload,
-            verdict_contract=verdict_contract,
-            case_evidence=case_evidence,
-            winner=winner,
-            needs_draw_vote=(
-                verdict_contract.get("needsDrawVote")
-                if verdict_contract.get("needsDrawVote") is not None
-                else (winner == "draw" if winner is not None else None)
-            ),
-            review_required=bool(verdict_contract.get("reviewRequired")),
-            callback_status=callback_status,
-            callback_error=callback_error,
-            judge_core=judge_core_view,
-            events=[
-                {
-                    "eventSeq": item.event_seq,
-                    "eventType": item.event_type,
-                    "payload": item.payload,
-                    "createdAt": item.created_at.isoformat(),
-                }
-                for item in workflow_events
-            ],
-            alerts=[_serialize_alert_item(item) for item in alerts],
-            replays=replay_items,
+        payload = await _run_case_read_route_guard(
+            build_case_overview_route_payload_v3(
+                case_id=case_id,
+                workflow_get_job=_workflow_get_job,
+                workflow_list_events=_workflow_list_events,
+                get_dispatch_receipt=_get_dispatch_receipt,
+                trace_get=runtime.trace_store.get_trace,
+                list_replay_records=_list_replay_records,
+                list_audit_alerts=_list_audit_alerts,
+                get_claim_ledger_record=_get_claim_ledger_record,
+                build_verdict_contract=_build_verdict_contract,
+                build_case_evidence_view=_build_case_evidence_view,
+                build_judge_core_view=_build_judge_core_view,
+                build_case_overview_replay_items=build_case_overview_replay_items_v3,
+                build_case_overview_payload=build_case_overview_payload_v3,
+                serialize_workflow_job=_serialize_workflow_job,
+                serialize_dispatch_receipt=_serialize_dispatch_receipt,
+                serialize_alert_item=_serialize_alert_item,
+            )
         )
         try:
             _validate_case_overview_contract(payload)
@@ -9528,6 +9426,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             return await self_awaitable
         except AssistantAgentRouteError_v3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_case_read_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except CaseReadRouteError_v3 as err:
             raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     @app.get("/internal/judge/cases/{case_id}/trace")

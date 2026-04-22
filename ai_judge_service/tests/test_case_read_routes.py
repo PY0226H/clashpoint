@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from app.applications.case_read_routes import (
+    CaseReadRouteError,
     build_case_courtroom_read_model_payload,
     build_case_overview_payload,
     build_case_overview_replay_items,
+    build_case_overview_route_payload,
 )
 
 
@@ -37,6 +40,94 @@ class _DummyTrace:
 
 
 class CaseReadRoutesTests(unittest.TestCase):
+    def test_build_case_overview_route_payload_should_raise_404_when_case_missing(self) -> None:
+        with self.assertRaises(CaseReadRouteError) as ctx:
+            asyncio.run(
+                build_case_overview_route_payload(
+                    case_id=9601,
+                    workflow_get_job=lambda **kwargs: asyncio.sleep(0, result=None),
+                    workflow_list_events=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    get_dispatch_receipt=lambda **kwargs: asyncio.sleep(0, result=None),
+                    trace_get=lambda case_id: None,
+                    list_replay_records=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    list_audit_alerts=lambda **kwargs: asyncio.sleep(0, result=[]),
+                    get_claim_ledger_record=lambda **kwargs: asyncio.sleep(0, result=None),
+                    build_verdict_contract=lambda report_payload: {},
+                    build_case_evidence_view=lambda **kwargs: {},
+                    build_judge_core_view=lambda **kwargs: None,
+                    build_case_overview_replay_items=lambda **kwargs: [],
+                    build_case_overview_payload=lambda **kwargs: {},
+                    serialize_workflow_job=lambda item: {},
+                    serialize_dispatch_receipt=lambda item: {},
+                    serialize_alert_item=lambda item: {},
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail, "case_not_found")
+
+    def test_build_case_overview_route_payload_should_build_payload(self) -> None:
+        created_at = datetime(2026, 4, 21, 0, 0, tzinfo=timezone.utc)
+        trace = _DummyTrace(
+            trace_id="trace-9602",
+            replays=[],
+        )
+        trace.status = "reported"
+        trace.created_at = created_at
+        trace.updated_at = created_at
+        trace.report_summary = {"payload": {"winner": "pro"}, "callbackStatus": "reported"}
+        trace.callback_status = "reported"
+        trace.callback_error = None
+
+        workflow_job = type("Job", (), {"job_id": 9602})()
+        workflow_event = type(
+            "Evt",
+            (),
+            {
+                "event_seq": 1,
+                "event_type": "judge.reported",
+                "payload": {"status": "reported"},
+                "created_at": created_at,
+            },
+        )()
+        phase_receipt = type("Receipt", (), {"response": {"winner": "con"}})()
+        final_receipt = type("Receipt", (), {"response": {"reportPayload": {"winner": "pro"}}})()
+
+        payload = asyncio.run(
+            build_case_overview_route_payload(
+                case_id=9602,
+                workflow_get_job=lambda **kwargs: asyncio.sleep(0, result=workflow_job),
+                workflow_list_events=lambda **kwargs: asyncio.sleep(0, result=[workflow_event]),
+                get_dispatch_receipt=lambda **kwargs: asyncio.sleep(
+                    0,
+                    result=(final_receipt if kwargs.get("dispatch_type") == "final" else phase_receipt),
+                ),
+                trace_get=lambda case_id: trace,
+                list_replay_records=lambda **kwargs: asyncio.sleep(0, result=[]),
+                list_audit_alerts=lambda **kwargs: asyncio.sleep(0, result=[{"alert_id": "a1"}]),
+                get_claim_ledger_record=lambda **kwargs: asyncio.sleep(0, result={"dispatchType": "final"}),
+                build_verdict_contract=lambda report_payload: {
+                    "winner": report_payload.get("winner"),
+                    "needsDrawVote": False,
+                    "reviewRequired": False,
+                },
+                build_case_evidence_view=lambda **kwargs: {"hasCaseDossier": True},
+                build_judge_core_view=lambda **kwargs: {"stage": "reported", "version": "v1"},
+                build_case_overview_replay_items=lambda **kwargs: [{"traceId": "trace-9602"}],
+                build_case_overview_payload=lambda **kwargs: dict(kwargs),
+                serialize_workflow_job=lambda item: {"jobId": item.job_id},
+                serialize_dispatch_receipt=lambda item: {"hasResponse": bool(getattr(item, "response", {}))},
+                serialize_alert_item=lambda item: {"alertId": item["alert_id"]},
+            )
+        )
+
+        self.assertEqual(payload["case_id"], 9602)
+        self.assertEqual(payload["winner"], "pro")
+        self.assertEqual(payload["latest_dispatch_type"], "final")
+        self.assertEqual(payload["callback_status"], "reported")
+        self.assertEqual(payload["workflow"]["jobId"], 9602)
+        self.assertEqual(len(payload["events"]), 1)
+        self.assertEqual(payload["alerts"][0]["alertId"], "a1")
+
     def test_build_case_overview_replay_items_should_prefer_replay_records(self) -> None:
         records = [
             _DummyReplayRecord(

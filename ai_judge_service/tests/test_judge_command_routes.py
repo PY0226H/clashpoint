@@ -10,11 +10,14 @@ from app.applications.judge_command_routes import (
     build_blindization_rejection_route_payload,
     build_case_create_route_payload,
     build_final_contract_blocked_route_payload,
+    build_final_dispatch_callback_delivery_route_payload,
     build_final_dispatch_callback_result_route_payload,
     build_final_dispatch_preflight_route_payload,
     build_final_dispatch_report_materialization_route_payload,
+    build_phase_dispatch_callback_delivery_route_payload,
     build_phase_dispatch_callback_result_route_payload,
     build_phase_dispatch_preflight_route_payload,
+    build_phase_dispatch_report_materialization_route_payload,
 )
 from app.models import CaseCreateRequest, FinalDispatchRequest, PhaseDispatchRequest
 
@@ -662,6 +665,60 @@ class JudgeCommandRoutesTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 502)
         self.assertIn("phase_failed_callback_failed", str(ctx.exception.detail))
 
+    def test_build_phase_dispatch_callback_delivery_route_payload_should_build_failed_payload(self) -> None:
+        parsed = SimpleNamespace(case_id=5351, trace_id="trace-phase-5351")
+        calls: dict[str, Any] = {}
+
+        async def _deliver_report_callback_with_failed_fallback(**kwargs: Any) -> Any:
+            calls["deliver"] = dict(kwargs)
+            calls["failedPayload"] = kwargs["build_failed_payload"]("phase-retry-exhausted")
+            return SimpleNamespace(callback_status="reported")
+
+        result = asyncio.run(
+            build_phase_dispatch_callback_delivery_route_payload(
+                parsed=parsed,
+                report_payload={"degradationLevel": 2},
+                deliver_report_callback_with_failed_fallback=_deliver_report_callback_with_failed_fallback,
+                report_callback_fn=object(),
+                failed_callback_fn=object(),
+                invoke_with_retry=lambda *args, **kwargs: asyncio.sleep(0),
+                build_failed_callback_payload=lambda **kwargs: dict(kwargs),
+            )
+        )
+
+        self.assertEqual(result.callback_status, "reported")
+        self.assertEqual(calls["deliver"]["job_id"], 5351)
+        self.assertEqual(calls["failedPayload"]["dispatch_type"], "phase")
+        self.assertEqual(calls["failedPayload"]["error_code"], "phase_callback_retry_exhausted")
+        self.assertEqual(calls["failedPayload"]["degradation_level"], 2)
+
+    def test_build_final_dispatch_callback_delivery_route_payload_should_build_failed_payload(self) -> None:
+        parsed = SimpleNamespace(case_id=5352, trace_id="trace-final-5352")
+        calls: dict[str, Any] = {}
+
+        async def _deliver_report_callback_with_failed_fallback(**kwargs: Any) -> Any:
+            calls["deliver"] = dict(kwargs)
+            calls["failedPayload"] = kwargs["build_failed_payload"]("final-retry-exhausted")
+            return SimpleNamespace(callback_status="reported")
+
+        result = asyncio.run(
+            build_final_dispatch_callback_delivery_route_payload(
+                parsed=parsed,
+                report_payload={"degradationLevel": 3},
+                deliver_report_callback_with_failed_fallback=_deliver_report_callback_with_failed_fallback,
+                report_callback_fn=object(),
+                failed_callback_fn=object(),
+                invoke_with_retry=lambda *args, **kwargs: asyncio.sleep(0),
+                build_failed_callback_payload=lambda **kwargs: dict(kwargs),
+            )
+        )
+
+        self.assertEqual(result.callback_status, "reported")
+        self.assertEqual(calls["deliver"]["job_id"], 5352)
+        self.assertEqual(calls["failedPayload"]["dispatch_type"], "final")
+        self.assertEqual(calls["failedPayload"]["error_code"], "final_callback_retry_exhausted")
+        self.assertEqual(calls["failedPayload"]["degradation_level"], 3)
+
     def test_build_phase_dispatch_callback_result_route_payload_should_raise_502_for_failed_reported(self) -> None:
         parsed = SimpleNamespace(
             case_id=5401,
@@ -1142,6 +1199,67 @@ class JudgeCommandRoutesTests(unittest.TestCase):
         self.assertEqual(materialized["reportPayload"]["winner"], "pro")
         self.assertEqual(materialized["finalJudgeWorkflowPayload"]["edgeCount"], 8)
         self.assertEqual(materialized["contractMissingFields"], ["debateSummary"])
+
+    def test_build_phase_dispatch_report_materialization_route_payload_should_build_materialized_payload(
+        self,
+    ) -> None:
+        parsed = SimpleNamespace(
+            case_id=5801,
+            scope_id=1,
+            session_id=5811,
+            trace_id="trace-phase-5801",
+            phase_no=6,
+        )
+        policy_profile = SimpleNamespace(version="v3-default")
+        prompt_profile = SimpleNamespace(version="promptset-v3-default")
+        tool_profile = SimpleNamespace(version="toolset-v3-default")
+        calls: dict[str, Any] = {}
+
+        async def _build_phase_report_payload(*, request: Any) -> dict[str, Any]:
+            calls["buildPhaseReport"] = {"caseId": request.case_id, "phaseNo": request.phase_no}
+            return {"winner": "con", "degradationLevel": 1}
+
+        async def _attach_judge_agent_runtime_trace(**kwargs: Any) -> None:
+            calls["attachRuntimeTrace"] = dict(kwargs)
+
+        def _attach_policy_trace_snapshot(**kwargs: Any) -> None:
+            calls["attachPolicyTrace"] = dict(kwargs)
+
+        def _attach_report_attestation(**kwargs: Any) -> None:
+            calls["attachAttestation"] = dict(kwargs)
+
+        async def _upsert_claim_ledger_record(**kwargs: Any) -> None:
+            calls["upsertClaimLedger"] = dict(kwargs)
+
+        def _build_phase_judge_workflow_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["buildWorkflowPayload"] = dict(kwargs)
+            return {"edgeCount": 5}
+
+        materialized = asyncio.run(
+            build_phase_dispatch_report_materialization_route_payload(
+                parsed=parsed,
+                request_payload={"case_id": 5801},
+                policy_profile=policy_profile,
+                prompt_profile=prompt_profile,
+                tool_profile=tool_profile,
+                build_phase_report_payload=_build_phase_report_payload,
+                attach_judge_agent_runtime_trace=_attach_judge_agent_runtime_trace,
+                attach_policy_trace_snapshot=_attach_policy_trace_snapshot,
+                attach_report_attestation=_attach_report_attestation,
+                upsert_claim_ledger_record=_upsert_claim_ledger_record,
+                build_phase_judge_workflow_payload=_build_phase_judge_workflow_payload,
+            )
+        )
+
+        self.assertEqual(calls["buildPhaseReport"]["caseId"], 5801)
+        self.assertEqual(calls["attachRuntimeTrace"]["dispatch_type"], "phase")
+        self.assertEqual(calls["attachRuntimeTrace"]["phase_no"], 6)
+        self.assertEqual(calls["attachPolicyTrace"]["profile"].version, "v3-default")
+        self.assertEqual(calls["attachAttestation"]["dispatch_type"], "phase")
+        self.assertEqual(calls["upsertClaimLedger"]["dispatch_type"], "phase")
+        self.assertEqual(calls["buildWorkflowPayload"]["request"].case_id, 5801)
+        self.assertEqual(materialized["reportPayload"]["winner"], "con")
+        self.assertEqual(materialized["phaseJudgeWorkflowPayload"]["edgeCount"], 5)
 
 
 if __name__ == "__main__":
