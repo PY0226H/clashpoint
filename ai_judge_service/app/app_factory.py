@@ -8,7 +8,6 @@ from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from pydantic import ValidationError
 
 from .applications import (
     AgentRuntime,
@@ -147,6 +146,18 @@ from .applications.fairness_runtime_routes import (
     build_fairness_shadow_upsert_payload as build_fairness_shadow_upsert_payload_v3,
 )
 from .applications.judge_app_domain import JUDGE_ROLE_ORDER
+from .applications.judge_command_routes import (
+    JudgeCommandRouteError as JudgeCommandRouteError_v3,
+)
+from .applications.judge_command_routes import (
+    build_case_create_route_payload as build_case_create_route_payload_v3,
+)
+from .applications.judge_command_routes import (
+    build_final_dispatch_preflight_route_payload as build_final_dispatch_preflight_route_payload_v3,
+)
+from .applications.judge_command_routes import (
+    build_phase_dispatch_preflight_route_payload as build_phase_dispatch_preflight_route_payload_v3,
+)
 from .applications.judge_dispatch_runtime import (
     CALLBACK_STATUS_FAILED_CALLBACK_FAILED as CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
 )
@@ -227,12 +238,6 @@ from .applications.judge_trace_replay_routes import (
 )
 from .applications.judge_trace_summary import (
     build_trace_report_summary as build_trace_report_summary_v3,
-)
-from .applications.judge_command_routes import (
-    JudgeCommandRouteError as JudgeCommandRouteError_v3,
-)
-from .applications.judge_command_routes import (
-    build_case_create_route_payload as build_case_create_route_payload_v3,
 )
 from .applications.judge_workflow_roles import (
     build_final_judge_workflow_payload as build_final_judge_workflow_payload_v3,
@@ -7641,101 +7646,50 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         raw_payload = await _read_json_object_or_raise_422(request=request)
-        try:
-            parsed = CaseCreateRequest.model_validate(raw_payload)
-        except ValidationError as err:
-            raise HTTPException(status_code=422, detail=err.errors()) from err
-        replayed = _resolve_idempotency_or_raise(
-            runtime=runtime,
-            key=parsed.idempotency_key,
-            job_id=parsed.case_id,
-            conflict_detail="idempotency_conflict:case_create",
+        return await _run_judge_command_route_guard(
+            build_case_create_route_payload_v3(
+                raw_payload=raw_payload,
+                case_create_model_validate=CaseCreateRequest.model_validate,
+                resolve_idempotency_or_raise=(
+                    lambda *, key, job_id, conflict_detail: _resolve_idempotency_or_raise(
+                        runtime=runtime,
+                        key=key,
+                        job_id=job_id,
+                        conflict_detail=conflict_detail,
+                    )
+                ),
+                ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
+                resolve_policy_profile=(
+                    lambda *, judge_policy_version, rubric_version, topic_domain: _resolve_policy_profile_or_raise(
+                        runtime=runtime,
+                        judge_policy_version=judge_policy_version,
+                        rubric_version=rubric_version,
+                        topic_domain=topic_domain,
+                    )
+                ),
+                resolve_prompt_profile=(
+                    lambda *, prompt_registry_version: _resolve_prompt_profile_or_raise(
+                        runtime=runtime,
+                        prompt_registry_version=prompt_registry_version,
+                    )
+                ),
+                resolve_tool_profile=(
+                    lambda *, tool_registry_version: _resolve_tool_profile_or_raise(
+                        runtime=runtime,
+                        tool_registry_version=tool_registry_version,
+                    )
+                ),
+                workflow_get_job=_workflow_get_job,
+                build_workflow_job=_build_workflow_job,
+                workflow_register_and_mark_case_built=_workflow_register_and_mark_case_built,
+                serialize_workflow_job=_serialize_workflow_job,
+                trace_register_start=runtime.trace_store.register_start,
+                trace_register_success=runtime.trace_store.register_success,
+                build_trace_report_summary=_build_trace_report_summary,
+                set_idempotency_success=runtime.trace_store.set_idempotency_success,
+                idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
+            )
         )
-        if replayed is not None:
-            return replayed
-        await _ensure_registry_runtime_ready()
-        policy_profile = _resolve_policy_profile_or_raise(
-            runtime=runtime,
-            judge_policy_version=parsed.judge_policy_version,
-            rubric_version=parsed.rubric_version,
-            topic_domain=parsed.topic_domain,
-        )
-        prompt_profile = _resolve_prompt_profile_or_raise(
-            runtime=runtime,
-            prompt_registry_version=policy_profile.prompt_registry_version,
-        )
-        tool_profile = _resolve_tool_profile_or_raise(
-            runtime=runtime,
-            tool_registry_version=policy_profile.tool_registry_version,
-        )
-        existing_job = await _workflow_get_job(job_id=parsed.case_id)
-        if existing_job is not None:
-            raise HTTPException(status_code=409, detail="case_already_exists")
-
-        request_payload = parsed.model_dump(mode="json")
-        workflow_job = _build_workflow_job(
-            dispatch_type="phase",
-            job_id=parsed.case_id,
-            trace_id=parsed.trace_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=parsed.retrieval_profile,
-        )
-        transitioned_job = await _workflow_register_and_mark_case_built(
-            job=workflow_job,
-            event_payload={
-                "dispatchType": "case",
-                "scopeId": parsed.scope_id,
-                "sessionId": parsed.session_id,
-                "traceId": parsed.trace_id,
-                "policyVersion": policy_profile.version,
-                "promptVersion": prompt_profile.version,
-                "toolsetVersion": tool_profile.version,
-                "caseStatus": "case_built",
-            },
-        )
-        response = {
-            "accepted": True,
-            "status": "case_built",
-            "caseId": parsed.case_id,
-            "scopeId": parsed.scope_id,
-            "sessionId": parsed.session_id,
-            "traceId": parsed.trace_id,
-            "idempotencyKey": parsed.idempotency_key,
-            "registryVersions": {
-                "policyVersion": policy_profile.version,
-                "promptVersion": prompt_profile.version,
-                "toolsetVersion": tool_profile.version,
-            },
-            "workflow": _serialize_workflow_job(transitioned_job),
-        }
-        runtime.trace_store.register_start(
-            job_id=parsed.case_id,
-            trace_id=parsed.trace_id,
-            request=request_payload,
-        )
-        runtime.trace_store.register_success(
-            job_id=parsed.case_id,
-            response=response,
-            callback_status="case_built",
-            report_summary=_build_trace_report_summary(
-                dispatch_type="case",
-                payload={},
-                callback_status="case_built",
-                callback_error=None,
-            ),
-        )
-        runtime.trace_store.set_idempotency_success(
-            key=parsed.idempotency_key,
-            job_id=parsed.case_id,
-            response=response,
-            ttl_secs=runtime.settings.idempotency_ttl_secs,
-        )
-        return response
 
     async def _handle_blindization_rejection(
         *,
@@ -7956,85 +7910,57 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 raw_payload=raw_payload,
                 sensitive_hits=sensitive_hits,
             )
-        try:
-            parsed = PhaseDispatchRequest.model_validate(raw_payload)
-        except ValidationError as err:
-            raise HTTPException(status_code=422, detail=err.errors()) from err
-        _validate_phase_dispatch_request(parsed)
-
-        replayed = _resolve_idempotency_or_raise(
-            runtime=runtime,
-            key=parsed.idempotency_key,
-            job_id=parsed.case_id,
-            conflict_detail="idempotency_conflict:phase_dispatch",
+        preflight = await _run_judge_command_route_guard(
+            build_phase_dispatch_preflight_route_payload_v3(
+                raw_payload=raw_payload,
+                phase_dispatch_model_validate=PhaseDispatchRequest.model_validate,
+                validate_phase_dispatch_request=_validate_phase_dispatch_request,
+                resolve_idempotency_or_raise=(
+                    lambda *, key, job_id, conflict_detail: _resolve_idempotency_or_raise(
+                        runtime=runtime,
+                        key=key,
+                        job_id=job_id,
+                        conflict_detail=conflict_detail,
+                    )
+                ),
+                ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
+                resolve_policy_profile=(
+                    lambda *, judge_policy_version, rubric_version, topic_domain: _resolve_policy_profile_or_raise(
+                        runtime=runtime,
+                        judge_policy_version=judge_policy_version,
+                        rubric_version=rubric_version,
+                        topic_domain=topic_domain,
+                    )
+                ),
+                resolve_prompt_profile=(
+                    lambda *, prompt_registry_version: _resolve_prompt_profile_or_raise(
+                        runtime=runtime,
+                        prompt_registry_version=prompt_registry_version,
+                    )
+                ),
+                resolve_tool_profile=(
+                    lambda *, tool_registry_version: _resolve_tool_profile_or_raise(
+                        runtime=runtime,
+                        tool_registry_version=tool_registry_version,
+                    )
+                ),
+                build_phase_dispatch_accepted_response=build_phase_dispatch_accepted_response_v3,
+                build_workflow_job=_build_workflow_job,
+                trace_register_start=runtime.trace_store.register_start,
+                persist_dispatch_receipt=_persist_dispatch_receipt,
+                workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
+                build_phase_workflow_register_payload=build_phase_workflow_register_payload_v3,
+            )
         )
-        if replayed is not None:
-            return replayed
-        await _ensure_registry_runtime_ready()
-        policy_profile = _resolve_policy_profile_or_raise(
-            runtime=runtime,
-            judge_policy_version=parsed.judge_policy_version,
-            rubric_version=parsed.rubric_version,
-            topic_domain=parsed.topic_domain,
-        )
-        prompt_profile = _resolve_prompt_profile_or_raise(
-            runtime=runtime,
-            prompt_registry_version=policy_profile.prompt_registry_version,
-        )
-        tool_profile = _resolve_tool_profile_or_raise(
-            runtime=runtime,
-            tool_registry_version=policy_profile.tool_registry_version,
-        )
-
-        response = build_phase_dispatch_accepted_response_v3(request=parsed)
-        request_payload = parsed.model_dump(mode="json")
-        workflow_job = _build_workflow_job(
-            dispatch_type="phase",
-            job_id=parsed.case_id,
-            trace_id=parsed.trace_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=parsed.retrieval_profile,
-        )
-        runtime.trace_store.register_start(
-            job_id=parsed.case_id,
-            trace_id=parsed.trace_id,
-            request=request_payload,
-        )
-        await _persist_dispatch_receipt(
-            dispatch_type="phase",
-            job_id=parsed.case_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            trace_id=parsed.trace_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=parsed.retrieval_profile,
-            phase_no=parsed.phase_no,
-            phase_start_no=None,
-            phase_end_no=None,
-            message_start_id=parsed.message_start_id,
-            message_end_id=parsed.message_end_id,
-            message_count=parsed.message_count,
-            status="queued",
-            request_payload=request_payload,
-            response_payload=response,
-        )
-        await _workflow_register_and_mark_blinded(
-            job=workflow_job,
-            event_payload=build_phase_workflow_register_payload_v3(
-                request=parsed,
-                policy_version=policy_profile.version,
-                prompt_version=prompt_profile.version,
-                toolset_version=tool_profile.version,
-            ),
-        )
+        replayed_response = preflight.get("replayedResponse")
+        if isinstance(replayed_response, dict):
+            return replayed_response
+        parsed = cast(PhaseDispatchRequest, preflight["parsed"])
+        response = cast(dict[str, Any], preflight["response"])
+        request_payload = cast(dict[str, Any], preflight["requestPayload"])
+        policy_profile = preflight["policyProfile"]
+        prompt_profile = preflight["promptProfile"]
+        tool_profile = preflight["toolProfile"]
 
         phase_report_payload = await build_phase_report_payload_v3_phase(
             request=parsed,
@@ -8308,85 +8234,57 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 raw_payload=raw_payload,
                 sensitive_hits=sensitive_hits,
             )
-        try:
-            parsed = FinalDispatchRequest.model_validate(raw_payload)
-        except ValidationError as err:
-            raise HTTPException(status_code=422, detail=err.errors()) from err
-        _validate_final_dispatch_request(parsed)
-
-        replayed = _resolve_idempotency_or_raise(
-            runtime=runtime,
-            key=parsed.idempotency_key,
-            job_id=parsed.case_id,
-            conflict_detail="idempotency_conflict:final_dispatch",
+        preflight = await _run_judge_command_route_guard(
+            build_final_dispatch_preflight_route_payload_v3(
+                raw_payload=raw_payload,
+                final_dispatch_model_validate=FinalDispatchRequest.model_validate,
+                validate_final_dispatch_request=_validate_final_dispatch_request,
+                resolve_idempotency_or_raise=(
+                    lambda *, key, job_id, conflict_detail: _resolve_idempotency_or_raise(
+                        runtime=runtime,
+                        key=key,
+                        job_id=job_id,
+                        conflict_detail=conflict_detail,
+                    )
+                ),
+                ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
+                resolve_policy_profile=(
+                    lambda *, judge_policy_version, rubric_version, topic_domain: _resolve_policy_profile_or_raise(
+                        runtime=runtime,
+                        judge_policy_version=judge_policy_version,
+                        rubric_version=rubric_version,
+                        topic_domain=topic_domain,
+                    )
+                ),
+                resolve_prompt_profile=(
+                    lambda *, prompt_registry_version: _resolve_prompt_profile_or_raise(
+                        runtime=runtime,
+                        prompt_registry_version=prompt_registry_version,
+                    )
+                ),
+                resolve_tool_profile=(
+                    lambda *, tool_registry_version: _resolve_tool_profile_or_raise(
+                        runtime=runtime,
+                        tool_registry_version=tool_registry_version,
+                    )
+                ),
+                build_final_dispatch_accepted_response=build_final_dispatch_accepted_response_v3,
+                build_workflow_job=_build_workflow_job,
+                trace_register_start=runtime.trace_store.register_start,
+                persist_dispatch_receipt=_persist_dispatch_receipt,
+                workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
+                build_final_workflow_register_payload=build_final_workflow_register_payload_v3,
+            )
         )
-        if replayed is not None:
-            return replayed
-        await _ensure_registry_runtime_ready()
-        policy_profile = _resolve_policy_profile_or_raise(
-            runtime=runtime,
-            judge_policy_version=parsed.judge_policy_version,
-            rubric_version=parsed.rubric_version,
-            topic_domain=parsed.topic_domain,
-        )
-        prompt_profile = _resolve_prompt_profile_or_raise(
-            runtime=runtime,
-            prompt_registry_version=policy_profile.prompt_registry_version,
-        )
-        tool_profile = _resolve_tool_profile_or_raise(
-            runtime=runtime,
-            tool_registry_version=policy_profile.tool_registry_version,
-        )
-
-        response = build_final_dispatch_accepted_response_v3(request=parsed)
-        request_payload = parsed.model_dump(mode="json")
-        workflow_job = _build_workflow_job(
-            dispatch_type="final",
-            job_id=parsed.case_id,
-            trace_id=parsed.trace_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=None,
-        )
-        runtime.trace_store.register_start(
-            job_id=parsed.case_id,
-            trace_id=parsed.trace_id,
-            request=request_payload,
-        )
-        await _persist_dispatch_receipt(
-            dispatch_type="final",
-            job_id=parsed.case_id,
-            scope_id=parsed.scope_id,
-            session_id=parsed.session_id,
-            trace_id=parsed.trace_id,
-            idempotency_key=parsed.idempotency_key,
-            rubric_version=parsed.rubric_version,
-            judge_policy_version=parsed.judge_policy_version,
-            topic_domain=parsed.topic_domain,
-            retrieval_profile=None,
-            phase_no=None,
-            phase_start_no=parsed.phase_start_no,
-            phase_end_no=parsed.phase_end_no,
-            message_start_id=None,
-            message_end_id=None,
-            message_count=None,
-            status="queued",
-            request_payload=request_payload,
-            response_payload=response,
-        )
-        await _workflow_register_and_mark_blinded(
-            job=workflow_job,
-            event_payload=build_final_workflow_register_payload_v3(
-                request=parsed,
-                policy_version=policy_profile.version,
-                prompt_version=prompt_profile.version,
-                toolset_version=tool_profile.version,
-            ),
-        )
+        replayed_response = preflight.get("replayedResponse")
+        if isinstance(replayed_response, dict):
+            return replayed_response
+        parsed = cast(FinalDispatchRequest, preflight["parsed"])
+        response = cast(dict[str, Any], preflight["response"])
+        request_payload = cast(dict[str, Any], preflight["requestPayload"])
+        policy_profile = preflight["policyProfile"]
+        prompt_profile = preflight["promptProfile"]
+        tool_profile = preflight["toolProfile"]
 
         phase_receipts = await _list_dispatch_receipts(
             dispatch_type="phase",
@@ -10271,6 +10169,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             return await self_awaitable
         except RegistryRouteErrorV3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_judge_command_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except JudgeCommandRouteError_v3 as err:
             raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     async def _run_assistant_agent_route_guard(
