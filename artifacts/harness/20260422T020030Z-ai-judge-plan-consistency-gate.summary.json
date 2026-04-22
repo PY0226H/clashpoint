@@ -1,0 +1,27 @@
+{
+  "run_id": "20260422T020030Z-ai-judge-plan-consistency-gate",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "arch_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md",
+  "consistency_section_found": true,
+  "arch_checklist_found": true,
+  "checks": [
+    {"label":"角色一致性","status":"pass","answer":"P32 继续围绕 Judge 主链编排下沉，不合并或绕过 8 Agent 职责边界，且保持 `workflow_roles` 可追踪。"},
+    {"label":"数据一致性","status":"pass","answer":"`case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 仍作为唯一主链语义，路由重构不改对象合同。"},
+    {"label":"门禁一致性","status":"pass","answer":"`Fairness Sentinel` 仍在终判前生效，`policy gate` 与 override 审计字段继续通过 registry/read-model 主链暴露。"},
+    {"label":"边界一致性","status":"pass","answer":"`NPC/Room QA` 仅保持 advisory-only，不写入官方 verdict/fairness/trust 账本。"},
+    {"label":"跨层一致性","status":"pass","answer":"任何 API/DTO/错误码调整必须同轮更新 `chat_server` 调用方、测试与文档，不保留长期 alias 双轨。"},
+    {"label":"收口一致性","status":"pass","answer":"真实环境项继续区分 `local_reference_ready` 与 `pass`，本地阶段仅输出可参考结论。"}
+  ],
+  "missing_items": [],
+  "empty_items": [],
+  "placeholder_items": [],
+  "arch_missing_items": [],
+  "started_at": "2026-04-22T02:00:30Z",
+  "finished_at": "2026-04-22T02:00:30Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260422T020030Z-ai-judge-plan-consistency-gate.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260422T020030Z-ai-judge-plan-consistency-gate.summary.md"
+  }
+}

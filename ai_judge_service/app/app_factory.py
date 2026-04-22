@@ -62,6 +62,15 @@ from .applications import (
 from .applications import (
     verify_report_attestation as verify_report_attestation_v3,
 )
+from .applications.assistant_agent_routes import (
+    AssistantAgentRouteError as AssistantAgentRouteError_v3,
+)
+from .applications.assistant_agent_routes import (
+    build_npc_coach_advice_route_payload as build_npc_coach_advice_route_payload_v3,
+)
+from .applications.assistant_agent_routes import (
+    build_room_qa_answer_route_payload as build_room_qa_answer_route_payload_v3,
+)
 from .applications.case_overview_contract import (
     validate_case_overview_contract as validate_case_overview_contract_v3,
 )
@@ -219,6 +228,12 @@ from .applications.judge_trace_replay_routes import (
 from .applications.judge_trace_summary import (
     build_trace_report_summary as build_trace_report_summary_v3,
 )
+from .applications.judge_command_routes import (
+    JudgeCommandRouteError as JudgeCommandRouteError_v3,
+)
+from .applications.judge_command_routes import (
+    build_case_create_route_payload as build_case_create_route_payload_v3,
+)
 from .applications.judge_workflow_roles import (
     build_final_judge_workflow_payload as build_final_judge_workflow_payload_v3,
 )
@@ -247,6 +262,21 @@ from .applications.panel_runtime_routes import (
 from .applications.panel_runtime_routes import (
     build_panel_runtime_readiness_payload as build_panel_runtime_readiness_payload_v3,
 )
+from .applications.registry_governance_routes import (
+    build_policy_domain_judge_families_route_payload as build_policy_domain_judge_families_route_payload_v3,
+)
+from .applications.registry_governance_routes import (
+    build_policy_gate_simulation_route_payload as build_policy_gate_simulation_route_payload_v3,
+)
+from .applications.registry_governance_routes import (
+    build_policy_registry_dependency_health_route_payload as build_policy_registry_dependency_health_route_payload_v3,
+)
+from .applications.registry_governance_routes import (
+    build_registry_governance_overview_route_payload as build_registry_governance_overview_route_payload_v3,
+)
+from .applications.registry_governance_routes import (
+    build_registry_prompt_tool_governance_route_payload as build_registry_prompt_tool_governance_route_payload_v3,
+)
 from .applications.registry_ops_views import (
     build_registry_alert_ops_view as build_registry_alert_ops_view_v3,
 )
@@ -255,31 +285,16 @@ from .applications.registry_ops_views import (
 )
 from .applications.registry_routes import RegistryRouteError as RegistryRouteErrorV3
 from .applications.registry_routes import (
-    build_policy_domain_judge_families_payload as build_policy_domain_judge_families_payload_v3,
-)
-from .applications.registry_routes import (
-    build_policy_gate_simulation_payload as build_policy_gate_simulation_payload_v3,
-)
-from .applications.registry_routes import (
-    build_policy_registry_dependency_health_payload as build_policy_registry_dependency_health_payload_v3,
-)
-from .applications.registry_routes import (
     build_registry_activate_payload as build_registry_activate_payload_v3,
 )
 from .applications.registry_routes import (
     build_registry_audits_payload as build_registry_audits_payload_v3,
 )
 from .applications.registry_routes import (
-    build_registry_governance_overview_payload as build_registry_governance_overview_payload_v3,
-)
-from .applications.registry_routes import (
     build_registry_profile_payload as build_registry_profile_payload_v3,
 )
 from .applications.registry_routes import (
     build_registry_profiles_payload as build_registry_profiles_payload_v3,
-)
-from .applications.registry_routes import (
-    build_registry_prompt_tool_governance_payload as build_registry_prompt_tool_governance_payload_v3,
 )
 from .applications.registry_routes import (
     build_registry_publish_payload as build_registry_publish_payload_v3,
@@ -7172,8 +7187,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        try:
-            return await build_policy_registry_dependency_health_payload_v3(
+        return await _run_registry_route_guard(
+            build_policy_registry_dependency_health_route_payload_v3(
                 policy_version=policy_version,
                 default_policy_version=runtime.policy_registry_runtime.default_version,
                 default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
@@ -7201,15 +7216,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 build_registry_dependency_overview=_build_registry_dependency_overview,
                 build_registry_dependency_trend=_build_registry_dependency_trend,
             )
-        except ValueError as err:
-            _raise_http_422_for_known_value_error(
-                err=err,
-                details_by_code={"invalid_trend_status": "invalid_trend_status"},
-            )
-            raise
-        except LookupError as err:
-            _raise_policy_registry_not_found_lookup_error(err=err)
-            raise
+        )
 
     @app.get("/internal/judge/registries/governance/overview")
     async def get_registry_governance_overview(
@@ -7221,7 +7228,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        return await build_registry_governance_overview_payload_v3(
+        return await build_registry_governance_overview_route_payload_v3(
             dependency_limit=dependency_limit,
             usage_preview_limit=usage_preview_limit,
             release_limit=release_limit,
@@ -7258,11 +7265,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        governance_overview = await build_registry_governance_overview_payload_v3(
+        return await build_registry_prompt_tool_governance_route_payload_v3(
             dependency_limit=dependency_limit,
             usage_preview_limit=usage_preview_limit,
             release_limit=release_limit,
             audit_limit=audit_limit,
+            risk_limit=risk_limit,
             default_policy_version=runtime.policy_registry_runtime.default_version,
             default_prompt_registry_version=runtime.prompt_registry_runtime.default_version,
             default_tool_registry_version=runtime.tool_registry_runtime.default_version,
@@ -7282,14 +7290,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             build_policy_domain_judge_family_overview=(
                 _build_policy_domain_judge_family_overview
             ),
-        )
-        return build_registry_prompt_tool_governance_payload_v3(
-            governance_overview=governance_overview,
-            dependency_limit=dependency_limit,
-            usage_preview_limit=usage_preview_limit,
-            release_limit=release_limit,
-            audit_limit=audit_limit,
-            risk_limit=risk_limit,
             build_registry_prompt_tool_usage_rows=_build_registry_prompt_tool_usage_rows,
             build_registry_prompt_tool_risk_items=_build_registry_prompt_tool_risk_items,
             build_registry_prompt_tool_action_hints=_build_registry_prompt_tool_action_hints,
@@ -7303,7 +7303,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        return build_policy_domain_judge_families_payload_v3(
+        return await build_policy_domain_judge_families_route_payload_v3(
             default_policy_version=runtime.policy_registry_runtime.default_version,
             policy_profiles=runtime.policy_registry_runtime.list_profiles(),
             preview_limit=preview_limit,
@@ -7322,8 +7322,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
         await _ensure_registry_runtime_ready()
-        try:
-            return await build_policy_gate_simulation_payload_v3(
+        return await _run_registry_route_guard(
+            build_policy_gate_simulation_route_payload_v3(
                 policy_version=policy_version,
                 default_policy_version=runtime.policy_registry_runtime.default_version,
                 include_all_versions=include_all_versions,
@@ -7344,15 +7344,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                     )
                 ),
             )
-        except ValueError as err:
-            _raise_http_422_for_known_value_error(
-                err=err,
-                details_by_code={"invalid_policy_version": "invalid_policy_version"},
-            )
-            raise
-        except LookupError as err:
-            _raise_policy_registry_not_found_lookup_error(err=err)
-            raise
+        )
 
     async def _read_json_object_or_raise_422(*, request: Request) -> dict[str, Any]:
         try:
@@ -10070,39 +10062,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_session_id = max(0, int(session_id))
-        if normalized_session_id <= 0:
-            raise HTTPException(status_code=422, detail="invalid_session_id")
-
-        shared_context = await _build_shared_room_context(
-            session_id=normalized_session_id,
-            case_id=payload.case_id,
-        )
-        scope_id = max(1, int(shared_context.get("scopeId") or 1))
-        execution_result = await runtime.agent_runtime.execute(
-            AgentExecutionRequest(
-                kind=AGENT_KIND_NPC_COACH,
-                input_payload={
-                    "sessionId": normalized_session_id,
-                    "caseId": shared_context.get("caseId"),
-                    "query": payload.query,
-                    "side": payload.side,
-                    "sharedContext": shared_context,
-                },
-                trace_id=payload.trace_id,
-                session_id=normalized_session_id,
-                scope_id=scope_id,
-                metadata={
-                    "app": "npc_coach",
-                    "entrypoint": "npc_coach_advice",
-                },
+        return await _run_assistant_agent_route_guard(
+            build_npc_coach_advice_route_payload_v3(
+                session_id=session_id,
+                payload=payload,
+                agent_kind_npc_coach=AGENT_KIND_NPC_COACH,
+                build_shared_room_context=_build_shared_room_context,
+                execute_agent=runtime.agent_runtime.execute,
+                build_execution_request=AgentExecutionRequest,
+                build_assistant_agent_response=_build_assistant_agent_response,
             )
-        )
-        return _build_assistant_agent_response(
-            agent_kind=AGENT_KIND_NPC_COACH,
-            session_id=normalized_session_id,
-            shared_context=shared_context,
-            execution_result=execution_result,
         )
 
     @app.post("/internal/judge/apps/room-qa/sessions/{session_id}/answer")
@@ -10112,38 +10081,16 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         x_ai_internal_key: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_internal_key(runtime.settings, x_ai_internal_key)
-        normalized_session_id = max(0, int(session_id))
-        if normalized_session_id <= 0:
-            raise HTTPException(status_code=422, detail="invalid_session_id")
-
-        shared_context = await _build_shared_room_context(
-            session_id=normalized_session_id,
-            case_id=payload.case_id,
-        )
-        scope_id = max(1, int(shared_context.get("scopeId") or 1))
-        execution_result = await runtime.agent_runtime.execute(
-            AgentExecutionRequest(
-                kind=AGENT_KIND_ROOM_QA,
-                input_payload={
-                    "sessionId": normalized_session_id,
-                    "caseId": shared_context.get("caseId"),
-                    "question": payload.question,
-                    "sharedContext": shared_context,
-                },
-                trace_id=payload.trace_id,
-                session_id=normalized_session_id,
-                scope_id=scope_id,
-                metadata={
-                    "app": "room_qa",
-                    "entrypoint": "room_qa_answer",
-                },
+        return await _run_assistant_agent_route_guard(
+            build_room_qa_answer_route_payload_v3(
+                session_id=session_id,
+                payload=payload,
+                agent_kind_room_qa=AGENT_KIND_ROOM_QA,
+                build_shared_room_context=_build_shared_room_context,
+                execute_agent=runtime.agent_runtime.execute,
+                build_execution_request=AgentExecutionRequest,
+                build_assistant_agent_response=_build_assistant_agent_response,
             )
-        )
-        return _build_assistant_agent_response(
-            agent_kind=AGENT_KIND_ROOM_QA,
-            session_id=normalized_session_id,
-            shared_context=shared_context,
-            execution_result=execution_result,
         )
 
     def _build_replay_context_dependencies() -> ReplayContextDependencyPack_v3:
@@ -10324,6 +10271,14 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         try:
             return await self_awaitable
         except RegistryRouteErrorV3 as err:
+            raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+
+    async def _run_assistant_agent_route_guard(
+        self_awaitable: Awaitable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return await self_awaitable
+        except AssistantAgentRouteError_v3 as err:
             raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
     @app.get("/internal/judge/cases/{case_id}/trace")
