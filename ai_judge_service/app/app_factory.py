@@ -150,6 +150,9 @@ from .applications.judge_command_routes import (
     JudgeCommandRouteError as JudgeCommandRouteError_v3,
 )
 from .applications.judge_command_routes import (
+    build_blindization_rejection_route_payload as build_blindization_rejection_route_payload_v3,
+)
+from .applications.judge_command_routes import (
     build_case_create_route_payload as build_case_create_route_payload_v3,
 )
 from .applications.judge_command_routes import (
@@ -7691,211 +7694,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             )
         )
 
-    async def _handle_blindization_rejection(
-        *,
-        dispatch_type: str,
-        raw_payload: dict[str, Any],
-        sensitive_hits: list[str],
-    ) -> None:
-        meta = _extract_dispatch_meta_from_raw(raw_payload)
-        job_id = int(meta.get("caseId") or 0)
-        session_id = int(meta.get("sessionId") or 0)
-        trace_id = str(meta.get("traceId") or "")
-        if job_id <= 0 or session_id <= 0 or not trace_id:
-            raise HTTPException(status_code=422, detail="input_not_blinded")
-        scope_id = int(meta.get("scopeId") or 1)
-        dims = _extract_receipt_dims_from_raw(dispatch_type, raw_payload)
-        request_payload = dict(raw_payload)
-        workflow_job = _build_workflow_job(
-            dispatch_type=dispatch_type,
-            job_id=job_id,
-            trace_id=trace_id,
-            scope_id=scope_id,
-            session_id=session_id,
-            idempotency_key=str(meta.get("idempotencyKey") or ""),
-            rubric_version=str(meta.get("rubricVersion") or ""),
-            judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
-            topic_domain=str(meta.get("topicDomain") or ""),
-            retrieval_profile=(
-                str(meta.get("retrievalProfile")) if meta.get("retrievalProfile") is not None else None
-            ),
-        )
-        runtime.trace_store.register_start(job_id=job_id, trace_id=trace_id, request=request_payload)
-        await _workflow_register_and_mark_blinded(
-            job=workflow_job,
-            event_payload={
-                "dispatchType": dispatch_type,
-                "scopeId": scope_id,
-                "sessionId": session_id,
-                "phaseNo": dims.get("phaseNo"),
-                "phaseStartNo": dims.get("phaseStartNo"),
-                "phaseEndNo": dims.get("phaseEndNo"),
-                "messageCount": dims.get("messageCount"),
-                "traceId": trace_id,
-                "rejectionCode": "input_not_blinded",
-                "sensitiveHits": sensitive_hits[:12],
-            },
-        )
-        response = {
-            "accepted": False,
-            "dispatchType": dispatch_type,
-            "status": "callback_failed",
-            "caseId": job_id,
-            "scopeId": scope_id,
-            "sessionId": session_id,
-            "traceId": trace_id,
-        }
-        if dispatch_type == "phase":
-            response["phaseNo"] = dims.get("phaseNo")
-            response["messageCount"] = dims.get("messageCount")
-        else:
-            response["phaseStartNo"] = dims.get("phaseStartNo")
-            response["phaseEndNo"] = dims.get("phaseEndNo")
-
-        error_code = "input_not_blinded"
-        error_message = (
-            "sensitive fields detected in judge input: " + ",".join(sensitive_hits[:12])
-        )
-        failed_payload = _build_failed_callback_payload(
-            case_id=job_id,
-            dispatch_type=dispatch_type,
-            trace_id=trace_id,
-            error_code=error_code,
-            error_message=error_message,
-        )
-        failed_callback_fn = _failed_callback_fn_for_dispatch(runtime, dispatch_type)
-        try:
-            failed_attempts, failed_retries = await _invoke_v3_callback_with_retry(
-                runtime=runtime,
-                callback_fn=failed_callback_fn,
-                job_id=job_id,
-                payload=failed_payload,
-            )
-        except Exception as failed_err:
-            receipt_response = _with_error_contract(
-                {
-                    **response,
-                    "callbackStatus": "failed_callback_failed",
-                    "callbackError": error_message,
-                    "failedCallbackPayload": failed_payload,
-                    "failedCallbackError": str(failed_err),
-                },
-                error_code=f"{dispatch_type}_failed_callback_failed",
-                error_message=str(failed_err),
-                dispatch_type=dispatch_type,
-                trace_id=trace_id,
-                retryable=False,
-                category="blindization_rejection",
-                details={"sensitiveHits": sensitive_hits[:12]},
-            )
-            await _persist_dispatch_receipt(
-                dispatch_type=dispatch_type,
-                job_id=job_id,
-                scope_id=scope_id,
-                session_id=session_id,
-                trace_id=trace_id,
-                idempotency_key=str(meta.get("idempotencyKey") or ""),
-                rubric_version=str(meta.get("rubricVersion") or ""),
-                judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
-                topic_domain=str(meta.get("topicDomain") or ""),
-                retrieval_profile=(
-                    str(meta.get("retrievalProfile")) if meta.get("retrievalProfile") is not None else None
-                ),
-                phase_no=dims.get("phaseNo"),
-                phase_start_no=dims.get("phaseStartNo"),
-                phase_end_no=dims.get("phaseEndNo"),
-                message_start_id=dims.get("messageStartId"),
-                message_end_id=dims.get("messageEndId"),
-                message_count=dims.get("messageCount"),
-                status="callback_failed",
-                request_payload=request_payload,
-                response_payload=receipt_response,
-            )
-            runtime.trace_store.register_failure(
-                job_id=job_id,
-                response=receipt_response,
-                callback_status="failed_callback_failed",
-                callback_error=str(failed_err),
-            )
-            await _workflow_mark_failed(
-                job_id=job_id,
-                error_code=f"{dispatch_type}_failed_callback_failed",
-                error_message=str(failed_err),
-                event_payload={
-                    "dispatchType": dispatch_type,
-                    "phaseNo": dims.get("phaseNo"),
-                    "phaseStartNo": dims.get("phaseStartNo"),
-                    "phaseEndNo": dims.get("phaseEndNo"),
-                    "callbackStatus": "failed_callback_failed",
-                    "sensitiveHits": sensitive_hits[:12],
-                },
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=f"{dispatch_type}_failed_callback_failed: {failed_err}",
-            ) from failed_err
-
-        receipt_response = _with_error_contract(
-            {
-                **response,
-                "callbackStatus": "failed_reported",
-                "callbackError": error_message,
-                "failedCallbackPayload": failed_payload,
-                "failedCallbackAttempts": failed_attempts,
-                "failedCallbackRetries": failed_retries,
-            },
-            error_code=error_code,
-            error_message=error_message,
-            dispatch_type=dispatch_type,
-            trace_id=trace_id,
-            retryable=False,
-            category="blindization_rejection",
-            details={"sensitiveHits": sensitive_hits[:12]},
-        )
-        await _persist_dispatch_receipt(
-            dispatch_type=dispatch_type,
-            job_id=job_id,
-            scope_id=scope_id,
-            session_id=session_id,
-            trace_id=trace_id,
-            idempotency_key=str(meta.get("idempotencyKey") or ""),
-            rubric_version=str(meta.get("rubricVersion") or ""),
-            judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
-            topic_domain=str(meta.get("topicDomain") or ""),
-            retrieval_profile=(
-                str(meta.get("retrievalProfile")) if meta.get("retrievalProfile") is not None else None
-            ),
-            phase_no=dims.get("phaseNo"),
-            phase_start_no=dims.get("phaseStartNo"),
-            phase_end_no=dims.get("phaseEndNo"),
-            message_start_id=dims.get("messageStartId"),
-            message_end_id=dims.get("messageEndId"),
-            message_count=dims.get("messageCount"),
-            status="callback_failed",
-            request_payload=request_payload,
-            response_payload=receipt_response,
-        )
-        runtime.trace_store.register_failure(
-            job_id=job_id,
-            response=receipt_response,
-            callback_status="failed_reported",
-            callback_error=error_message,
-        )
-        await _workflow_mark_failed(
-            job_id=job_id,
-            error_code=error_code,
-            error_message=error_message,
-            event_payload={
-                "dispatchType": dispatch_type,
-                "phaseNo": dims.get("phaseNo"),
-                "phaseStartNo": dims.get("phaseStartNo"),
-                "phaseEndNo": dims.get("phaseEndNo"),
-                "callbackStatus": "failed_reported",
-                "sensitiveHits": sensitive_hits[:12],
-            },
-        )
-        raise HTTPException(status_code=422, detail=error_code)
-
     @app.post("/internal/judge/v3/phase/dispatch")
     async def dispatch_judge_phase(
         request: Request,
@@ -7905,10 +7703,30 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         raw_payload = await _read_json_object_or_raise_422(request=request)
         sensitive_hits = _find_sensitive_key_hits(raw_payload)
         if sensitive_hits:
-            await _handle_blindization_rejection(
-                dispatch_type="phase",
-                raw_payload=raw_payload,
-                sensitive_hits=sensitive_hits,
+            await _run_judge_command_route_guard(
+                build_blindization_rejection_route_payload_v3(
+                    dispatch_type="phase",
+                    raw_payload=raw_payload,
+                    sensitive_hits=sensitive_hits,
+                    extract_dispatch_meta_from_raw=_extract_dispatch_meta_from_raw,
+                    extract_receipt_dims_from_raw=_extract_receipt_dims_from_raw,
+                    build_workflow_job=_build_workflow_job,
+                    trace_register_start=runtime.trace_store.register_start,
+                    workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
+                    build_failed_callback_payload=_build_failed_callback_payload,
+                    invoke_failed_callback_with_retry=(
+                        lambda *, case_id, payload: _invoke_v3_callback_with_retry(
+                            runtime=runtime,
+                            callback_fn=_failed_callback_fn_for_dispatch(runtime, "phase"),
+                            job_id=case_id,
+                            payload=payload,
+                        )
+                    ),
+                    with_error_contract=_with_error_contract,
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=runtime.trace_store.register_failure,
+                    workflow_mark_failed=_workflow_mark_failed,
+                )
             )
         preflight = await _run_judge_command_route_guard(
             build_phase_dispatch_preflight_route_payload_v3(
@@ -8229,10 +8047,30 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         raw_payload = await _read_json_object_or_raise_422(request=request)
         sensitive_hits = _find_sensitive_key_hits(raw_payload)
         if sensitive_hits:
-            await _handle_blindization_rejection(
-                dispatch_type="final",
-                raw_payload=raw_payload,
-                sensitive_hits=sensitive_hits,
+            await _run_judge_command_route_guard(
+                build_blindization_rejection_route_payload_v3(
+                    dispatch_type="final",
+                    raw_payload=raw_payload,
+                    sensitive_hits=sensitive_hits,
+                    extract_dispatch_meta_from_raw=_extract_dispatch_meta_from_raw,
+                    extract_receipt_dims_from_raw=_extract_receipt_dims_from_raw,
+                    build_workflow_job=_build_workflow_job,
+                    trace_register_start=runtime.trace_store.register_start,
+                    workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
+                    build_failed_callback_payload=_build_failed_callback_payload,
+                    invoke_failed_callback_with_retry=(
+                        lambda *, case_id, payload: _invoke_v3_callback_with_retry(
+                            runtime=runtime,
+                            callback_fn=_failed_callback_fn_for_dispatch(runtime, "final"),
+                            job_id=case_id,
+                            payload=payload,
+                        )
+                    ),
+                    with_error_contract=_with_error_contract,
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=runtime.trace_store.register_failure,
+                    workflow_mark_failed=_workflow_mark_failed,
+                )
             )
         preflight = await _run_judge_command_route_guard(
             build_final_dispatch_preflight_route_payload_v3(

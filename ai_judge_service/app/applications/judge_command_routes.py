@@ -357,3 +357,226 @@ async def build_final_dispatch_preflight_route_payload(
         "promptProfile": prompt_profile,
         "toolProfile": tool_profile,
     }
+
+
+async def build_blindization_rejection_route_payload(
+    *,
+    dispatch_type: str,
+    raw_payload: dict[str, Any],
+    sensitive_hits: list[str],
+    extract_dispatch_meta_from_raw: Callable[[dict[str, Any]], dict[str, Any]],
+    extract_receipt_dims_from_raw: Callable[[str, dict[str, Any]], dict[str, int | None]],
+    build_workflow_job: Callable[..., Any],
+    trace_register_start: Callable[..., Any],
+    workflow_register_and_mark_blinded: Callable[..., Awaitable[Any]],
+    build_failed_callback_payload: Callable[..., dict[str, Any]],
+    invoke_failed_callback_with_retry: Callable[..., Awaitable[tuple[int, int]]],
+    with_error_contract: Callable[..., dict[str, Any]],
+    persist_dispatch_receipt: Callable[..., Awaitable[Any]],
+    trace_register_failure: Callable[..., Any],
+    workflow_mark_failed: Callable[..., Awaitable[Any]],
+) -> dict[str, Any]:
+    meta = extract_dispatch_meta_from_raw(raw_payload)
+    job_id = int(meta.get("caseId") or 0)
+    session_id = int(meta.get("sessionId") or 0)
+    trace_id = str(meta.get("traceId") or "")
+    if job_id <= 0 or session_id <= 0 or not trace_id:
+        raise JudgeCommandRouteError(status_code=422, detail="input_not_blinded")
+
+    scope_id = int(meta.get("scopeId") or 1)
+    dims = extract_receipt_dims_from_raw(dispatch_type, raw_payload)
+    request_payload = dict(raw_payload)
+    workflow_job = build_workflow_job(
+        dispatch_type=dispatch_type,
+        job_id=job_id,
+        trace_id=trace_id,
+        scope_id=scope_id,
+        session_id=session_id,
+        idempotency_key=str(meta.get("idempotencyKey") or ""),
+        rubric_version=str(meta.get("rubricVersion") or ""),
+        judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
+        topic_domain=str(meta.get("topicDomain") or ""),
+        retrieval_profile=(
+            str(meta.get("retrievalProfile"))
+            if meta.get("retrievalProfile") is not None
+            else None
+        ),
+    )
+    trace_register_start(
+        job_id=job_id,
+        trace_id=trace_id,
+        request=request_payload,
+    )
+    await workflow_register_and_mark_blinded(
+        job=workflow_job,
+        event_payload={
+            "dispatchType": dispatch_type,
+            "scopeId": scope_id,
+            "sessionId": session_id,
+            "phaseNo": dims.get("phaseNo"),
+            "phaseStartNo": dims.get("phaseStartNo"),
+            "phaseEndNo": dims.get("phaseEndNo"),
+            "messageCount": dims.get("messageCount"),
+            "traceId": trace_id,
+            "rejectionCode": "input_not_blinded",
+            "sensitiveHits": sensitive_hits[:12],
+        },
+    )
+    response = {
+        "accepted": False,
+        "dispatchType": dispatch_type,
+        "status": "callback_failed",
+        "caseId": job_id,
+        "scopeId": scope_id,
+        "sessionId": session_id,
+        "traceId": trace_id,
+    }
+    if dispatch_type == "phase":
+        response["phaseNo"] = dims.get("phaseNo")
+        response["messageCount"] = dims.get("messageCount")
+    else:
+        response["phaseStartNo"] = dims.get("phaseStartNo")
+        response["phaseEndNo"] = dims.get("phaseEndNo")
+
+    error_code = "input_not_blinded"
+    error_message = "sensitive fields detected in judge input: " + ",".join(sensitive_hits[:12])
+    failed_payload = build_failed_callback_payload(
+        case_id=job_id,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        error_code=error_code,
+        error_message=error_message,
+    )
+    try:
+        failed_attempts, failed_retries = await invoke_failed_callback_with_retry(
+            case_id=job_id,
+            payload=failed_payload,
+        )
+    except Exception as failed_err:
+        receipt_response = with_error_contract(
+            {
+                **response,
+                "callbackStatus": "failed_callback_failed",
+                "callbackError": error_message,
+                "failedCallbackPayload": failed_payload,
+                "failedCallbackError": str(failed_err),
+            },
+            error_code=f"{dispatch_type}_failed_callback_failed",
+            error_message=str(failed_err),
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            retryable=False,
+            category="blindization_rejection",
+            details={"sensitiveHits": sensitive_hits[:12]},
+        )
+        await persist_dispatch_receipt(
+            dispatch_type=dispatch_type,
+            job_id=job_id,
+            scope_id=scope_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            idempotency_key=str(meta.get("idempotencyKey") or ""),
+            rubric_version=str(meta.get("rubricVersion") or ""),
+            judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
+            topic_domain=str(meta.get("topicDomain") or ""),
+            retrieval_profile=(
+                str(meta.get("retrievalProfile"))
+                if meta.get("retrievalProfile") is not None
+                else None
+            ),
+            phase_no=dims.get("phaseNo"),
+            phase_start_no=dims.get("phaseStartNo"),
+            phase_end_no=dims.get("phaseEndNo"),
+            message_start_id=dims.get("messageStartId"),
+            message_end_id=dims.get("messageEndId"),
+            message_count=dims.get("messageCount"),
+            status="callback_failed",
+            request_payload=request_payload,
+            response_payload=receipt_response,
+        )
+        trace_register_failure(
+            job_id=job_id,
+            response=receipt_response,
+            callback_status="failed_callback_failed",
+            callback_error=str(failed_err),
+        )
+        await workflow_mark_failed(
+            job_id=job_id,
+            error_code=f"{dispatch_type}_failed_callback_failed",
+            error_message=str(failed_err),
+            event_payload={
+                "dispatchType": dispatch_type,
+                "phaseNo": dims.get("phaseNo"),
+                "phaseStartNo": dims.get("phaseStartNo"),
+                "phaseEndNo": dims.get("phaseEndNo"),
+                "callbackStatus": "failed_callback_failed",
+                "sensitiveHits": sensitive_hits[:12],
+            },
+        )
+        raise JudgeCommandRouteError(
+            status_code=502,
+            detail=f"{dispatch_type}_failed_callback_failed: {failed_err}",
+        ) from failed_err
+
+    receipt_response = with_error_contract(
+        {
+            **response,
+            "callbackStatus": "failed_reported",
+            "callbackError": error_message,
+            "failedCallbackPayload": failed_payload,
+            "failedCallbackAttempts": failed_attempts,
+            "failedCallbackRetries": failed_retries,
+        },
+        error_code=error_code,
+        error_message=error_message,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        retryable=False,
+        category="blindization_rejection",
+        details={"sensitiveHits": sensitive_hits[:12]},
+    )
+    await persist_dispatch_receipt(
+        dispatch_type=dispatch_type,
+        job_id=job_id,
+        scope_id=scope_id,
+        session_id=session_id,
+        trace_id=trace_id,
+        idempotency_key=str(meta.get("idempotencyKey") or ""),
+        rubric_version=str(meta.get("rubricVersion") or ""),
+        judge_policy_version=str(meta.get("judgePolicyVersion") or ""),
+        topic_domain=str(meta.get("topicDomain") or ""),
+        retrieval_profile=(
+            str(meta.get("retrievalProfile"))
+            if meta.get("retrievalProfile") is not None
+            else None
+        ),
+        phase_no=dims.get("phaseNo"),
+        phase_start_no=dims.get("phaseStartNo"),
+        phase_end_no=dims.get("phaseEndNo"),
+        message_start_id=dims.get("messageStartId"),
+        message_end_id=dims.get("messageEndId"),
+        message_count=dims.get("messageCount"),
+        status="callback_failed",
+        request_payload=request_payload,
+        response_payload=receipt_response,
+    )
+    trace_register_failure(
+        job_id=job_id,
+        response=receipt_response,
+        callback_status="failed_reported",
+        callback_error=error_message,
+    )
+    await workflow_mark_failed(
+        job_id=job_id,
+        error_code=error_code,
+        error_message=error_message,
+        event_payload={
+            "dispatchType": dispatch_type,
+            "phaseNo": dims.get("phaseNo"),
+            "phaseStartNo": dims.get("phaseStartNo"),
+            "phaseEndNo": dims.get("phaseEndNo"),
+            "callbackStatus": "failed_reported",
+            "sensitiveHits": sensitive_hits[:12],
+        },
+    )
+    raise JudgeCommandRouteError(status_code=422, detail=error_code)

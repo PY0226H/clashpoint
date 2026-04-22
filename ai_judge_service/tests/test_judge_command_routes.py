@@ -7,6 +7,7 @@ from typing import Any
 
 from app.applications.judge_command_routes import (
     JudgeCommandRouteError,
+    build_blindization_rejection_route_payload,
     build_case_create_route_payload,
     build_final_dispatch_preflight_route_payload,
     build_phase_dispatch_preflight_route_payload,
@@ -521,6 +522,141 @@ class JudgeCommandRoutesTests(unittest.TestCase):
         self.assertEqual(calls["workflowBlinded"]["eventPayload"]["dispatchType"], "final")
         self.assertEqual(result["response"]["dispatchType"], "final")
         self.assertEqual(result["requestPayload"]["case_id"], 5201)
+
+    def test_build_blindization_rejection_route_payload_should_raise_422_and_record_failed_reported(self) -> None:
+        calls: dict[str, Any] = {}
+
+        def _extract_dispatch_meta_from_raw(payload: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "caseId": payload.get("case_id"),
+                "scopeId": payload.get("scopeId"),
+                "sessionId": payload.get("session_id"),
+                "traceId": payload.get("trace_id"),
+                "idempotencyKey": payload.get("idempotency_key"),
+                "rubricVersion": payload.get("rubric_version"),
+                "judgePolicyVersion": payload.get("judge_policy_version"),
+                "topicDomain": payload.get("topic_domain"),
+                "retrievalProfile": payload.get("retrieval_profile"),
+            }
+
+        def _extract_receipt_dims_from_raw(_: str, payload: dict[str, Any]) -> dict[str, int | None]:
+            return {
+                "phaseNo": payload.get("phase_no"),
+                "phaseStartNo": None,
+                "phaseEndNo": None,
+                "messageStartId": payload.get("message_start_id"),
+                "messageEndId": payload.get("message_end_id"),
+                "messageCount": payload.get("message_count"),
+            }
+
+        def _build_workflow_job(**kwargs: Any) -> dict[str, Any]:
+            calls["workflowJob"] = dict(kwargs)
+            return dict(kwargs)
+
+        def _trace_register_start(*, job_id: int, trace_id: str, request: dict[str, Any]) -> None:
+            calls["traceStart"] = {"jobId": job_id, "traceId": trace_id, "request": dict(request)}
+
+        async def _workflow_register_and_mark_blinded(*, job: dict[str, Any], event_payload: dict[str, Any]) -> None:
+            calls["workflowBlinded"] = {"job": dict(job), "eventPayload": dict(event_payload)}
+
+        def _build_failed_callback_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["failedPayload"] = dict(kwargs)
+            return dict(kwargs)
+
+        async def _invoke_failed_callback_with_retry(*, case_id: int, payload: dict[str, Any]) -> tuple[int, int]:
+            calls["failedInvoke"] = {"caseId": case_id, "payload": dict(payload)}
+            return 1, 0
+
+        def _with_error_contract(payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            out = dict(payload)
+            out["errorCode"] = kwargs.get("error_code")
+            return out
+
+        async def _persist_dispatch_receipt(**kwargs: Any) -> None:
+            calls["persistReceipt"] = dict(kwargs)
+
+        def _trace_register_failure(*, job_id: int, response: dict[str, Any], callback_status: str, callback_error: str) -> None:
+            calls["traceFailure"] = {
+                "jobId": job_id,
+                "response": dict(response),
+                "callbackStatus": callback_status,
+                "callbackError": callback_error,
+            }
+
+        async def _workflow_mark_failed(**kwargs: Any) -> None:
+            calls["workflowFailed"] = dict(kwargs)
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                build_blindization_rejection_route_payload(
+                    dispatch_type="phase",
+                    raw_payload=_build_phase_payload(case_id=5301, idempotency_key="phase:5301"),
+                    sensitive_hits=["messages[0].user_id"],
+                    extract_dispatch_meta_from_raw=_extract_dispatch_meta_from_raw,
+                    extract_receipt_dims_from_raw=_extract_receipt_dims_from_raw,
+                    build_workflow_job=_build_workflow_job,
+                    trace_register_start=_trace_register_start,
+                    workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
+                    build_failed_callback_payload=_build_failed_callback_payload,
+                    invoke_failed_callback_with_retry=_invoke_failed_callback_with_retry,
+                    with_error_contract=_with_error_contract,
+                    persist_dispatch_receipt=_persist_dispatch_receipt,
+                    trace_register_failure=_trace_register_failure,
+                    workflow_mark_failed=_workflow_mark_failed,
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "input_not_blinded")
+        self.assertEqual(calls["traceStart"]["jobId"], 5301)
+        self.assertEqual(calls["workflowBlinded"]["eventPayload"]["rejectionCode"], "input_not_blinded")
+        self.assertEqual(calls["traceFailure"]["callbackStatus"], "failed_reported")
+        self.assertEqual(calls["persistReceipt"]["status"], "callback_failed")
+        self.assertEqual(calls["workflowFailed"]["error_code"], "input_not_blinded")
+
+    def test_build_blindization_rejection_route_payload_should_raise_502_when_failed_callback_fails(self) -> None:
+        async def _raise_failed_callback(*, case_id: int, payload: dict[str, Any]) -> tuple[int, int]:
+            raise RuntimeError("failed-callback-down")
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                build_blindization_rejection_route_payload(
+                    dispatch_type="phase",
+                    raw_payload=_build_phase_payload(case_id=5302, idempotency_key="phase:5302"),
+                    sensitive_hits=["messages[0].vip"],
+                    extract_dispatch_meta_from_raw=lambda payload: {
+                        "caseId": payload.get("case_id"),
+                        "scopeId": payload.get("scopeId"),
+                        "sessionId": payload.get("session_id"),
+                        "traceId": payload.get("trace_id"),
+                        "idempotencyKey": payload.get("idempotency_key"),
+                        "rubricVersion": payload.get("rubric_version"),
+                        "judgePolicyVersion": payload.get("judge_policy_version"),
+                        "topicDomain": payload.get("topic_domain"),
+                        "retrievalProfile": payload.get("retrieval_profile"),
+                    },
+                    extract_receipt_dims_from_raw=lambda _dispatch_type, payload: {
+                        "phaseNo": payload.get("phase_no"),
+                        "phaseStartNo": None,
+                        "phaseEndNo": None,
+                        "messageStartId": payload.get("message_start_id"),
+                        "messageEndId": payload.get("message_end_id"),
+                        "messageCount": payload.get("message_count"),
+                    },
+                    build_workflow_job=lambda **kwargs: dict(kwargs),
+                    trace_register_start=lambda **kwargs: None,
+                    workflow_register_and_mark_blinded=lambda **kwargs: asyncio.sleep(0),
+                    build_failed_callback_payload=lambda **kwargs: dict(kwargs),
+                    invoke_failed_callback_with_retry=_raise_failed_callback,
+                    with_error_contract=lambda payload, **kwargs: dict(payload),
+                    persist_dispatch_receipt=lambda **kwargs: asyncio.sleep(0),
+                    trace_register_failure=lambda **kwargs: None,
+                    workflow_mark_failed=lambda **kwargs: asyncio.sleep(0),
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("phase_failed_callback_failed", str(ctx.exception.detail))
 
 
 if __name__ == "__main__":
