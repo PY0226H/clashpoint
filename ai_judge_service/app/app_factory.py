@@ -7,7 +7,7 @@ from functools import partial
 from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from .applications import (
     AgentRuntime,
@@ -383,6 +383,10 @@ from .applications.route_group_fairness import (
 from .applications.route_group_judge_command import (
     JudgeCommandRouteDependencies,
     register_judge_command_routes,
+)
+from .applications.route_group_ops_read_model_pack import (
+    OpsReadModelPackRouteDependencies,
+    register_ops_read_model_pack_routes,
 )
 from .applications.route_group_panel_runtime import (
     PanelRuntimeRouteDependencies,
@@ -4837,93 +4841,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
     )
 
-    @app.get("/internal/judge/ops/read-model/pack")
-    async def get_judge_ops_read_model_pack(
-        x_ai_internal_key: str | None = Header(default=None),
-        dispatch_type: str | None = Query(default="final"),
-        policy_version: str | None = Query(default=None),
-        window_days: int = Query(default=7, ge=1, le=30),
-        top_limit: int = Query(default=10, ge=1, le=50),
-        case_scan_limit: int = Query(default=200, ge=20, le=1000),
-        include_case_trust: bool = Query(default=True),
-        trust_case_limit: int = Query(default=5, ge=1, le=20),
-        dependency_limit: int = Query(default=200, ge=1, le=500),
-        usage_preview_limit: int = Query(default=20, ge=1, le=200),
-        release_limit: int = Query(default=50, ge=1, le=200),
-        audit_limit: int = Query(default=100, ge=1, le=200),
-        calibration_risk_limit: int = Query(default=50, ge=1, le=200),
-        calibration_benchmark_limit: int = Query(default=200, ge=1, le=500),
-        calibration_shadow_limit: int = Query(default=200, ge=1, le=500),
-        panel_profile_scan_limit: int = Query(default=600, ge=50, le=5000),
-        panel_group_limit: int = Query(default=50, ge=1, le=200),
-        panel_attention_limit: int = Query(default=20, ge=1, le=100),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _await_payload_or_raise_http_500_for_runtime(
-            self_awaitable=_build_ops_read_model_pack_payload_for_runtime(
-                x_ai_internal_key=x_ai_internal_key,
-                dispatch_type=dispatch_type,
-                policy_version=policy_version,
-                window_days=window_days,
-                top_limit=top_limit,
-                case_scan_limit=case_scan_limit,
-                include_case_trust=include_case_trust,
-                trust_case_limit=trust_case_limit,
-                dependency_limit=dependency_limit,
-                usage_preview_limit=usage_preview_limit,
-                release_limit=release_limit,
-                audit_limit=audit_limit,
-                calibration_risk_limit=calibration_risk_limit,
-                calibration_benchmark_limit=calibration_benchmark_limit,
-                calibration_shadow_limit=calibration_shadow_limit,
-                panel_profile_scan_limit=panel_profile_scan_limit,
-                panel_group_limit=panel_group_limit,
-                panel_attention_limit=panel_attention_limit,
-                runtime=runtime,
-                get_judge_fairness_dashboard=(
-                    fairness_route_handles.get_judge_fairness_dashboard
-                ),
-                get_registry_governance_overview=(
-                    registry_route_handles.get_registry_governance_overview
-                ),
-                get_registry_prompt_tool_governance=(
-                    registry_route_handles.get_registry_prompt_tool_governance
-                ),
-                get_policy_registry_dependency_health=(
-                    registry_route_handles.get_policy_registry_dependency_health
-                ),
-                get_judge_fairness_policy_calibration_advisor=(
-                    fairness_route_handles.get_judge_fairness_policy_calibration_advisor
-                ),
-                get_panel_runtime_readiness=(
-                    panel_runtime_route_handles.get_panel_runtime_readiness
-                ),
-                list_judge_courtroom_cases=(
-                    case_read_route_handles.list_judge_courtroom_cases
-                ),
-                list_judge_courtroom_drilldown_bundle=(
-                    case_read_route_handles.list_judge_courtroom_drilldown_bundle
-                ),
-                list_judge_evidence_claim_ops_queue=(
-                    case_read_route_handles.list_judge_evidence_claim_ops_queue
-                ),
-                list_judge_trust_challenge_ops_queue=(
-                    trust_route_handles.list_judge_trust_challenge_ops_queue
-                ),
-                list_judge_review_jobs=review_route_handles.list_judge_review_jobs,
-                simulate_policy_release_gate=(
-                    registry_route_handles.simulate_policy_release_gate
-                ),
-                get_judge_case_courtroom_read_model=(
-                    case_read_route_handles.get_judge_case_courtroom_read_model
-                ),
-                get_judge_trust_public_verify=(
-                    trust_route_handles.get_judge_trust_public_verify
-                ),
-            ),
-            code="ops_read_model_pack_v5_contract_violation",
-        )
-
     review_route_handles = register_review_routes(
         app=app,
         deps=ReviewRouteDependencies(
@@ -4962,6 +4879,60 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             resolve_open_alerts_for_review=resolve_open_alerts_for_review,
             serialize_workflow_job=_serialize_workflow_job,
             serialize_alert_item=serialize_alert_item_v3,
+        ),
+    )
+
+    register_ops_read_model_pack_routes(
+        app=app,
+        deps=OpsReadModelPackRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            await_payload_or_raise_http_500=(
+                _await_payload_or_raise_http_500_for_runtime
+            ),
+            build_ops_read_model_pack_payload=(
+                _build_ops_read_model_pack_payload_for_runtime
+            ),
+            get_judge_fairness_dashboard=(
+                fairness_route_handles.get_judge_fairness_dashboard
+            ),
+            get_registry_governance_overview=(
+                registry_route_handles.get_registry_governance_overview
+            ),
+            get_registry_prompt_tool_governance=(
+                registry_route_handles.get_registry_prompt_tool_governance
+            ),
+            get_policy_registry_dependency_health=(
+                registry_route_handles.get_policy_registry_dependency_health
+            ),
+            get_judge_fairness_policy_calibration_advisor=(
+                fairness_route_handles.get_judge_fairness_policy_calibration_advisor
+            ),
+            get_panel_runtime_readiness=(
+                panel_runtime_route_handles.get_panel_runtime_readiness
+            ),
+            list_judge_courtroom_cases=(
+                case_read_route_handles.list_judge_courtroom_cases
+            ),
+            list_judge_courtroom_drilldown_bundle=(
+                case_read_route_handles.list_judge_courtroom_drilldown_bundle
+            ),
+            list_judge_evidence_claim_ops_queue=(
+                case_read_route_handles.list_judge_evidence_claim_ops_queue
+            ),
+            list_judge_trust_challenge_ops_queue=(
+                trust_route_handles.list_judge_trust_challenge_ops_queue
+            ),
+            list_judge_review_jobs=review_route_handles.list_judge_review_jobs,
+            simulate_policy_release_gate=(
+                registry_route_handles.simulate_policy_release_gate
+            ),
+            get_judge_case_courtroom_read_model=(
+                case_read_route_handles.get_judge_case_courtroom_read_model
+            ),
+            get_judge_trust_public_verify=(
+                trust_route_handles.get_judge_trust_public_verify
+            ),
         ),
     )
 
