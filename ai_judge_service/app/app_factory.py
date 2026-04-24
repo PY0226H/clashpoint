@@ -25,9 +25,6 @@ from .applications import (
     build_audit_anchor_export as build_audit_anchor_export_v3,
 )
 from .applications import (
-    build_challenge_review_registry as build_challenge_review_registry_v3,
-)
-from .applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
 )
 from .applications import (
@@ -93,11 +90,26 @@ from .applications.bootstrap_registry_route_helpers import (
     serialize_policy_profile_with_domain_family_for_runtime,
 )
 from .applications.bootstrap_replay_dependencies import build_replay_dependency_packs
+from .applications.bootstrap_review_alert_trust_payload_helpers import (
+    build_alert_ops_view_payload_for_runtime,
+    build_alert_outbox_payload_for_runtime,
+    build_case_alerts_payload_for_runtime,
+    build_review_case_detail_payload_for_runtime,
+    build_review_cases_list_payload_for_runtime,
+    build_trust_audit_anchor_payload_for_runtime,
+    build_trust_challenge_decision_payload_for_runtime,
+    build_trust_challenge_ops_queue_payload_for_runtime,
+    build_trust_challenge_request_payload_for_runtime,
+    build_trust_phasea_bundle_for_runtime,
+    build_trust_public_verify_payload_for_runtime,
+    build_validated_trust_item_payload_for_runtime,
+    resolve_report_context_for_case_for_runtime,
+    transition_judge_alert_status_for_runtime,
+)
 from .applications.bootstrap_review_trust_helpers import (
     build_review_case_risk_profile_for_runtime,
     build_review_trust_unified_priority_profile_for_runtime,
     build_trust_challenge_action_hints_for_runtime,
-    build_trust_challenge_id_for_runtime,
     build_trust_challenge_priority_profile_for_runtime,
 )
 from .applications.bootstrap_route_dependencies import (
@@ -269,56 +281,8 @@ from .applications.panel_runtime_routes import (
 from .applications.panel_runtime_routes import (
     normalize_panel_runtime_profile_source as normalize_panel_runtime_profile_source_v3,
 )
-from .applications.registry_ops_views import (
-    build_registry_alert_ops_view as build_registry_alert_ops_view_v3,
-)
-from .applications.registry_ops_views import (
-    normalize_ops_alert_delivery_status as normalize_ops_alert_delivery_status_v3,
-)
-from .applications.registry_ops_views import (
-    normalize_ops_alert_fields_mode as normalize_ops_alert_fields_mode_v3,
-)
-from .applications.registry_ops_views import (
-    normalize_ops_alert_status as normalize_ops_alert_status_v3,
-)
 from .applications.review_alert_routes import (
     ReviewRouteError as ReviewRouteError_v3,
-)
-from .applications.review_alert_routes import (
-    build_alert_ops_view_payload as build_alert_ops_view_payload_v3,
-)
-from .applications.review_alert_routes import (
-    build_alert_outbox_route_payload as build_alert_outbox_route_payload_v3,
-)
-from .applications.review_alert_routes import (
-    build_alert_status_transition_payload as build_alert_status_transition_payload_v3,
-)
-from .applications.review_alert_routes import (
-    build_case_alerts_payload as build_case_alerts_payload_v3,
-)
-from .applications.review_alert_routes import (
-    build_review_case_detail_payload as build_review_case_detail_payload_v3,
-)
-from .applications.review_alert_routes import (
-    build_review_case_sort_key as build_review_case_sort_key_v3,
-)
-from .applications.review_alert_routes import (
-    build_review_cases_list_payload as build_review_cases_list_payload_v3,
-)
-from .applications.review_alert_routes import (
-    normalize_review_case_filters as normalize_review_case_filters_v3,
-)
-from .applications.review_alert_routes import (
-    normalize_review_case_risk_level as normalize_review_case_risk_level_v3,
-)
-from .applications.review_alert_routes import (
-    normalize_review_case_sla_bucket as normalize_review_case_sla_bucket_v3,
-)
-from .applications.review_alert_routes import (
-    normalize_review_case_sort_by as normalize_review_case_sort_by_v3,
-)
-from .applications.review_alert_routes import (
-    normalize_review_case_sort_order as normalize_review_case_sort_order_v3,
 )
 from .applications.review_queue_contract import (
     validate_courtroom_drilldown_bundle_contract as validate_courtroom_drilldown_bundle_contract_v3,
@@ -374,23 +338,11 @@ from .applications.trust_audit_anchor_contract import (
 from .applications.trust_challenge_ops_queue_routes import (
     TrustChallengeOpsQueueRouteError as TrustChallengeOpsQueueRouteError_v3,
 )
-from .applications.trust_challenge_ops_queue_routes import (
-    build_trust_challenge_ops_queue_route_payload as build_trust_challenge_ops_queue_route_payload_v3,
-)
-from .applications.trust_challenge_queue_contract import (
-    validate_trust_challenge_queue_contract as validate_trust_challenge_queue_contract_v3,
-)
 from .applications.trust_challenge_review_contract import (
     validate_trust_challenge_review_contract as validate_trust_challenge_review_contract_v3,
 )
 from .applications.trust_challenge_runtime_routes import (
     TrustChallengeRouteError as TrustChallengeRouteError_v3,
-)
-from .applications.trust_challenge_runtime_routes import (
-    build_trust_challenge_decision_payload as build_trust_challenge_decision_payload_v3,
-)
-from .applications.trust_challenge_runtime_routes import (
-    build_trust_challenge_request_payload as build_trust_challenge_request_payload_v3,
 )
 from .applications.trust_commitment_contract import (
     validate_trust_commitment_contract as validate_trust_commitment_contract_v3,
@@ -401,53 +353,11 @@ from .applications.trust_kernel_version_contract import (
 from .applications.trust_ops_views import (
     build_public_trust_verify_payload as build_public_trust_verify_payload_v3,
 )
-from .applications.trust_ops_views import (
-    build_trust_challenge_ops_queue_item as build_trust_challenge_ops_queue_item_v3,
-)
-from .applications.trust_ops_views import (
-    build_trust_challenge_ops_queue_payload as build_trust_challenge_ops_queue_payload_v3,
-)
-from .applications.trust_ops_views import (
-    build_trust_challenge_sort_key as build_trust_challenge_sort_key_v3,
-)
-from .applications.trust_ops_views import (
-    normalize_trust_challenge_priority_level as normalize_trust_challenge_priority_level_v3,
-)
-from .applications.trust_ops_views import (
-    normalize_trust_challenge_review_state as normalize_trust_challenge_review_state_v3,
-)
-from .applications.trust_ops_views import (
-    normalize_trust_challenge_sla_bucket as normalize_trust_challenge_sla_bucket_v3,
-)
-from .applications.trust_ops_views import (
-    normalize_trust_challenge_sort_by as normalize_trust_challenge_sort_by_v3,
-)
-from .applications.trust_ops_views import (
-    normalize_trust_challenge_sort_order as normalize_trust_challenge_sort_order_v3,
-)
-from .applications.trust_ops_views import (
-    normalize_trust_challenge_state_filter as normalize_trust_challenge_state_filter_v3,
-)
 from .applications.trust_public_verify_contract import (
     validate_trust_public_verify_contract as validate_trust_public_verify_contract_v3,
 )
 from .applications.trust_read_routes import (
     TrustReadRouteError as TrustReadRouteError_v3,
-)
-from .applications.trust_read_routes import (
-    build_trust_audit_anchor_route_payload as build_trust_audit_anchor_route_payload_v3,
-)
-from .applications.trust_read_routes import (
-    build_trust_phasea_bundle_for_case as build_trust_phasea_bundle_for_case_v3,
-)
-from .applications.trust_read_routes import (
-    build_trust_public_verify_bundle_payload as build_trust_public_verify_bundle_payload_v3,
-)
-from .applications.trust_read_routes import (
-    build_validated_trust_item_route_payload as build_validated_trust_item_route_payload_v3,
-)
-from .applications.trust_read_routes import (
-    resolve_trust_report_context_for_case as resolve_trust_report_context_for_case_v3,
 )
 from .applications.trust_verdict_attestation_contract import (
     validate_trust_verdict_attestation_contract as validate_trust_verdict_attestation_contract_v3,
@@ -1054,16 +964,6 @@ def _build_domain_family_sort_key_for_runtime(row: dict[str, Any]) -> tuple[int,
         -int(row.get("count") or 0),
         str(row.get("domainJudgeFamily") or ""),
     )
-
-
-def _run_trust_read_guard_sync(
-    builder: Callable[..., dict[str, Any]],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    try:
-        return builder(**kwargs)
-    except TrustReadRouteError_v3 as err:
-        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
 
 
 async def _run_route_guard_with_http_bridge(
@@ -1820,80 +1720,6 @@ async def _build_shared_room_context_for_runtime(
     }
 
 
-async def _transition_judge_alert_status_for_runtime(
-    *,
-    case_id: int,
-    alert_id: str,
-    to_status: str,
-    actor: str | None,
-    reason: str | None,
-    transition_audit_alert: Callable[..., Any],
-    sync_audit_alert_to_facts: Callable[..., Awaitable[FactAuditAlert]],
-    facts_transition_audit_alert: Callable[..., Awaitable[Any]],
-    serialize_alert_item: Callable[[Any], dict[str, Any]],
-    run_review_route_guard: Callable[[Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    return await run_review_route_guard(
-        build_alert_status_transition_payload_v3(
-            job_id=case_id,
-            alert_id=alert_id,
-            to_status=to_status,
-            actor=actor,
-            reason=reason,
-            transition_audit_alert=transition_audit_alert,
-            sync_audit_alert_to_facts=sync_audit_alert_to_facts,
-            facts_transition_audit_alert=facts_transition_audit_alert,
-            serialize_alert_item=serialize_alert_item,
-        )
-    )
-
-
-async def _resolve_report_context_for_case_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    not_found_detail: str,
-    missing_report_detail: str,
-    get_dispatch_receipt: Callable[..., Awaitable[Any | None]],
-    run_trust_read_guard: Callable[[Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    return await run_trust_read_guard(
-        resolve_trust_report_context_for_case_v3(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            get_dispatch_receipt=get_dispatch_receipt,
-            not_found_detail=not_found_detail,
-            missing_report_detail=missing_report_detail,
-        )
-    )
-
-
-async def _build_trust_phasea_bundle_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    get_dispatch_receipt: Callable[..., Awaitable[Any | None]],
-    get_workflow_job: Callable[..., Awaitable[WorkflowJob | None]],
-    list_workflow_events: Callable[..., Awaitable[list[Any]]],
-    list_audit_alerts: Callable[..., Awaitable[list[Any]]],
-    serialize_workflow_job: Callable[[WorkflowJob], dict[str, Any]],
-    provider: str,
-    run_trust_read_guard: Callable[[Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    return await run_trust_read_guard(
-        build_trust_phasea_bundle_for_case_v3(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            get_dispatch_receipt=get_dispatch_receipt,
-            get_workflow_job=get_workflow_job,
-            list_workflow_events=list_workflow_events,
-            list_audit_alerts=list_audit_alerts,
-            serialize_workflow_job=serialize_workflow_job,
-            provider=provider,
-        )
-    )
-
-
 async def _build_dispatch_receipt_payload_for_runtime(
     *,
     case_id: int,
@@ -1908,191 +1734,6 @@ async def _build_dispatch_receipt_payload_for_runtime(
     if item is None:
         raise HTTPException(status_code=404, detail=not_found_detail)
     return serialize_dispatch_receipt_v3(item)
-
-
-async def _build_review_cases_list_payload_for_runtime(
-    *,
-    status: str,
-    dispatch_type: str | None,
-    risk_level: str | None,
-    sla_bucket: str | None,
-    challenge_state: str | None,
-    trust_review_state: str | None,
-    unified_priority_level: str | None,
-    sort_by: str,
-    sort_order: str,
-    scan_limit: int,
-    limit: int,
-    workflow_list_jobs: Callable[..., Awaitable[list[WorkflowJob]]],
-    workflow_list_events: Callable[..., Awaitable[list[dict[str, Any]]]],
-    list_audit_alerts: Callable[..., Awaitable[list[Any]]],
-    get_trace: Callable[[int], dict[str, Any] | None],
-    build_review_case_risk_profile: Callable[..., dict[str, Any]],
-    build_trust_challenge_priority_profile: Callable[..., dict[str, Any]],
-    build_review_trust_unified_priority_profile: Callable[..., dict[str, Any]],
-    serialize_workflow_job: Callable[[WorkflowJob], dict[str, Any]],
-) -> dict[str, Any]:
-    normalized_filters = normalize_review_case_filters_v3(
-        status=status,
-        dispatch_type=dispatch_type,
-        risk_level=risk_level,
-        sla_bucket=sla_bucket,
-        challenge_state=challenge_state,
-        trust_review_state=trust_review_state,
-        unified_priority_level=unified_priority_level,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        scan_limit=scan_limit,
-        normalize_workflow_status=_normalize_workflow_status,
-        workflow_statuses=WORKFLOW_STATUSES,
-        normalize_review_case_risk_level=normalize_review_case_risk_level_v3,
-        review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
-        normalize_review_case_sla_bucket=normalize_review_case_sla_bucket_v3,
-        review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
-        normalize_trust_challenge_state_filter=normalize_trust_challenge_state_filter_v3,
-        case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
-        normalize_trust_challenge_review_state=normalize_trust_challenge_review_state_v3,
-        trust_challenge_review_state_values=TRUST_CHALLENGE_REVIEW_STATE_VALUES,
-        normalize_trust_challenge_priority_level=normalize_trust_challenge_priority_level_v3,
-        trust_challenge_priority_level_values=TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES,
-        normalize_review_case_sort_by=normalize_review_case_sort_by_v3,
-        review_case_sort_fields=REVIEW_CASE_SORT_FIELDS,
-        normalize_review_case_sort_order=normalize_review_case_sort_order_v3,
-    )
-    return await build_review_cases_list_payload_v3(
-        normalized_status=str(normalized_filters["status"]),
-        normalized_dispatch_type=cast(
-            str | None, normalized_filters["dispatchType"]
-        ),
-        normalized_risk_level=cast(str | None, normalized_filters["riskLevel"]),
-        normalized_sla_bucket=cast(str | None, normalized_filters["slaBucket"]),
-        normalized_challenge_state=cast(
-            str | None, normalized_filters["challengeState"]
-        ),
-        normalized_trust_review_state=cast(
-            str | None, normalized_filters["trustReviewState"]
-        ),
-        normalized_unified_priority_level=cast(
-            str | None, normalized_filters["unifiedPriorityLevel"]
-        ),
-        normalized_sort_by=str(normalized_filters["sortBy"]),
-        normalized_sort_order=str(normalized_filters["sortOrder"]),
-        normalized_scan_limit=int(normalized_filters["scanLimit"]),
-        limit=limit,
-        trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
-        workflow_list_jobs=workflow_list_jobs,
-        get_trace=get_trace,
-        workflow_list_events=workflow_list_events,
-        list_audit_alerts=list_audit_alerts,
-        build_challenge_review_registry=build_challenge_review_registry_v3,
-        build_review_case_risk_profile=build_review_case_risk_profile,
-        build_trust_challenge_priority_profile=build_trust_challenge_priority_profile,
-        build_review_trust_unified_priority_profile=(
-            build_review_trust_unified_priority_profile
-        ),
-        serialize_workflow_job=serialize_workflow_job,
-        build_review_case_sort_key=build_review_case_sort_key_v3,
-    )
-
-
-async def _build_review_case_detail_payload_for_runtime(
-    *,
-    case_id: int,
-    workflow_get_job: Callable[..., Awaitable[WorkflowJob | None]],
-    workflow_list_events: Callable[..., Awaitable[list[dict[str, Any]]]],
-    list_audit_alerts: Callable[..., Awaitable[list[Any]]],
-    get_trace: Callable[[int], dict[str, Any] | None],
-    serialize_workflow_job: Callable[[WorkflowJob], dict[str, Any]],
-    serialize_alert_item: Callable[[Any], dict[str, Any]],
-) -> dict[str, Any]:
-    return await build_review_case_detail_payload_v3(
-        case_id=case_id,
-        workflow_get_job=workflow_get_job,
-        workflow_list_events=workflow_list_events,
-        list_audit_alerts=list_audit_alerts,
-        get_trace=get_trace,
-        serialize_workflow_job=serialize_workflow_job,
-        serialize_alert_item=serialize_alert_item,
-    )
-
-
-async def _build_alert_ops_view_payload_for_runtime(
-    *,
-    alert_type: str | None,
-    status: str | None,
-    delivery_status: str | None,
-    registry_type: str | None,
-    policy_version: str | None,
-    gate_code: str | None,
-    gate_actor: str | None,
-    override_applied: bool | None,
-    fields_mode: str,
-    include_trend: bool,
-    trend_window_minutes: int,
-    trend_bucket_minutes: int,
-    offset: int,
-    limit: int,
-    list_audit_alerts: Callable[..., Awaitable[list[Any]]],
-    list_alert_outbox: Callable[..., list[Any]],
-) -> dict[str, Any]:
-    return await build_alert_ops_view_payload_v3(
-        alert_type=alert_type,
-        status=status,
-        delivery_status=delivery_status,
-        registry_type=registry_type,
-        policy_version=policy_version,
-        gate_code=gate_code,
-        gate_actor=gate_actor,
-        override_applied=override_applied,
-        fields_mode=fields_mode,
-        include_trend=include_trend,
-        trend_window_minutes=trend_window_minutes,
-        trend_bucket_minutes=trend_bucket_minutes,
-        offset=offset,
-        limit=limit,
-        normalize_ops_alert_status=normalize_ops_alert_status_v3,
-        normalize_ops_alert_delivery_status=normalize_ops_alert_delivery_status_v3,
-        normalize_ops_alert_fields_mode=normalize_ops_alert_fields_mode_v3,
-        ops_registry_alert_types=OPS_REGISTRY_ALERT_TYPES,
-        ops_alert_status_values=OPS_ALERT_STATUS_VALUES,
-        ops_alert_delivery_status_values=OPS_ALERT_DELIVERY_STATUS_VALUES,
-        ops_alert_fields_mode_values=OPS_ALERT_FIELDS_MODE_VALUES,
-        list_audit_alerts=list_audit_alerts,
-        list_alert_outbox=list_alert_outbox,
-        build_registry_alert_ops_view=build_registry_alert_ops_view_v3,
-    )
-
-
-async def _build_case_alerts_payload_for_runtime(
-    *,
-    case_id: int,
-    status: str | None,
-    limit: int,
-    list_audit_alerts: Callable[..., Awaitable[list[Any]]],
-    serialize_alert_item: Callable[[Any], dict[str, Any]],
-) -> dict[str, Any]:
-    return await build_case_alerts_payload_v3(
-        case_id=case_id,
-        status=status,
-        limit=limit,
-        list_audit_alerts=list_audit_alerts,
-        serialize_alert_item=serialize_alert_item,
-    )
-
-
-def _build_alert_outbox_payload_for_runtime(
-    *,
-    delivery_status: str | None,
-    limit: int,
-    list_alert_outbox: Callable[..., list[Any]],
-    serialize_outbox_event: Callable[[Any], dict[str, Any]],
-) -> dict[str, Any]:
-    return build_alert_outbox_route_payload_v3(
-        delivery_status=delivery_status,
-        limit=limit,
-        list_alert_outbox=list_alert_outbox,
-        serialize_outbox_event=serialize_outbox_event,
-    )
 
 
 async def _build_ops_read_model_pack_payload_for_runtime(
@@ -2387,224 +2028,6 @@ def _build_replay_reports_payload_for_runtime(
     )
 
 
-async def _build_trust_challenge_ops_queue_payload_for_runtime(
-    *,
-    status: str | None,
-    dispatch_type: str,
-    challenge_state: str | None,
-    review_state: str | None,
-    priority_level: str | None,
-    sla_bucket: str | None,
-    has_open_alert: bool | None,
-    sort_by: str,
-    sort_order: str,
-    scan_limit: int,
-    offset: int,
-    limit: int,
-    workflow_list_jobs: Callable[..., Awaitable[list[WorkflowJob]]],
-    build_trust_phasea_bundle: Callable[..., Awaitable[dict[str, Any]]],
-    get_trace: Callable[[int], dict[str, Any] | None],
-    build_trust_challenge_priority_profile: Callable[..., dict[str, Any]],
-    serialize_workflow_job: Callable[[WorkflowJob], dict[str, Any]],
-    build_trust_challenge_action_hints: Callable[..., dict[str, Any]],
-    run_trust_challenge_guard: Callable[
-        [Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]
-    ],
-) -> dict[str, Any]:
-    return await run_trust_challenge_guard(
-        build_trust_challenge_ops_queue_route_payload_v3(
-            status=status,
-            dispatch_type=dispatch_type,
-            challenge_state=challenge_state,
-            review_state=review_state,
-            priority_level=priority_level,
-            sla_bucket=sla_bucket,
-            has_open_alert=has_open_alert,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            scan_limit=scan_limit,
-            offset=offset,
-            limit=limit,
-            normalize_workflow_status=_normalize_workflow_status,
-            workflow_statuses=WORKFLOW_STATUSES,
-            normalize_trust_challenge_state_filter=normalize_trust_challenge_state_filter_v3,
-            case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
-            normalize_trust_challenge_review_state=normalize_trust_challenge_review_state_v3,
-            trust_challenge_review_state_values=TRUST_CHALLENGE_REVIEW_STATE_VALUES,
-            normalize_trust_challenge_priority_level=(
-                normalize_trust_challenge_priority_level_v3
-            ),
-            trust_challenge_priority_level_values=TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES,
-            normalize_trust_challenge_sla_bucket=normalize_trust_challenge_sla_bucket_v3,
-            trust_challenge_sla_bucket_values=TRUST_CHALLENGE_SLA_BUCKET_VALUES,
-            normalize_trust_challenge_sort_by=normalize_trust_challenge_sort_by_v3,
-            trust_challenge_sort_fields=TRUST_CHALLENGE_SORT_FIELDS,
-            normalize_trust_challenge_sort_order=normalize_trust_challenge_sort_order_v3,
-            trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
-            workflow_list_jobs=workflow_list_jobs,
-            build_trust_phasea_bundle=build_trust_phasea_bundle,
-            get_trace=get_trace,
-            build_trust_challenge_priority_profile=(
-                build_trust_challenge_priority_profile
-            ),
-            serialize_workflow_job=serialize_workflow_job,
-            build_trust_challenge_ops_queue_item=build_trust_challenge_ops_queue_item_v3,
-            build_trust_challenge_action_hints=build_trust_challenge_action_hints,
-            build_trust_challenge_sort_key=build_trust_challenge_sort_key_v3,
-            build_trust_challenge_ops_queue_payload=build_trust_challenge_ops_queue_payload_v3,
-            validate_trust_challenge_ops_queue_contract=(
-                validate_trust_challenge_queue_contract_v3
-            ),
-        )
-    )
-
-
-async def _build_trust_challenge_request_payload_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    reason_code: str,
-    reason: str | None,
-    requested_by: str | None,
-    auto_accept: bool,
-    trust_challenge_common_dependencies: dict[str, Any],
-    upsert_audit_alert: Callable[..., Any],
-    sync_audit_alert_to_facts: Callable[..., Awaitable[FactAuditAlert]],
-    run_trust_challenge_guard: Callable[
-        [Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]
-    ],
-) -> dict[str, Any]:
-    return await run_trust_challenge_guard(
-        build_trust_challenge_request_payload_v3(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            reason_code=reason_code,
-            reason=reason,
-            requested_by=requested_by,
-            auto_accept=auto_accept,
-            **trust_challenge_common_dependencies,
-            new_challenge_id=build_trust_challenge_id_for_runtime,
-            upsert_audit_alert=upsert_audit_alert,
-            sync_audit_alert_to_facts=sync_audit_alert_to_facts,
-            trust_challenge_state_requested=TRUST_CHALLENGE_STATE_REQUESTED,
-        )
-    )
-
-
-async def _build_trust_challenge_decision_payload_for_runtime(
-    *,
-    case_id: int,
-    challenge_id: str,
-    dispatch_type: str,
-    decision: str,
-    actor: str | None,
-    reason: str | None,
-    trust_challenge_common_dependencies: dict[str, Any],
-    workflow_mark_completed: Callable[..., Awaitable[None]],
-    workflow_mark_draw_pending_vote: Callable[..., Awaitable[Any]],
-    resolve_open_alerts_for_review: Callable[..., Awaitable[list[str]]],
-    run_trust_challenge_guard: Callable[
-        [Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]
-    ],
-) -> dict[str, Any]:
-    return await run_trust_challenge_guard(
-        build_trust_challenge_decision_payload_v3(
-            case_id=case_id,
-            challenge_id=challenge_id,
-            dispatch_type=dispatch_type,
-            decision=decision,
-            actor=actor,
-            reason=reason,
-            **trust_challenge_common_dependencies,
-            workflow_mark_completed=workflow_mark_completed,
-            workflow_mark_draw_pending_vote=workflow_mark_draw_pending_vote,
-            resolve_open_alerts_for_review=resolve_open_alerts_for_review,
-            trust_challenge_state_closed=TRUST_CHALLENGE_STATE_CLOSED,
-            trust_challenge_state_verdict_upheld=TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
-            trust_challenge_state_verdict_overturned=(
-                TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED
-            ),
-            trust_challenge_state_draw_after_review=(
-                TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW
-            ),
-            workflow_transition_error_cls=WorkflowTransitionError,
-        )
-    )
-
-
-async def _build_validated_trust_item_payload_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    item_key: str,
-    validate_contract: Callable[[dict[str, Any]], None],
-    violation_code: str,
-    build_trust_phasea_bundle: Callable[..., Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    bundle = await build_trust_phasea_bundle(
-        case_id=case_id,
-        dispatch_type=dispatch_type,
-    )
-    return _run_trust_read_guard_sync(
-        build_validated_trust_item_route_payload_v3,
-        case_id=case_id,
-        bundle=bundle,
-        item_key=item_key,
-        validate_contract=validate_contract,
-        violation_code=violation_code,
-    )
-
-
-async def _build_trust_audit_anchor_payload_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    include_payload: bool,
-    build_trust_phasea_bundle: Callable[..., Awaitable[dict[str, Any]]],
-    build_audit_anchor_export: Callable[..., dict[str, Any]],
-    validate_contract: Callable[[dict[str, Any]], None],
-    violation_code: str,
-) -> dict[str, Any]:
-    bundle = await build_trust_phasea_bundle(
-        case_id=case_id,
-        dispatch_type=dispatch_type,
-    )
-    return _run_trust_read_guard_sync(
-        build_trust_audit_anchor_route_payload_v3,
-        case_id=case_id,
-        bundle=bundle,
-        include_payload=include_payload,
-        build_audit_anchor_export=build_audit_anchor_export,
-        validate_contract=validate_contract,
-        violation_code=violation_code,
-    )
-
-
-async def _build_trust_public_verify_payload_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    build_trust_phasea_bundle: Callable[..., Awaitable[dict[str, Any]]],
-    build_audit_anchor_export: Callable[..., dict[str, Any]],
-    build_public_verify_payload: Callable[..., dict[str, Any]],
-    validate_contract: Callable[[dict[str, Any]], None],
-    violation_code: str,
-) -> dict[str, Any]:
-    bundle = await build_trust_phasea_bundle(
-        case_id=case_id,
-        dispatch_type=dispatch_type,
-    )
-    return _run_trust_read_guard_sync(
-        build_trust_public_verify_bundle_payload_v3,
-        case_id=case_id,
-        bundle=bundle,
-        build_audit_anchor_export=build_audit_anchor_export,
-        build_public_verify_payload=build_public_verify_payload,
-        validate_contract=validate_contract,
-        violation_code=violation_code,
-    )
-
-
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
     judge_core = JudgeCoreOrchestrator(
@@ -2788,12 +2211,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         workflow_list_jobs=_workflow_list_jobs,
     )
     _resolve_report_context_for_case = partial(
-        _resolve_report_context_for_case_for_runtime,
+        resolve_report_context_for_case_for_runtime,
         get_dispatch_receipt=_get_dispatch_receipt,
         run_trust_read_guard=_run_trust_read_guard,
     )
     _build_trust_phasea_bundle = partial(
-        _build_trust_phasea_bundle_for_runtime,
+        build_trust_phasea_bundle_for_runtime,
         get_dispatch_receipt=_get_dispatch_receipt,
         get_workflow_job=_workflow_get_job,
         list_workflow_events=_workflow_list_events,
@@ -2803,12 +2226,56 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         run_trust_read_guard=_run_trust_read_guard,
     )
     _transition_judge_alert_status = partial(
-        _transition_judge_alert_status_for_runtime,
+        transition_judge_alert_status_for_runtime,
         transition_audit_alert=runtime.trace_store.transition_audit_alert,
         sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
         facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
         serialize_alert_item=serialize_alert_item_v3,
         run_review_route_guard=_run_review_route_guard,
+    )
+    build_review_cases_list_payload = partial(
+        build_review_cases_list_payload_for_runtime,
+        normalize_workflow_status=_normalize_workflow_status,
+        workflow_statuses=WORKFLOW_STATUSES,
+        review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
+        review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
+        case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
+        trust_challenge_review_state_values=TRUST_CHALLENGE_REVIEW_STATE_VALUES,
+        trust_challenge_priority_level_values=TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES,
+        review_case_sort_fields=REVIEW_CASE_SORT_FIELDS,
+        trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
+    )
+    build_alert_ops_view_payload = partial(
+        build_alert_ops_view_payload_for_runtime,
+        ops_registry_alert_types=OPS_REGISTRY_ALERT_TYPES,
+        ops_alert_status_values=OPS_ALERT_STATUS_VALUES,
+        ops_alert_delivery_status_values=OPS_ALERT_DELIVERY_STATUS_VALUES,
+        ops_alert_fields_mode_values=OPS_ALERT_FIELDS_MODE_VALUES,
+    )
+    build_trust_challenge_ops_queue_payload = partial(
+        build_trust_challenge_ops_queue_payload_for_runtime,
+        normalize_workflow_status=_normalize_workflow_status,
+        workflow_statuses=WORKFLOW_STATUSES,
+        case_fairness_challenge_states=CASE_FAIRNESS_CHALLENGE_STATES,
+        trust_challenge_review_state_values=TRUST_CHALLENGE_REVIEW_STATE_VALUES,
+        trust_challenge_priority_level_values=TRUST_CHALLENGE_PRIORITY_LEVEL_VALUES,
+        trust_challenge_sla_bucket_values=TRUST_CHALLENGE_SLA_BUCKET_VALUES,
+        trust_challenge_sort_fields=TRUST_CHALLENGE_SORT_FIELDS,
+        trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
+    )
+    build_trust_challenge_request_payload = partial(
+        build_trust_challenge_request_payload_for_runtime,
+        trust_challenge_state_requested=TRUST_CHALLENGE_STATE_REQUESTED,
+    )
+    build_trust_challenge_decision_payload = partial(
+        build_trust_challenge_decision_payload_for_runtime,
+        trust_challenge_state_closed=TRUST_CHALLENGE_STATE_CLOSED,
+        trust_challenge_state_verdict_upheld=TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
+        trust_challenge_state_verdict_overturned=(
+            TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED
+        ),
+        trust_challenge_state_draw_after_review=TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+        workflow_transition_error_cls=WorkflowTransitionError,
     )
     serialize_policy_profile_with_domain_family = partial(
         serialize_policy_profile_with_domain_family_for_runtime,
@@ -3175,22 +2642,22 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             build_validated_trust_item_payload=(
-                _build_validated_trust_item_payload_for_runtime
+                build_validated_trust_item_payload_for_runtime
             ),
             build_trust_challenge_ops_queue_payload=(
-                _build_trust_challenge_ops_queue_payload_for_runtime
+                build_trust_challenge_ops_queue_payload
             ),
             build_trust_challenge_request_payload=(
-                _build_trust_challenge_request_payload_for_runtime
+                build_trust_challenge_request_payload
             ),
             build_trust_challenge_decision_payload=(
-                _build_trust_challenge_decision_payload_for_runtime
+                build_trust_challenge_decision_payload
             ),
             build_trust_audit_anchor_payload=(
-                _build_trust_audit_anchor_payload_for_runtime
+                build_trust_audit_anchor_payload_for_runtime
             ),
             build_trust_public_verify_payload=(
-                _build_trust_public_verify_payload_for_runtime
+                build_trust_public_verify_payload_for_runtime
             ),
             run_trust_read_guard=_run_trust_read_guard,
             build_trust_phasea_bundle=_build_trust_phasea_bundle,
@@ -3308,12 +2775,8 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             await_payload_or_raise_http_422_404=(
                 await_payload_or_raise_http_422_404_for_runtime
             ),
-            build_review_cases_list_payload=(
-                _build_review_cases_list_payload_for_runtime
-            ),
-            build_review_case_detail_payload=(
-                _build_review_case_detail_payload_for_runtime
-            ),
+            build_review_cases_list_payload=build_review_cases_list_payload,
+            build_review_case_detail_payload=build_review_case_detail_payload_for_runtime,
             run_review_route_guard=_run_review_route_guard,
             workflow_get_job=_workflow_get_job,
             workflow_list_jobs=_workflow_list_jobs,
@@ -3400,10 +2863,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             build_payload_or_raise_http_404=(
                 build_payload_or_raise_http_404_for_runtime
             ),
-            build_case_alerts_payload=_build_case_alerts_payload_for_runtime,
+            build_case_alerts_payload=build_case_alerts_payload_for_runtime,
             transition_judge_alert_status=_transition_judge_alert_status,
-            build_alert_ops_view_payload=_build_alert_ops_view_payload_for_runtime,
-            build_alert_outbox_payload=_build_alert_outbox_payload_for_runtime,
+            build_alert_ops_view_payload=build_alert_ops_view_payload,
+            build_alert_outbox_payload=build_alert_outbox_payload_for_runtime,
             list_audit_alerts=_list_audit_alerts,
             list_alert_outbox=runtime.trace_store.list_alert_outbox,
             mark_alert_outbox_delivery=runtime.trace_store.mark_alert_outbox_delivery,
