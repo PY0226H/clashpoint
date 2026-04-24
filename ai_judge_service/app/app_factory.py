@@ -249,55 +249,16 @@ from .applications.judge_command_routes import (
     attach_policy_trace_snapshot as attach_policy_trace_snapshot_v3,
 )
 from .applications.judge_command_routes import (
-    build_blindization_rejection_route_payload as build_blindization_rejection_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_case_create_route_payload as build_case_create_route_payload_v3,
-)
-from .applications.judge_command_routes import (
     build_dispatch_meta_from_raw as build_dispatch_meta_from_raw_v3,
 )
 from .applications.judge_command_routes import (
     build_error_contract as build_error_contract_v3,
 )
 from .applications.judge_command_routes import (
-    build_failed_callback_payload as build_failed_callback_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_final_contract_blocked_route_payload as build_final_contract_blocked_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_final_dispatch_callback_delivery_route_payload as build_final_dispatch_callback_delivery_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_final_dispatch_callback_result_route_payload as build_final_dispatch_callback_result_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_final_dispatch_preflight_route_payload as build_final_dispatch_preflight_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_final_dispatch_report_materialization_route_payload as build_final_dispatch_report_materialization_route_payload_v3,
-)
-from .applications.judge_command_routes import (
     build_final_report_payload_for_dispatch as build_final_report_payload_for_dispatch_v3,
 )
 from .applications.judge_command_routes import (
-    build_phase_dispatch_callback_delivery_route_payload as build_phase_dispatch_callback_delivery_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_phase_dispatch_callback_result_route_payload as build_phase_dispatch_callback_result_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_phase_dispatch_preflight_route_payload as build_phase_dispatch_preflight_route_payload_v3,
-)
-from .applications.judge_command_routes import (
-    build_phase_dispatch_report_materialization_route_payload as build_phase_dispatch_report_materialization_route_payload_v3,
-)
-from .applications.judge_command_routes import (
     build_receipt_dims_from_raw as build_receipt_dims_from_raw_v3,
-)
-from .applications.judge_command_routes import (
-    build_workflow_job as build_workflow_job_v3,
 )
 from .applications.judge_command_routes import (
     extract_optional_bool as extract_optional_bool_v3,
@@ -313,9 +274,6 @@ from .applications.judge_command_routes import (
 )
 from .applications.judge_command_routes import (
     extract_optional_str as extract_optional_str_v3,
-)
-from .applications.judge_command_routes import (
-    find_sensitive_key_hits as find_sensitive_key_hits_v3,
 )
 from .applications.judge_command_routes import (
     invoke_callback_with_retry as invoke_callback_with_retry_v3,
@@ -336,9 +294,6 @@ from .applications.judge_command_routes import (
     resolve_prompt_profile_or_raise as resolve_prompt_profile_or_raise_v3,
 )
 from .applications.judge_command_routes import (
-    resolve_report_callback_fn_for_dispatch as resolve_report_callback_fn_for_dispatch_v3,
-)
-from .applications.judge_command_routes import (
     resolve_tool_profile_or_raise as resolve_tool_profile_or_raise_v3,
 )
 from .applications.judge_command_routes import (
@@ -355,39 +310,6 @@ from .applications.judge_command_routes import (
 )
 from .applications.judge_command_routes import (
     validate_phase_dispatch_request as validate_phase_dispatch_request_v3,
-)
-from .applications.judge_command_routes import (
-    with_error_contract as with_error_contract_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    CALLBACK_STATUS_FAILED_CALLBACK_FAILED as CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
-)
-from .applications.judge_dispatch_runtime import (
-    CALLBACK_STATUS_FAILED_REPORTED as CALLBACK_STATUS_FAILED_REPORTED_V3,
-)
-from .applications.judge_dispatch_runtime import (
-    CALLBACK_STATUS_REPORTED as CALLBACK_STATUS_REPORTED_V3,
-)
-from .applications.judge_dispatch_runtime import (
-    build_final_dispatch_accepted_response as build_final_dispatch_accepted_response_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    build_final_workflow_register_payload as build_final_workflow_register_payload_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    build_final_workflow_reported_payload as build_final_workflow_reported_payload_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    build_phase_dispatch_accepted_response as build_phase_dispatch_accepted_response_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    build_phase_workflow_register_payload as build_phase_workflow_register_payload_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    build_phase_workflow_reported_payload as build_phase_workflow_reported_payload_v3,
-)
-from .applications.judge_dispatch_runtime import (
-    deliver_report_callback_with_failed_fallback as deliver_report_callback_with_failed_fallback_v3,
 )
 from .applications.judge_trace_replay_routes import (
     ReplayContextDependencyPack as ReplayContextDependencyPack_v3,
@@ -436,15 +358,6 @@ from .applications.judge_trace_replay_routes import (
 )
 from .applications.judge_trace_replay_routes import (
     resolve_replay_trace_id as resolve_replay_trace_id_v3,
-)
-from .applications.judge_trace_summary import (
-    build_trace_report_summary as build_trace_report_summary_v3,
-)
-from .applications.judge_workflow_roles import (
-    build_final_judge_workflow_payload as build_final_judge_workflow_payload_v3,
-)
-from .applications.judge_workflow_roles import (
-    build_phase_judge_workflow_payload as build_phase_judge_workflow_payload_v3,
 )
 from .applications.ops_read_model_pack import (
     build_ops_read_model_pack_adaptive_summary,
@@ -607,6 +520,10 @@ from .applications.review_queue_contract import (
 from .applications.review_queue_contract import (
     validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
 )
+from .applications.route_group_judge_command import (
+    JudgeCommandRouteDependencies,
+    register_judge_command_routes,
+)
 from .applications.route_group_registry import register_registry_routes
 from .applications.trust_audit_anchor_contract import (
     validate_trust_audit_anchor_contract as validate_trust_audit_anchor_contract_v3,
@@ -742,7 +659,6 @@ from .domain.facts import (
 )
 from .domain.workflow import WORKFLOW_STATUSES, WorkflowJob
 from .models import (
-    CaseCreateRequest,
     FinalDispatchRequest,
     NpcCoachAdviceRequest,
     PhaseDispatchRequest,
@@ -4889,345 +4805,54 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
     )
 
-    @app.post("/internal/judge/cases")
-    async def create_judge_case(
-        request: Request,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        raw_payload = await _read_json_object_or_raise_422(request=request)
-        return await _run_judge_command_route_guard(
-            build_case_create_route_payload_v3(
-                raw_payload=raw_payload,
-                case_create_model_validate=CaseCreateRequest.model_validate,
-                resolve_idempotency_or_raise=resolve_idempotency_or_raise,
-                ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
-                resolve_policy_profile=resolve_policy_profile,
-                resolve_prompt_profile=resolve_prompt_profile,
-                resolve_tool_profile=resolve_tool_profile,
-                workflow_get_job=_workflow_get_job,
-                build_workflow_job=build_workflow_job_v3,
-                workflow_register_and_mark_case_built=_workflow_register_and_mark_case_built,
-                serialize_workflow_job=_serialize_workflow_job,
-                trace_register_start=runtime.trace_store.register_start,
-                trace_register_success=runtime.trace_store.register_success,
-                build_trace_report_summary=build_trace_report_summary_v3,
-                set_idempotency_success=runtime.trace_store.set_idempotency_success,
-                idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
-            )
-        )
-
-    @app.post("/internal/judge/v3/phase/dispatch")
-    async def dispatch_judge_phase(
-        request: Request,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        raw_payload = await _read_json_object_or_raise_422(request=request)
-        sensitive_hits = find_sensitive_key_hits_v3(raw_payload)
-        if sensitive_hits:
-            await _run_judge_command_route_guard(
-                build_blindization_rejection_route_payload_v3(
-                    dispatch_type="phase",
-                    raw_payload=raw_payload,
-                    sensitive_hits=sensitive_hits,
-                    extract_dispatch_meta_from_raw=extract_dispatch_meta_from_raw,
-                    extract_receipt_dims_from_raw=extract_receipt_dims_from_raw,
-                    build_workflow_job=build_workflow_job_v3,
-                    trace_register_start=runtime.trace_store.register_start,
-                    workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
-                    build_failed_callback_payload=build_failed_callback_payload_v3,
-                    invoke_failed_callback_with_retry=(
-                        invoke_phase_failed_callback_with_retry
-                    ),
-                    with_error_contract=with_error_contract_v3,
-                    persist_dispatch_receipt=_persist_dispatch_receipt,
-                    trace_register_failure=runtime.trace_store.register_failure,
-                    workflow_mark_failed=_workflow_mark_failed,
-                )
-            )
-        preflight = await _run_judge_command_route_guard(
-            build_phase_dispatch_preflight_route_payload_v3(
-                raw_payload=raw_payload,
-                phase_dispatch_model_validate=PhaseDispatchRequest.model_validate,
-                validate_phase_dispatch_request=validate_phase_dispatch_request_v3,
-                resolve_idempotency_or_raise=resolve_idempotency_or_raise,
-                ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
-                resolve_policy_profile=resolve_policy_profile,
-                resolve_prompt_profile=resolve_prompt_profile,
-                resolve_tool_profile=resolve_tool_profile,
-                build_phase_dispatch_accepted_response=build_phase_dispatch_accepted_response_v3,
-                build_workflow_job=build_workflow_job_v3,
-                trace_register_start=runtime.trace_store.register_start,
-                persist_dispatch_receipt=_persist_dispatch_receipt,
-                workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
-                build_phase_workflow_register_payload=build_phase_workflow_register_payload_v3,
-            )
-        )
-        replayed_response = preflight.get("replayedResponse")
-        if isinstance(replayed_response, dict):
-            return replayed_response
-        parsed = cast(PhaseDispatchRequest, preflight["parsed"])
-        response = cast(dict[str, Any], preflight["response"])
-        request_payload = cast(dict[str, Any], preflight["requestPayload"])
-        policy_profile = preflight["policyProfile"]
-        prompt_profile = preflight["promptProfile"]
-        tool_profile = preflight["toolProfile"]
-
-        report_materialization = await _run_judge_command_route_guard(
-            build_phase_dispatch_report_materialization_route_payload_v3(
-                parsed=parsed,
-                request_payload=request_payload,
-                policy_profile=policy_profile,
-                prompt_profile=prompt_profile,
-                tool_profile=tool_profile,
-                build_phase_report_payload=build_phase_report_payload,
-                attach_judge_agent_runtime_trace=attach_judge_agent_runtime_trace,
-                attach_policy_trace_snapshot=attach_policy_trace_snapshot,
-                attach_report_attestation=attach_report_attestation_v3,
-                upsert_claim_ledger_record=_upsert_claim_ledger_record,
-                build_phase_judge_workflow_payload=build_phase_judge_workflow_payload_v3,
-            )
-        )
-        phase_report_payload = cast(dict[str, Any], report_materialization["reportPayload"])
-        phase_judge_workflow_payload = cast(
-            dict[str, Any],
-            report_materialization["phaseJudgeWorkflowPayload"],
-        )
-        phase_callback_outcome = await _run_judge_command_route_guard(
-            build_phase_dispatch_callback_delivery_route_payload_v3(
-                parsed=parsed,
-                report_payload=phase_report_payload,
-                deliver_report_callback_with_failed_fallback=deliver_report_callback_with_failed_fallback_v3,
-                report_callback_fn=cast(
-                    CallbackReportFn,
-                    resolve_report_callback_fn_for_dispatch_v3(
-                        dispatch_type="phase",
-                        callback_phase_report_fn=runtime.callback_phase_report_fn,
-                        callback_final_report_fn=runtime.callback_final_report_fn,
-                    ),
-                ),
-                failed_callback_fn=cast(
-                    CallbackReportFn,
-                    resolve_failed_callback_fn_for_dispatch_v3(
-                        dispatch_type="phase",
-                        callback_phase_failed_fn=runtime.callback_phase_failed_fn,
-                        callback_final_failed_fn=runtime.callback_final_failed_fn,
-                    ),
-                ),
-                invoke_with_retry=invoke_callback_with_retry,
-                build_failed_callback_payload=build_failed_callback_payload_v3,
-            )
-        )
-
-        return await _run_judge_command_route_guard(
-            build_phase_dispatch_callback_result_route_payload_v3(
-                parsed=parsed,
-                response=response,
-                request_payload=request_payload,
-                report_payload=phase_report_payload,
-                callback_outcome=phase_callback_outcome,
-                callback_status_reported=CALLBACK_STATUS_REPORTED_V3,
-                callback_status_failed_reported=CALLBACK_STATUS_FAILED_REPORTED_V3,
-                callback_status_failed_callback_failed=CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
-                with_error_contract=with_error_contract_v3,
-                persist_dispatch_receipt=_persist_dispatch_receipt,
-                trace_register_failure=runtime.trace_store.register_failure,
-                trace_register_success=runtime.trace_store.register_success,
-                workflow_mark_failed=_workflow_mark_failed,
-                workflow_mark_completed=_workflow_mark_completed,
-                build_phase_workflow_reported_payload=build_phase_workflow_reported_payload_v3,
-                build_trace_report_summary=build_trace_report_summary_v3,
-                clear_idempotency=runtime.trace_store.clear_idempotency,
-                set_idempotency_success=runtime.trace_store.set_idempotency_success,
-                idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
-                phase_judge_workflow_payload=phase_judge_workflow_payload,
-            )
-        )
-
-    @app.post("/internal/judge/v3/final/dispatch")
-    async def dispatch_judge_final(
-        request: Request,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        raw_payload = await _read_json_object_or_raise_422(request=request)
-        sensitive_hits = find_sensitive_key_hits_v3(raw_payload)
-        if sensitive_hits:
-            await _run_judge_command_route_guard(
-                build_blindization_rejection_route_payload_v3(
-                    dispatch_type="final",
-                    raw_payload=raw_payload,
-                    sensitive_hits=sensitive_hits,
-                    extract_dispatch_meta_from_raw=extract_dispatch_meta_from_raw,
-                    extract_receipt_dims_from_raw=extract_receipt_dims_from_raw,
-                    build_workflow_job=build_workflow_job_v3,
-                    trace_register_start=runtime.trace_store.register_start,
-                    workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
-                    build_failed_callback_payload=build_failed_callback_payload_v3,
-                    invoke_failed_callback_with_retry=(
-                        invoke_final_failed_callback_with_retry
-                    ),
-                    with_error_contract=with_error_contract_v3,
-                    persist_dispatch_receipt=_persist_dispatch_receipt,
-                    trace_register_failure=runtime.trace_store.register_failure,
-                    workflow_mark_failed=_workflow_mark_failed,
-                )
-            )
-        preflight = await _run_judge_command_route_guard(
-            build_final_dispatch_preflight_route_payload_v3(
-                raw_payload=raw_payload,
-                final_dispatch_model_validate=FinalDispatchRequest.model_validate,
-                validate_final_dispatch_request=validate_final_dispatch_request_v3,
-                resolve_idempotency_or_raise=resolve_idempotency_or_raise,
-                ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
-                resolve_policy_profile=resolve_policy_profile,
-                resolve_prompt_profile=resolve_prompt_profile,
-                resolve_tool_profile=resolve_tool_profile,
-                build_final_dispatch_accepted_response=build_final_dispatch_accepted_response_v3,
-                build_workflow_job=build_workflow_job_v3,
-                trace_register_start=runtime.trace_store.register_start,
-                persist_dispatch_receipt=_persist_dispatch_receipt,
-                workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
-                build_final_workflow_register_payload=build_final_workflow_register_payload_v3,
-            )
-        )
-        replayed_response = preflight.get("replayedResponse")
-        if isinstance(replayed_response, dict):
-            return replayed_response
-        parsed = cast(FinalDispatchRequest, preflight["parsed"])
-        response = cast(dict[str, Any], preflight["response"])
-        request_payload = cast(dict[str, Any], preflight["requestPayload"])
-        policy_profile = preflight["policyProfile"]
-        prompt_profile = preflight["promptProfile"]
-        tool_profile = preflight["toolProfile"]
-
-        report_materialization = await _run_judge_command_route_guard(
-            build_final_dispatch_report_materialization_route_payload_v3(
-                parsed=parsed,
-                request_payload=request_payload,
-                policy_profile=policy_profile,
-                prompt_profile=prompt_profile,
-                tool_profile=tool_profile,
-                list_dispatch_receipts=_list_dispatch_receipts,
-                build_final_report_payload=build_final_report_payload,
-                resolve_panel_runtime_profiles=resolve_panel_runtime_profiles,
-                attach_judge_agent_runtime_trace=attach_judge_agent_runtime_trace,
-                attach_policy_trace_snapshot=attach_policy_trace_snapshot,
-                attach_report_attestation=attach_report_attestation_v3,
-                upsert_claim_ledger_record=_upsert_claim_ledger_record,
-                build_final_judge_workflow_payload=build_final_judge_workflow_payload_v3,
-                validate_final_report_payload_contract=validate_final_report_payload_contract_v3_final,
-            )
-        )
-        final_report_payload = cast(dict[str, Any], report_materialization["reportPayload"])
-        final_judge_workflow_payload = cast(
-            dict[str, Any],
-            report_materialization["finalJudgeWorkflowPayload"],
-        )
-        contract_missing_fields = cast(
-            list[str],
-            report_materialization["contractMissingFields"],
-        )
-        if contract_missing_fields:
-            await _run_judge_command_route_guard(
-                build_final_contract_blocked_route_payload_v3(
-                    parsed=parsed,
-                    response=response,
-                    request_payload=request_payload,
-                    report_payload=final_report_payload,
-                    contract_missing_fields=contract_missing_fields,
-                    upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
-                    sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
-                    build_failed_callback_payload=build_failed_callback_payload_v3,
-                    invoke_failed_callback_with_retry=(
-                        invoke_final_failed_callback_with_retry
-                    ),
-                    with_error_contract=with_error_contract_v3,
-                    persist_dispatch_receipt=_persist_dispatch_receipt,
-                    trace_register_failure=runtime.trace_store.register_failure,
-                    workflow_mark_failed=_workflow_mark_failed,
-                    clear_idempotency=runtime.trace_store.clear_idempotency,
-                )
-            )
-
-        final_callback_outcome = await _run_judge_command_route_guard(
-            build_final_dispatch_callback_delivery_route_payload_v3(
-                parsed=parsed,
-                report_payload=final_report_payload,
-                deliver_report_callback_with_failed_fallback=deliver_report_callback_with_failed_fallback_v3,
-                report_callback_fn=cast(
-                    CallbackReportFn,
-                    resolve_report_callback_fn_for_dispatch_v3(
-                        dispatch_type="final",
-                        callback_phase_report_fn=runtime.callback_phase_report_fn,
-                        callback_final_report_fn=runtime.callback_final_report_fn,
-                    ),
-                ),
-                failed_callback_fn=cast(
-                    CallbackReportFn,
-                    resolve_failed_callback_fn_for_dispatch_v3(
-                        dispatch_type="final",
-                        callback_phase_failed_fn=runtime.callback_phase_failed_fn,
-                        callback_final_failed_fn=runtime.callback_final_failed_fn,
-                    ),
-                ),
-                invoke_with_retry=invoke_callback_with_retry,
-                build_failed_callback_payload=build_failed_callback_payload_v3,
-            )
-        )
-
-        return await _run_judge_command_route_guard(
-            build_final_dispatch_callback_result_route_payload_v3(
-                parsed=parsed,
-                response=response,
-                request_payload=request_payload,
-                report_payload=final_report_payload,
-                callback_outcome=final_callback_outcome,
-                callback_status_reported=CALLBACK_STATUS_REPORTED_V3,
-                callback_status_failed_reported=CALLBACK_STATUS_FAILED_REPORTED_V3,
-                callback_status_failed_callback_failed=CALLBACK_STATUS_FAILED_CALLBACK_FAILED_V3,
-                with_error_contract=with_error_contract_v3,
-                persist_dispatch_receipt=_persist_dispatch_receipt,
-                trace_register_failure=runtime.trace_store.register_failure,
-                trace_register_success=runtime.trace_store.register_success,
-                workflow_mark_failed=_workflow_mark_failed,
-                workflow_mark_review_required=_workflow_mark_review_required,
-                workflow_mark_completed=_workflow_mark_completed,
-                build_final_workflow_reported_payload=build_final_workflow_reported_payload_v3,
-                build_trace_report_summary=build_trace_report_summary_v3,
-                clear_idempotency=runtime.trace_store.clear_idempotency,
-                set_idempotency_success=runtime.trace_store.set_idempotency_success,
-                idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
-                final_judge_workflow_payload=final_judge_workflow_payload,
-            )
-        )
-
-    @app.get("/internal/judge/v3/phase/cases/{case_id}/receipt")
-    async def get_phase_dispatch_receipt(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _build_dispatch_receipt_payload_for_runtime(
-            case_id=case_id,
-            dispatch_type="phase",
-            not_found_detail="phase_dispatch_receipt_not_found",
+    register_judge_command_routes(
+        app=app,
+        deps=JudgeCommandRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            read_json_object_or_raise_422=_read_json_object_or_raise_422,
+            run_judge_command_route_guard=_run_judge_command_route_guard,
+            ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
+            resolve_idempotency_or_raise=resolve_idempotency_or_raise,
+            resolve_policy_profile=resolve_policy_profile,
+            resolve_prompt_profile=resolve_prompt_profile,
+            resolve_tool_profile=resolve_tool_profile,
+            workflow_get_job=_workflow_get_job,
+            workflow_register_and_mark_case_built=(
+                _workflow_register_and_mark_case_built
+            ),
+            serialize_workflow_job=_serialize_workflow_job,
+            extract_dispatch_meta_from_raw=extract_dispatch_meta_from_raw,
+            extract_receipt_dims_from_raw=extract_receipt_dims_from_raw,
+            workflow_register_and_mark_blinded=_workflow_register_and_mark_blinded,
+            invoke_phase_failed_callback_with_retry=(
+                invoke_phase_failed_callback_with_retry
+            ),
+            invoke_final_failed_callback_with_retry=(
+                invoke_final_failed_callback_with_retry
+            ),
+            persist_dispatch_receipt=_persist_dispatch_receipt,
+            workflow_mark_failed=_workflow_mark_failed,
+            build_phase_report_payload=build_phase_report_payload,
+            build_final_report_payload=build_final_report_payload,
+            attach_judge_agent_runtime_trace=attach_judge_agent_runtime_trace,
+            attach_policy_trace_snapshot=attach_policy_trace_snapshot,
+            upsert_claim_ledger_record=_upsert_claim_ledger_record,
+            invoke_callback_with_retry=invoke_callback_with_retry,
+            workflow_mark_completed=_workflow_mark_completed,
+            workflow_mark_review_required=_workflow_mark_review_required,
+            list_dispatch_receipts=_list_dispatch_receipts,
+            resolve_panel_runtime_profiles=resolve_panel_runtime_profiles,
+            sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
             get_dispatch_receipt=_get_dispatch_receipt,
-        )
-
-    @app.get("/internal/judge/v3/final/cases/{case_id}/receipt")
-    async def get_final_dispatch_receipt(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _build_dispatch_receipt_payload_for_runtime(
-            case_id=case_id,
-            dispatch_type="final",
-            not_found_detail="final_dispatch_receipt_not_found",
-            get_dispatch_receipt=_get_dispatch_receipt,
-        )
+            build_dispatch_receipt_payload=_build_dispatch_receipt_payload_for_runtime,
+            validate_final_report_payload_contract=(
+                validate_final_report_payload_contract_v3_final
+            ),
+            validate_phase_dispatch_request=validate_phase_dispatch_request_v3,
+            validate_final_dispatch_request=validate_final_dispatch_request_v3,
+        ),
+    )
 
     @app.get("/internal/judge/cases/{case_id}")
     async def get_judge_case(
