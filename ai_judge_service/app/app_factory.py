@@ -23,9 +23,6 @@ from .applications import (
     build_workflow_runtime,
 )
 from .applications import (
-    attach_report_attestation as attach_report_attestation_v3,
-)
-from .applications import (
     build_audit_anchor_export as build_audit_anchor_export_v3,
 )
 from .applications import (
@@ -63,6 +60,11 @@ from .applications import (
 )
 from .applications.assistant_agent_routes import (
     AssistantAgentRouteError as AssistantAgentRouteError_v3,
+)
+from .applications.bootstrap_replay_dependencies import build_replay_dependency_packs
+from .applications.bootstrap_route_dependencies import (
+    build_registry_release_gate_dependencies,
+    build_trust_challenge_common_dependencies,
 )
 from .applications.case_courtroom_views import (
     build_case_evidence_view as build_case_evidence_view_v3,
@@ -162,12 +164,6 @@ from .applications.judge_command_routes import (
     resolve_tool_profile_or_raise as resolve_tool_profile_or_raise_v3,
 )
 from .applications.judge_command_routes import (
-    resolve_winner as resolve_winner_v3,
-)
-from .applications.judge_command_routes import (
-    safe_float as safe_float_v3,
-)
-from .applications.judge_command_routes import (
     save_dispatch_receipt as save_dispatch_receipt_v3,
 )
 from .applications.judge_command_routes import (
@@ -177,16 +173,7 @@ from .applications.judge_command_routes import (
     validate_phase_dispatch_request as validate_phase_dispatch_request_v3,
 )
 from .applications.judge_trace_replay_routes import (
-    ReplayContextDependencyPack as ReplayContextDependencyPack_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    ReplayFinalizeDependencyPack as ReplayFinalizeDependencyPack_v3,
-)
-from .applications.judge_trace_replay_routes import (
     ReplayReadRouteError as ReplayReadRouteError_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    ReplayReportDependencyPack as ReplayReportDependencyPack_v3,
 )
 from .applications.judge_trace_replay_routes import (
     build_replay_report_route_payload as build_replay_report_route_payload_v3,
@@ -196,21 +183,6 @@ from .applications.judge_trace_replay_routes import (
 )
 from .applications.judge_trace_replay_routes import (
     build_replay_reports_route_payload as build_replay_reports_route_payload_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    build_replay_route_payload as build_replay_route_payload_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    choose_replay_dispatch_receipt as choose_replay_dispatch_receipt_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    extract_replay_request_snapshot as extract_replay_request_snapshot_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    normalize_replay_dispatch_type as normalize_replay_dispatch_type_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    resolve_replay_trace_id as resolve_replay_trace_id_v3,
 )
 from .applications.ops_read_model_pack import (
     build_ops_read_model_pack_adaptive_summary,
@@ -380,6 +352,7 @@ from .applications.route_group_fairness import (
     FairnessRouteDependencies,
     register_fairness_routes,
 )
+from .applications.route_group_health import register_health_routes
 from .applications.route_group_judge_command import (
     JudgeCommandRouteDependencies,
     register_judge_command_routes,
@@ -505,7 +478,6 @@ from .callback_client import (
     callback_phase_report,
 )
 from .core.judge_core import (
-    JUDGE_CORE_STAGE_REPLAY_COMPUTED,
     JUDGE_CORE_VERSION,
     JudgeCoreOrchestrator,
 )
@@ -533,10 +505,6 @@ from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
 from .domain.workflow import WORKFLOW_STATUSES, WorkflowJob
-from .models import (
-    FinalDispatchRequest,
-    PhaseDispatchRequest,
-)
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
     Settings,
@@ -3869,54 +3837,6 @@ async def _build_trust_public_verify_payload_for_runtime(
     )
 
 
-def _build_registry_release_gate_dependencies_for_runtime(
-    *,
-    policy_registry_type: str,
-    evaluate_policy_registry_dependency_health: Callable[..., Awaitable[dict[str, Any]]],
-    emit_registry_dependency_health_alert: Callable[..., Awaitable[dict[str, Any]]],
-    resolve_registry_dependency_health_alerts: Callable[..., Awaitable[list[dict[str, Any]]]],
-    evaluate_policy_release_fairness_gate: Callable[..., Awaitable[dict[str, Any]]],
-    emit_registry_fairness_gate_alert: Callable[..., Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    return {
-        "policy_registry_type": policy_registry_type,
-        "evaluate_policy_registry_dependency_health": (
-            evaluate_policy_registry_dependency_health
-        ),
-        "emit_registry_dependency_health_alert": emit_registry_dependency_health_alert,
-        "resolve_registry_dependency_health_alerts": (
-            resolve_registry_dependency_health_alerts
-        ),
-        "evaluate_policy_release_fairness_gate": evaluate_policy_release_fairness_gate,
-        "emit_registry_fairness_gate_alert": emit_registry_fairness_gate_alert,
-    }
-
-
-def _build_trust_challenge_common_dependencies_for_runtime(
-    *,
-    resolve_report_context_for_case: Callable[..., Awaitable[dict[str, Any]]],
-    workflow_get_job: Callable[..., Awaitable[WorkflowJob | None]],
-    workflow_append_event: Callable[..., Awaitable[dict[str, Any]]],
-    workflow_mark_review_required: Callable[..., Awaitable[None]],
-    build_trust_phasea_bundle: Callable[..., Awaitable[dict[str, Any]]],
-    serialize_workflow_job: Callable[[WorkflowJob], dict[str, Any]],
-    trust_challenge_event_type: str,
-    trust_challenge_state_accepted: str,
-    trust_challenge_state_under_review: str,
-) -> dict[str, Any]:
-    return {
-        "resolve_report_context_for_case": resolve_report_context_for_case,
-        "workflow_get_job": workflow_get_job,
-        "workflow_append_event": workflow_append_event,
-        "workflow_mark_review_required": workflow_mark_review_required,
-        "build_trust_phasea_bundle": build_trust_phasea_bundle,
-        "serialize_workflow_job": serialize_workflow_job,
-        "trust_challenge_event_type": trust_challenge_event_type,
-        "trust_challenge_state_accepted": trust_challenge_state_accepted,
-        "trust_challenge_state_under_review": trust_challenge_state_under_review,
-    }
-
-
 def _build_review_case_risk_profile_for_runtime(
     *,
     workflow: WorkflowJob,
@@ -4113,74 +4033,6 @@ async def _ensure_registry_runtime_ready_for_runtime(
 ) -> None:
     await ensure_workflow_schema_ready()
     await runtime.registry_product_runtime.ensure_loaded()
-
-
-def _build_replay_dependency_packs_for_runtime(
-    *,
-    runtime: AppRuntime,
-    ensure_registry_runtime_ready: Callable[[], Awaitable[None]],
-    resolve_policy_profile: Callable[..., Any],
-    resolve_prompt_profile: Callable[..., Any],
-    resolve_tool_profile: Callable[..., Any],
-    build_final_report_payload: Callable[..., dict[str, Any]],
-    resolve_panel_runtime_profiles: Callable[..., dict[str, dict[str, Any]]],
-    build_phase_report_payload: Callable[..., Awaitable[dict[str, Any]]],
-    attach_judge_agent_runtime_trace: Callable[..., Awaitable[None]],
-    attach_policy_trace_snapshot: Callable[..., None],
-    get_dispatch_receipt: Callable[..., Awaitable[Any | None]],
-    list_dispatch_receipts: Callable[..., Awaitable[list[Any]]],
-    append_replay_record: Callable[..., Awaitable[FactReplayRecord]],
-    workflow_mark_replay: Callable[..., Awaitable[None]],
-    upsert_claim_ledger_record: Callable[..., Awaitable[FactClaimLedgerRecord | None]],
-) -> tuple[
-    ReplayContextDependencyPack_v3,
-    ReplayReportDependencyPack_v3,
-    ReplayFinalizeDependencyPack_v3,
-]:
-    context_dependencies = ReplayContextDependencyPack_v3(
-        normalize_replay_dispatch_type=normalize_replay_dispatch_type_v3,
-        get_dispatch_receipt=get_dispatch_receipt,
-        choose_replay_dispatch_receipt=choose_replay_dispatch_receipt_v3,
-        extract_replay_request_snapshot=extract_replay_request_snapshot_v3,
-        resolve_replay_trace_id=resolve_replay_trace_id_v3,
-    )
-    report_dependencies = ReplayReportDependencyPack_v3(
-        ensure_registry_runtime_ready=ensure_registry_runtime_ready,
-        final_request_model_validate=FinalDispatchRequest.model_validate,
-        phase_request_model_validate=PhaseDispatchRequest.model_validate,
-        validate_final_dispatch_request=validate_final_dispatch_request_v3,
-        validate_phase_dispatch_request=validate_phase_dispatch_request_v3,
-        resolve_policy_profile=resolve_policy_profile,
-        resolve_prompt_profile=resolve_prompt_profile,
-        resolve_tool_profile=resolve_tool_profile,
-        list_dispatch_receipts=list_dispatch_receipts,
-        build_final_report_payload=build_final_report_payload,
-        resolve_panel_runtime_profiles=resolve_panel_runtime_profiles,
-        build_phase_report_payload=build_phase_report_payload,
-        attach_judge_agent_runtime_trace=attach_judge_agent_runtime_trace,
-        attach_policy_trace_snapshot=attach_policy_trace_snapshot,
-        attach_report_attestation=attach_report_attestation_v3,
-        validate_final_report_payload_contract=validate_final_report_payload_contract_v3_final,
-        settings=runtime.settings,
-        gateway_runtime=runtime.gateway_runtime,
-    )
-    finalize_dependencies = ReplayFinalizeDependencyPack_v3(
-        provider=runtime.settings.provider,
-        get_trace=runtime.trace_store.get_trace,
-        trace_register_start=runtime.trace_store.register_start,
-        trace_mark_replay=runtime.trace_store.mark_replay,
-        append_replay_record=append_replay_record,
-        workflow_mark_replay=workflow_mark_replay,
-        upsert_claim_ledger_record=upsert_claim_ledger_record,
-        build_verdict_contract=build_verdict_contract_v3,
-        build_replay_route_payload=build_replay_route_payload_v3,
-        safe_float=safe_float_v3,
-        resolve_winner=resolve_winner_v3,
-        draw_margin=0.8,
-        judge_core_stage=JUDGE_CORE_STAGE_REPLAY_COMPUTED,
-        judge_core_version=JUDGE_CORE_VERSION,
-    )
-    return context_dependencies, report_dependencies, finalize_dependencies
 
 
 def create_app(runtime: AppRuntime) -> FastAPI:
@@ -4400,7 +4252,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         list_audit_alerts=_list_audit_alerts,
     )
     registry_release_gate_dependencies = (
-        _build_registry_release_gate_dependencies_for_runtime(
+        build_registry_release_gate_dependencies(
             policy_registry_type=REGISTRY_TYPE_POLICY,
             evaluate_policy_registry_dependency_health=(
                 evaluate_policy_registry_dependency_health
@@ -4414,7 +4266,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
     )
     trust_challenge_common_dependencies = (
-        _build_trust_challenge_common_dependencies_for_runtime(
+        build_trust_challenge_common_dependencies(
             resolve_report_context_for_case=_resolve_report_context_for_case,
             workflow_get_job=_workflow_get_job,
             workflow_append_event=_workflow_append_event,
@@ -4523,7 +4375,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         replay_context_dependencies,
         replay_report_dependencies,
         replay_finalize_dependencies,
-    ) = _build_replay_dependency_packs_for_runtime(
+    ) = build_replay_dependency_packs(
         runtime=runtime,
         ensure_registry_runtime_ready=_ensure_registry_runtime_ready,
         resolve_policy_profile=resolve_policy_profile,
@@ -4541,9 +4393,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         upsert_claim_ledger_record=_upsert_claim_ledger_record,
     )
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, bool]:
-        return {"ok": True}
+    register_health_routes(app=app)
 
     registry_route_handles = register_registry_routes(
         app=app,
