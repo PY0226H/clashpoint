@@ -323,9 +323,6 @@ from .applications.review_alert_routes import (
     build_alert_ops_view_payload as build_alert_ops_view_payload_v3,
 )
 from .applications.review_alert_routes import (
-    build_alert_outbox_delivery_payload as build_alert_outbox_delivery_payload_v3,
-)
-from .applications.review_alert_routes import (
     build_alert_outbox_route_payload as build_alert_outbox_route_payload_v3,
 )
 from .applications.review_alert_routes import (
@@ -333,9 +330,6 @@ from .applications.review_alert_routes import (
 )
 from .applications.review_alert_routes import (
     build_case_alerts_payload as build_case_alerts_payload_v3,
-)
-from .applications.review_alert_routes import (
-    build_rag_diagnostics_payload as build_rag_diagnostics_payload_v3,
 )
 from .applications.review_alert_routes import (
     build_review_case_detail_payload as build_review_case_detail_payload_v3,
@@ -369,6 +363,10 @@ from .applications.review_queue_contract import (
 )
 from .applications.review_queue_contract import (
     validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
+)
+from .applications.route_group_alert_ops import (
+    AlertOpsRouteDependencies,
+    register_alert_ops_routes,
 )
 from .applications.route_group_assistant import (
     AssistantRouteDependencies,
@@ -5043,140 +5041,29 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
     )
 
-    @app.get("/internal/judge/cases/{case_id}/alerts")
-    async def list_judge_job_alerts(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _build_case_alerts_payload_for_runtime(
-            case_id=case_id,
-            status=status,
-            limit=limit,
-            list_audit_alerts=_list_audit_alerts,
-            serialize_alert_item=serialize_alert_item_v3,
-        )
-
-    @app.post("/internal/judge/cases/{case_id}/alerts/{alert_id}/ack")
-    async def ack_judge_job_alert(
-        case_id: int,
-        alert_id: str,
-        x_ai_internal_key: str | None = Header(default=None),
-        actor: str | None = Query(default=None),
-        reason: str | None = Query(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _transition_judge_alert_status(
-            case_id=case_id,
-            alert_id=alert_id,
-            to_status="acked",
-            actor=actor,
-            reason=reason,
-        )
-
-    @app.post("/internal/judge/cases/{case_id}/alerts/{alert_id}/resolve")
-    async def resolve_judge_job_alert(
-        case_id: int,
-        alert_id: str,
-        x_ai_internal_key: str | None = Header(default=None),
-        actor: str | None = Query(default=None),
-        reason: str | None = Query(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _transition_judge_alert_status(
-            case_id=case_id,
-            alert_id=alert_id,
-            to_status="resolved",
-            actor=actor,
-            reason=reason,
-        )
-
-    @app.get("/internal/judge/alerts/ops-view")
-    async def list_judge_alert_ops_view(
-        x_ai_internal_key: str | None = Header(default=None),
-        alert_type: str | None = Query(default=None),
-        status: str | None = Query(default=None),
-        delivery_status: str | None = Query(default=None),
-        registry_type: str | None = Query(default=None),
-        policy_version: str | None = Query(default=None),
-        gate_code: str | None = Query(default=None),
-        gate_actor: str | None = Query(default=None),
-        override_applied: bool | None = Query(default=None),
-        fields_mode: str = Query(default="full"),
-        include_trend: bool = Query(default=True),
-        trend_window_minutes: int = Query(default=1440, ge=10, le=43200),
-        trend_bucket_minutes: int = Query(default=60, ge=5, le=1440),
-        offset: int = Query(default=0, ge=0, le=5000),
-        limit: int = Query(default=50, ge=1, le=500),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _await_payload_or_raise_http_422_for_runtime(
-            self_awaitable=_build_alert_ops_view_payload_for_runtime(
-                alert_type=alert_type,
-                status=status,
-                delivery_status=delivery_status,
-                registry_type=registry_type,
-                policy_version=policy_version,
-                gate_code=gate_code,
-                gate_actor=gate_actor,
-                override_applied=override_applied,
-                fields_mode=fields_mode,
-                include_trend=include_trend,
-                trend_window_minutes=trend_window_minutes,
-                trend_bucket_minutes=trend_bucket_minutes,
-                offset=offset,
-                limit=limit,
-                list_audit_alerts=_list_audit_alerts,
-                list_alert_outbox=runtime.trace_store.list_alert_outbox,
+    register_alert_ops_routes(
+        app=app,
+        deps=AlertOpsRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            await_payload_or_raise_http_422=(
+                _await_payload_or_raise_http_422_for_runtime
             ),
-        )
-
-    @app.get("/internal/judge/alerts/outbox")
-    async def list_judge_alert_outbox(
-        x_ai_internal_key: str | None = Header(default=None),
-        delivery_status: str | None = Query(default=None),
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return _build_alert_outbox_payload_for_runtime(
-            delivery_status=delivery_status,
-            limit=limit,
+            build_payload_or_raise_http_404=(
+                _build_payload_or_raise_http_404_for_runtime
+            ),
+            build_case_alerts_payload=_build_case_alerts_payload_for_runtime,
+            transition_judge_alert_status=_transition_judge_alert_status,
+            build_alert_ops_view_payload=_build_alert_ops_view_payload_for_runtime,
+            build_alert_outbox_payload=_build_alert_outbox_payload_for_runtime,
+            list_audit_alerts=_list_audit_alerts,
             list_alert_outbox=runtime.trace_store.list_alert_outbox,
-            serialize_outbox_event=serialize_outbox_event_v3,
-        )
-
-    @app.post("/internal/judge/alerts/outbox/{event_id}/delivery")
-    async def mark_judge_alert_outbox_delivery(
-        event_id: str,
-        x_ai_internal_key: str | None = Header(default=None),
-        delivery_status: str = Query(default="sent"),
-        error_message: str | None = Query(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        item = runtime.trace_store.mark_alert_outbox_delivery(
-            event_id=event_id,
-            delivery_status=delivery_status,
-            error_message=error_message,
-        )
-        return _build_payload_or_raise_http_404_for_runtime(
-            builder=build_alert_outbox_delivery_payload_v3,
-            item=item,
-            serialize_outbox_event=serialize_outbox_event_v3,
-        )
-
-    @app.get("/internal/judge/rag/diagnostics")
-    async def get_rag_diagnostics(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return _build_payload_or_raise_http_404_for_runtime(
-            builder=build_rag_diagnostics_payload_v3,
-            case_id=case_id,
+            mark_alert_outbox_delivery=runtime.trace_store.mark_alert_outbox_delivery,
             get_trace=runtime.trace_store.get_trace,
-        )
+            serialize_alert_item=serialize_alert_item_v3,
+            serialize_outbox_event=serialize_outbox_event_v3,
+        ),
+    )
 
     return app
 
