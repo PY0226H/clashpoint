@@ -5,7 +5,7 @@ import unittest
 from app.app_factory import create_app, create_runtime, require_internal_key
 from fastapi import HTTPException
 
-from tests.test_app_factory import _build_settings
+from tests.app_factory_test_helpers import build_settings as _build_settings
 
 
 class AppFactorySmokeTests(unittest.TestCase):

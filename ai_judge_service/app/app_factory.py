@@ -61,6 +61,16 @@ from .applications import (
 from .applications.assistant_agent_routes import (
     AssistantAgentRouteError as AssistantAgentRouteError_v3,
 )
+from .applications.bootstrap_case_read_helpers import (
+    build_courtroom_drilldown_bundle_view_for_runtime,
+    build_courtroom_read_model_light_summary_for_runtime,
+    build_courtroom_read_model_view_for_runtime,
+    extract_optional_datetime_for_runtime,
+)
+from .applications.bootstrap_fairness_helpers import (
+    build_case_fairness_aggregations_for_runtime,
+    build_case_fairness_item_for_runtime,
+)
 from .applications.bootstrap_replay_dependencies import build_replay_dependency_packs
 from .applications.bootstrap_route_dependencies import (
     build_registry_release_gate_dependencies,
@@ -68,15 +78,6 @@ from .applications.bootstrap_route_dependencies import (
 )
 from .applications.case_courtroom_views import (
     build_case_evidence_view as build_case_evidence_view_v3,
-)
-from .applications.case_courtroom_views import (
-    build_courtroom_drilldown_bundle_view as build_courtroom_drilldown_bundle_view_v3,
-)
-from .applications.case_courtroom_views import (
-    build_courtroom_read_model_light_summary as build_courtroom_read_model_light_summary_v3,
-)
-from .applications.case_courtroom_views import (
-    build_courtroom_read_model_view as build_courtroom_read_model_view_v3,
 )
 from .applications.case_courtroom_views import (
     serialize_claim_ledger_record as serialize_claim_ledger_record_v3,
@@ -103,12 +104,6 @@ from .applications.fairness_runtime_routes import (
     FairnessRouteError as FairnessRouteError_v3,
 )
 from .applications.fairness_runtime_routes import (
-    build_case_fairness_aggregations as build_case_fairness_aggregations_v3,
-)
-from .applications.fairness_runtime_routes import (
-    build_case_fairness_item as build_case_fairness_item_v3,
-)
-from .applications.fairness_runtime_routes import (
     normalize_case_fairness_challenge_state as normalize_case_fairness_challenge_state_v3,
 )
 from .applications.fairness_runtime_routes import (
@@ -132,9 +127,6 @@ from .applications.judge_command_routes import (
 )
 from .applications.judge_command_routes import (
     build_receipt_dims_from_raw as build_receipt_dims_from_raw_v3,
-)
-from .applications.judge_command_routes import (
-    extract_optional_datetime as extract_optional_datetime_v3,
 )
 from .applications.judge_command_routes import (
     extract_optional_int as extract_optional_int_v3,
@@ -3903,91 +3895,6 @@ def _build_review_trust_unified_priority_profile_for_runtime(
     )
 
 
-def _build_courtroom_read_model_view_for_runtime(
-    *,
-    report_payload: dict[str, Any],
-    case_evidence: dict[str, Any],
-) -> dict[str, Any]:
-    return build_courtroom_read_model_view_v3(
-        report_payload=report_payload,
-        case_evidence=case_evidence,
-        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
-    )
-
-
-def _build_courtroom_read_model_light_summary_for_runtime(
-    *,
-    courtroom_view: dict[str, Any],
-) -> dict[str, Any]:
-    return build_courtroom_read_model_light_summary_v3(
-        courtroom_view=courtroom_view,
-        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
-    )
-
-
-def _build_courtroom_drilldown_bundle_view_for_runtime(
-    *,
-    courtroom_view: dict[str, Any],
-    claim_preview_limit: int,
-    evidence_preview_limit: int,
-    panel_preview_limit: int,
-) -> dict[str, Any]:
-    return build_courtroom_drilldown_bundle_view_v3(
-        courtroom_view=courtroom_view,
-        claim_preview_limit=claim_preview_limit,
-        evidence_preview_limit=evidence_preview_limit,
-        panel_preview_limit=panel_preview_limit,
-        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
-    )
-
-
-def _extract_optional_datetime_for_runtime(
-    payload: dict[str, Any],
-    *keys: str,
-) -> datetime | None:
-    return extract_optional_datetime_v3(
-        payload,
-        *keys,
-        normalize_query_datetime=_normalize_query_datetime,
-    )
-
-
-def _build_case_fairness_item_for_runtime(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    trace_id: str,
-    workflow_job: WorkflowJob | None,
-    workflow_events: list[Any],
-    report_payload: dict[str, Any] | None,
-    latest_run: FactFairnessBenchmarkRun | None,
-    latest_shadow_run: FactFairnessShadowRun | None,
-) -> dict[str, Any]:
-    return build_case_fairness_item_v3(
-        case_id=case_id,
-        dispatch_type=dispatch_type,
-        trace_id=trace_id,
-        workflow_job=workflow_job,
-        workflow_events=workflow_events,
-        report_payload=report_payload,
-        latest_run=latest_run,
-        latest_shadow_run=latest_shadow_run,
-        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
-        serialize_fairness_benchmark_run=_serialize_fairness_benchmark_run,
-        serialize_fairness_shadow_run=_serialize_fairness_shadow_run,
-        trust_challenge_event_type=TRUST_CHALLENGE_EVENT_TYPE,
-    )
-
-
-def _build_case_fairness_aggregations_for_runtime(
-    items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return build_case_fairness_aggregations_v3(
-        items,
-        case_fairness_gate_conclusions=CASE_FAIRNESS_GATE_CONCLUSIONS,
-    )
-
-
 def _build_trust_challenge_id_for_runtime(*, case_id: int) -> str:
     return f"chlg-{max(0, int(case_id))}-{uuid4().hex[:12]}"
 
@@ -4295,16 +4202,33 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         _build_review_trust_unified_priority_profile_for_runtime,
         trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
     )
-    build_courtroom_read_model_view = _build_courtroom_read_model_view_for_runtime
-    build_courtroom_read_model_light_summary = (
-        _build_courtroom_read_model_light_summary_for_runtime
+    build_courtroom_read_model_view = partial(
+        build_courtroom_read_model_view_for_runtime,
+        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
     )
-    build_courtroom_drilldown_bundle_view = (
-        _build_courtroom_drilldown_bundle_view_for_runtime
+    build_courtroom_read_model_light_summary = partial(
+        build_courtroom_read_model_light_summary_for_runtime,
+        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
     )
-    extract_optional_datetime = _extract_optional_datetime_for_runtime
-    build_case_fairness_item = _build_case_fairness_item_for_runtime
-    build_case_fairness_aggregations = _build_case_fairness_aggregations_for_runtime
+    build_courtroom_drilldown_bundle_view = partial(
+        build_courtroom_drilldown_bundle_view_for_runtime,
+        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
+    )
+    extract_optional_datetime = partial(
+        extract_optional_datetime_for_runtime,
+        normalize_query_datetime=_normalize_query_datetime,
+    )
+    build_case_fairness_item = partial(
+        build_case_fairness_item_for_runtime,
+        normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
+        serialize_fairness_benchmark_run=_serialize_fairness_benchmark_run,
+        serialize_fairness_shadow_run=_serialize_fairness_shadow_run,
+        trust_challenge_event_type=TRUST_CHALLENGE_EVENT_TYPE,
+    )
+    build_case_fairness_aggregations = partial(
+        build_case_fairness_aggregations_for_runtime,
+        case_fairness_gate_conclusions=CASE_FAIRNESS_GATE_CONCLUSIONS,
+    )
     resolve_idempotency_or_raise = partial(
         resolve_idempotency_or_raise_v3,
         resolve_idempotency=runtime.trace_store.resolve_idempotency,
