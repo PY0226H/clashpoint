@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
 
@@ -21,102 +20,28 @@ from app.applications.panel_runtime_profile_contract import (
     PANEL_RUNTIME_PROFILE_TOP_LEVEL_KEYS,
     validate_panel_runtime_profile_contract,
 )
-from app.models import FinalDispatchRequest, PhaseDispatchMessage, PhaseDispatchRequest
-from httpx import ASGITransport, AsyncClient
 
-from tests.app_factory_test_helpers import build_settings as _build_settings
-
-
-def _build_phase_request(
-    *,
-    case_id: int = 101,
-    idempotency_key: str = "phase-key-101",
-    rubric_version: str = "v3",
-    judge_policy_version: str = "v3-default",
-) -> PhaseDispatchRequest:
-    now = datetime.now(timezone.utc)
-    return PhaseDispatchRequest(
-        case_id=case_id,
-        scope_id=1,
-        session_id=2,
-        phase_no=1,
-        message_start_id=1,
-        message_end_id=2,
-        message_count=2,
-        messages=[
-            PhaseDispatchMessage(
-                message_id=1,
-                side="pro",
-                content="pro message",
-                created_at=now,
-                speaker_tag="pro_1",
-            ),
-            PhaseDispatchMessage(
-                message_id=2,
-                side="con",
-                content="con message",
-                created_at=now,
-                speaker_tag="con_1",
-            ),
-        ],
-        rubric_version=rubric_version,
-        judge_policy_version=judge_policy_version,
-        topic_domain="tft",
-        retrieval_profile="hybrid_v1",
-        trace_id=f"trace-phase-{case_id}",
-        idempotency_key=idempotency_key,
-    )
+from tests.app_factory_test_helpers import (
+    AppFactoryRouteTestMixin,
+)
+from tests.app_factory_test_helpers import (
+    build_final_request as _build_final_request,
+)
+from tests.app_factory_test_helpers import (
+    build_phase_request as _build_phase_request,
+)
+from tests.app_factory_test_helpers import (
+    build_settings as _build_settings,
+)
+from tests.app_factory_test_helpers import (
+    unique_case_id as _unique_case_id,
+)
 
 
-def _build_final_request(
-    *,
-    case_id: int = 202,
-    idempotency_key: str = "final-key-202",
-    rubric_version: str = "v3",
-    judge_policy_version: str = "v3-default",
-) -> FinalDispatchRequest:
-    return FinalDispatchRequest(
-        case_id=case_id,
-        scope_id=1,
-        session_id=2,
-        phase_start_no=1,
-        phase_end_no=1,
-        rubric_version=rubric_version,
-        judge_policy_version=judge_policy_version,
-        topic_domain="tft",
-        trace_id=f"trace-final-{case_id}",
-        idempotency_key=idempotency_key,
-    )
-
-
-def _unique_case_id(seed: int) -> int:
-    return int(datetime.now(timezone.utc).timestamp() * 1_000_000) + seed
-
-
-class AppFactoryOpsPanelRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def _post_json(
-        self,
-        *,
-        app: Any,
-        path: str,
-        payload: dict[str, Any],
-        internal_key: str,
-    ) -> Any:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            return await client.post(
-                path,
-                json=payload,
-                headers={"x-ai-internal-key": internal_key},
-            )
-
-    async def _get(self, *, app: Any, path: str, internal_key: str) -> Any:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            return await client.get(
-                path,
-                headers={"x-ai-internal-key": internal_key},
-            )
+class AppFactoryOpsPanelRouteTests(
+    AppFactoryRouteTestMixin,
+    unittest.IsolatedAsyncioTestCase,
+):
 
     async def test_ops_read_model_pack_route_should_join_fairness_registry_and_trust_v5(
         self,

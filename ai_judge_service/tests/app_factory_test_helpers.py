@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
+from app.models import (
+    CaseCreateRequest,
+    FinalDispatchRequest,
+    PhaseDispatchMessage,
+    PhaseDispatchRequest,
+)
 from app.settings import Settings
+from httpx import ASGITransport, AsyncClient
 
 
 def build_settings(**overrides: object) -> Settings:
@@ -79,3 +87,123 @@ def build_settings(**overrides: object) -> Settings:
     }
     base.update(overrides)
     return Settings(**base)
+
+
+def build_phase_request(
+    *,
+    case_id: int = 101,
+    idempotency_key: str = "phase-key-101",
+    rubric_version: str = "v3",
+    judge_policy_version: str = "v3-default",
+) -> PhaseDispatchRequest:
+    now = datetime.now(timezone.utc)
+    return PhaseDispatchRequest(
+        case_id=case_id,
+        scope_id=1,
+        session_id=2,
+        phase_no=1,
+        message_start_id=1,
+        message_end_id=2,
+        message_count=2,
+        messages=[
+            PhaseDispatchMessage(
+                message_id=1,
+                side="pro",
+                content="pro message",
+                created_at=now,
+                speaker_tag="pro_1",
+            ),
+            PhaseDispatchMessage(
+                message_id=2,
+                side="con",
+                content="con message",
+                created_at=now,
+                speaker_tag="con_1",
+            ),
+        ],
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
+        topic_domain="tft",
+        retrieval_profile="hybrid_v1",
+        trace_id=f"trace-phase-{case_id}",
+        idempotency_key=idempotency_key,
+    )
+
+
+def build_final_request(
+    *,
+    case_id: int = 202,
+    idempotency_key: str = "final-key-202",
+    rubric_version: str = "v3",
+    judge_policy_version: str = "v3-default",
+) -> FinalDispatchRequest:
+    return FinalDispatchRequest(
+        case_id=case_id,
+        scope_id=1,
+        session_id=2,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
+        topic_domain="tft",
+        trace_id=f"trace-final-{case_id}",
+        idempotency_key=idempotency_key,
+    )
+
+
+def build_case_create_request(
+    *,
+    case_id: int = 901,
+    idempotency_key: str = "case-key-901",
+    rubric_version: str = "v3",
+    judge_policy_version: str = "v3-default",
+) -> CaseCreateRequest:
+    return CaseCreateRequest(
+        case_id=case_id,
+        scope_id=1,
+        session_id=2,
+        rubric_version=rubric_version,
+        judge_policy_version=judge_policy_version,
+        topic_domain="tft",
+        retrieval_profile="hybrid_v1",
+        trace_id=f"trace-case-{case_id}",
+        idempotency_key=idempotency_key,
+    )
+
+
+def unique_case_id(seed: int) -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1_000_000) + seed
+
+
+class AppFactoryRouteTestMixin:
+    async def _post_json(
+        self,
+        *,
+        app: Any,
+        path: str,
+        payload: dict[str, Any],
+        internal_key: str,
+    ) -> Any:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                path,
+                json=payload,
+                headers={"x-ai-internal-key": internal_key},
+            )
+
+    async def _get(self, *, app: Any, path: str, internal_key: str) -> Any:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(
+                path,
+                headers={"x-ai-internal-key": internal_key},
+            )
+
+    async def _post(self, *, app: Any, path: str, internal_key: str) -> Any:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                path,
+                headers={"x-ai-internal-key": internal_key},
+            )
