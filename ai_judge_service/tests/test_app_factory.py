@@ -7924,7 +7924,8 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory.validate_panel_runtime_profile_contract_v3",
+            "app.applications.bootstrap_ops_panel_replay_payload_helpers."
+            "validate_panel_runtime_profile_contract_v3",
             side_effect=ValueError("panel_runtime_profile_missing_keys:items"),
         ):
             resp = await self._get(
