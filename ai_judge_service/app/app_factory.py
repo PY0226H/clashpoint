@@ -64,15 +64,6 @@ from .applications import (
 from .applications.assistant_agent_routes import (
     AssistantAgentRouteError as AssistantAgentRouteError_v3,
 )
-from .applications.assistant_agent_routes import (
-    build_assistant_agent_response as build_assistant_agent_response_v3,
-)
-from .applications.assistant_agent_routes import (
-    build_npc_coach_advice_route_payload as build_npc_coach_advice_route_payload_v3,
-)
-from .applications.assistant_agent_routes import (
-    build_room_qa_answer_route_payload as build_room_qa_answer_route_payload_v3,
-)
 from .applications.case_courtroom_views import (
     build_case_evidence_view as build_case_evidence_view_v3,
 )
@@ -198,9 +189,6 @@ from .applications.judge_trace_replay_routes import (
     ReplayReportDependencyPack as ReplayReportDependencyPack_v3,
 )
 from .applications.judge_trace_replay_routes import (
-    build_replay_post_route_payload as build_replay_post_route_payload_v3,
-)
-from .applications.judge_trace_replay_routes import (
     build_replay_report_route_payload as build_replay_report_route_payload_v3,
 )
 from .applications.judge_trace_replay_routes import (
@@ -211,15 +199,6 @@ from .applications.judge_trace_replay_routes import (
 )
 from .applications.judge_trace_replay_routes import (
     build_replay_route_payload as build_replay_route_payload_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    build_trace_route_payload as build_trace_route_payload_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    build_trace_route_read_payload as build_trace_route_read_payload_v3,
-)
-from .applications.judge_trace_replay_routes import (
-    build_trace_route_replay_items as build_trace_route_replay_items_v3,
 )
 from .applications.judge_trace_replay_routes import (
     choose_replay_dispatch_receipt as choose_replay_dispatch_receipt_v3,
@@ -391,6 +370,10 @@ from .applications.review_queue_contract import (
 from .applications.review_queue_contract import (
     validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
 )
+from .applications.route_group_assistant import (
+    AssistantRouteDependencies,
+    register_assistant_routes,
+)
 from .applications.route_group_case_read import (
     CaseReadRouteDependencies,
     register_case_read_routes,
@@ -404,6 +387,10 @@ from .applications.route_group_judge_command import (
     register_judge_command_routes,
 )
 from .applications.route_group_registry import register_registry_routes
+from .applications.route_group_replay import (
+    ReplayRouteDependencies,
+    register_replay_routes,
+)
 from .applications.route_group_review import (
     ReviewRouteDependencies,
     register_review_routes,
@@ -519,8 +506,6 @@ from .core.judge_core import (
 from .core.workflow import WorkflowTransitionError
 from .domain.agents import (
     AGENT_KIND_JUDGE,
-    AGENT_KIND_NPC_COACH,
-    AGENT_KIND_ROOM_QA,
     AgentExecutionRequest,
 )
 from .domain.facts import (
@@ -544,9 +529,7 @@ from .domain.facts import (
 from .domain.workflow import WORKFLOW_STATUSES, WorkflowJob
 from .models import (
     FinalDispatchRequest,
-    NpcCoachAdviceRequest,
     PhaseDispatchRequest,
-    RoomQaAnswerRequest,
 )
 from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
 from .settings import (
@@ -4698,78 +4681,34 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
     )
 
-    @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
-    async def request_npc_coach_advice(
-        session_id: int,
-        payload: NpcCoachAdviceRequest,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _run_assistant_agent_route_guard(
-            build_npc_coach_advice_route_payload_v3(
-                session_id=session_id,
-                payload=payload,
-                agent_kind_npc_coach=AGENT_KIND_NPC_COACH,
-                build_shared_room_context=build_shared_room_context,
-                execute_agent=runtime.agent_runtime.execute,
-                build_execution_request=AgentExecutionRequest,
-                build_assistant_agent_response=build_assistant_agent_response_v3,
-            )
-        )
+    register_assistant_routes(
+        app=app,
+        deps=AssistantRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            run_assistant_agent_route_guard=_run_assistant_agent_route_guard,
+            build_shared_room_context=build_shared_room_context,
+            execute_agent=runtime.agent_runtime.execute,
+        ),
+    )
 
-    @app.post("/internal/judge/apps/room-qa/sessions/{session_id}/answer")
-    async def request_room_qa_answer(
-        session_id: int,
-        payload: RoomQaAnswerRequest,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _run_assistant_agent_route_guard(
-            build_room_qa_answer_route_payload_v3(
-                session_id=session_id,
-                payload=payload,
-                agent_kind_room_qa=AGENT_KIND_ROOM_QA,
-                build_shared_room_context=build_shared_room_context,
-                execute_agent=runtime.agent_runtime.execute,
-                build_execution_request=AgentExecutionRequest,
-                build_assistant_agent_response=build_assistant_agent_response_v3,
-            )
-        )
-
-    @app.get("/internal/judge/cases/{case_id}/trace")
-    async def get_judge_job_trace(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _run_replay_read_guard(
-            build_trace_route_read_payload_v3(
-                case_id=case_id,
-                get_trace=runtime.trace_store.get_trace,
-                list_replay_records=_list_replay_records,
-                build_trace_route_replay_items=build_trace_route_replay_items_v3,
-                build_verdict_contract=build_verdict_contract_v3,
-                build_trace_route_payload=build_trace_route_payload_v3,
-            )
-        )
-
-    @app.post("/internal/judge/cases/{case_id}/replay")
-    async def replay_judge_job(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-        dispatch_type: str = Query(default="auto"),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _run_replay_read_guard(
-            build_replay_post_route_payload_v3(
-                case_id=case_id,
-                dispatch_type=dispatch_type,
-                context_dependencies=replay_context_dependencies,
-                # replay 主路由只保留 HTTP 语义，重算编排统一在 applications 层完成。
-                report_dependencies=replay_report_dependencies,
-                finalize_dependencies=replay_finalize_dependencies,
-            )
-        )
+    register_replay_routes(
+        app=app,
+        deps=ReplayRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            run_replay_read_guard=_run_replay_read_guard,
+            build_replay_report_payload=_build_replay_report_payload_for_runtime,
+            build_replay_reports_payload=_build_replay_reports_payload_for_runtime,
+            replay_context_dependencies=replay_context_dependencies,
+            replay_report_dependencies=replay_report_dependencies,
+            replay_finalize_dependencies=replay_finalize_dependencies,
+            get_trace=runtime.trace_store.get_trace,
+            list_replay_records=_list_replay_records,
+            get_claim_ledger_record=_get_claim_ledger_record,
+            list_traces=runtime.trace_store.list_traces,
+        ),
+    )
 
     trust_route_handles = register_trust_routes(
         app=app,
@@ -4836,46 +4775,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
         ),
     )
-
-    @app.get("/internal/judge/cases/{case_id}/replay/report")
-    async def get_judge_replay_report(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _build_replay_report_payload_for_runtime(
-            case_id=case_id,
-            get_trace=runtime.trace_store.get_trace,
-            get_claim_ledger_record=_get_claim_ledger_record,
-            run_replay_read_guard=_run_replay_read_guard,
-        )
-
-    @app.get("/internal/judge/cases/replay/reports")
-    async def list_judge_replay_reports(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        winner: str | None = Query(default=None),
-        callback_status: str | None = Query(default=None),
-        trace_id: str | None = Query(default=None),
-        created_after: datetime | None = Query(default=None),
-        created_before: datetime | None = Query(default=None),
-        has_audit_alert: bool | None = Query(default=None),
-        limit: int = Query(default=20, ge=1, le=200),
-        include_report: bool = Query(default=False),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return _build_replay_reports_payload_for_runtime(
-            status=status,
-            winner=winner,
-            callback_status=callback_status,
-            trace_id=trace_id,
-            created_after=created_after,
-            created_before=created_before,
-            has_audit_alert=has_audit_alert,
-            limit=limit,
-            include_report=include_report,
-            list_traces=runtime.trace_store.list_traces,
-        )
 
     fairness_route_handles = register_fairness_routes(
         app=app,
