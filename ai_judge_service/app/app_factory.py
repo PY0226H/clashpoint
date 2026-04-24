@@ -60,6 +60,11 @@ from .applications import (
 from .applications.assistant_agent_routes import (
     AssistantAgentRouteError as AssistantAgentRouteError_v3,
 )
+from .applications.bootstrap_callback_helpers import (
+    attach_policy_trace_snapshot_for_runtime,
+    invoke_failed_callback_with_retry_for_runtime,
+    invoke_v3_callback_with_retry_for_runtime,
+)
 from .applications.bootstrap_case_read_helpers import (
     build_courtroom_drilldown_bundle_view_for_runtime,
     build_courtroom_read_model_light_summary_for_runtime,
@@ -84,6 +89,18 @@ from .applications.bootstrap_review_trust_helpers import (
 from .applications.bootstrap_route_dependencies import (
     build_registry_release_gate_dependencies,
     build_trust_challenge_common_dependencies,
+)
+from .applications.bootstrap_route_guard_helpers import (
+    await_payload_or_raise_http_404_for_runtime,
+    await_payload_or_raise_http_422_404_for_runtime,
+    await_payload_or_raise_http_422_for_runtime,
+    await_payload_or_raise_http_500_for_runtime,
+    build_payload_or_raise_http_404_for_runtime,
+    validate_contract_or_raise_http_500_for_runtime,
+)
+from .applications.bootstrap_runtime_ready_helpers import (
+    ensure_registry_runtime_ready_for_runtime,
+    ensure_workflow_schema_ready_for_runtime,
 )
 from .applications.case_courtroom_views import (
     build_case_evidence_view as build_case_evidence_view_v3,
@@ -123,9 +140,6 @@ from .applications.judge_command_routes import (
     JudgeCommandRouteError as JudgeCommandRouteError_v3,
 )
 from .applications.judge_command_routes import (
-    attach_policy_trace_snapshot as attach_policy_trace_snapshot_v3,
-)
-from .applications.judge_command_routes import (
     build_dispatch_meta_from_raw as build_dispatch_meta_from_raw_v3,
 )
 from .applications.judge_command_routes import (
@@ -139,12 +153,6 @@ from .applications.judge_command_routes import (
 )
 from .applications.judge_command_routes import (
     extract_optional_str as extract_optional_str_v3,
-)
-from .applications.judge_command_routes import (
-    invoke_callback_with_retry as invoke_callback_with_retry_v3,
-)
-from .applications.judge_command_routes import (
-    resolve_failed_callback_fn_for_dispatch as resolve_failed_callback_fn_for_dispatch_v3,
 )
 from .applications.judge_command_routes import (
     resolve_idempotency_or_raise as resolve_idempotency_or_raise_v3,
@@ -491,7 +499,7 @@ from .domain.facts import (
     ReplayRecord as FactReplayRecord,
 )
 from .domain.workflow import WORKFLOW_STATUSES, WorkflowJob
-from .runtime_types import CallbackReportFn, DispatchRuntimeConfig, SleepFn
+from .runtime_types import DispatchRuntimeConfig, SleepFn
 from .settings import (
     Settings,
     build_callback_client_config,
@@ -1176,83 +1184,6 @@ def _raise_registry_version_not_found_lookup_error(*, err: LookupError) -> None:
     raise HTTPException(status_code=404, detail="registry_version_not_found") from err
 
 
-def _raise_http_500_contract_violation(*, err: ValueError, code: str) -> None:
-    raise HTTPException(
-        status_code=500,
-        detail={
-            "code": str(code),
-            "message": str(err),
-        },
-    ) from err
-
-
-def _validate_contract_or_raise_http_500_for_runtime(
-    *,
-    payload: dict[str, Any],
-    validate_contract: Callable[[dict[str, Any]], None],
-    code: str,
-) -> dict[str, Any]:
-    try:
-        validate_contract(payload)
-    except ValueError as err:
-        _raise_http_500_contract_violation(err=err, code=code)
-    return payload
-
-
-async def _await_payload_or_raise_http_500_for_runtime(
-    *,
-    self_awaitable: Awaitable[dict[str, Any]],
-    code: str,
-) -> dict[str, Any]:
-    try:
-        return await self_awaitable
-    except ValueError as err:
-        _raise_http_500_contract_violation(err=err, code=code)
-
-
-async def _await_payload_or_raise_http_422_for_runtime(
-    *,
-    self_awaitable: Awaitable[dict[str, Any]],
-) -> dict[str, Any]:
-    try:
-        return await self_awaitable
-    except ValueError as err:
-        _raise_http_422_from_value_error(err=err)
-
-
-async def _await_payload_or_raise_http_404_for_runtime(
-    *,
-    self_awaitable: Awaitable[dict[str, Any]],
-) -> dict[str, Any]:
-    try:
-        return await self_awaitable
-    except LookupError as err:
-        _raise_http_404_from_lookup_error(err=err)
-
-
-async def _await_payload_or_raise_http_422_404_for_runtime(
-    *,
-    self_awaitable: Awaitable[dict[str, Any]],
-) -> dict[str, Any]:
-    try:
-        return await self_awaitable
-    except ValueError as err:
-        _raise_http_422_from_value_error(err=err)
-    except LookupError as err:
-        _raise_http_404_from_lookup_error(err=err)
-
-
-def _build_payload_or_raise_http_404_for_runtime(
-    *,
-    builder: Callable[..., dict[str, Any]],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    try:
-        return builder(**kwargs)
-    except LookupError as err:
-        _raise_http_404_from_lookup_error(err=err)
-
-
 def _raise_registry_value_error(
     *,
     err: ValueError,
@@ -1574,82 +1505,6 @@ async def _attach_judge_agent_runtime_trace(
     role_order = runtime_output.get("roleOrder")
     if isinstance(role_order, list):
         judge_trace["courtroomRoleOrder"] = [str(item) for item in role_order if str(item).strip()]
-
-
-async def _invoke_v3_callback_with_retry(
-    *,
-    runtime: AppRuntime,
-    callback_fn: CallbackReportFn,
-    job_id: int,
-    payload: dict[str, Any],
-) -> tuple[int, int]:
-    return await invoke_callback_with_retry_v3(
-        callback_fn=callback_fn,
-        job_id=job_id,
-        payload=payload,
-        max_attempts=runtime.dispatch_runtime_cfg.runtime_retry_max_attempts,
-        backoff_ms=runtime.dispatch_runtime_cfg.retry_backoff_ms,
-        sleep_fn=runtime.sleep_fn,
-    )
-
-
-async def _invoke_v3_callback_with_retry_for_runtime(
-    callback_fn: CallbackReportFn,
-    job_id: int,
-    payload: dict[str, Any],
-    *,
-    runtime: AppRuntime,
-) -> tuple[int, int]:
-    return await _invoke_v3_callback_with_retry(
-        runtime=runtime,
-        callback_fn=callback_fn,
-        job_id=job_id,
-        payload=payload,
-    )
-
-
-async def _invoke_failed_callback_with_retry_for_runtime(
-    *,
-    runtime: AppRuntime,
-    dispatch_type: str,
-    callback_phase_failed_fn: CallbackReportFn | None,
-    callback_final_failed_fn: CallbackReportFn | None,
-    case_id: int,
-    payload: dict[str, Any],
-) -> tuple[int, int]:
-    callback_fn = cast(
-        CallbackReportFn,
-        resolve_failed_callback_fn_for_dispatch_v3(
-            dispatch_type=dispatch_type,
-            callback_phase_failed_fn=callback_phase_failed_fn,
-            callback_final_failed_fn=callback_final_failed_fn,
-        ),
-    )
-    return await _invoke_v3_callback_with_retry(
-        runtime=runtime,
-        callback_fn=callback_fn,
-        job_id=case_id,
-        payload=payload,
-    )
-
-
-def _attach_policy_trace_snapshot_for_runtime(
-    *,
-    runtime: AppRuntime,
-    report_payload: dict[str, Any],
-    profile: Any,
-    prompt_profile: Any,
-    tool_profile: Any,
-) -> None:
-    attach_policy_trace_snapshot_v3(
-        report_payload=report_payload,
-        profile=profile,
-        prompt_profile=prompt_profile,
-        tool_profile=tool_profile,
-        build_policy_trace_snapshot=runtime.policy_registry_runtime.build_trace_snapshot,
-        build_prompt_trace_snapshot=runtime.prompt_registry_runtime.build_trace_snapshot,
-        build_tool_trace_snapshot=runtime.tool_registry_runtime.build_trace_snapshot,
-    )
 
 
 async def _read_json_object_or_raise_422(*, request: Request) -> dict[str, Any]:
@@ -3823,30 +3678,6 @@ async def _build_trust_public_verify_payload_for_runtime(
     )
 
 
-async def _ensure_workflow_schema_ready_for_runtime(
-    *,
-    runtime: AppRuntime,
-    workflow_schema_state: dict[str, bool],
-    workflow_schema_lock: asyncio.Lock,
-) -> None:
-    if workflow_schema_state["ready"] or not runtime.settings.db_auto_create_schema:
-        return
-    async with workflow_schema_lock:
-        if workflow_schema_state["ready"]:
-            return
-        await runtime.workflow_runtime.db.create_schema()
-        workflow_schema_state["ready"] = True
-
-
-async def _ensure_registry_runtime_ready_for_runtime(
-    *,
-    runtime: AppRuntime,
-    ensure_workflow_schema_ready: Callable[[], Awaitable[None]],
-) -> None:
-    await ensure_workflow_schema_ready()
-    await runtime.registry_product_runtime.ensure_loaded()
-
-
 def create_app(runtime: AppRuntime) -> FastAPI:
     app = FastAPI(title="AI Judge Service", version="0.2.0")
     judge_core = JudgeCoreOrchestrator(
@@ -3855,13 +3686,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     workflow_schema_state = {"ready": False}
     workflow_schema_lock = asyncio.Lock()
     _ensure_workflow_schema_ready = partial(
-        _ensure_workflow_schema_ready_for_runtime,
+        ensure_workflow_schema_ready_for_runtime,
         runtime=runtime,
         workflow_schema_state=workflow_schema_state,
         workflow_schema_lock=workflow_schema_lock,
     )
     _ensure_registry_runtime_ready = partial(
-        _ensure_registry_runtime_ready_for_runtime,
+        ensure_registry_runtime_ready_for_runtime,
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
     )
@@ -4181,22 +4012,22 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         runtime=runtime,
     )
     attach_policy_trace_snapshot = partial(
-        _attach_policy_trace_snapshot_for_runtime,
+        attach_policy_trace_snapshot_for_runtime,
         runtime=runtime,
     )
     invoke_callback_with_retry = partial(
-        _invoke_v3_callback_with_retry_for_runtime,
+        invoke_v3_callback_with_retry_for_runtime,
         runtime=runtime,
     )
     invoke_phase_failed_callback_with_retry = partial(
-        _invoke_failed_callback_with_retry_for_runtime,
+        invoke_failed_callback_with_retry_for_runtime,
         runtime=runtime,
         dispatch_type="phase",
         callback_phase_failed_fn=runtime.callback_phase_failed_fn,
         callback_final_failed_fn=runtime.callback_final_failed_fn,
     )
     invoke_final_failed_callback_with_retry = partial(
-        _invoke_failed_callback_with_retry_for_runtime,
+        invoke_failed_callback_with_retry_for_runtime,
         runtime=runtime,
         dispatch_type="final",
         callback_phase_failed_fn=runtime.callback_phase_failed_fn,
@@ -4323,7 +4154,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             require_internal_key_fn=require_internal_key,
             run_case_read_route_guard=_run_case_read_route_guard,
             validate_contract_or_raise_http_500=(
-                _validate_contract_or_raise_http_500_for_runtime
+                validate_contract_or_raise_http_500_for_runtime
             ),
             workflow_get_job=_workflow_get_job,
             workflow_list_events=_workflow_list_events,
@@ -4509,7 +4340,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             await_payload_or_raise_http_500=(
-                _await_payload_or_raise_http_500_for_runtime
+                await_payload_or_raise_http_500_for_runtime
             ),
             build_panel_runtime_profiles_payload=(
                 _build_panel_runtime_profiles_payload_for_runtime
@@ -4528,13 +4359,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             await_payload_or_raise_http_422=(
-                _await_payload_or_raise_http_422_for_runtime
+                await_payload_or_raise_http_422_for_runtime
             ),
             await_payload_or_raise_http_404=(
-                _await_payload_or_raise_http_404_for_runtime
+                await_payload_or_raise_http_404_for_runtime
             ),
             await_payload_or_raise_http_422_404=(
-                _await_payload_or_raise_http_422_404_for_runtime
+                await_payload_or_raise_http_422_404_for_runtime
             ),
             build_review_cases_list_payload=(
                 _build_review_cases_list_payload_for_runtime
@@ -4569,7 +4400,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             await_payload_or_raise_http_500=(
-                _await_payload_or_raise_http_500_for_runtime
+                await_payload_or_raise_http_500_for_runtime
             ),
             build_ops_read_model_pack_payload=(
                 _build_ops_read_model_pack_payload_for_runtime
@@ -4623,10 +4454,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             await_payload_or_raise_http_422=(
-                _await_payload_or_raise_http_422_for_runtime
+                await_payload_or_raise_http_422_for_runtime
             ),
             build_payload_or_raise_http_404=(
-                _build_payload_or_raise_http_404_for_runtime
+                build_payload_or_raise_http_404_for_runtime
             ),
             build_case_alerts_payload=_build_case_alerts_payload_for_runtime,
             transition_judge_alert_status=_transition_judge_alert_status,
