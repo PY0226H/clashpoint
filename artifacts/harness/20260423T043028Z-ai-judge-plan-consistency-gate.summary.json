@@ -1,0 +1,27 @@
+{
+  "run_id": "20260423T043028Z-ai-judge-plan-consistency-gate",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "arch_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md",
+  "consistency_section_found": true,
+  "arch_checklist_found": true,
+  "checks": [
+    {"label":"角色一致性","status":"pass","answer":"不合并或绕过 8 Agent 职责边界，保持 `workflow_roles` 可追踪。"},
+    {"label":"数据一致性","status":"pass","answer":"六对象仍为主链语义，路由重构不改变对象合同。"},
+    {"label":"门禁一致性","status":"pass","answer":"`Fairness Sentinel` 继续处于终判前位置，override 可审计。"},
+    {"label":"边界一致性","status":"pass","answer":"`NPC/Room QA` 仅 advisory-only，不写官方 verdict/fairness/trust。"},
+    {"label":"跨层一致性","status":"pass","answer":"契约变更同轮更新调用方、测试与文档，不保留长期 alias 双轨。"},
+    {"label":"收口一致性","status":"pass","answer":"真实环境项继续区分 `local_reference_ready` 与 `pass`。"}
+  ],
+  "missing_items": [],
+  "empty_items": [],
+  "placeholder_items": [],
+  "arch_missing_items": [],
+  "started_at": "2026-04-23T04:30:28Z",
+  "finished_at": "2026-04-23T04:30:28Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260423T043028Z-ai-judge-plan-consistency-gate.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260423T043028Z-ai-judge-plan-consistency-gate.summary.md"
+  }
+}

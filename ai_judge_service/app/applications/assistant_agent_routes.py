@@ -62,6 +62,38 @@ def sanitize_assistant_advisory_output(payload: Any) -> Any:
     return payload
 
 
+def build_assistant_agent_response(
+    *,
+    agent_kind: str,
+    session_id: int,
+    shared_context: dict[str, Any],
+    execution_result: Any,
+) -> dict[str, Any]:
+    output = (
+        sanitize_assistant_advisory_output(execution_result.output)
+        if isinstance(execution_result.output, dict)
+        else {}
+    )
+    capability_boundary = {
+        "mode": "advisory_only",
+        "officialVerdictAuthority": False,
+        "writesVerdictLedger": False,
+        "writesJudgeTrace": False,
+    }
+    return {
+        "agentKind": agent_kind,
+        "sessionId": session_id,
+        "caseId": shared_context.get("caseId"),
+        "status": execution_result.status,
+        "accepted": bool(output.get("accepted")),
+        "errorCode": execution_result.error_code,
+        "errorMessage": execution_result.error_message,
+        "capabilityBoundary": capability_boundary,
+        "sharedContext": shared_context,
+        "output": output,
+    }
+
+
 def normalize_assistant_session_id(session_id: int) -> int:
     normalized_session_id = max(0, int(session_id))
     if normalized_session_id <= 0:

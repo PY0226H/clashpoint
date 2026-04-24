@@ -7,17 +7,40 @@ from typing import Any
 
 from app.applications.judge_command_routes import (
     JudgeCommandRouteError,
+    attach_policy_trace_snapshot,
     build_blindization_rejection_route_payload,
     build_case_create_route_payload,
+    build_dispatch_meta_from_raw,
     build_final_contract_blocked_route_payload,
     build_final_dispatch_callback_delivery_route_payload,
     build_final_dispatch_callback_result_route_payload,
     build_final_dispatch_preflight_route_payload,
     build_final_dispatch_report_materialization_route_payload,
+    build_final_report_payload_for_dispatch,
     build_phase_dispatch_callback_delivery_route_payload,
     build_phase_dispatch_callback_result_route_payload,
     build_phase_dispatch_preflight_route_payload,
     build_phase_dispatch_report_materialization_route_payload,
+    build_receipt_dims_from_raw,
+    extract_optional_bool,
+    extract_optional_datetime,
+    extract_optional_float,
+    extract_optional_int,
+    extract_optional_str,
+    extract_raw_field,
+    invoke_callback_with_retry,
+    resolve_failed_callback_fn_for_dispatch,
+    resolve_idempotency_or_raise,
+    resolve_panel_runtime_profiles,
+    resolve_policy_profile_or_raise,
+    resolve_prompt_profile_or_raise,
+    resolve_report_callback_fn_for_dispatch,
+    resolve_tool_profile_or_raise,
+    resolve_winner,
+    safe_float,
+    save_dispatch_receipt,
+    validate_final_dispatch_request,
+    validate_phase_dispatch_request,
 )
 from app.models import CaseCreateRequest, FinalDispatchRequest, PhaseDispatchRequest
 
@@ -84,6 +107,528 @@ def _build_final_payload(*, case_id: int, idempotency_key: str) -> dict[str, Any
 
 
 class JudgeCommandRoutesTests(unittest.TestCase):
+    def test_extract_optional_helpers_should_parse_raw_values(self) -> None:
+        payload = {
+            "count": "7",
+            "ratio": "0.25",
+            "label": "  ready  ",
+            "enabled": "YES",
+            "rawOnly": "raw-value",
+        }
+
+        self.assertEqual(extract_raw_field(payload, "missing", "rawOnly"), "raw-value")
+        self.assertEqual(extract_optional_int(payload, "count"), 7)
+        self.assertEqual(extract_optional_float(payload, "ratio"), 0.25)
+        self.assertEqual(extract_optional_str(payload, "label"), "ready")
+        self.assertTrue(extract_optional_bool(payload, "enabled"))
+        self.assertIsNone(extract_optional_int(payload, "missing"))
+        self.assertIsNone(extract_optional_float({"ratio": "nan?"}, "ratio"))
+        self.assertIsNone(extract_optional_bool({"enabled": "unknown"}, "enabled"))
+
+    def test_extract_optional_datetime_should_support_z_and_normalizer(self) -> None:
+        payload = {"ts": "2026-04-22T01:02:03Z"}
+        parsed = extract_optional_datetime(payload, "ts")
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.isoformat(), "2026-04-22T01:02:03+00:00")
+
+        normalized = extract_optional_datetime(
+            payload,
+            "ts",
+            normalize_query_datetime=lambda value: None if value is None else value.replace(second=0),
+        )
+        self.assertIsNotNone(normalized)
+        assert normalized is not None
+        self.assertEqual(normalized.isoformat(), "2026-04-22T01:02:00+00:00")
+        self.assertIsNone(extract_optional_datetime({"ts": "not-datetime"}, "ts"))
+
+    def test_build_dispatch_meta_and_receipt_dims_should_normalize_raw_payload(self) -> None:
+        raw_payload = _build_phase_payload(case_id=4001, idempotency_key="phase:4001")
+
+        meta = build_dispatch_meta_from_raw(
+            raw_payload,
+            extract_optional_int=extract_optional_int,
+            extract_optional_str=extract_optional_str,
+        )
+        dims = build_receipt_dims_from_raw(
+            "phase",
+            raw_payload,
+            extract_optional_int=extract_optional_int,
+        )
+
+        self.assertEqual(meta["caseId"], 4001)
+        self.assertEqual(meta["sessionId"], 4031)
+        self.assertEqual(meta["idempotencyKey"], "phase:4001")
+        self.assertEqual(dims["phaseNo"], 3)
+        self.assertEqual(dims["messageCount"], 2)
+        self.assertIsNone(dims["phaseStartNo"])
+
+    def test_resolve_idempotency_or_raise_should_return_replayed_response(self) -> None:
+        replayed = resolve_idempotency_or_raise(
+            resolve_idempotency=lambda **kwargs: SimpleNamespace(
+                status="replay",
+                record=SimpleNamespace(response={"accepted": True, "status": "queued"}),
+            ),
+            key="phase:4101",
+            job_id=4101,
+            ttl_secs=3600,
+            conflict_detail="idempotency_conflict:phase_dispatch",
+        )
+
+        self.assertIsNotNone(replayed)
+        assert replayed is not None
+        self.assertTrue(replayed["accepted"])
+        self.assertTrue(replayed["idempotentReplay"])
+
+    def test_resolve_idempotency_or_raise_should_raise_on_conflict(self) -> None:
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            resolve_idempotency_or_raise(
+                resolve_idempotency=lambda **kwargs: SimpleNamespace(
+                    status="occupied",
+                    record=None,
+                ),
+                key="phase:4102",
+                job_id=4102,
+                ttl_secs=3600,
+                conflict_detail="idempotency_conflict:phase_dispatch",
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail, "idempotency_conflict:phase_dispatch")
+
+    def test_validate_dispatch_request_helpers_should_raise_422_on_invalid_ranges(self) -> None:
+        phase_payload = _build_phase_payload(case_id=4201, idempotency_key="phase:4201")
+        phase_payload["message_count"] = 1
+        phase_payload["messages"] = []
+        phase_request = PhaseDispatchRequest.model_validate(phase_payload)
+
+        with self.assertRaises(JudgeCommandRouteError) as phase_ctx:
+            validate_phase_dispatch_request(phase_request)
+        self.assertEqual(phase_ctx.exception.status_code, 422)
+        self.assertEqual(phase_ctx.exception.detail, "message_count_mismatch")
+
+        final_payload = _build_final_payload(case_id=4202, idempotency_key="final:4202")
+        final_payload["phase_start_no"] = 3
+        final_payload["phase_end_no"] = 2
+        final_request = FinalDispatchRequest.model_validate(final_payload)
+
+        with self.assertRaises(JudgeCommandRouteError) as final_ctx:
+            validate_final_dispatch_request(final_request)
+        self.assertEqual(final_ctx.exception.status_code, 422)
+        self.assertEqual(final_ctx.exception.detail, "invalid_phase_range")
+
+    def test_resolve_callback_fn_for_dispatch_should_choose_by_dispatch_type(self) -> None:
+        phase_failed = object()
+        final_failed = object()
+        phase_report = object()
+        final_report = object()
+
+        self.assertIs(
+            resolve_failed_callback_fn_for_dispatch(
+                dispatch_type="phase",
+                callback_phase_failed_fn=phase_failed,
+                callback_final_failed_fn=final_failed,
+            ),
+            phase_failed,
+        )
+        self.assertIs(
+            resolve_failed_callback_fn_for_dispatch(
+                dispatch_type="final",
+                callback_phase_failed_fn=phase_failed,
+                callback_final_failed_fn=final_failed,
+            ),
+            final_failed,
+        )
+        self.assertIs(
+            resolve_report_callback_fn_for_dispatch(
+                dispatch_type="phase",
+                callback_phase_report_fn=phase_report,
+                callback_final_report_fn=final_report,
+            ),
+            phase_report,
+        )
+        self.assertIs(
+            resolve_report_callback_fn_for_dispatch(
+                dispatch_type="final",
+                callback_phase_report_fn=phase_report,
+                callback_final_report_fn=final_report,
+            ),
+            final_report,
+        )
+
+    def test_invoke_callback_with_retry_should_retry_until_success(self) -> None:
+        calls: dict[str, Any] = {"attempt": 0, "sleep": []}
+
+        async def _callback(job_id: int, payload: dict[str, Any]) -> None:
+            calls["attempt"] += 1
+            if calls["attempt"] < 3:
+                raise RuntimeError("temp-down")
+
+        async def _sleep(seconds: float) -> None:
+            calls["sleep"].append(seconds)
+
+        attempts, retries = asyncio.run(
+            invoke_callback_with_retry(
+                callback_fn=_callback,
+                job_id=5001,
+                payload={"status": "reported"},
+                max_attempts=5,
+                backoff_ms=10,
+                sleep_fn=_sleep,
+            )
+        )
+        self.assertEqual(attempts, 3)
+        self.assertEqual(retries, 2)
+        self.assertEqual(calls["sleep"], [0.01, 0.02])
+
+    def test_invoke_callback_with_retry_should_raise_after_max_attempts(self) -> None:
+        async def _callback(job_id: int, payload: dict[str, Any]) -> None:
+            raise RuntimeError("always-fail")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            asyncio.run(
+                invoke_callback_with_retry(
+                    callback_fn=_callback,
+                    job_id=5002,
+                    payload={"status": "reported"},
+                    max_attempts=2,
+                    backoff_ms=0,
+                    sleep_fn=lambda _seconds: asyncio.sleep(0),
+                )
+            )
+        self.assertIn("after 2 attempts", str(ctx.exception))
+
+    def test_save_dispatch_receipt_should_forward_payload_to_store(self) -> None:
+        calls: dict[str, Any] = {}
+
+        def _save_dispatch_receipt_fn(**kwargs: Any) -> None:
+            calls["kwargs"] = dict(kwargs)
+
+        save_dispatch_receipt(
+            save_dispatch_receipt_fn=_save_dispatch_receipt_fn,
+            dispatch_type="phase",
+            job_id=5101,
+            scope_id=1,
+            session_id=5131,
+            trace_id="trace-phase-5101",
+            idempotency_key="phase:5101",
+            rubric_version="v3",
+            judge_policy_version="v3-default",
+            topic_domain="tft",
+            retrieval_profile="hybrid_v1",
+            phase_no=3,
+            phase_start_no=None,
+            phase_end_no=None,
+            message_start_id=11,
+            message_end_id=12,
+            message_count=2,
+            status="reported",
+            request_payload={"dispatchType": "phase"},
+            response_payload={"accepted": True},
+        )
+
+        saved = calls["kwargs"]
+        self.assertEqual(saved["dispatch_type"], "phase")
+        self.assertEqual(saved["job_id"], 5101)
+        self.assertEqual(saved["status"], "reported")
+        self.assertEqual(saved["request"], {"dispatchType": "phase"})
+        self.assertEqual(saved["response"], {"accepted": True})
+
+    def test_safe_float_should_fallback_on_invalid_values(self) -> None:
+        self.assertEqual(safe_float("1.5"), 1.5)
+        self.assertEqual(safe_float(2), 2.0)
+        self.assertEqual(safe_float("bad", default=9.0), 9.0)
+
+    def test_resolve_winner_should_honor_margin(self) -> None:
+        self.assertEqual(resolve_winner(8.5, 6.9, margin=1.0), "pro")
+        self.assertEqual(resolve_winner(6.2, 7.6, margin=1.0), "con")
+        self.assertEqual(resolve_winner(7.0, 6.4, margin=1.0), "draw")
+
+    def test_build_final_report_payload_for_dispatch_should_list_phase_receipts_when_missing(
+        self,
+    ) -> None:
+        calls: dict[str, Any] = {}
+
+        def _list_dispatch_receipts(**kwargs: Any) -> list[Any]:
+            calls["list"] = dict(kwargs)
+            return [{"phaseNo": 1}, {"phaseNo": 2}]
+
+        def _build_final_report_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["build"] = dict(kwargs)
+            return {
+                "accepted": True,
+                "phaseCount": len(kwargs["phase_receipts"]),
+            }
+
+        result = build_final_report_payload_for_dispatch(
+            request=SimpleNamespace(session_id=8101),
+            phase_receipts=None,
+            fairness_thresholds={"biasGap": 0.05},
+            panel_runtime_profiles={"judgeA": {"judgeId": "judgeA"}},
+            list_dispatch_receipts=_list_dispatch_receipts,
+            build_final_report_payload=_build_final_report_payload,
+            judge_style_mode="balanced",
+        )
+
+        self.assertEqual(calls["list"]["dispatch_type"], "phase")
+        self.assertEqual(calls["list"]["session_id"], 8101)
+        self.assertEqual(calls["build"]["judge_style_mode"], "balanced")
+        self.assertEqual(len(calls["build"]["phase_receipts"]), 2)
+        self.assertEqual(result["phaseCount"], 2)
+
+    def test_build_final_report_payload_for_dispatch_should_use_given_phase_receipts(self) -> None:
+        calls: dict[str, Any] = {"listCalled": False}
+
+        def _list_dispatch_receipts(**kwargs: Any) -> list[Any]:
+            calls["listCalled"] = True
+            return [{"phaseNo": 9}]
+
+        def _build_final_report_payload(**kwargs: Any) -> dict[str, Any]:
+            calls["build"] = dict(kwargs)
+            return {"accepted": True}
+
+        provided_receipts: tuple[dict[str, Any], ...] = (
+            {"phaseNo": 5},
+            {"phaseNo": 6},
+        )
+
+        build_final_report_payload_for_dispatch(
+            request=SimpleNamespace(session_id=8201),
+            phase_receipts=provided_receipts,  # type: ignore[arg-type]
+            fairness_thresholds=None,
+            panel_runtime_profiles=None,
+            list_dispatch_receipts=_list_dispatch_receipts,
+            build_final_report_payload=_build_final_report_payload,
+            judge_style_mode="strict",
+        )
+
+        self.assertFalse(calls["listCalled"])
+        self.assertEqual(len(calls["build"]["phase_receipts"]), 2)
+        self.assertIsNot(calls["build"]["phase_receipts"], provided_receipts)
+
+    def test_resolve_registry_profile_helpers_should_resolve_profiles(self) -> None:
+        policy_profile = object()
+        prompt_profile = object()
+        tool_profile = object()
+
+        resolved_policy = resolve_policy_profile_or_raise(
+            resolve_policy_profile=lambda **kwargs: SimpleNamespace(
+                profile=policy_profile,
+                error_code=None,
+            ),
+            judge_policy_version="v3-default",
+            rubric_version="v3",
+            topic_domain="tft",
+        )
+        resolved_prompt = resolve_prompt_profile_or_raise(
+            get_prompt_profile=lambda _version: prompt_profile,
+            prompt_registry_version="promptset-v3-default",
+        )
+        resolved_tool = resolve_tool_profile_or_raise(
+            get_tool_profile=lambda _version: tool_profile,
+            tool_registry_version="toolset-v3-default",
+        )
+
+        self.assertIs(resolved_policy, policy_profile)
+        self.assertIs(resolved_prompt, prompt_profile)
+        self.assertIs(resolved_tool, tool_profile)
+
+    def test_resolve_registry_profile_helpers_should_raise_422_on_missing(self) -> None:
+        with self.assertRaises(JudgeCommandRouteError) as policy_ctx:
+            resolve_policy_profile_or_raise(
+                resolve_policy_profile=lambda **kwargs: SimpleNamespace(
+                    profile=None,
+                    error_code="judge_policy_version_unknown",
+                ),
+                judge_policy_version="missing",
+                rubric_version="v3",
+                topic_domain="tft",
+            )
+        self.assertEqual(policy_ctx.exception.status_code, 422)
+        self.assertEqual(policy_ctx.exception.detail, "judge_policy_version_unknown")
+
+        with self.assertRaises(JudgeCommandRouteError) as prompt_ctx:
+            resolve_prompt_profile_or_raise(
+                get_prompt_profile=lambda _version: None,
+                prompt_registry_version="missing",
+            )
+        self.assertEqual(prompt_ctx.exception.status_code, 422)
+        self.assertEqual(prompt_ctx.exception.detail, "unknown_prompt_registry_version")
+
+        with self.assertRaises(JudgeCommandRouteError) as tool_ctx:
+            resolve_tool_profile_or_raise(
+                get_tool_profile=lambda _version: None,
+                tool_registry_version="missing",
+            )
+        self.assertEqual(tool_ctx.exception.status_code, 422)
+        self.assertEqual(tool_ctx.exception.detail, "unknown_tool_registry_version")
+
+    def test_attach_policy_trace_snapshot_should_fill_registry_trace_fields(self) -> None:
+        report_payload: dict[str, Any] = {"status": "queued"}
+        policy_profile = SimpleNamespace(version="policy-v3")
+        prompt_profile = SimpleNamespace(version="prompt-v7")
+        tool_profile = SimpleNamespace(version="tool-v5")
+
+        attach_policy_trace_snapshot(
+            report_payload=report_payload,
+            profile=policy_profile,
+            prompt_profile=prompt_profile,
+            tool_profile=tool_profile,
+            build_policy_trace_snapshot=lambda profile: {"policyVersion": profile.version},
+            build_prompt_trace_snapshot=lambda profile: {"promptVersion": profile.version},
+            build_tool_trace_snapshot=lambda profile: {"toolVersion": profile.version},
+        )
+
+        judge_trace = report_payload["judgeTrace"]
+        self.assertEqual(judge_trace["policyRegistry"]["policyVersion"], "policy-v3")
+        self.assertEqual(judge_trace["promptRegistry"]["promptVersion"], "prompt-v7")
+        self.assertEqual(judge_trace["toolRegistry"]["toolVersion"], "tool-v5")
+        self.assertEqual(
+            judge_trace["registryVersions"],
+            {
+                "policyVersion": "policy-v3",
+                "promptVersion": "prompt-v7",
+                "toolsetVersion": "tool-v5",
+            },
+        )
+
+    def test_attach_policy_trace_snapshot_should_noop_for_non_dict_payload(self) -> None:
+        attach_policy_trace_snapshot(
+            report_payload=None,
+            profile=SimpleNamespace(version="policy-v3"),
+            prompt_profile=SimpleNamespace(version="prompt-v7"),
+            tool_profile=SimpleNamespace(version="tool-v5"),
+            build_policy_trace_snapshot=lambda profile: {"policyVersion": profile.version},
+            build_prompt_trace_snapshot=lambda profile: {"promptVersion": profile.version},
+            build_tool_trace_snapshot=lambda profile: {"toolVersion": profile.version},
+        )
+
+    def test_resolve_panel_runtime_profiles_should_merge_metadata_and_defaults(self) -> None:
+        profile = SimpleNamespace(
+            version="v3-custom",
+            tool_registry_version="toolset-v7",
+            topic_domain="tft",
+            prompt_versions={
+                "summaryPromptVersion": "summary-v9",
+                "agent2PromptVersion": "agent2-v9",
+            },
+            metadata={
+                "panelRuntimeContext": {
+                    "defaultDomainSlot": "tft_ranked",
+                    "runtimeStage": "adaptive_bootstrap",
+                    "adaptiveEnabled": True,
+                    "candidateModels": ["gpt-5.4", "gpt-5.4", "gpt-5.4-mini"],
+                    "strategyMetadata": {"calibrationVersion": "calib-local-v2"},
+                },
+                "panelRuntimeProfiles": {
+                    "judgeA": {
+                        "profileId": "panel-a-custom",
+                        "modelStrategy": "llm_vote",
+                        "strategySlot": "adaptive_weighted_vote",
+                        "scoreSource": "weighted_blend",
+                        "decisionMargin": "0.45",
+                        "promptVersion": "panel-prompt-v9",
+                        "toolsetVersion": "toolset-custom",
+                        "candidateModels": ["gpt-5.4", "gpt-5.4"],
+                    }
+                },
+            },
+        )
+        defaults = {
+            "judgeA": {
+                "promptVersionKey": "summaryPromptVersion",
+                "profileId": "panel-judgeA-default-v1",
+                "modelStrategy": "judge_dimension_composite",
+                "strategySlot": "dimension_composite",
+                "scoreSource": "dimension_composite",
+                "decisionMargin": 0.8,
+                "domainSlot": "tft",
+                "runtimeStage": "bootstrap",
+            },
+            "judgeB": {
+                "promptVersionKey": "agent2PromptVersion",
+                "profileId": "panel-judgeB-default-v1",
+                "modelStrategy": "judge_dimension_composite",
+                "strategySlot": "dimension_composite",
+                "scoreSource": "dimension_composite",
+                "decisionMargin": 0.8,
+                "domainSlot": "tft",
+                "runtimeStage": "bootstrap",
+            },
+        }
+
+        result = resolve_panel_runtime_profiles(
+            profile=profile,
+            panel_judge_ids=("judgeA", "judgeB"),
+            panel_runtime_profile_defaults=defaults,
+        )
+
+        judge_a = result["judgeA"]
+        self.assertEqual(judge_a["profileId"], "panel-a-custom")
+        self.assertEqual(judge_a["modelStrategy"], "llm_vote")
+        self.assertEqual(judge_a["strategySlot"], "adaptive_weighted_vote")
+        self.assertEqual(judge_a["scoreSource"], "weighted_blend")
+        self.assertEqual(judge_a["decisionMargin"], 0.45)
+        self.assertEqual(judge_a["promptVersion"], "panel-prompt-v9")
+        self.assertEqual(judge_a["toolsetVersion"], "toolset-custom")
+        self.assertEqual(judge_a["domainSlot"], "tft_ranked")
+        self.assertEqual(judge_a["runtimeStage"], "adaptive_bootstrap")
+        self.assertTrue(judge_a["adaptiveEnabled"])
+        self.assertEqual(judge_a["candidateModels"], ["gpt-5.4"])
+        self.assertEqual(judge_a["profileSource"], "policy_metadata")
+        self.assertEqual(judge_a["policyVersion"], "v3-custom")
+
+        judge_b = result["judgeB"]
+        self.assertEqual(judge_b["profileId"], "panel-judgeB-default-v1")
+        self.assertEqual(judge_b["promptVersion"], "agent2-v9")
+        self.assertEqual(judge_b["toolsetVersion"], "toolset-v7")
+        self.assertEqual(judge_b["domainSlot"], "tft_ranked")
+        self.assertEqual(judge_b["runtimeStage"], "adaptive_bootstrap")
+        self.assertTrue(judge_b["adaptiveEnabled"])
+        self.assertEqual(judge_b["candidateModels"], ["gpt-5.4", "gpt-5.4-mini"])
+        self.assertEqual(
+            judge_b["strategyMetadata"],
+            {"calibrationVersion": "calib-local-v2"},
+        )
+        self.assertEqual(judge_b["profileSource"], "builtin_default")
+
+    def test_resolve_panel_runtime_profiles_should_fallback_to_general_topic_defaults(self) -> None:
+        profile = SimpleNamespace(
+            version="v3-default",
+            tool_registry_version="",
+            topic_domain="*",
+            prompt_versions={},
+            metadata={},
+        )
+        defaults = {
+            "judgeA": {
+                "promptVersionKey": "summaryPromptVersion",
+                "profileId": "panel-judgeA-default-v1",
+                "modelStrategy": "judge_dimension_composite",
+                "strategySlot": "dimension_composite",
+                "scoreSource": "dimension_composite",
+                "decisionMargin": 0.75,
+                "domainSlot": "tft",
+                "runtimeStage": "bootstrap",
+            }
+        }
+
+        result = resolve_panel_runtime_profiles(
+            profile=profile,
+            panel_judge_ids=("judgeA",),
+            panel_runtime_profile_defaults=defaults,
+        )
+        judge_a = result["judgeA"]
+
+        self.assertEqual(judge_a["domainSlot"], "general")
+        self.assertEqual(judge_a["runtimeStage"], "bootstrap")
+        self.assertFalse(judge_a["adaptiveEnabled"])
+        self.assertEqual(judge_a["candidateModels"], [])
+        self.assertEqual(judge_a["strategyMetadata"], {})
+        self.assertEqual(judge_a["decisionMargin"], 0.75)
+        self.assertIsNone(judge_a["toolsetVersion"])
+        self.assertIsNone(judge_a["promptVersion"])
+        self.assertEqual(judge_a["profileSource"], "builtin_default")
+
     def test_build_case_create_route_payload_should_return_case_built_response(self) -> None:
         raw_payload = _build_case_payload(case_id=4101, idempotency_key="case:4101")
         calls: dict[str, Any] = {}

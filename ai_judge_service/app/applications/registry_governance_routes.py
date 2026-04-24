@@ -42,6 +42,32 @@ class RegistryGovernanceRouteDependencyPack:
     build_registry_prompt_tool_action_hints: Callable[..., list[dict[str, Any]]]
 
 
+def serialize_policy_profile_with_domain_family(
+    *,
+    profile: Any,
+    serialize_policy_profile: Callable[[Any], dict[str, Any]],
+    resolve_policy_domain_judge_family_state: Callable[..., tuple[str, bool, str | None]],
+) -> dict[str, Any]:
+    payload = serialize_policy_profile(profile)
+    metadata = (
+        dict(payload.get("metadata"))
+        if isinstance(payload.get("metadata"), dict)
+        else {}
+    )
+    family, valid, error_code = resolve_policy_domain_judge_family_state(
+        topic_domain=payload.get("topicDomain") or payload.get("topic_domain"),
+        metadata=metadata,
+    )
+    metadata["domainJudgeFamily"] = family
+    metadata["domainJudgeFamilyValid"] = bool(valid)
+    if error_code:
+        metadata["domainJudgeFamilyError"] = error_code
+    else:
+        metadata.pop("domainJudgeFamilyError", None)
+    payload["metadata"] = metadata
+    return payload
+
+
 async def build_policy_registry_dependency_health_route_payload(
     *,
     policy_version: str | None,

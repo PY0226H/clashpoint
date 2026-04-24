@@ -102,10 +102,13 @@
 优先看：
 
 1. [AGENTS.md](/Users/panyihang/Documents/EchoIsle/AGENTS.md)
-2. [00-overview.md](/Users/panyihang/Documents/EchoIsle/docs/harness/00-overview.md)
-3. [module_turn_harness.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/module_turn_harness.sh)
-4. [journey_verify.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh)
-5. [module-turn-harness SKILL](/Users/panyihang/Documents/EchoIsle/skills/module-turn-harness/SKILL.md)
+2. [task-flows/README.md](/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/README.md)
+3. [product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md)
+4. [doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/doc-governance.md)
+5. [quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/quality-gates.md)
+6. [runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/runtime-verify.md)
+7. [usage-tutorial.md](/Users/panyihang/Documents/EchoIsle/docs/harness/usage-tutorial.md)
+8. [journey_verify.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh)
 
 ---
 

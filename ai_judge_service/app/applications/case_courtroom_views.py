@@ -1141,3 +1141,75 @@ def build_courtroom_drilldown_action_hints(
     if not hints:
         hints.append("monitor")
     return hints
+
+
+def serialize_claim_ledger_record(
+    record: Any,
+    *,
+    include_payload: bool = True,
+) -> dict[str, Any]:
+    item = {
+        "caseId": record.case_id,
+        "dispatchType": record.dispatch_type,
+        "traceId": record.trace_id,
+        "createdAt": record.created_at.isoformat(),
+        "updatedAt": record.updated_at.isoformat(),
+    }
+    if include_payload:
+        item["caseDossier"] = dict(record.case_dossier)
+        item["claimGraph"] = dict(record.claim_graph)
+        item["claimGraphSummary"] = dict(record.claim_graph_summary)
+        item["evidenceLedger"] = dict(record.evidence_ledger)
+        item["verdictEvidenceRefs"] = [dict(row) for row in record.verdict_evidence_refs]
+    return item
+
+
+def normalize_courtroom_case_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def normalize_courtroom_case_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def build_courtroom_case_sort_key(
+    *,
+    item: dict[str, Any],
+    sort_by: str,
+) -> tuple[Any, ...]:
+    risk = item.get("riskProfile") if isinstance(item.get("riskProfile"), dict) else {}
+    workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    if sort_by == "risk_score":
+        return (
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(workflow.get("caseId") or 0),)
+    return (
+        str(workflow.get("updatedAt") or "").strip(),
+        int(risk.get("score") or 0),
+        int(workflow.get("caseId") or 0),
+    )
+
+
+def normalize_evidence_claim_reliability_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def normalize_evidence_claim_queue_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def normalize_evidence_claim_queue_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized

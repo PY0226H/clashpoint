@@ -302,7 +302,7 @@ build_profile_checks() {
     "profile 分发与统一摘要" \
     "pass" \
     "已进入 ${PROFILE} profile，并按统一 JSON/Markdown 格式产出结果。" \
-    "$ROOT/scripts/harness/journey_verify.sh;$ROOT/docs/harness/30-runtime-verify.md" \
+    "$ROOT/scripts/harness/journey_verify.sh;$ROOT/docs/harness/runtime-verify.md" \
     ""
 
   case "$PROFILE" in

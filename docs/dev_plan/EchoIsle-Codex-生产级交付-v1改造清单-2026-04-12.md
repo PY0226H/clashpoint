@@ -7,7 +7,7 @@
 
 2026-04-13 更新：
 
-1. 本清单中依赖 `module_turn_harness.sh`、`module-turn-harness/SKILL.md`、`docs/harness/20-orchestration.md` 的条目已作废。
+1. 本清单中依赖旧 orchestration / module-turn 入口的条目已作废。
 2. `module-turn-harness` 已退役并删除，不再作为生产级交付改造目标。
 3. 后续若继续推进生产级交付治理，应基于 `docs/harness/task-flows/` 与具体 leaf skill/guard 重新拆分计划。
 
@@ -55,7 +55,7 @@
 | P1-1 | 新增：`scripts/quality/python_strict_debt_guard.sh` | 基线文件：`ai_judge_service/docs/typing/strict_whitelist.baseline.txt` | strict 白名单模块数增加；新增模块未附 `owner/reason/expires_on` | `bash scripts/quality/python_strict_debt_guard.sh --root .` |
 | P1-2 | 新增：`scripts/release/supply_chain_allowlist_budget_guard.sh` | 对 `cargo_deny_advisories_allowlist.csv` 增加字段校验：`owner/reason/expires_on`（可扩展 `ticket`） | 新增豁免无 owner/reason/expires_on；到期日超 14 天；活跃豁免总量较基线上升 | `bash scripts/release/supply_chain_allowlist_budget_guard.sh --root . --max-expire-days 14` |
 | P1-3 | `skills/post-module-test-guard/scripts/run_test_gate.sh` | 统一 nextest 参数（去除与 CI 分叉）；新增 `--ci-parity` 模式 | 本地门禁与 CI 命令不一致；`--ci-parity` 模式检查失败 | `bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode full --ci-parity` |
-| P1-4 | 已作废：原目标为 `docs/harness/20-orchestration.md`、`skills/module-turn-harness/SKILL.md`、`AGENTS.md` | `module-turn-harness` 已退役并删除 | 不再执行 | 后续基于 task flow 与具体 leaf skill 重新规划 |
+| P1-4 | 已作废：原目标为旧 orchestration / module-turn 入口与 `AGENTS.md` | `module-turn-harness` 已退役并删除 | 不再执行 | 后续基于 task flow 与具体 leaf skill 重新规划 |
 
 ---
 

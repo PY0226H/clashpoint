@@ -11,6 +11,603 @@ class FairnessRouteError(Exception):
         self.detail = detail
 
 
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_case_fairness_gate_conclusion(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def normalize_case_fairness_challenge_state(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def normalize_case_fairness_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def normalize_case_fairness_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def build_case_fairness_sort_key(
+    *,
+    item: dict[str, Any],
+    sort_by: str,
+) -> tuple[Any, ...]:
+    if sort_by == "panel_disagreement_ratio":
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        return (
+            _safe_float(panel.get("ratio"), default=0.0),
+            int(item.get("caseId") or 0),
+        )
+    if sort_by == "gate_conclusion":
+        return (
+            str(item.get("gateConclusion") or "").strip().lower(),
+            int(item.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(item.get("caseId") or 0),)
+    return (
+        str(item.get("updatedAt") or "").strip(),
+        int(item.get("caseId") or 0),
+    )
+
+
+def build_case_fairness_aggregations(
+    items: list[dict[str, Any]],
+    *,
+    case_fairness_gate_conclusions: set[str] | frozenset[str],
+) -> dict[str, Any]:
+    gate_counts: dict[str, int] = {
+        key: 0 for key in sorted(case_fairness_gate_conclusions)
+    }
+    gate_counts["unknown"] = 0
+    winner_counts: dict[str, int] = {
+        "pro": 0,
+        "con": 0,
+        "draw": 0,
+        "unknown": 0,
+    }
+    challenge_state_counts: dict[str, int] = {"none": 0}
+    policy_version_counts: dict[str, int] = {"unknown": 0}
+
+    open_review_count = 0
+    review_required_count = 0
+    drift_breach_count = 0
+    threshold_breach_count = 0
+    shadow_breach_count = 0
+    panel_high_disagreement_count = 0
+    with_challenge_count = 0
+
+    for item in items:
+        gate = str(item.get("gateConclusion") or "").strip().lower()
+        if gate in gate_counts:
+            gate_counts[gate] += 1
+        else:
+            gate_counts["unknown"] += 1
+
+        winner = str(item.get("winner") or "").strip().lower()
+        if winner in winner_counts:
+            winner_counts[winner] += 1
+        else:
+            winner_counts["unknown"] += 1
+
+        if bool(item.get("reviewRequired")):
+            review_required_count += 1
+
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        if bool(panel.get("high")):
+            panel_high_disagreement_count += 1
+
+        drift = item.get("driftSummary") if isinstance(item.get("driftSummary"), dict) else {}
+        if bool(drift.get("hasDriftBreach")):
+            drift_breach_count += 1
+        if bool(drift.get("hasThresholdBreach")):
+            threshold_breach_count += 1
+        policy_version = str(drift.get("policyVersion") or "").strip()
+        if policy_version:
+            policy_version_counts[policy_version] = (
+                policy_version_counts.get(policy_version, 0) + 1
+            )
+        else:
+            policy_version_counts["unknown"] += 1
+
+        shadow = item.get("shadowSummary") if isinstance(item.get("shadowSummary"), dict) else {}
+        if bool(shadow.get("hasShadowBreach")):
+            shadow_breach_count += 1
+
+        challenge_link = (
+            item.get("challengeLink") if isinstance(item.get("challengeLink"), dict) else {}
+        )
+        if bool(challenge_link.get("hasOpenReview")):
+            open_review_count += 1
+        latest_challenge = (
+            challenge_link.get("latest")
+            if isinstance(challenge_link.get("latest"), dict)
+            else None
+        )
+        state = (
+            str(latest_challenge.get("state") or "").strip()
+            if isinstance(latest_challenge, dict)
+            else ""
+        )
+        if state:
+            challenge_state_counts[state] = challenge_state_counts.get(state, 0) + 1
+            with_challenge_count += 1
+        else:
+            challenge_state_counts["none"] = challenge_state_counts.get("none", 0) + 1
+
+    return {
+        "totalMatched": len(items),
+        "reviewRequiredCount": review_required_count,
+        "openReviewCount": open_review_count,
+        "driftBreachCount": drift_breach_count,
+        "thresholdBreachCount": threshold_breach_count,
+        "shadowBreachCount": shadow_breach_count,
+        "panelHighDisagreementCount": panel_high_disagreement_count,
+        "withChallengeCount": with_challenge_count,
+        "gateConclusionCounts": gate_counts,
+        "winnerCounts": winner_counts,
+        "challengeStateCounts": dict(
+            sorted(challenge_state_counts.items(), key=lambda kv: kv[0])
+        ),
+        "policyVersionCounts": dict(
+            sorted(policy_version_counts.items(), key=lambda kv: kv[0])
+        ),
+    }
+
+
+def _extract_latest_challenge_snapshot(
+    workflow_events: list[Any],
+    *,
+    trust_challenge_event_type: str,
+) -> dict[str, Any] | None:
+    for event in reversed(workflow_events):
+        if (
+            str(getattr(event, "event_type", "") or "").strip()
+            != trust_challenge_event_type
+        ):
+            continue
+        payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+        state = str(
+            payload.get("state")
+            or payload.get("challengeState")
+            or payload.get("currentState")
+            or ""
+        ).strip()
+        if not state:
+            continue
+        return {
+            "state": state,
+            "reasonCode": (
+                str(payload.get("reasonCode") or payload.get("challengeReasonCode") or "").strip()
+                or None
+            ),
+            "reason": (
+                str(payload.get("reason") or payload.get("challengeReason") or "").strip() or None
+            ),
+            "requestedBy": (
+                str(payload.get("requestedBy") or payload.get("challengeRequestedBy") or "").strip()
+                or None
+            ),
+            "decidedBy": (
+                str(payload.get("decidedBy") or payload.get("challengeDecisionBy") or "").strip()
+                or None
+            ),
+            "dispatchType": str(payload.get("dispatchType") or "").strip() or None,
+            "at": (
+                getattr(event, "created_at", None).isoformat()
+                if isinstance(getattr(event, "created_at", None), datetime)
+                else None
+            ),
+        }
+    return None
+
+
+def build_case_fairness_item(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    workflow_job: Any | None,
+    workflow_events: list[Any],
+    report_payload: dict[str, Any],
+    latest_run: Any | None,
+    latest_shadow_run: Any | None,
+    normalize_fairness_gate_decision: Callable[..., str],
+    serialize_fairness_benchmark_run: Callable[[Any], dict[str, Any]],
+    serialize_fairness_shadow_run: Callable[[Any], dict[str, Any]],
+    trust_challenge_event_type: str,
+) -> dict[str, Any]:
+    fairness_summary = (
+        report_payload.get("fairnessSummary")
+        if isinstance(report_payload.get("fairnessSummary"), dict)
+        else {}
+    )
+    judge_trace = (
+        report_payload.get("judgeTrace")
+        if isinstance(report_payload.get("judgeTrace"), dict)
+        else {}
+    )
+    panel_runtime_profiles = (
+        judge_trace.get("panelRuntimeProfiles")
+        if isinstance(judge_trace.get("panelRuntimeProfiles"), dict)
+        else {}
+    )
+    verdict_ledger = (
+        report_payload.get("verdictLedger")
+        if isinstance(report_payload.get("verdictLedger"), dict)
+        else {}
+    )
+    arbitration = (
+        verdict_ledger.get("arbitration")
+        if isinstance(verdict_ledger.get("arbitration"), dict)
+        else {}
+    )
+    winner = str(report_payload.get("winner") or "").strip().lower() or None
+    review_required = bool(report_payload.get("reviewRequired"))
+    error_codes = [
+        str(item).strip()
+        for item in (report_payload.get("errorCodes") or [])
+        if str(item).strip()
+    ]
+    panel_high_disagreement = bool(fairness_summary.get("panelHighDisagreement"))
+    challenge_snapshot = _extract_latest_challenge_snapshot(
+        workflow_events,
+        trust_challenge_event_type=trust_challenge_event_type,
+    )
+    policy_version = (
+        str((judge_trace.get("policyRegistry") or {}).get("version") or "").strip()
+        if isinstance(judge_trace.get("policyRegistry"), dict)
+        else ""
+    ) or None
+    run_summary = (
+        dict(getattr(latest_run, "summary"))
+        if latest_run is not None and isinstance(getattr(latest_run, "summary", None), dict)
+        else {}
+    )
+    drift_payload = run_summary.get("drift") if isinstance(run_summary.get("drift"), dict) else {}
+    threshold_breaches = run_summary.get("thresholdBreaches")
+    if not isinstance(threshold_breaches, list):
+        threshold_breaches = []
+    drift_breaches = drift_payload.get("driftBreaches")
+    if not isinstance(drift_breaches, list):
+        drift_breaches = []
+    shadow_summary = (
+        dict(getattr(latest_shadow_run, "summary"))
+        if latest_shadow_run is not None
+        and isinstance(getattr(latest_shadow_run, "summary", None), dict)
+        else {}
+    )
+    shadow_breaches = shadow_summary.get("breaches")
+    if not isinstance(shadow_breaches, list):
+        shadow_breaches = []
+    has_shadow_breach = bool(
+        shadow_summary.get("hasBreach")
+        if isinstance(shadow_summary, dict)
+        else False
+    )
+    if (
+        latest_shadow_run is not None
+        and str(getattr(latest_shadow_run, "threshold_decision", "") or "").strip().lower()
+        != "accepted"
+    ):
+        has_shadow_breach = True
+    gate_conclusion = normalize_fairness_gate_decision(
+        arbitration.get("gateDecision") or fairness_summary.get("gateDecision"),
+        review_required=review_required,
+    )
+    if not gate_conclusion:
+        gate_conclusion = "blocked_to_draw" if review_required else "pass_through"
+
+    return {
+        "caseId": case_id,
+        "dispatchType": dispatch_type,
+        "traceId": trace_id or None,
+        "workflowStatus": getattr(workflow_job, "status", None) if workflow_job is not None else None,
+        "updatedAt": (
+            getattr(workflow_job, "updated_at", None).isoformat()
+            if workflow_job is not None
+            and isinstance(getattr(workflow_job, "updated_at", None), datetime)
+            else None
+        ),
+        "winner": winner,
+        "reviewRequired": review_required,
+        "gateConclusion": gate_conclusion,
+        "errorCodes": error_codes,
+        "panelDisagreement": {
+            "high": panel_high_disagreement,
+            "ratio": _safe_float(fairness_summary.get("panelDisagreementRatio"), default=0.0),
+            "ratioMax": _safe_float(fairness_summary.get("panelDisagreementRatioMax"), default=0.0),
+            "reasons": [
+                str(item).strip()
+                for item in (fairness_summary.get("panelDisagreementReasons") or [])
+                if str(item).strip()
+            ],
+            "majorityWinner": (
+                str(fairness_summary.get("panelMajorityWinner") or "").strip().lower() or None
+            ),
+            "voteBySide": (
+                fairness_summary.get("panelVoteBySide")
+                if isinstance(fairness_summary.get("panelVoteBySide"), dict)
+                else {}
+            ),
+            "runtimeProfiles": panel_runtime_profiles,
+        },
+        "driftSummary": {
+            "policyVersion": policy_version,
+            "latestRun": (
+                serialize_fairness_benchmark_run(latest_run) if latest_run is not None else None
+            ),
+            "thresholdBreaches": [
+                str(item).strip() for item in threshold_breaches if str(item).strip()
+            ],
+            "driftBreaches": [str(item).strip() for item in drift_breaches if str(item).strip()],
+            "hasThresholdBreach": bool(run_summary.get("hasThresholdBreach")),
+            "hasDriftBreach": bool(drift_payload.get("hasDriftBreach")),
+        },
+        "shadowSummary": {
+            "policyVersion": policy_version,
+            "latestRun": (
+                serialize_fairness_shadow_run(latest_shadow_run)
+                if latest_shadow_run is not None
+                else None
+            ),
+            "benchmarkRunId": (
+                str(getattr(latest_shadow_run, "benchmark_run_id", "") or "").strip() or None
+                if latest_shadow_run is not None
+                else None
+            ),
+            "breaches": [str(item).strip() for item in shadow_breaches if str(item).strip()],
+            "hasShadowBreach": has_shadow_breach,
+        },
+        "challengeLink": {
+            "latest": challenge_snapshot,
+            "hasOpenReview": (
+                workflow_job is not None
+                and str(getattr(workflow_job, "status", "") or "").strip()
+                in {"review_required", "draw_pending_vote"}
+            ),
+        },
+    }
+
+
+def build_fairness_calibration_on_env_input_template() -> dict[str, Any]:
+    return {
+        "envMarker": {
+            "REAL_CALIBRATION_ENV_READY": "true",
+            "CALIBRATION_ENV_MODE": "real",
+        },
+        "fairnessBenchmarkTrackRequiredKeys": [
+            "CALIBRATION_STATUS",
+            "WINDOW_FROM",
+            "WINDOW_TO",
+            "SAMPLE_SIZE",
+            "DRAW_RATE",
+            "SIDE_BIAS_DELTA",
+            "APPEAL_OVERTURN_RATE",
+        ],
+        "shadowRunPayloadRequiredKeys": [
+            "run_id",
+            "policy_version",
+            "benchmark_run_id",
+            "environment_mode",
+            "status",
+            "threshold_decision",
+            "metrics.sample_size",
+            "metrics.winner_flip_rate",
+            "metrics.score_shift_delta",
+            "metrics.review_required_delta",
+        ],
+        "recommendedCommands": [
+            "bash scripts/harness/ai_judge_p5_real_calibration_on_env.sh",
+            "bash scripts/harness/ai_judge_fairness_benchmark_freeze.sh",
+            "bash scripts/harness/ai_judge_runtime_ops_pack.sh",
+            "bash scripts/harness/ai_judge_real_env_window_closure.sh",
+        ],
+        "notes": [
+            (
+                "local calibration pack is for threshold suggestions and risk scanning "
+                "only; it does not represent real-env pass."
+            ),
+            (
+                "when entering the real-env window, provide real markers and full "
+                "five-track calibration evidence."
+            ),
+        ],
+    }
+
+
+def build_fairness_policy_calibration_recommended_actions(
+    *,
+    release_gate: dict[str, Any],
+    policy_version: str | None,
+    risk_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    seen_action_ids: set[str] = set()
+
+    gate_code = str(release_gate.get("code") or "").strip()
+    gate_passed = bool(release_gate.get("passed"))
+    benchmark_gate_passed = bool(release_gate.get("benchmarkGatePassed"))
+    shadow_gate_applied = bool(release_gate.get("shadowGateApplied"))
+    shadow_gate_passed = release_gate.get("shadowGatePassed")
+    high_risk_count = sum(
+        1
+        for item in risk_items
+        if isinstance(item, dict)
+        and str(item.get("severity") or "").strip().lower() == "high"
+    )
+
+    def _append_action(
+        *,
+        action_id: str,
+        priority: str,
+        reason_code: str,
+        description: str,
+        blocking: bool,
+    ) -> None:
+        normalized_action_id = str(action_id or "").strip()
+        if not normalized_action_id or normalized_action_id in seen_action_ids:
+            return
+        seen_action_ids.add(normalized_action_id)
+        actions.append(
+            {
+                "actionId": normalized_action_id,
+                "priority": str(priority or "").strip().lower() or "medium",
+                "reasonCode": str(reason_code or "").strip() or None,
+                "description": str(description or "").strip(),
+                "blocking": bool(blocking),
+                "advisoryOnly": True,
+                "policyVersion": policy_version,
+            }
+        )
+
+    if not policy_version:
+        _append_action(
+            action_id="select_policy_version_context",
+            priority="high",
+            reason_code="no_policy_version_context",
+            description=(
+                "provide policy_version in query or upload benchmark/shadow runs "
+                "before using calibration advisor."
+            ),
+            blocking=True,
+        )
+        return actions
+
+    if gate_code == "registry_fairness_gate_no_benchmark":
+        _append_action(
+            action_id="run_benchmark_first",
+            priority="high",
+            reason_code=gate_code,
+            description=(
+                "no benchmark evidence found for this policy version; run a benchmark "
+                "window before publish/activate."
+            ),
+            blocking=True,
+        )
+    elif gate_code in {
+        "registry_fairness_gate_threshold_not_accepted",
+        "registry_fairness_gate_remediation_required",
+        "registry_fairness_gate_status_not_ready",
+    }:
+        _append_action(
+            action_id="rerun_benchmark_with_remediation",
+            priority="high",
+            reason_code=gate_code,
+            description=(
+                "latest benchmark does not meet release gate; patch policy/prompts/tools "
+                "and rerun benchmark."
+            ),
+            blocking=True,
+        )
+
+    if benchmark_gate_passed and not shadow_gate_applied:
+        _append_action(
+            action_id="run_shadow_evaluation",
+            priority="high",
+            reason_code="shadow_required_after_benchmark_pass",
+            description=(
+                "benchmark passed and shadow evidence is missing; run shadow evaluation "
+                "to check winner-flip and score-shift risks."
+            ),
+            blocking=True,
+        )
+
+    if shadow_gate_applied and shadow_gate_passed is False:
+        _append_action(
+            action_id="prepare_candidate_policy_patch",
+            priority="high",
+            reason_code=gate_code or "shadow_gate_blocked",
+            description=(
+                "shadow gate is blocked; prepare candidate policy patch and rerun "
+                "shadow with the same benchmark baseline."
+            ),
+            blocking=True,
+        )
+        _append_action(
+            action_id="manual_review_before_activation",
+            priority="high",
+            reason_code="activation_requires_manual_review",
+            description=(
+                "activation should stay blocked until shadow breaches are resolved "
+                "or a governance override is explicitly approved."
+            ),
+            blocking=True,
+        )
+
+    if gate_passed:
+        _append_action(
+            action_id="publish_candidate_policy",
+            priority="medium",
+            reason_code="registry_fairness_gate_passed",
+            description=(
+                "fairness gate is currently passing; candidate policy can be published "
+                "through registry governance flow."
+            ),
+            blocking=False,
+        )
+        _append_action(
+            action_id="activate_candidate_policy",
+            priority="low",
+            reason_code="registry_fairness_gate_passed",
+            description=(
+                "after publish and governance review, policy activation can proceed "
+                "without fairness override."
+            ),
+            blocking=False,
+        )
+
+    if high_risk_count > 0 and not gate_passed:
+        _append_action(
+            action_id="triage_high_risk_cases",
+            priority="medium",
+            reason_code="high_risk_cases_present",
+            description=(
+                f"{high_risk_count} high-severity risk items detected; review top cases "
+                "for targeted remediation before next calibration run."
+            ),
+            blocking=False,
+        )
+
+    if not actions:
+        _append_action(
+            action_id="monitor_next_calibration_window",
+            priority="low",
+            reason_code=gate_code or "gate_status_unknown",
+            description=(
+                "no immediate blocking suggestion detected; continue monitoring fairness "
+                "runs and keep calibration evidence fresh."
+            ),
+            blocking=False,
+        )
+    return actions
+
+
 def normalize_fairness_environment_mode(
     value: str | None,
     *,

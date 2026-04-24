@@ -1,17 +1,5 @@
 # AGENTS.md
 
-## Purpose
-
-This file is the agent-facing table of contents for EchoIsle.
-
-Use it to find:
-
-1. the task flow entry for the current request
-2. which rules are currently enforced
-3. where the detailed harness docs and project map live
-
----
-
 ## Task Flow Entry
 
 1. If the task is `dev`, read `/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/dev.md`.
@@ -86,13 +74,12 @@ Detailed explanations now live under `docs/harness/`.
 
 Use these files as the detailed source of truth:
 
-1. [docs/harness/00-overview.md](/Users/panyihang/Documents/EchoIsle/docs/harness/00-overview.md): what the harness docs cover, current phase status, and where to look first
-2. [docs/harness/10-task-classification.md](/Users/panyihang/Documents/EchoIsle/docs/harness/10-task-classification.md): task types, module-level definition, and task flow routing
-3. [docs/harness/task-flows/README.md](/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/README.md): task-specific lifecycle flows for dev/refactor/non-dev/stage-closure
-4. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
-5. [docs/harness/30-runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/30-runtime-verify.md): current verification model and the gap before unified runtime verify lands
-6. [docs/harness/40-doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/40-doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
-7. [docs/harness/50-quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/50-quality-gates.md): current quality gates, guards, and CI responsibilities
+1. [docs/harness/task-flows/README.md](/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/README.md): task-specific lifecycle flows for dev/refactor/non-dev/stage-closure
+2. [docs/harness/product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md): summary-first product constraints for everyday module work
+3. [docs/harness/runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/runtime-verify.md): current verification model and the gap before unified runtime verify lands
+4. [docs/harness/doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/doc-governance.md): plan docs, evidence docs, explanation/interview docs, and current document ownership rules
+5. [docs/harness/quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/quality-gates.md): current quality gates, guards, and CI responsibilities
+6. [docs/harness/usage-tutorial.md](/Users/panyihang/Documents/EchoIsle/docs/harness/usage-tutorial.md): current day-to-day usage tutorial
 
 ---
 

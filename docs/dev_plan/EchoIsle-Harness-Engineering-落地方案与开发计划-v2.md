@@ -346,17 +346,22 @@ EchoIsle 当前已经具备明显的 harness 雏形：
 ```text
 docs/
   harness/
-    00-overview.md
-    10-task-classification.md
-    20-orchestration.md
-    30-runtime-verify.md
-    40-doc-governance.md
-    50-quality-gates.md
+    task-flows/
+      README.md
+      dev.md
+      refactor.md
+      non-dev.md
+      stage-closure.md
+    product-goals.md
+    runtime-verify.md
+    doc-governance.md
+    quality-gates.md
+    usage-tutorial.md
 
 scripts/
   harness/
-    module_turn_harness.sh
     journey_verify.sh
+    ai_judge_*.sh
 
 artifacts/
   harness/
@@ -555,8 +560,8 @@ bash scripts/harness/journey_verify.sh \
   3. 补充 `module-turn-harness` 的默认入口说明
 - 产出：
   1. 精简后的 `AGENTS.md`
-  2. `docs/harness/00-overview.md`
-  3. `docs/harness/10-task-classification.md`
+  2. `docs/harness/task-flows/README.md`
+  3. `docs/harness/product-goals.md`
 - 验收：
   1. `AGENTS.md` 不再承载长篇细则
   2. 能在 2 分钟内定位规则入口
@@ -574,12 +579,17 @@ bash scripts/harness/journey_verify.sh \
   - 现有 skill 规则
   - 架构和计划文档
 - 动作：
-  1. 新建以下文件：
-     - `00-overview.md`
-     - `20-orchestration.md`
-     - `30-runtime-verify.md`
-     - `40-doc-governance.md`
-     - `50-quality-gates.md`
+  1. 建立并维护以下当前文件：
+     - `task-flows/README.md`
+     - `task-flows/dev.md`
+     - `task-flows/refactor.md`
+     - `task-flows/non-dev.md`
+     - `task-flows/stage-closure.md`
+     - `product-goals.md`
+     - `runtime-verify.md`
+     - `doc-governance.md`
+     - `quality-gates.md`
+     - `usage-tutorial.md`
   2. 每个文档只写稳定规则，不写临时阶段说明
 - 产出：
   - `docs/harness/*.md`
@@ -589,12 +599,16 @@ bash scripts/harness/journey_verify.sh \
 
 - 当前完成情况：
   1. 已建立 `docs/harness/` 主目录，并落地以下文件：
-     - `00-overview.md`
-     - `10-task-classification.md`
-     - `20-orchestration.md`
-     - `30-runtime-verify.md`
-     - `40-doc-governance.md`
-     - `50-quality-gates.md`
+     - `task-flows/README.md`
+     - `task-flows/dev.md`
+     - `task-flows/refactor.md`
+     - `task-flows/non-dev.md`
+     - `task-flows/stage-closure.md`
+     - `product-goals.md`
+     - `runtime-verify.md`
+     - `doc-governance.md`
+     - `quality-gates.md`
+     - `usage-tutorial.md`
   2. 已将 `AGENTS.md` 中的导航链接对齐到上述文档
   3. 当前文档内容已明确区分“现状规则”和“后续阶段目标”，避免把未来设计误判为已生效规则
 
@@ -1208,9 +1222,9 @@ bash scripts/harness/journey_verify.sh \
 1. 本文档是 Harness Engineering 升级的当前主计划文档。
 2. 后续执行阶段，默认活动计划入口应由 `.codex/plan-slots/default.txt` 指向 `docs/dev_plan/当前开发计划.md`；并行计划通过命名 slot 管理。
 3. 任何新增模块级 skill，若会改变交付链，必须先更新：
-   - `docs/harness/20-orchestration.md`
    - `docs/harness/task-flows/`
-   - 必要时更新 `module-turn-harness`
+   - `docs/harness/usage-tutorial.md`
+   - 必要时更新对应 leaf skill 的 `SKILL.md`
    - 本计划文档中的相关阶段说明
 4. 任何新增 release/gate/evidence 脚本，默认不得把报告写入 `docs/dev_plan/`。
 5. explanation/interview 文档默认不是主阻塞链，但仍是高价值沉淀层，不能直接废弃。

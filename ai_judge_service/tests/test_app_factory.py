@@ -535,7 +535,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_case_overview_contract",
+            "app.app_factory.validate_case_overview_contract_v3",
             side_effect=ValueError("case_overview_missing_keys:caseEvidence"),
         ):
             resp = await self._get(
@@ -653,7 +653,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_courtroom_read_model_contract",
+            "app.app_factory.validate_courtroom_read_model_contract_v3",
             side_effect=ValueError("courtroom_read_model_missing_keys:report"),
         ):
             resp = await self._get(
@@ -730,28 +730,37 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         def _build_custom_final_payload(
             *,
-            runtime,
             request,
             phase_receipts=None,
             fairness_thresholds=None,
             panel_runtime_profiles=None,
+            list_dispatch_receipts=None,
+            build_final_report_payload=None,
+            judge_style_mode=None,
+            **_unused,
         ):
             receipts = (
                 list(phase_receipts)
                 if phase_receipts is not None
                 else list(
-                    runtime.trace_store.list_dispatch_receipts(
+                    list_dispatch_receipts(
                         dispatch_type="phase",
                         session_id=request.session_id,
                         status="reported",
                         limit=1000,
                     )
                 )
+                if callable(list_dispatch_receipts)
+                else []
             )
-            payload = build_final_report_payload_v3_final(
+            payload = (
+                build_final_report_payload
+                if callable(build_final_report_payload)
+                else build_final_report_payload_v3_final
+            )(
                 request=request,
                 phase_receipts=receipts,
-                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                judge_style_mode=judge_style_mode,
                 fairness_thresholds=fairness_thresholds,
                 panel_runtime_profiles=panel_runtime_profiles,
             )
@@ -803,7 +812,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory._build_final_report_payload",
+            "app.app_factory.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_custom_final_payload,
         ):
             for case_id in (high_case_id, mid_case_id, low_case_id):
@@ -1020,28 +1029,37 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         def _build_custom_final_payload(
             *,
-            runtime,
             request,
             phase_receipts=None,
             fairness_thresholds=None,
             panel_runtime_profiles=None,
+            list_dispatch_receipts=None,
+            build_final_report_payload=None,
+            judge_style_mode=None,
+            **_unused,
         ):
             receipts = (
                 list(phase_receipts)
                 if phase_receipts is not None
                 else list(
-                    runtime.trace_store.list_dispatch_receipts(
+                    list_dispatch_receipts(
                         dispatch_type="phase",
                         session_id=request.session_id,
                         status="reported",
                         limit=1000,
                     )
                 )
+                if callable(list_dispatch_receipts)
+                else []
             )
-            payload = build_final_report_payload_v3_final(
+            payload = (
+                build_final_report_payload
+                if callable(build_final_report_payload)
+                else build_final_report_payload_v3_final
+            )(
                 request=request,
                 phase_receipts=receipts,
-                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                judge_style_mode=judge_style_mode,
                 fairness_thresholds=fairness_thresholds,
                 panel_runtime_profiles=panel_runtime_profiles,
             )
@@ -1139,7 +1157,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory._build_final_report_payload",
+            "app.app_factory.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_custom_final_payload,
         ):
             for case_id in (high_case_id, low_case_id):
@@ -1353,28 +1371,37 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         def _build_custom_final_payload(
             *,
-            runtime,
             request,
             phase_receipts=None,
             fairness_thresholds=None,
             panel_runtime_profiles=None,
+            list_dispatch_receipts=None,
+            build_final_report_payload=None,
+            judge_style_mode=None,
+            **_unused,
         ):
             receipts = (
                 list(phase_receipts)
                 if phase_receipts is not None
                 else list(
-                    runtime.trace_store.list_dispatch_receipts(
+                    list_dispatch_receipts(
                         dispatch_type="phase",
                         session_id=request.session_id,
                         status="reported",
                         limit=1000,
                     )
                 )
+                if callable(list_dispatch_receipts)
+                else []
             )
-            payload = build_final_report_payload_v3_final(
+            payload = (
+                build_final_report_payload
+                if callable(build_final_report_payload)
+                else build_final_report_payload_v3_final
+            )(
                 request=request,
                 phase_receipts=receipts,
-                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                judge_style_mode=judge_style_mode,
                 fairness_thresholds=fairness_thresholds,
                 panel_runtime_profiles=panel_runtime_profiles,
             )
@@ -1477,7 +1504,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory._build_final_report_payload",
+            "app.app_factory.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_custom_final_payload,
         ):
             for case_id in (high_case_id, low_case_id):
@@ -1573,7 +1600,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory._validate_courtroom_drilldown_bundle_contract",
+            "app.app_factory.validate_courtroom_drilldown_bundle_contract_v3",
             side_effect=ValueError("courtroom_drilldown_bundle_missing_keys:items"),
         ):
             resp = await self._get(
@@ -1593,7 +1620,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory._validate_evidence_claim_ops_queue_contract",
+            "app.app_factory.validate_evidence_claim_ops_queue_contract_v3",
             side_effect=ValueError("evidence_claim_ops_queue_missing_keys:items"),
         ):
             resp = await self._get(
@@ -4308,7 +4335,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "degradationLevel": 1,
         }
 
-        with patch("app.app_factory._build_final_report_payload", return_value=gated_payload):
+        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", return_value=gated_payload):
             final_resp = await self._post_json(
                 app=app,
                 path="/internal/judge/v3/final/dispatch",
@@ -4459,7 +4486,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "degradationLevel": 1,
         }
 
-        with patch("app.app_factory._build_final_report_payload", return_value=gated_payload):
+        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", return_value=gated_payload):
             final_resp = await self._post_json(
                 app=app,
                 path="/internal/judge/v3/final/dispatch",
@@ -4692,7 +4719,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 audit_alerts=[],
             )
 
-        with patch("app.app_factory._build_final_report_payload", side_effect=_payload_side_effect):
+        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", side_effect=_payload_side_effect):
             high_resp = await self._post_json(
                 app=app,
                 path="/internal/judge/v3/final/dispatch",
@@ -4777,28 +4804,37 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
 
         def _build_review_payload(
             *,
-            runtime,
             request,
             phase_receipts=None,
             fairness_thresholds=None,
             panel_runtime_profiles=None,
+            list_dispatch_receipts=None,
+            build_final_report_payload=None,
+            judge_style_mode=None,
+            **_unused,
         ):
             receipts = (
                 list(phase_receipts)
                 if phase_receipts is not None
                 else list(
-                    runtime.trace_store.list_dispatch_receipts(
+                    list_dispatch_receipts(
                         dispatch_type="phase",
                         session_id=request.session_id,
                         status="reported",
                         limit=1000,
                     )
                 )
+                if callable(list_dispatch_receipts)
+                else []
             )
-            payload = build_final_report_payload_v3_final(
+            payload = (
+                build_final_report_payload
+                if callable(build_final_report_payload)
+                else build_final_report_payload_v3_final
+            )(
                 request=request,
                 phase_receipts=receipts,
-                judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
+                judge_style_mode=judge_style_mode,
                 fairness_thresholds=fairness_thresholds,
                 panel_runtime_profiles=panel_runtime_profiles,
             )
@@ -4832,7 +4868,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory._build_final_report_payload",
+            "app.app_factory.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_review_payload,
         ):
             for case_id in (challenged_case_id, plain_case_id):
@@ -5177,7 +5213,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory._validate_trust_challenge_ops_queue_contract",
+            "app.app_factory.validate_trust_challenge_queue_contract_v3",
             side_effect=ValueError("trust_challenge_queue_missing_keys:items"),
         ):
             resp = await self._get(
@@ -5845,7 +5881,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_trust_public_verify_contract",
+            "app.app_factory.validate_trust_public_verify_contract_v3",
             side_effect=ValueError("trust_public_verify_missing_keys:verifyPayload"),
         ):
             resp = await self._get(
@@ -5898,7 +5934,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_trust_commitment_contract",
+            "app.app_factory.validate_trust_commitment_contract_v3",
             side_effect=ValueError("trust_commitment_missing_keys:item"),
         ):
             resp = await self._get(
@@ -5951,7 +5987,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_trust_verdict_attestation_contract",
+            "app.app_factory.validate_trust_verdict_attestation_contract_v3",
             side_effect=ValueError("trust_verdict_attestation_missing_keys:item"),
         ):
             resp = await self._get(
@@ -6004,7 +6040,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_trust_challenge_review_contract",
+            "app.app_factory.validate_trust_challenge_review_contract_v3",
             side_effect=ValueError("trust_challenge_review_missing_keys:item"),
         ):
             resp = await self._get(
@@ -6057,7 +6093,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_trust_kernel_version_contract",
+            "app.app_factory.validate_trust_kernel_version_contract_v3",
             side_effect=ValueError("trust_kernel_version_missing_keys:item"),
         ):
             resp = await self._get(
@@ -6110,7 +6146,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_trust_audit_anchor_contract",
+            "app.app_factory.validate_trust_audit_anchor_contract_v3",
             side_effect=ValueError("trust_audit_anchor_missing_keys:item"),
         ):
             resp = await self._get(
@@ -6266,7 +6302,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "conScore": 62.0,
             "dimensionScores": {"logic": 70.0},
         }
-        with patch("app.app_factory._build_final_report_payload", return_value=broken_payload):
+        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", return_value=broken_payload):
             replay_resp = await self._post(
                 app=app,
                 path="/internal/judge/cases/7102/replay?dispatch_type=final",
@@ -6445,7 +6481,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         final_req = _build_final_request(case_id=7301, idempotency_key="final:7301")
 
         with patch(
-            "app.app_factory._build_final_report_payload",
+            "app.app_factory.build_final_report_payload_for_dispatch_v3",
             return_value={"winner": "draw", "degradationLevel": 1},
         ):
             blocked_resp = await self._post_json(
@@ -7051,7 +7087,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory._validate_case_fairness_list_contract",
+            "app.app_factory.validate_case_fairness_list_contract_v3",
             side_effect=ValueError("fairness_case_list_missing_keys:items"),
         ):
             resp = await self._get(
@@ -7104,7 +7140,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_resp.status_code, 200)
 
         with patch(
-            "app.app_factory._validate_case_fairness_detail_contract",
+            "app.app_factory.validate_case_fairness_detail_contract_v3",
             side_effect=ValueError("fairness_case_detail_missing_keys:item"),
         ):
             resp = await self._get(
@@ -7274,7 +7310,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory._validate_fairness_dashboard_contract",
+            "app.app_factory.validate_fairness_dashboard_contract_v3",
             side_effect=ValueError("fairness_dashboard_overview_missing_keys"),
         ):
             resp = await self._get(
@@ -8018,7 +8054,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(runtime)
 
         with patch(
-            "app.app_factory._validate_panel_runtime_profile_contract",
+            "app.app_factory.validate_panel_runtime_profile_contract_v3",
             side_effect=ValueError("panel_runtime_profile_missing_keys:items"),
         ):
             resp = await self._get(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -9,6 +10,499 @@ class PanelRuntimeRouteError(Exception):
         super().__init__(str(detail))
         self.status_code = int(status_code)
         self.detail = detail
+
+
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    if value is None or isinstance(value, bool):
+        return float(default)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if math.isnan(parsed) or math.isinf(parsed):
+        return float(default)
+    return parsed
+
+
+def normalize_panel_runtime_profile_source(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def normalize_panel_runtime_profile_sort_by(value: str | None) -> str:
+    return str(value or "").strip().lower() or "updated_at"
+
+
+def normalize_panel_runtime_profile_sort_order(value: str | None) -> str:
+    return str(value or "").strip().lower() or "desc"
+
+
+def build_panel_runtime_profile_item(
+    *,
+    case_item: dict[str, Any],
+    judge_id: str,
+    runtime_profile: dict[str, Any],
+) -> dict[str, Any]:
+    panel = (
+        case_item.get("panelDisagreement")
+        if isinstance(case_item.get("panelDisagreement"), dict)
+        else {}
+    )
+    challenge_link = (
+        case_item.get("challengeLink")
+        if isinstance(case_item.get("challengeLink"), dict)
+        else {}
+    )
+    latest_challenge = (
+        challenge_link.get("latest")
+        if isinstance(challenge_link.get("latest"), dict)
+        else {}
+    )
+    drift_summary = (
+        case_item.get("driftSummary")
+        if isinstance(case_item.get("driftSummary"), dict)
+        else {}
+    )
+
+    profile_source = (
+        str(runtime_profile.get("profileSource") or "").strip().lower() or "unknown"
+    )
+    profile_id = str(runtime_profile.get("profileId") or "").strip() or None
+    model_strategy = str(runtime_profile.get("modelStrategy") or "").strip() or None
+    score_source = str(runtime_profile.get("scoreSource") or "").strip() or None
+    strategy_slot = str(runtime_profile.get("strategySlot") or "").strip() or None
+    prompt_version = str(runtime_profile.get("promptVersion") or "").strip() or None
+    toolset_version = str(runtime_profile.get("toolsetVersion") or "").strip() or None
+    domain_slot = str(runtime_profile.get("domainSlot") or "").strip() or None
+    runtime_stage = str(runtime_profile.get("runtimeStage") or "").strip() or None
+    candidate_models = (
+        [
+            str(item).strip()
+            for item in runtime_profile.get("candidateModels", [])
+            if str(item).strip()
+        ]
+        if isinstance(runtime_profile.get("candidateModels"), list)
+        else []
+    )
+    strategy_metadata = (
+        dict(runtime_profile.get("strategyMetadata"))
+        if isinstance(runtime_profile.get("strategyMetadata"), dict)
+        else {}
+    )
+    policy_version = (
+        str(runtime_profile.get("policyVersion") or "").strip()
+        or str(drift_summary.get("policyVersion") or "").strip()
+        or None
+    )
+
+    return {
+        "caseId": int(case_item.get("caseId") or 0),
+        "traceId": str(case_item.get("traceId") or "").strip() or None,
+        "dispatchType": str(case_item.get("dispatchType") or "").strip() or None,
+        "workflowStatus": str(case_item.get("workflowStatus") or "").strip() or None,
+        "updatedAt": str(case_item.get("updatedAt") or "").strip() or None,
+        "winner": str(case_item.get("winner") or "").strip().lower() or None,
+        "gateConclusion": str(case_item.get("gateConclusion") or "").strip().lower() or None,
+        "reviewRequired": bool(case_item.get("reviewRequired")),
+        "hasOpenReview": bool(challenge_link.get("hasOpenReview")),
+        "challengeState": str(latest_challenge.get("state") or "").strip() or None,
+        "panelDisagreement": {
+            "high": bool(panel.get("high")),
+            "ratio": _safe_float(panel.get("ratio"), default=0.0),
+            "ratioMax": _safe_float(panel.get("ratioMax"), default=0.0),
+            "reasons": [
+                str(item).strip()
+                for item in (panel.get("reasons") or [])
+                if str(item).strip()
+            ],
+            "majorityWinner": str(panel.get("majorityWinner") or "").strip().lower() or None,
+            "voteBySide": (
+                panel.get("voteBySide")
+                if isinstance(panel.get("voteBySide"), dict)
+                else {}
+            ),
+        },
+        "judgeId": judge_id,
+        "profileId": profile_id,
+        "profileSource": profile_source,
+        "modelStrategy": model_strategy,
+        "strategySlot": strategy_slot,
+        "scoreSource": score_source,
+        "decisionMargin": _safe_float(runtime_profile.get("decisionMargin"), default=0.0),
+        "promptVersion": prompt_version,
+        "toolsetVersion": toolset_version,
+        "domainSlot": domain_slot,
+        "runtimeStage": runtime_stage,
+        "adaptiveEnabled": bool(runtime_profile.get("adaptiveEnabled")),
+        "candidateModels": candidate_models,
+        "strategyMetadata": strategy_metadata,
+        "policyVersion": policy_version,
+        "runtimeProfile": dict(runtime_profile),
+    }
+
+
+def build_panel_runtime_profile_sort_key(
+    *,
+    item: dict[str, Any],
+    sort_by: str,
+) -> tuple[Any, ...]:
+    if sort_by == "panel_disagreement_ratio":
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        return (
+            _safe_float(panel.get("ratio"), default=0.0),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "case_id":
+        return (
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "judge_id":
+        return (
+            str(item.get("judgeId") or ""),
+            int(item.get("caseId") or 0),
+        )
+    if sort_by == "profile_id":
+        return (
+            str(item.get("profileId") or ""),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "model_strategy":
+        return (
+            str(item.get("modelStrategy") or ""),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "strategy_slot":
+        return (
+            str(item.get("strategySlot") or ""),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    if sort_by == "domain_slot":
+        return (
+            str(item.get("domainSlot") or ""),
+            int(item.get("caseId") or 0),
+            str(item.get("judgeId") or ""),
+        )
+    return (
+        str(item.get("updatedAt") or "").strip(),
+        int(item.get("caseId") or 0),
+        str(item.get("judgeId") or ""),
+    )
+
+
+def build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dict[str, Any]:
+    judge_counts: dict[str, int] = {}
+    profile_id_counts: dict[str, int] = {"unknown": 0}
+    model_strategy_counts: dict[str, int] = {"unknown": 0}
+    strategy_slot_counts: dict[str, int] = {"unknown": 0}
+    domain_slot_counts: dict[str, int] = {"unknown": 0}
+    profile_source_counts: dict[str, int] = {"unknown": 0}
+    policy_version_counts: dict[str, int] = {"unknown": 0}
+    winner_counts: dict[str, int] = {
+        "pro": 0,
+        "con": 0,
+        "draw": 0,
+        "unknown": 0,
+    }
+    review_required_count = 0
+    open_review_count = 0
+    panel_high_disagreement_count = 0
+    disagreement_ratio_sum = 0.0
+
+    for item in items:
+        judge_id = str(item.get("judgeId") or "").strip() or "unknown"
+        judge_counts[judge_id] = judge_counts.get(judge_id, 0) + 1
+
+        profile_id = str(item.get("profileId") or "").strip()
+        if profile_id:
+            profile_id_counts[profile_id] = profile_id_counts.get(profile_id, 0) + 1
+        else:
+            profile_id_counts["unknown"] += 1
+
+        model_strategy = str(item.get("modelStrategy") or "").strip()
+        if model_strategy:
+            model_strategy_counts[model_strategy] = (
+                model_strategy_counts.get(model_strategy, 0) + 1
+            )
+        else:
+            model_strategy_counts["unknown"] += 1
+
+        strategy_slot = str(item.get("strategySlot") or "").strip()
+        if strategy_slot:
+            strategy_slot_counts[strategy_slot] = strategy_slot_counts.get(strategy_slot, 0) + 1
+        else:
+            strategy_slot_counts["unknown"] += 1
+
+        domain_slot = str(item.get("domainSlot") or "").strip()
+        if domain_slot:
+            domain_slot_counts[domain_slot] = domain_slot_counts.get(domain_slot, 0) + 1
+        else:
+            domain_slot_counts["unknown"] += 1
+
+        profile_source = str(item.get("profileSource") or "").strip().lower()
+        if profile_source:
+            profile_source_counts[profile_source] = profile_source_counts.get(profile_source, 0) + 1
+        else:
+            profile_source_counts["unknown"] += 1
+
+        policy_version = str(item.get("policyVersion") or "").strip()
+        if policy_version:
+            policy_version_counts[policy_version] = policy_version_counts.get(policy_version, 0) + 1
+        else:
+            policy_version_counts["unknown"] += 1
+
+        winner = str(item.get("winner") or "").strip().lower()
+        if winner in winner_counts:
+            winner_counts[winner] += 1
+        else:
+            winner_counts["unknown"] += 1
+
+        if bool(item.get("reviewRequired")):
+            review_required_count += 1
+        if bool(item.get("hasOpenReview")):
+            open_review_count += 1
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        if bool(panel.get("high")):
+            panel_high_disagreement_count += 1
+        disagreement_ratio_sum += _safe_float(panel.get("ratio"), default=0.0)
+
+    total_matched = len(items)
+    return {
+        "totalMatched": total_matched,
+        "reviewRequiredCount": review_required_count,
+        "openReviewCount": open_review_count,
+        "panelHighDisagreementCount": panel_high_disagreement_count,
+        "avgPanelDisagreementRatio": (
+            disagreement_ratio_sum / total_matched if total_matched > 0 else 0.0
+        ),
+        "byJudgeId": dict(sorted(judge_counts.items(), key=lambda kv: kv[0])),
+        "byProfileId": dict(sorted(profile_id_counts.items(), key=lambda kv: kv[0])),
+        "byModelStrategy": dict(sorted(model_strategy_counts.items(), key=lambda kv: kv[0])),
+        "byStrategySlot": dict(sorted(strategy_slot_counts.items(), key=lambda kv: kv[0])),
+        "byDomainSlot": dict(sorted(domain_slot_counts.items(), key=lambda kv: kv[0])),
+        "byProfileSource": dict(sorted(profile_source_counts.items(), key=lambda kv: kv[0])),
+        "byPolicyVersion": dict(sorted(policy_version_counts.items(), key=lambda kv: kv[0])),
+        "winnerCounts": winner_counts,
+    }
+
+
+def build_panel_runtime_readiness_summary(
+    *,
+    items: list[dict[str, Any]],
+    group_limit: int,
+    attention_limit: int,
+) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in items:
+        strategy_slot = str(item.get("strategySlot") or "").strip() or "unknown"
+        domain_slot = str(item.get("domainSlot") or "").strip() or "unknown"
+        model_strategy = str(item.get("modelStrategy") or "").strip() or "unknown"
+        profile_id = str(item.get("profileId") or "").strip() or "unknown"
+        policy_version = str(item.get("policyVersion") or "").strip() or "unknown"
+        group_key = (
+            f"{strategy_slot}|{domain_slot}|{model_strategy}|{profile_id}|{policy_version}"
+        )
+
+        row = grouped.setdefault(
+            group_key,
+            {
+                "groupKey": group_key,
+                "strategySlot": strategy_slot,
+                "domainSlot": domain_slot,
+                "modelStrategy": model_strategy,
+                "profileId": profile_id,
+                "policyVersion": policy_version,
+                "recordCount": 0,
+                "caseIds": set(),
+                "judgeIds": set(),
+                "profileSources": set(),
+                "candidateModels": set(),
+                "adaptiveEnabledCount": 0,
+                "reviewRequiredCount": 0,
+                "openReviewCount": 0,
+                "panelHighDisagreementCount": 0,
+                "panelDisagreementRatioSum": 0.0,
+            },
+        )
+        row["recordCount"] += 1
+        case_id = int(item.get("caseId") or 0)
+        if case_id > 0:
+            row["caseIds"].add(case_id)
+        judge_id = str(item.get("judgeId") or "").strip()
+        if judge_id:
+            row["judgeIds"].add(judge_id)
+        source = str(item.get("profileSource") or "").strip().lower()
+        if source:
+            row["profileSources"].add(source)
+        if bool(item.get("adaptiveEnabled")):
+            row["adaptiveEnabledCount"] += 1
+        if bool(item.get("reviewRequired")):
+            row["reviewRequiredCount"] += 1
+        if bool(item.get("hasOpenReview")):
+            row["openReviewCount"] += 1
+        panel = (
+            item.get("panelDisagreement")
+            if isinstance(item.get("panelDisagreement"), dict)
+            else {}
+        )
+        if bool(panel.get("high")):
+            row["panelHighDisagreementCount"] += 1
+        row["panelDisagreementRatioSum"] += _safe_float(panel.get("ratio"), default=0.0)
+        for candidate_model in item.get("candidateModels") or []:
+            candidate_model_token = str(candidate_model).strip()
+            if candidate_model_token:
+                row["candidateModels"].add(candidate_model_token)
+
+    group_rows: list[dict[str, Any]] = []
+    for row in grouped.values():
+        record_count = int(row["recordCount"])
+        panel_high_count = int(row["panelHighDisagreementCount"])
+        review_required_count = int(row["reviewRequiredCount"])
+        open_review_count = int(row["openReviewCount"])
+        candidate_models = sorted(str(item) for item in row["candidateModels"])
+        panel_high_rate = panel_high_count / record_count if record_count > 0 else 0.0
+        review_required_rate = (
+            review_required_count / record_count if record_count > 0 else 0.0
+        )
+        open_review_rate = open_review_count / record_count if record_count > 0 else 0.0
+        avg_disagreement_ratio = (
+            float(row["panelDisagreementRatioSum"]) / record_count
+            if record_count > 0
+            else 0.0
+        )
+        adaptive_enabled_rate = (
+            int(row["adaptiveEnabledCount"]) / record_count if record_count > 0 else 0.0
+        )
+        readiness_score = max(
+            0.0,
+            min(
+                100.0,
+                100.0
+                - panel_high_rate * 60.0
+                - review_required_rate * 30.0
+                - open_review_rate * 10.0,
+            ),
+        )
+
+        if readiness_score < 60.0:
+            readiness_level = "attention"
+        elif readiness_score < 80.0:
+            readiness_level = "watch"
+        else:
+            readiness_level = "ready"
+
+        switch_conditions: list[str] = []
+        if panel_high_rate >= 0.2:
+            switch_conditions.append("panel_disagreement_ratio_high")
+        if review_required_rate >= 0.2:
+            switch_conditions.append("review_required_rate_high")
+        if open_review_rate >= 0.1:
+            switch_conditions.append("open_review_backlog")
+        if not candidate_models:
+            switch_conditions.append("candidate_models_missing")
+        if not switch_conditions:
+            switch_conditions.append("stable_runtime")
+
+        simulations: list[dict[str, Any]] = []
+        if len(candidate_models) >= 2 and readiness_level != "ready":
+            simulations.append(
+                {
+                    "scenarioId": "switch_to_secondary_candidate",
+                    "trigger": switch_conditions[0],
+                    "candidateModel": candidate_models[1],
+                    "expectedImpact": "reduce disagreement and review pressure",
+                    "advisoryOnly": True,
+                }
+            )
+        else:
+            simulations.append(
+                {
+                    "scenarioId": "keep_current_strategy",
+                    "trigger": switch_conditions[0],
+                    "candidateModel": candidate_models[0] if candidate_models else None,
+                    "expectedImpact": "maintain current runtime strategy and monitor drift",
+                    "advisoryOnly": True,
+                }
+            )
+
+        group_rows.append(
+            {
+                "groupKey": row["groupKey"],
+                "strategySlot": row["strategySlot"],
+                "domainSlot": row["domainSlot"],
+                "modelStrategy": row["modelStrategy"],
+                "profileId": row["profileId"],
+                "policyVersion": row["policyVersion"],
+                "recordCount": record_count,
+                "caseCount": len(row["caseIds"]),
+                "judgeIds": sorted(str(item) for item in row["judgeIds"]),
+                "profileSources": sorted(str(item) for item in row["profileSources"]),
+                "candidateModels": candidate_models,
+                "candidateModelCount": len(candidate_models),
+                "adaptiveEnabledRate": round(adaptive_enabled_rate, 4),
+                "panelHighDisagreementCount": panel_high_count,
+                "panelHighDisagreementRate": round(panel_high_rate, 4),
+                "reviewRequiredCount": review_required_count,
+                "reviewRequiredRate": round(review_required_rate, 4),
+                "openReviewCount": open_review_count,
+                "openReviewRate": round(open_review_rate, 4),
+                "avgPanelDisagreementRatio": round(avg_disagreement_ratio, 4),
+                "readinessScore": round(readiness_score, 2),
+                "readinessLevel": readiness_level,
+                "recommendedSwitchConditions": switch_conditions,
+                "simulations": simulations,
+            }
+        )
+
+    group_rows.sort(
+        key=lambda row: (
+            float(row.get("readinessScore") or 0.0),
+            float(row.get("panelHighDisagreementRate") or 0.0),
+            float(row.get("reviewRequiredRate") or 0.0),
+            str(row.get("groupKey") or ""),
+        ),
+    )
+    limited_group_rows = group_rows[: max(1, min(int(group_limit), 200))]
+    attention_rows = [
+        row for row in limited_group_rows if str(row.get("readinessLevel")) != "ready"
+    ][: max(1, min(int(attention_limit), 100))]
+
+    readiness_counts = {
+        "ready": 0,
+        "watch": 0,
+        "attention": 0,
+    }
+    for row in limited_group_rows:
+        level = str(row.get("readinessLevel") or "").strip().lower()
+        if level in readiness_counts:
+            readiness_counts[level] += 1
+
+    return {
+        "groups": limited_group_rows,
+        "attentionGroups": attention_rows,
+        "overview": {
+            "totalRecords": len(items),
+            "totalGroups": len(limited_group_rows),
+            "readinessCounts": readiness_counts,
+            "attentionGroupCount": len(attention_rows),
+        },
+    }
 
 
 def normalize_panel_runtime_profile_query(

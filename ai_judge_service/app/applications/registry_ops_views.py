@@ -12,6 +12,11 @@ OPS_REGISTRY_ALERT_TYPES = {
     REGISTRY_FAIRNESS_ALERT_TYPE_OVERRIDE,
     REGISTRY_DEPENDENCY_ALERT_TYPE_BLOCKED,
 }
+REGISTRY_PROMPT_TOOL_RISK_SEVERITY_RANK = {
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+}
 
 
 def _normalize_aware_datetime(value: Any) -> datetime | None:
@@ -80,6 +85,10 @@ def _normalize_ops_alert_status(value: str | None) -> str | None:
     return normalized
 
 
+def normalize_ops_alert_status(value: str | None) -> str | None:
+    return _normalize_ops_alert_status(value)
+
+
 def _normalize_ops_alert_delivery_status(value: str | None) -> str | None:
     if value is None:
         return None
@@ -89,11 +98,19 @@ def _normalize_ops_alert_delivery_status(value: str | None) -> str | None:
     return normalized
 
 
+def normalize_ops_alert_delivery_status(value: str | None) -> str | None:
+    return _normalize_ops_alert_delivery_status(value)
+
+
 def _normalize_ops_alert_fields_mode(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return "full"
     return normalized
+
+
+def normalize_ops_alert_fields_mode(value: str | None) -> str:
+    return _normalize_ops_alert_fields_mode(value)
 
 
 def _normalize_registry_audit_action(value: str | None) -> str | None:
@@ -103,6 +120,10 @@ def _normalize_registry_audit_action(value: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def normalize_registry_audit_action(value: str | None) -> str | None:
+    return _normalize_registry_audit_action(value)
 
 
 def _build_alert_outbox_index(events: list[Any]) -> dict[str, dict[str, Any]]:
@@ -170,6 +191,662 @@ def _build_alert_outbox_index(events: list[Any]) -> dict[str, dict[str, Any]]:
         row.pop("_latestUpdatedAt", None)
         row.pop("_latestCreatedAt", None)
     return index
+
+
+def build_alert_outbox_index(events: list[Any]) -> dict[str, dict[str, Any]]:
+    return _build_alert_outbox_index(events)
+
+
+def normalize_registry_dependency_trend_status(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def build_registry_dependency_overview(
+    *,
+    items: list[dict[str, Any]],
+    alerts: list[Any],
+    registry_type: str,
+    window_minutes: int,
+) -> dict[str, Any]:
+    normalized_registry_type = str(registry_type or "").strip().lower()
+    window = max(10, min(int(window_minutes), 43200))
+    now = datetime.now(timezone.utc)
+    window_from = now - timedelta(minutes=window)
+
+    by_policy_version: dict[str, dict[str, Any]] = {}
+    for item in items:
+        version = str(item.get("policyVersion") or "").strip()
+        if not version:
+            continue
+        policy_kernel = (
+            item.get("policyKernel")
+            if isinstance(item.get("policyKernel"), dict)
+            else {}
+        )
+        row = by_policy_version.setdefault(
+            version,
+            {
+                "policyVersion": version,
+                "dependencyOk": bool(item.get("ok")),
+                "policyKernelVersion": (
+                    str(policy_kernel.get("version") or "").strip() or None
+                ),
+                "policyKernelHash": (
+                    str(policy_kernel.get("kernelHash") or "").strip() or None
+                ),
+                "totalAlerts": 0,
+                "openBlockedCount": 0,
+                "resolvedCount": 0,
+                "recentChanges": 0,
+                "lastStatus": None,
+                "lastUpdatedAt": None,
+                "latestGateDecision": None,
+                "latestGateCode": None,
+                "latestGateSource": None,
+                "overrideApplied": None,
+                "overrideActor": None,
+                "overrideReason": None,
+                "gateUpdatedAt": None,
+                "_latestUpdatedAt": None,
+                "_latestGateUpdatedAt": None,
+            },
+        )
+        row["dependencyOk"] = bool(item.get("ok"))
+        if row.get("policyKernelVersion") is None:
+            row["policyKernelVersion"] = (
+                str(policy_kernel.get("version") or "").strip() or None
+            )
+        if row.get("policyKernelHash") is None:
+            row["policyKernelHash"] = (
+                str(policy_kernel.get("kernelHash") or "").strip() or None
+            )
+
+    total_alerts = 0
+    open_blocked_count = 0
+    resolved_count = 0
+    recent_total = 0
+    recent_status_counts = {
+        "raised": 0,
+        "acked": 0,
+        "resolved": 0,
+        "unknown": 0,
+    }
+
+    for alert in alerts:
+        alert_type = str(getattr(alert, "alert_type", "") or "").strip()
+        if alert_type != REGISTRY_DEPENDENCY_ALERT_TYPE_BLOCKED:
+            continue
+        details = (
+            dict(getattr(alert, "details"))
+            if isinstance(getattr(alert, "details", None), dict)
+            else {}
+        )
+        if str(details.get("registryType") or "").strip().lower() != normalized_registry_type:
+            continue
+        version = str(details.get("version") or "").strip() or "unknown"
+        status = str(getattr(alert, "status", "") or "").strip().lower() or "unknown"
+        updated_at = _normalize_aware_datetime(
+            getattr(alert, "updated_at", None)
+        ) or _normalize_aware_datetime(getattr(alert, "created_at", None)) or now
+
+        row = by_policy_version.setdefault(
+            version,
+            {
+                "policyVersion": version,
+                "dependencyOk": None,
+                "policyKernelVersion": None,
+                "policyKernelHash": None,
+                "totalAlerts": 0,
+                "openBlockedCount": 0,
+                "resolvedCount": 0,
+                "recentChanges": 0,
+                "lastStatus": None,
+                "lastUpdatedAt": None,
+                "latestGateDecision": None,
+                "latestGateCode": None,
+                "latestGateSource": None,
+                "overrideApplied": None,
+                "overrideActor": None,
+                "overrideReason": None,
+                "gateUpdatedAt": None,
+                "_latestUpdatedAt": None,
+                "_latestGateUpdatedAt": None,
+            },
+        )
+        row["totalAlerts"] += 1
+        total_alerts += 1
+        if status == "resolved":
+            row["resolvedCount"] += 1
+            resolved_count += 1
+        else:
+            row["openBlockedCount"] += 1
+            open_blocked_count += 1
+
+        latest_updated_at = row.get("_latestUpdatedAt")
+        if not isinstance(latest_updated_at, datetime) or updated_at >= latest_updated_at:
+            row["_latestUpdatedAt"] = updated_at
+            row["lastStatus"] = status
+            row["lastUpdatedAt"] = updated_at.isoformat()
+
+        if updated_at >= window_from:
+            row["recentChanges"] += 1
+            recent_total += 1
+            if status in recent_status_counts:
+                recent_status_counts[status] += 1
+            else:
+                recent_status_counts["unknown"] += 1
+
+    gate_decision_counts = {
+        "blocked": 0,
+        "override_activated": 0,
+        "pass": 0,
+    }
+    for alert in alerts:
+        alert_type = str(getattr(alert, "alert_type", "") or "").strip()
+        if alert_type not in {
+            REGISTRY_FAIRNESS_ALERT_TYPE_BLOCKED,
+            REGISTRY_FAIRNESS_ALERT_TYPE_OVERRIDE,
+        }:
+            continue
+        details = (
+            dict(getattr(alert, "details"))
+            if isinstance(getattr(alert, "details", None), dict)
+            else {}
+        )
+        if str(details.get("registryType") or "").strip().lower() != normalized_registry_type:
+            continue
+        version = str(details.get("version") or "").strip() or "unknown"
+        gate_payload = details.get("gate") if isinstance(details.get("gate"), dict) else {}
+        updated_at = _normalize_aware_datetime(
+            getattr(alert, "updated_at", None)
+        ) or _normalize_aware_datetime(getattr(alert, "created_at", None)) or now
+
+        row = by_policy_version.setdefault(
+            version,
+            {
+                "policyVersion": version,
+                "dependencyOk": None,
+                "policyKernelVersion": None,
+                "policyKernelHash": None,
+                "totalAlerts": 0,
+                "openBlockedCount": 0,
+                "resolvedCount": 0,
+                "recentChanges": 0,
+                "lastStatus": None,
+                "lastUpdatedAt": None,
+                "latestGateDecision": None,
+                "latestGateCode": None,
+                "latestGateSource": None,
+                "overrideApplied": None,
+                "overrideActor": None,
+                "overrideReason": None,
+                "gateUpdatedAt": None,
+                "_latestUpdatedAt": None,
+                "_latestGateUpdatedAt": None,
+            },
+        )
+        override_applied = bool(details.get("overrideApplied"))
+        if override_applied:
+            gate_decision = "override_activated"
+        elif bool(gate_payload.get("passed")):
+            gate_decision = "pass"
+        else:
+            gate_decision = "blocked"
+        gate_decision_counts[gate_decision] = gate_decision_counts.get(gate_decision, 0) + 1
+
+        latest_gate_updated_at = row.get("_latestGateUpdatedAt")
+        if (
+            not isinstance(latest_gate_updated_at, datetime)
+            or updated_at >= latest_gate_updated_at
+        ):
+            row["_latestGateUpdatedAt"] = updated_at
+            row["latestGateDecision"] = gate_decision
+            row["latestGateCode"] = str(gate_payload.get("code") or "").strip() or None
+            row["latestGateSource"] = str(gate_payload.get("source") or "").strip() or None
+            row["overrideApplied"] = override_applied
+            row["overrideActor"] = str(details.get("actor") or "").strip() or None
+            row["overrideReason"] = str(details.get("reason") or "").strip() or None
+            row["gateUpdatedAt"] = updated_at.isoformat()
+
+    version_rows = list(by_policy_version.values())
+    for row in version_rows:
+        row.pop("_latestUpdatedAt", None)
+        row.pop("_latestGateUpdatedAt", None)
+    version_rows.sort(
+        key=lambda row: (
+            -int(row.get("totalAlerts") or 0),
+            str(row.get("policyVersion") or ""),
+        )
+    )
+
+    return {
+        "registryType": normalized_registry_type,
+        "windowMinutes": window,
+        "window": {
+            "from": window_from.isoformat(),
+            "to": now.isoformat(),
+        },
+        "counts": {
+            "trackedPolicyVersions": len(items),
+            "totalPolicyVersions": len(version_rows),
+            "totalAlerts": total_alerts,
+            "openBlockedCount": open_blocked_count,
+            "resolvedCount": resolved_count,
+            "recentChanges": recent_total,
+        },
+        "recentStatusCounts": recent_status_counts,
+        "gateDecisionCounts": gate_decision_counts,
+        "byPolicyVersion": version_rows,
+    }
+
+
+def build_registry_dependency_trend(
+    *,
+    alerts: list[Any],
+    registry_type: str,
+    window_minutes: int,
+    status_filter: str | None,
+    policy_version_filter: str | None,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    normalized_registry_type = str(registry_type or "").strip().lower()
+    normalized_status_filter = normalize_registry_dependency_trend_status(status_filter)
+    normalized_policy_version_filter = str(policy_version_filter or "").strip() or None
+    window = max(10, min(int(window_minutes), 43200))
+    page_offset = max(0, int(offset))
+    page_limit = max(1, min(int(limit), 500))
+    now = datetime.now(timezone.utc)
+    window_from = now - timedelta(minutes=window)
+
+    rows: list[dict[str, Any]] = []
+    status_counts = {
+        "raised": 0,
+        "acked": 0,
+        "resolved": 0,
+        "unknown": 0,
+    }
+
+    for alert in alerts:
+        alert_type = str(getattr(alert, "alert_type", "") or "").strip()
+        if alert_type != REGISTRY_DEPENDENCY_ALERT_TYPE_BLOCKED:
+            continue
+        details = (
+            dict(getattr(alert, "details"))
+            if isinstance(getattr(alert, "details", None), dict)
+            else {}
+        )
+        if str(details.get("registryType") or "").strip().lower() != normalized_registry_type:
+            continue
+        policy_version = str(details.get("version") or "").strip() or "unknown"
+        if (
+            normalized_policy_version_filter is not None
+            and policy_version != normalized_policy_version_filter
+        ):
+            continue
+        status = str(getattr(alert, "status", "") or "").strip().lower() or "unknown"
+        if normalized_status_filter == "open":
+            if status not in {"raised", "acked"}:
+                continue
+        elif normalized_status_filter is not None and status != normalized_status_filter:
+            continue
+        created_at = _normalize_aware_datetime(getattr(alert, "created_at", None)) or now
+        updated_at = _normalize_aware_datetime(getattr(alert, "updated_at", None)) or created_at
+        if updated_at < window_from:
+            continue
+
+        if status in status_counts:
+            status_counts[status] += 1
+        else:
+            status_counts["unknown"] += 1
+
+        dependency_payload = (
+            details.get("dependency")
+            if isinstance(details.get("dependency"), dict)
+            else {}
+        )
+        rows.append(
+            {
+                "alertId": str(getattr(alert, "alert_id", "") or "").strip() or None,
+                "caseId": int(getattr(alert, "job_id", 0) or 0),
+                "scopeId": int(getattr(alert, "scope_id", 0) or 0),
+                "traceId": str(getattr(alert, "trace_id", "") or "").strip() or None,
+                "type": alert_type,
+                "status": status,
+                "severity": str(getattr(alert, "severity", "") or "").strip() or None,
+                "title": str(getattr(alert, "title", "") or "").strip() or None,
+                "message": str(getattr(alert, "message", "") or "").strip() or None,
+                "registryType": normalized_registry_type,
+                "policyVersion": policy_version,
+                "action": str(details.get("action") or "").strip() or None,
+                "dependencyCode": str(dependency_payload.get("code") or "").strip() or None,
+                "dependencyOk": (
+                    bool(dependency_payload.get("ok"))
+                    if "ok" in dependency_payload
+                    else None
+                ),
+                "createdAt": created_at.isoformat(),
+                "updatedAt": updated_at.isoformat(),
+                "_updatedAt": updated_at,
+                "_createdAt": created_at,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            row.get("_updatedAt"),
+            row.get("_createdAt"),
+            str(row.get("alertId") or ""),
+        ),
+        reverse=True,
+    )
+    total_count = len(rows)
+    paged_rows = rows[page_offset : page_offset + page_limit]
+    for row in paged_rows:
+        row.pop("_updatedAt", None)
+        row.pop("_createdAt", None)
+
+    return {
+        "registryType": normalized_registry_type,
+        "windowMinutes": window,
+        "window": {
+            "from": window_from.isoformat(),
+            "to": now.isoformat(),
+        },
+        "filters": {
+            "status": normalized_status_filter,
+            "policyVersion": normalized_policy_version_filter,
+            "offset": page_offset,
+            "limit": page_limit,
+        },
+        "count": total_count,
+        "returned": len(paged_rows),
+        "statusCounts": status_counts,
+        "items": paged_rows,
+    }
+
+
+def registry_prompt_tool_risk_severity_rank(value: str | None) -> int:
+    normalized = str(value or "").strip().lower()
+    return REGISTRY_PROMPT_TOOL_RISK_SEVERITY_RANK.get(normalized, 0)
+
+
+def build_registry_prompt_tool_usage_rows(
+    *,
+    usage_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    enriched_rows: list[dict[str, Any]] = []
+    unreferenced_count = 0
+    for row in usage_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ref_count = max(0, int(row.get("referencedByPolicyCount") or 0))
+        except (TypeError, ValueError):
+            ref_count = 0
+        is_active = bool(row.get("isActive"))
+        risk_tags: list[str] = []
+        if ref_count <= 0:
+            unreferenced_count += 1
+            risk_tags.append("unreferenced")
+        if is_active and ref_count <= 0:
+            risk_tags.append("active_unreferenced")
+        if ref_count <= 0 and is_active:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+        enriched = dict(row)
+        enriched["riskLevel"] = risk_level
+        enriched["riskTags"] = risk_tags
+        enriched_rows.append(enriched)
+    return enriched_rows, unreferenced_count
+
+
+def build_registry_prompt_tool_risk_items(
+    *,
+    dependency_items: list[dict[str, Any]],
+    prompt_usage_rows: list[dict[str, Any]],
+    tool_usage_rows: list[dict[str, Any]],
+    missing_prompt_refs: list[str],
+    missing_tool_refs: list[str],
+    release_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    risk_items: list[dict[str, Any]] = []
+
+    for item in dependency_items:
+        if not isinstance(item, dict):
+            continue
+        if bool(item.get("ok")):
+            continue
+        policy_version = str(item.get("policyVersion") or "").strip() or None
+        issue_codes = sorted(
+            {
+                str(code).strip()
+                for code in (item.get("issueCodes") or [])
+                if str(code).strip()
+            }
+        )
+        detail_path = "/internal/judge/registries/policy/dependencies/health"
+        if policy_version:
+            detail_path = f"{detail_path}?policy_version={policy_version}"
+        risk_items.append(
+            {
+                "riskType": "dependency_invalid",
+                "severity": "high",
+                "policyVersion": policy_version,
+                "promptRegistryVersion": (
+                    str(item.get("promptRegistryVersion") or "").strip() or None
+                ),
+                "toolRegistryVersion": (
+                    str(item.get("toolRegistryVersion") or "").strip() or None
+                ),
+                "issueCodes": issue_codes,
+                "reason": "policy release dependencies are invalid.",
+                "detailPath": detail_path,
+                "actionHint": "registry.policy.dependencies.fix",
+            }
+        )
+
+    for version in sorted({str(row).strip() for row in missing_prompt_refs if str(row).strip()}):
+        risk_items.append(
+            {
+                "riskType": "prompt_registry_ref_missing",
+                "severity": "high",
+                "promptRegistryVersion": version,
+                "reason": "policy references a missing prompt registry version.",
+                "detailPath": "/internal/judge/registries/prompts",
+                "actionHint": "registry.prompt.curate",
+            }
+        )
+    for version in sorted({str(row).strip() for row in missing_tool_refs if str(row).strip()}):
+        risk_items.append(
+            {
+                "riskType": "tool_registry_ref_missing",
+                "severity": "high",
+                "toolRegistryVersion": version,
+                "reason": "policy references a missing tool registry version.",
+                "detailPath": "/internal/judge/registries/tools",
+                "actionHint": "registry.tool.curate",
+            }
+        )
+
+    for row in prompt_usage_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ref_count = max(0, int(row.get("referencedByPolicyCount") or 0))
+        except (TypeError, ValueError):
+            ref_count = 0
+        if ref_count > 0:
+            continue
+        version = str(row.get("version") or "").strip() or None
+        is_active = bool(row.get("isActive"))
+        risk_items.append(
+            {
+                "riskType": "prompt_unreferenced",
+                "severity": "medium" if is_active else "low",
+                "promptRegistryVersion": version,
+                "isActive": is_active,
+                "reason": "prompt registry version is not referenced by any policy.",
+                "detailPath": "/internal/judge/registries/prompts",
+                "actionHint": "registry.prompt.curate",
+            }
+        )
+
+    for row in tool_usage_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ref_count = max(0, int(row.get("referencedByPolicyCount") or 0))
+        except (TypeError, ValueError):
+            ref_count = 0
+        if ref_count > 0:
+            continue
+        version = str(row.get("version") or "").strip() or None
+        is_active = bool(row.get("isActive"))
+        risk_items.append(
+            {
+                "riskType": "tool_unreferenced",
+                "severity": "medium" if is_active else "low",
+                "toolRegistryVersion": version,
+                "isActive": is_active,
+                "reason": "tool registry version is not referenced by any policy.",
+                "detailPath": "/internal/judge/registries/tools",
+                "actionHint": "registry.tool.curate",
+            }
+        )
+
+    for registry_type in ("prompt", "tool"):
+        state = (
+            release_state.get(registry_type)
+            if isinstance(release_state.get(registry_type), dict)
+            else {}
+        )
+        try:
+            release_count = max(0, int(state.get("count") or 0))
+        except (TypeError, ValueError):
+            release_count = 0
+        if release_count > 0:
+            continue
+        risk_items.append(
+            {
+                "riskType": f"{registry_type}_release_missing",
+                "severity": "high",
+                "reason": (
+                    f"{registry_type} registry has no release history and needs bootstrap."
+                ),
+                "detailPath": f"/internal/judge/registries/{registry_type}/releases",
+                "actionHint": (
+                    "registry.prompt.curate"
+                    if registry_type == "prompt"
+                    else "registry.tool.curate"
+                ),
+            }
+        )
+
+    risk_items.sort(
+        key=lambda item: (
+            -registry_prompt_tool_risk_severity_rank(
+                str(item.get("severity") or "").strip().lower()
+            ),
+            str(item.get("riskType") or ""),
+            str(item.get("policyVersion") or ""),
+            str(item.get("promptRegistryVersion") or ""),
+            str(item.get("toolRegistryVersion") or ""),
+        )
+    )
+    return risk_items
+
+
+def build_registry_prompt_tool_action_hints(
+    *,
+    risk_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    action_index: dict[str, dict[str, Any]] = {}
+
+    def upsert_hint(
+        *,
+        action_id: str,
+        path: str,
+        reason: str,
+        severity: str,
+    ) -> None:
+        rank = registry_prompt_tool_risk_severity_rank(severity)
+        current = action_index.get(action_id)
+        if current is not None and int(current.get("_rank") or 0) >= rank:
+            return
+        action_index[action_id] = {
+            "actionId": action_id,
+            "path": path,
+            "reason": reason,
+            "severity": severity if severity in {"high", "medium", "low"} else "low",
+            "_rank": rank,
+        }
+
+    for item in risk_items:
+        if not isinstance(item, dict):
+            continue
+        risk_type = str(item.get("riskType") or "").strip().lower()
+        severity = str(item.get("severity") or "").strip().lower() or "low"
+
+        if risk_type in {
+            "dependency_invalid",
+            "prompt_registry_ref_missing",
+            "tool_registry_ref_missing",
+        }:
+            upsert_hint(
+                action_id="registry.policy.dependencies.fix",
+                path="/internal/judge/registries/policy/dependencies/health",
+                reason="resolve policy to prompt/tool dependency mismatch.",
+                severity=severity,
+            )
+        if risk_type.startswith("prompt_"):
+            upsert_hint(
+                action_id="registry.prompt.curate",
+                path="/internal/judge/registries/prompts",
+                reason="review prompt releases and keep only referenced versions.",
+                severity=severity,
+            )
+        if risk_type.startswith("tool_"):
+            upsert_hint(
+                action_id="registry.tool.curate",
+                path="/internal/judge/registries/tools",
+                reason="review tool releases and keep only referenced versions.",
+                severity=severity,
+            )
+        if risk_type.endswith("_missing"):
+            upsert_hint(
+                action_id="registry.audits.inspect",
+                path="/internal/judge/registries/policy/gate-simulation",
+                reason="inspect release gate simulation before activation.",
+                severity=severity,
+            )
+
+    if not action_index:
+        return [
+            {
+                "actionId": "monitor",
+                "path": "/internal/judge/registries/prompt-tool/governance",
+                "reason": "governance signals look healthy; continue monitoring.",
+                "severity": "low",
+            }
+        ]
+
+    action_rows = list(action_index.values())
+    action_rows.sort(
+        key=lambda row: (
+            -int(row.get("_rank") or 0),
+            str(row.get("actionId") or ""),
+        )
+    )
+    for row in action_rows:
+        row.pop("_rank", None)
+    return action_rows
 
 
 def _build_registry_alert_ops_trend(
@@ -280,6 +957,19 @@ def _build_registry_alert_ops_trend(
     }
 
 
+def build_registry_alert_ops_trend(
+    *,
+    rows: list[dict[str, Any]],
+    window_minutes: int,
+    bucket_minutes: int,
+) -> dict[str, Any]:
+    return _build_registry_alert_ops_trend(
+        rows=rows,
+        window_minutes=window_minutes,
+        bucket_minutes=bucket_minutes,
+    )
+
+
 def _serialize_registry_alert_ops_item(
     row: dict[str, Any],
     *,
@@ -335,6 +1025,14 @@ def _serialize_registry_alert_ops_item(
             "latestUpdatedAt": outbox_payload.get("latestUpdatedAt"),
         },
     }
+
+
+def serialize_registry_alert_ops_item(
+    row: dict[str, Any],
+    *,
+    fields_mode: str,
+) -> dict[str, Any]:
+    return _serialize_registry_alert_ops_item(row, fields_mode=fields_mode)
 
 
 def _build_registry_alert_link_index_for_audits(
@@ -428,6 +1126,17 @@ def _build_registry_alert_link_index_for_audits(
             cleaned_rows.append(row_copy)
         rows_by_key[key] = cleaned_rows
     return rows_by_key
+
+
+def build_registry_alert_link_index_for_audits(
+    *,
+    alerts: list[Any],
+    outbox_events: list[Any],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    return _build_registry_alert_link_index_for_audits(
+        alerts=alerts,
+        outbox_events=outbox_events,
+    )
 
 
 def build_registry_audit_ops_view(

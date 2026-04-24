@@ -78,8 +78,8 @@ EOF_TODO
 | p1-3 | 已完成 | scripts/quality/harness_docs_lint.sh | 本地校验通过 | 主开发计划阶段收口 | （无） |
 EOF_COMPLETED
 
-  cat >"$workspace/docs/harness/00-overview.md" <<'EOF_HARNESS'
-# Harness Overview
+  cat >"$workspace/docs/harness/usage-tutorial.md" <<'EOF_HARNESS'
+# Harness Usage Tutorial
 
 更新时间：2026-04-06
 状态：已生效

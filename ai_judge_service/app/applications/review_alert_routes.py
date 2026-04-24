@@ -11,6 +11,171 @@ class ReviewRouteError(Exception):
         self.detail = detail
 
 
+def normalize_review_case_risk_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def normalize_review_case_sla_bucket(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def normalize_review_case_sort_by(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "updated_at"
+    return normalized
+
+
+def normalize_review_case_sort_order(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "desc"
+    return normalized
+
+
+def build_review_case_risk_profile(
+    *,
+    workflow: Any,
+    report_payload: dict[str, Any],
+    report_summary: dict[str, Any],
+    now: datetime,
+    normalize_query_datetime: Callable[[datetime | None], datetime | None],
+) -> dict[str, Any]:
+    payload = report_payload if isinstance(report_payload, dict) else {}
+    summary = report_summary if isinstance(report_summary, dict) else {}
+    fairness_summary = (
+        payload.get("fairnessSummary")
+        if isinstance(payload.get("fairnessSummary"), dict)
+        else {}
+    )
+    error_codes = [
+        str(item).strip()
+        for item in (payload.get("errorCodes") or [])
+        if str(item).strip()
+    ]
+    audit_alerts = (
+        summary.get("auditAlerts")
+        if isinstance(summary.get("auditAlerts"), list)
+        else []
+    )
+    audit_alert_count = len(audit_alerts)
+    callback_status = str(summary.get("callbackStatus") or "").strip().lower()
+    winner = str(payload.get("winner") or "").strip().lower()
+    panel_high_disagreement = bool(fairness_summary.get("panelHighDisagreement"))
+    review_required = bool(payload.get("reviewRequired"))
+
+    age_minutes: int | None = None
+    workflow_updated_at = getattr(workflow, "updated_at", None)
+    if isinstance(workflow_updated_at, datetime):
+        updated_at = normalize_query_datetime(workflow_updated_at)
+        if updated_at is not None:
+            age_delta = now - updated_at
+            age_minutes = max(0, int(age_delta.total_seconds() // 60))
+
+    risk_score = 0
+    risk_tags: list[str] = []
+
+    if review_required:
+        risk_score += 35
+        risk_tags.append("review_required")
+    if panel_high_disagreement:
+        risk_score += 20
+        risk_tags.append("panel_high_disagreement")
+    if error_codes:
+        risk_score += min(25, len(error_codes) * 8)
+        risk_tags.append("error_codes_present")
+    if audit_alert_count > 0:
+        risk_score += min(20, audit_alert_count * 4)
+        risk_tags.append("audit_alerts_present")
+    if callback_status in {"failed", "error", "callback_failed"}:
+        risk_score += 15
+        risk_tags.append("callback_failed")
+    if winner == "draw":
+        risk_score += 5
+        risk_tags.append("draw_outcome")
+
+    if age_minutes is not None and age_minutes >= 360:
+        risk_score += 15
+        risk_tags.append("review_stale_6h")
+    elif age_minutes is not None and age_minutes >= 120:
+        risk_score += 8
+        risk_tags.append("review_stale_2h")
+
+    risk_score = max(0, min(int(risk_score), 100))
+    if risk_score >= 75:
+        risk_level = "high"
+    elif risk_score >= 45:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    if age_minutes is None:
+        sla_bucket = "unknown"
+    elif age_minutes >= 360:
+        sla_bucket = "urgent"
+    elif age_minutes >= 120:
+        sla_bucket = "warning"
+    else:
+        sla_bucket = "normal"
+
+    return {
+        "score": risk_score,
+        "level": risk_level,
+        "tags": risk_tags,
+        "ageMinutes": age_minutes,
+        "slaBucket": sla_bucket,
+        "auditAlertCount": audit_alert_count,
+        "panelHighDisagreement": panel_high_disagreement,
+        "reviewRequired": review_required,
+    }
+
+
+def build_review_case_sort_key(
+    *,
+    item: dict[str, Any],
+    sort_by: str,
+) -> tuple[Any, ...]:
+    risk = item.get("riskProfile") if isinstance(item.get("riskProfile"), dict) else {}
+    unified = (
+        item.get("unifiedPriorityProfile")
+        if isinstance(item.get("unifiedPriorityProfile"), dict)
+        else {}
+    )
+    workflow = item.get("workflow") if isinstance(item.get("workflow"), dict) else {}
+    if sort_by == "unified_priority_score":
+        return (
+            int(unified.get("score") or 0),
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "risk_score":
+        return (
+            int(risk.get("score") or 0),
+            str(workflow.get("updatedAt") or "").strip(),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "audit_alert_count":
+        return (
+            int(risk.get("auditAlertCount") or 0),
+            int(risk.get("score") or 0),
+            int(workflow.get("caseId") or 0),
+        )
+    if sort_by == "case_id":
+        return (int(workflow.get("caseId") or 0),)
+    return (
+        str(workflow.get("updatedAt") or "").strip(),
+        int(risk.get("score") or 0),
+        int(workflow.get("caseId") or 0),
+    )
+
+
 def normalize_review_case_filters(
     *,
     status: str,
