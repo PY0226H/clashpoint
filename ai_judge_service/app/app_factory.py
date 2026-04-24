@@ -77,12 +77,6 @@ from .applications.case_courtroom_views import (
     build_case_evidence_view as build_case_evidence_view_v3,
 )
 from .applications.case_courtroom_views import (
-    build_courtroom_case_sort_key as build_courtroom_case_sort_key_v3,
-)
-from .applications.case_courtroom_views import (
-    build_courtroom_drilldown_action_hints as build_courtroom_drilldown_action_hints_v3,
-)
-from .applications.case_courtroom_views import (
     build_courtroom_drilldown_bundle_view as build_courtroom_drilldown_bundle_view_v3,
 )
 from .applications.case_courtroom_views import (
@@ -92,30 +86,6 @@ from .applications.case_courtroom_views import (
     build_courtroom_read_model_view as build_courtroom_read_model_view_v3,
 )
 from .applications.case_courtroom_views import (
-    build_evidence_claim_action_hints as build_evidence_claim_action_hints_v3,
-)
-from .applications.case_courtroom_views import (
-    build_evidence_claim_ops_profile as build_evidence_claim_ops_profile_v3,
-)
-from .applications.case_courtroom_views import (
-    build_evidence_claim_queue_sort_key as build_evidence_claim_queue_sort_key_v3,
-)
-from .applications.case_courtroom_views import (
-    normalize_courtroom_case_sort_by as normalize_courtroom_case_sort_by_v3,
-)
-from .applications.case_courtroom_views import (
-    normalize_courtroom_case_sort_order as normalize_courtroom_case_sort_order_v3,
-)
-from .applications.case_courtroom_views import (
-    normalize_evidence_claim_queue_sort_by as normalize_evidence_claim_queue_sort_by_v3,
-)
-from .applications.case_courtroom_views import (
-    normalize_evidence_claim_queue_sort_order as normalize_evidence_claim_queue_sort_order_v3,
-)
-from .applications.case_courtroom_views import (
-    normalize_evidence_claim_reliability_level as normalize_evidence_claim_reliability_level_v3,
-)
-from .applications.case_courtroom_views import (
     serialize_claim_ledger_record as serialize_claim_ledger_record_v3,
 )
 from .applications.case_overview_contract import (
@@ -123,33 +93,6 @@ from .applications.case_overview_contract import (
 )
 from .applications.case_read_routes import (
     CaseReadRouteError as CaseReadRouteError_v3,
-)
-from .applications.case_read_routes import (
-    build_case_claim_ledger_route_payload as build_case_claim_ledger_route_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_courtroom_cases_route_payload as build_case_courtroom_cases_route_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_courtroom_drilldown_bundle_route_payload as build_case_courtroom_drilldown_bundle_route_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_courtroom_read_model_payload as build_case_courtroom_read_model_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_courtroom_read_model_route_payload as build_case_courtroom_read_model_route_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_evidence_claim_ops_queue_route_payload as build_case_evidence_claim_ops_queue_route_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_overview_payload as build_case_overview_payload_v3,
-)
-from .applications.case_read_routes import (
-    build_case_overview_replay_items as build_case_overview_replay_items_v3,
-)
-from .applications.case_read_routes import (
-    build_case_overview_route_payload as build_case_overview_route_payload_v3,
 )
 from .applications.courtroom_read_model_contract import (
     validate_courtroom_read_model_contract as validate_courtroom_read_model_contract_v3,
@@ -519,6 +462,10 @@ from .applications.review_queue_contract import (
 )
 from .applications.review_queue_contract import (
     validate_evidence_claim_ops_queue_contract as validate_evidence_claim_ops_queue_contract_v3,
+)
+from .applications.route_group_case_read import (
+    CaseReadRouteDependencies,
+    register_case_read_routes,
 )
 from .applications.route_group_judge_command import (
     JudgeCommandRouteDependencies,
@@ -4854,295 +4801,57 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
     )
 
-    @app.get("/internal/judge/cases/{case_id}")
-    async def get_judge_case(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        payload = await _run_case_read_route_guard(
-            build_case_overview_route_payload_v3(
-                case_id=case_id,
-                workflow_get_job=_workflow_get_job,
-                workflow_list_events=_workflow_list_events,
-                get_dispatch_receipt=_get_dispatch_receipt,
-                trace_get=runtime.trace_store.get_trace,
-                list_replay_records=_list_replay_records,
-                list_audit_alerts=_list_audit_alerts,
-                get_claim_ledger_record=_get_claim_ledger_record,
-                build_verdict_contract=build_verdict_contract_v3,
-                build_case_evidence_view=build_case_evidence_view_v3,
-                build_judge_core_view=_build_judge_core_view,
-                build_case_overview_replay_items=build_case_overview_replay_items_v3,
-                build_case_overview_payload=build_case_overview_payload_v3,
-                serialize_workflow_job=_serialize_workflow_job,
-                serialize_dispatch_receipt=serialize_dispatch_receipt_v3,
-                serialize_alert_item=serialize_alert_item_v3,
-            )
-        )
-        return _validate_contract_or_raise_http_500_for_runtime(
-            payload=payload,
-            validate_contract=validate_case_overview_contract_v3,
-            code="case_overview_contract_violation",
-        )
-
-    @app.get("/internal/judge/cases/{case_id}/claim-ledger")
-    async def get_judge_case_claim_ledger(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-        dispatch_type: str = Query(default="auto"),
-        limit: int = Query(default=20, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _run_case_read_route_guard(
-            build_case_claim_ledger_route_payload_v3(
-                case_id=case_id,
-                dispatch_type=dispatch_type,
-                limit=limit,
-                list_claim_ledger_records=_list_claim_ledger_records,
-                get_claim_ledger_record=_get_claim_ledger_record,
-                serialize_claim_ledger_record=serialize_claim_ledger_record_v3,
-            )
-        )
-
-    @app.get("/internal/judge/cases/{case_id}/courtroom-read-model")
-    async def get_judge_case_courtroom_read_model(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-        dispatch_type: str = Query(default="auto"),
-        include_events: bool = Query(default=False),
-        include_alerts: bool = Query(default=True),
-        alert_limit: int = Query(default=200, ge=1, le=500),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        response_payload = await _run_case_read_route_guard(
-            build_case_courtroom_read_model_route_payload_v3(
-                case_id=case_id,
-                dispatch_type=dispatch_type,
-                include_events=include_events,
-                include_alerts=include_alerts,
-                alert_limit=alert_limit,
-                resolve_report_context_for_case=_resolve_report_context_for_case,
-                workflow_get_job=_workflow_get_job,
-                workflow_list_events=_workflow_list_events,
-                trace_get=runtime.trace_store.get_trace,
-                get_claim_ledger_record=_get_claim_ledger_record,
-                build_verdict_contract=build_verdict_contract_v3,
-                build_case_evidence_view=build_case_evidence_view_v3,
-                build_courtroom_read_model_view=build_courtroom_read_model_view,
-                build_judge_core_view=_build_judge_core_view,
-                list_audit_alerts=_list_audit_alerts,
-                build_case_courtroom_read_model_payload=build_case_courtroom_read_model_payload_v3,
-                serialize_workflow_job=_serialize_workflow_job,
-                serialize_alert_item=serialize_alert_item_v3,
-            )
-        )
-        return _validate_contract_or_raise_http_500_for_runtime(
-            payload=response_payload,
-            validate_contract=validate_courtroom_read_model_contract_v3,
-            code="courtroom_read_model_contract_violation",
-        )
-
-    @app.get("/internal/judge/courtroom/cases")
-    async def list_judge_courtroom_cases(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        dispatch_type: str = Query(default="auto"),
-        winner: str | None = Query(default=None),
-        review_required: bool | None = Query(default=None),
-        risk_level: str | None = Query(default=None),
-        sla_bucket: str | None = Query(default=None),
-        updated_from: datetime | None = Query(default=None),
-        updated_to: datetime | None = Query(default=None),
-        sort_by: str = Query(default="updated_at"),
-        sort_order: str = Query(default="desc"),
-        scan_limit: int = Query(default=500, ge=20, le=2000),
-        offset: int = Query(default=0, ge=0, le=5000),
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _run_case_read_route_guard(
-            build_case_courtroom_cases_route_payload_v3(
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                review_required=review_required,
-                risk_level=risk_level,
-                sla_bucket=sla_bucket,
-                updated_from=updated_from,
-                updated_to=updated_to,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                scan_limit=scan_limit,
-                offset=offset,
-                limit=limit,
-                normalize_workflow_status=_normalize_workflow_status,
-                workflow_statuses=WORKFLOW_STATUSES,
-                normalize_review_case_risk_level=normalize_review_case_risk_level_v3,
-                review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
-                normalize_review_case_sla_bucket=normalize_review_case_sla_bucket_v3,
-                review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
-                normalize_query_datetime=_normalize_query_datetime,
-                normalize_courtroom_case_sort_by=normalize_courtroom_case_sort_by_v3,
-                normalize_courtroom_case_sort_order=normalize_courtroom_case_sort_order_v3,
-                courtroom_case_sort_fields=COURTROOM_CASE_SORT_FIELDS,
-                workflow_list_jobs=_workflow_list_jobs,
-                resolve_report_context_for_case=_resolve_report_context_for_case,
-                trace_get=runtime.trace_store.get_trace,
-                build_review_case_risk_profile=build_review_case_risk_profile,
-                build_verdict_contract=build_verdict_contract_v3,
-                build_case_evidence_view=build_case_evidence_view_v3,
-                build_courtroom_read_model_view=build_courtroom_read_model_view,
-                serialize_workflow_job=_serialize_workflow_job,
-                build_courtroom_read_model_light_summary=(
-                    build_courtroom_read_model_light_summary
-                ),
-                build_courtroom_case_sort_key=build_courtroom_case_sort_key_v3,
-            )
-        )
-
-    @app.get("/internal/judge/courtroom/drilldown-bundle")
-    async def list_judge_courtroom_drilldown_bundle(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        dispatch_type: str = Query(default="auto"),
-        winner: str | None = Query(default=None),
-        review_required: bool | None = Query(default=None),
-        risk_level: str | None = Query(default=None),
-        sla_bucket: str | None = Query(default=None),
-        updated_from: datetime | None = Query(default=None),
-        updated_to: datetime | None = Query(default=None),
-        sort_by: str = Query(default="updated_at"),
-        sort_order: str = Query(default="desc"),
-        scan_limit: int = Query(default=500, ge=20, le=2000),
-        offset: int = Query(default=0, ge=0, le=5000),
-        limit: int = Query(default=50, ge=1, le=200),
-        claim_preview_limit: int = Query(default=10, ge=1, le=100),
-        evidence_preview_limit: int = Query(default=10, ge=1, le=100),
-        panel_preview_limit: int = Query(default=10, ge=1, le=100),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        payload = await _run_case_read_route_guard(
-            build_case_courtroom_drilldown_bundle_route_payload_v3(
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                review_required=review_required,
-                risk_level=risk_level,
-                sla_bucket=sla_bucket,
-                updated_from=updated_from,
-                updated_to=updated_to,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                scan_limit=scan_limit,
-                offset=offset,
-                limit=limit,
-                claim_preview_limit=claim_preview_limit,
-                evidence_preview_limit=evidence_preview_limit,
-                panel_preview_limit=panel_preview_limit,
-                normalize_workflow_status=_normalize_workflow_status,
-                workflow_statuses=WORKFLOW_STATUSES,
-                normalize_review_case_risk_level=normalize_review_case_risk_level_v3,
-                review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
-                normalize_review_case_sla_bucket=normalize_review_case_sla_bucket_v3,
-                review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
-                normalize_query_datetime=_normalize_query_datetime,
-                normalize_courtroom_case_sort_by=normalize_courtroom_case_sort_by_v3,
-                normalize_courtroom_case_sort_order=normalize_courtroom_case_sort_order_v3,
-                courtroom_case_sort_fields=COURTROOM_CASE_SORT_FIELDS,
-                workflow_list_jobs=_workflow_list_jobs,
-                resolve_report_context_for_case=_resolve_report_context_for_case,
-                trace_get=runtime.trace_store.get_trace,
-                build_review_case_risk_profile=build_review_case_risk_profile,
-                build_verdict_contract=build_verdict_contract_v3,
-                build_case_evidence_view=build_case_evidence_view_v3,
-                build_courtroom_read_model_view=build_courtroom_read_model_view,
-                build_courtroom_drilldown_bundle_view=(
-                    build_courtroom_drilldown_bundle_view
-                ),
-                build_courtroom_drilldown_action_hints=build_courtroom_drilldown_action_hints_v3,
-                serialize_workflow_job=_serialize_workflow_job,
-                build_courtroom_case_sort_key=build_courtroom_case_sort_key_v3,
-            )
-        )
-        return _validate_contract_or_raise_http_500_for_runtime(
-            payload=payload,
-            validate_contract=validate_courtroom_drilldown_bundle_contract_v3,
-            code="courtroom_drilldown_bundle_contract_violation",
-        )
-
-    @app.get("/internal/judge/evidence-claim/ops-queue")
-    async def list_judge_evidence_claim_ops_queue(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        dispatch_type: str = Query(default="auto"),
-        winner: str | None = Query(default=None),
-        review_required: bool | None = Query(default=None),
-        risk_level: str | None = Query(default=None),
-        sla_bucket: str | None = Query(default=None),
-        reliability_level: str | None = Query(default=None),
-        has_conflict: bool | None = Query(default=None),
-        has_unanswered_claim: bool | None = Query(default=None),
-        updated_from: datetime | None = Query(default=None),
-        updated_to: datetime | None = Query(default=None),
-        sort_by: str = Query(default="updated_at"),
-        sort_order: str = Query(default="desc"),
-        scan_limit: int = Query(default=500, ge=20, le=2000),
-        offset: int = Query(default=0, ge=0, le=5000),
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        payload = await _run_case_read_route_guard(
-            build_case_evidence_claim_ops_queue_route_payload_v3(
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                review_required=review_required,
-                risk_level=risk_level,
-                sla_bucket=sla_bucket,
-                reliability_level=reliability_level,
-                has_conflict=has_conflict,
-                has_unanswered_claim=has_unanswered_claim,
-                updated_from=updated_from,
-                updated_to=updated_to,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                scan_limit=scan_limit,
-                offset=offset,
-                limit=limit,
-                normalize_workflow_status=_normalize_workflow_status,
-                workflow_statuses=WORKFLOW_STATUSES,
-                normalize_review_case_risk_level=normalize_review_case_risk_level_v3,
-                review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
-                normalize_review_case_sla_bucket=normalize_review_case_sla_bucket_v3,
-                review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
-                normalize_evidence_claim_reliability_level=normalize_evidence_claim_reliability_level_v3,
-                evidence_claim_reliability_level_values=EVIDENCE_CLAIM_RELIABILITY_LEVEL_VALUES,
-                normalize_query_datetime=_normalize_query_datetime,
-                normalize_evidence_claim_queue_sort_by=normalize_evidence_claim_queue_sort_by_v3,
-                normalize_evidence_claim_queue_sort_order=normalize_evidence_claim_queue_sort_order_v3,
-                evidence_claim_queue_sort_fields=EVIDENCE_CLAIM_QUEUE_SORT_FIELDS,
-                workflow_list_jobs=_workflow_list_jobs,
-                resolve_report_context_for_case=_resolve_report_context_for_case,
-                trace_get=runtime.trace_store.get_trace,
-                build_review_case_risk_profile=build_review_case_risk_profile,
-                build_verdict_contract=build_verdict_contract_v3,
-                build_case_evidence_view=build_case_evidence_view_v3,
-                build_courtroom_read_model_view=build_courtroom_read_model_view,
-                build_courtroom_read_model_light_summary=(
-                    build_courtroom_read_model_light_summary
-                ),
-                build_evidence_claim_ops_profile=build_evidence_claim_ops_profile_v3,
-                build_evidence_claim_action_hints=build_evidence_claim_action_hints_v3,
-                serialize_workflow_job=_serialize_workflow_job,
-                build_evidence_claim_queue_sort_key=build_evidence_claim_queue_sort_key_v3,
-            )
-        )
-        return _validate_contract_or_raise_http_500_for_runtime(
-            payload=payload,
-            validate_contract=validate_evidence_claim_ops_queue_contract_v3,
-            code="evidence_claim_ops_queue_contract_violation",
-        )
+    case_read_route_handles = register_case_read_routes(
+        app=app,
+        deps=CaseReadRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            run_case_read_route_guard=_run_case_read_route_guard,
+            validate_contract_or_raise_http_500=(
+                _validate_contract_or_raise_http_500_for_runtime
+            ),
+            workflow_get_job=_workflow_get_job,
+            workflow_list_events=_workflow_list_events,
+            get_dispatch_receipt=_get_dispatch_receipt,
+            trace_get=runtime.trace_store.get_trace,
+            list_replay_records=_list_replay_records,
+            list_audit_alerts=_list_audit_alerts,
+            get_claim_ledger_record=_get_claim_ledger_record,
+            list_claim_ledger_records=_list_claim_ledger_records,
+            resolve_report_context_for_case=_resolve_report_context_for_case,
+            workflow_list_jobs=_workflow_list_jobs,
+            build_judge_core_view=_build_judge_core_view,
+            build_review_case_risk_profile=build_review_case_risk_profile,
+            build_courtroom_read_model_view=build_courtroom_read_model_view,
+            build_courtroom_read_model_light_summary=(
+                build_courtroom_read_model_light_summary
+            ),
+            build_courtroom_drilldown_bundle_view=build_courtroom_drilldown_bundle_view,
+            serialize_workflow_job=_serialize_workflow_job,
+            normalize_workflow_status=_normalize_workflow_status,
+            workflow_statuses=WORKFLOW_STATUSES,
+            normalize_query_datetime=_normalize_query_datetime,
+            review_case_risk_level_values=REVIEW_CASE_RISK_LEVEL_VALUES,
+            review_case_sla_bucket_values=REVIEW_CASE_SLA_BUCKET_VALUES,
+            courtroom_case_sort_fields=COURTROOM_CASE_SORT_FIELDS,
+            evidence_claim_reliability_level_values=(
+                EVIDENCE_CLAIM_RELIABILITY_LEVEL_VALUES
+            ),
+            evidence_claim_queue_sort_fields=EVIDENCE_CLAIM_QUEUE_SORT_FIELDS,
+            validate_case_overview_contract=(
+                lambda payload: validate_case_overview_contract_v3(payload)
+            ),
+            validate_courtroom_read_model_contract=(
+                lambda payload: validate_courtroom_read_model_contract_v3(payload)
+            ),
+            validate_courtroom_drilldown_bundle_contract=(
+                lambda payload: validate_courtroom_drilldown_bundle_contract_v3(payload)
+            ),
+            validate_evidence_claim_ops_queue_contract=(
+                lambda payload: validate_evidence_claim_ops_queue_contract_v3(payload)
+            ),
+        ),
+    )
 
     @app.post("/internal/judge/apps/npc-coach/sessions/{session_id}/advice")
     async def request_npc_coach_advice(
@@ -5782,15 +5491,23 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 ),
                 get_judge_fairness_policy_calibration_advisor=get_judge_fairness_policy_calibration_advisor,
                 get_panel_runtime_readiness=get_panel_runtime_readiness,
-                list_judge_courtroom_cases=list_judge_courtroom_cases,
-                list_judge_courtroom_drilldown_bundle=list_judge_courtroom_drilldown_bundle,
-                list_judge_evidence_claim_ops_queue=list_judge_evidence_claim_ops_queue,
+                list_judge_courtroom_cases=(
+                    case_read_route_handles.list_judge_courtroom_cases
+                ),
+                list_judge_courtroom_drilldown_bundle=(
+                    case_read_route_handles.list_judge_courtroom_drilldown_bundle
+                ),
+                list_judge_evidence_claim_ops_queue=(
+                    case_read_route_handles.list_judge_evidence_claim_ops_queue
+                ),
                 list_judge_trust_challenge_ops_queue=list_judge_trust_challenge_ops_queue,
                 list_judge_review_jobs=list_judge_review_jobs,
                 simulate_policy_release_gate=(
                     registry_route_handles.simulate_policy_release_gate
                 ),
-                get_judge_case_courtroom_read_model=get_judge_case_courtroom_read_model,
+                get_judge_case_courtroom_read_model=(
+                    case_read_route_handles.get_judge_case_courtroom_read_model
+                ),
                 get_judge_trust_public_verify=get_judge_trust_public_verify,
             ),
             code="ops_read_model_pack_v5_contract_violation",
