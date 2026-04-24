@@ -669,7 +669,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory.build_final_report_payload_for_dispatch_v3",
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_custom_final_payload,
         ):
             for case_id in (high_case_id, mid_case_id, low_case_id):
@@ -1014,7 +1014,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory.build_final_report_payload_for_dispatch_v3",
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_custom_final_payload,
         ):
             for case_id in (high_case_id, low_case_id):
@@ -1361,7 +1361,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory.build_final_report_payload_for_dispatch_v3",
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_custom_final_payload,
         ):
             for case_id in (high_case_id, low_case_id):
@@ -4192,7 +4192,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "degradationLevel": 1,
         }
 
-        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", return_value=gated_payload):
+        with patch(
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
+            return_value=gated_payload,
+        ):
             final_resp = await self._post_json(
                 app=app,
                 path="/internal/judge/v3/final/dispatch",
@@ -4343,7 +4346,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "degradationLevel": 1,
         }
 
-        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", return_value=gated_payload):
+        with patch(
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
+            return_value=gated_payload,
+        ):
             final_resp = await self._post_json(
                 app=app,
                 path="/internal/judge/v3/final/dispatch",
@@ -4576,7 +4582,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
                 audit_alerts=[],
             )
 
-        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", side_effect=_payload_side_effect):
+        with patch(
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
+            side_effect=_payload_side_effect,
+        ):
             high_resp = await self._post_json(
                 app=app,
                 path="/internal/judge/v3/final/dispatch",
@@ -4725,7 +4734,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             return payload
 
         with patch(
-            "app.app_factory.build_final_report_payload_for_dispatch_v3",
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
             side_effect=_build_review_payload,
         ):
             for case_id in (challenged_case_id, plain_case_id):
@@ -6159,7 +6168,10 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
             "conScore": 62.0,
             "dimensionScores": {"logic": 70.0},
         }
-        with patch("app.app_factory.build_final_report_payload_for_dispatch_v3", return_value=broken_payload):
+        with patch(
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
+            return_value=broken_payload,
+        ):
             replay_resp = await self._post(
                 app=app,
                 path="/internal/judge/cases/7102/replay?dispatch_type=final",
@@ -6338,7 +6350,7 @@ class AppFactoryTests(unittest.IsolatedAsyncioTestCase):
         final_req = _build_final_request(case_id=7301, idempotency_key="final:7301")
 
         with patch(
-            "app.app_factory.build_final_report_payload_for_dispatch_v3",
+            "app.applications.bootstrap_final_report_helpers.build_final_report_payload_for_dispatch_v3",
             return_value={"winner": "draw", "degradationLevel": 1},
         ):
             blocked_resp = await self._post_json(

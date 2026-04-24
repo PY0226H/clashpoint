@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Awaitable, Callable, cast
-from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -71,7 +70,17 @@ from .applications.bootstrap_fairness_helpers import (
     build_case_fairness_aggregations_for_runtime,
     build_case_fairness_item_for_runtime,
 )
+from .applications.bootstrap_final_report_helpers import (
+    build_final_report_payload_for_runtime,
+)
 from .applications.bootstrap_replay_dependencies import build_replay_dependency_packs
+from .applications.bootstrap_review_trust_helpers import (
+    build_review_case_risk_profile_for_runtime,
+    build_review_trust_unified_priority_profile_for_runtime,
+    build_trust_challenge_action_hints_for_runtime,
+    build_trust_challenge_id_for_runtime,
+    build_trust_challenge_priority_profile_for_runtime,
+)
 from .applications.bootstrap_route_dependencies import (
     build_registry_release_gate_dependencies,
     build_trust_challenge_common_dependencies,
@@ -121,9 +130,6 @@ from .applications.judge_command_routes import (
 )
 from .applications.judge_command_routes import (
     build_error_contract as build_error_contract_v3,
-)
-from .applications.judge_command_routes import (
-    build_final_report_payload_for_dispatch as build_final_report_payload_for_dispatch_v3,
 )
 from .applications.judge_command_routes import (
     build_receipt_dims_from_raw as build_receipt_dims_from_raw_v3,
@@ -299,9 +305,6 @@ from .applications.review_alert_routes import (
     build_review_case_detail_payload as build_review_case_detail_payload_v3,
 )
 from .applications.review_alert_routes import (
-    build_review_case_risk_profile as build_review_case_risk_profile_v3,
-)
-from .applications.review_alert_routes import (
     build_review_case_sort_key as build_review_case_sort_key_v3,
 )
 from .applications.review_alert_routes import (
@@ -404,19 +407,10 @@ from .applications.trust_ops_views import (
     build_public_trust_verify_payload as build_public_trust_verify_payload_v3,
 )
 from .applications.trust_ops_views import (
-    build_review_trust_unified_priority_profile as build_review_trust_unified_priority_profile_v3,
-)
-from .applications.trust_ops_views import (
-    build_trust_challenge_action_hints as build_trust_challenge_action_hints_v3,
-)
-from .applications.trust_ops_views import (
     build_trust_challenge_ops_queue_item as build_trust_challenge_ops_queue_item_v3,
 )
 from .applications.trust_ops_views import (
     build_trust_challenge_ops_queue_payload as build_trust_challenge_ops_queue_payload_v3,
-)
-from .applications.trust_ops_views import (
-    build_trust_challenge_priority_profile as build_trust_challenge_priority_profile_v3,
 )
 from .applications.trust_ops_views import (
     build_trust_challenge_sort_key as build_trust_challenge_sort_key_v3,
@@ -3707,7 +3701,7 @@ async def _build_trust_challenge_request_payload_for_runtime(
             requested_by=requested_by,
             auto_accept=auto_accept,
             **trust_challenge_common_dependencies,
-            new_challenge_id=_build_trust_challenge_id_for_runtime,
+            new_challenge_id=build_trust_challenge_id_for_runtime,
             upsert_audit_alert=upsert_audit_alert,
             sync_audit_alert_to_facts=sync_audit_alert_to_facts,
             trust_challenge_state_requested=TRUST_CHALLENGE_STATE_REQUESTED,
@@ -3826,95 +3820,6 @@ async def _build_trust_public_verify_payload_for_runtime(
         build_public_verify_payload=build_public_verify_payload,
         validate_contract=validate_contract,
         violation_code=violation_code,
-    )
-
-
-def _build_review_case_risk_profile_for_runtime(
-    *,
-    workflow: WorkflowJob,
-    report_payload: dict[str, Any] | None,
-    report_summary: dict[str, Any] | None,
-    now: datetime | str | None,
-    normalize_query_datetime: Callable[[datetime | str | None], datetime | None],
-) -> dict[str, Any]:
-    return build_review_case_risk_profile_v3(
-        workflow=workflow,
-        report_payload=report_payload,
-        report_summary=report_summary,
-        now=now,
-        normalize_query_datetime=normalize_query_datetime,
-    )
-
-
-def _build_trust_challenge_priority_profile_for_runtime(
-    *,
-    workflow: WorkflowJob,
-    challenge_review: dict[str, Any] | None,
-    report_payload: dict[str, Any] | None,
-    report_summary: dict[str, Any] | None,
-    now: datetime | str | None,
-    normalize_query_datetime: Callable[[datetime | str | None], datetime | None],
-    trust_challenge_open_states: set[str],
-) -> dict[str, Any]:
-    return build_trust_challenge_priority_profile_v3(
-        workflow=workflow,
-        challenge_review=challenge_review,
-        report_payload=report_payload,
-        report_summary=report_summary,
-        now=now,
-        normalize_query_datetime=normalize_query_datetime,
-        trust_challenge_open_states=trust_challenge_open_states,
-    )
-
-
-def _build_trust_challenge_action_hints_for_runtime(
-    *,
-    challenge_review: dict[str, Any] | None,
-    priority_profile: dict[str, Any] | None,
-    trust_challenge_open_states: set[str],
-) -> list[dict[str, Any]]:
-    return build_trust_challenge_action_hints_v3(
-        challenge_review=challenge_review,
-        priority_profile=priority_profile,
-        trust_challenge_open_states=trust_challenge_open_states,
-    )
-
-
-def _build_review_trust_unified_priority_profile_for_runtime(
-    *,
-    risk_profile: dict[str, Any] | None,
-    trust_priority_profile: dict[str, Any] | None,
-    challenge_review: dict[str, Any] | None,
-    trust_challenge_open_states: set[str],
-) -> dict[str, Any]:
-    return build_review_trust_unified_priority_profile_v3(
-        risk_profile=risk_profile,
-        trust_priority_profile=trust_priority_profile,
-        challenge_review=challenge_review,
-        trust_challenge_open_states=trust_challenge_open_states,
-    )
-
-
-def _build_trust_challenge_id_for_runtime(*, case_id: int) -> str:
-    return f"chlg-{max(0, int(case_id))}-{uuid4().hex[:12]}"
-
-
-def _build_final_report_payload_for_runtime(
-    *,
-    runtime: AppRuntime,
-    request: Any,
-    phase_receipts: list[Any] | None,
-    fairness_thresholds: dict[str, Any] | None,
-    panel_runtime_profiles: dict[str, dict[str, Any]] | None,
-) -> dict[str, Any]:
-    return build_final_report_payload_for_dispatch_v3(
-        request=request,
-        phase_receipts=phase_receipts,
-        fairness_thresholds=fairness_thresholds,
-        panel_runtime_profiles=panel_runtime_profiles,
-        list_dispatch_receipts=runtime.trace_store.list_dispatch_receipts,
-        build_final_report_payload=build_final_report_payload_v3_final,
-        judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
     )
 
 
@@ -4186,20 +4091,20 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         )
     )
     build_review_case_risk_profile = partial(
-        _build_review_case_risk_profile_for_runtime,
+        build_review_case_risk_profile_for_runtime,
         normalize_query_datetime=_normalize_query_datetime,
     )
     build_trust_challenge_priority_profile = partial(
-        _build_trust_challenge_priority_profile_for_runtime,
+        build_trust_challenge_priority_profile_for_runtime,
         normalize_query_datetime=_normalize_query_datetime,
         trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
     )
     build_trust_challenge_action_hints = partial(
-        _build_trust_challenge_action_hints_for_runtime,
+        build_trust_challenge_action_hints_for_runtime,
         trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
     )
     build_review_trust_unified_priority_profile = partial(
-        _build_review_trust_unified_priority_profile_for_runtime,
+        build_review_trust_unified_priority_profile_for_runtime,
         trust_challenge_open_states=TRUST_CHALLENGE_OPEN_STATES,
     )
     build_courtroom_read_model_view = partial(
@@ -4261,8 +4166,10 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         gateway_runtime=runtime.gateway_runtime,
     )
     build_final_report_payload = partial(
-        _build_final_report_payload_for_runtime,
-        runtime=runtime,
+        build_final_report_payload_for_runtime,
+        list_dispatch_receipts=runtime.trace_store.list_dispatch_receipts,
+        build_final_report_payload=build_final_report_payload_v3_final,
+        judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
     )
     resolve_panel_runtime_profiles = partial(
         resolve_panel_runtime_profiles_v3,
