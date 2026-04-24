@@ -120,16 +120,15 @@ from .applications.bootstrap_workflow_trace_store_helpers import (
     list_fairness_benchmark_runs_for_runtime,
     list_fairness_shadow_runs_for_runtime,
     list_replay_records_for_runtime,
+    persist_dispatch_receipt_for_runtime,
     sync_audit_alert_to_facts_for_runtime,
+    upsert_claim_ledger_record_for_runtime,
     upsert_fairness_benchmark_run_for_runtime,
     upsert_fairness_shadow_run_for_runtime,
     workflow_append_event_for_runtime,
     workflow_get_job_for_runtime,
     workflow_list_events_for_runtime,
     workflow_list_jobs_for_runtime,
-)
-from .applications.case_courtroom_views import (
-    build_case_evidence_view as build_case_evidence_view_v3,
 )
 from .applications.case_courtroom_views import (
     serialize_claim_ledger_record as serialize_claim_ledger_record_v3,
@@ -191,9 +190,6 @@ from .applications.judge_command_routes import (
 )
 from .applications.judge_command_routes import (
     resolve_tool_profile_or_raise as resolve_tool_profile_or_raise_v3,
-)
-from .applications.judge_command_routes import (
-    save_dispatch_receipt as save_dispatch_receipt_v3,
 )
 from .applications.judge_command_routes import (
     validate_final_dispatch_request as validate_final_dispatch_request_v3,
@@ -508,9 +504,6 @@ from .domain.facts import (
 )
 from .domain.facts import (
     ClaimLedgerRecord as FactClaimLedgerRecord,
-)
-from .domain.facts import (
-    DispatchReceipt as FactDispatchReceipt,
 )
 from .domain.facts import (
     FairnessBenchmarkRun as FactFairnessBenchmarkRun,
@@ -927,113 +920,6 @@ def _build_policy_domain_judge_family_overview(
         "invalidItems": invalid_items[:preview_cap],
         "includeVersions": bool(include_versions),
     }
-
-
-def _payload_int_from_mapping(payload: dict[str, Any], *keys: str) -> int | None:
-    for key in keys:
-        value = payload.get(key)
-        if value is None or isinstance(value, bool):
-            continue
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _payload_str_from_mapping(payload: dict[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        value = payload.get(key)
-        if value is None:
-            continue
-        normalized = str(value).strip()
-        if normalized:
-            return normalized
-    return None
-
-
-def _build_case_dossier_from_request_payload(
-    *,
-    dispatch_type: str,
-    request_payload: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    payload = request_payload if isinstance(request_payload, dict) else {}
-    if not payload:
-        return None
-
-    phase_no = _payload_int_from_mapping(payload, "phase_no", "phaseNo")
-    phase_start_no = _payload_int_from_mapping(payload, "phase_start_no", "phaseStartNo")
-    phase_end_no = _payload_int_from_mapping(payload, "phase_end_no", "phaseEndNo")
-    message_start_id = _payload_int_from_mapping(payload, "message_start_id", "messageStartId")
-    message_end_id = _payload_int_from_mapping(payload, "message_end_id", "messageEndId")
-    message_count = _payload_int_from_mapping(payload, "message_count", "messageCount")
-
-    message_digest: list[dict[str, Any]] = []
-    side_distribution = {"pro": 0, "con": 0, "other": 0}
-    speaker_tags: list[str] = []
-    speaker_seen: set[str] = set()
-
-    message_rows = payload.get("messages") if isinstance(payload.get("messages"), list) else []
-    for row in message_rows:
-        if not isinstance(row, dict):
-            continue
-        side = str(row.get("side") or "").strip().lower()
-        if side == "pro":
-            side_distribution["pro"] += 1
-        elif side == "con":
-            side_distribution["con"] += 1
-        else:
-            side_distribution["other"] += 1
-        speaker_tag = str(row.get("speaker_tag") or row.get("speakerTag") or "").strip()
-        if speaker_tag and speaker_tag not in speaker_seen:
-            speaker_seen.add(speaker_tag)
-            speaker_tags.append(speaker_tag)
-        message_digest.append(
-            {
-                "messageId": _payload_int_from_mapping(row, "message_id", "messageId"),
-                "side": side if side else None,
-                "speakerTag": speaker_tag or None,
-                "createdAt": _payload_str_from_mapping(row, "created_at", "createdAt"),
-            }
-        )
-
-    if dispatch_type == "final":
-        phase_scope: dict[str, Any] = {
-            "startNo": phase_start_no,
-            "endNo": phase_end_no,
-        }
-    else:
-        phase_scope = {"no": phase_no}
-
-    return {
-        "version": "v1",
-        "dispatchType": dispatch_type,
-        "caseId": _payload_int_from_mapping(payload, "case_id", "caseId"),
-        "scopeId": _payload_int_from_mapping(payload, "scope_id", "scopeId"),
-        "sessionId": _payload_int_from_mapping(payload, "session_id", "sessionId"),
-        "traceId": _payload_str_from_mapping(payload, "trace_id", "traceId"),
-        "topicDomain": _payload_str_from_mapping(payload, "topic_domain", "topicDomain"),
-        "rubricVersion": _payload_str_from_mapping(payload, "rubric_version", "rubricVersion"),
-        "judgePolicyVersion": _payload_str_from_mapping(
-            payload,
-            "judge_policy_version",
-            "judgePolicyVersion",
-        ),
-        "retrievalProfile": _payload_str_from_mapping(
-            payload,
-            "retrieval_profile",
-            "retrievalProfile",
-        ),
-        "phase": phase_scope,
-        "messageWindow": {
-            "startId": message_start_id,
-            "endId": message_end_id,
-            "count": message_count,
-        },
-        "sideDistribution": side_distribution,
-        "speakerTags": speaker_tags,
-        "messageDigest": message_digest,
-}
 
 
 def _serialize_fairness_benchmark_run(record: FactFairnessBenchmarkRun) -> dict[str, Any]:
@@ -2082,147 +1968,6 @@ async def _build_shared_room_context_for_runtime(
     }
 
 
-async def _persist_dispatch_receipt_for_runtime(
-    *,
-    runtime: AppRuntime,
-    ensure_workflow_schema_ready: Callable[[], Awaitable[None]],
-    dispatch_type: str,
-    job_id: int,
-    scope_id: int,
-    session_id: int,
-    trace_id: str,
-    idempotency_key: str,
-    rubric_version: str,
-    judge_policy_version: str,
-    topic_domain: str,
-    retrieval_profile: str | None,
-    phase_no: int | None,
-    phase_start_no: int | None,
-    phase_end_no: int | None,
-    message_start_id: int | None,
-    message_end_id: int | None,
-    message_count: int | None,
-    status: str,
-    request_payload: dict[str, Any],
-    response_payload: dict[str, Any] | None,
-) -> None:
-    save_dispatch_receipt_v3(
-        save_dispatch_receipt_fn=runtime.trace_store.save_dispatch_receipt,
-        dispatch_type=dispatch_type,
-        job_id=job_id,
-        scope_id=scope_id,
-        session_id=session_id,
-        trace_id=trace_id,
-        idempotency_key=idempotency_key,
-        rubric_version=rubric_version,
-        judge_policy_version=judge_policy_version,
-        topic_domain=topic_domain,
-        retrieval_profile=retrieval_profile,
-        phase_no=phase_no,
-        phase_start_no=phase_start_no,
-        phase_end_no=phase_end_no,
-        message_start_id=message_start_id,
-        message_end_id=message_end_id,
-        message_count=message_count,
-        status=status,
-        request_payload=request_payload,
-        response_payload=response_payload,
-    )
-    await ensure_workflow_schema_ready()
-    await runtime.workflow_runtime.facts.upsert_dispatch_receipt(
-        receipt=FactDispatchReceipt(
-            dispatch_type=dispatch_type,
-            job_id=max(0, int(job_id)),
-            scope_id=max(0, int(scope_id)),
-            session_id=max(0, int(session_id)),
-            trace_id=str(trace_id or "").strip(),
-            idempotency_key=str(idempotency_key or "").strip(),
-            rubric_version=str(rubric_version or "").strip(),
-            judge_policy_version=str(judge_policy_version or "").strip(),
-            topic_domain=str(topic_domain or "").strip(),
-            retrieval_profile=retrieval_profile,
-            phase_no=phase_no,
-            phase_start_no=phase_start_no,
-            phase_end_no=phase_end_no,
-            message_start_id=message_start_id,
-            message_end_id=message_end_id,
-            message_count=message_count,
-            status=str(status or "").strip(),
-            request=dict(request_payload or {}),
-            response=(dict(response_payload) if isinstance(response_payload, dict) else None),
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
-    )
-
-
-async def _upsert_claim_ledger_record_for_runtime(
-    *,
-    runtime: AppRuntime,
-    ensure_workflow_schema_ready: Callable[[], Awaitable[None]],
-    case_id: int,
-    dispatch_type: str,
-    trace_id: str,
-    report_payload: dict[str, Any] | None,
-    request_payload: dict[str, Any] | None = None,
-) -> FactClaimLedgerRecord | None:
-    payload = report_payload if isinstance(report_payload, dict) else {}
-    if not payload and not isinstance(request_payload, dict):
-        return None
-    verdict_contract = build_verdict_contract_v3(payload)
-    evidence_view = build_case_evidence_view_v3(
-        report_payload=payload,
-        verdict_contract=verdict_contract,
-        claim_ledger_record=None,
-    )
-    case_dossier = (
-        evidence_view.get("caseDossier")
-        if isinstance(evidence_view.get("caseDossier"), dict)
-        else _build_case_dossier_from_request_payload(
-            dispatch_type=dispatch_type,
-            request_payload=request_payload,
-        )
-    )
-    claim_graph = (
-        evidence_view.get("claimGraph")
-        if isinstance(evidence_view.get("claimGraph"), dict)
-        else None
-    )
-    claim_graph_summary = (
-        evidence_view.get("claimGraphSummary")
-        if isinstance(evidence_view.get("claimGraphSummary"), dict)
-        else None
-    )
-    evidence_ledger = (
-        evidence_view.get("evidenceLedger")
-        if isinstance(evidence_view.get("evidenceLedger"), dict)
-        else None
-    )
-    verdict_evidence_refs = [
-        dict(item)
-        for item in (evidence_view.get("verdictEvidenceRefs") or [])
-        if isinstance(item, dict)
-    ]
-    if (
-        case_dossier is None
-        and claim_graph is None
-        and claim_graph_summary is None
-        and not verdict_evidence_refs
-    ):
-        return None
-    await ensure_workflow_schema_ready()
-    return await runtime.workflow_runtime.facts.upsert_claim_ledger_record(
-        case_id=case_id,
-        dispatch_type=dispatch_type,
-        trace_id=trace_id,
-        case_dossier=case_dossier,
-        claim_graph=claim_graph,
-        claim_graph_summary=claim_graph_summary,
-        evidence_ledger=evidence_ledger,
-        verdict_evidence_refs=verdict_evidence_refs,
-    )
-
-
 async def _transition_judge_alert_status_for_runtime(
     *,
     case_id: int,
@@ -3245,7 +2990,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     )
 
     _persist_dispatch_receipt = partial(
-        _persist_dispatch_receipt_for_runtime,
+        persist_dispatch_receipt_for_runtime,
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
     )
@@ -3272,7 +3017,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     )
 
     _upsert_claim_ledger_record = partial(
-        _upsert_claim_ledger_record_for_runtime,
+        upsert_claim_ledger_record_for_runtime,
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
     )
