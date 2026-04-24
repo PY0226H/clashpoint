@@ -384,6 +384,10 @@ from .applications.route_group_judge_command import (
     JudgeCommandRouteDependencies,
     register_judge_command_routes,
 )
+from .applications.route_group_panel_runtime import (
+    PanelRuntimeRouteDependencies,
+    register_panel_runtime_routes,
+)
 from .applications.route_group_registry import register_registry_routes
 from .applications.route_group_replay import (
     ReplayRouteDependencies,
@@ -4814,6 +4818,25 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
     )
 
+    panel_runtime_route_handles = register_panel_runtime_routes(
+        app=app,
+        deps=PanelRuntimeRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            await_payload_or_raise_http_500=(
+                _await_payload_or_raise_http_500_for_runtime
+            ),
+            build_panel_runtime_profiles_payload=(
+                _build_panel_runtime_profiles_payload_for_runtime
+            ),
+            build_panel_runtime_readiness_payload=(
+                _build_panel_runtime_readiness_payload_for_runtime
+            ),
+            list_judge_case_fairness=fairness_route_handles.list_judge_case_fairness,
+            run_panel_runtime_route_guard=_run_panel_runtime_route_guard,
+        ),
+    )
+
     @app.get("/internal/judge/ops/read-model/pack")
     async def get_judge_ops_read_model_pack(
         x_ai_internal_key: str | None = Header(default=None),
@@ -4872,7 +4895,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 get_judge_fairness_policy_calibration_advisor=(
                     fairness_route_handles.get_judge_fairness_policy_calibration_advisor
                 ),
-                get_panel_runtime_readiness=get_panel_runtime_readiness,
+                get_panel_runtime_readiness=(
+                    panel_runtime_route_handles.get_panel_runtime_readiness
+                ),
                 list_judge_courtroom_cases=(
                     case_read_route_handles.list_judge_courtroom_cases
                 ),
@@ -4897,107 +4922,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 ),
             ),
             code="ops_read_model_pack_v5_contract_violation",
-        )
-
-    @app.get("/internal/judge/panels/runtime/profiles")
-    async def list_panel_runtime_profiles(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        dispatch_type: str | None = Query(default=None),
-        winner: str | None = Query(default=None),
-        policy_version: str | None = Query(default=None),
-        has_open_review: bool | None = Query(default=None),
-        gate_conclusion: str | None = Query(default=None),
-        challenge_state: str | None = Query(default=None),
-        review_required: bool | None = Query(default=None),
-        panel_high_disagreement: bool | None = Query(default=None),
-        judge_id: str | None = Query(default=None),
-        profile_source: str | None = Query(default=None),
-        profile_id: str | None = Query(default=None),
-        model_strategy: str | None = Query(default=None),
-        strategy_slot: str | None = Query(default=None),
-        domain_slot: str | None = Query(default=None),
-        sort_by: str = Query(default="updated_at"),
-        sort_order: str = Query(default="desc"),
-        offset: int = Query(default=0, ge=0, le=5000),
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _await_payload_or_raise_http_500_for_runtime(
-            self_awaitable=_build_panel_runtime_profiles_payload_for_runtime(
-                x_ai_internal_key=x_ai_internal_key,
-                status=status,
-                dispatch_type=dispatch_type,
-                winner=winner,
-                policy_version=policy_version,
-                has_open_review=has_open_review,
-                gate_conclusion=gate_conclusion,
-                challenge_state=challenge_state,
-                review_required=review_required,
-                panel_high_disagreement=panel_high_disagreement,
-                judge_id=judge_id,
-                profile_source=profile_source,
-                profile_id=profile_id,
-                model_strategy=model_strategy,
-                strategy_slot=strategy_slot,
-                domain_slot=domain_slot,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                offset=offset,
-                limit=limit,
-                list_judge_case_fairness=(
-                    fairness_route_handles.list_judge_case_fairness
-                ),
-                run_panel_runtime_route_guard=_run_panel_runtime_route_guard,
-            ),
-            code="panel_runtime_profile_contract_violation",
-        )
-
-    @app.get("/internal/judge/panels/runtime/readiness")
-    async def get_panel_runtime_readiness(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str | None = Query(default=None),
-        dispatch_type: str | None = Query(default="final"),
-        winner: str | None = Query(default=None),
-        policy_version: str | None = Query(default=None),
-        has_open_review: bool | None = Query(default=None),
-        gate_conclusion: str | None = Query(default=None),
-        challenge_state: str | None = Query(default=None),
-        review_required: bool | None = Query(default=None),
-        panel_high_disagreement: bool | None = Query(default=None),
-        judge_id: str | None = Query(default=None),
-        profile_source: str | None = Query(default=None),
-        profile_id: str | None = Query(default=None),
-        model_strategy: str | None = Query(default=None),
-        strategy_slot: str | None = Query(default=None),
-        domain_slot: str | None = Query(default=None),
-        profile_scan_limit: int = Query(default=600, ge=50, le=5000),
-        group_limit: int = Query(default=50, ge=1, le=200),
-        attention_limit: int = Query(default=20, ge=1, le=100),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _build_panel_runtime_readiness_payload_for_runtime(
-            x_ai_internal_key=x_ai_internal_key,
-            status=status,
-            dispatch_type=dispatch_type,
-            winner=winner,
-            policy_version=policy_version,
-            has_open_review=has_open_review,
-            gate_conclusion=gate_conclusion,
-            challenge_state=challenge_state,
-            review_required=review_required,
-            panel_high_disagreement=panel_high_disagreement,
-            judge_id=judge_id,
-            profile_source=profile_source,
-            profile_id=profile_id,
-            model_strategy=model_strategy,
-            strategy_slot=strategy_slot,
-            domain_slot=domain_slot,
-            profile_scan_limit=profile_scan_limit,
-            group_limit=group_limit,
-            attention_limit=attention_limit,
-            list_panel_runtime_profiles=list_panel_runtime_profiles,
-            run_panel_runtime_route_guard=_run_panel_runtime_route_guard,
         )
 
     review_route_handles = register_review_routes(
