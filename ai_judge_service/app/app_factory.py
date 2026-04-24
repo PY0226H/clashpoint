@@ -359,9 +359,6 @@ from .applications.review_alert_routes import (
     build_rag_diagnostics_payload as build_rag_diagnostics_payload_v3,
 )
 from .applications.review_alert_routes import (
-    build_review_case_decision_payload as build_review_case_decision_payload_v3,
-)
-from .applications.review_alert_routes import (
     build_review_case_detail_payload as build_review_case_detail_payload_v3,
 )
 from .applications.review_alert_routes import (
@@ -407,6 +404,10 @@ from .applications.route_group_judge_command import (
     register_judge_command_routes,
 )
 from .applications.route_group_registry import register_registry_routes
+from .applications.route_group_review import (
+    ReviewRouteDependencies,
+    register_review_routes,
+)
 from .applications.route_group_trust import (
     TrustRouteDependencies,
     register_trust_routes,
@@ -4987,7 +4988,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 list_judge_trust_challenge_ops_queue=(
                     trust_route_handles.list_judge_trust_challenge_ops_queue
                 ),
-                list_judge_review_jobs=list_judge_review_jobs,
+                list_judge_review_jobs=review_route_handles.list_judge_review_jobs,
                 simulate_policy_release_gate=(
                     registry_route_handles.simulate_policy_release_gate
                 ),
@@ -5102,90 +5103,46 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             run_panel_runtime_route_guard=_run_panel_runtime_route_guard,
         )
 
-    @app.get("/internal/judge/review/cases")
-    async def list_judge_review_jobs(
-        x_ai_internal_key: str | None = Header(default=None),
-        status: str = Query(default="review_required"),
-        dispatch_type: str | None = Query(default=None),
-        risk_level: str | None = Query(default=None),
-        sla_bucket: str | None = Query(default=None),
-        challenge_state: str | None = Query(default=None),
-        trust_review_state: str | None = Query(default=None),
-        unified_priority_level: str | None = Query(default=None),
-        sort_by: str = Query(default="updated_at"),
-        sort_order: str = Query(default="desc"),
-        scan_limit: int = Query(default=200, ge=20, le=1000),
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _await_payload_or_raise_http_422_for_runtime(
-            self_awaitable=_build_review_cases_list_payload_for_runtime(
-                status=status,
-                dispatch_type=dispatch_type,
-                risk_level=risk_level,
-                sla_bucket=sla_bucket,
-                challenge_state=challenge_state,
-                trust_review_state=trust_review_state,
-                unified_priority_level=unified_priority_level,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                scan_limit=scan_limit,
-                limit=limit,
-                workflow_list_jobs=_workflow_list_jobs,
-                workflow_list_events=_workflow_list_events,
-                list_audit_alerts=_list_audit_alerts,
-                get_trace=runtime.trace_store.get_trace,
-                build_review_case_risk_profile=build_review_case_risk_profile,
-                build_trust_challenge_priority_profile=build_trust_challenge_priority_profile,
-                build_review_trust_unified_priority_profile=(
-                    build_review_trust_unified_priority_profile
-                ),
-                serialize_workflow_job=_serialize_workflow_job,
+    review_route_handles = register_review_routes(
+        app=app,
+        deps=ReviewRouteDependencies(
+            runtime=runtime,
+            require_internal_key_fn=require_internal_key,
+            await_payload_or_raise_http_422=(
+                _await_payload_or_raise_http_422_for_runtime
             ),
-        )
-
-    @app.get("/internal/judge/review/cases/{case_id}")
-    async def get_judge_review_job(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _await_payload_or_raise_http_404_for_runtime(
-            self_awaitable=_build_review_case_detail_payload_for_runtime(
-                case_id=case_id,
-                workflow_get_job=_workflow_get_job,
-                workflow_list_events=_workflow_list_events,
-                list_audit_alerts=_list_audit_alerts,
-                get_trace=runtime.trace_store.get_trace,
-                serialize_workflow_job=_serialize_workflow_job,
-                serialize_alert_item=serialize_alert_item_v3,
+            await_payload_or_raise_http_404=(
+                _await_payload_or_raise_http_404_for_runtime
             ),
-        )
-
-    @app.post("/internal/judge/review/cases/{case_id}/decision")
-    async def decide_judge_review_job(
-        case_id: int,
-        x_ai_internal_key: str | None = Header(default=None),
-        decision: str = Query(default="approve"),
-        actor: str | None = Query(default=None),
-        reason: str | None = Query(default=None),
-    ) -> dict[str, Any]:
-        require_internal_key(runtime.settings, x_ai_internal_key)
-        return await _await_payload_or_raise_http_422_404_for_runtime(
-            self_awaitable=_run_review_route_guard(
-                build_review_case_decision_payload_v3(
-                    case_id=case_id,
-                    decision=decision,
-                    actor=actor,
-                    reason=reason,
-                    workflow_get_job=_workflow_get_job,
-                    workflow_mark_completed=_workflow_mark_completed,
-                    workflow_mark_failed=_workflow_mark_failed,
-                    resolve_open_alerts_for_review=resolve_open_alerts_for_review,
-                    serialize_workflow_job=_serialize_workflow_job,
-                )
+            await_payload_or_raise_http_422_404=(
+                _await_payload_or_raise_http_422_404_for_runtime
             ),
-        )
+            build_review_cases_list_payload=(
+                _build_review_cases_list_payload_for_runtime
+            ),
+            build_review_case_detail_payload=(
+                _build_review_case_detail_payload_for_runtime
+            ),
+            run_review_route_guard=_run_review_route_guard,
+            workflow_get_job=_workflow_get_job,
+            workflow_list_jobs=_workflow_list_jobs,
+            workflow_list_events=_workflow_list_events,
+            workflow_mark_completed=_workflow_mark_completed,
+            workflow_mark_failed=_workflow_mark_failed,
+            list_audit_alerts=_list_audit_alerts,
+            get_trace=runtime.trace_store.get_trace,
+            build_review_case_risk_profile=build_review_case_risk_profile,
+            build_trust_challenge_priority_profile=(
+                build_trust_challenge_priority_profile
+            ),
+            build_review_trust_unified_priority_profile=(
+                build_review_trust_unified_priority_profile
+            ),
+            resolve_open_alerts_for_review=resolve_open_alerts_for_review,
+            serialize_workflow_job=_serialize_workflow_job,
+            serialize_alert_item=serialize_alert_item_v3,
+        ),
+    )
 
     @app.get("/internal/judge/cases/{case_id}/alerts")
     async def list_judge_job_alerts(
