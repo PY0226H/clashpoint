@@ -58,6 +58,17 @@ expect_contains "route split uses refactor type" "refactor(ai-judge): split trus
 expect_not_contains "route split avoids generic capability subject" "add ai-judge capability" "$ROUTE_OUT"
 expect_not_contains "route split avoids sync follow-up alternative" "sync ai-judge follow-up" "$ROUTE_OUT"
 
+LOCAL_REF_OUT="$TMP_DIR/local-reference.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p36-local-reference-regression-pack \
+  --summary "Record P36 AI Judge local reference regression evidence and runtime ops pack status without claiming real environment pass" >"$LOCAL_REF_OUT"
+
+expect_contains "local reference uses docs type" "docs(ai-judge): record p36 local reference evidence" "$LOCAL_REF_OUT"
+expect_not_contains "local reference avoids generic capability subject" "add ai-judge capability" "$LOCAL_REF_OUT"
+expect_not_contains "local reference avoids sync follow-up alternative" "sync ai-judge follow-up" "$LOCAL_REF_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

@@ -171,6 +171,11 @@ detect_type() {
     echo "refactor"
     return 0
   fi
+  if [[ "$module_key" == *"local-reference-regression"* ||
+        "$summary_lower" == *"local reference"* ]]; then
+    echo "docs"
+    return 0
+  fi
 
   echo "feat"
 }
@@ -187,6 +192,9 @@ build_subject() {
   elif [[ "$module_key" == *"route-dependency-hotspot-split"* ||
           "$summary_lower" == *"route dependency"* ]]; then
     echo "split trust and ops route wiring"
+  elif [[ "$module_key" == *"local-reference-regression"* ||
+          "$summary_lower" == *"local reference"* ]]; then
+    echo "record p36 local reference evidence"
   elif [[ "$module_key" == *"audit-anchor-export"* || "$summary_lower" == *"audit anchor"* ]]; then
     echo "export audit anchor manifest"
   elif [[ "$module_key" == *"ops-read-model-trust"* || "$summary_lower" == *"ops read model"* ]]; then
@@ -222,6 +230,7 @@ build_alt_one_subject() {
   case "$subject" in
     "add local artifact store adapter") echo "add artifact refs and manifest" ;;
     "split trust and ops route wiring") echo "extract trust dependency builders" ;;
+    "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
     *) echo "$subject" ;;
@@ -234,6 +243,7 @@ build_alt_two_subject() {
   case "$subject" in
     "add local artifact store adapter") echo "wire local artifact evidence" ;;
     "split trust and ops route wiring") echo "thin app factory route assembly" ;;
+    "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;
     "export audit anchor manifest") echo "prepare audit anchor export" ;;
     *) echo "sync ${scope} follow-up" ;;

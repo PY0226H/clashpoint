@@ -59,6 +59,7 @@ test-results/
 # local automation/cache artifacts
 .fastembed*
 .codex/
+ai_judge_service/artifacts/
 
 # docs
 docs/
