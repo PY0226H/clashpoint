@@ -149,6 +149,7 @@ class Settings:
     artifact_store_endpoint_url: str = ""
     artifact_store_region: str = ""
     artifact_store_force_path_style: bool = False
+    artifact_store_healthcheck_enabled: bool = False
     tokenizer_fallback_encoding: str = "o200k_base"
     phase_prompt_max_tokens: int = 3200
     agent2_prompt_max_tokens: int = 3600
@@ -296,6 +297,10 @@ def load_settings() -> Settings:
         artifact_store_region=os.getenv("AI_JUDGE_ARTIFACT_REGION", "").strip(),
         artifact_store_force_path_style=parse_env_bool(
             os.getenv("AI_JUDGE_ARTIFACT_FORCE_PATH_STYLE"),
+            default=False,
+        ),
+        artifact_store_healthcheck_enabled=parse_env_bool(
+            os.getenv("AI_JUDGE_ARTIFACT_HEALTHCHECK_ENABLED"),
             default=False,
         ),
         topic_memory_limit=int(os.getenv("AI_JUDGE_TOPIC_MEMORY_LIMIT", "5")),

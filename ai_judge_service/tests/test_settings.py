@@ -64,6 +64,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.artifact_store_endpoint_url, "")
         self.assertEqual(settings.artifact_store_region, "")
         self.assertFalse(settings.artifact_store_force_path_style)
+        self.assertFalse(settings.artifact_store_healthcheck_enabled)
         self.assertEqual(settings.topic_memory_limit, 5)
         self.assertEqual(settings.topic_memory_min_evidence_refs, 1)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 20)
@@ -163,6 +164,7 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_ARTIFACT_ENDPOINT_URL": "http://minio:9000",
                 "AI_JUDGE_ARTIFACT_REGION": "us-west-2",
                 "AI_JUDGE_ARTIFACT_FORCE_PATH_STYLE": "true",
+                "AI_JUDGE_ARTIFACT_HEALTHCHECK_ENABLED": "true",
                 "AI_JUDGE_TOPIC_MEMORY_LIMIT": "7",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS": "2",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS": "60",
@@ -257,6 +259,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.artifact_store_endpoint_url, "http://minio:9000")
         self.assertEqual(settings.artifact_store_region, "us-west-2")
         self.assertTrue(settings.artifact_store_force_path_style)
+        self.assertTrue(settings.artifact_store_healthcheck_enabled)
         self.assertEqual(settings.topic_memory_limit, 7)
         self.assertEqual(settings.topic_memory_min_evidence_refs, 2)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 60)
@@ -494,6 +497,22 @@ class SettingsTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "AI_JUDGE_ARTIFACT_BUCKET cannot be empty"):
+                load_settings()
+
+    def test_load_settings_should_reject_s3_artifact_store_prefix_escape(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ARTIFACT_PREFIX": "prod/../escape",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_ARTIFACT_PREFIX cannot contain . or .. segments",
+            ):
                 load_settings()
 
     def test_load_settings_should_accept_runtime_fault_injection_nodes_in_non_production(

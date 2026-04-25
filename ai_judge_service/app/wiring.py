@@ -38,6 +38,7 @@ def build_artifact_store(*, settings: Settings) -> LocalArtifactStore | S3Compat
             prefix=settings.artifact_store_prefix,
             client=_build_s3_client(settings=settings),
             force_path_style=settings.artifact_store_force_path_style,
+            endpoint_configured=bool(settings.artifact_store_endpoint_url),
         )
     return LocalArtifactStore(root_dir=settings.artifact_store_root)
 

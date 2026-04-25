@@ -12,6 +12,9 @@ CASE_ARTIFACT_KINDS: tuple[str, ...] = (
     "audit_pack",
     "trust_registry_snapshot",
 )
+ARTIFACT_STORE_HEALTHCHECK_VERSION = "artifact-store-healthcheck-v1"
+ARTIFACT_STORE_HEALTHCHECK_PROBE_CASE_ID = 1
+ARTIFACT_STORE_HEALTHCHECK_PROBE_ARTIFACT_ID = "artifact-store-healthcheck-probe"
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,162 @@ def build_artifact_store_readiness_payload(artifact_store: ArtifactStorePort) ->
         "status": "unknown",
         "productionReady": False,
     }
+
+
+def _artifact_store_healthcheck_base(
+    *,
+    readiness: dict[str, Any],
+) -> dict[str, Any]:
+    provider = str(readiness.get("provider") or "unknown").strip() or "unknown"
+    uri_scheme = str(readiness.get("uriScheme") or "").strip() or None
+    return {
+        "version": ARTIFACT_STORE_HEALTHCHECK_VERSION,
+        "provider": provider,
+        "status": "unknown",
+        "uriScheme": uri_scheme,
+        "bucketConfigured": bool(readiness.get("bucketConfigured")),
+        "prefixConfigured": bool(readiness.get("prefixConfigured")),
+        "endpointConfigured": bool(readiness.get("endpointConfigured")),
+        "writeReadRoundtripStatus": "not_run",
+        "lastErrorCode": None,
+        "productionReady": False,
+    }
+
+
+def _artifact_store_healthcheck_error_code(err: Exception) -> str:
+    response = getattr(err, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict):
+            code = _payload_str(error.get("Code"))
+            if code:
+                return f"artifact_store_{code.lower()}"
+    token = str(err).strip().strip("'\"")
+    if token:
+        normalized = token.lower().replace(" ", "_").replace("-", "_")
+        return normalized
+    return err.__class__.__name__.lower()
+
+
+async def build_artifact_store_healthcheck_payload(
+    *,
+    artifact_store: ArtifactStorePort,
+    roundtrip_enabled: bool,
+) -> dict[str, Any]:
+    readiness = build_artifact_store_readiness_payload(artifact_store)
+    payload = _artifact_store_healthcheck_base(readiness=readiness)
+    provider = str(payload["provider"]).strip().lower()
+
+    if provider == "local":
+        payload.update(
+            {
+                "status": "local_reference",
+                "writeReadRoundtripStatus": "not_applicable",
+                "lastErrorCode": "local_provider_not_production",
+                "productionReady": False,
+            }
+        )
+        return payload
+
+    if provider != "s3_compatible":
+        payload.update(
+            {
+                "status": "env_blocked",
+                "writeReadRoundtripStatus": "unsupported_provider",
+                "lastErrorCode": "artifact_store_provider_unknown",
+            }
+        )
+        return payload
+
+    if not bool(payload["bucketConfigured"]):
+        payload.update(
+            {
+                "status": "env_blocked",
+                "writeReadRoundtripStatus": "configuration_missing",
+                "lastErrorCode": "artifact_store_bucket_missing",
+            }
+        )
+        return payload
+
+    if not roundtrip_enabled:
+        payload.update(
+            {
+                "status": "env_blocked",
+                "writeReadRoundtripStatus": "not_enabled",
+                "lastErrorCode": "artifact_healthcheck_not_enabled",
+            }
+        )
+        return payload
+
+    probe_payload = {
+        "version": ARTIFACT_STORE_HEALTHCHECK_VERSION,
+        "probe": "artifact_store_healthcheck",
+    }
+    try:
+        ref = await artifact_store.put_json(
+            case_id=ARTIFACT_STORE_HEALTHCHECK_PROBE_CASE_ID,
+            kind="replay_snapshot",
+            payload=probe_payload,
+            redaction_level="redacted",
+            dispatch_type="final",
+            trace_id="artifact-healthcheck",
+            artifact_id=ARTIFACT_STORE_HEALTHCHECK_PROBE_ARTIFACT_ID,
+            metadata={"purpose": "artifact_store_healthcheck"},
+        )
+    except Exception as err:
+        payload.update(
+            {
+                "status": "blocked",
+                "writeReadRoundtripStatus": "put_failed",
+                "lastErrorCode": _artifact_store_healthcheck_error_code(err),
+            }
+        )
+        return payload
+
+    if not await artifact_store.exists(ref=ref):
+        payload.update(
+            {
+                "status": "blocked",
+                "writeReadRoundtripStatus": "head_missing",
+                "lastErrorCode": "artifact_healthcheck_head_missing",
+            }
+        )
+        return payload
+
+    try:
+        stored_payload = await artifact_store.get_json(ref=ref)
+    except Exception as err:
+        code = _artifact_store_healthcheck_error_code(err)
+        payload.update(
+            {
+                "status": "blocked",
+                "writeReadRoundtripStatus": (
+                    "sha_mismatch" if code == "artifact_sha256_mismatch" else "get_failed"
+                ),
+                "lastErrorCode": code,
+            }
+        )
+        return payload
+
+    if stored_payload != probe_payload:
+        payload.update(
+            {
+                "status": "blocked",
+                "writeReadRoundtripStatus": "payload_mismatch",
+                "lastErrorCode": "artifact_healthcheck_payload_mismatch",
+            }
+        )
+        return payload
+
+    payload.update(
+        {
+            "status": "ready",
+            "writeReadRoundtripStatus": "pass",
+            "lastErrorCode": None,
+            "productionReady": True,
+        }
+    )
+    return payload
 
 
 def _artifact_pack_metadata(

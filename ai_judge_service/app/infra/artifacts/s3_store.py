@@ -67,6 +67,7 @@ class S3CompatibleArtifactStore:
         prefix: str = "ai_judge_service",
         client: Any,
         force_path_style: bool = False,
+        endpoint_configured: bool = False,
     ) -> None:
         bucket_token = str(bucket or "").strip()
         if not bucket_token:
@@ -77,6 +78,7 @@ class S3CompatibleArtifactStore:
         self._prefix = _normalize_prefix(prefix)
         self._client = client
         self._force_path_style = bool(force_path_style)
+        self._endpoint_configured = bool(endpoint_configured)
 
     async def put_json(
         self,
@@ -177,8 +179,9 @@ class S3CompatibleArtifactStore:
             "status": "production_configured",
             "productionReady": True,
             "uriScheme": "s3",
-            "bucket": self._bucket,
-            "prefix": self._prefix,
+            "bucketConfigured": bool(self._bucket),
+            "prefixConfigured": bool(self._prefix),
+            "endpointConfigured": self._endpoint_configured,
         }
         if self._force_path_style:
             payload["forcePathStyle"] = True

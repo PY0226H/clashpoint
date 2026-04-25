@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.applications.artifact_pack import (
+    build_artifact_store_healthcheck_payload,
     build_artifact_store_readiness_payload,
     write_case_artifact_pack,
     write_trust_audit_artifact_pack,
@@ -18,9 +19,20 @@ from app.wiring import build_artifact_store
 
 
 class _FakeS3Client:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_put: bool = False,
+        fail_on_head: bool = False,
+        fail_on_get: bool = False,
+        corrupt_get: bool = False,
+    ) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.metadata: dict[tuple[str, str], dict[str, str]] = {}
+        self.fail_on_put = bool(fail_on_put)
+        self.fail_on_head = bool(fail_on_head)
+        self.fail_on_get = bool(fail_on_get)
+        self.corrupt_get = bool(corrupt_get)
 
     def put_object(
         self,
@@ -32,16 +44,36 @@ class _FakeS3Client:
         Metadata: dict[str, str],
     ) -> None:
         del ContentType
+        if self.fail_on_put:
+            raise RuntimeError("s3_put_failed")
         self.objects[(Bucket, Key)] = Body
         self.metadata[(Bucket, Key)] = dict(Metadata)
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, BytesIO]:
+        if self.fail_on_get:
+            raise RuntimeError("s3_get_failed")
+        if self.corrupt_get:
+            return {
+                "Body": BytesIO(
+                    b'{"probe":"artifact_store_healthcheck","version":"tampered"}'
+                )
+            }
         return {"Body": BytesIO(self.objects[(Bucket, Key)])}
 
     def head_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        if self.fail_on_head:
+            raise RuntimeError("s3_head_failed")
         if (Bucket, Key) not in self.objects:
             raise KeyError(Key)
         return {}
+
+
+class _ReadinessOnlyStore:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = dict(payload)
+
+    def readiness_payload(self) -> dict[str, object]:
+        return dict(self._payload)
 
 
 class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
@@ -240,6 +272,13 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
             "s3_compatible",
         )
         self.assertTrue(manifest_payload["metadata"]["artifactStore"]["productionReady"])
+        readiness = manifest_payload["metadata"]["artifactStore"]
+        self.assertTrue(readiness["bucketConfigured"])
+        self.assertTrue(readiness["prefixConfigured"])
+        self.assertFalse(readiness["endpointConfigured"])
+        self.assertTrue(readiness["forcePathStyle"])
+        self.assertNotIn("judge-artifacts", str(readiness))
+        self.assertNotIn("ai/judge", str(readiness))
 
     async def test_s3_compatible_store_should_reject_wrong_bucket_uri(self) -> None:
         client = _FakeS3Client()
@@ -288,6 +327,139 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
             "production_configured",
         )
 
+    async def test_artifact_store_healthcheck_should_keep_local_reference_without_path(
+        self,
+    ) -> None:
+        payload = await build_artifact_store_healthcheck_payload(
+            artifact_store=self._store,
+            roundtrip_enabled=True,
+        )
+
+        self.assertEqual(payload["provider"], "local")
+        self.assertEqual(payload["status"], "local_reference")
+        self.assertEqual(payload["writeReadRoundtripStatus"], "not_applicable")
+        self.assertEqual(payload["lastErrorCode"], "local_provider_not_production")
+        self.assertFalse(payload["productionReady"])
+        self.assertNotIn(self._tmpdir.name, str(payload))
+        self.assertNotIn(str(self._root), str(payload))
+
+    async def test_s3_artifact_store_healthcheck_should_env_block_when_not_enabled(
+        self,
+    ) -> None:
+        client = _FakeS3Client()
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="prod/ai-judge",
+            client=client,
+            endpoint_configured=True,
+        )
+
+        payload = await build_artifact_store_healthcheck_payload(
+            artifact_store=store,
+            roundtrip_enabled=False,
+        )
+
+        self.assertEqual(payload["provider"], "s3_compatible")
+        self.assertEqual(payload["status"], "env_blocked")
+        self.assertEqual(payload["writeReadRoundtripStatus"], "not_enabled")
+        self.assertEqual(payload["lastErrorCode"], "artifact_healthcheck_not_enabled")
+        self.assertFalse(payload["productionReady"])
+        self.assertEqual(client.objects, {})
+        self.assertTrue(payload["bucketConfigured"])
+        self.assertTrue(payload["prefixConfigured"])
+        self.assertTrue(payload["endpointConfigured"])
+        self.assertNotIn("judge-artifacts", str(payload))
+        self.assertNotIn("prod/ai-judge", str(payload))
+
+    async def test_s3_artifact_store_healthcheck_should_env_block_without_bucket(
+        self,
+    ) -> None:
+        store = _ReadinessOnlyStore(
+            {
+                "provider": "s3_compatible",
+                "uriScheme": "s3",
+                "bucketConfigured": False,
+                "prefixConfigured": True,
+                "endpointConfigured": True,
+            }
+        )
+
+        payload = await build_artifact_store_healthcheck_payload(
+            artifact_store=store,
+            roundtrip_enabled=True,
+        )
+
+        self.assertEqual(payload["status"], "env_blocked")
+        self.assertEqual(payload["writeReadRoundtripStatus"], "configuration_missing")
+        self.assertEqual(payload["lastErrorCode"], "artifact_store_bucket_missing")
+        self.assertFalse(payload["productionReady"])
+
+    async def test_s3_artifact_store_healthcheck_should_pass_roundtrip_when_enabled(
+        self,
+    ) -> None:
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="prod/ai-judge",
+            client=_FakeS3Client(),
+            endpoint_configured=True,
+        )
+
+        payload = await build_artifact_store_healthcheck_payload(
+            artifact_store=store,
+            roundtrip_enabled=True,
+        )
+
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["writeReadRoundtripStatus"], "pass")
+        self.assertIsNone(payload["lastErrorCode"])
+        self.assertTrue(payload["productionReady"])
+        self.assertTrue(payload["bucketConfigured"])
+        self.assertTrue(payload["prefixConfigured"])
+        self.assertTrue(payload["endpointConfigured"])
+        self.assertNotIn("judge-artifacts", str(payload))
+        self.assertNotIn("prod/ai-judge", str(payload))
+        self.assertNotIn("secret", str(payload).lower())
+
+    async def test_s3_artifact_store_healthcheck_should_report_roundtrip_failures(
+        self,
+    ) -> None:
+        cases = [
+            (_FakeS3Client(fail_on_put=True), "put_failed", "s3_put_failed"),
+            (
+                _FakeS3Client(fail_on_head=True),
+                "head_missing",
+                "artifact_healthcheck_head_missing",
+            ),
+            (_FakeS3Client(fail_on_get=True), "get_failed", "s3_get_failed"),
+            (
+                _FakeS3Client(corrupt_get=True),
+                "sha_mismatch",
+                "artifact_sha256_mismatch",
+            ),
+        ]
+        for client, roundtrip_status, error_code in cases:
+            with self.subTest(roundtrip_status=roundtrip_status):
+                store = S3CompatibleArtifactStore(
+                    bucket="judge-artifacts",
+                    prefix="prod/ai-judge",
+                    client=client,
+                )
+
+                payload = await build_artifact_store_healthcheck_payload(
+                    artifact_store=store,
+                    roundtrip_enabled=True,
+                )
+
+                self.assertEqual(payload["status"], "blocked")
+                self.assertEqual(
+                    payload["writeReadRoundtripStatus"],
+                    roundtrip_status,
+                )
+                self.assertEqual(payload["lastErrorCode"], error_code)
+                self.assertFalse(payload["productionReady"])
+                self.assertNotIn("judge-artifacts", str(payload))
+                self.assertNotIn("prod/ai-judge", str(payload))
+
     def test_wiring_should_build_local_artifact_store_by_default(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             settings = load_settings()
@@ -312,6 +484,7 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
                 "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
                 "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
                 "AI_JUDGE_ARTIFACT_PREFIX": "prod/ai-judge",
+                "AI_JUDGE_ARTIFACT_ENDPOINT_URL": "http://minio:9000",
             },
             clear=True,
         ):
@@ -324,6 +497,11 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             build_artifact_store_readiness_payload(store)["provider"],
             "s3_compatible",
+        )
+        self.assertTrue(build_artifact_store_readiness_payload(store)["endpointConfigured"])
+        self.assertNotIn(
+            "http://minio:9000",
+            str(build_artifact_store_readiness_payload(store)),
         )
 
 
