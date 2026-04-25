@@ -3,6 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from .ops_trust_monitoring import (
+    OPS_TRUST_MONITORING_BLOCKER_BUCKETS,
+    OPS_TRUST_MONITORING_KEYS,
+    build_ops_trust_monitoring_summary,
+)
 from .trust_artifact_summary import (
     TRUST_ARTIFACT_COMPONENT_KEYS,
     build_trust_artifact_summary_from_public_verify_payload,
@@ -30,6 +35,7 @@ OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "challengeReviewState",
     "auditAnchorStatus",
     "artifactCoverage",
+    "trustMonitoring",
     "judgeWorkflowCoverage",
     "caseLifecycleOverview",
     "caseChainCoverage",
@@ -163,6 +169,7 @@ OPS_READ_MODEL_PACK_V5_ARTIFACT_COVERAGE_KEYS: tuple[str, ...] = (
     "artifactRefCount",
     "artifactKindCounts",
 )
+OPS_READ_MODEL_PACK_V5_TRUST_MONITORING_KEYS: tuple[str, ...] = OPS_TRUST_MONITORING_KEYS
 
 OPS_READ_MODEL_PACK_V5_FILTER_KEYS: tuple[str, ...] = (
     "dispatchType",
@@ -1292,6 +1299,11 @@ async def build_ops_read_model_pack_route_payload(
                 if isinstance(verify_payload.get("challengeReview"), dict)
                 else {}
             )
+            verification_readiness = (
+                trust_payload.get("verificationReadiness")
+                if isinstance(trust_payload.get("verificationReadiness"), dict)
+                else {}
+            )
             trust_artifact_summary = build_trust_artifact_summary_from_public_verify_payload(
                 public_verify_payload=trust_payload,
                 include_artifact_refs=False,
@@ -1319,6 +1331,7 @@ async def build_ops_read_model_pack_route_payload(
                     "reviewState": review_state,
                     "challengeState": challenge_state,
                     "totalChallenges": max(0, total_challenges),
+                    "publicVerificationReadiness": verification_readiness,
                     "trustArtifactSummary": trust_artifact_summary,
                 }
             )
@@ -1520,6 +1533,19 @@ async def build_ops_read_model_pack_route_payload(
         policy_gate_rows=policy_gate_rows,
         courtroom_items=courtroom_items,
     )
+    trust_monitoring = build_ops_trust_monitoring_summary(
+        trust_items=trust_items,
+        trust_errors=trust_errors,
+        artifact_coverage=trust_artifact_sections["artifactCoverage"],
+        audit_anchor_status=trust_artifact_sections["auditAnchorStatus"],
+        public_verify_status=trust_artifact_sections["publicVerifyStatus"],
+        challenge_review_state=trust_artifact_sections["challengeReviewState"],
+        trust_challenge_queue=trust_challenge_queue,
+        registry_prompt_tool_governance=registry_prompt_tool_governance,
+        policy_gate_simulation=policy_gate_simulation,
+        fairness_calibration_advisor=fairness_calibration_advisor,
+        policy_kernel_binding=policy_kernel_binding,
+    )
     read_contract = build_ops_read_model_pack_read_contract_fn()
     pack_filters = build_ops_read_model_pack_filters_fn(
         dispatch_type=dispatch_type,
@@ -1566,6 +1592,7 @@ async def build_ops_read_model_pack_route_payload(
         challenge_review_state=trust_artifact_sections["challengeReviewState"],
         audit_anchor_status=trust_artifact_sections["auditAnchorStatus"],
         artifact_coverage=trust_artifact_sections["artifactCoverage"],
+        trust_monitoring=trust_monitoring,
         judge_workflow_coverage=judge_workflow_coverage,
         case_lifecycle_overview=case_lifecycle_overview,
         case_chain_coverage=case_chain_coverage,
@@ -1825,7 +1852,7 @@ def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
                 "sideAnalysis",
                 "verdictReason",
             ],
-    "opsVisible": [
+            "opsVisible": [
                 "workflowStatus",
                 "callbackStatus",
                 "lifecycleBucket",
@@ -1838,6 +1865,7 @@ def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
                 "challengeReviewState",
                 "auditAnchorStatus",
                 "artifactCoverage",
+                "trustMonitoring",
             ],
             "internalAudit": [
                 "traceId",
@@ -2337,6 +2365,77 @@ def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
         value=artifact_coverage.get("artifactKindCounts"),
     )
 
+    trust_monitoring = payload.get("trustMonitoring")
+    if not isinstance(trust_monitoring, dict):
+        raise ValueError("ops_read_model_pack_trustMonitoring_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_trustMonitoring",
+        payload=trust_monitoring,
+        required_keys=OPS_READ_MODEL_PACK_V5_TRUST_MONITORING_KEYS,
+    )
+    monitoring_version = trust_monitoring.get("monitoringVersion")
+    if not isinstance(monitoring_version, str) or not monitoring_version.strip():
+        raise ValueError("ops_read_model_pack_trustMonitoring_monitoringVersion_invalid")
+    overall_status = trust_monitoring.get("overallStatus")
+    if not isinstance(overall_status, str) or not overall_status.strip():
+        raise ValueError("ops_read_model_pack_trustMonitoring_overallStatus_invalid")
+    _require_non_negative_int(
+        section="ops_read_model_pack_trustMonitoring",
+        field="sampledCaseCount",
+        value=trust_monitoring.get("sampledCaseCount"),
+    )
+    for section_key in (
+        "artifactStoreReadiness",
+        "publicVerificationReadiness",
+        "challengeReviewLag",
+        "registryReleaseReadiness",
+        "panelShadowDrift",
+        "realEnvEvidenceStatus",
+        "redactionContract",
+    ):
+        if not isinstance(trust_monitoring.get(section_key), dict):
+            raise ValueError(f"ops_read_model_pack_trustMonitoring_{section_key}_not_dict")
+    blocker_counts = trust_monitoring.get("blockerCounts")
+    if not isinstance(blocker_counts, dict):
+        raise ValueError("ops_read_model_pack_trustMonitoring_blockerCounts_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_trustMonitoring_blockerCounts",
+        payload=blocker_counts,
+        required_keys=OPS_TRUST_MONITORING_BLOCKER_BUCKETS,
+    )
+    _require_count_dict(
+        section="ops_read_model_pack_trustMonitoring_blockerCounts",
+        value=blocker_counts,
+    )
+    blockers = trust_monitoring.get("blockers")
+    if not isinstance(blockers, list):
+        raise ValueError("ops_read_model_pack_trustMonitoring_blockers_not_list")
+    for row in blockers:
+        if not isinstance(row, dict):
+            raise ValueError("ops_read_model_pack_trustMonitoring_blocker_not_dict")
+        _require_keys(
+            section="ops_read_model_pack_trustMonitoring_blocker",
+            payload=row,
+            required_keys=("bucket", "code", "count", "severity"),
+        )
+        bucket = row.get("bucket")
+        if bucket not in OPS_TRUST_MONITORING_BLOCKER_BUCKETS:
+            raise ValueError("ops_read_model_pack_trustMonitoring_blocker_bucket_invalid")
+        _require_non_negative_int(
+            section="ops_read_model_pack_trustMonitoring_blocker",
+            field="count",
+            value=row.get("count"),
+        )
+    redaction_contract = trust_monitoring.get("redactionContract")
+    if redaction_contract.get("internalAuditPayloadVisible") is not False:
+        raise ValueError(
+            "ops_read_model_pack_trustMonitoring_internalAuditPayloadVisible_not_false"
+        )
+    if redaction_contract.get("rawPromptVisible") is not False:
+        raise ValueError("ops_read_model_pack_trustMonitoring_rawPromptVisible_not_false")
+    if redaction_contract.get("rawTraceVisible") is not False:
+        raise ValueError("ops_read_model_pack_trustMonitoring_rawTraceVisible_not_false")
+
     judge_workflow_coverage = payload.get("judgeWorkflowCoverage")
     if not isinstance(judge_workflow_coverage, dict):
         raise ValueError("ops_read_model_pack_judgeWorkflowCoverage_not_dict")
@@ -2616,6 +2715,7 @@ def build_ops_read_model_pack_v5_payload(
     challenge_review_state: dict[str, Any],
     audit_anchor_status: dict[str, Any],
     artifact_coverage: dict[str, Any],
+    trust_monitoring: dict[str, Any],
     judge_workflow_coverage: dict[str, Any],
     case_lifecycle_overview: dict[str, Any],
     case_chain_coverage: dict[str, Any],
@@ -2653,6 +2753,7 @@ def build_ops_read_model_pack_v5_payload(
         "challengeReviewState": challenge_review_state,
         "auditAnchorStatus": audit_anchor_status,
         "artifactCoverage": artifact_coverage,
+        "trustMonitoring": trust_monitoring,
         "judgeWorkflowCoverage": judge_workflow_coverage,
         "caseLifecycleOverview": case_lifecycle_overview,
         "caseChainCoverage": case_chain_coverage,

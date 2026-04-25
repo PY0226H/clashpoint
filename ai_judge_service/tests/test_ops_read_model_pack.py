@@ -17,6 +17,7 @@ from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_COVERAGE_KEYS,
+    OPS_READ_MODEL_PACK_V5_TRUST_MONITORING_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     build_ops_read_model_pack_adaptive_summary,
     build_ops_read_model_pack_case_chain_coverage,
@@ -32,6 +33,10 @@ from app.applications.ops_read_model_pack import (
     summarize_ops_read_model_pack_review_items,
     summarize_ops_read_model_pack_trust_items,
     validate_ops_read_model_pack_v5_contract,
+)
+from app.applications.ops_trust_monitoring import (
+    OPS_TRUST_MONITORING_KEYS,
+    build_ops_trust_monitoring_summary,
 )
 
 
@@ -156,6 +161,32 @@ class OpsReadModelPackTests(unittest.TestCase):
                 "manifestHashPresentCount": 0,
                 "artifactRefCount": 0,
                 "artifactKindCounts": {},
+            },
+            "trustMonitoring": {
+                "monitoringVersion": "ops-trust-monitoring-v1",
+                "overallStatus": "ready",
+                "sampledCaseCount": 0,
+                "artifactStoreReadiness": {},
+                "publicVerificationReadiness": {},
+                "challengeReviewLag": {},
+                "registryReleaseReadiness": {},
+                "panelShadowDrift": {},
+                "realEnvEvidenceStatus": {},
+                "blockerCounts": {
+                    "production": 0,
+                    "review": 0,
+                    "release": 0,
+                    "evidence": 0,
+                },
+                "blockers": [],
+                "redactionContract": {
+                    "artifactRefsVisible": False,
+                    "hashesOnly": True,
+                    "internalAuditPayloadVisible": False,
+                    "rawPromptVisible": False,
+                    "rawTraceVisible": False,
+                    "publicPayloadFields": [],
+                },
             },
             "judgeWorkflowCoverage": {
                 "totalCases": 0,
@@ -602,6 +633,7 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertIn("winner", payload["fieldLayers"]["userVisible"])
         self.assertIn("caseLifecycleOverview", payload["fieldLayers"]["opsVisible"])
         self.assertIn("artifactCoverage", payload["fieldLayers"]["opsVisible"])
+        self.assertIn("trustMonitoring", payload["fieldLayers"]["opsVisible"])
         self.assertIn("policyKernelHash", payload["fieldLayers"]["internalAudit"])
         self.assertIn("artifactManifestHash", payload["fieldLayers"]["internalAudit"])
         self.assertTrue(payload["errorSemantics"]["structuredErrorCodeRequired"])
@@ -694,6 +726,10 @@ class OpsReadModelPackTests(unittest.TestCase):
     def test_validate_ops_read_model_pack_v5_contract_should_pass_for_stable_payload(self) -> None:
         payload = self._build_pack_payload()
         self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))
+        self.assertEqual(
+            set(payload["trustMonitoring"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_TRUST_MONITORING_KEYS),
+        )
         validate_ops_read_model_pack_v5_contract(payload)
 
     def test_validate_ops_read_model_pack_v5_contract_should_fail_on_missing_keys(self) -> None:
@@ -768,6 +804,7 @@ class OpsReadModelPackTests(unittest.TestCase):
             challenge_review_state=seed["challengeReviewState"],
             audit_anchor_status=seed["auditAnchorStatus"],
             artifact_coverage=seed["artifactCoverage"],
+            trust_monitoring=seed["trustMonitoring"],
             judge_workflow_coverage=seed["judgeWorkflowCoverage"],
             case_lifecycle_overview=seed["caseLifecycleOverview"],
             case_chain_coverage=seed["caseChainCoverage"],
@@ -778,6 +815,99 @@ class OpsReadModelPackTests(unittest.TestCase):
         )
         self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))
         self.assertEqual(payload["courtroomReadModel"]["requestedCaseLimit"], 10)
+        self.assertEqual(payload["trustMonitoring"]["overallStatus"], "ready")
+
+    def test_build_ops_trust_monitoring_summary_should_bucket_p37_readiness(self) -> None:
+        payload = build_ops_trust_monitoring_summary(
+            trust_items=[
+                {
+                    "publicVerificationReadiness": {
+                        "status": "artifact_manifest_pending",
+                        "errorCode": "artifact_manifest_pending",
+                        "externalizable": False,
+                    }
+                }
+            ],
+            trust_errors=[],
+            artifact_coverage={
+                "sampledCaseCount": 1,
+                "readyCount": 0,
+                "pendingCount": 1,
+                "missingCount": 0,
+                "manifestHashPresentCount": 1,
+                "artifactRefCount": 0,
+            },
+            audit_anchor_status={
+                "readyCount": 0,
+                "pendingCount": 1,
+                "missingCount": 0,
+            },
+            public_verify_status={
+                "sampledCaseCount": 1,
+                "verifiedCount": 1,
+                "failedCount": 0,
+                "pendingCount": 0,
+                "errorCount": 0,
+                "reasonCounts": {"ok": 1},
+            },
+            challenge_review_state={
+                "sampledCaseCount": 1,
+                "reviewRequiredCount": 1,
+                "openChallengeCount": 1,
+                "totalChallengeCount": 1,
+                "challengeStateCounts": {"under_internal_review": 1},
+                "reviewStateCounts": {"pending_review": 1},
+            },
+            trust_challenge_queue={
+                "count": 1,
+                "items": [
+                    {
+                        "priorityProfile": {
+                            "level": "high",
+                            "slaBucket": "urgent",
+                        }
+                    }
+                ],
+            },
+            registry_prompt_tool_governance={
+                "summary": {"riskTotalCount": 2, "riskHighCount": 1},
+                "riskItems": [],
+            },
+            policy_gate_simulation={"summary": {"blockedCount": 1}},
+            fairness_calibration_advisor={
+                "overview": {
+                    "shadowRunCount": 0,
+                    "shadowThresholdViolationCount": 0,
+                    "driftBreachCount": 0,
+                },
+                "releaseGate": {
+                    "shadowGateApplied": False,
+                    "shadowGatePassed": None,
+                    "latestRun": {
+                        "runId": "local-reference",
+                        "status": "passed",
+                        "environmentMode": "local",
+                    },
+                    "latestShadowRun": None,
+                },
+            },
+            policy_kernel_binding={
+                "activePolicyVersion": "v3-default",
+                "missingKernelBindingCount": 1,
+                "overrideAppliedPolicyCount": 0,
+                "gateDecisionCounts": {"blocked": 1},
+            },
+        )
+
+        self.assertEqual(set(payload.keys()), set(OPS_TRUST_MONITORING_KEYS))
+        self.assertEqual(payload["overallStatus"], "blocked")
+        self.assertEqual(payload["artifactStoreReadiness"]["status"], "pending")
+        self.assertEqual(payload["publicVerificationReadiness"]["status"], "blocked")
+        self.assertEqual(payload["challengeReviewLag"]["status"], "blocked")
+        self.assertEqual(payload["registryReleaseReadiness"]["status"], "blocked")
+        self.assertEqual(payload["panelShadowDrift"]["status"], "missing")
+        self.assertEqual(payload["realEnvEvidenceStatus"]["status"], "env_blocked")
+        self.assertFalse(payload["redactionContract"]["internalAuditPayloadVisible"])
 
     def test_summarize_ops_read_model_pack_trust_items_should_count_flags(self) -> None:
         summary = summarize_ops_read_model_pack_trust_items(

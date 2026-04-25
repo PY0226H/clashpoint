@@ -139,6 +139,7 @@ class AppFactoryOpsPanelRouteTests(
         self.assertIsInstance(payload["policyGateSimulation"], dict)
         self.assertIsInstance(payload["adaptiveSummary"], dict)
         self.assertIsInstance(payload["trustOverview"], dict)
+        self.assertIsInstance(payload["trustMonitoring"], dict)
         self.assertIsInstance(payload["judgeWorkflowCoverage"], dict)
         self.assertIsInstance(payload["caseLifecycleOverview"], dict)
         self.assertIsInstance(payload["caseChainCoverage"], dict)
@@ -219,6 +220,12 @@ class AppFactoryOpsPanelRouteTests(
             payload["trustOverview"]["count"],
         )
         self.assertGreaterEqual(payload["trustOverview"]["reviewRequiredCount"], 0)
+        self.assertIn("artifactStoreReadiness", payload["trustMonitoring"])
+        self.assertIn("publicVerificationReadiness", payload["trustMonitoring"])
+        self.assertIn("registryReleaseReadiness", payload["trustMonitoring"])
+        self.assertFalse(
+            payload["trustMonitoring"]["redactionContract"]["internalAuditPayloadVisible"]
+        )
         self.assertTrue(
             any(row["caseId"] == case_id for row in payload["trustOverview"]["items"])
         )
