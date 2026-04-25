@@ -30,6 +30,14 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runtime.get_profile(AGENT_KIND_JUDGE).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_NPC_COACH).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_ROOM_QA).enabled)  # type: ignore[union-attr]
+        self.assertIn(
+            "advisory_only",
+            runtime.get_profile(AGENT_KIND_NPC_COACH).tags,  # type: ignore[union-attr]
+        )
+        self.assertIn(
+            "no_verdict_write",
+            runtime.get_profile(AGENT_KIND_ROOM_QA).tags,  # type: ignore[union-attr]
+        )
 
     async def test_execute_should_enable_judge_courtroom_runtime(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))
@@ -169,7 +177,19 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(npc_result.error_code, "agent_not_enabled")
         self.assertEqual(npc_result.output.get("kind"), AGENT_KIND_NPC_COACH)
         self.assertEqual(npc_result.output.get("mode"), "advisory_only")
+        self.assertTrue(bool(npc_result.output.get("advisoryOnly")))
         self.assertFalse(bool(npc_result.output.get("officialVerdictAuthority")))
+        self.assertFalse(bool(npc_result.output.get("writesVerdictLedger")))
+        self.assertFalse(bool(npc_result.output.get("writesJudgeTrace")))
+        self.assertFalse(bool(npc_result.output.get("canTriggerOfficialJudgeRoles")))
+        self.assertEqual(
+            npc_result.output.get("policyIsolation"),
+            "assistant_advisory_policy",
+        )
+        self.assertIn(
+            "knowledge_gateway",
+            npc_result.output.get("allowedContextSources", []),
+        )
 
     async def test_execute_should_report_error_for_unknown_agent_kind(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))

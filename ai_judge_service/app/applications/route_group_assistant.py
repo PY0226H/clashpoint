@@ -40,6 +40,7 @@ class AssistantRouteDependencies:
     require_internal_key_fn: RequireInternalKeyFn
     run_assistant_agent_route_guard: AssistantRouteGuardFn
     build_shared_room_context: Callable[..., Awaitable[dict[str, Any]]]
+    build_gateway_trace_snapshot: Callable[..., dict[str, Any]]
     execute_agent: Callable[..., Awaitable[Any]]
 
 
@@ -63,6 +64,7 @@ def register_assistant_routes(
                 payload=payload,
                 agent_kind_npc_coach=AGENT_KIND_NPC_COACH,
                 build_shared_room_context=deps.build_shared_room_context,
+                build_gateway_trace_snapshot=deps.build_gateway_trace_snapshot,
                 execute_agent=deps.execute_agent,
                 build_execution_request=AgentExecutionRequest,
                 build_assistant_agent_response=build_assistant_agent_response_v3,
@@ -82,6 +84,7 @@ def register_assistant_routes(
                 payload=payload,
                 agent_kind_room_qa=AGENT_KIND_ROOM_QA,
                 build_shared_room_context=deps.build_shared_room_context,
+                build_gateway_trace_snapshot=deps.build_gateway_trace_snapshot,
                 execute_agent=deps.execute_agent,
                 build_execution_request=AgentExecutionRequest,
                 build_assistant_agent_response=build_assistant_agent_response_v3,

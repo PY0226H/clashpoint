@@ -24,6 +24,7 @@ class RouteGroupAssistantTests(unittest.TestCase):
             require_internal_key_fn=lambda _settings, _header: None,
             run_assistant_agent_route_guard=lambda awaitable: awaitable,
             build_shared_room_context=_payload,
+            build_gateway_trace_snapshot=lambda **_kwargs: {},
             execute_agent=_payload,
         )
 

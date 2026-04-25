@@ -39,7 +39,17 @@ class _ReservedAgentExecutor(AgentExecutorPort):
                 "reason": self._reason,
                 "traceId": request.trace_id,
                 "mode": "advisory_only",
+                "advisoryOnly": True,
                 "officialVerdictAuthority": False,
+                "writesVerdictLedger": False,
+                "writesJudgeTrace": False,
+                "canTriggerOfficialJudgeRoles": False,
+                "policyIsolation": "assistant_advisory_policy",
+                "allowedContextSources": [
+                    "room_context_snapshot",
+                    "stage_summary",
+                    "knowledge_gateway",
+                ],
             },
             error_code="agent_not_enabled",
             error_message=self._reason,
@@ -324,7 +334,7 @@ def build_agent_runtime(*, settings: Any) -> AgentRuntime:
             enabled=False,
             owner="ai_judge_service",
             timeout_ms=timeout_ms,
-            tags=("shell", "future"),
+            tags=("shell", "future", "advisory_only", "no_verdict_write"),
         ),
         AgentProfile(
             kind=AGENT_KIND_ROOM_QA,
@@ -333,7 +343,7 @@ def build_agent_runtime(*, settings: Any) -> AgentRuntime:
             enabled=False,
             owner="ai_judge_service",
             timeout_ms=timeout_ms,
-            tags=("shell", "future"),
+            tags=("shell", "future", "advisory_only", "no_verdict_write"),
         ),
     ]
     executors: dict[AgentKind, AgentExecutorPort] = {

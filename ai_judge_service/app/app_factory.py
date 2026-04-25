@@ -2112,6 +2112,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             require_internal_key_fn=require_internal_key,
             run_assistant_agent_route_guard=_run_assistant_agent_route_guard,
             build_shared_room_context=build_shared_room_context,
+            build_gateway_trace_snapshot=runtime.gateway_runtime.build_trace_snapshot,
             execute_agent=runtime.agent_runtime.execute,
         ),
     )
