@@ -14,15 +14,22 @@ TRUST_AUDIT_ANCHOR_ITEM_KEYS: tuple[str, ...] = (
     "caseId",
     "dispatchType",
     "traceId",
+    "anchorStatus",
     "componentHashes",
     "anchorHash",
+    "artifactManifest",
 )
 
-TRUST_AUDIT_ANCHOR_COMPONENT_HASH_KEYS: tuple[str, ...] = (
+TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS: tuple[str, ...] = (
     "caseCommitmentHash",
     "verdictAttestationHash",
     "challengeReviewHash",
     "kernelVersionHash",
+)
+
+TRUST_AUDIT_ANCHOR_COMPONENT_HASH_KEYS: tuple[str, ...] = (
+    *TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
+    "artifactManifestHash",
 )
 
 TRUST_AUDIT_ANCHOR_PAYLOAD_KEYS: tuple[str, ...] = (
@@ -94,7 +101,9 @@ def validate_trust_audit_anchor_contract(payload: dict[str, Any]) -> None:
     if str(item.get("traceId") or "").strip() != str(payload.get("traceId") or "").strip():
         raise ValueError("trust_audit_anchor_item_trace_id_mismatch")
     _assert_non_empty_string("trust_audit_anchor_item_version", item.get("version"))
-    _assert_non_empty_string("trust_audit_anchor_item_anchor_hash", item.get("anchorHash"))
+    anchor_status = str(item.get("anchorStatus") or "").strip().lower()
+    if anchor_status not in {"artifact_ready", "artifact_pending"}:
+        raise ValueError("trust_audit_anchor_item_anchor_status_invalid")
 
     component_hashes = item.get("componentHashes")
     if not isinstance(component_hashes, dict):
@@ -102,13 +111,39 @@ def validate_trust_audit_anchor_contract(payload: dict[str, Any]) -> None:
     _assert_required_keys(
         section="trust_audit_anchor_component_hashes",
         payload=component_hashes,
-        keys=TRUST_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
+        keys=TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     )
-    for key in TRUST_AUDIT_ANCHOR_COMPONENT_HASH_KEYS:
+    for key in TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS:
         _assert_non_empty_string(
             f"trust_audit_anchor_component_hashes_{key}",
             component_hashes.get(key),
         )
+    artifact_manifest = item.get("artifactManifest")
+    if anchor_status == "artifact_ready":
+        _assert_non_empty_string("trust_audit_anchor_item_anchor_hash", item.get("anchorHash"))
+        _assert_required_keys(
+            section="trust_audit_anchor_component_hashes",
+            payload=component_hashes,
+            keys=("artifactManifestHash",),
+        )
+        _assert_non_empty_string(
+            "trust_audit_anchor_component_hashes_artifactManifestHash",
+            component_hashes.get("artifactManifestHash"),
+        )
+        if not isinstance(artifact_manifest, dict):
+            raise ValueError("trust_audit_anchor_artifact_manifest_not_dict")
+        if (
+            str(artifact_manifest.get("manifestHash") or "").strip()
+            != str(component_hashes.get("artifactManifestHash") or "").strip()
+        ):
+            raise ValueError("trust_audit_anchor_artifact_manifest_hash_mismatch")
+    else:
+        if str(item.get("anchorHash") or "").strip():
+            raise ValueError("trust_audit_anchor_pending_anchor_hash_forbidden")
+        if str(component_hashes.get("artifactManifestHash") or "").strip():
+            raise ValueError("trust_audit_anchor_pending_artifact_manifest_hash_forbidden")
+        if isinstance(artifact_manifest, dict) and artifact_manifest:
+            raise ValueError("trust_audit_anchor_pending_artifact_manifest_forbidden")
 
     if "payload" in item:
         item_payload = item.get("payload")

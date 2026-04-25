@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.applications.trust_public_verify_contract import (
+    TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_KEYS,
     TRUST_PUBLIC_VERIFY_CASE_COMMITMENT_KEYS,
@@ -71,11 +72,13 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
                 "auditAnchor": {
                     "version": "trust-phaseA-audit-anchor-v1",
                     "anchorHash": "anchor_hash",
+                    "anchorStatus": "artifact_ready",
                     "componentHashes": {
                         "caseCommitmentHash": "c_hash",
                         "verdictAttestationHash": "va_hash",
                         "challengeReviewHash": "cr_hash",
                         "kernelVersionHash": "kv_registry_hash",
+                        "artifactManifestHash": "artifact_manifest_hash",
                     },
                 },
             },
@@ -143,6 +146,32 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
             "trust_public_verify_audit_anchor_component_hashes_missing_keys:kernelVersionHash",
             str(ctx.exception),
         )
+
+    def test_validate_trust_public_verify_contract_should_pass_when_anchor_pending(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        audit_anchor = payload["verifyPayload"]["auditAnchor"]
+        audit_anchor["anchorStatus"] = "artifact_pending"
+        audit_anchor["anchorHash"] = None
+        audit_anchor["componentHashes"].pop("artifactManifestHash")
+
+        self.assertEqual(
+            set(audit_anchor["componentHashes"].keys()),
+            set(TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS),
+        )
+        validate_trust_public_verify_contract(payload)
+
+    def test_validate_trust_public_verify_contract_should_fail_on_pending_fake_anchor(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        audit_anchor = payload["verifyPayload"]["auditAnchor"]
+        audit_anchor["anchorStatus"] = "artifact_pending"
+        audit_anchor["componentHashes"].pop("artifactManifestHash")
+
+        with self.assertRaisesRegex(ValueError, "pending_anchor_hash_forbidden"):
+            validate_trust_public_verify_contract(payload)
 
     def test_validate_trust_public_verify_contract_should_fail_on_forbidden_field(
         self,

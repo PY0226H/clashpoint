@@ -95,6 +95,7 @@ def build_public_trust_verify_payload(
         "auditAnchor": {
             "version": audit_anchor.get("version"),
             "anchorHash": audit_anchor.get("anchorHash"),
+            "anchorStatus": audit_anchor.get("anchorStatus") or "artifact_pending",
             "componentHashes": (
                 dict(audit_anchor.get("componentHashes"))
                 if isinstance(audit_anchor.get("componentHashes"), dict)

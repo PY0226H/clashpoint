@@ -1617,6 +1617,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         ),
         build_audit_anchor_export=build_audit_anchor_export_v3,
         build_public_verify_payload=build_public_trust_verify_payload_v3,
+        artifact_store=runtime.trace_store_boundaries.artifact_store,
     )
 
     _workflow_register_and_mark_blinded = partial(

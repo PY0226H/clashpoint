@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from app.applications.trust_ops_views import build_public_trust_verify_payload
+from app.applications.trust_phasea import build_audit_anchor_export
 from app.applications.trust_read_routes import (
     TrustReadRouteError,
     build_trust_attestation_verify_payload,
@@ -23,6 +27,7 @@ from app.applications.trust_read_routes import (
     write_trust_registry_snapshot_for_report,
 )
 from app.domain.trust import TrustRegistrySnapshot
+from app.infra.artifacts import LocalArtifactStore
 
 
 @dataclass
@@ -658,6 +663,73 @@ class TrustReadRoutesTests(unittest.TestCase):
         self.assertIs(snapshot, written[0])
         self.assertEqual(snapshot.trace_id, "trace-write-through")
         self.assertEqual(snapshot.public_verify["caseId"], 2013)
+
+    def test_write_trust_registry_snapshot_for_report_should_attach_artifact_manifest(
+        self,
+    ) -> None:
+        written: list[TrustRegistrySnapshot] = []
+
+        async def _upsert_trust_registry_snapshot(
+            *,
+            snapshot: TrustRegistrySnapshot,
+        ) -> TrustRegistrySnapshot:
+            written.append(snapshot)
+            return snapshot
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifact_store = LocalArtifactStore(root_dir=Path(tmpdir) / "artifacts")
+            snapshot = asyncio.run(
+                write_trust_registry_snapshot_for_report(
+                    case_id=2014,
+                    dispatch_type="final",
+                    trace_id="trace-artifact-anchor",
+                    request_snapshot={
+                        "caseId": 2014,
+                        "message_start_id": 1,
+                        "message_end_id": 2,
+                        "message_count": 2,
+                        "messages": [
+                            {"message_id": 1, "side": "pro", "content": "hidden pro"},
+                            {"message_id": 2, "side": "con", "content": "hidden con"},
+                        ],
+                    },
+                    report_payload={
+                        "winner": "pro",
+                        "proScore": 66,
+                        "conScore": 60,
+                        "reviewRequired": False,
+                        "trustAttestation": {"commitmentHash": "att-commit"},
+                        "evidenceLedger": {"entries": [{"id": "e1", "content": "hidden"}]},
+                    },
+                    workflow_snapshot={"status": "callback_reported"},
+                    workflow_status="callback_reported",
+                    workflow_events=[],
+                    alerts=[],
+                    provider="mock",
+                    upsert_trust_registry_snapshot=_upsert_trust_registry_snapshot,
+                    build_audit_anchor_export=build_audit_anchor_export,
+                    build_public_verify_payload=build_public_trust_verify_payload,
+                    artifact_store=artifact_store,
+                )
+            )
+
+        self.assertEqual(len(written), 1)
+        audit_anchor = snapshot.audit_anchor
+        self.assertEqual(audit_anchor["anchorStatus"], "artifact_ready")
+        self.assertIsNotNone(audit_anchor["anchorHash"])
+        self.assertEqual(
+            audit_anchor["componentHashes"]["artifactManifestHash"],
+            audit_anchor["artifactManifest"]["manifestHash"],
+        )
+        self.assertEqual(
+            snapshot.public_verify["verifyPayload"]["auditAnchor"]["anchorHash"],
+            audit_anchor["anchorHash"],
+        )
+        self.assertIn("artifactManifestHash", snapshot.component_hashes)
+        manifest_repr = str(audit_anchor["artifactManifest"])
+        self.assertNotIn("hidden pro", manifest_repr)
+        self.assertNotIn("hidden con", manifest_repr)
+        self.assertNotIn("hidden", manifest_repr)
 
 
 if __name__ == "__main__":

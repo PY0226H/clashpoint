@@ -249,6 +249,20 @@ class TrustPhaseATests(unittest.TestCase):
         attestation = {"registryHash": "attest-r1"}
         challenge = {"registryHash": "challenge-r1"}
         kernel = {"registryHash": "kernel-r1"}
+        artifact_manifest = {
+            "version": "artifact-manifest-v1",
+            "manifestHash": "manifest-h1",
+            "artifactRefs": [
+                {
+                    "artifactId": "audit-1",
+                    "kind": "audit_pack",
+                    "uri": "local-artifact://ai_judge_service/9005/audit_pack/audit-1.json",
+                    "sha256": "a" * 64,
+                    "contentType": "application/json",
+                    "redactionLevel": "ops",
+                }
+            ],
+        }
 
         anchor_without_payload = build_audit_anchor_export(
             case_id=9005,
@@ -259,13 +273,20 @@ class TrustPhaseATests(unittest.TestCase):
             challenge_review=challenge,
             kernel_version=kernel,
             include_payload=False,
+            artifact_manifest=artifact_manifest,
         )
         self.assertEqual(anchor_without_payload["dispatchType"], "final")
+        self.assertEqual(anchor_without_payload["anchorStatus"], "artifact_ready")
         self.assertNotIn("payload", anchor_without_payload)
         self.assertEqual(anchor_without_payload["componentHashes"]["caseCommitmentHash"], "commit-h1")
         self.assertEqual(anchor_without_payload["componentHashes"]["verdictAttestationHash"], "attest-r1")
         self.assertEqual(anchor_without_payload["componentHashes"]["challengeReviewHash"], "challenge-r1")
         self.assertEqual(anchor_without_payload["componentHashes"]["kernelVersionHash"], "kernel-r1")
+        self.assertEqual(
+            anchor_without_payload["componentHashes"]["artifactManifestHash"],
+            "manifest-h1",
+        )
+        self.assertEqual(anchor_without_payload["artifactManifest"]["manifestHash"], "manifest-h1")
 
         anchor_with_payload = build_audit_anchor_export(
             case_id=9005,
@@ -276,6 +297,7 @@ class TrustPhaseATests(unittest.TestCase):
             challenge_review=challenge,
             kernel_version=kernel,
             include_payload=True,
+            artifact_manifest=artifact_manifest,
         )
         self.assertIn("payload", anchor_with_payload)
         self.assertIn("anchorHash", anchor_with_payload)
@@ -283,6 +305,27 @@ class TrustPhaseATests(unittest.TestCase):
             anchor_with_payload["payload"]["caseCommitment"]["commitmentHash"],
             "commit-h1",
         )
+        self.assertEqual(
+            anchor_with_payload["payload"]["artifactManifest"]["manifestHash"],
+            "manifest-h1",
+        )
+
+    def test_audit_anchor_export_should_mark_pending_without_artifact_manifest(self) -> None:
+        anchor = build_audit_anchor_export(
+            case_id=9006,
+            dispatch_type="phase",
+            trace_id="trace-9006",
+            case_commitment={"commitmentHash": "commit-h2"},
+            verdict_attestation={"registryHash": "attest-r2"},
+            challenge_review={"registryHash": "challenge-r2"},
+            kernel_version={"registryHash": "kernel-r2"},
+            include_payload=False,
+        )
+
+        self.assertEqual(anchor["anchorStatus"], "artifact_pending")
+        self.assertIsNone(anchor["anchorHash"])
+        self.assertIsNone(anchor["artifactManifest"])
+        self.assertNotIn("artifactManifestHash", anchor["componentHashes"])
 
 
 if __name__ == "__main__":

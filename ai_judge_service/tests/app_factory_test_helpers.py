@@ -77,6 +77,7 @@ def build_settings(**overrides: object) -> Settings:
         "db_pool_size": 10,
         "db_max_overflow": 20,
         "db_auto_create_schema": True,
+        "artifact_store_root": f"/tmp/echoisle_ai_judge_service_artifacts_{unique_db_suffix}",
         "topic_memory_limit": 5,
         "topic_memory_min_evidence_refs": 1,
         "topic_memory_min_rationale_chars": 20,

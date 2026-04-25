@@ -476,7 +476,10 @@ def build_audit_anchor_export(
     challenge_review: dict[str, Any],
     kernel_version: dict[str, Any],
     include_payload: bool,
+    artifact_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    manifest_payload = artifact_manifest if isinstance(artifact_manifest, dict) else {}
+    artifact_manifest_hash = str(manifest_payload.get("manifestHash") or "").strip()
     component_hashes = {
         "caseCommitmentHash": str(case_commitment.get("commitmentHash") or "").strip()
         or _sha256_hex(case_commitment),
@@ -487,17 +490,21 @@ def build_audit_anchor_export(
         "kernelVersionHash": str(kernel_version.get("registryHash") or "").strip()
         or _sha256_hex(kernel_version),
     }
+    if artifact_manifest_hash:
+        component_hashes["artifactManifestHash"] = artifact_manifest_hash
+    anchor_status = "artifact_ready" if artifact_manifest_hash else "artifact_pending"
     anchor_basis = {
         "version": "trust-phaseA-audit-anchor-v1",
         "caseId": int(case_id),
         "dispatchType": _normalize_dispatch_type(dispatch_type),
         "traceId": str(trace_id or "").strip(),
+        "anchorStatus": anchor_status,
         "componentHashes": component_hashes,
     }
-    anchor_hash = _sha256_hex(anchor_basis)
     payload: dict[str, Any] = {
         **anchor_basis,
-        "anchorHash": anchor_hash,
+        "anchorHash": _sha256_hex(anchor_basis) if artifact_manifest_hash else None,
+        "artifactManifest": dict(manifest_payload) if artifact_manifest_hash else None,
     }
     if include_payload:
         payload["payload"] = {
@@ -506,4 +513,6 @@ def build_audit_anchor_export(
             "challengeReview": challenge_review,
             "kernelVersion": kernel_version,
         }
+        if artifact_manifest_hash:
+            payload["payload"]["artifactManifest"] = dict(manifest_payload)
     return payload

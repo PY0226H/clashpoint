@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.applications.trust_audit_anchor_contract import (
+    TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     TRUST_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
     TRUST_AUDIT_ANCHOR_ITEM_KEYS,
     TRUST_AUDIT_ANCHOR_PAYLOAD_KEYS,
@@ -12,19 +13,29 @@ from app.applications.trust_audit_anchor_contract import (
 
 
 class TrustAuditAnchorContractTests(unittest.TestCase):
-    def _build_payload(self, *, include_payload: bool) -> dict:
+    def _build_payload(self, *, include_payload: bool, artifact_ready: bool = True) -> dict:
+        artifact_manifest = {
+            "version": "artifact-manifest-v1",
+            "manifestHash": "artifact_manifest_hash",
+            "artifactRefs": [],
+        }
+        component_hashes = {
+            "caseCommitmentHash": "c_hash",
+            "verdictAttestationHash": "va_hash",
+            "challengeReviewHash": "cr_hash",
+            "kernelVersionHash": "kv_hash",
+        }
+        if artifact_ready:
+            component_hashes["artifactManifestHash"] = "artifact_manifest_hash"
         item = {
             "version": "trust-phaseA-audit-anchor-v1",
             "caseId": 9501,
             "dispatchType": "final",
             "traceId": "trace-final-9501",
-            "componentHashes": {
-                "caseCommitmentHash": "c_hash",
-                "verdictAttestationHash": "va_hash",
-                "challengeReviewHash": "cr_hash",
-                "kernelVersionHash": "kv_hash",
-            },
-            "anchorHash": "anchor_hash",
+            "anchorStatus": "artifact_ready" if artifact_ready else "artifact_pending",
+            "componentHashes": component_hashes,
+            "anchorHash": "anchor_hash" if artifact_ready else None,
+            "artifactManifest": artifact_manifest if artifact_ready else None,
         }
         if include_payload:
             item["payload"] = {
@@ -58,6 +69,14 @@ class TrustAuditAnchorContractTests(unittest.TestCase):
         payload = self._build_payload(include_payload=False)
         validate_trust_audit_anchor_contract(payload)
 
+    def test_validate_trust_audit_anchor_contract_should_pass_when_artifact_pending(self) -> None:
+        payload = self._build_payload(include_payload=False, artifact_ready=False)
+        self.assertEqual(
+            set(payload["item"]["componentHashes"].keys()),
+            set(TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS),
+        )
+        validate_trust_audit_anchor_contract(payload)
+
     def test_validate_trust_audit_anchor_contract_should_fail_on_missing_component_hash(self) -> None:
         payload = self._build_payload(include_payload=False)
         payload["item"]["componentHashes"].pop("kernelVersionHash")
@@ -68,6 +87,13 @@ class TrustAuditAnchorContractTests(unittest.TestCase):
             "trust_audit_anchor_component_hashes_missing_keys:kernelVersionHash",
             str(ctx.exception),
         )
+
+    def test_validate_trust_audit_anchor_contract_should_fail_on_pending_fake_anchor(self) -> None:
+        payload = self._build_payload(include_payload=False, artifact_ready=False)
+        payload["item"]["anchorHash"] = "fake-anchor"
+
+        with self.assertRaisesRegex(ValueError, "pending_anchor_hash_forbidden"):
+            validate_trust_audit_anchor_contract(payload)
 
 
 if __name__ == "__main__":

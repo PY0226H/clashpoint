@@ -6,6 +6,7 @@ from typing import Any
 
 from app.domain.trust import TRUST_REGISTRY_VERSION, TrustRegistrySnapshot
 
+from .artifact_pack import write_trust_audit_artifact_pack
 from .trust_phasea_bundle import build_trust_phasea_bundle
 from .trust_public_verify_contract import build_trust_public_verify_visibility_contract
 
@@ -96,9 +97,24 @@ def build_trust_phasea_bundle_from_registry_snapshot(
         "challengeReview": dict(normalized.challenge_review),
         "kernelVersion": dict(normalized.kernel_version),
         "auditAnchor": dict(normalized.audit_anchor),
+        "artifactManifest": (
+            dict(normalized.audit_anchor.get("artifactManifest"))
+            if isinstance(normalized.audit_anchor.get("artifactManifest"), dict)
+            else None
+        ),
         "publicVerify": dict(normalized.public_verify),
         "componentHashes": dict(normalized.component_hashes),
     }
+
+
+def _artifact_manifest_from_bundle(bundle: dict[str, Any]) -> dict[str, Any] | None:
+    manifest = bundle.get("artifactManifest")
+    if isinstance(manifest, dict):
+        return dict(manifest)
+    audit_anchor = bundle.get("auditAnchor")
+    if isinstance(audit_anchor, dict) and isinstance(audit_anchor.get("artifactManifest"), dict):
+        return dict(audit_anchor["artifactManifest"])
+    return None
 
 
 def build_trust_report_context_from_receipt(
@@ -286,6 +302,7 @@ def build_trust_registry_snapshot_from_bundle(
         else {}
     )
     kernel_version = dict(bundle["kernelVersion"]) if isinstance(bundle.get("kernelVersion"), dict) else {}
+    artifact_manifest = _artifact_manifest_from_bundle(bundle)
     audit_anchor = build_audit_anchor_export(
         case_id=case_id,
         dispatch_type=dispatch_type,
@@ -295,6 +312,7 @@ def build_trust_registry_snapshot_from_bundle(
         challenge_review=challenge_review,
         kernel_version=kernel_version,
         include_payload=False,
+        artifact_manifest=artifact_manifest,
     )
     public_verify = build_trust_public_verify_route_payload(
         case_id=case_id,
@@ -338,6 +356,7 @@ async def write_trust_registry_snapshot_for_report(
     upsert_trust_registry_snapshot: Any,
     build_audit_anchor_export: Any,
     build_public_verify_payload: Any,
+    artifact_store: Any | None = None,
     registry_version: str = TRUST_REGISTRY_VERSION,
 ) -> TrustRegistrySnapshot:
     bundle = build_trust_phasea_bundle(
@@ -358,6 +377,31 @@ async def write_trust_registry_snapshot_for_report(
         "source": "write_through_report",
         "registryVersion": registry_version,
     }
+    commitment = dict(bundle.get("commitment")) if isinstance(bundle.get("commitment"), dict) else {}
+    verdict_attestation = (
+        dict(bundle.get("verdictAttestation"))
+        if isinstance(bundle.get("verdictAttestation"), dict)
+        else {}
+    )
+    challenge_review = (
+        dict(bundle.get("challengeReview")) if isinstance(bundle.get("challengeReview"), dict) else {}
+    )
+    kernel_version = dict(bundle.get("kernelVersion")) if isinstance(bundle.get("kernelVersion"), dict) else {}
+    if artifact_store is not None:
+        artifact_pack = await write_trust_audit_artifact_pack(
+            artifact_store=artifact_store,
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            request_snapshot=request_snapshot,
+            report_payload=report_payload,
+            workflow_snapshot=workflow_snapshot,
+            commitment=commitment,
+            verdict_attestation=verdict_attestation,
+            challenge_review=challenge_review,
+            kernel_version=kernel_version,
+        )
+        bundle["artifactManifest"] = artifact_pack.manifest.to_payload()
     snapshot = build_trust_registry_snapshot_from_bundle(
         case_id=case_id,
         bundle=bundle,
@@ -505,6 +549,7 @@ def build_trust_audit_anchor_route_payload(
         challenge_review=challenge_review,
         kernel_version=kernel_version,
         include_payload=bool(include_payload),
+        artifact_manifest=_artifact_manifest_from_bundle(bundle),
     )
     payload = build_trust_item_route_payload(
         case_id=case_id,
@@ -550,6 +595,7 @@ def build_trust_public_verify_bundle_payload(
         challenge_review=challenge_review,
         kernel_version=kernel_version,
         include_payload=False,
+        artifact_manifest=_artifact_manifest_from_bundle(bundle),
     )
     payload = build_trust_public_verify_route_payload(
         case_id=case_id,

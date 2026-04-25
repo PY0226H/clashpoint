@@ -60,14 +60,20 @@ TRUST_PUBLIC_VERIFY_KERNEL_VERSION_KEYS: tuple[str, ...] = (
 TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_KEYS: tuple[str, ...] = (
     "version",
     "anchorHash",
+    "anchorStatus",
     "componentHashes",
 )
 
-TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS: tuple[str, ...] = (
+TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS: tuple[str, ...] = (
     "caseCommitmentHash",
     "verdictAttestationHash",
     "challengeReviewHash",
     "kernelVersionHash",
+)
+
+TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS: tuple[str, ...] = (
+    *TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
+    "artifactManifestHash",
 )
 
 TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS: tuple[str, ...] = (
@@ -305,28 +311,43 @@ def _validate_audit_anchor(payload: dict[str, Any]) -> None:
         "trust_public_verify_audit_anchor_version",
         payload.get("version"),
     )
-    _assert_non_empty_string(
-        "trust_public_verify_audit_anchor_anchor_hash",
-        payload.get("anchorHash"),
-    )
+    anchor_status = str(payload.get("anchorStatus") or "").strip().lower()
+    if anchor_status not in {"artifact_ready", "artifact_pending"}:
+        raise ValueError("trust_public_verify_audit_anchor_status_invalid")
     component_hashes = payload.get("componentHashes")
     if not isinstance(component_hashes, dict):
         raise ValueError("trust_public_verify_audit_anchor_component_hashes_not_dict")
     _assert_required_keys(
         section="trust_public_verify_audit_anchor_component_hashes",
         payload=component_hashes,
-        keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
+        keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     )
     _assert_only_keys(
         section="trust_public_verify_audit_anchor_component_hashes",
         payload=component_hashes,
         keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
     )
-    for key in TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS:
+    for key in TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS:
         _assert_non_empty_string(
             f"trust_public_verify_audit_anchor_component_hashes_{key}",
             component_hashes.get(key),
         )
+    if anchor_status == "artifact_ready":
+        _assert_non_empty_string(
+            "trust_public_verify_audit_anchor_anchor_hash",
+            payload.get("anchorHash"),
+        )
+        _assert_non_empty_string(
+            "trust_public_verify_audit_anchor_component_hashes_artifactManifestHash",
+            component_hashes.get("artifactManifestHash"),
+        )
+    else:
+        if str(payload.get("anchorHash") or "").strip():
+            raise ValueError("trust_public_verify_audit_anchor_pending_anchor_hash_forbidden")
+        if str(component_hashes.get("artifactManifestHash") or "").strip():
+            raise ValueError(
+                "trust_public_verify_audit_anchor_pending_artifact_manifest_hash_forbidden"
+            )
 
 
 def build_trust_public_verify_visibility_contract() -> dict[str, Any]:

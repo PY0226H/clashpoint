@@ -260,6 +260,29 @@ def _update_public_verify_challenge_review(
     return {**public_verify, "verifyPayload": verify_payload}
 
 
+def _update_public_verify_audit_anchor(
+    *,
+    public_verify: dict[str, Any],
+    audit_anchor: dict[str, Any],
+) -> dict[str, Any]:
+    verify_payload = (
+        dict(public_verify.get("verifyPayload"))
+        if isinstance(public_verify.get("verifyPayload"), dict)
+        else {}
+    )
+    verify_payload["auditAnchor"] = {
+        "version": audit_anchor.get("version"),
+        "anchorHash": audit_anchor.get("anchorHash"),
+        "anchorStatus": audit_anchor.get("anchorStatus") or "artifact_pending",
+        "componentHashes": (
+            dict(audit_anchor.get("componentHashes"))
+            if isinstance(audit_anchor.get("componentHashes"), dict)
+            else {}
+        ),
+    }
+    return {**public_verify, "verifyPayload": verify_payload}
+
+
 def _refresh_hash_surfaces(
     *,
     row: JudgeTrustRegistrySnapshotModel,
@@ -279,20 +302,35 @@ def _refresh_hash_surfaces(
         {key: value for key, value in component_hashes.items() if key != "auditAnchorHash"}
     )
     audit_anchor["componentHashes"] = anchor_component_hashes
+    anchor_status = (
+        "artifact_ready"
+        if str(anchor_component_hashes.get("artifactManifestHash") or "").strip()
+        else "artifact_pending"
+    )
     anchor_basis = {
         "version": audit_anchor.get("version") or "trust-phaseA-audit-anchor-v1",
         "caseId": int(row.case_id),
         "dispatchType": normalize_trust_dispatch_type(row.dispatch_type),
         "traceId": str(row.trace_id or "").strip(),
+        "anchorStatus": anchor_status,
         "componentHashes": anchor_component_hashes,
     }
-    audit_anchor["anchorHash"] = _sha256_hex(anchor_basis)
-    component_hashes["auditAnchorHash"] = audit_anchor["anchorHash"]
+    audit_anchor["anchorStatus"] = anchor_status
+    if anchor_status == "artifact_ready":
+        audit_anchor["anchorHash"] = _sha256_hex(anchor_basis)
+        component_hashes["auditAnchorHash"] = audit_anchor["anchorHash"]
+    else:
+        audit_anchor["anchorHash"] = None
+        component_hashes.pop("auditAnchorHash", None)
     row.component_hashes = component_hashes
     row.audit_anchor = audit_anchor
-    row.public_verify = _update_public_verify_challenge_review(
+    public_verify = _update_public_verify_challenge_review(
         public_verify=dict(row.public_verify) if isinstance(row.public_verify, dict) else {},
         challenge_review=challenge_review,
+    )
+    row.public_verify = _update_public_verify_audit_anchor(
+        public_verify=public_verify,
+        audit_anchor=audit_anchor,
     )
 
 

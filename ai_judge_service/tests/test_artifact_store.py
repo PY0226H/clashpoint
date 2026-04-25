@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.applications.artifact_pack import write_case_artifact_pack
+from app.applications.artifact_pack import write_case_artifact_pack, write_trust_audit_artifact_pack
 from app.domain.artifacts import ArtifactRef
 from app.infra.artifacts import LocalArtifactStore
 
@@ -113,6 +113,49 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
         )
         for ref in pack.refs:
             self.assertTrue(await self._store.exists(ref=ref))
+
+    async def test_trust_audit_artifact_pack_should_redact_evidence_ref_payloads(self) -> None:
+        pack = await write_trust_audit_artifact_pack(
+            artifact_store=self._store,
+            case_id=9105,
+            dispatch_type="final",
+            trace_id="trace-9105",
+            request_snapshot={
+                "message_start_id": 1,
+                "message_end_id": 2,
+                "message_count": 2,
+                "messages": [{"message_id": 1, "side": "pro", "content": "raw message"}],
+            },
+            report_payload={
+                "winner": "pro",
+                "verdictEvidenceRefs": [
+                    {
+                        "evidenceId": "ev-1",
+                        "side": "pro",
+                        "type": "agent2_hit",
+                        "item": "raw decisive quote",
+                        "content": "raw ref content",
+                    }
+                ],
+                "evidenceLedger": {"entries": [{"id": "ev-1", "content": "raw evidence"}]},
+            },
+            workflow_snapshot={"status": "callback_reported"},
+            commitment={"commitmentHash": "case-hash", "version": "v1"},
+            verdict_attestation={"registryHash": "verdict-hash", "version": "v1"},
+            challenge_review={"registryHash": "challenge-hash", "version": "v1"},
+            kernel_version={"registryHash": "kernel-hash", "version": "v1"},
+        )
+
+        evidence_ref = next(ref for ref in pack.refs if ref.kind == "evidence_pack")
+        evidence_payload = await self._store.get_json(ref=evidence_ref)
+        evidence_repr = str(evidence_payload)
+        self.assertNotIn("raw decisive quote", evidence_repr)
+        self.assertNotIn("raw ref content", evidence_repr)
+        self.assertNotIn("raw evidence", evidence_repr)
+        self.assertEqual(
+            evidence_payload["verdictEvidenceRefs"][0]["itemHash"],
+            "eb817ecdd6e8090037d4981b1e46084d977ae54ae80766593e165921cb33dbc2",
+        )
 
 
 if __name__ == "__main__":
