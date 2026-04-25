@@ -1,0 +1,33 @@
+{
+  "run_id": "20260425T092753Z-ai-judge-p5-real-calibration-on-env",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "status": "env_blocked",
+  "environment_ready": false,
+  "environment_mode": "blocked",
+  "local_reference_enabled": false,
+  "env_marker_file": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env",
+  "evidence_dir": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence",
+  "started_at": "2026-04-25T09:27:53Z",
+  "finished_at": "2026-04-25T09:27:54Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260425T092753Z-ai-judge-real-env-window-closure/p5.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260425T092753Z-ai-judge-real-env-window-closure/p5.summary.md"
+  },
+  "counts": {
+    "total": 5,
+    "pass_total": 0,
+    "pending_real_data_total": 0,
+    "local_reference_pass_total": 0,
+    "local_reference_pending_total": 0,
+    "evidence_missing_total": 0,
+    "env_blocked_total": 5,
+    "fail_total": 0
+  },
+  "tracks": [
+    {"track_id":"latency_baseline","title":"Latency Baseline","status":"env_blocked","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_latency_baseline.env","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"real environment not ready"}
+    ,{"track_id":"cost_baseline","title":"Cost Baseline","status":"env_blocked","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_cost_baseline.env","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"real environment not ready"}
+    ,{"track_id":"fairness_benchmark","title":"Fairness Benchmark","status":"env_blocked","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fairness_benchmark.env","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"real environment not ready"}
+    ,{"track_id":"fault_drill","title":"Fault Drill","status":"env_blocked","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fault_drill.env","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"real environment not ready"}
+    ,{"track_id":"trust_attestation","title":"Trust Attestation","status":"env_blocked","evidence_file":"/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_trust_attestation.env","missing_base_keys":"（无）","missing_real_keys":"REAL_ENV_EVIDENCE;DATASET_REF","missing_local_keys":"（无）","note":"real environment not ready"}
+  ]
+}

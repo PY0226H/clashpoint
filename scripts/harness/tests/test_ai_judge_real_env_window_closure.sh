@@ -210,6 +210,15 @@ mkdir -p "$EVIDENCE_PASS"
 seed_tracks_real "$EVIDENCE_PASS"
 cat >"$EVIDENCE_PASS/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+REAL_EVIDENCE_LINK=https://example.com/evidence/window-pass
 EOF
 
 PASS_STDOUT="$TMP_DIR/pass.stdout"
@@ -217,13 +226,33 @@ PASS_JSON="$TMP_DIR/pass.summary.json"
 PASS_MD="$TMP_DIR/pass.summary.md"
 run_window_closure "$WORK_PASS" --emit-json "$PASS_JSON" --emit-md "$PASS_MD" >"$PASS_STDOUT"
 expect_contains "pass status" "ai_judge_real_env_window_closure_status: pass" "$PASS_STDOUT"
+expect_contains "pass readiness status" "real_env_readiness_status: pass" "$PASS_STDOUT"
+expect_contains "pass readiness input ready" "real_env_input_ready: true" "$PASS_STDOUT"
 expect_contains "pass p5 status" "p5_status: pass" "$PASS_STDOUT"
 expect_contains "pass runtime pack status" "runtime_ops_pack_status: pass" "$PASS_STDOUT"
 expect_contains "pass real pass ready" "real_pass_ready: true" "$PASS_STDOUT"
 expect_contains "pass json" "\"status\": \"pass\"" "$PASS_JSON"
+expect_contains "pass json readiness block" "\"readiness\"" "$PASS_JSON"
+expect_contains "pass json readiness input" "\"input_ready\": true" "$PASS_JSON"
 expect_contains "pass json real pass ready" "\"ready\": true" "$PASS_JSON"
 expect_contains "pass md title" "# ai-judge-real-env-window-closure" "$PASS_MD"
 expect_contains "pass closure env real pass" "REAL_PASS_READY=true" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
+expect_contains "pass closure env readiness" "REAL_ENV_READINESS_STATUS=pass" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
+
+# 场景2b：真实阶段数据齐全但 readiness 输入缺失 -> env_blocked，防止 fake pass
+WORK_INPUT_BLOCKED="$TMP_DIR/input-blocked"
+EVIDENCE_INPUT_BLOCKED="$WORK_INPUT_BLOCKED/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_INPUT_BLOCKED"
+seed_tracks_real "$EVIDENCE_INPUT_BLOCKED"
+cat >"$EVIDENCE_INPUT_BLOCKED/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+EOF
+
+INPUT_BLOCKED_STDOUT="$TMP_DIR/input-blocked.stdout"
+run_window_closure "$WORK_INPUT_BLOCKED" >"$INPUT_BLOCKED_STDOUT"
+expect_contains "input blocked status" "ai_judge_real_env_window_closure_status: env_blocked" "$INPUT_BLOCKED_STDOUT"
+expect_contains "input blocked readiness code" "real_sample_manifest_missing" "$INPUT_BLOCKED_STDOUT"
 
 # 场景3：阈值违反 -> threshold_violation
 WORK_VIOLATION="$TMP_DIR/violation"
@@ -232,6 +261,14 @@ mkdir -p "$EVIDENCE_VIOLATION"
 seed_tracks_real "$EVIDENCE_VIOLATION" "0.45" "1600" "2900" "false" "0.90" "0.90" "0.12"
 cat >"$EVIDENCE_VIOLATION/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
 EOF
 
 VIOLATION_STDOUT="$TMP_DIR/violation.stdout"
@@ -246,6 +283,14 @@ mkdir -p "$EVIDENCE_PENDING"
 seed_tracks_real "$EVIDENCE_PENDING"
 cat >"$EVIDENCE_PENDING/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
 EOF
 sed -i '' '/^REAL_ENV_EVIDENCE=/d' "$EVIDENCE_PENDING/ai_judge_p5_latency_baseline.env"
 

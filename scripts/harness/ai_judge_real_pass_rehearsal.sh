@@ -169,6 +169,14 @@ seed_rehearsal_evidence() {
 REAL_CALIBRATION_ENV_READY=true
 LOCAL_REFERENCE_ENV_READY=false
 CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-rehearsal/real-samples/manifest.json
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+REAL_EVIDENCE_LINK=https://example.com/evidence/rehearsal-window
 EOF_ENV_MARKER
 
   cat >"$evidence_dir/ai_judge_p5_latency_baseline.env" <<'EOF_LATENCY'

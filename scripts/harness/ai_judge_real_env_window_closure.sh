@@ -33,6 +33,19 @@ REAL_ENV_CLOSURE_STATUS="unknown"
 STAGE_CLOSURE_EVIDENCE_STATUS="unknown"
 MARKER_READY="false"
 ENV_MODE="blocked"
+REAL_ENV_INPUT_READY="false"
+REAL_ENV_READINESS_STATUS="env_blocked"
+REAL_ENV_READINESS_BLOCKER_CODES=""
+REAL_ENV_READINESS_BLOCKER_HINTS=""
+REAL_SAMPLE_MANIFEST=""
+REAL_PROVIDER_READY="false"
+REAL_CALLBACK_READY="false"
+PRODUCTION_ARTIFACT_STORE_READY="false"
+BENCHMARK_TARGETS_READY="false"
+FAIRNESS_TARGETS_READY="false"
+RUNTIME_OPS_TARGETS_READY="false"
+LOCAL_REFERENCE_EVIDENCE_LINK=""
+REAL_EVIDENCE_LINK=""
 REAL_PASS_READY="false"
 REAL_PASS_BLOCKER_CODES=""
 REAL_PASS_BLOCKER_HINTS=""
@@ -150,6 +163,18 @@ read_env_value() {
     return
   fi
   printf '%s' "${line#*=}"
+}
+
+read_input_value() {
+  local key="$1"
+  local value=""
+  if [[ -f "$ENV_MARKER" ]]; then
+    value="$(trim "$(read_env_value "$ENV_MARKER" "$key")")"
+  fi
+  if [[ -z "$value" ]]; then
+    value="$(trim "$(printenv "$key" 2>/dev/null || true)")"
+  fi
+  printf '%s' "$value"
 }
 
 read_json_status() {
@@ -367,6 +392,74 @@ join_with_delim() {
   printf '%s' "$out"
 }
 
+derive_readiness_inputs() {
+  local -a blocker_codes=()
+  local -a blocker_hints=()
+
+  REAL_SAMPLE_MANIFEST="$(trim "$(read_input_value "REAL_SAMPLE_MANIFEST")")"
+  REAL_PROVIDER_READY="$(trim "$(read_input_value "REAL_PROVIDER_READY")")"
+  REAL_CALLBACK_READY="$(trim "$(read_input_value "REAL_CALLBACK_READY")")"
+  PRODUCTION_ARTIFACT_STORE_READY="$(trim "$(read_input_value "PRODUCTION_ARTIFACT_STORE_READY")")"
+  BENCHMARK_TARGETS_READY="$(trim "$(read_input_value "BENCHMARK_TARGETS_READY")")"
+  FAIRNESS_TARGETS_READY="$(trim "$(read_input_value "FAIRNESS_TARGETS_READY")")"
+  RUNTIME_OPS_TARGETS_READY="$(trim "$(read_input_value "RUNTIME_OPS_TARGETS_READY")")"
+  LOCAL_REFERENCE_EVIDENCE_LINK="$(trim "$(read_input_value "LOCAL_REFERENCE_EVIDENCE_LINK")")"
+  REAL_EVIDENCE_LINK="$(trim "$(read_input_value "REAL_EVIDENCE_LINK")")"
+
+  if [[ -z "$LOCAL_REFERENCE_EVIDENCE_LINK" ]]; then
+    LOCAL_REFERENCE_EVIDENCE_LINK="$EVIDENCE_DIR/ai_judge_p5_local_reference_notes.md"
+  fi
+  if [[ -z "$REAL_EVIDENCE_LINK" ]]; then
+    REAL_EVIDENCE_LINK="$OUTPUT_DOC"
+  fi
+
+  if [[ "$MARKER_READY" != "true" ]]; then
+    blocker_codes+=("real_env_marker_not_ready")
+    blocker_hints+=("设置 REAL_CALIBRATION_ENV_READY=true 并确认 CALIBRATION_ENV_MODE=real")
+  fi
+  if [[ -z "$REAL_SAMPLE_MANIFEST" ]]; then
+    blocker_codes+=("real_sample_manifest_missing")
+    blocker_hints+=("在 ai_judge_p5_real_env.env 或环境变量中设置 REAL_SAMPLE_MANIFEST")
+  fi
+  if ! is_truthy "$REAL_PROVIDER_READY"; then
+    blocker_codes+=("real_provider_not_ready")
+    blocker_hints+=("设置 REAL_PROVIDER_READY=true，确认真实模型/provider 服务可用")
+  fi
+  if ! is_truthy "$REAL_CALLBACK_READY"; then
+    blocker_codes+=("real_callback_not_ready")
+    blocker_hints+=("设置 REAL_CALLBACK_READY=true，确认真实 callback/回写服务可用")
+  fi
+  if ! is_truthy "$PRODUCTION_ARTIFACT_STORE_READY"; then
+    blocker_codes+=("production_artifact_store_not_ready")
+    blocker_hints+=("设置 PRODUCTION_ARTIFACT_STORE_READY=true，确认生产对象存储可写可读")
+  fi
+  if ! is_truthy "$BENCHMARK_TARGETS_READY"; then
+    blocker_codes+=("benchmark_targets_not_ready")
+    blocker_hints+=("设置 BENCHMARK_TARGETS_READY=true，确认 benchmark 阈值与样本口径已冻结")
+  fi
+  if ! is_truthy "$FAIRNESS_TARGETS_READY"; then
+    blocker_codes+=("fairness_targets_not_ready")
+    blocker_hints+=("设置 FAIRNESS_TARGETS_READY=true，确认 fairness 目标阈值已冻结")
+  fi
+  if ! is_truthy "$RUNTIME_OPS_TARGETS_READY"; then
+    blocker_codes+=("runtime_ops_targets_not_ready")
+    blocker_hints+=("设置 RUNTIME_OPS_TARGETS_READY=true，确认 runtime ops/SLA 目标阈值已冻结")
+  fi
+
+  if [[ ${#blocker_codes[@]} -eq 0 ]]; then
+    REAL_ENV_INPUT_READY="true"
+    REAL_ENV_READINESS_STATUS="readiness_ready"
+    REAL_ENV_READINESS_BLOCKER_CODES=""
+    REAL_ENV_READINESS_BLOCKER_HINTS=""
+    return
+  fi
+
+  REAL_ENV_INPUT_READY="false"
+  REAL_ENV_READINESS_STATUS="env_blocked"
+  REAL_ENV_READINESS_BLOCKER_CODES="$(join_with_delim "," "${blocker_codes[@]}")"
+  REAL_ENV_READINESS_BLOCKER_HINTS="$(join_with_delim " || " "${blocker_hints[@]}")"
+}
+
 derive_status() {
   if [[ "$P5_EXIT_CODE" != "0" || "$RUNTIME_OPS_EXIT_CODE" != "0" ]]; then
     STATUS="stage_failed"
@@ -374,6 +467,10 @@ derive_status() {
   fi
 
   if [[ "$P5_STATUS" == "pass" && "$RUNTIME_OPS_STATUS" == "pass" ]]; then
+    if [[ "$REAL_ENV_INPUT_READY" != "true" ]]; then
+      STATUS="env_blocked"
+      return
+    fi
     STATUS="pass"
     return
   fi
@@ -438,6 +535,25 @@ derive_real_pass_readiness() {
     blocker_codes+=("fairness_ingest_not_sent")
     blocker_hints+=("fairness ingest 要求成功，但当前为 '$FAIRNESS_INGEST_STATUS'")
   fi
+  if [[ "$REAL_ENV_INPUT_READY" != "true" ]]; then
+    if [[ -n "$REAL_ENV_READINESS_BLOCKER_CODES" ]]; then
+      IFS=',' read -r -a readiness_codes <<< "$REAL_ENV_READINESS_BLOCKER_CODES"
+      local code
+      for code in "${readiness_codes[@]}"; do
+        [[ -z "$code" ]] && continue
+        if [[ ${#blocker_codes[@]} -eq 0 ]] || ! is_in_set "$code" "${blocker_codes[@]}"; then
+          blocker_codes+=("$code")
+        fi
+      done
+    else
+      blocker_codes+=("real_env_readiness_inputs_not_ready")
+    fi
+    if [[ -n "$REAL_ENV_READINESS_BLOCKER_HINTS" ]]; then
+      blocker_hints+=("$REAL_ENV_READINESS_BLOCKER_HINTS")
+    else
+      blocker_hints+=("真实环境 readiness 输入未全部满足")
+    fi
+  fi
 
   if [[ ${#blocker_codes[@]} -eq 0 ]]; then
     REAL_PASS_READY="true"
@@ -451,6 +567,22 @@ derive_real_pass_readiness() {
   REAL_PASS_BLOCKER_HINTS="$(join_with_delim " || " "${blocker_hints[@]}")"
 }
 
+derive_readiness_status() {
+  if [[ "$STATUS" == "pass" ]]; then
+    REAL_ENV_READINESS_STATUS="pass"
+    return
+  fi
+  if [[ "$STATUS" == "stage_failed" || "$STATUS" == "threshold_violation" ]]; then
+    REAL_ENV_READINESS_STATUS="failed"
+    return
+  fi
+  if [[ "$REAL_ENV_INPUT_READY" == "true" ]]; then
+    REAL_ENV_READINESS_STATUS="readiness_ready"
+    return
+  fi
+  REAL_ENV_READINESS_STATUS="env_blocked"
+}
+
 write_output_env() {
   cat >"$OUTPUT_ENV" <<EOF_ENV
 AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=$STATUS
@@ -459,6 +591,19 @@ RUN_ID=$RUN_ID
 REAL_CALIBRATION_ENV_READY=$MARKER_READY
 ENVIRONMENT_MODE=$ENV_MODE
 ALLOW_LOCAL_REFERENCE=$ALLOW_LOCAL_REFERENCE
+REAL_ENV_READINESS_STATUS=$REAL_ENV_READINESS_STATUS
+REAL_ENV_INPUT_READY=$REAL_ENV_INPUT_READY
+REAL_ENV_READINESS_BLOCKER_CODES=$REAL_ENV_READINESS_BLOCKER_CODES
+REAL_ENV_READINESS_BLOCKER_HINTS=$REAL_ENV_READINESS_BLOCKER_HINTS
+REAL_SAMPLE_MANIFEST=$REAL_SAMPLE_MANIFEST
+REAL_PROVIDER_READY=$REAL_PROVIDER_READY
+REAL_CALLBACK_READY=$REAL_CALLBACK_READY
+PRODUCTION_ARTIFACT_STORE_READY=$PRODUCTION_ARTIFACT_STORE_READY
+BENCHMARK_TARGETS_READY=$BENCHMARK_TARGETS_READY
+FAIRNESS_TARGETS_READY=$FAIRNESS_TARGETS_READY
+RUNTIME_OPS_TARGETS_READY=$RUNTIME_OPS_TARGETS_READY
+LOCAL_REFERENCE_EVIDENCE_LINK=$LOCAL_REFERENCE_EVIDENCE_LINK
+REAL_EVIDENCE_LINK=$REAL_EVIDENCE_LINK
 REAL_PASS_READY=$REAL_PASS_READY
 REAL_PASS_BLOCKER_CODES=$REAL_PASS_BLOCKER_CODES
 REAL_PASS_BLOCKER_HINTS=$REAL_PASS_BLOCKER_HINTS
@@ -484,6 +629,7 @@ write_output_doc() {
 4. environment_mode：\`$ENV_MODE\`
 5. marker_ready：\`$MARKER_READY\`
 6. allow_local_reference：\`$ALLOW_LOCAL_REFERENCE\`
+7. real_env_readiness_status：\`$REAL_ENV_READINESS_STATUS\`
 
 ## 子阶段状态
 
@@ -506,6 +652,23 @@ write_output_doc() {
 2. blocker_codes：\`${REAL_PASS_BLOCKER_CODES:-（无）}\`
 3. blocker_hints：\`${REAL_PASS_BLOCKER_HINTS:-（无）}\`
 
+## Real Env Readiness 输入
+
+| 输入 | 当前值 |
+| --- | --- |
+| real_sample_manifest | \`${REAL_SAMPLE_MANIFEST:-（缺失）}\` |
+| real_provider_ready | \`$REAL_PROVIDER_READY\` |
+| real_callback_ready | \`$REAL_CALLBACK_READY\` |
+| production_artifact_store_ready | \`$PRODUCTION_ARTIFACT_STORE_READY\` |
+| benchmark_targets_ready | \`$BENCHMARK_TARGETS_READY\` |
+| fairness_targets_ready | \`$FAIRNESS_TARGETS_READY\` |
+| runtime_ops_targets_ready | \`$RUNTIME_OPS_TARGETS_READY\` |
+
+1. readiness_blocker_codes：\`${REAL_ENV_READINESS_BLOCKER_CODES:-（无）}\`
+2. readiness_blocker_hints：\`${REAL_ENV_READINESS_BLOCKER_HINTS:-（无）}\`
+3. local_reference_evidence_link：\`$LOCAL_REFERENCE_EVIDENCE_LINK\`
+4. real_evidence_link：\`$REAL_EVIDENCE_LINK\`
+
 ## 输出工件
 
 1. closure env：\`$OUTPUT_ENV\`
@@ -526,6 +689,25 @@ write_json_summary() {
   "environment_mode": "$(json_escape "$ENV_MODE")",
   "marker_ready": "$MARKER_READY",
   "allow_local_reference": "$ALLOW_LOCAL_REFERENCE",
+  "readiness": {
+    "status": "$(json_escape "$REAL_ENV_READINESS_STATUS")",
+    "input_ready": $([[ "$REAL_ENV_INPUT_READY" == "true" ]] && echo "true" || echo "false"),
+    "blocker_codes": "$(json_escape "$REAL_ENV_READINESS_BLOCKER_CODES")",
+    "blocker_hints": "$(json_escape "$REAL_ENV_READINESS_BLOCKER_HINTS")",
+    "inputs": {
+      "real_sample_manifest": "$(json_escape "$REAL_SAMPLE_MANIFEST")",
+      "real_provider_ready": "$(json_escape "$REAL_PROVIDER_READY")",
+      "real_callback_ready": "$(json_escape "$REAL_CALLBACK_READY")",
+      "production_artifact_store_ready": "$(json_escape "$PRODUCTION_ARTIFACT_STORE_READY")",
+      "benchmark_targets_ready": "$(json_escape "$BENCHMARK_TARGETS_READY")",
+      "fairness_targets_ready": "$(json_escape "$FAIRNESS_TARGETS_READY")",
+      "runtime_ops_targets_ready": "$(json_escape "$RUNTIME_OPS_TARGETS_READY")"
+    },
+    "links": {
+      "local_reference_evidence": "$(json_escape "$LOCAL_REFERENCE_EVIDENCE_LINK")",
+      "real_evidence": "$(json_escape "$REAL_EVIDENCE_LINK")"
+    }
+  },
   "stages": [
     {
       "stage": "p5_real_calibration_on_env",
@@ -571,6 +753,8 @@ write_md_summary() {
 - environment_mode: \`$ENV_MODE\`
 - marker_ready: \`$MARKER_READY\`
 - allow_local_reference: \`$ALLOW_LOCAL_REFERENCE\`
+- real_env_readiness_status: \`$REAL_ENV_READINESS_STATUS\`
+- real_env_input_ready: \`$REAL_ENV_INPUT_READY\`
 - real_pass_ready: \`$REAL_PASS_READY\`
 - real_pass_blocker_codes: \`${REAL_PASS_BLOCKER_CODES:-（无）}\`
 
@@ -590,6 +774,19 @@ write_md_summary() {
 ## real_pass_hints
 
 1. \`${REAL_PASS_BLOCKER_HINTS:-（无）}\`
+
+## real_env_readiness_inputs
+
+1. real_sample_manifest: \`${REAL_SAMPLE_MANIFEST:-（缺失）}\`
+2. real_provider_ready: \`$REAL_PROVIDER_READY\`
+3. real_callback_ready: \`$REAL_CALLBACK_READY\`
+4. production_artifact_store_ready: \`$PRODUCTION_ARTIFACT_STORE_READY\`
+5. benchmark_targets_ready: \`$BENCHMARK_TARGETS_READY\`
+6. fairness_targets_ready: \`$FAIRNESS_TARGETS_READY\`
+7. runtime_ops_targets_ready: \`$RUNTIME_OPS_TARGETS_READY\`
+8. readiness_blocker_codes: \`${REAL_ENV_READINESS_BLOCKER_CODES:-（无）}\`
+9. local_reference_evidence_link: \`$LOCAL_REFERENCE_EVIDENCE_LINK\`
+10. real_evidence_link: \`$REAL_EVIDENCE_LINK\`
 EOF_MD
 }
 
@@ -687,6 +884,7 @@ main() {
   ensure_parent_dir "$EMIT_MD"
 
   resolve_env_mode
+  derive_readiness_inputs
 
   local p5_json p5_md p5_stdout
   p5_json="$run_dir/p5.summary.json"
@@ -726,6 +924,7 @@ main() {
 
   derive_status
   derive_real_pass_readiness
+  derive_readiness_status
   FINISHED_AT="$(iso_now)"
   write_output_env
   write_output_doc
@@ -734,6 +933,9 @@ main() {
 
   echo "ai_judge_real_env_window_closure_status: $STATUS"
   echo "environment_mode: $ENV_MODE (marker_ready=$MARKER_READY)"
+  echo "real_env_readiness_status: $REAL_ENV_READINESS_STATUS"
+  echo "real_env_input_ready: $REAL_ENV_INPUT_READY"
+  echo "real_env_readiness_blocker_codes: ${REAL_ENV_READINESS_BLOCKER_CODES:-none}"
   echo "p5_status: $P5_STATUS (exit=$P5_EXIT_CODE)"
   echo "runtime_ops_pack_status: $RUNTIME_OPS_STATUS (exit=$RUNTIME_OPS_EXIT_CODE)"
   echo "runtime_ops_fairness_status: $FAIRNESS_STATUS"
