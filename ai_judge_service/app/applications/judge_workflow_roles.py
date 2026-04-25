@@ -1266,6 +1266,72 @@ class ChiefArbiterRole:
         }
 
 
+@dataclass(frozen=True)
+class OpinionWriterRole:
+    def build_phase_opinion(self, *, report_payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "debateSummary": report_payload.get("debateSummary"),
+            "sideAnalysis": (
+                report_payload.get("sideAnalysis")
+                if isinstance(report_payload.get("sideAnalysis"), dict)
+                else {}
+            ),
+            "verdictReason": report_payload.get("verdictReason"),
+            "sourceContract": {
+                "ownerAgent": "opinion_writer",
+                "status": "phase_advisory",
+                "inputObjects": ["phase_payload"],
+                "writesVerdictFacts": False,
+                "officialVerdictAuthority": False,
+            },
+        }
+
+    def extract_final_opinion(self, *, report_payload: dict[str, Any]) -> dict[str, Any]:
+        verdict_ledger = report_payload.get("verdictLedger")
+        opinion_pack = (
+            report_payload.get("opinionPack")
+            if isinstance(report_payload.get("opinionPack"), dict)
+            else {}
+        )
+        source_contract = (
+            opinion_pack.get("sourceContract")
+            if isinstance(opinion_pack.get("sourceContract"), dict)
+            else {}
+        )
+        user_report = (
+            opinion_pack.get("userReport")
+            if isinstance(opinion_pack.get("userReport"), dict)
+            else {}
+        )
+        if not isinstance(verdict_ledger, dict) or not source_contract:
+            return {
+                "debateSummary": None,
+                "sideAnalysis": {},
+                "verdictReason": None,
+                "sourceContract": {
+                    "ownerAgent": "opinion_writer",
+                    "status": "blocked_missing_ledger_contract",
+                    "inputObjects": [],
+                    "writesVerdictFacts": False,
+                    "officialVerdictAuthority": False,
+                    "failClosed": True,
+                },
+            }
+        return {
+            "debateSummary": user_report.get("debateSummary"),
+            "sideAnalysis": (
+                user_report.get("sideAnalysis")
+                if isinstance(user_report.get("sideAnalysis"), dict)
+                else {}
+            ),
+            "verdictReason": user_report.get("verdictReason"),
+            "sourceContract": source_contract,
+            "factSource": user_report.get("factSource") or "verdict_ledger",
+            "writesVerdictFacts": False,
+            "officialVerdictAuthority": False,
+        }
+
+
 def _extract_final_message_count(payload: dict[str, Any]) -> int:
     rows = payload.get("phaseRollupSummary")
     if not isinstance(rows, list):
@@ -1343,15 +1409,7 @@ def build_phase_judge_workflow_payload(
         panel_bundle=panel_bundle,
         fairness_gate=fairness_gate,
         verdict=verdict,
-        opinion={
-            "debateSummary": payload.get("debateSummary"),
-            "sideAnalysis": (
-                payload.get("sideAnalysis")
-                if isinstance(payload.get("sideAnalysis"), dict)
-                else {}
-            ),
-            "verdictReason": payload.get("verdictReason"),
-        },
+        opinion=OpinionWriterRole().build_phase_opinion(report_payload=payload),
         case_dossier_enrichment=case_dossier_enrichment,
     )
     judge_payload = state.to_payload()
@@ -1397,15 +1455,7 @@ def build_final_judge_workflow_payload(
         panel_bundle=JudgePanelRole().normalize_final_panel_bundle(payload),
         fairness_gate=FairnessSentinelRole().extract_final_gate(payload),
         verdict=ChiefArbiterRole().extract_final_verdict(payload),
-        opinion={
-            "debateSummary": payload.get("debateSummary"),
-            "sideAnalysis": (
-                payload.get("sideAnalysis")
-                if isinstance(payload.get("sideAnalysis"), dict)
-                else {}
-            ),
-            "verdictReason": payload.get("verdictReason"),
-        },
+        opinion=OpinionWriterRole().extract_final_opinion(report_payload=payload),
         case_dossier_enrichment=case_dossier_enrichment,
     )
     judge_payload = state.to_payload()

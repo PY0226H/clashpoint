@@ -693,6 +693,66 @@ def _build_verdict_ledger(
     }
 
 
+def _opinion_writer_input_contract_errors(
+    *,
+    verdict_ledger: dict[str, Any],
+    evidence_ledger: dict[str, Any],
+    fairness_report: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    winner = str(verdict_ledger.get("winner") or "").strip().lower()
+    if winner not in {"pro", "con", "draw"}:
+        errors.append("verdict_ledger.winner")
+    if not isinstance(verdict_ledger.get("scoreCard"), dict):
+        errors.append("verdict_ledger.score_card")
+    arbitration = (
+        verdict_ledger.get("arbitration")
+        if isinstance(verdict_ledger.get("arbitration"), dict)
+        else {}
+    )
+    if not arbitration:
+        errors.append("verdict_ledger.arbitration")
+    if not bool(arbitration.get("verdictLedgerLocked")):
+        errors.append("verdict_ledger.not_locked")
+    if not isinstance(verdict_ledger.get("decisiveEvidenceRefs"), list):
+        errors.append("verdict_ledger.decisive_evidence_refs")
+    if not isinstance(evidence_ledger.get("entries"), list):
+        errors.append("evidence_ledger.entries")
+    if not isinstance(evidence_ledger.get("refsById"), dict):
+        errors.append("evidence_ledger.refs_by_id")
+    if not isinstance(fairness_report.get("reviewRequired"), bool):
+        errors.append("fairness_report.review_required")
+    gate_decision = str(fairness_report.get("gateDecision") or "").strip().lower()
+    if gate_decision not in _FINAL_ARBITRATION_GATE_DECISIONS:
+        errors.append("fairness_report.gate_decision")
+    return errors
+
+
+def _build_opinion_source_contract(
+    *,
+    verdict_ledger: dict[str, Any],
+    evidence_ledger: dict[str, Any],
+    fairness_report: dict[str, Any],
+) -> dict[str, Any]:
+    errors = _opinion_writer_input_contract_errors(
+        verdict_ledger=verdict_ledger,
+        evidence_ledger=evidence_ledger,
+        fairness_report=fairness_report,
+    )
+    if errors:
+        raise ValueError("opinion_writer_input_contract_failed:" + ",".join(errors))
+    return {
+        "ownerAgent": "opinion_writer",
+        "inputObjects": ["verdict_ledger", "evidence_ledger", "fairness_report"],
+        "verdictLedgerLocked": True,
+        "writesVerdictFacts": False,
+        "rawPromptAllowed": False,
+        "internalAuditExposedToUser": False,
+        "failClosed": True,
+        "status": "passed",
+    }
+
+
 def _build_opinion_pack(
     *,
     winner: str,
@@ -715,7 +775,23 @@ def _build_opinion_pack(
     claim_graph_summary: dict[str, Any],
     evidence_ledger: dict[str, Any],
     panel_judges: dict[str, Any],
+    fact_lock: dict[str, Any],
 ) -> dict[str, Any]:
+    source_contract = _build_opinion_source_contract(
+        verdict_ledger=verdict_ledger,
+        evidence_ledger=evidence_ledger,
+        fairness_report=fairness_summary,
+    )
+    ledger_winner = str(verdict_ledger.get("winner") or "").strip().lower()
+    if ledger_winner != str(winner or "").strip().lower():
+        raise ValueError("opinion_writer_winner_mismatch")
+    score_card = (
+        verdict_ledger.get("scoreCard")
+        if isinstance(verdict_ledger.get("scoreCard"), dict)
+        else {}
+    )
+    ledger_pro_score = round(_clamp_score(_safe_float(score_card.get("proScore"), default=pro_score)), 2)
+    ledger_con_score = round(_clamp_score(_safe_float(score_card.get("conScore"), default=con_score)), 2)
     alert_types: list[str] = []
     for row in audit_alerts:
         if not isinstance(row, dict):
@@ -742,19 +818,23 @@ def _build_opinion_pack(
     )
     return {
         "version": "v3-opinion-pack",
+        "sourceContract": source_contract,
+        "factLock": fact_lock if isinstance(fact_lock, dict) else {},
         "userReport": {
             "winner": winner,
+            "factSource": "verdict_ledger",
             "debateSummary": debate_summary,
             "sideAnalysis": side_analysis if isinstance(side_analysis, dict) else {},
             "verdictReason": verdict_reason,
             "scoreCard": {
-                "proScore": round(_clamp_score(pro_score), 2),
-                "conScore": round(_clamp_score(con_score), 2),
+                "proScore": ledger_pro_score,
+                "conScore": ledger_con_score,
             },
             "phaseDebateTimeline": phase_debate_timeline,
             "evidenceInsightCards": evidence_insight_cards,
         },
         "opsSummary": {
+            "sourceContractStatus": "passed",
             "reviewRequired": review_required,
             "needsDrawVote": needs_draw_vote,
             "degradationLevel": int(degradation_level),
@@ -1544,6 +1624,33 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
     if not isinstance(opinion_pack, dict):
         missing.append("opinionPack")
     else:
+        source_contract = (
+            opinion_pack.get("sourceContract")
+            if isinstance(opinion_pack.get("sourceContract"), dict)
+            else None
+        )
+        if source_contract is None:
+            missing.append("opinionPack.sourceContract")
+        else:
+            input_objects = source_contract.get("inputObjects")
+            required_inputs = {"verdict_ledger", "evidence_ledger", "fairness_report"}
+            normalized_inputs = {
+                str(item).strip()
+                for item in input_objects
+                if str(item or "").strip()
+            } if isinstance(input_objects, list) else set()
+            if not required_inputs.issubset(normalized_inputs):
+                missing.append("opinionPack.sourceContract.inputObjects")
+            if bool(source_contract.get("verdictLedgerLocked")) is not True:
+                missing.append("opinionPack.sourceContract.verdictLedgerLocked")
+            if source_contract.get("writesVerdictFacts") is not False:
+                missing.append("opinionPack.sourceContract.writesVerdictFacts")
+            if bool(source_contract.get("rawPromptAllowed")) is not False:
+                missing.append("opinionPack.sourceContract.rawPromptAllowed")
+            if bool(source_contract.get("failClosed")) is not True:
+                missing.append("opinionPack.sourceContract.failClosed")
+        if not isinstance(opinion_pack.get("factLock"), dict):
+            missing.append("opinionPack.factLock")
         user_report = (
             opinion_pack.get("userReport")
             if isinstance(opinion_pack.get("userReport"), dict)
@@ -1557,6 +1664,18 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
                 missing.append("opinionPack.userReport.winner")
             elif user_winner != winner:
                 missing.append("opinionPack.userReport.winner_mismatch")
+            if str(user_report.get("factSource") or "").strip() != "verdict_ledger":
+                missing.append("opinionPack.userReport.factSource")
+            forbidden_user_keys = {
+                "auditAlerts",
+                "fairnessSummary",
+                "internalPrompt",
+                "panelJudges",
+                "rawConfidence",
+                "systemPrompt",
+            }
+            if forbidden_user_keys.intersection(set(user_report.keys())):
+                missing.append("opinionPack.userReport.internal_fields_exposed")
             if str(user_report.get("debateSummary") or "").strip() != debate_summary:
                 missing.append("opinionPack.userReport.debateSummary_mismatch")
             user_side_analysis = user_report.get("sideAnalysis")
@@ -1569,8 +1688,15 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
                 missing.append("opinionPack.userReport.phaseDebateTimeline")
             if not isinstance(user_report.get("evidenceInsightCards"), list):
                 missing.append("opinionPack.userReport.evidenceInsightCards")
-        if not isinstance(opinion_pack.get("opsSummary"), dict):
+        ops_summary = (
+            opinion_pack.get("opsSummary")
+            if isinstance(opinion_pack.get("opsSummary"), dict)
+            else None
+        )
+        if ops_summary is None:
             missing.append("opinionPack.opsSummary")
+        elif str(ops_summary.get("sourceContractStatus") or "").strip() != "passed":
+            missing.append("opinionPack.opsSummary.sourceContractStatus")
         if not isinstance(opinion_pack.get("internalReview"), dict):
             missing.append("opinionPack.internalReview")
 
@@ -2164,7 +2290,24 @@ def build_final_report_payload(
         claim_graph_summary=claim_graph_summary,
         evidence_ledger=evidence_ledger,
         panel_judges=panel_judges,
+        fact_lock=(
+            display_payload.get("factLock")
+            if isinstance(display_payload.get("factLock"), dict)
+            else {}
+        ),
     )
+    opinion_user_report = (
+        opinion_pack.get("userReport")
+        if isinstance(opinion_pack.get("userReport"), dict)
+        else {}
+    )
+    debate_summary = str(opinion_user_report.get("debateSummary") or debate_summary).strip()
+    side_analysis = (
+        opinion_user_report.get("sideAnalysis")
+        if isinstance(opinion_user_report.get("sideAnalysis"), dict)
+        else side_analysis
+    )
+    verdict_reason = str(opinion_user_report.get("verdictReason") or verdict_reason).strip()
 
     return {
         "sessionId": request.session_id,
@@ -2264,6 +2407,23 @@ def build_final_report_payload(
             },
             "panelRuntimeProfiles": normalized_panel_runtime_profiles,
             "opinionPackVersion": opinion_pack.get("version"),
+            "opinionWriter": {
+                "sourceContract": (
+                    opinion_pack.get("sourceContract")
+                    if isinstance(opinion_pack.get("sourceContract"), dict)
+                    else {}
+                ),
+                "factLock": (
+                    opinion_pack.get("factLock")
+                    if isinstance(opinion_pack.get("factLock"), dict)
+                    else {}
+                ),
+                "userReportFactSource": (
+                    opinion_user_report.get("factSource")
+                    if isinstance(opinion_user_report, dict)
+                    else None
+                ),
+            },
             "fairnessGate": fairness_summary,
         },
         "fairnessSummary": fairness_summary,

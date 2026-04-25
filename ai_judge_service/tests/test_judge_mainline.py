@@ -147,6 +147,18 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["opinionPack"], dict)
     assert isinstance(payload["opinionPack"]["userReport"], dict)
     assert isinstance(payload["opinionPack"]["opsSummary"], dict)
+    assert payload["opinionPack"]["sourceContract"]["inputObjects"] == [
+        "verdict_ledger",
+        "evidence_ledger",
+        "fairness_report",
+    ]
+    assert payload["opinionPack"]["sourceContract"]["verdictLedgerLocked"] is True
+    assert payload["opinionPack"]["sourceContract"]["writesVerdictFacts"] is False
+    assert payload["opinionPack"]["sourceContract"]["rawPromptAllowed"] is False
+    assert payload["opinionPack"]["opsSummary"]["sourceContractStatus"] == "passed"
+    assert payload["opinionPack"]["userReport"]["factSource"] == "verdict_ledger"
+    assert "fairnessSummary" not in payload["opinionPack"]["userReport"]
+    assert "panelJudges" not in payload["opinionPack"]["userReport"]
     assert isinstance(payload["opinionPack"]["userReport"]["phaseDebateTimeline"], list)
     assert isinstance(payload["opinionPack"]["userReport"]["evidenceInsightCards"], list)
     assert payload["claimGraph"]["stats"]["conflictEdges"] >= 1
@@ -171,6 +183,8 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["judgeTrace"]["evidenceLedgerStats"], dict)
     assert isinstance(payload["judgeTrace"]["panelArbiter"], dict)
     assert payload["judgeTrace"]["opinionPackVersion"] == "v3-opinion-pack"
+    assert payload["judgeTrace"]["opinionWriter"]["sourceContract"]["status"] == "passed"
+    assert payload["judgeTrace"]["opinionWriter"]["userReportFactSource"] == "verdict_ledger"
     judges = payload["verdictLedger"]["panelDecisions"]["judges"]
     assert set(judges.keys()) == {"judgeA", "judgeB", "judgeC"}
     for key in ("judgeA", "judgeB", "judgeC"):
@@ -217,6 +231,8 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert payload["opinionPack"]["userReport"]["debateSummary"] == payload["debateSummary"]
     assert payload["opinionPack"]["userReport"]["sideAnalysis"] == payload["sideAnalysis"]
     assert payload["opinionPack"]["userReport"]["verdictReason"] == payload["verdictReason"]
+    assert payload["opinionPack"]["factLock"]["winner"] == payload["winner"]
+    assert payload["opinionPack"]["factLock"] == payload["judgeTrace"]["opinionWriter"]["factLock"]
     assert len(payload["opinionPack"]["userReport"]["phaseDebateTimeline"]) == len(
         payload["phaseRollupSummary"]
     )
@@ -695,6 +711,45 @@ def test_validate_final_report_payload_contract_should_report_missing_items() ->
     assert "verdictLedger" in missing
     assert "opinionPack" in missing
     assert "judgeTrace" in missing
+
+
+def test_validate_final_report_payload_contract_should_enforce_opinion_source_contract() -> None:
+    request = FinalDispatchRequest(
+        case_id=9018,
+        scope_id=1,
+        session_id=318,
+        phase_start_no=1,
+        phase_end_no=1,
+        rubric_version="v3",
+        judge_policy_version="v3-default",
+        topic_domain="tft",
+        trace_id="trace-final-9018",
+        idempotency_key="final:9018",
+    )
+    now = datetime.now(timezone.utc)
+    payload = build_final_report_payload(
+        request=request,
+        phase_receipts=[
+            _ReceiptRow(
+                phase_no=1,
+                response={"reportPayload": _build_phase_payload(pro=69, con=55, msg_offset=0)},
+                updated_at=now,
+            )
+        ],
+        judge_style_mode="rational",
+    )
+    assert validate_final_report_payload_contract(payload) == []
+
+    unlocked_payload = copy.deepcopy(payload)
+    unlocked_payload["opinionPack"]["sourceContract"]["verdictLedgerLocked"] = False
+    unlocked_payload["opinionPack"]["sourceContract"]["writesVerdictFacts"] = True
+    unlocked_payload["opinionPack"]["userReport"]["factSource"] = "raw_prompt"
+    unlocked_payload["opinionPack"]["userReport"]["fairnessSummary"] = {}
+    missing = validate_final_report_payload_contract(unlocked_payload)
+    assert "opinionPack.sourceContract.verdictLedgerLocked" in missing
+    assert "opinionPack.sourceContract.writesVerdictFacts" in missing
+    assert "opinionPack.userReport.factSource" in missing
+    assert "opinionPack.userReport.internal_fields_exposed" in missing
 
 
 def test_validate_final_report_payload_contract_should_enforce_fairness_review_contract() -> None:

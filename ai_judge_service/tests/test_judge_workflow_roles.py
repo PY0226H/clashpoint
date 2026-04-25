@@ -168,6 +168,28 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
                 {"phaseNo": 1, "messageCount": 20},
                 {"phaseNo": 2, "messageCount": 18},
             ],
+            "opinionPack": {
+                "sourceContract": {
+                    "ownerAgent": "opinion_writer",
+                    "inputObjects": [
+                        "verdict_ledger",
+                        "evidence_ledger",
+                        "fairness_report",
+                    ],
+                    "verdictLedgerLocked": True,
+                    "writesVerdictFacts": False,
+                    "rawPromptAllowed": False,
+                    "failClosed": True,
+                    "status": "passed",
+                },
+                "userReport": {
+                    "winner": "pro",
+                    "factSource": "verdict_ledger",
+                    "debateSummary": "ledger debate summary",
+                    "sideAnalysis": {"pro": "ledger pro", "con": "ledger con"},
+                    "verdictReason": "ledger reason",
+                },
+            },
             "debateSummary": "debate summary",
             "sideAnalysis": {"pro": "pro", "con": "con"},
             "verdictReason": "reason",
@@ -209,6 +231,17 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
             payload[JUDGE_WORKFLOW_ROOT_KEY]["verdict"]["agentMeta"][
                 "officialVerdictAuthority"
             ]
+        )
+        self.assertEqual(
+            payload[JUDGE_WORKFLOW_ROOT_KEY]["opinion"]["debateSummary"],
+            "ledger debate summary",
+        )
+        self.assertEqual(
+            payload[JUDGE_WORKFLOW_ROOT_KEY]["opinion"]["factSource"],
+            "verdict_ledger",
+        )
+        self.assertFalse(
+            payload[JUDGE_WORKFLOW_ROOT_KEY]["opinion"]["writesVerdictFacts"]
         )
         validate_judge_app_domain_payload(payload)
 
@@ -309,6 +342,28 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
             ],
             "auditAlerts": [{"alertId": "alert-2"}],
             "phaseRollupSummary": [{"phaseNo": 1, "messageCount": 12}],
+            "opinionPack": {
+                "sourceContract": {
+                    "ownerAgent": "opinion_writer",
+                    "inputObjects": [
+                        "verdict_ledger",
+                        "evidence_ledger",
+                        "fairness_report",
+                    ],
+                    "verdictLedgerLocked": True,
+                    "writesVerdictFacts": False,
+                    "rawPromptAllowed": False,
+                    "failClosed": True,
+                    "status": "passed",
+                },
+                "userReport": {
+                    "winner": "draw",
+                    "factSource": "verdict_ledger",
+                    "debateSummary": "ledger review summary",
+                    "sideAnalysis": {"pro": "ledger pro", "con": "ledger con"},
+                    "verdictReason": "ledger review reason",
+                },
+            },
             "debateSummary": "debate summary",
             "sideAnalysis": {"pro": "pro", "con": "con"},
             "verdictReason": "reason",
