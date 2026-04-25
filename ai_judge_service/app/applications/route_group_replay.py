@@ -48,6 +48,7 @@ class ReplayRouteDependencies:
     list_replay_records: Callable[..., Awaitable[list[Any]]]
     get_claim_ledger_record: Callable[..., Awaitable[Any | None]]
     list_traces: Callable[..., list[Any]]
+    build_case_chain_summary: Callable[..., Awaitable[dict[str, Any]]] | None = None
 
 
 def register_replay_routes(
@@ -71,6 +72,7 @@ def register_replay_routes(
                 build_trace_route_replay_items=build_trace_route_replay_items_v3,
                 build_verdict_contract=build_verdict_contract_v3,
                 build_trace_route_payload=build_trace_route_payload_v3,
+                build_case_chain_summary=deps.build_case_chain_summary,
             )
         )
 

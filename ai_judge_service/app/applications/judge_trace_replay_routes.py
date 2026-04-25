@@ -133,6 +133,7 @@ def build_trace_route_payload(
     report_summary: dict[str, Any] | None,
     verdict_contract: dict[str, Any],
     replay_items: list[dict[str, Any]],
+    case_chain_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = report_summary if isinstance(report_summary, dict) else {}
     role_nodes = summary.get("roleNodes") if isinstance(summary.get("roleNodes"), list) else []
@@ -149,6 +150,9 @@ def build_trace_route_payload(
         "reportSummary": summary,
         "roleNodes": role_nodes,
         "verdictContract": dict(verdict_contract) if isinstance(verdict_contract, dict) else {},
+        "caseChainSummary": (
+            dict(case_chain_summary) if isinstance(case_chain_summary, dict) else {}
+        ),
         "replays": list(replay_items),
     }
 
@@ -298,6 +302,7 @@ async def build_trace_route_read_payload(
     build_trace_route_replay_items: Any,
     build_verdict_contract: Any,
     build_trace_route_payload: Any,
+    build_case_chain_summary: Any | None = None,
 ) -> dict[str, Any]:
     record = get_trace(case_id)
     if record is None:
@@ -314,11 +319,17 @@ async def build_trace_route_read_payload(
         else {}
     )
     verdict_contract = build_verdict_contract(report_payload)
+    case_chain_summary = (
+        await build_case_chain_summary(job_id=case_id)
+        if build_case_chain_summary is not None
+        else None
+    )
     return build_trace_route_payload(
         record=record,
         report_summary=report_summary,
         verdict_contract=verdict_contract,
         replay_items=replay_items,
+        case_chain_summary=case_chain_summary,
     )
 
 

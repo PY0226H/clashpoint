@@ -135,6 +135,8 @@ def register_judge_command_routes(
     deps: JudgeCommandRouteDependencies,
 ) -> None:
     runtime = deps.runtime
+    trace_write = runtime.trace_store_boundaries.write_store
+    audit_alert_store = runtime.trace_store_boundaries.audit_alert_store
 
     @app.post("/internal/judge/cases")
     async def create_judge_case(
@@ -158,10 +160,10 @@ def register_judge_command_routes(
                     deps.workflow_register_and_mark_case_built
                 ),
                 serialize_workflow_job=deps.serialize_workflow_job,
-                trace_register_start=runtime.trace_store.register_start,
-                trace_register_success=runtime.trace_store.register_success,
+                trace_register_start=trace_write.register_start,
+                trace_register_success=trace_write.register_success,
                 build_trace_report_summary=build_trace_report_summary_v3,
-                set_idempotency_success=runtime.trace_store.set_idempotency_success,
+                set_idempotency_success=trace_write.set_idempotency_success,
                 idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
             )
         )
@@ -183,7 +185,7 @@ def register_judge_command_routes(
                     extract_dispatch_meta_from_raw=deps.extract_dispatch_meta_from_raw,
                     extract_receipt_dims_from_raw=deps.extract_receipt_dims_from_raw,
                     build_workflow_job=build_workflow_job_v3,
-                    trace_register_start=runtime.trace_store.register_start,
+                    trace_register_start=trace_write.register_start,
                     workflow_register_and_mark_blinded=(
                         deps.workflow_register_and_mark_blinded
                     ),
@@ -193,7 +195,7 @@ def register_judge_command_routes(
                     ),
                     with_error_contract=with_error_contract_v3,
                     persist_dispatch_receipt=deps.persist_dispatch_receipt,
-                    trace_register_failure=runtime.trace_store.register_failure,
+                    trace_register_failure=trace_write.register_failure,
                     workflow_mark_failed=deps.workflow_mark_failed,
                 )
             )
@@ -211,7 +213,7 @@ def register_judge_command_routes(
                     build_phase_dispatch_accepted_response_v3
                 ),
                 build_workflow_job=build_workflow_job_v3,
-                trace_register_start=runtime.trace_store.register_start,
+                trace_register_start=trace_write.register_start,
                 persist_dispatch_receipt=deps.persist_dispatch_receipt,
                 workflow_register_and_mark_blinded=(
                     deps.workflow_register_and_mark_blinded
@@ -295,16 +297,16 @@ def register_judge_command_routes(
                 ),
                 with_error_contract=with_error_contract_v3,
                 persist_dispatch_receipt=deps.persist_dispatch_receipt,
-                trace_register_failure=runtime.trace_store.register_failure,
-                trace_register_success=runtime.trace_store.register_success,
+                trace_register_failure=trace_write.register_failure,
+                trace_register_success=trace_write.register_success,
                 workflow_mark_failed=deps.workflow_mark_failed,
                 workflow_mark_completed=deps.workflow_mark_completed,
                 build_phase_workflow_reported_payload=(
                     build_phase_workflow_reported_payload_v3
                 ),
                 build_trace_report_summary=build_trace_report_summary_v3,
-                clear_idempotency=runtime.trace_store.clear_idempotency,
-                set_idempotency_success=runtime.trace_store.set_idempotency_success,
+                clear_idempotency=trace_write.clear_idempotency,
+                set_idempotency_success=trace_write.set_idempotency_success,
                 idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
                 phase_judge_workflow_payload=phase_judge_workflow_payload,
             )
@@ -327,7 +329,7 @@ def register_judge_command_routes(
                     extract_dispatch_meta_from_raw=deps.extract_dispatch_meta_from_raw,
                     extract_receipt_dims_from_raw=deps.extract_receipt_dims_from_raw,
                     build_workflow_job=build_workflow_job_v3,
-                    trace_register_start=runtime.trace_store.register_start,
+                    trace_register_start=trace_write.register_start,
                     workflow_register_and_mark_blinded=(
                         deps.workflow_register_and_mark_blinded
                     ),
@@ -337,7 +339,7 @@ def register_judge_command_routes(
                     ),
                     with_error_contract=with_error_contract_v3,
                     persist_dispatch_receipt=deps.persist_dispatch_receipt,
-                    trace_register_failure=runtime.trace_store.register_failure,
+                    trace_register_failure=trace_write.register_failure,
                     workflow_mark_failed=deps.workflow_mark_failed,
                 )
             )
@@ -355,7 +357,7 @@ def register_judge_command_routes(
                     build_final_dispatch_accepted_response_v3
                 ),
                 build_workflow_job=build_workflow_job_v3,
-                trace_register_start=runtime.trace_store.register_start,
+                trace_register_start=trace_write.register_start,
                 persist_dispatch_receipt=deps.persist_dispatch_receipt,
                 workflow_register_and_mark_blinded=(
                     deps.workflow_register_and_mark_blinded
@@ -414,7 +416,7 @@ def register_judge_command_routes(
                     request_payload=request_payload,
                     report_payload=final_report_payload,
                     contract_missing_fields=contract_missing_fields,
-                    upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
+                    upsert_audit_alert=audit_alert_store.upsert_alert,
                     sync_audit_alert_to_facts=deps.sync_audit_alert_to_facts,
                     build_failed_callback_payload=build_failed_callback_payload_v3,
                     invoke_failed_callback_with_retry=(
@@ -422,9 +424,9 @@ def register_judge_command_routes(
                     ),
                     with_error_contract=with_error_contract_v3,
                     persist_dispatch_receipt=deps.persist_dispatch_receipt,
-                    trace_register_failure=runtime.trace_store.register_failure,
+                    trace_register_failure=trace_write.register_failure,
                     workflow_mark_failed=deps.workflow_mark_failed,
-                    clear_idempotency=runtime.trace_store.clear_idempotency,
+                    clear_idempotency=trace_write.clear_idempotency,
                 )
             )
 
@@ -470,8 +472,8 @@ def register_judge_command_routes(
                 ),
                 with_error_contract=with_error_contract_v3,
                 persist_dispatch_receipt=deps.persist_dispatch_receipt,
-                trace_register_failure=runtime.trace_store.register_failure,
-                trace_register_success=runtime.trace_store.register_success,
+                trace_register_failure=trace_write.register_failure,
+                trace_register_success=trace_write.register_success,
                 workflow_mark_failed=deps.workflow_mark_failed,
                 workflow_mark_review_required=deps.workflow_mark_review_required,
                 workflow_mark_completed=deps.workflow_mark_completed,
@@ -479,8 +481,8 @@ def register_judge_command_routes(
                     build_final_workflow_reported_payload_v3
                 ),
                 build_trace_report_summary=build_trace_report_summary_v3,
-                clear_idempotency=runtime.trace_store.clear_idempotency,
-                set_idempotency_success=runtime.trace_store.set_idempotency_success,
+                clear_idempotency=trace_write.clear_idempotency,
+                set_idempotency_success=trace_write.set_idempotency_success,
                 idempotency_ttl_secs=runtime.settings.idempotency_ttl_secs,
                 final_judge_workflow_payload=final_judge_workflow_payload,
             )

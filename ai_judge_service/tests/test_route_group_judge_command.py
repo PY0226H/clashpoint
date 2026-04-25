@@ -14,7 +14,13 @@ from fastapi import FastAPI
 class RouteGroupJudgeCommandTests(unittest.TestCase):
     def test_register_judge_command_routes_should_expose_command_paths(self) -> None:
         app = FastAPI()
-        runtime = SimpleNamespace(settings=SimpleNamespace(), trace_store=SimpleNamespace())
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(),
+            trace_store_boundaries=SimpleNamespace(
+                write_store=SimpleNamespace(),
+                audit_alert_store=SimpleNamespace(),
+            ),
+        )
 
         async def _payload(**_kwargs: Any) -> dict[str, Any]:
             return {}

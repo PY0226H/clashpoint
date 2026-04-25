@@ -169,10 +169,12 @@ class JudgeTraceReplayRoutesTests(unittest.TestCase):
             },
             verdict_contract={"winner": "pro"},
             replay_items=[{"winner": "pro"}],
+            case_chain_summary={"ledgerChain": {"complete": True}},
         )
         self.assertEqual(payload["caseId"], 1002)
         self.assertEqual(payload["roleNodes"][0]["role"], "clerk")
         self.assertEqual(payload["verdictContract"]["winner"], "pro")
+        self.assertTrue(payload["caseChainSummary"]["ledgerChain"]["complete"])
         self.assertEqual(payload["replays"][0]["winner"], "pro")
 
     def test_build_replay_route_payload_should_return_stable_contract(self) -> None:
@@ -334,6 +336,10 @@ class JudgeTraceReplayRoutesTests(unittest.TestCase):
             self.assertEqual(limit, 50)
             return []
 
+        async def _build_case_chain_summary(*, job_id: int) -> dict:
+            self.assertEqual(job_id, 1010)
+            return {"caseId": job_id, "ledgerChain": {"complete": False}}
+
         payload = asyncio.run(
             build_trace_route_read_payload(
                 case_id=1010,
@@ -344,11 +350,14 @@ class JudgeTraceReplayRoutesTests(unittest.TestCase):
                 build_trace_route_payload=lambda **kwargs: {
                     "traceId": kwargs["record"].trace_id,
                     "verdictContract": kwargs["verdict_contract"],
+                    "caseChainSummary": kwargs["case_chain_summary"],
                 },
+                build_case_chain_summary=_build_case_chain_summary,
             )
         )
         self.assertEqual(payload["traceId"], "trace-1010")
         self.assertEqual(payload["verdictContract"], {"winner": None})
+        self.assertFalse(payload["caseChainSummary"]["ledgerChain"]["complete"])
 
     def test_build_trace_route_read_payload_should_raise_not_found(self) -> None:
         async def _list_replay_records(*, job_id: int, limit: int) -> list[_ReplayRow]:

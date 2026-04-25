@@ -331,6 +331,7 @@ from .settings import (
     load_settings,
 )
 from .trace_store import TraceStoreProtocol, build_trace_store_from_settings
+from .trace_store_boundaries import TraceStoreBoundaries, build_trace_store_boundaries
 from .wiring import build_v3_dispatch_callbacks
 
 LoadSettingsFn = Callable[[], Settings]
@@ -346,6 +347,7 @@ class AppRuntime:
     callback_final_failed_fn: Callable[[int, dict[str, Any]], Awaitable[None]]
     sleep_fn: SleepFn
     trace_store: TraceStoreProtocol
+    trace_store_boundaries: TraceStoreBoundaries
     workflow_runtime: WorkflowRuntime
     gateway_runtime: GatewayRuntime
     registry_product_runtime: RegistryProductRuntime
@@ -373,6 +375,11 @@ def create_runtime(
 ) -> AppRuntime:
     trace_store = build_trace_store_from_settings(settings=settings)
     workflow_runtime = build_workflow_runtime(settings=settings)
+    trace_store_boundaries = build_trace_store_boundaries(
+        trace_store=trace_store,
+        workflow_store=workflow_runtime.store,
+        fact_repository=workflow_runtime.facts,
+    )
     gateway_runtime = build_gateway_runtime(settings=settings)
     agent_runtime = build_agent_runtime(settings=settings)
     registry_product_runtime = build_registry_product_runtime(
@@ -401,6 +408,7 @@ def create_runtime(
         callback_final_failed_fn=callback_final_failed_fn,
         sleep_fn=sleep_fn,
         trace_store=trace_store,
+        trace_store_boundaries=trace_store_boundaries,
         workflow_runtime=workflow_runtime,
         gateway_runtime=gateway_runtime,
         registry_product_runtime=registry_product_runtime,
@@ -1420,7 +1428,7 @@ async def _resolve_registry_dependency_health_alerts_for_runtime(
     reason: str | None,
     action: str,
 ) -> list[dict[str, Any]]:
-    rows = runtime.trace_store.list_audit_alerts(
+    rows = runtime.trace_store_boundaries.audit_alert_store.list_alerts(
         job_id=0,
         status=None,
         limit=500,
@@ -1440,7 +1448,7 @@ async def _resolve_registry_dependency_health_alerts_for_runtime(
             continue
         if str(getattr(row, "status", "") or "").strip().lower() == "resolved":
             continue
-        transitioned = runtime.trace_store.transition_audit_alert(
+        transitioned = runtime.trace_store_boundaries.audit_alert_store.transition_alert(
             job_id=0,
             alert_id=str(getattr(row, "alert_id", "") or "").strip(),
             to_status="resolved",
@@ -1473,13 +1481,13 @@ async def _resolve_open_alerts_for_review_for_runtime(
     reason: str,
 ) -> list[str]:
     resolved_alert_ids: list[str] = []
-    raised_alerts = runtime.trace_store.list_audit_alerts(
+    raised_alerts = runtime.trace_store_boundaries.audit_alert_store.list_alerts(
         job_id=job_id,
         status="raised",
         limit=200,
     )
     for item in raised_alerts:
-        row = runtime.trace_store.transition_audit_alert(
+        row = runtime.trace_store_boundaries.audit_alert_store.transition_alert(
             job_id=job_id,
             alert_id=item.alert_id,
             to_status="resolved",
@@ -1715,7 +1723,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     )
     _transition_judge_alert_status = partial(
         transition_judge_alert_status_for_runtime,
-        transition_audit_alert=runtime.trace_store.transition_audit_alert,
+        transition_audit_alert=(
+            runtime.trace_store_boundaries.audit_alert_store.transition_alert
+        ),
         sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
         facts_transition_audit_alert=runtime.workflow_runtime.facts.transition_audit_alert,
         serialize_alert_item=serialize_alert_item_v3,
@@ -1860,7 +1870,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     )
     resolve_idempotency_or_raise = partial(
         resolve_idempotency_or_raise_v3,
-        resolve_idempotency=runtime.trace_store.resolve_idempotency,
+        resolve_idempotency=runtime.trace_store_boundaries.write_store.resolve_idempotency,
         ttl_secs=runtime.settings.idempotency_ttl_secs,
     )
     resolve_policy_profile = partial(
@@ -1891,7 +1901,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
     )
     build_final_report_payload = partial(
         build_final_report_payload_for_runtime,
-        list_dispatch_receipts=runtime.trace_store.list_dispatch_receipts,
+        list_dispatch_receipts=runtime.trace_store_boundaries.read_model.list_dispatch_receipts,
         build_final_report_payload=build_final_report_payload_v3_final,
         judge_style_mode=runtime.dispatch_runtime_cfg.judge_style_mode,
     )
@@ -2055,7 +2065,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             workflow_get_job=_workflow_get_job,
             workflow_list_events=_workflow_list_events,
             get_dispatch_receipt=_get_dispatch_receipt,
-            trace_get=runtime.trace_store.get_trace,
+            trace_get=runtime.trace_store_boundaries.read_model.get_trace,
             list_replay_records=_list_replay_records,
             list_audit_alerts=_list_audit_alerts,
             get_claim_ledger_record=_get_claim_ledger_record,
@@ -2117,10 +2127,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             replay_context_dependencies=replay_context_dependencies,
             replay_report_dependencies=replay_report_dependencies,
             replay_finalize_dependencies=replay_finalize_dependencies,
-            get_trace=runtime.trace_store.get_trace,
+            get_trace=runtime.trace_store_boundaries.read_model.get_trace,
             list_replay_records=_list_replay_records,
             get_claim_ledger_record=_get_claim_ledger_record,
-            list_traces=runtime.trace_store.list_traces,
+            list_traces=runtime.trace_store_boundaries.read_model.list_traces,
+            build_case_chain_summary=(
+                runtime.trace_store_boundaries.read_model.build_case_chain_summary
+            ),
         ),
     )
 
@@ -2154,7 +2167,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             verify_report_attestation=verify_report_attestation_v3,
             get_dispatch_receipt=_get_dispatch_receipt,
             workflow_list_jobs=_workflow_list_jobs,
-            get_trace=runtime.trace_store.get_trace,
+            get_trace=runtime.trace_store_boundaries.read_model.get_trace,
             build_trust_challenge_priority_profile=(
                 build_trust_challenge_priority_profile
             ),
@@ -2162,7 +2175,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             build_trust_challenge_action_hints=build_trust_challenge_action_hints,
             run_trust_challenge_guard=_run_trust_challenge_guard,
             trust_challenge_common_dependencies=trust_challenge_common_dependencies,
-            upsert_audit_alert=runtime.trace_store.upsert_audit_alert,
+            upsert_audit_alert=runtime.trace_store_boundaries.audit_alert_store.upsert_alert,
             sync_audit_alert_to_facts=_sync_audit_alert_to_facts,
             workflow_mark_completed=_workflow_mark_completed,
             workflow_mark_draw_pending_vote=(
@@ -2200,7 +2213,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             workflow_get_job=_workflow_get_job,
             workflow_list_events=_workflow_list_events,
             workflow_list_jobs=_workflow_list_jobs,
-            get_trace=runtime.trace_store.get_trace,
+            get_trace=runtime.trace_store_boundaries.read_model.get_trace,
             resolve_report_context_for_case=_resolve_report_context_for_case,
             list_fairness_benchmark_runs=_list_fairness_benchmark_runs,
             list_fairness_shadow_runs=_list_fairness_shadow_runs,
@@ -2268,7 +2281,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             workflow_mark_completed=_workflow_mark_completed,
             workflow_mark_failed=_workflow_mark_failed,
             list_audit_alerts=_list_audit_alerts,
-            get_trace=runtime.trace_store.get_trace,
+            get_trace=runtime.trace_store_boundaries.read_model.get_trace,
             build_review_case_risk_profile=build_review_case_risk_profile,
             build_trust_challenge_priority_profile=(
                 build_trust_challenge_priority_profile
@@ -2350,9 +2363,11 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             build_alert_ops_view_payload=build_alert_ops_view_payload,
             build_alert_outbox_payload=build_alert_outbox_payload_for_runtime,
             list_audit_alerts=_list_audit_alerts,
-            list_alert_outbox=runtime.trace_store.list_alert_outbox,
-            mark_alert_outbox_delivery=runtime.trace_store.mark_alert_outbox_delivery,
-            get_trace=runtime.trace_store.get_trace,
+            list_alert_outbox=runtime.trace_store_boundaries.audit_alert_store.list_outbox,
+            mark_alert_outbox_delivery=(
+                runtime.trace_store_boundaries.audit_alert_store.mark_outbox_delivery
+            ),
+            get_trace=runtime.trace_store_boundaries.read_model.get_trace,
             serialize_alert_item=serialize_alert_item_v3,
             serialize_outbox_event=serialize_outbox_event_v3,
         ),
