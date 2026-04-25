@@ -5,6 +5,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.domain.facts import DispatchReceipt
+from app.domain.judge import (
+    JudgeLedgerCaseDossier,
+    JudgeLedgerClaimGraph,
+    JudgeLedgerEvidenceLedger,
+    JudgeLedgerFairnessReport,
+    JudgeLedgerOpinionPack,
+    JudgeLedgerSnapshot,
+    JudgeLedgerVerdictLedger,
+    validate_judge_ledger_snapshot,
+)
 from app.infra.db.runtime import build_database_runtime
 from app.infra.facts import JudgeFactRepository
 
@@ -309,6 +319,131 @@ class JudgeFactRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.alert_id, "al-fixed-9001")
         self.assertEqual(second.trace_id, "trace-9001-b")
         self.assertEqual(second.message, "missing fields updated")
+
+    async def test_judge_ledger_snapshot_should_upsert_and_query_versions(self) -> None:
+        created = datetime(2026, 4, 24, 0, 0, tzinfo=timezone.utc)
+
+        def build_snapshot(*, policy_version: str, winner: str, updated_minute: int) -> JudgeLedgerSnapshot:
+            case_dossier = JudgeLedgerCaseDossier(
+                case_id=9101,
+                dispatch_type="final",
+                trace_id=f"trace-9101-{policy_version}",
+                scope_id=1,
+                session_id=77,
+                phase_start_no=1,
+                phase_end_no=3,
+                message_count=18,
+                judge_policy_version=policy_version,
+                rubric_version="rubric-v1",
+                topic_domain="tft",
+                retrieval_profile="hybrid_v1",
+                input_validation={"allowed": True},
+                redaction_summary={"identityFieldsRemoved": 2},
+                transcript_snapshot={"messageIds": [101, 102, 103]},
+            )
+            return JudgeLedgerSnapshot(
+                case_id=9101,
+                dispatch_type="final",
+                trace_id=case_dossier.trace_id,
+                job_id=99101,
+                scope_id=1,
+                session_id=77,
+                judge_policy_version=policy_version,
+                rubric_version="rubric-v1",
+                topic_domain="tft",
+                retrieval_profile="hybrid_v1",
+                case_dossier=case_dossier,
+                claim_graph=JudgeLedgerClaimGraph(
+                    payload={
+                        "stats": {"totalClaims": 1},
+                        "items": [{"claimId": "c-1", "side": "pro"}],
+                        "unansweredClaimIds": [],
+                    },
+                    summary={"coreClaimCount": 1},
+                ),
+                evidence_ledger=JudgeLedgerEvidenceLedger(
+                    payload={
+                        "entries": [{"evidenceId": "ev-1", "kind": "message_ref"}],
+                        "sourceCitations": [],
+                        "conflictSources": [],
+                    },
+                    verdict_evidence_refs=[{"evidenceId": "ev-1", "side": "pro"}],
+                ),
+                verdict_ledger=JudgeLedgerVerdictLedger(
+                    winner=winner,
+                    side_scores={"pro": 84, "con": 73},
+                    dimension_scores={"logic": {"pro": 21, "con": 18}},
+                    accepted_claims=[{"claimId": "c-1"}],
+                    decisive_evidence_refs=[{"evidenceId": "ev-1"}],
+                    arbitration={"decisionPath": ["panel", "fairness_sentinel", "arbiter"]},
+                ),
+                fairness_report=JudgeLedgerFairnessReport(
+                    auto_judge_allowed=True,
+                    review_required=False,
+                    metrics={"panelDisagreement": 0.08},
+                    reasons=[],
+                ),
+                opinion_pack=JudgeLedgerOpinionPack(
+                    user_report={"verdictReason": "pro better supported the claim"},
+                    business_result={"winner": winner},
+                    ops_audit_summary={"traceId": case_dossier.trace_id},
+                    trust_commitment={"kernelVersion": "judge-kernel-v1"},
+                ),
+                created_at=created,
+                updated_at=datetime(2026, 4, 24, 0, updated_minute, tzinfo=timezone.utc),
+            )
+
+        first = build_snapshot(policy_version="policy-v1", winner="pro", updated_minute=1)
+        self.assertEqual(validate_judge_ledger_snapshot(first), [])
+        await self._repo.upsert_judge_ledger_snapshot(snapshot=first)
+
+        second = build_snapshot(policy_version="policy-v2", winner="draw", updated_minute=3)
+        await self._repo.upsert_judge_ledger_snapshot(snapshot=second)
+
+        latest = await self._repo.get_judge_ledger_snapshot(case_id=9101, dispatch_type="final")
+        self.assertIsNotNone(latest)
+        assert latest is not None
+        self.assertEqual(latest.judge_policy_version, "policy-v2")
+        self.assertEqual(latest.verdict_ledger.winner, "draw")
+        self.assertEqual(latest.case_dossier.redaction_summary["identityFieldsRemoved"], 2)
+
+        v1 = await self._repo.get_judge_ledger_snapshot(
+            case_id=9101,
+            dispatch_type="final",
+            judge_policy_version="policy-v1",
+            rubric_version="rubric-v1",
+        )
+        self.assertIsNotNone(v1)
+        assert v1 is not None
+        self.assertEqual(v1.verdict_ledger.winner, "pro")
+        self.assertEqual(v1.evidence_ledger.verdict_evidence_refs[0]["evidenceId"], "ev-1")
+
+        rows = await self._repo.list_judge_ledger_snapshots(
+            case_id=9101,
+            dispatch_type="final",
+            limit=10,
+        )
+        self.assertEqual([row.judge_policy_version for row in rows], ["policy-v2", "policy-v1"])
+
+    async def test_judge_ledger_snapshot_should_reject_unlocked_opinion(self) -> None:
+        snapshot = JudgeLedgerSnapshot(
+            case_id=9102,
+            dispatch_type="final",
+            trace_id="trace-9102",
+            case_dossier=JudgeLedgerCaseDossier(
+                case_id=9102,
+                dispatch_type="final",
+                trace_id="trace-9102",
+            ),
+            opinion_pack=JudgeLedgerOpinionPack(
+                user_report={"verdictReason": "must not exist before verdict lock"},
+            ),
+        )
+
+        errors = validate_judge_ledger_snapshot(snapshot)
+        self.assertIn("opinion_without_locked_verdict", errors)
+        with self.assertRaisesRegex(ValueError, "invalid_judge_ledger_snapshot"):
+            await self._repo.upsert_judge_ledger_snapshot(snapshot=snapshot)
 
 
 if __name__ == "__main__":

@@ -134,6 +134,42 @@ class ClaimLedgerRecordModel(Base):
     )
 
 
+class JudgeLedgerSnapshotModel(Base):
+    __tablename__ = "judge_ledger_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dispatch_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    job_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    scope_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    session_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    trace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    rubric_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    judge_policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    topic_domain: Mapped[str] = mapped_column(String(128), nullable=False, default="default")
+    retrieval_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    case_dossier: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    claim_graph: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    evidence_ledger: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    verdict_ledger: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    fairness_report: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    opinion_pack: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "dispatch_type",
+            "judge_policy_version",
+            "rubric_version",
+            name="uq_judge_ledger_snapshots_case_dispatch_policy_rubric",
+        ),
+        Index("ix_judge_ledger_snapshots_case_updated", "case_id", "updated_at"),
+        Index("ix_judge_ledger_snapshots_trace", "trace_id"),
+    )
+
+
 class FairnessBenchmarkRunModel(Base):
     __tablename__ = "fairness_benchmark_runs"
 

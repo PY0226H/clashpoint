@@ -1,0 +1,252 @@
+# 当前开发计划
+
+关联 slot：`default`  
+更新时间：2026-04-24  
+当前主线：`AI_judge_service P34（Enterprise Agent Platform 收敛 + app_factory 热点下沉主计划）`  
+当前状态：进行中（stage_closure_matrix_converged）
+
+---
+
+## 1. 计划定位
+
+1. 本计划基于两份已拍板文档生成：  
+   - `AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`  
+   - `AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+2. 计划输入同时对齐当前代码现实：`app_factory.py` 6,852 行、`phase_pipeline.py` 2,386 行、`trace_store.py` 2,515 行、`test_app_factory.py` 8,161 行，且 `app_factory` 仍承担 67 条内部路由装配。
+3. 本轮目标不是继续“单小批次微推进”，而是改为“整批执行包”推进：每批至少覆盖 4~8 个子任务，批内统一回归、统一留证。
+4. 本计划默认 hard-cut，不保留长期兼容双轨；若出现短期兼容层，必须在模块说明中写明移除条件。
+
+### 已完成/未完成矩阵
+
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-p33-stage-closure-execute` | 上一轮阶段收口（归档 + completed/todo 回写） | 已完成 | 归档：`docs/dev_plan/archive/20260424T023422Z-ai-judge-stage-closure-execute.md` |
+| `ai-judge-p34-plan-bootstrap-enterprise-alignment` | 基于企业方案与架构方案重建下一轮计划 | 已完成 | 本文档已完成重建，进入执行态 |
+| `ai-judge-p34-app-factory-hotspot-sink-master` | 一次性推进 app_factory 热点下沉主计划（多批大包） | 已完成 | app_factory.py 已从 6,852 行收敛到 2,369 行，低于 <=3,000 行目标；依赖包、route group、payload/helper 与测试拆分均已留证并通过 post-module full gate。 |
+| `ai-judge-p34-judge-mainline-convergence-pack` | Judge 主链编排/依赖装配收敛到 App 层边界 | 进行中（入口装配已收敛，主链显式化待后续深化） | 本轮已完成 command/dispatch 入口与 app_factory 装配收敛；`judge_mainline / judge_workflow_roles / judge_dispatch_runtime` 的进一步 App 层显式化仍留后续批次。 |
+| `ai-judge-p34-registry-fairness-review-pack` | registry/fairness/review 读写路由装配再下沉 | 已完成 | registry/fairness/review 路由组、payload helper 与域级 app_factory 回归均已拆分并通过 full gate。 |
+| `ai-judge-p34-trust-challenge-ops-pack` | trust/challenge/ops 聚合路由组拆分与契约冻结 | 已完成 | trust/challenge/ops read-model、attestation/public verify、challenge lifecycle 与 ops queue 回归已拆分并通过 full gate。 |
+| `ai-judge-p34-test-split-and-contract-pack` | `test_app_factory.py` 拆分 + 契约门禁升级 | 已完成 | `test_app_factory.py` 已从 8,161 行收敛到 18 行 root smoke，域级测试套件与 contract validation 回归均已通过。 |
+| `ai-judge-p34-local-reference-regression-pack` | 本地回归包更新（SLA/fairness/ops-pack） | 待执行 | 维持 `local_reference_frozen` 证据链 |
+| `ai-judge-p34-real-env-pass-window-execute` | 真实环境窗口复核并升级到 `pass` | 阻塞 | 依赖真实环境窗口与样本可用 |
+| `ai-judge-p34-stage-closure-execute` | P34 收口执行（completed/todo + archive） | 阻塞 | 仍依赖 real-env pass/window 或明确阻塞证据闭环；本轮只做矩阵状态收敛与草案复核，不执行正式归档。 |
+| ai-judge-p34-registry-route-group-extract | P0 | 已完成（registry route group 已下沉） | P34 Batch-B 首个路由组落地；app_factory.py 6852 -> 6501 行；已通过 app_factory/registry/ops 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-judge-command-route-group-extract | P0 | 已完成（judge command route group 已下沉） | P34 Batch-A/B 继续推进 app_factory 热点下沉；app_factory.py 当前 6126 行；已通过 command/mainline/app_factory 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-case-read-route-group-extract | P0 | 已完成（case read route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5843 行；已通过 case-read/app_factory/ops 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-fairness-route-group-extract | P0 | 已完成（fairness route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5465 行；已通过 fairness/app_factory/ops/panel 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-trust-route-group-extract | P0 | 已完成（trust route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5333 行；已通过 trust/app_factory/ops 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-review-route-group-extract | P0 | 已完成（review route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5290 行；已通过 review/app_factory/ops 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-replay-assistant-route-group-extract | P0 | 已完成（replay/assistant route groups 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5189 行；已通过 assistant/replay/app_factory 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-alert-ops-route-group-extract | P0 | 已完成（alert/ops route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5076 行；已通过 alert/ops/app_factory 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-panel-runtime-route-group-extract | P0 | 已完成（panel/runtime route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 5000 行；已通过 panel/runtime、ops pack 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-ops-read-model-pack-route-group-extract | P0 | 已完成（ops read-model pack route group 已下沉） | P34 Batch-B 继续推进 app_factory 热点下沉；app_factory.py 当前 4971 行；已通过 ops pack、panel/runtime、route group 聚焦回归与 post-module full gate。 |
+| ai-judge-p34-dependency-pack-test-split-batch | P0 | 已完成（dependency pack 与 smoke test split 已推进） | P34 Batch-C 起步；app_factory.py 当前 4821 行，test_app_factory.py 当前 8091 行；已通过新增 bootstrap/health/smoke 测试、route group/replay/registry/trust 聚焦回归、完整 test_app_factory 与 post-module full gate。 |
+| ai-judge-p34-helper-test-split-batch | P0 | 已完成（helper 下沉与 test helper split 已推进） | P34 Batch-C 继续推进；app_factory.py 当前 4745 行，test_app_factory.py 当前 8018 行；已通过新增 helper 测试、app_factory/smoke 聚焦回归、完整 test_app_factory 与 post-module full gate。 |
+| ai-judge-p34-review-trust-helper-bootstrap-batch | P0 | 已完成（review/trust 与 final-report helper 下沉已推进） | P34 Batch-C 继续推进；app_factory.py 当前 4652 行，test_app_factory.py 当前 8030 行；已通过新增 bootstrap helper 测试、review/trust/final 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-route-callback-helper-bootstrap-batch | P0 | 已完成（route guard/callback/runtime ready helper 下沉已推进） | P34 Batch-C 继续推进；app_factory.py 当前 4483 行，test_app_factory.py 当前 8030 行；已通过新增 bootstrap helper 测试、callback/contract/create_app/final/replay 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-workflow-trace-bootstrap-pack-batch | P0 | 已完成（workflow/trace store bootstrap pack 已推进） | P34 Batch-C 继续推进；app_factory.py 当前 4152 行，test_app_factory.py 当前 8030 行；已通过新增 workflow/trace helper 测试、workflow/trace/replay/claim/fairness/audit 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-workflow-state-helper-bootstrap-batch | P0 | 已完成（workflow state helper 下沉已推进） | P34 Batch-C 继续推进；app_factory.py 当前 4030 行，test_app_factory.py 当前 8030 行；已通过新增 workflow state helper 测试、workflow/final/replay/review/failed/callback 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-persistence-helper-bootstrap-batch | P0 | 已完成（复杂持久化 helper 下沉已推进） | P34 Batch-C 继续推进；app_factory.py 当前 3775 行，test_app_factory.py 当前 8030 行；已通过新增 workflow trace-store helper 测试、dispatch/claim/replay/final/phase/workflow 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-registry-payload-bootstrap-pack-batch | P0 | 已完成（registry/payload bootstrap pack 已推进） | P34 Batch-C 继续推进；app_factory.py 当前 3424 行，test_app_factory.py 当前 8030 行；已通过新增 registry route helper 测试、registry/policy/governance/release/audit/profile 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-review-alert-trust-payload-bootstrap-batch | P0 | 已完成（review/alert/trust payload helper 下沉已推进） | P34 Batch-C 继续推进；app_factory.py 当前 2887 行，test_app_factory.py 当前 8031 行；已通过新增 review/alert/trust payload helper 测试、review/alert/trust/challenge/public/audit/ops 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-ops-panel-replay-payload-bootstrap-batch | P0 | 已完成（ops/panel/replay payload helper 下沉已推进） | P34 Batch-C 继续推进；app_factory.py 当前 2369 行，test_app_factory.py 当前 8032 行；已通过新增 ops/panel/replay payload helper 测试、ops/panel/replay/room/receipt 聚焦回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-test-app-factory-domain-split-batch | P0 | 已完成（ops/panel 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 7512 行，新拆 test_app_factory_ops_panel_routes.py 639 行，app_factory.py 当前 2369 行；已通过新 ops/panel 路由测试、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-replay-trust-app-factory-test-split-batch | P0 | 已完成（replay/receipt 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 7099 行，新拆 test_app_factory_replay_receipt_routes.py 357 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 replay/receipt + ops/panel 路由测试、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-trust-attestation-app-factory-test-split-batch | P0 | 已完成（trust/attestation 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 6532 行，新拆 test_app_factory_trust_attestation_routes.py 598 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 trust/attestation 路由测试、ops/panel + replay/receipt + trust/attestation 组合回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-alert-app-factory-test-split-batch | P0 | 已完成（alert/outbox 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 5815 行，新拆 test_app_factory_alert_routes.py 745 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 alert/outbox 路由测试、ops/panel + replay/receipt + trust/attestation + alert 组合回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-fairness-app-factory-test-split-batch | P0 | 已完成（fairness 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 4677 行，新拆 test_app_factory_fairness_routes.py 1169 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 fairness 路由测试、ops/panel + replay/receipt + trust/attestation + alert + fairness 组合回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-command-dispatch-app-factory-test-split-batch | P0 | 已完成（command/dispatch 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 3656 行，新拆 test_app_factory_command_dispatch_routes.py 1055 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 command/dispatch 路由测试、已拆 app_factory domain 组合回归、完整 test_app_factory、ruff 与 post-module full gate。 |
+| ai-judge-p34-case-read-app-factory-test-split-batch | P0 | 已完成（case-read/courtroom 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 2313 行，新拆 test_app_factory_case_read_routes.py 1381 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 case-read/courtroom 路由测试、已拆 app_factory domain 组合回归、完整 test_app_factory、ruff 与 post-module full gate（chat nextest 700 passed，含 1 个既有 leaky 标记，门禁通过）。 |
+| ai-judge-p34-registry-app-factory-test-split-batch | P0 | 已完成（registry 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 1126 行，新拆 test_app_factory_registry_routes.py 1208 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 registry 路由测试、完整 test_app_factory 余量、已拆 app_factory domain 组合回归、ruff 与 post-module full gate（chat nextest 700 passed，desktop nextest 24 passed，门禁通过）。 |
+| ai-judge-p34-assistant-app-factory-test-split-batch | P0 | 已完成（assistant/runtime 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 915 行，新拆 test_app_factory_assistant_routes.py 242 行，test_app_factory_registry_routes.py 当前 1208 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 assistant/runtime 路由测试、完整 test_app_factory 余量、已拆 app_factory domain 组合回归、ruff 与 post-module full gate（chat nextest 700 passed，含 1 个既有 leaky 标记，desktop nextest 24 passed，门禁通过）。 |
+| ai-judge-p34-review-app-factory-test-split-batch | P0 | 已完成（review 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 287 行，新拆 test_app_factory_review_routes.py 656 行，test_app_factory_assistant_routes.py 当前 242 行，test_app_factory_registry_routes.py 当前 1208 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 review 路由测试、完整 test_app_factory 余量、已拆 app_factory domain 组合回归、ruff 与 post-module full gate（chat nextest 700 passed，desktop nextest 24 passed，门禁通过）。 |
+| ai-judge-p34-trust-challenge-app-factory-test-split-batch | P0 | 已完成（trust challenge 路由测试已拆分） | P34 Batch-C 继续推进；test_app_factory.py 当前 18 行，新拆 test_app_factory_trust_challenge_routes.py 287 行，test_app_factory_review_routes.py 当前 656 行，test_app_factory_assistant_routes.py 当前 242 行，test_app_factory_registry_routes.py 当前 1208 行，app_factory_test_helpers.py 当前 209 行，app_factory.py 当前 2369 行；已通过 trust challenge 路由测试、test_app_factory 默认构造余量、完整 app_factory split+root 组合回归、ruff 与 post-module full gate（chat nextest 700 passed，desktop nextest 24 passed，门禁通过）。 |
+| ai-judge-p34-stage-closure-draft-review | P0 | 已完成（stage closure 草案已生成，暂不执行归档） | 已生成初版 `artifacts/harness/20260424T-p34-stage-closure-draft.summary.{json,md}` 与矩阵收敛终版 `artifacts/harness/20260424T-p34-stage-closure-draft-after-matrix-convergence-v2.summary.{json,md}`；终版草案识别 39 个 completed 候选、1 个 todo 候选；真实环境 `pass` 仍是阶段阻塞项，本轮不直接执行 `ai_judge_stage_closure_execute.sh`。 |
+| ai-judge-p34-stage-closure-matrix-convergence | P0 | 已完成（P34 矩阵状态与收口候选已收敛） | 已将有 full gate 证据的 P34 route group、helper/payload、test split 批次收敛为 completed 候选；保留 `judge-mainline-convergence` 后续深化、local-reference、real-env 与正式 stage-closure 的非完成状态，避免误宣称真实环境 pass。 |
+
+### 下一开发模块建议
+
+1. 审核矩阵收敛版 stage-closure draft 的 completed/todo 候选
+2. 准备正式写入 `completed.md` / `todo.md` 前的人工映射确认
+3. 真实环境 real-env/on-env `pass` 阻塞未解除前，不执行正式 stage-closure 归档
+
+### 模块完成同步历史
+
+- 2026-04-24：完成 `ai-judge-p33-stage-closure-execute`，活动计划已归档并重置，`completed.md` 与 `todo.md` 同步完毕。
+- 2026-04-24：完成 `ai-judge-p34-plan-bootstrap-enterprise-alignment`，以企业方案 + 架构方案 + 当前代码状态重建整批执行计划。
+
+- 2026-04-24：推进 `ai-judge-p34-registry-route-group-extract`；完成 registry/policy/governance 路由组下沉：新增 route_group_registry 注册器，create_app 通过 handles 复用 governance/dependency/gate-simulation 路由，保持路径与契约不变。
+- 2026-04-24：推进 `ai-judge-p34-judge-command-route-group-extract`；完成 judge command 路由组下沉：新增 route_group_judge_command 注册器，迁移 case-create、phase/final dispatch、phase/final receipt 五个入口路由，保留幂等、workflow、callback、receipt 双写与合同校验语义。
+- 2026-04-24：推进 `ai-judge-p34-case-read-route-group-extract`；完成 case read 路由组下沉：新增 route_group_case_read 注册器，迁移 case overview、claim-ledger、courtroom-read-model、courtroom cases、drilldown、evidence-claim ops queue 六个读面路由，保留 read guard 与合同校验语义。
+- 2026-04-24：推进 `ai-judge-p34-fairness-route-group-extract`；完成 fairness 路由组下沉：新增 route_group_fairness 注册器，迁移 benchmark/shadow 读写、case detail/list、dashboard、calibration-pack、policy-calibration-advisor 路由，并通过 handles 供 ops pack 与 panel runtime 复用。
+- 2026-04-24：推进 `ai-judge-p34-trust-route-group-extract`；完成 trust/challenge 路由组下沉：新增 route_group_trust 注册器，迁移 trust item、challenge ops/request/decision、audit-anchor、public-verify、attestation verify 路由，并通过 handles 供 ops pack 复用。
+- 2026-04-24：推进 `ai-judge-p34-review-route-group-extract`；完成 review 路由组下沉：新增 route_group_review 注册器，迁移 review cases list/detail/decision 三个入口，并通过 handles 供 ops read-model pack 复用 review 队列。
+- 2026-04-24：推进 `ai-judge-p34-replay-assistant-route-group-extract`；完成 replay/assistant 路由组下沉：新增 route_group_assistant 与 route_group_replay 注册器，迁移 NPC coach、Room QA、trace、replay、replay report/list 五类入口，并保留 replay 重算依赖包注入语义。
+- 2026-04-24：推进 `ai-judge-p34-alert-ops-route-group-extract`；完成 alert/ops 路由组下沉：新增 route_group_alert_ops 注册器，迁移 case alerts、ack/resolve、alert ops-view、alert outbox、outbox delivery、RAG diagnostics 入口，保留告警状态同步与 outbox delivery 语义。
+- 2026-04-24：推进 `ai-judge-p34-panel-runtime-route-group-extract`；完成 panel/runtime 路由组下沉：新增 route_group_panel_runtime 注册器，迁移 panel profiles/readiness 入口，并通过 PanelRuntimeRouteHandles 供 ops read-model pack 复用 readiness。
+- 2026-04-24：推进 `ai-judge-p34-ops-read-model-pack-route-group-extract`；完成 ops read-model pack 路由组下沉：新增 route_group_ops_read_model_pack 注册器，迁移 /internal/judge/ops/read-model/pack 入口，并显式注入 registry/fairness/case/trust/review/panel handles。
+- 2026-04-24：推进 `ai-judge-p34-dependency-pack-test-split-batch`；完成 dependency pack 与 smoke 测试拆分多批推进：新增 route_group_health、bootstrap_route_dependencies、bootstrap_replay_dependencies，迁移 healthz、registry release gate/trust challenge common 依赖包与 replay dependency packs，并将入口 smoke 从 test_app_factory.py 拆到 test_app_factory_smoke.py。
+- 2026-04-24：推进 `ai-judge-p34-helper-test-split-batch`；完成 helper 下沉与测试 helper 拆分多批推进：新增 bootstrap_case_read_helpers、bootstrap_fairness_helpers 与 app_factory_test_helpers，迁移 courtroom/case fairness helper 包装，并将 _build_settings 从 test_app_factory.py 拆出。
+- 2026-04-24：推进 `ai-judge-p34-review-trust-helper-bootstrap-batch`；继续推进 helper 下沉：新增 bootstrap_review_trust_helpers 与 bootstrap_final_report_helpers，迁移 review/trust priority、trust challenge id 与 final report payload runtime 包装，并将相关测试 patch target 切到新 helper 模块。
+- 2026-04-24：推进 `ai-judge-p34-route-callback-helper-bootstrap-batch`；继续推进 helper 下沉：新增 bootstrap_route_guard_helpers、bootstrap_callback_helpers 与 bootstrap_runtime_ready_helpers，迁移路由守卫、judge callback/policy trace 与 runtime ready 包装，保持路由契约与回调语义不变。
+- 2026-04-24：推进 `ai-judge-p34-workflow-trace-bootstrap-pack-batch`；继续推进 workflow/trace store helper 下沉：新增 bootstrap_workflow_trace_store_helpers，迁移 audit alert、workflow job/event、fairness facts、dispatch receipt、replay record 与 claim ledger 基础读写包装，保留复杂持久化与状态迁移在 app_factory 后续单独收敛。
+- 2026-04-24：推进 `ai-judge-p34-workflow-state-helper-bootstrap-batch`；继续推进 workflow 状态迁移 helper 下沉：新增 bootstrap_workflow_state_helpers，迁移 register_blinded/case_built、mark_completed/review_required/failed/replay 等状态迁移包装，保留 stage fallback、error contract 与 replay not-found 语义不变。
+- 2026-04-24：推进 `ai-judge-p34-persistence-helper-bootstrap-batch`；继续推进复杂持久化 helper 下沉：将 dispatch receipt 双写与 claim ledger upsert/request dossier fallback 从 app_factory 迁入 bootstrap_workflow_trace_store_helpers，保留 trace_store 保存、workflow facts 写入、空载荷跳过与证据视图 fallback 语义不变。
+- 2026-04-24：推进 `ai-judge-p34-registry-payload-bootstrap-pack-batch`；继续推进 registry/payload route helper 下沉：新增 bootstrap_registry_route_helpers，迁移 registry route guard、governance dependency pack、policy/profile/release/audit payload 包装，保留 registry 合同、ready gate、错误码映射与治理依赖注入语义不变。
+- 2026-04-24：推进 `ai-judge-p34-review-alert-trust-payload-bootstrap-batch`；继续推进 review/alert/trust payload helper 下沉：新增 bootstrap_review_alert_trust_payload_helpers，迁移 review list/detail、alert status/ops/outbox/case alerts、trust phasea/challenge/request/decision/audit/public verify 等 payload 包装，保留 review filter、alert ops 常量、trust challenge 状态与错误桥接语义不变。
+- 2026-04-24：推进 `ai-judge-p34-ops-panel-replay-payload-bootstrap-batch`；继续推进 ops read-model/panel/replay payload helper 下沉：新增 bootstrap_ops_panel_replay_payload_helpers，迁移 shared room context、dispatch receipt、ops read-model pack、panel runtime profiles/readiness、replay report/list 等 payload 包装，保留 route group 注入、panel 常量、replay 查询与 receipt 404 语义不变。
+- 2026-04-24：推进 `ai-judge-p34-test-app-factory-domain-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_ops_panel_routes.py，迁移 ops read-model pack 与 panel runtime profiles/readiness 4 个路由回归，保留原断言、契约校验和 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-replay-trust-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：抽取 AppFactoryRouteTestMixin 与 phase/final/case request builder 到 app_factory_test_helpers，并新增 test_app_factory_replay_receipt_routes.py，迁移 replay post、trace/replay report、receipt fallback、replay fact persistence、replay contract block 5 个路由回归，保留原断言与入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-trust-attestation-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_trust_attestation_routes.py，迁移 attestation verify、trust phaseA bundle、trust public/commitment/verdict/challenge/kernel/audit contract 9 个路由回归，保留原断言、patch target 与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-alert-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_alert_routes.py，迁移 policy dependency blocked alert/outbox、alert ops-view full/lite、case alert ack、final contract blocked alert sync 5 个告警路由/告警 outbox 回归，fairness 告警副作用留待 fairness 批处理，保留原断言、patch target 与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-fairness-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_fairness_routes.py，迁移 fairness benchmark/shadow、fairness case read-model、fairness dashboard、calibration pack、policy calibration advisor 10 个路由回归，保留 registry fairness gate 测试在原 registry 发布链路，保留原断言、patch target 与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-command-dispatch-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_command_dispatch_routes.py，迁移 case-create、phase/final dispatch、policy/rubric reject、callback failure、blindization failure 13 个命令流回归，保留 case-read、registry、assistant、review/trust 余量在原文件，保留原断言、patch target 与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-case-read-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_case_read_routes.py，迁移 case overview、claim-ledger、courtroom-read-model、courtroom cases、courtroom drilldown bundle、evidence-claim ops queue 13 个读面回归，保留 registry、assistant、review/trust 余量在原文件，保留原断言、patch target 与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-registry-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_registry_routes.py，迁移 policy/prompt/tool registry、policy publish/activate/rollback/audit、dependency health、gate simulation、registry governance、prompt-tool governance、domain judge family 17 个 registry 路由回归，保留 assistant、review/trust 余量在原文件，保留原断言与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-assistant-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_assistant_routes.py，迁移 create_runtime shell profile、NPC coach shell、room QA shell、NPC advisory official verdict strip 4 个 assistant/runtime 回归，保留 review/trust 余量在原文件，保留原断言与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-review-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_review_routes.py，迁移 review list/detail/decision、risk filter/sorting、trust association/unified priority、trust priority query validation 4 个 review 路由回归，保留 trust challenge 与 create_default_app 余量在原文件，保留原断言与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-trust-challenge-app-factory-test-split-batch`；继续推进 test_app_factory.py 域级拆分：新增 test_app_factory_trust_challenge_routes.py，迁移 trust challenge request/decision lifecycle、ops queue state/priority filters、query validation、contract validation failure 4 个 trust challenge 路由回归，原 test_app_factory.py 仅保留 create_default_app 构造测试，保留原断言与 app_factory 入口语义不变。
+- 2026-04-24：推进 `ai-judge-p34-stage-closure-draft-review`；生成阶段收口草案 `artifacts/harness/20260424T-p34-stage-closure-draft.summary.{json,md}`，草案状态 pass，但仅识别 2 个 completed 候选与 0 个 todo 候选，因此本轮暂不正式归档，下一步先收敛矩阵状态、completed/todo 映射与真实环境阻塞口径。
+- 2026-04-24：推进 `ai-judge-p34-stage-closure-matrix-convergence`；收敛 P34 执行批次矩阵状态，将已具备 full gate 证据的 route group、helper/payload、test split 批次标记为 completed 候选，并重跑 `artifacts/harness/20260424T-p34-stage-closure-draft-after-matrix-convergence-v2.summary.{json,md}`，草案识别 39 个 completed 候选与 1 个 real-env/on-env todo 候选，正式归档仍受真实环境 `pass` 阻塞。
+
+## 2. 当前代码状态快照（P34 基线）
+
+| 维度 | 当前状态 | 结论 |
+| --- | --- | --- |
+| `app_factory.py` | 6,852 行 | 单文件热点仍高，需继续下沉 |
+| `phase_pipeline.py` | 2,386 行 | 主链仍有可继续领域化空间 |
+| `trace_store.py` | 2,515 行 | trace/ops 读写语义重，需边界清晰 |
+| `test_app_factory.py` | 8,161 行 | 回归过重，应拆为域级测试套件 |
+| `app_factory` 路由数量 | 67 条 | 建议改为“路由组注册器 + 依赖包”模式 |
+| `applications/*` 总规模 | 24,123 行 | 已形成拆分基础，可承接继续下沉 |
+
+收口复核现态（2026-04-24）：
+
+1. `app_factory.py` 当前 2,369 行，已低于 <=3,000 行目标。
+2. `test_app_factory.py` 当前 18 行，仅保留 `create_default_app` root smoke；域级 app_factory 回归已拆分到 `test_app_factory_*_routes.py`。
+3. stage-closure draft 矩阵收敛终版已识别 39 个 completed 候选与 1 个 real-env/on-env todo 候选，正式归档仍需人工审核映射并等待真实环境阻塞闭环。
+
+补充口径（截至 2026-04-21 冻结文档）：
+
+1. Runtime SLA：`local_reference_frozen`，`needs_real_env_reconfirm=true`。
+2. Fairness Benchmark：`local_reference_frozen`，`needs_real_env_reconfirm=true`。
+3. 真实环境 `pass` 仍为阶段主阻塞，不得被本地参考结论替代。
+
+## 3. 与两份方案的强绑定目标
+
+1. 按企业方案第 6、7、9、10、11、12、17 章执行：法庭式 8 Agent 主链、六对象事实链、公平门禁、可回放可追溯。
+2. 按架构方案第 4、5、8、10、13 章执行：模块化单体、Judge/NPC/Room QA 边界、双运行单元方向、严格一致性清单。
+3. 禁止路线偏移：不回退为“单 prompt 判分器”；不让 NPC/Room QA 污染官方裁决链。
+
+## 4. 整批执行路线图（避免一批一批碎推进）
+
+| 批次 | 模块包 | 状态 | 本批目标 | 本批退出条件 |
+| --- | --- | --- | --- | --- |
+| Batch-A（基础收敛） | `judge-mainline-convergence + app-factory-hotspot-sink-part1` | 已完成（app_factory 热点收敛达标，主链深化另列后续） | 先把 `create_app` 的依赖装配和主链编排下沉成可组合依赖包 | `app_factory` 已降至 2,369 行；command/mainline/app_factory 聚焦回归与 full gate 通过 |
+| Batch-B（路由组重构） | `registry/fairness/review/trust/challenge/ops route packs` | 已完成 | 将 67 条路由按域分组注册，`app_factory` 仅保留入口与编排 | registry/fairness/review/trust/challenge/ops/panel/replay/assistant 路由组均已落地并通过回归 |
+| Batch-C（测试与契约） | `test split + contract freeze + plan gate` | 已完成 | 拆分超大测试文件并增强契约门禁，避免后续改动回归爆炸 | `test_app_factory.py` 已收敛到 18 行 root smoke，域级测试套件与 contract validation 回归全过 |
+| Batch-D（运行态证据） | `local-reference regression pack + real-env window prep` | 待执行 | 更新本地参考证据并准备真实窗口执行脚本与输入物 | 本地参考冻结更新完成，real-env 执行包 ready |
+| Batch-E（真实窗口与收口） | `real-env-pass-window + stage-closure` | 阻塞 | 在真实窗口完成 `pass` 或给出受阻结论并闭环到 todo | 产出 `pass` 或明确阻塞证据后执行阶段收口 |
+
+## 5. app_factory 热点下沉完整计划（主计划）
+
+### 5.1 现状诊断
+
+1. 入口文件职责过重：同时承担依赖构建、路由注册、错误映射、读模型组装、业务辅助函数。
+2. 依赖注入方式碎片化：大量 `partial(...)` 在 `create_app` 内直接堆叠，阅读与审查成本高。
+3. 路由定义过密：67 条 `@app.*` 装饰器集中在单函数，变更冲突概率高。
+4. 测试集中度过高：`test_app_factory.py` 8,161 行，定位失败成本高，阻碍并行开发。
+
+### 5.2 目标结构（落地后）
+
+1. `app_factory.py` 仅保留三类职责：`create_runtime`、`create_app` 入口、默认 app 构建。
+2. 新增“依赖包 + 路由组注册器”结构，建议按域拆分：
+   - `app/applications/bootstrap_runtime.py`
+   - `app/applications/bootstrap_workflow_dependencies.py`
+   - `app/applications/bootstrap_registry_dependencies.py`
+   - `app/applications/bootstrap_trust_review_dependencies.py`
+   - `app/applications/route_group_registry.py`
+   - `app/applications/route_group_judge_command.py`
+   - `app/applications/route_group_case_read.py`
+   - `app/applications/route_group_fairness.py`
+   - `app/applications/route_group_trust_review.py`
+   - `app/applications/route_group_ops_panel_alerts.py`
+3. `test_app_factory.py` 拆为域级测试：
+   - `tests/test_route_group_registry.py`
+   - `tests/test_route_group_judge_command.py`
+   - `tests/test_route_group_case_read.py`
+   - `tests/test_route_group_fairness.py`
+   - `tests/test_route_group_trust_review.py`
+   - `tests/test_route_group_ops_panel_alerts.py`
+   - `tests/test_app_factory_smoke.py`（保留入口 smoke）
+
+### 5.3 执行波次（整批，不拆微粒度）
+
+| 波次 | 覆盖范围 | 关键改动 | DoD | 回归命令 |
+| --- | --- | --- | --- | --- |
+| Wave-H0 基线冻结 | 量化热点与回归基线 | 固定 LOC/路由数/测试时长基线；补 baseline 注记到计划历史 | 形成可复核基线快照 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_judge_mainline.py tests/test_phase_pipeline.py` |
+| Wave-H1 依赖装配下沉 | `create_app` 前半段 `partial` 依赖构建 | 抽离 workflow/registry/trust/review/fairness dependency pack builder | `create_app` 依赖装配块缩减且行为不变 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_judge_command_routes.py tests/test_registry_governance_routes.py` |
+| Wave-H2 路由组注册化 | 67 路由分域注册 | 引入 route group register 函数，`app_factory` 不再堆叠全部 `@app.*` | 路由路径/参数/错误语义保持一致 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_case_read_routes.py tests/test_fairness_case_contract.py tests/test_trust_read_routes.py` |
+| Wave-H3 辅助函数下沉 | `_build_*_for_runtime` 类热点 | 按域迁移 helper 到 `applications/*`，app_factory 仅保留薄包装 | helper 归属清晰、循环依赖无新增 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_ops_read_model_pack.py tests/test_review_alert_routes.py tests/test_panel_runtime_routes.py` |
+| Wave-H4 测试拆分与契约门禁 | 巨型测试文件拆分 | 将 `test_app_factory.py` 拆域，补 `app_factory_smoke` 与契约冻结回归 | 测试可并行执行，故障定位粒度下降 | `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory_smoke.py tests/test_route_group_*.py` |
+| Wave-H5 清理与硬切 | 删除过渡胶水 | 清理临时兼容包装，更新 import 边界与注释移除条件 | `app_factory` 目标降到 <= 3,000 行 | `cd ai_judge_service && ../scripts/py -m pytest -q` + `cd ai_judge_service && ../scripts/py -m ruff check app tests` |
+
+### 5.4 热点下沉量化目标（硬指标）
+
+1. `app_factory.py`：`6852 -> <=3000` 行。
+2. `create_app` 主体：保持可读（依赖装配段与路由注册段分离）。
+3. 路由注册：从单文件 67 路由集中式，切为域级 route group 注册。
+4. `test_app_factory.py`：`8161 -> <=2500` 行（其余迁移至域级测试文件）。
+5. 回归效率：核心回归命令集合可在不跑全量 `pytest -q` 的情况下覆盖主要改动面。
+
+### 5.5 并行执行策略（提升效率）
+
+1. 允许三路并行：  
+   - 路由组拆分线（registry/fairness/review）  
+   - trust/challenge/ops 拆分线  
+   - test 拆分与契约线
+2. 批内统一合并规则：每波次合并前必须执行本波次回归矩阵，不接受“只改不验”。
+3. 严禁碎批次提交：每个波次至少交付“代码 + 测试 + 证据”三件套。
+
+## 6. Judge 主链与平台扩展并行计划
+
+| 模块 | 范围 | 目标 | 验证 |
+| --- | --- | --- | --- |
+| `ai-judge-p34-judge-mainline-convergence-pack` | `judge_mainline / judge_workflow_roles / judge_dispatch_runtime` | 继续显式化 8 Agent 主链编排边界，减少跨域穿透 | `tests/test_judge_mainline.py tests/test_judge_workflow_roles.py tests/test_judge_dispatch_runtime.py` |
+| `ai-judge-p34-npc-roomqa-boundary-pack` | `assistant_agent_routes / gateway_runtime / policy guard` | 固定 `advisory_only` 边界，禁止写入 verdict 链 | `tests/test_assistant_agent_routes.py tests/test_gateway_runtime.py` |
+| `ai-judge-p34-trust-verifiable-pack` | trust contracts + read routes + ops views | commitment/attestation/challenge/kernel/audit 五链路维持一致 | `tests/test_trust_phasea.py tests/test_trust_read_routes.py tests/test_trust_attestation.py tests/test_trust_ops_views.py` |
+
+## 7. 验证与证据计划（按批次打包执行）
+
+1. 静态质量门禁：
+   - `cd ai_judge_service && ../scripts/py -m ruff check app tests`
+2. 主链回归：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_judge_mainline.py tests/test_phase_pipeline.py tests/test_trace_store.py tests/test_phase_final_contract_models.py`
+3. 路由/合同回归：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_app_factory.py tests/test_case_read_routes.py tests/test_review_alert_routes.py tests/test_judge_command_routes.py`
+4. 运行态证据：
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh`
+   - `bash scripts/harness/ai_judge_runtime_sla_freeze.sh`
+   - `bash scripts/harness/ai_judge_fairness_benchmark_freeze.sh`
+5. 真实窗口（条件满足后）：
+   - `bash scripts/harness/ai_judge_real_env_window_closure.sh`
+
+## 8. 风险与对策
+
+1. 风险：`app_factory` 下沉过程中出现隐藏契约回归。  
+   对策：每波次固定“域级路由回归 + app_factory smoke + 合同校验”三段门禁。
+2. 风险：测试拆分导致覆盖盲区。  
+   对策：保留 `test_app_factory_smoke.py` 作为入口护栏；新增域级用例前不删除原断言。
+3. 风险：本地参考通过掩盖真实环境问题。  
+   对策：所有冻结文档继续标注 `needs_real_env_reconfirm=true`，真实窗口前不宣称 `pass`。
+4. 风险：并行开发引发边界污染（NPC/Room QA 写入官方链）。  
+   对策：在 PR/评审清单中加入强制检查项：`advisory_only` 不写 `verdict_ledger/judge_trace` 主链。
+
+## 9. 架构方案第13章一致性校验（执行前必过）
+
+1. **角色一致性**：P34 全部模块继续沿用法庭式 8 Agent 职责映射，禁止绕过 `Fairness Sentinel -> Chief Arbiter -> Opinion Writer` 终判路径。
+2. **数据一致性**：`case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 仍是唯一事实链，`app_factory` 下沉仅改装配形态，不改六对象主语义。
+3. **门禁一致性**：发布、裁决、复核、fairness gate、review/challenge gate 不降级；新增路由组拆分后仍需保留 gate 审计字段与 override 追踪。
+4. **边界一致性**：`NPC Coach / Room QA` 严格维持 `advisory_only`，不得写入官方 verdict 链或覆盖 judge 主链状态。
+5. **跨层一致性**：若 API/DTO/错误码调整，同轮同步 `openapi/调用方/测试/文档`，不保留长期 alias 或双字段并存。
+6. **收口一致性**：本地冻结继续使用 `local_reference_*` 口径；真实环境未完成前不写 `pass`，真实窗口结果必须通过 `real_env_window_closure` 留证。

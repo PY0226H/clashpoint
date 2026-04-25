@@ -19,12 +19,23 @@ from app.domain.facts import (
     FairnessShadowRun,
     ReplayRecord,
 )
+from app.domain.judge.ledger_objects import (
+    JudgeLedgerCaseDossier,
+    JudgeLedgerClaimGraph,
+    JudgeLedgerEvidenceLedger,
+    JudgeLedgerFairnessReport,
+    JudgeLedgerOpinionPack,
+    JudgeLedgerSnapshot,
+    JudgeLedgerVerdictLedger,
+    validate_judge_ledger_snapshot,
+)
 from app.infra.db.models import (
     AuditAlertModel,
     ClaimLedgerRecordModel,
     DispatchReceiptModel,
     FairnessBenchmarkRunModel,
     FairnessShadowRunModel,
+    JudgeLedgerSnapshotModel,
     ReplayRecordModel,
 )
 
@@ -278,6 +289,119 @@ class JudgeFactRepository:
         async with self._session_factory() as session:
             rows = (await session.execute(stmt)).scalars().all()
             return [self._to_claim_ledger_record(row) for row in rows]
+
+    async def upsert_judge_ledger_snapshot(
+        self,
+        *,
+        snapshot: JudgeLedgerSnapshot,
+    ) -> JudgeLedgerSnapshot:
+        validation_errors = validate_judge_ledger_snapshot(snapshot)
+        if validation_errors:
+            raise ValueError(f"invalid_judge_ledger_snapshot:{','.join(validation_errors)}")
+
+        now = _utcnow()
+        dispatch_type = _normalize_token(snapshot.dispatch_type)
+        policy_version = (
+            str(snapshot.judge_policy_version or snapshot.case_dossier.judge_policy_version)
+            .strip()
+        )
+        rubric_version = str(snapshot.rubric_version or snapshot.case_dossier.rubric_version).strip()
+        stmt: Select[tuple[JudgeLedgerSnapshotModel]] = select(JudgeLedgerSnapshotModel).where(
+            and_(
+                JudgeLedgerSnapshotModel.case_id == int(snapshot.case_id),
+                JudgeLedgerSnapshotModel.dispatch_type == dispatch_type,
+                JudgeLedgerSnapshotModel.judge_policy_version == policy_version,
+                JudgeLedgerSnapshotModel.rubric_version == rubric_version,
+            )
+        )
+
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(stmt)).scalars().first()
+                if row is None:
+                    row = JudgeLedgerSnapshotModel(
+                        case_id=int(snapshot.case_id),
+                        dispatch_type=dispatch_type,
+                        judge_policy_version=policy_version,
+                        rubric_version=rubric_version,
+                        created_at=snapshot.created_at or now,
+                    )
+                    session.add(row)
+                row.job_id = snapshot.job_id
+                row.scope_id = int(snapshot.scope_id)
+                row.session_id = snapshot.session_id
+                row.trace_id = str(snapshot.trace_id or "").strip()
+                row.topic_domain = str(snapshot.topic_domain or "default").strip() or "default"
+                row.retrieval_profile = snapshot.retrieval_profile
+                row.case_dossier = snapshot.case_dossier.to_payload()
+                row.claim_graph = snapshot.claim_graph.to_payload()
+                row.evidence_ledger = snapshot.evidence_ledger.to_payload()
+                row.verdict_ledger = snapshot.verdict_ledger.to_payload()
+                row.fairness_report = snapshot.fairness_report.to_payload()
+                row.opinion_pack = snapshot.opinion_pack.to_payload()
+                row.updated_at = snapshot.updated_at or now
+            await session.refresh(row)
+            return self._to_judge_ledger_snapshot(row)
+
+    async def get_judge_ledger_snapshot(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str | None = None,
+        judge_policy_version: str | None = None,
+        rubric_version: str | None = None,
+    ) -> JudgeLedgerSnapshot | None:
+        stmt: Select[tuple[JudgeLedgerSnapshotModel]] = select(JudgeLedgerSnapshotModel).where(
+            JudgeLedgerSnapshotModel.case_id == int(case_id)
+        )
+        if dispatch_type is not None:
+            stmt = stmt.where(
+                JudgeLedgerSnapshotModel.dispatch_type == (_normalize_token(dispatch_type) or "unknown")
+            )
+        if judge_policy_version is not None:
+            stmt = stmt.where(
+                JudgeLedgerSnapshotModel.judge_policy_version
+                == str(judge_policy_version or "").strip()
+            )
+        if rubric_version is not None:
+            stmt = stmt.where(
+                JudgeLedgerSnapshotModel.rubric_version == str(rubric_version or "").strip()
+            )
+        stmt = stmt.order_by(
+            JudgeLedgerSnapshotModel.updated_at.desc(),
+            JudgeLedgerSnapshotModel.id.desc(),
+        )
+
+        async with self._session_factory() as session:
+            row = (await session.execute(stmt)).scalars().first()
+            if row is None:
+                return None
+            return self._to_judge_ledger_snapshot(row)
+
+    async def list_judge_ledger_snapshots(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str | None = None,
+        limit: int = 20,
+    ) -> list[JudgeLedgerSnapshot]:
+        stmt: Select[tuple[JudgeLedgerSnapshotModel]] = (
+            select(JudgeLedgerSnapshotModel)
+            .where(JudgeLedgerSnapshotModel.case_id == int(case_id))
+            .order_by(
+                JudgeLedgerSnapshotModel.updated_at.desc(),
+                JudgeLedgerSnapshotModel.id.desc(),
+            )
+            .limit(max(1, min(200, int(limit))))
+        )
+        if dispatch_type is not None:
+            stmt = stmt.where(
+                JudgeLedgerSnapshotModel.dispatch_type == (_normalize_token(dispatch_type) or "unknown")
+            )
+
+        async with self._session_factory() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._to_judge_ledger_snapshot(row) for row in rows]
 
     async def upsert_fairness_benchmark_run(
         self,
@@ -713,6 +837,40 @@ class JudgeFactRepository:
                 for item in (row.verdict_evidence_refs or [])
                 if isinstance(item, dict)
             ],
+            created_at=_normalize_dt(row.created_at),
+            updated_at=_normalize_dt(row.updated_at),
+        )
+
+    def _to_judge_ledger_snapshot(self, row: JudgeLedgerSnapshotModel) -> JudgeLedgerSnapshot:
+        case_dossier_payload = row.case_dossier if isinstance(row.case_dossier, dict) else {}
+        case_dossier = JudgeLedgerCaseDossier.from_payload(case_dossier_payload)
+        return JudgeLedgerSnapshot(
+            case_id=row.case_id,
+            dispatch_type=row.dispatch_type,
+            trace_id=row.trace_id,
+            job_id=row.job_id,
+            scope_id=row.scope_id,
+            session_id=row.session_id,
+            judge_policy_version=row.judge_policy_version,
+            rubric_version=row.rubric_version,
+            topic_domain=row.topic_domain,
+            retrieval_profile=row.retrieval_profile,
+            case_dossier=case_dossier,
+            claim_graph=JudgeLedgerClaimGraph.from_payload(
+                row.claim_graph if isinstance(row.claim_graph, dict) else {}
+            ),
+            evidence_ledger=JudgeLedgerEvidenceLedger.from_payload(
+                row.evidence_ledger if isinstance(row.evidence_ledger, dict) else {}
+            ),
+            verdict_ledger=JudgeLedgerVerdictLedger.from_payload(
+                row.verdict_ledger if isinstance(row.verdict_ledger, dict) else {}
+            ),
+            fairness_report=JudgeLedgerFairnessReport.from_payload(
+                row.fairness_report if isinstance(row.fairness_report, dict) else {}
+            ),
+            opinion_pack=JudgeLedgerOpinionPack.from_payload(
+                row.opinion_pack if isinstance(row.opinion_pack, dict) else {}
+            ),
             created_at=_normalize_dt(row.created_at),
             updated_at=_normalize_dt(row.updated_at),
         )
