@@ -466,6 +466,11 @@ derive_status() {
     return
   fi
 
+  if [[ "$ENV_MODE" == "real" && "$REAL_ENV_INPUT_READY" != "true" ]]; then
+    STATUS="env_blocked"
+    return
+  fi
+
   if [[ "$P5_STATUS" == "pass" && "$RUNTIME_OPS_STATUS" == "pass" ]]; then
     if [[ "$REAL_ENV_INPUT_READY" != "true" ]]; then
       STATUS="env_blocked"

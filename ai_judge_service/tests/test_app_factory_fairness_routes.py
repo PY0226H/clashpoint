@@ -103,6 +103,52 @@ class AppFactoryFairnessRouteTests(
         )
         self.assertTrue(any(item.run_id == run_id for item in fact_runs))
 
+    async def test_fairness_benchmark_routes_should_preserve_pending_real_samples(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        run_id = f"run-{_unique_case_id(7602)}"
+
+        post_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": run_id,
+                "policy_version": "fairness-benchmark-v1",
+                "environment_mode": "real",
+                "status": "pending_real_samples",
+                "threshold_decision": "pending",
+                "needs_real_env_reconfirm": True,
+                "summary": {
+                    "note": "real sample manifest missing",
+                    "realSampleManifest": {
+                        "manifestRef": "",
+                        "status": "missing",
+                        "ready": False,
+                    },
+                    "releaseGateInputReady": False,
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(post_resp.status_code, 200)
+        post_payload = post_resp.json()
+        self.assertEqual(post_payload["item"]["status"], "pending_real_samples")
+        self.assertEqual(
+            post_payload["item"]["summary"]["realSampleManifest"]["status"],
+            "missing",
+        )
+
+        list_resp = await self._get(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs?status=pending_real_samples",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        list_payload = list_resp.json()
+        self.assertTrue(any(item["runId"] == run_id for item in list_payload["items"]))
+
     async def test_fairness_shadow_routes_should_persist_list_and_raise_alert(self) -> None:
         runtime = create_runtime(settings=_build_settings())
         app = create_app(runtime)

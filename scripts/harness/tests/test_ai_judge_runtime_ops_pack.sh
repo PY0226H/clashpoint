@@ -227,6 +227,8 @@ mkdir -p "$EVIDENCE_PASS"
 seed_tracks_real "$EVIDENCE_PASS"
 cat >"$EVIDENCE_PASS/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/runtime-ops/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
 EOF
 
 PASS_STDOUT="$TMP_DIR/pass.stdout"
@@ -244,6 +246,8 @@ mkdir -p "$EVIDENCE_VIOLATION"
 seed_tracks_real "$EVIDENCE_VIOLATION" "0.45" "1600" "2900" "false" "0.90" "0.90" "0.12"
 cat >"$EVIDENCE_VIOLATION/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/runtime-ops/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
 EOF
 
 VIOLATION_STDOUT="$TMP_DIR/violation.stdout"

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=""
 BENCHMARK_ENV=""
 ENV_MARKER=""
+SAMPLE_MANIFEST_ARG=""
 OUTPUT_DOC=""
 OUTPUT_ENV=""
 EMIT_JSON=""
@@ -33,6 +34,21 @@ INGEST_ERROR=""
 INGEST_RESPONSE_FILE=""
 INGEST_REQUIRED_FAILURE="false"
 
+REAL_SAMPLE_MANIFEST=""
+REAL_SAMPLE_MANIFEST_READY="false"
+REAL_SAMPLE_MANIFEST_STATUS="not_required"
+REAL_SAMPLE_MANIFEST_MISSING_KEYS=""
+REAL_SAMPLE_MANIFEST_BLOCKER_HINT=""
+FAIRNESS_SAMPLE_ID=""
+FAIRNESS_TOPIC_DOMAIN=""
+FAIRNESS_PRO_TRANSCRIPT_REF=""
+FAIRNESS_CON_TRANSCRIPT_REF=""
+FAIRNESS_EXPECTED_REVIEW_HINTS_REF=""
+FAIRNESS_PRIVACY_REDACTION_STATUS=""
+FAIRNESS_SOURCE_EVIDENCE_LINK=""
+FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY="false"
+FAIRNESS_PUBLIC_RAW_TRANSCRIPT_EXPOSED="false"
+
 usage() {
   cat <<'USAGE'
 用法:
@@ -40,6 +56,7 @@ usage() {
     [--root <repo-root>] \
     [--benchmark-env <path>] \
     [--env-marker <path>] \
+    [--sample-manifest <path-or-uri>] \
     [--output-doc <path>] \
     [--output-env <path>] \
     [--allow-local-reference] \
@@ -59,7 +76,8 @@ usage() {
 说明:
   - 冻结 fairness benchmark 的阈值口径与当前观测值。
   - 默认优先真实环境；开启 --allow-local-reference 时允许本机参考冻结。
-  - 输出状态可能为 pass/local_reference_frozen/pending_data/threshold_violation/env_blocked。
+  - 真实环境必须提供真实样本 manifest；缺失时输出 pending_real_samples。
+  - 输出状态可能为 pass/local_reference_frozen/pending_real_samples/pending_data/threshold_violation/env_blocked。
   - 开启 ingest 后，会将冻结结果自动上报到 AI judge service 的 fairness benchmark run 路由。
 USAGE
 }
@@ -134,6 +152,41 @@ read_env_value() {
   printf '%s' "${line#*=}"
 }
 
+read_config_value() {
+  local key="$1"
+  local value=""
+  if [[ -f "$ENV_MARKER" ]]; then
+    value="$(trim "$(read_env_value "$ENV_MARKER" "$key")")"
+  fi
+  if [[ -z "$value" ]]; then
+    value="$(trim "$(printenv "$key" 2>/dev/null || true)")"
+  fi
+  printf '%s' "$value"
+}
+
+read_config_value_any() {
+  local key value
+  for key in "$@"; do
+    value="$(read_config_value "$key")"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return
+    fi
+  done
+  printf '%s' ""
+}
+
+is_remote_ref() {
+  local value="$1"
+  [[ "$value" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*:// ]]
+}
+
+accepts_redaction_status() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$value" == "redacted" || "$value" == "anonymized" || "$value" == "approved" || "$value" == "privacy_reviewed" ]]
+}
+
 collect_missing_keys() {
   local file="$1"
   local required="$2"
@@ -175,6 +228,10 @@ parse_args() {
         ;;
       --env-marker)
         ENV_MARKER="${2:-}"
+        shift 2
+        ;;
+      --sample-manifest)
+        SAMPLE_MANIFEST_ARG="${2:-}"
         shift 2
         ;;
       --output-doc)
@@ -276,6 +333,98 @@ resolve_environment_mode() {
   fi
 }
 
+derive_real_sample_manifest() {
+  REAL_SAMPLE_MANIFEST="$(trim "$SAMPLE_MANIFEST_ARG")"
+  if [[ -z "$REAL_SAMPLE_MANIFEST" ]]; then
+    REAL_SAMPLE_MANIFEST="$(read_config_value_any "FAIRNESS_REAL_SAMPLE_MANIFEST" "REAL_SAMPLE_MANIFEST")"
+  fi
+  REAL_SAMPLE_MANIFEST_READY="$(read_config_value_any "FAIRNESS_REAL_SAMPLE_MANIFEST_READY" "REAL_SAMPLE_MANIFEST_READY")"
+  if [[ -z "$REAL_SAMPLE_MANIFEST_READY" ]]; then
+    REAL_SAMPLE_MANIFEST_READY="false"
+  fi
+
+  FAIRNESS_SAMPLE_ID="$(read_config_value_any "FAIRNESS_SAMPLE_ID" "SAMPLE_ID")"
+  FAIRNESS_TOPIC_DOMAIN="$(read_config_value_any "FAIRNESS_TOPIC_DOMAIN" "TOPIC_DOMAIN")"
+  FAIRNESS_PRO_TRANSCRIPT_REF="$(read_config_value_any "FAIRNESS_PRO_TRANSCRIPT_REF" "PRO_TRANSCRIPT_REF")"
+  FAIRNESS_CON_TRANSCRIPT_REF="$(read_config_value_any "FAIRNESS_CON_TRANSCRIPT_REF" "CON_TRANSCRIPT_REF")"
+  FAIRNESS_EXPECTED_REVIEW_HINTS_REF="$(read_config_value_any "FAIRNESS_EXPECTED_REVIEW_HINTS_REF" "EXPECTED_REVIEW_HINTS_REF")"
+  FAIRNESS_PRIVACY_REDACTION_STATUS="$(read_config_value_any "FAIRNESS_PRIVACY_REDACTION_STATUS" "PRIVACY_REDACTION_STATUS")"
+  FAIRNESS_SOURCE_EVIDENCE_LINK="$(read_config_value_any "FAIRNESS_SOURCE_EVIDENCE_LINK" "SOURCE_EVIDENCE_LINK")"
+
+  if [[ "$ENV_MODE" != "real" ]]; then
+    REAL_SAMPLE_MANIFEST_STATUS="not_required"
+    REAL_SAMPLE_MANIFEST_MISSING_KEYS=""
+    REAL_SAMPLE_MANIFEST_BLOCKER_HINT=""
+    return
+  fi
+
+  if [[ -z "$REAL_SAMPLE_MANIFEST" ]]; then
+    REAL_SAMPLE_MANIFEST_STATUS="missing"
+    REAL_SAMPLE_MANIFEST_READY="false"
+    REAL_SAMPLE_MANIFEST_MISSING_KEYS="REAL_SAMPLE_MANIFEST"
+    REAL_SAMPLE_MANIFEST_BLOCKER_HINT="真实环境 fairness benchmark 需要 REAL_SAMPLE_MANIFEST 或 FAIRNESS_REAL_SAMPLE_MANIFEST"
+    return
+  fi
+
+  if is_remote_ref "$REAL_SAMPLE_MANIFEST"; then
+    if is_truthy "$REAL_SAMPLE_MANIFEST_READY"; then
+      REAL_SAMPLE_MANIFEST_STATUS="ready_remote_ref"
+      REAL_SAMPLE_MANIFEST_READY="true"
+      REAL_SAMPLE_MANIFEST_MISSING_KEYS=""
+      REAL_SAMPLE_MANIFEST_BLOCKER_HINT=""
+    else
+      REAL_SAMPLE_MANIFEST_STATUS="pending_remote_validation"
+      REAL_SAMPLE_MANIFEST_READY="false"
+      REAL_SAMPLE_MANIFEST_MISSING_KEYS="REAL_SAMPLE_MANIFEST_READY"
+      REAL_SAMPLE_MANIFEST_BLOCKER_HINT="远端真实样本 manifest 已引用，但需要 REAL_SAMPLE_MANIFEST_READY=true 显式确认样本字段与脱敏状态"
+    fi
+    return
+  fi
+
+  local manifest_file
+  manifest_file="$(abs_path "$REAL_SAMPLE_MANIFEST")"
+  REAL_SAMPLE_MANIFEST="$manifest_file"
+  if [[ ! -f "$manifest_file" ]]; then
+    REAL_SAMPLE_MANIFEST_STATUS="missing_file"
+    REAL_SAMPLE_MANIFEST_READY="false"
+    REAL_SAMPLE_MANIFEST_MISSING_KEYS="REAL_SAMPLE_MANIFEST_FILE"
+    REAL_SAMPLE_MANIFEST_BLOCKER_HINT="真实样本 manifest 文件不存在或不可读: $manifest_file"
+    return
+  fi
+
+  local required_manifest_keys missing_manifest_keys
+  required_manifest_keys="SAMPLE_MANIFEST_VERSION;SAMPLE_ID;TOPIC_DOMAIN;PRO_TRANSCRIPT_REF;CON_TRANSCRIPT_REF;EXPECTED_REVIEW_HINTS_REF;PRIVACY_REDACTION_STATUS;SOURCE_EVIDENCE_LINK"
+  missing_manifest_keys="$(collect_missing_keys "$manifest_file" "$required_manifest_keys")"
+
+  FAIRNESS_SAMPLE_ID="$(trim "$(read_env_value "$manifest_file" "SAMPLE_ID")")"
+  FAIRNESS_TOPIC_DOMAIN="$(trim "$(read_env_value "$manifest_file" "TOPIC_DOMAIN")")"
+  FAIRNESS_PRO_TRANSCRIPT_REF="$(trim "$(read_env_value "$manifest_file" "PRO_TRANSCRIPT_REF")")"
+  FAIRNESS_CON_TRANSCRIPT_REF="$(trim "$(read_env_value "$manifest_file" "CON_TRANSCRIPT_REF")")"
+  FAIRNESS_EXPECTED_REVIEW_HINTS_REF="$(trim "$(read_env_value "$manifest_file" "EXPECTED_REVIEW_HINTS_REF")")"
+  FAIRNESS_PRIVACY_REDACTION_STATUS="$(trim "$(read_env_value "$manifest_file" "PRIVACY_REDACTION_STATUS")")"
+  FAIRNESS_SOURCE_EVIDENCE_LINK="$(trim "$(read_env_value "$manifest_file" "SOURCE_EVIDENCE_LINK")")"
+
+  if [[ -n "$missing_manifest_keys" ]]; then
+    REAL_SAMPLE_MANIFEST_STATUS="invalid"
+    REAL_SAMPLE_MANIFEST_READY="false"
+    REAL_SAMPLE_MANIFEST_MISSING_KEYS="$missing_manifest_keys"
+    REAL_SAMPLE_MANIFEST_BLOCKER_HINT="真实样本 manifest 缺少必填字段: $missing_manifest_keys"
+    return
+  fi
+  if ! accepts_redaction_status "$FAIRNESS_PRIVACY_REDACTION_STATUS"; then
+    REAL_SAMPLE_MANIFEST_STATUS="invalid"
+    REAL_SAMPLE_MANIFEST_READY="false"
+    REAL_SAMPLE_MANIFEST_MISSING_KEYS="PRIVACY_REDACTION_STATUS"
+    REAL_SAMPLE_MANIFEST_BLOCKER_HINT="真实样本 manifest 必须声明已脱敏/已隐私审核"
+    return
+  fi
+
+  REAL_SAMPLE_MANIFEST_STATUS="validated"
+  REAL_SAMPLE_MANIFEST_READY="true"
+  REAL_SAMPLE_MANIFEST_MISSING_KEYS=""
+  REAL_SAMPLE_MANIFEST_BLOCKER_HINT=""
+}
+
 build_ingest_payload() {
   local policy_version="$1"
   local threshold_decision="$2"
@@ -314,7 +463,23 @@ build_ingest_payload() {
   },
   "summary": {
     "note": "$(json_escape "$note")",
-    "missing_keys": "$(json_escape "$missing_keys")"
+    "missing_keys": "$(json_escape "$missing_keys")",
+    "realSampleManifest": {
+      "manifestRef": "$(json_escape "$REAL_SAMPLE_MANIFEST")",
+      "status": "$(json_escape "$REAL_SAMPLE_MANIFEST_STATUS")",
+      "ready": $([[ "$REAL_SAMPLE_MANIFEST_READY" == "true" ]] && echo "true" || echo "false"),
+      "missingKeys": "$(json_escape "$REAL_SAMPLE_MANIFEST_MISSING_KEYS")",
+      "blockerHint": "$(json_escape "$REAL_SAMPLE_MANIFEST_BLOCKER_HINT")",
+      "sampleId": "$(json_escape "$FAIRNESS_SAMPLE_ID")",
+      "topicDomain": "$(json_escape "$FAIRNESS_TOPIC_DOMAIN")",
+      "proTranscriptRef": "$(json_escape "$FAIRNESS_PRO_TRANSCRIPT_REF")",
+      "conTranscriptRef": "$(json_escape "$FAIRNESS_CON_TRANSCRIPT_REF")",
+      "expectedReviewHintsRef": "$(json_escape "$FAIRNESS_EXPECTED_REVIEW_HINTS_REF")",
+      "privacyRedactionStatus": "$(json_escape "$FAIRNESS_PRIVACY_REDACTION_STATUS")",
+      "sourceEvidenceLink": "$(json_escape "$FAIRNESS_SOURCE_EVIDENCE_LINK")",
+      "publicRawTranscriptExposed": false
+    },
+    "releaseGateInputReady": $([[ "$FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY" == "true" ]] && echo "true" || echo "false")
   },
   "source": "harness_fairness_benchmark_freeze",
   "reported_by": "$(json_escape "$INGEST_REPORTED_BY")",
@@ -420,11 +585,27 @@ FAIRNESS_BENCHMARK_FREEZE_STATUS=$STATUS
 FREEZE_UPDATED_AT=$FINISHED_AT
 FREEZE_ENV_MODE=$ENV_MODE
 FREEZE_POLICY_VERSION=$policy_version
+BENCHMARK_RUN_ID=$RUN_ID
 FAIRNESS_BENCHMARK_EVIDENCE=$freeze_evidence_ref
 FREEZE_DATASET_REF=$dataset_ref
 THRESHOLD_DECISION=$threshold_decision
 NEEDS_REAL_ENV_RECONFIRM=$needs_real_reconfirm
 NEEDS_REMEDIATION=$needs_remediation
+FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY=$FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY
+FAIRNESS_PUBLIC_RAW_TRANSCRIPT_EXPOSED=$FAIRNESS_PUBLIC_RAW_TRANSCRIPT_EXPOSED
+
+REAL_SAMPLE_MANIFEST=$REAL_SAMPLE_MANIFEST
+REAL_SAMPLE_MANIFEST_READY=$REAL_SAMPLE_MANIFEST_READY
+REAL_SAMPLE_MANIFEST_STATUS=$REAL_SAMPLE_MANIFEST_STATUS
+REAL_SAMPLE_MANIFEST_MISSING_KEYS=$REAL_SAMPLE_MANIFEST_MISSING_KEYS
+REAL_SAMPLE_MANIFEST_BLOCKER_HINT=$REAL_SAMPLE_MANIFEST_BLOCKER_HINT
+FAIRNESS_SAMPLE_ID=$FAIRNESS_SAMPLE_ID
+FAIRNESS_TOPIC_DOMAIN=$FAIRNESS_TOPIC_DOMAIN
+FAIRNESS_PRO_TRANSCRIPT_REF=$FAIRNESS_PRO_TRANSCRIPT_REF
+FAIRNESS_CON_TRANSCRIPT_REF=$FAIRNESS_CON_TRANSCRIPT_REF
+FAIRNESS_EXPECTED_REVIEW_HINTS_REF=$FAIRNESS_EXPECTED_REVIEW_HINTS_REF
+FAIRNESS_PRIVACY_REDACTION_STATUS=$FAIRNESS_PRIVACY_REDACTION_STATUS
+FAIRNESS_SOURCE_EVIDENCE_LINK=$FAIRNESS_SOURCE_EVIDENCE_LINK
 
 DRAW_RATE_MAX=$MAX_DRAW_RATE
 SIDE_BIAS_DELTA_MAX=$MAX_SIDE_BIAS_DELTA
@@ -481,6 +662,8 @@ write_freeze_doc() {
 3. policy_version: \`$policy_version\`
 4. needs_real_env_reconfirm: \`$needs_real_reconfirm\`
 5. needs_remediation: \`$needs_remediation\`
+6. benchmark_run_id: \`$RUN_ID\`
+7. registry_release_gate_input_ready: \`$FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY\`
 
 ## 2. 阈值与观测值
 
@@ -498,13 +681,32 @@ write_freeze_doc() {
 4. dataset_ref: \`$dataset_ref\`
 5. sample_size: \`$sample_size\`
 
-## 4. 风险与说明
+## 4. 真实样本 Manifest
+
+| 字段 | 当前值 |
+| --- | --- |
+| manifest_ref | \`${REAL_SAMPLE_MANIFEST:-（缺失）}\` |
+| manifest_ready | \`$REAL_SAMPLE_MANIFEST_READY\` |
+| manifest_status | \`$REAL_SAMPLE_MANIFEST_STATUS\` |
+| sample_id | \`${FAIRNESS_SAMPLE_ID:-（缺失）}\` |
+| topic_domain | \`${FAIRNESS_TOPIC_DOMAIN:-（缺失）}\` |
+| pro_transcript_ref | \`${FAIRNESS_PRO_TRANSCRIPT_REF:-（缺失）}\` |
+| con_transcript_ref | \`${FAIRNESS_CON_TRANSCRIPT_REF:-（缺失）}\` |
+| expected_review_hints_ref | \`${FAIRNESS_EXPECTED_REVIEW_HINTS_REF:-（缺失）}\` |
+| privacy_redaction_status | \`${FAIRNESS_PRIVACY_REDACTION_STATUS:-（缺失）}\` |
+| source_evidence_link | \`${FAIRNESS_SOURCE_EVIDENCE_LINK:-（缺失）}\` |
+
+1. missing_keys: \`${REAL_SAMPLE_MANIFEST_MISSING_KEYS:-（无）}\`
+2. blocker_hint: \`${REAL_SAMPLE_MANIFEST_BLOCKER_HINT:-（无）}\`
+3. public_raw_transcript_exposed: \`$FAIRNESS_PUBLIC_RAW_TRANSCRIPT_EXPOSED\`
+
+## 5. 风险与说明
 
 1. missing_keys: \`${missing_keys:-（无）}\`
 2. note: \`${note}\`
 3. 当前冻结仅用于工程口径治理；真实环境冻结结论仍以 \`status=pass\` 为准。
 
-## 5. ingest 状态
+## 6. ingest 状态
 
 1. ingest_enabled: \`$INGEST_ENABLED\`
 2. ingest_base_url: \`$INGEST_BASE_URL\`
@@ -545,6 +747,8 @@ write_json_summary() {
     printf '  "threshold_decision": "%s",\n' "$(json_escape "$threshold_decision")"
     printf '  "needs_real_env_reconfirm": %s,\n' "$([[ "$needs_real_reconfirm" == "true" ]] && echo "true" || echo "false")"
     printf '  "needs_remediation": %s,\n' "$([[ "$needs_remediation" == "true" ]] && echo "true" || echo "false")"
+    printf '  "benchmark_run_id": "%s",\n' "$(json_escape "$RUN_ID")"
+    printf '  "registry_release_gate_input_ready": %s,\n' "$([[ "$FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY" == "true" ]] && echo "true" || echo "false")"
     printf '  "metrics": {\n'
     printf '    "sample_size": "%s",\n' "$(json_escape "$sample_size")"
     printf '    "draw_rate": "%s",\n' "$(json_escape "$draw_rate")"
@@ -558,6 +762,21 @@ write_json_summary() {
     printf '    "draw_rate_max": "%s",\n' "$(json_escape "$MAX_DRAW_RATE")"
     printf '    "side_bias_delta_max": "%s",\n' "$(json_escape "$MAX_SIDE_BIAS_DELTA")"
     printf '    "appeal_overturn_rate_max": "%s"\n' "$(json_escape "$MAX_APPEAL_OVERTURN_RATE")"
+    printf '  },\n'
+    printf '  "real_sample_manifest": {\n'
+    printf '    "manifest_ref": "%s",\n' "$(json_escape "$REAL_SAMPLE_MANIFEST")"
+    printf '    "ready": %s,\n' "$([[ "$REAL_SAMPLE_MANIFEST_READY" == "true" ]] && echo "true" || echo "false")"
+    printf '    "status": "%s",\n' "$(json_escape "$REAL_SAMPLE_MANIFEST_STATUS")"
+    printf '    "missing_keys": "%s",\n' "$(json_escape "$REAL_SAMPLE_MANIFEST_MISSING_KEYS")"
+    printf '    "blocker_hint": "%s",\n' "$(json_escape "$REAL_SAMPLE_MANIFEST_BLOCKER_HINT")"
+    printf '    "sample_id": "%s",\n' "$(json_escape "$FAIRNESS_SAMPLE_ID")"
+    printf '    "topic_domain": "%s",\n' "$(json_escape "$FAIRNESS_TOPIC_DOMAIN")"
+    printf '    "pro_transcript_ref": "%s",\n' "$(json_escape "$FAIRNESS_PRO_TRANSCRIPT_REF")"
+    printf '    "con_transcript_ref": "%s",\n' "$(json_escape "$FAIRNESS_CON_TRANSCRIPT_REF")"
+    printf '    "expected_review_hints_ref": "%s",\n' "$(json_escape "$FAIRNESS_EXPECTED_REVIEW_HINTS_REF")"
+    printf '    "privacy_redaction_status": "%s",\n' "$(json_escape "$FAIRNESS_PRIVACY_REDACTION_STATUS")"
+    printf '    "source_evidence_link": "%s",\n' "$(json_escape "$FAIRNESS_SOURCE_EVIDENCE_LINK")"
+    printf '    "public_raw_transcript_exposed": false\n'
     printf '  },\n'
     printf '  "missing_keys": "%s",\n' "$(json_escape "$missing_keys")"
     printf '  "note": "%s",\n' "$(json_escape "$note")"
@@ -593,7 +812,13 @@ write_md_summary() {
     printf -- '- status: `%s`\n' "$STATUS"
     printf -- '- environment_mode: `%s`\n' "$ENV_MODE"
     printf -- '- threshold_decision: `%s`\n' "$threshold_decision"
+    printf -- '- benchmark_run_id: `%s`\n' "$RUN_ID"
+    printf -- '- registry_release_gate_input_ready: `%s`\n' "$FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY"
     printf -- '- benchmark_env: `%s`\n' "$BENCHMARK_ENV"
+    printf -- '- real_sample_manifest: `%s`\n' "${REAL_SAMPLE_MANIFEST:-}"
+    printf -- '- real_sample_manifest_status: `%s`\n' "$REAL_SAMPLE_MANIFEST_STATUS"
+    printf -- '- real_sample_manifest_ready: `%s`\n' "$REAL_SAMPLE_MANIFEST_READY"
+    printf -- '- public_raw_transcript_exposed: `%s`\n' "$FAIRNESS_PUBLIC_RAW_TRANSCRIPT_EXPOSED"
     printf -- '- output_env: `%s`\n' "$OUTPUT_ENV"
     printf -- '- output_doc: `%s`\n' "$OUTPUT_DOC"
     printf -- '- started_at: `%s`\n' "$STARTED_AT"
@@ -663,6 +888,7 @@ main() {
   ensure_parent_dir "$EMIT_MD"
 
   resolve_environment_mode
+  derive_real_sample_manifest
 
   local required_base required_real required_local
   required_base="CALIBRATION_STATUS;WINDOW_FROM;WINDOW_TO;SAMPLE_SIZE;DRAW_RATE;SIDE_BIAS_DELTA;APPEAL_OVERTURN_RATE"
@@ -719,6 +945,10 @@ main() {
     if [[ "$calibration_status" != "validated" ]]; then
       STATUS="pending_data"
       note="calibration_status is ${calibration_status:-missing}"
+    elif [[ "$ENV_MODE" == "real" && "$REAL_SAMPLE_MANIFEST_READY" != "true" ]]; then
+      STATUS="pending_real_samples"
+      missing_keys="$REAL_SAMPLE_MANIFEST_MISSING_KEYS"
+      note="${REAL_SAMPLE_MANIFEST_BLOCKER_HINT:-real sample manifest is not ready}"
     elif [[ -n "$missing_keys" ]]; then
       STATUS="pending_data"
       note="missing required keys: $missing_keys"
@@ -754,6 +984,10 @@ main() {
         note="local reference fairness benchmark frozen; waiting real environment reconfirmation"
       fi
     fi
+  fi
+
+  if [[ "$STATUS" == "pass" && "$threshold_decision" == "accepted" && "$REAL_SAMPLE_MANIFEST_READY" == "true" ]]; then
+    FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY="true"
   fi
 
   FINISHED_AT="$(iso_now)"
@@ -823,6 +1057,9 @@ main() {
   echo "ai_judge_fairness_benchmark_freeze_status: $STATUS"
   echo "environment_mode: $ENV_MODE"
   echo "allow_local_reference: $ALLOW_LOCAL_REFERENCE"
+  echo "real_sample_manifest_status: $REAL_SAMPLE_MANIFEST_STATUS"
+  echo "real_sample_manifest_ready: $REAL_SAMPLE_MANIFEST_READY"
+  echo "registry_release_gate_input_ready: $FAIRNESS_REGISTRY_RELEASE_GATE_INPUT_READY"
   echo "ingest_enabled: $INGEST_ENABLED"
   echo "ingest_status: $INGEST_STATUS"
   echo "ingest_http_code: ${INGEST_HTTP_CODE:-000}"

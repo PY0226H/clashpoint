@@ -632,6 +632,7 @@ def normalize_fairness_status(
     if token in {
         "pass",
         "local_reference_frozen",
+        "pending_real_samples",
         "pending_data",
         "threshold_violation",
         "env_blocked",
