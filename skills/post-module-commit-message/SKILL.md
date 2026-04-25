@@ -9,6 +9,7 @@ description: "在每轮开发收尾时，根据当前 Git 改动生成符合 Con
 
 在每次一轮开发完成后，生成当前改动对应的 commit 标题。
 输出必须符合 Conventional Commits 规范，优先给出 1 条主推荐，并可附 1-2 条备选。
+默认推荐应像人工整理过的提交标题，而不是把模块流水号直接拼进标题。
 
 ## 输出要求
 
@@ -18,6 +19,8 @@ description: "在每轮开发收尾时，根据当前 Git 改动生成符合 Con
 - subject 使用小写开头的祈使语气短句，不加句号，建议不超过 72 字符。
 - 对话中至少回显 `Recommended` 主推荐；若用户需要可附 `Alternatives`。
 - 不允许仅以“步骤通过/step pass”代替推荐正文。
+- 不要把完整模块 ID 当 scope，例如避免 `ai-judge-p36-artifact-store-port-local-pack` 这类长 scope。
+- 不要使用 `advance <module> workflow`、`sync module follow-up` 这类机械泛化 subject 作为主推荐。
 - `summary` 产物仅记录执行状态，不承载推荐正文。
 
 ## 工作流
@@ -45,12 +48,17 @@ git diff --cached --name-only
 3. 推断 scope：
 - 优先使用业务模块或目录名，例如 `login`、`cart`、`user`、`api`、`order`。
 - 避免使用过深路径或无语义词（如 `src`、`utils`）作为 scope。
+- 将长模块编号归并为稳定短 scope，例如：
+  - `ai-judge-p36-*` -> `ai-judge`
+  - `post-module-commit-message-*` -> `commit-message`
+  - `harness-*` -> `harness`
 - 若改动跨多个模块且无主次，省略 scope。
 
 4. 生成 subject：
 - 聚焦“本次改动最核心结果”，不用堆砌细节。
 - 优先使用动词短语，如 `support github oauth`、`correct total price calculation`。
 - 避免模糊表述，如 `update code`、`fix bug`。
+- 优先从 `summary` 和主要文件变化提取用户可读结果；只有缺少上下文时才回退到模块名。
 
 5. 质量检查：
 - 检查标题是否与实际改动一致。
@@ -93,7 +101,8 @@ Alternatives:
 
 1. agent 负责将本脚本输出的推荐正文在最终对话中明确展示给用户。
 2. 默认展示 `Recommended + Alternatives`；若用户明确要求精简，展示 `--title-only` 结果。
-3. 不要把 commit 推荐正文写入 summary 或计划文档，除非用户明确要求。
+3. 脚本输出应作为最终推荐；只有脚本仍明显偏机械时，agent 才补充一条人工修订版，并应说明原因。
+4. 不要把 commit 推荐正文写入 summary 或计划文档，除非用户明确要求。
 
 ## 示例
 
@@ -104,3 +113,5 @@ Alternatives:
 - `style(home): format header component`
 - `test(order): add refund test cases`
 - `chore: update pre-commit hooks`
+- `feat(ai-judge): add local artifact store adapter`
+- `refactor(commit-message): improve commit message recommendations`

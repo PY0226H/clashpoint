@@ -1,3 +1,3 @@
 interface:
   display_name: "Post Module Commit Message"
-  short_description: "Generate Conventional Commit titles after each development round"
+  short_description: "Generate concise, human-readable Conventional Commit titles after each development round"

@@ -20,25 +20,42 @@ expect_contains() {
   exit 1
 }
 
+expect_not_contains() {
+  local name="$1"
+  local pattern="$2"
+  local file="$3"
+  if ! grep -Fq -- "$pattern" "$file"; then
+    echo "[PASS] $name"
+    return
+  fi
+  echo "[FAIL] $name: unexpected pattern '$pattern'"
+  echo "--- output ---"
+  cat "$file"
+  exit 1
+}
+
 DEV_OUT="$TMP_DIR/dev.out"
 bash "$SCRIPT" \
   --root "$ROOT" \
   --task-kind dev \
-  --module harness-commit-skill-integration \
-  --summary "让 post-module-commit-message skill 输出 commit 推荐" >"$DEV_OUT"
+  --module ai-judge-p36-artifact-store-port-local-pack \
+  --summary "Add local artifact store port and adapter for AI Judge trust and audit artifacts" >"$DEV_OUT"
 
 expect_contains "dev output includes recommended label" "Recommended:" "$DEV_OUT"
-expect_contains "dev output includes harness scope" "(harness-commit-skill-integration):" "$DEV_OUT"
+expect_contains "dev output uses concise ai-judge scope" "feat(ai-judge): add local artifact store adapter" "$DEV_OUT"
+expect_not_contains "dev output avoids long module scope" "(ai-judge-p36-artifact-store-port-local-pack):" "$DEV_OUT"
+expect_not_contains "dev output avoids mechanical subject" "advance ai-judge-p36-artifact-store-port-local-pack workflow" "$DEV_OUT"
 expect_contains "dev output includes alternatives" "Alternatives:" "$DEV_OUT"
 
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \
   --task-kind refactor \
-  --module auth-session-hardening \
-  --summary "refactor auth session flow" \
+  --module post-module-commit-message-humanized-output \
+  --summary "Tune post-module commit message skill to prefer concise human commit messages" \
   --title-only >"$TITLE_OUT"
 
-expect_contains "title-only uses refactor type" "refactor(auth-session-hardening):" "$TITLE_OUT"
+expect_contains "title-only uses concise refactor title" "refactor(commit-message): improve commit message recommendations" "$TITLE_OUT"
+expect_not_contains "title-only avoids long commit-message module scope" "(post-module-commit-message-humanized-output):" "$TITLE_OUT"
 
 echo "all post-module-commit-message script tests passed"
