@@ -295,6 +295,9 @@ from .applications.trust_public_verify_contract import (
 from .applications.trust_read_routes import (
     TrustReadRouteError as TrustReadRouteError_v3,
 )
+from .applications.trust_read_routes import (
+    write_trust_registry_snapshot_for_report as write_trust_registry_snapshot_for_report_v3,
+)
 from .applications.trust_verdict_attestation_contract import (
     validate_trust_verdict_attestation_contract as validate_trust_verdict_attestation_contract_v3,
 )
@@ -1596,6 +1599,18 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
     )
+    _get_trust_registry_snapshot = (
+        runtime.workflow_runtime.trust_registry.get_trust_registry_snapshot
+    )
+    _write_trust_registry_snapshot = partial(
+        write_trust_registry_snapshot_for_report_v3,
+        provider=runtime.settings.provider,
+        upsert_trust_registry_snapshot=(
+            runtime.workflow_runtime.trust_registry.upsert_trust_registry_snapshot
+        ),
+        build_audit_anchor_export=build_audit_anchor_export_v3,
+        build_public_verify_payload=build_public_trust_verify_payload_v3,
+    )
 
     _workflow_register_and_mark_blinded = partial(
         workflow_register_and_mark_blinded_for_runtime,
@@ -1720,6 +1735,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         serialize_workflow_job=_serialize_workflow_job,
         provider=runtime.settings.provider,
         run_trust_read_guard=_run_trust_read_guard,
+        get_trust_registry_snapshot=_get_trust_registry_snapshot,
     )
     _transition_judge_alert_status = partial(
         transition_judge_alert_status_for_runtime,
@@ -2050,6 +2066,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
             validate_phase_dispatch_request=validate_phase_dispatch_request_v3,
             validate_final_dispatch_request=validate_final_dispatch_request_v3,
+            write_trust_registry_snapshot=_write_trust_registry_snapshot,
         ),
     )
 

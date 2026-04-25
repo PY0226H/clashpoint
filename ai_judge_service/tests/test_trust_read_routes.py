@@ -13,12 +13,16 @@ from app.applications.trust_read_routes import (
     build_trust_phasea_bundle_for_case,
     build_trust_public_verify_bundle_payload,
     build_trust_public_verify_route_payload,
+    build_trust_registry_snapshot_from_bundle,
     build_trust_report_context_from_receipt,
     build_validated_trust_item_route_payload,
     choose_trust_read_dispatch_receipt,
+    choose_trust_read_registry_snapshot,
     normalize_trust_read_dispatch_type,
     resolve_trust_report_context_for_case,
+    write_trust_registry_snapshot_for_report,
 )
+from app.domain.trust import TrustRegistrySnapshot
 
 
 @dataclass
@@ -31,6 +35,88 @@ class _DummyReceipt:
 @dataclass
 class _DummyWorkflowJob:
     status: str
+
+
+def _build_registry_snapshot(
+    *,
+    case_id: int,
+    dispatch_type: str = "final",
+    trace_id: str = "trace-registry",
+) -> TrustRegistrySnapshot:
+    component_hashes = {
+        "caseCommitmentHash": f"commit-{trace_id}",
+        "verdictAttestationHash": f"attest-{trace_id}",
+        "challengeReviewHash": f"challenge-{trace_id}",
+        "kernelVersionHash": f"kernel-{trace_id}",
+        "auditAnchorHash": f"anchor-{trace_id}",
+    }
+    return TrustRegistrySnapshot(
+        case_id=case_id,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        case_commitment={
+            "version": "trust-phaseA-case-commitment-v1",
+            "caseId": case_id,
+            "dispatchType": dispatch_type,
+            "traceId": trace_id,
+            "requestHash": "request-hash",
+            "workflowHash": "workflow-hash",
+            "reportHash": "report-hash",
+            "attestationCommitmentHash": "att-hash",
+            "commitmentHash": component_hashes["caseCommitmentHash"],
+        },
+        verdict_attestation={
+            "version": "trust-phaseA-verdict-attestation-v1",
+            "caseId": case_id,
+            "dispatchType": dispatch_type,
+            "traceId": trace_id,
+            "registryHash": component_hashes["verdictAttestationHash"],
+            "verified": True,
+            "mismatchComponents": [],
+        },
+        challenge_review={
+            "version": "trust-phaseB-challenge-review-v1",
+            "caseId": case_id,
+            "traceId": trace_id,
+            "registryHash": component_hashes["challengeReviewHash"],
+            "challengeState": "not_challenged",
+            "totalChallenges": 0,
+        },
+        kernel_version={
+            "version": "trust-phaseA-kernel-version-v1",
+            "caseId": case_id,
+            "traceId": trace_id,
+            "registryHash": component_hashes["kernelVersionHash"],
+            "kernelHash": "kernel-vector-hash",
+        },
+        audit_anchor={
+            "version": "trust-phaseA-audit-anchor-v1",
+            "caseId": case_id,
+            "dispatchType": dispatch_type,
+            "traceId": trace_id,
+            "anchorHash": component_hashes["auditAnchorHash"],
+            "componentHashes": component_hashes,
+        },
+        public_verify={
+            "caseId": case_id,
+            "dispatchType": dispatch_type,
+            "traceId": trace_id,
+            "verifyPayload": {
+                "caseCommitment": {"commitmentHash": component_hashes["caseCommitmentHash"]},
+                "verdictAttestation": {
+                    "registryHash": component_hashes["verdictAttestationHash"],
+                    "verified": True,
+                },
+                "challengeReview": {
+                    "registryHash": component_hashes["challengeReviewHash"],
+                    "challengeState": "not_challenged",
+                },
+                "kernelVersion": {"registryHash": component_hashes["kernelVersionHash"]},
+                "auditAnchor": {"anchorHash": component_hashes["auditAnchorHash"]},
+            },
+        },
+        component_hashes=component_hashes,
+    )
 
 
 class TrustReadRoutesTests(unittest.TestCase):
@@ -226,6 +312,65 @@ class TrustReadRoutesTests(unittest.TestCase):
         self.assertIn("challengeReview", payload)
         self.assertIn("kernelVersion", payload)
 
+    def test_build_trust_phasea_bundle_for_case_should_prefer_registry_snapshot(self) -> None:
+        snapshot = _build_registry_snapshot(
+            case_id=2010,
+            dispatch_type="final",
+            trace_id="trace-registry-2010",
+        )
+        receipt_calls: list[str] = []
+
+        async def _get_trust_registry_snapshot(*, case_id: int, dispatch_type: str) -> Any:
+            self.assertEqual(case_id, 2010)
+            if dispatch_type == "final":
+                return snapshot
+            return None
+
+        async def _get_dispatch_receipt(**kwargs: Any) -> Any:
+            receipt_calls.append(str(kwargs.get("dispatch_type")))
+            return None
+
+        payload = asyncio.run(
+            build_trust_phasea_bundle_for_case(
+                case_id=2010,
+                dispatch_type="auto",
+                get_dispatch_receipt=_get_dispatch_receipt,
+                get_workflow_job=lambda **_kwargs: asyncio.sleep(0),
+                list_workflow_events=lambda **_kwargs: asyncio.sleep(0, result=[]),
+                list_audit_alerts=lambda **_kwargs: asyncio.sleep(0, result=[]),
+                serialize_workflow_job=lambda _job: {},
+                provider="mock",
+                get_trust_registry_snapshot=_get_trust_registry_snapshot,
+            )
+        )
+
+        self.assertEqual(receipt_calls, [])
+        self.assertEqual(payload["context"]["source"], "trust_registry")
+        self.assertEqual(payload["context"]["registryVersion"], "trust-registry-v1")
+        self.assertEqual(payload["commitment"]["commitmentHash"], "commit-trace-registry-2010")
+
+    def test_choose_trust_read_registry_snapshot_should_follow_auto_priority(self) -> None:
+        final_snapshot = _build_registry_snapshot(case_id=2011, trace_id="trace-final")
+        phase_snapshot = _build_registry_snapshot(
+            case_id=2011,
+            dispatch_type="phase",
+            trace_id="trace-phase",
+        )
+
+        async def _get_trust_registry_snapshot(*, case_id: int, dispatch_type: str) -> Any:
+            self.assertEqual(case_id, 2011)
+            return final_snapshot if dispatch_type == "final" else phase_snapshot
+
+        dispatch_type, chosen = asyncio.run(
+            choose_trust_read_registry_snapshot(
+                dispatch_type="auto",
+                case_id=2011,
+                get_trust_registry_snapshot=_get_trust_registry_snapshot,
+            )
+        )
+        self.assertEqual(dispatch_type, "final")
+        self.assertIs(chosen, final_snapshot)
+
     def test_build_trust_attestation_verify_payload_should_return_verify_bundle(self) -> None:
         final_receipt = _DummyReceipt(
             request={"traceId": "trace-final-request"},
@@ -381,6 +526,133 @@ class TrustReadRoutesTests(unittest.TestCase):
             "trust_public_verify_contract_violation",
         )
         self.assertIn("public_verify_missing_keys:verifyPayload", ctx.exception.detail["message"])
+
+    def test_build_trust_registry_snapshot_from_bundle_should_include_public_verify(self) -> None:
+        bundle = {
+            "context": {"dispatchType": "final", "traceId": "trace-registry"},
+            "commitment": {
+                "version": "trust-phaseA-case-commitment-v1",
+                "caseId": 2012,
+                "dispatchType": "final",
+                "traceId": "trace-registry",
+                "requestHash": "request-hash",
+                "workflowHash": "workflow-hash",
+                "reportHash": "report-hash",
+                "attestationCommitmentHash": "att-hash",
+                "commitmentHash": "commit-hash",
+            },
+            "verdictAttestation": {
+                "version": "trust-phaseA-verdict-attestation-v1",
+                "caseId": 2012,
+                "dispatchType": "final",
+                "traceId": "trace-registry",
+                "registryHash": "attest-hash",
+                "verified": True,
+                "mismatchComponents": [],
+            },
+            "challengeReview": {
+                "version": "trust-phaseB-challenge-review-v1",
+                "caseId": 2012,
+                "traceId": "trace-registry",
+                "registryHash": "challenge-hash",
+                "challengeState": "not_challenged",
+                "totalChallenges": 0,
+            },
+            "kernelVersion": {
+                "version": "trust-phaseA-kernel-version-v1",
+                "caseId": 2012,
+                "traceId": "trace-registry",
+                "registryHash": "kernel-hash",
+                "kernelHash": "kernel-vector-hash",
+            },
+        }
+
+        def _build_audit_anchor_export(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "caseId": kwargs["case_id"],
+                "dispatchType": kwargs["dispatch_type"],
+                "traceId": kwargs["trace_id"],
+                "anchorHash": "anchor-hash",
+                "componentHashes": {
+                    "caseCommitmentHash": "commit-hash",
+                    "verdictAttestationHash": "attest-hash",
+                    "challengeReviewHash": "challenge-hash",
+                    "kernelVersionHash": "kernel-hash",
+                },
+            }
+
+        def _build_public_verify_payload(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "caseCommitment": kwargs["commitment"],
+                "verdictAttestation": kwargs["verdict_attestation"],
+                "challengeReview": kwargs["challenge_review"],
+                "kernelVersion": kwargs["kernel_version"],
+                "auditAnchor": kwargs["audit_anchor"],
+            }
+
+        snapshot = build_trust_registry_snapshot_from_bundle(
+            case_id=2012,
+            bundle=bundle,
+            build_audit_anchor_export=_build_audit_anchor_export,
+            build_public_verify_payload=_build_public_verify_payload,
+        )
+
+        self.assertEqual(snapshot.dispatch_type, "final")
+        self.assertEqual(snapshot.public_verify["verifyPayload"]["auditAnchor"]["anchorHash"], "anchor-hash")
+        self.assertEqual(snapshot.component_hashes["auditAnchorHash"], "anchor-hash")
+
+    def test_write_trust_registry_snapshot_for_report_should_upsert_snapshot(self) -> None:
+        written: list[TrustRegistrySnapshot] = []
+
+        async def _upsert_trust_registry_snapshot(*, snapshot: TrustRegistrySnapshot) -> TrustRegistrySnapshot:
+            written.append(snapshot)
+            return snapshot
+
+        snapshot = asyncio.run(
+            write_trust_registry_snapshot_for_report(
+                case_id=2013,
+                dispatch_type="final",
+                trace_id="trace-write-through",
+                request_snapshot={"caseId": 2013},
+                report_payload={
+                    "winner": "pro",
+                    "proScore": 66,
+                    "conScore": 60,
+                    "reviewRequired": False,
+                    "trustAttestation": {"commitmentHash": "att-commit"},
+                },
+                workflow_snapshot={"status": "callback_reported"},
+                workflow_status="callback_reported",
+                workflow_events=[],
+                alerts=[],
+                provider="mock",
+                upsert_trust_registry_snapshot=_upsert_trust_registry_snapshot,
+                build_audit_anchor_export=lambda **kwargs: {
+                    "caseId": kwargs["case_id"],
+                    "dispatchType": kwargs["dispatch_type"],
+                    "traceId": kwargs["trace_id"],
+                    "anchorHash": "anchor-write",
+                    "componentHashes": {
+                        "caseCommitmentHash": kwargs["case_commitment"]["commitmentHash"],
+                        "verdictAttestationHash": kwargs["verdict_attestation"]["registryHash"],
+                        "challengeReviewHash": kwargs["challenge_review"]["registryHash"],
+                        "kernelVersionHash": kwargs["kernel_version"]["registryHash"],
+                    },
+                },
+                build_public_verify_payload=lambda **kwargs: {
+                    "caseCommitment": kwargs["commitment"],
+                    "verdictAttestation": kwargs["verdict_attestation"],
+                    "challengeReview": kwargs["challenge_review"],
+                    "kernelVersion": kwargs["kernel_version"],
+                    "auditAnchor": kwargs["audit_anchor"],
+                },
+            )
+        )
+
+        self.assertEqual(len(written), 1)
+        self.assertIs(snapshot, written[0])
+        self.assertEqual(snapshot.trace_id, "trace-write-through")
+        self.assertEqual(snapshot.public_verify["caseId"], 2013)
 
 
 if __name__ == "__main__":

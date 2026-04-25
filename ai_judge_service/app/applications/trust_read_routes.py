@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
+
+from app.domain.trust import TRUST_REGISTRY_VERSION, TrustRegistrySnapshot
 
 from .trust_phasea_bundle import build_trust_phasea_bundle
 
@@ -35,6 +38,66 @@ def choose_trust_read_dispatch_receipt(
             return "phase", phase_receipt
         return "auto", None
     return dispatch_type, explicit_receipt
+
+
+async def choose_trust_read_registry_snapshot(
+    *,
+    dispatch_type: str,
+    case_id: int,
+    get_trust_registry_snapshot: Any,
+) -> tuple[str, TrustRegistrySnapshot | None]:
+    if get_trust_registry_snapshot is None:
+        return dispatch_type, None
+    if dispatch_type == "auto":
+        final_snapshot = await get_trust_registry_snapshot(
+            case_id=case_id,
+            dispatch_type="final",
+        )
+        if final_snapshot is not None:
+            return "final", final_snapshot
+        phase_snapshot = await get_trust_registry_snapshot(
+            case_id=case_id,
+            dispatch_type="phase",
+        )
+        if phase_snapshot is not None:
+            return "phase", phase_snapshot
+        return "auto", None
+    snapshot = await get_trust_registry_snapshot(
+        case_id=case_id,
+        dispatch_type=dispatch_type,
+    )
+    return dispatch_type, snapshot
+
+
+def build_trust_phasea_bundle_from_registry_snapshot(
+    *,
+    snapshot: TrustRegistrySnapshot,
+) -> dict[str, Any]:
+    normalized = snapshot.normalized()
+    return {
+        "context": {
+            "dispatchType": normalized.dispatch_type,
+            "traceId": normalized.trace_id,
+            "source": "trust_registry",
+            "registryVersion": normalized.registry_version,
+        },
+        "verifyResult": {
+            "verified": bool(normalized.verdict_attestation.get("verified")),
+            "reason": normalized.verdict_attestation.get("reason"),
+            "mismatchComponents": (
+                list(normalized.verdict_attestation.get("mismatchComponents"))
+                if isinstance(normalized.verdict_attestation.get("mismatchComponents"), list)
+                else []
+            ),
+        },
+        "commitment": dict(normalized.case_commitment),
+        "verdictAttestation": dict(normalized.verdict_attestation),
+        "challengeReview": dict(normalized.challenge_review),
+        "kernelVersion": dict(normalized.kernel_version),
+        "auditAnchor": dict(normalized.audit_anchor),
+        "publicVerify": dict(normalized.public_verify),
+        "componentHashes": dict(normalized.component_hashes),
+    }
 
 
 def build_trust_report_context_from_receipt(
@@ -131,10 +194,25 @@ async def build_trust_phasea_bundle_for_case(
     list_audit_alerts: Any,
     serialize_workflow_job: Any,
     provider: str,
+    get_trust_registry_snapshot: Any | None = None,
 ) -> dict[str, Any]:
+    try:
+        dispatch_type_normalized = normalize_trust_read_dispatch_type(dispatch_type)
+    except ValueError as err:
+        raise TrustReadRouteError(status_code=422, detail="invalid_dispatch_type") from err
+
+    registry_dispatch_type, registry_snapshot = await choose_trust_read_registry_snapshot(
+        dispatch_type=dispatch_type_normalized,
+        case_id=case_id,
+        get_trust_registry_snapshot=get_trust_registry_snapshot,
+    )
+    if registry_snapshot is not None:
+        del registry_dispatch_type
+        return build_trust_phasea_bundle_from_registry_snapshot(snapshot=registry_snapshot)
+
     context = await resolve_trust_report_context_for_case(
         case_id=case_id,
-        dispatch_type=dispatch_type,
+        dispatch_type=dispatch_type_normalized,
         get_dispatch_receipt=get_dispatch_receipt,
         not_found_detail="trust_receipt_not_found",
         missing_report_detail="trust_report_payload_missing",
@@ -157,7 +235,137 @@ async def build_trust_phasea_bundle_for_case(
         alerts=alerts,
         provider=provider,
     )
-    return {"context": context, **bundle_payload}
+    return {"context": {**context, "source": "derived_from_receipt"}, **bundle_payload}
+
+
+def _coerce_audit_alerts(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    out: list[Any] = []
+    for item in value:
+        if isinstance(item, dict):
+            out.append(SimpleNamespace(**item))
+        else:
+            out.append(item)
+    return out
+
+
+def _component_hashes_from_anchor(audit_anchor: dict[str, Any]) -> dict[str, Any]:
+    component_hashes = (
+        dict(audit_anchor.get("componentHashes"))
+        if isinstance(audit_anchor.get("componentHashes"), dict)
+        else {}
+    )
+    anchor_hash = str(audit_anchor.get("anchorHash") or "").strip()
+    if anchor_hash:
+        component_hashes["auditAnchorHash"] = anchor_hash
+    return component_hashes
+
+
+def build_trust_registry_snapshot_from_bundle(
+    *,
+    case_id: int,
+    bundle: dict[str, Any],
+    build_audit_anchor_export: Any,
+    build_public_verify_payload: Any,
+    registry_version: str = TRUST_REGISTRY_VERSION,
+) -> TrustRegistrySnapshot:
+    context = bundle["context"] if isinstance(bundle.get("context"), dict) else {}
+    dispatch_type = str(context.get("dispatchType") or "").strip().lower()
+    trace_id = str(context.get("traceId") or "").strip()
+    commitment = dict(bundle["commitment"]) if isinstance(bundle.get("commitment"), dict) else {}
+    verdict_attestation = (
+        dict(bundle["verdictAttestation"])
+        if isinstance(bundle.get("verdictAttestation"), dict)
+        else {}
+    )
+    challenge_review = (
+        dict(bundle["challengeReview"])
+        if isinstance(bundle.get("challengeReview"), dict)
+        else {}
+    )
+    kernel_version = dict(bundle["kernelVersion"]) if isinstance(bundle.get("kernelVersion"), dict) else {}
+    audit_anchor = build_audit_anchor_export(
+        case_id=case_id,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        case_commitment=commitment,
+        verdict_attestation=verdict_attestation,
+        challenge_review=challenge_review,
+        kernel_version=kernel_version,
+        include_payload=False,
+    )
+    public_verify = build_trust_public_verify_route_payload(
+        case_id=case_id,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        verify_payload=build_public_verify_payload(
+            commitment=commitment,
+            verdict_attestation=verdict_attestation,
+            challenge_review=challenge_review,
+            kernel_version=kernel_version,
+            audit_anchor=audit_anchor,
+        ),
+    )
+    return TrustRegistrySnapshot(
+        case_id=int(case_id),
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        registry_version=registry_version,
+        case_commitment=commitment,
+        verdict_attestation=verdict_attestation,
+        challenge_review=challenge_review,
+        kernel_version=kernel_version,
+        audit_anchor=dict(audit_anchor),
+        public_verify=public_verify,
+        component_hashes=_component_hashes_from_anchor(audit_anchor),
+    )
+
+
+async def write_trust_registry_snapshot_for_report(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    request_snapshot: dict[str, Any] | None,
+    report_payload: dict[str, Any] | None,
+    workflow_snapshot: dict[str, Any] | None,
+    workflow_status: str | None,
+    workflow_events: list[Any] | None,
+    alerts: list[Any] | None,
+    provider: str,
+    upsert_trust_registry_snapshot: Any,
+    build_audit_anchor_export: Any,
+    build_public_verify_payload: Any,
+    registry_version: str = TRUST_REGISTRY_VERSION,
+) -> TrustRegistrySnapshot:
+    bundle = build_trust_phasea_bundle(
+        case_id=case_id,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        request_snapshot=request_snapshot,
+        report_payload=report_payload,
+        workflow_snapshot=workflow_snapshot,
+        workflow_status=workflow_status,
+        workflow_events=list(workflow_events or []),
+        alerts=_coerce_audit_alerts(alerts),
+        provider=provider,
+    )
+    bundle["context"] = {
+        "dispatchType": str(dispatch_type or "").strip().lower(),
+        "traceId": str(trace_id or "").strip(),
+        "source": "write_through_report",
+        "registryVersion": registry_version,
+    }
+    snapshot = build_trust_registry_snapshot_from_bundle(
+        case_id=case_id,
+        bundle=bundle,
+        build_audit_anchor_export=build_audit_anchor_export,
+        build_public_verify_payload=build_public_verify_payload,
+        registry_version=registry_version,
+    )
+    # Trust Registry 是裁决事实的制度化承诺层；写入失败必须显式暴露，不能伪装成功。
+    return await upsert_trust_registry_snapshot(snapshot=snapshot)
 
 
 async def build_trust_attestation_verify_payload(

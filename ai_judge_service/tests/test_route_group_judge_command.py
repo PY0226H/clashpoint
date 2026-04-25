@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from typing import Any
 
+from app.applications.judge_command_routes import JudgeCommandRouteError
 from app.applications.route_group_judge_command import (
     JudgeCommandRouteDependencies,
+    _write_trust_registry_snapshot_or_raise,
     register_judge_command_routes,
 )
 from fastapi import FastAPI
@@ -70,6 +73,7 @@ class RouteGroupJudgeCommandTests(unittest.TestCase):
             validate_final_report_payload_contract=lambda **_kwargs: None,
             validate_phase_dispatch_request=lambda **_kwargs: None,
             validate_final_dispatch_request=lambda **_kwargs: None,
+            write_trust_registry_snapshot=_payload,
         )
 
         register_judge_command_routes(app=app, deps=deps)
@@ -80,3 +84,25 @@ class RouteGroupJudgeCommandTests(unittest.TestCase):
         self.assertIn("/internal/judge/v3/final/dispatch", paths)
         self.assertIn("/internal/judge/v3/phase/cases/{case_id}/receipt", paths)
         self.assertIn("/internal/judge/v3/final/cases/{case_id}/receipt", paths)
+
+    def test_write_trust_registry_snapshot_or_raise_should_map_contract_error(self) -> None:
+        async def _write_trust_registry_snapshot(**_kwargs: Any) -> None:
+            raise ValueError("invalid_trust_registry_snapshot:component_hashes_required")
+
+        with self.assertRaises(JudgeCommandRouteError) as ctx:
+            asyncio.run(
+                _write_trust_registry_snapshot_or_raise(
+                    write_trust_registry_snapshot=_write_trust_registry_snapshot,
+                    case_id=7001,
+                    dispatch_type="final",
+                    trace_id="trace-7001",
+                    request_snapshot={"caseId": 7001},
+                    report_payload={"auditAlerts": []},
+                    workflow_snapshot={"status": "callback_reported"},
+                    workflow_status="callback_reported",
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(ctx.exception.detail["code"], "trust_registry_contract_violation")
+        self.assertFalse(ctx.exception.detail["retryable"])

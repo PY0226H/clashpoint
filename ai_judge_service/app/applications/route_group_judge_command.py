@@ -7,6 +7,7 @@ from fastapi import FastAPI, Header, Request
 
 from ..models import CaseCreateRequest, FinalDispatchRequest, PhaseDispatchRequest
 from ..runtime_types import CallbackReportFn
+from .judge_command_routes import JudgeCommandRouteError
 from .judge_command_routes import (
     build_blindization_rejection_route_payload as build_blindization_rejection_route_payload_v3,
 )
@@ -127,6 +128,60 @@ class JudgeCommandRouteDependencies:
     validate_final_report_payload_contract: Callable[..., None]
     validate_phase_dispatch_request: Callable[..., None]
     validate_final_dispatch_request: Callable[..., None]
+    write_trust_registry_snapshot: Callable[..., Awaitable[Any]]
+
+
+async def _write_trust_registry_snapshot_or_raise(
+    *,
+    write_trust_registry_snapshot: Callable[..., Awaitable[Any]],
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    request_snapshot: dict[str, Any],
+    report_payload: dict[str, Any],
+    workflow_snapshot: dict[str, Any],
+    workflow_status: str,
+) -> dict[str, Any]:
+    try:
+        snapshot = await write_trust_registry_snapshot(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            request_snapshot=request_snapshot,
+            report_payload=report_payload,
+            workflow_snapshot=workflow_snapshot,
+            workflow_status=workflow_status,
+            workflow_events=[],
+            alerts=(
+                report_payload.get("auditAlerts")
+                if isinstance(report_payload.get("auditAlerts"), list)
+                else []
+            ),
+        )
+        to_payload = getattr(snapshot, "to_payload", None)
+        if callable(to_payload):
+            return {"trustRegistry": to_payload()}
+        return {"trustRegistry": snapshot}
+    except JudgeCommandRouteError:
+        raise
+    except ValueError as err:
+        raise JudgeCommandRouteError(
+            status_code=500,
+            detail={
+                "code": "trust_registry_contract_violation",
+                "message": str(err),
+                "retryable": False,
+            },
+        ) from err
+    except Exception as err:
+        raise JudgeCommandRouteError(
+            status_code=503,
+            detail={
+                "code": "trust_registry_write_failed",
+                "message": str(err),
+                "retryable": True,
+            },
+        ) from err
 
 
 def register_judge_command_routes(
@@ -254,6 +309,18 @@ def register_judge_command_routes(
         phase_judge_workflow_payload = cast(
             dict[str, Any],
             report_materialization["phaseJudgeWorkflowPayload"],
+        )
+        await deps.run_judge_command_route_guard(
+            _write_trust_registry_snapshot_or_raise(
+                write_trust_registry_snapshot=deps.write_trust_registry_snapshot,
+                case_id=parsed.case_id,
+                dispatch_type="phase",
+                trace_id=parsed.trace_id,
+                request_snapshot=request_payload,
+                report_payload=phase_report_payload,
+                workflow_snapshot=phase_judge_workflow_payload,
+                workflow_status="callback_reported",
+            )
         )
         phase_callback_outcome = await deps.run_judge_command_route_guard(
             build_phase_dispatch_callback_delivery_route_payload_v3(
@@ -430,6 +497,22 @@ def register_judge_command_routes(
                 )
             )
 
+        await deps.run_judge_command_route_guard(
+            _write_trust_registry_snapshot_or_raise(
+                write_trust_registry_snapshot=deps.write_trust_registry_snapshot,
+                case_id=parsed.case_id,
+                dispatch_type="final",
+                trace_id=parsed.trace_id,
+                request_snapshot=request_payload,
+                report_payload=final_report_payload,
+                workflow_snapshot=final_judge_workflow_payload,
+                workflow_status=(
+                    "review_required"
+                    if bool(final_report_payload.get("reviewRequired"))
+                    else "callback_reported"
+                ),
+            )
+        )
         final_callback_outcome = await deps.run_judge_command_route_guard(
             build_final_dispatch_callback_delivery_route_payload_v3(
                 parsed=parsed,

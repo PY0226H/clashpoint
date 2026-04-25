@@ -182,6 +182,7 @@ async def build_trust_phasea_bundle_for_runtime(
     serialize_workflow_job: Callable[[Any], dict[str, Any]],
     provider: str,
     run_trust_read_guard: Callable[[Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]],
+    get_trust_registry_snapshot: Callable[..., Awaitable[Any | None]] | None = None,
 ) -> dict[str, Any]:
     return await run_trust_read_guard(
         build_trust_phasea_bundle_for_case_v3(
@@ -193,6 +194,7 @@ async def build_trust_phasea_bundle_for_runtime(
             list_audit_alerts=list_audit_alerts,
             serialize_workflow_job=serialize_workflow_job,
             provider=provider,
+            get_trust_registry_snapshot=get_trust_registry_snapshot,
         )
     )
 
