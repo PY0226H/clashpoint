@@ -855,6 +855,15 @@ class JudgeMainlinePhaseTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(payload["winner"], "pro")
+        self.assertEqual(payload["judgeTrace"]["gatewayCore"]["traceId"], "trace-phase-9101")
+        self.assertEqual(
+            payload["judgeTrace"]["gatewayCore"]["requestedPolicyVersion"],
+            "v3-default",
+        )
+        self.assertEqual(
+            payload["judgeTrace"]["gatewayCore"]["requestedRetrievalProfile"],
+            "hybrid_v1",
+        )
         mocked.assert_awaited_once()
         called_kwargs = mocked.await_args.kwargs
         self.assertEqual(called_kwargs["request"], request)

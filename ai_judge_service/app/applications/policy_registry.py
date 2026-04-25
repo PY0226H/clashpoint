@@ -23,6 +23,8 @@ class JudgePolicyProfile:
     prompt_versions: dict[str, str]
     tool_ids: tuple[str, ...]
     fairness_thresholds: dict[str, Any]
+    draw_policy: dict[str, Any]
+    review_escalation_policy: dict[str, Any]
     metadata: dict[str, Any]
 
 
@@ -89,6 +91,8 @@ class PolicyRegistryRuntime:
             "promptVersions": dict(profile.prompt_versions),
             "toolIds": list(profile.tool_ids),
             "fairnessThresholds": dict(profile.fairness_thresholds),
+            "drawPolicy": dict(profile.draw_policy),
+            "reviewEscalationPolicy": dict(profile.review_escalation_policy),
             "metadata": dict(profile.metadata),
         }
 
@@ -103,6 +107,8 @@ class PolicyRegistryRuntime:
             "promptVersions": dict(profile.prompt_versions),
             "toolIds": list(profile.tool_ids),
             "fairnessThresholds": dict(profile.fairness_thresholds),
+            "drawPolicy": dict(profile.draw_policy),
+            "reviewEscalationPolicy": dict(profile.review_escalation_policy),
         }
 
     @staticmethod
@@ -115,6 +121,8 @@ class PolicyRegistryRuntime:
             "toolRegistryVersion": profile.tool_registry_version,
             "promptVersions": dict(profile.prompt_versions),
             "toolIds": list(profile.tool_ids),
+            "drawPolicy": dict(profile.draw_policy),
+            "reviewEscalationPolicy": dict(profile.review_escalation_policy),
         }
         return {
             "version": "policy-kernel-binding-v1",
@@ -190,6 +198,22 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
         "evidenceMinWinnerSupportRefs": 1,
         "evidenceConflictRatioMax": 0.65,
     }
+    default_draw_policy = {
+        "allowedPublicResults": ["pro", "con", "draw"],
+        "lowMarginAction": "draw_or_review",
+        "reviewRequiredResult": "draw",
+    }
+    default_review_escalation_policy = {
+        "gateRequired": True,
+        "blockToDrawSignals": [
+            "label_swap_instability",
+            "style_shift_instability",
+            "judge_panel_high_disagreement",
+            "evidence_support_too_low",
+            "identity_leakage_detected",
+        ],
+        "humanReviewOnBlockedGate": True,
+    }
     fallback = [
         JudgePolicyProfile(
             version=default_version,
@@ -200,6 +224,8 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
             prompt_versions=dict(DEFAULT_PROMPT_VERSIONS),
             tool_ids=DEFAULT_TOOL_IDS,
             fairness_thresholds=default_thresholds,
+            draw_policy=default_draw_policy,
+            review_escalation_policy=default_review_escalation_policy,
             metadata={"status": "active", "source": "builtin"},
         )
     ]
@@ -244,6 +270,16 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
             if isinstance(row.get("fairnessThresholds"), dict)
             else dict(default_thresholds)
         )
+        draw_policy = (
+            dict(row.get("drawPolicy"))
+            if isinstance(row.get("drawPolicy"), dict)
+            else dict(default_draw_policy)
+        )
+        review_escalation_policy = (
+            dict(row.get("reviewEscalationPolicy"))
+            if isinstance(row.get("reviewEscalationPolicy"), dict)
+            else dict(default_review_escalation_policy)
+        )
         metadata = dict(row.get("metadata")) if isinstance(row.get("metadata"), dict) else {}
         metadata.setdefault("status", "active")
         metadata.setdefault("source", "env")
@@ -257,6 +293,8 @@ def _normalize_profiles(raw_profiles: Any, *, default_version: str) -> list[Judg
                 prompt_versions=prompt_versions,
                 tool_ids=tool_ids,
                 fairness_thresholds=fairness_thresholds,
+                draw_policy=draw_policy,
+                review_escalation_policy=review_escalation_policy,
                 metadata=metadata,
             )
         )

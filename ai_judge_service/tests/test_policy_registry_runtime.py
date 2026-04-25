@@ -88,6 +88,8 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         self.assertEqual(profile.prompt_versions["claimGraphVersion"], "v1-claim-graph-bootstrap")
         self.assertIn("evidenceMinTotalRefs", profile.fairness_thresholds)
         self.assertIn("evidenceMinDecisiveRefs", profile.fairness_thresholds)
+        self.assertEqual(profile.draw_policy["reviewRequiredResult"], "draw")
+        self.assertTrue(profile.review_escalation_policy["gateRequired"])
 
     def test_build_policy_registry_runtime_should_parse_custom_registry_json(self) -> None:
         runtime = build_policy_registry_runtime(
@@ -96,7 +98,10 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
                     '{"defaultVersion":"v4-pro","profiles":[{"version":"v4-pro","rubricVersion":"v4",'
                     '"topicDomain":"tft","promptRegistryVersion":"promptset-v4","toolRegistryVersion":"toolset-v4",'
                     '"promptVersions":{"claimGraphVersion":"v2"},"toolIds":["x"],'
-                    '"fairnessThresholds":{"drawRateMax":0.22},"metadata":{"status":"active"}}]}'
+                    '"fairnessThresholds":{"drawRateMax":0.22},'
+                    '"drawPolicy":{"lowMarginAction":"manual_review"},'
+                    '"reviewEscalationPolicy":{"gateRequired":true,"humanReviewOnBlockedGate":true},'
+                    '"metadata":{"status":"active"}}]}'
                 )
             )
         )
@@ -110,6 +115,8 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         self.assertEqual(profile.tool_registry_version, "toolset-v4")
         self.assertEqual(profile.prompt_versions["claimGraphVersion"], "v2")
         self.assertEqual(profile.tool_ids, ("x",))
+        self.assertEqual(profile.draw_policy["lowMarginAction"], "manual_review")
+        self.assertTrue(profile.review_escalation_policy["humanReviewOnBlockedGate"])
 
     def test_policy_resolve_should_validate_version_rubric_and_topic(self) -> None:
         runtime = build_policy_registry_runtime(settings=_build_settings())
@@ -154,6 +161,11 @@ class PolicyRegistryRuntimeTests(unittest.TestCase):
         self.assertEqual(
             first["kernelVector"]["toolRegistryVersion"],
             profile.tool_registry_version,
+        )
+        self.assertEqual(first["kernelVector"]["drawPolicy"], profile.draw_policy)
+        self.assertEqual(
+            first["kernelVector"]["reviewEscalationPolicy"],
+            profile.review_escalation_policy,
         )
 
 

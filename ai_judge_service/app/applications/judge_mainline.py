@@ -41,9 +41,21 @@ async def build_phase_report_payload(
     settings: Settings,
     gateway_runtime: GatewayRuntime,
 ) -> dict[str, Any]:
-    return await build_phase_report_payload_v3(
+    payload = await build_phase_report_payload_v3(
         request=request,
         settings=settings,
         llm_gateway=gateway_runtime.llm,
         knowledge_gateway=gateway_runtime.knowledge,
     )
+    if isinstance(payload, dict):
+        trace = payload.get("judgeTrace")
+        if not isinstance(trace, dict):
+            trace = {}
+            payload["judgeTrace"] = trace
+        trace["gatewayCore"] = gateway_runtime.build_trace_snapshot(
+            trace_id=request.trace_id,
+            requested_policy_version=request.judge_policy_version,
+            requested_retrieval_profile=request.retrieval_profile,
+            use_case="judge",
+        )
+    return payload

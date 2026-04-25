@@ -1,3 +1,15 @@
-from .ports import KnowledgeGatewayPort, LlmGatewayPort
+from .ports import (
+    GatewayKnowledgePolicy,
+    GatewayLlmPolicy,
+    GatewayPolicyBinding,
+    KnowledgeGatewayPort,
+    LlmGatewayPort,
+)
 
-__all__ = ["LlmGatewayPort", "KnowledgeGatewayPort"]
+__all__ = [
+    "GatewayKnowledgePolicy",
+    "GatewayLlmPolicy",
+    "GatewayPolicyBinding",
+    "LlmGatewayPort",
+    "KnowledgeGatewayPort",
+]
