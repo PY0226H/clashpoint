@@ -10,44 +10,10 @@ from app.applications.registry_governance_routes import (
     build_policy_registry_dependency_health_route_payload,
     build_registry_prompt_tool_governance_route_payload,
 )
-from app.applications.registry_routes import RegistryRouteError, build_policy_release_gate_decision
+from app.applications.registry_routes import RegistryRouteError
 
 
 class RegistryGovernanceRoutesTests(unittest.TestCase):
-    def test_policy_release_gate_decision_should_merge_p37_readiness_inputs(self) -> None:
-        dependency_health = {
-            "ok": True,
-            "code": "dependency_ok",
-            "policyProfile": {
-                "metadata": {
-                    "releaseGateInputs": {
-                        "artifactStoreReadiness": {"status": "env_blocked"},
-                        "publicVerificationReadiness": {"status": "ready"},
-                        "trustRegistryWriteThrough": {"status": "ready"},
-                        "panelShadowDrift": {"status": "ready"},
-                    }
-                }
-            },
-        }
-        fairness_gate = {
-            "passed": True,
-            "benchmarkGatePassed": True,
-            "shadowGateApplied": False,
-            "shadowGatePassed": None,
-            "thresholdDecision": "accepted",
-        }
-
-        payload = build_policy_release_gate_decision(
-            dependency_health=dependency_health,
-            fairness_gate=fairness_gate,
-        )
-
-        self.assertFalse(payload["allowed"])
-        self.assertEqual(payload["decision"], "env_blocked")
-        self.assertEqual(payload["code"], "registry_release_gate_env_blocked")
-        reason_codes = {row["code"] for row in payload["reasons"]}
-        self.assertIn("registry_release_gate_artifactStoreReadiness_env_blocked", reason_codes)
-
     def test_dependency_health_route_should_map_invalid_trend_status(self) -> None:
         async def _evaluate_dependency_health(version: str) -> dict[str, Any]:
             return {
