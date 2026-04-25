@@ -465,6 +465,133 @@ class AppFactoryRegistryRouteTests(
             shadow_run_id,
         )
 
+    async def test_policy_registry_activate_should_block_when_p37_release_readiness_env_blocked(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        suffix = _unique_case_id(9218)
+        version = f"policy-release-gate-{suffix}"
+        benchmark_run_id = f"benchmark-release-{suffix}"
+        shadow_run_id = f"shadow-release-{suffix}"
+        actor = f"release-gate-actor-{suffix}"
+
+        publish_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/registries/policy/publish",
+            payload={
+                "version": version,
+                "activate": False,
+                "profile": {
+                    "rubricVersion": "v3",
+                    "topicDomain": "tft",
+                    "promptRegistryVersion": "promptset-v3-default",
+                    "toolRegistryVersion": "toolset-v3-default",
+                    "metadata": {
+                        "releaseGateInputs": {
+                            "artifactStoreReadiness": {
+                                "status": "env_blocked",
+                                "code": "artifact_store_real_env_missing",
+                            },
+                            "publicVerificationReadiness": {"status": "ready"},
+                            "trustRegistryWriteThrough": {"status": "ready"},
+                            "panelShadowDrift": {"status": "ready"},
+                        }
+                    },
+                },
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(publish_resp.status_code, 200)
+
+        benchmark_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/benchmark-runs",
+            payload={
+                "run_id": benchmark_run_id,
+                "policy_version": version,
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "sample_size": 64,
+                "draw_rate": 0.12,
+                "side_bias_delta": 0.02,
+                "appeal_overturn_rate": 0.03,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(benchmark_resp.status_code, 200)
+
+        shadow_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/shadow-runs",
+            payload={
+                "run_id": shadow_run_id,
+                "policy_version": version,
+                "benchmark_run_id": benchmark_run_id,
+                "environment_mode": "local_reference",
+                "status": "local_reference_frozen",
+                "threshold_decision": "accepted",
+                "sample_size": 64,
+                "winner_flip_rate": 0.01,
+                "score_shift_delta": 0.02,
+                "review_required_delta": 0.0,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(shadow_resp.status_code, 200)
+
+        activate_resp = await self._post(
+            app=app,
+            path=f"/internal/judge/registries/policy/{version}/activate?actor={actor}",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(activate_resp.status_code, 409)
+        detail = activate_resp.json()["detail"]
+        self.assertEqual(detail["code"], "registry_release_gate_env_blocked")
+        self.assertEqual(detail["releaseGate"]["decision"], "env_blocked")
+        reason_codes = {row["code"] for row in detail["releaseGate"]["reasons"]}
+        self.assertIn("artifact_store_real_env_missing", reason_codes)
+
+        override_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/registries/policy/{version}/activate"
+                f"?override_fairness_gate=true&actor={actor}"
+                "&reason=release_gate_env_override"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(override_resp.status_code, 200)
+        override_payload = override_resp.json()
+        self.assertTrue(override_payload["item"]["isActive"])
+        self.assertEqual(override_payload["releaseGate"]["decision"], "env_blocked")
+
+        audits_resp = await self._get(
+            app=app,
+            path="/internal/judge/registries/policy/audits?limit=200",
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(audits_resp.status_code, 200)
+        audit_items = audits_resp.json()["items"]
+        activate_audit = next(
+            (
+                item
+                for item in audit_items
+                if item["action"] == "activate"
+                and item["version"] == version
+                and item["actor"] == actor
+            ),
+            None,
+        )
+        self.assertIsNotNone(activate_audit)
+        assert activate_audit is not None
+        self.assertEqual(
+            activate_audit["details"]["releaseGate"]["decision"],
+            "env_blocked",
+        )
+        self.assertTrue(bool(activate_audit["details"]["releaseGate"]["overrideApplied"]))
+
     async def test_policy_registry_activate_should_block_when_dependency_invalid(
         self,
     ) -> None:
@@ -648,8 +775,12 @@ class AppFactoryRegistryRouteTests(
         self.assertIn("domainJudgeFamily", target)
         self.assertIn("dependencyHealth", target)
         self.assertIn("fairnessGate", target)
+        self.assertIn("releaseGate", target)
         self.assertIn("simulatedGate", target)
-        self.assertIn(target["simulatedGate"]["status"], {"pass", "blocked"})
+        self.assertIn(
+            target["simulatedGate"]["status"],
+            {"allowed", "blocked", "needs_review", "env_blocked"},
+        )
         self.assertIsInstance(target["simulatedGate"]["failingComponents"], list)
 
         after_alerts = list(
@@ -771,6 +902,8 @@ class AppFactoryRegistryRouteTests(
         self.assertIn("prompt_registry_version_not_found", invalid_row["issueCodes"])
         self.assertEqual(invalid_row["policyKernelVersion"], "policy-kernel-binding-v1")
         self.assertTrue(str(invalid_row["policyKernelHash"] or "").strip())
+        self.assertIn("releaseGate", invalid_row)
+        self.assertEqual(invalid_row["releaseGateDecision"], "blocked")
         self.assertIn(f"promptset-missing-{suffix}", dependency["byPromptRegistryVersion"])
 
         reverse_usage = payload["reverseUsage"]
@@ -794,6 +927,10 @@ class AppFactoryRegistryRouteTests(
         self.assertTrue(
             any(row["domainJudgeFamily"] == "tft" for row in domain_families["items"])
         )
+        release_readiness = payload["releaseReadiness"]
+        self.assertIsInstance(release_readiness, dict)
+        self.assertGreaterEqual(release_readiness["blockedCount"], 1)
+        self.assertIn("dependencyHealth", release_readiness["componentBlockCounts"])
 
         release_state = payload["releaseState"]
         self.assertIn("policy", release_state)

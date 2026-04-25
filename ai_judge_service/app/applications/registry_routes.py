@@ -4,6 +4,31 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 REGISTRY_DEPENDENCY_NOT_FOUND_CODE = "policy_registry_not_found"
+RELEASE_GATE_READY_STATUSES = {
+    "ready",
+    "readiness_ready",
+    "local_reference_ready",
+    "pass",
+    "passed",
+    "accepted",
+    "ok",
+}
+RELEASE_GATE_BLOCKED_STATUSES = {
+    "blocked",
+    "failed",
+    "fail",
+    "error",
+    "threshold_violation",
+    "violation",
+    "not_ready",
+}
+RELEASE_GATE_ENV_BLOCKED_STATUSES = {
+    "env_blocked",
+    "pending_real_env",
+    "pending_real_samples",
+    "missing_real_env",
+    "missing_real_samples",
+}
 
 
 class RegistryRouteError(Exception):
@@ -52,6 +77,267 @@ def build_registry_releases_payload(
 
 def build_registry_release_payload(*, item: dict[str, Any]) -> dict[str, Any]:
     return {"item": dict(item)}
+
+
+def _extract_policy_metadata(dependency_health: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dependency_health if isinstance(dependency_health, dict) else {}
+    profile = payload.get("policyProfile") if isinstance(payload.get("policyProfile"), dict) else {}
+    return profile.get("metadata") if isinstance(profile.get("metadata"), dict) else {}
+
+
+def _extract_release_readiness_section(metadata: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "releaseGateInputs",
+        "releaseReadiness",
+        "release_gate_inputs",
+        "release_readiness",
+        "p37ReleaseReadiness",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _coerce_release_component(
+    *,
+    name: str,
+    raw: Any,
+    missing_code: str,
+    ready_message: str,
+) -> dict[str, Any]:
+    payload = raw if isinstance(raw, dict) else {}
+    raw_status = str(payload.get("status") or payload.get("decision") or "").strip().lower()
+    if not raw_status:
+        raw_status = "missing"
+
+    if raw_status in RELEASE_GATE_READY_STATUSES:
+        status = "ready"
+        code = f"registry_release_gate_{name}_ready"
+        message = str(payload.get("message") or "").strip() or ready_message
+    elif raw_status in RELEASE_GATE_BLOCKED_STATUSES:
+        status = "blocked"
+        code = (
+            str(payload.get("code") or "").strip()
+            or f"registry_release_gate_{name}_blocked"
+        )
+        message = (
+            str(payload.get("message") or "").strip()
+            or f"{name} is blocked"
+        )
+    elif raw_status in RELEASE_GATE_ENV_BLOCKED_STATUSES:
+        status = "env_blocked"
+        code = (
+            str(payload.get("code") or "").strip()
+            or f"registry_release_gate_{name}_env_blocked"
+        )
+        message = (
+            str(payload.get("message") or "").strip()
+            or f"{name} is blocked by missing real environment evidence"
+        )
+    else:
+        status = "needs_review"
+        code = str(payload.get("code") or "").strip() or missing_code
+        message = (
+            str(payload.get("message") or "").strip()
+            or f"{name} requires review before release"
+        )
+
+    return {
+        "name": name,
+        "status": status,
+        "code": code,
+        "message": message,
+        "sourceStatus": raw_status,
+        "evidenceRef": (
+            str(payload.get("evidenceRef") or payload.get("evidence_ref") or "").strip()
+            or None
+        ),
+    }
+
+
+def _build_fairness_benchmark_release_component(
+    fairness_gate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    gate = fairness_gate if isinstance(fairness_gate, dict) else {}
+    if bool(gate.get("benchmarkGatePassed")):
+        return {
+            "name": "fairnessBenchmark",
+            "status": "ready",
+            "code": "registry_release_gate_fairness_benchmark_ready",
+            "message": "fairness benchmark gate passed",
+            "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
+            "evidenceRef": None,
+        }
+    code = str(gate.get("code") or "").strip() or "registry_release_gate_fairness_benchmark_missing"
+    status = "env_blocked" if code == "registry_fairness_gate_no_benchmark" else "blocked"
+    return {
+        "name": "fairnessBenchmark",
+        "status": status,
+        "code": code,
+        "message": str(gate.get("message") or "").strip()
+        or "fairness benchmark gate did not pass",
+        "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
+        "evidenceRef": None,
+    }
+
+
+def _build_panel_shadow_release_component(
+    *,
+    fairness_gate: dict[str, Any] | None,
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    gate = fairness_gate if isinstance(fairness_gate, dict) else {}
+    if bool(gate.get("shadowGateApplied")):
+        if bool(gate.get("shadowGatePassed")):
+            return {
+                "name": "panelShadowDrift",
+                "status": "ready",
+                "code": "registry_release_gate_panel_shadow_ready",
+                "message": "panel shadow gate passed",
+                "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
+                "evidenceRef": None,
+            }
+        return {
+            "name": "panelShadowDrift",
+            "status": "blocked",
+            "code": str(gate.get("code") or "").strip()
+            or "registry_release_gate_panel_shadow_blocked",
+            "message": str(gate.get("message") or "").strip()
+            or "panel shadow drift gate did not pass",
+            "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
+            "evidenceRef": None,
+        }
+
+    raw = (
+        release_inputs.get("panelShadowDrift")
+        if release_inputs.get("panelShadowDrift") is not None
+        else release_inputs.get("panel_shadow_drift")
+    )
+    return _coerce_release_component(
+        name="panelShadowDrift",
+        raw=raw,
+        missing_code="registry_release_gate_panel_shadow_missing",
+        ready_message="panel shadow drift readiness is marked ready",
+    )
+
+
+def build_policy_release_gate_decision(
+    *,
+    dependency_health: dict[str, Any] | None,
+    fairness_gate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    metadata = _extract_policy_metadata(dependency_health)
+    release_inputs = _extract_release_readiness_section(metadata)
+    dependency_ok = bool(
+        dependency_health.get("ok") if isinstance(dependency_health, dict) else False
+    )
+    components = [
+        {
+            "name": "dependencyHealth",
+            "status": "ready" if dependency_ok else "blocked",
+            "code": (
+                "registry_release_gate_dependency_ready"
+                if dependency_ok
+                else "registry_policy_dependency_blocked"
+            ),
+            "message": (
+                "policy dependency health passed"
+                if dependency_ok
+                else "policy dependency health is blocked"
+            ),
+            "sourceStatus": (
+                str(dependency_health.get("code") or "").strip()
+                if isinstance(dependency_health, dict)
+                else None
+            ),
+            "evidenceRef": None,
+        },
+        _build_fairness_benchmark_release_component(fairness_gate),
+        _build_panel_shadow_release_component(
+            fairness_gate=fairness_gate,
+            release_inputs=release_inputs,
+        ),
+        _coerce_release_component(
+            name="artifactStoreReadiness",
+            raw=(
+                release_inputs.get("artifactStoreReadiness")
+                if release_inputs.get("artifactStoreReadiness") is not None
+                else release_inputs.get("artifact_store_readiness")
+            ),
+            missing_code="registry_release_gate_artifact_store_missing",
+            ready_message="artifact store readiness is marked ready",
+        ),
+        _coerce_release_component(
+            name="publicVerificationReadiness",
+            raw=(
+                release_inputs.get("publicVerificationReadiness")
+                if release_inputs.get("publicVerificationReadiness") is not None
+                else release_inputs.get("public_verification_readiness")
+            ),
+            missing_code="registry_release_gate_public_verification_missing",
+            ready_message="public verification readiness is marked ready",
+        ),
+        _coerce_release_component(
+            name="trustRegistryWriteThrough",
+            raw=(
+                release_inputs.get("trustRegistryWriteThrough")
+                if release_inputs.get("trustRegistryWriteThrough") is not None
+                else release_inputs.get("trust_registry_write_through")
+            ),
+            missing_code="registry_release_gate_trust_registry_missing",
+            ready_message="trust registry write-through readiness is marked ready",
+        ),
+    ]
+
+    status_counts = {
+        "ready": 0,
+        "blocked": 0,
+        "env_blocked": 0,
+        "needs_review": 0,
+    }
+    for component in components:
+        status = str(component.get("status") or "").strip().lower()
+        if status in status_counts:
+            status_counts[status] += 1
+        else:
+            status_counts["needs_review"] += 1
+
+    if status_counts["blocked"] > 0:
+        decision = "blocked"
+    elif status_counts["env_blocked"] > 0:
+        decision = "env_blocked"
+    elif status_counts["needs_review"] > 0:
+        decision = "needs_review"
+    else:
+        decision = "allowed"
+
+    reasons = [
+        {
+            "component": str(component.get("name") or "").strip(),
+            "status": str(component.get("status") or "").strip(),
+            "code": str(component.get("code") or "").strip(),
+            "message": str(component.get("message") or "").strip(),
+        }
+        for component in components
+        if str(component.get("status") or "").strip() != "ready"
+    ]
+    return {
+        "version": "policy-release-gate-v1",
+        "allowed": decision == "allowed",
+        "decision": decision,
+        "status": decision,
+        "code": f"registry_release_gate_{decision}",
+        "message": (
+            "all release gate components passed"
+            if decision == "allowed"
+            else f"release gate {decision}"
+        ),
+        "components": components,
+        "statusCounts": status_counts,
+        "reasons": reasons,
+        "metadataInputPresent": bool(release_inputs),
+    }
 
 
 async def build_policy_registry_dependency_health_payload(
@@ -246,11 +532,21 @@ def build_registry_extra_details_payload(
     *,
     dependency_health: dict[str, Any] | None,
     fairness_gate: dict[str, Any] | None,
+    release_gate: dict[str, Any] | None,
     override_fairness_gate: bool,
 ) -> dict[str, Any] | None:
     extra_details_payload: dict[str, Any] = {}
     if dependency_health is not None:
         extra_details_payload["dependencyHealth"] = dict(dependency_health)
+    if release_gate is not None:
+        extra_details_payload["releaseGate"] = {
+            **(release_gate or {}),
+            "overrideApplied": bool(
+                override_fairness_gate
+                and release_gate is not None
+                and not bool(release_gate.get("allowed"))
+            ),
+        }
     if fairness_gate is not None:
         extra_details_payload["fairnessGate"] = {
             **(fairness_gate or {}),
@@ -288,6 +584,7 @@ async def build_registry_publish_payload(
     dependency_alert: dict[str, Any] | None = None
     dependency_alert_resolved: list[dict[str, Any]] = []
     dependency_health: dict[str, Any] | None = None
+    release_gate: dict[str, Any] | None = None
     policy_domain_judge_family: str | None = None
 
     if registry_type_token == policy_registry_type:
@@ -327,6 +624,10 @@ async def build_registry_publish_payload(
         fairness_gate = await evaluate_policy_release_fairness_gate(
             policy_version=version,
         )
+        release_gate = build_policy_release_gate_decision(
+            dependency_health=dependency_health,
+            fairness_gate=fairness_gate,
+        )
         if not bool(fairness_gate.get("passed")):
             if override_fairness_gate:
                 if reason is None:
@@ -352,6 +653,37 @@ async def build_registry_publish_payload(
                     status_code=409,
                     detail={
                         "code": "registry_fairness_gate_blocked",
+                        "releaseGate": release_gate,
+                        "gate": fairness_gate,
+                        "alert": fairness_alert,
+                    },
+                )
+        elif not bool(release_gate.get("allowed")):
+            if override_fairness_gate:
+                if reason is None:
+                    raise ValueError("registry_fairness_gate_override_reason_required")
+                fairness_alert = await emit_registry_fairness_gate_alert(
+                    registry_type=registry_type_token,
+                    version=version,
+                    gate_result=release_gate,
+                    override_applied=True,
+                    actor=actor,
+                    reason=reason,
+                )
+            else:
+                fairness_alert = await emit_registry_fairness_gate_alert(
+                    registry_type=registry_type_token,
+                    version=version,
+                    gate_result=release_gate,
+                    override_applied=False,
+                    actor=actor,
+                    reason=reason,
+                )
+                raise RegistryRouteError(
+                    status_code=409,
+                    detail={
+                        "code": release_gate["code"],
+                        "releaseGate": release_gate,
                         "gate": fairness_gate,
                         "alert": fairness_alert,
                     },
@@ -360,6 +692,7 @@ async def build_registry_publish_payload(
     extra_details = build_registry_extra_details_payload(
         dependency_health=dependency_health,
         fairness_gate=fairness_gate,
+        release_gate=release_gate,
         override_fairness_gate=override_fairness_gate,
     )
     item = await publish_release(
@@ -379,6 +712,7 @@ async def build_registry_publish_payload(
         "dependencyAlert": dependency_alert,
         "resolvedDependencyAlerts": dependency_alert_resolved,
         "fairnessGate": fairness_gate,
+        "releaseGate": release_gate,
         "alert": fairness_alert,
     }
 
@@ -404,6 +738,7 @@ async def build_registry_activate_payload(
     dependency_alert: dict[str, Any] | None = None
     dependency_alert_resolved: list[dict[str, Any]] = []
     dependency_health: dict[str, Any] | None = None
+    release_gate: dict[str, Any] | None = None
 
     if registry_type_token == policy_registry_type:
         dependency_health = await evaluate_policy_registry_dependency_health(
@@ -434,6 +769,10 @@ async def build_registry_activate_payload(
         fairness_gate = await evaluate_policy_release_fairness_gate(
             policy_version=version,
         )
+        release_gate = build_policy_release_gate_decision(
+            dependency_health=dependency_health,
+            fairness_gate=fairness_gate,
+        )
         if not bool(fairness_gate.get("passed")):
             if override_fairness_gate:
                 if reason is None:
@@ -459,6 +798,37 @@ async def build_registry_activate_payload(
                     status_code=409,
                     detail={
                         "code": "registry_fairness_gate_blocked",
+                        "releaseGate": release_gate,
+                        "gate": fairness_gate,
+                        "alert": fairness_alert,
+                    },
+                )
+        elif not bool(release_gate.get("allowed")):
+            if override_fairness_gate:
+                if reason is None:
+                    raise ValueError("registry_fairness_gate_override_reason_required")
+                fairness_alert = await emit_registry_fairness_gate_alert(
+                    registry_type=registry_type_token,
+                    version=version,
+                    gate_result=release_gate,
+                    override_applied=True,
+                    actor=actor,
+                    reason=reason,
+                )
+            else:
+                fairness_alert = await emit_registry_fairness_gate_alert(
+                    registry_type=registry_type_token,
+                    version=version,
+                    gate_result=release_gate,
+                    override_applied=False,
+                    actor=actor,
+                    reason=reason,
+                )
+                raise RegistryRouteError(
+                    status_code=409,
+                    detail={
+                        "code": release_gate["code"],
+                        "releaseGate": release_gate,
                         "gate": fairness_gate,
                         "alert": fairness_alert,
                     },
@@ -467,6 +837,7 @@ async def build_registry_activate_payload(
     extra_details = build_registry_extra_details_payload(
         dependency_health=dependency_health,
         fairness_gate=fairness_gate,
+        release_gate=release_gate,
         override_fairness_gate=override_fairness_gate,
     )
     item = await activate_release(
@@ -483,6 +854,7 @@ async def build_registry_activate_payload(
         "dependencyAlert": dependency_alert,
         "resolvedDependencyAlerts": dependency_alert_resolved,
         "fairnessGate": fairness_gate,
+        "releaseGate": release_gate,
         "alert": fairness_alert,
     }
 
@@ -523,6 +895,7 @@ async def build_registry_governance_overview_payload(
     list_prompt_profiles: Callable[[], list[Any]],
     list_tool_profiles: Callable[[], list[Any]],
     evaluate_policy_registry_dependency_health: Callable[[str], Awaitable[dict[str, Any]]],
+    evaluate_policy_release_fairness_gate: Callable[[str], Awaitable[dict[str, Any]]],
     list_releases: Callable[..., Awaitable[list[dict[str, Any]]]],
     list_audits: Callable[..., Awaitable[list[dict[str, Any]]]],
     build_policy_domain_judge_family_overview: Callable[..., dict[str, Any]],
@@ -536,10 +909,38 @@ async def build_registry_governance_overview_payload(
     dependency_by_prompt_registry: dict[str, int] = {}
     dependency_by_tool_registry: dict[str, int] = {}
     dependency_issue_code_counts: dict[str, int] = {}
+    release_gate_decision_counts: dict[str, int] = {
+        "allowed": 0,
+        "blocked": 0,
+        "env_blocked": 0,
+        "needs_review": 0,
+    }
+    release_gate_component_block_counts: dict[str, int] = {}
     for profile in policy_profiles[: max(1, min(int(dependency_limit), 500))]:
         dependency_payload = await evaluate_policy_registry_dependency_health(
             str(getattr(profile, "version", "") or "").strip(),
         )
+        fairness_gate = await evaluate_policy_release_fairness_gate(
+            str(getattr(profile, "version", "") or "").strip(),
+        )
+        release_gate = build_policy_release_gate_decision(
+            dependency_health=dependency_payload,
+            fairness_gate=fairness_gate,
+        )
+        release_gate_decision = str(release_gate.get("decision") or "").strip()
+        if release_gate_decision in release_gate_decision_counts:
+            release_gate_decision_counts[release_gate_decision] += 1
+        else:
+            release_gate_decision_counts["needs_review"] += 1
+        for reason in release_gate.get("reasons") or []:
+            if not isinstance(reason, dict):
+                continue
+            component = str(reason.get("component") or "").strip()
+            if not component:
+                continue
+            release_gate_component_block_counts[component] = (
+                release_gate_component_block_counts.get(component, 0) + 1
+            )
         issue_codes = [
             str(row.get("code") or "").strip()
             for row in (dependency_payload.get("issues") or [])
@@ -588,6 +989,14 @@ async def build_registry_governance_overview_payload(
                     str(policy_kernel.get("kernelHash") or "").strip() or None
                 ),
                 "issueCodes": issue_codes,
+                "releaseGateDecision": release_gate_decision,
+                "releaseGateCode": str(release_gate.get("code") or "").strip() or None,
+                "releaseGateReasonCodes": [
+                    str(reason.get("code") or "").strip()
+                    for reason in release_gate.get("reasons") or []
+                    if isinstance(reason, dict) and str(reason.get("code") or "").strip()
+                ],
+                "releaseGate": release_gate,
             }
         )
 
@@ -791,6 +1200,25 @@ async def build_registry_governance_overview_payload(
             "missingToolRegistryRefs": missing_tool_refs,
         },
         "domainJudgeFamilies": domain_family_overview,
+        "releaseReadiness": {
+            "decisionCounts": release_gate_decision_counts,
+            "allowedCount": release_gate_decision_counts["allowed"],
+            "blockedCount": release_gate_decision_counts["blocked"],
+            "envBlockedCount": release_gate_decision_counts["env_blocked"],
+            "needsReviewCount": release_gate_decision_counts["needs_review"],
+            "componentBlockCounts": dict(
+                sorted(release_gate_component_block_counts.items(), key=lambda kv: kv[0])
+            ),
+            "items": [
+                {
+                    "policyVersion": row.get("policyVersion"),
+                    "decision": row.get("releaseGateDecision"),
+                    "code": row.get("releaseGateCode"),
+                    "reasonCodes": row.get("releaseGateReasonCodes"),
+                }
+                for row in dependency_rows
+            ],
+        },
         "releaseState": release_state,
         "auditSummary": {
             "countsByRegistryType": dict(
@@ -835,6 +1263,11 @@ def build_registry_prompt_tool_governance_payload(
     release_state = (
         governance_overview.get("releaseState")
         if isinstance(governance_overview.get("releaseState"), dict)
+        else {}
+    )
+    release_readiness = (
+        governance_overview.get("releaseReadiness")
+        if isinstance(governance_overview.get("releaseReadiness"), dict)
         else {}
     )
     audit_summary = (
@@ -956,6 +1389,7 @@ def build_registry_prompt_tool_governance_payload(
             "missingToolRegistryRefs": missing_tool_refs,
         },
         "releaseState": release_state,
+        "releaseReadiness": release_readiness,
         "auditSummary": audit_summary,
         "domainJudgeFamilies": governance_overview.get("domainJudgeFamilies"),
         "riskItems": risk_items,
@@ -1045,6 +1479,10 @@ async def build_policy_gate_simulation_payload(
         )
         dependency_health = await evaluate_policy_registry_dependency_health(version_token)
         fairness_gate = await evaluate_policy_release_fairness_gate(version_token)
+        release_gate = build_policy_release_gate_decision(
+            dependency_health=dependency_health,
+            fairness_gate=fairness_gate,
+        )
         failing_components: list[str] = []
         if not bool(dependency_health.get("ok")):
             failing_components.append("dependency_health")
@@ -1052,7 +1490,24 @@ async def build_policy_gate_simulation_payload(
             failing_components.append("fairness_gate")
         if not bool(metadata.get("domainJudgeFamilyValid")):
             failing_components.append("domain_judge_family")
-        simulated_passed = len(failing_components) == 0
+        for reason in release_gate.get("reasons") or []:
+            if not isinstance(reason, dict):
+                continue
+            component = str(reason.get("component") or "").strip()
+            if component and component not in failing_components:
+                failing_components.append(component)
+        simulated_passed = bool(release_gate.get("allowed")) and len(failing_components) == 0
+        if simulated_passed:
+            simulated_status = "allowed"
+            simulated_code = "registry_policy_gate_simulation_passed"
+        elif bool(release_gate.get("allowed")):
+            simulated_status = "blocked"
+            simulated_code = "registry_policy_gate_simulation_blocked"
+        else:
+            simulated_status = str(release_gate.get("status") or "").strip() or "blocked"
+            simulated_code = str(release_gate.get("code") or "").strip() or (
+                "registry_policy_gate_simulation_blocked"
+            )
 
         evaluated_items.append(
             {
@@ -1065,14 +1520,11 @@ async def build_policy_gate_simulation_payload(
                 },
                 "dependencyHealth": dependency_health,
                 "fairnessGate": fairness_gate,
+                "releaseGate": release_gate,
                 "simulatedGate": {
                     "passed": simulated_passed,
-                    "status": "pass" if simulated_passed else "blocked",
-                    "code": (
-                        "registry_policy_gate_simulation_passed"
-                        if simulated_passed
-                        else "registry_policy_gate_simulation_blocked"
-                    ),
+                    "status": simulated_status,
+                    "code": simulated_code,
                     "reason": (
                         "all checks passed"
                         if simulated_passed

@@ -189,6 +189,7 @@ async def build_registry_governance_overview_route_payload(
     list_prompt_profiles: Callable[[], list[Any]],
     list_tool_profiles: Callable[[], list[Any]],
     evaluate_policy_registry_dependency_health: Callable[[str], Awaitable[dict[str, Any]]],
+    evaluate_policy_release_fairness_gate: Callable[[str], Awaitable[dict[str, Any]]],
     list_releases: Callable[..., Awaitable[list[dict[str, Any]]]],
     list_audits: Callable[..., Awaitable[list[dict[str, Any]]]],
     build_policy_domain_judge_family_overview: Callable[..., dict[str, Any]],
@@ -210,6 +211,7 @@ async def build_registry_governance_overview_route_payload(
         evaluate_policy_registry_dependency_health=(
             evaluate_policy_registry_dependency_health
         ),
+        evaluate_policy_release_fairness_gate=evaluate_policy_release_fairness_gate,
         list_releases=list_releases,
         list_audits=list_audits,
         build_policy_domain_judge_family_overview=(
@@ -243,6 +245,9 @@ async def build_registry_governance_overview_route_payload_from_pack(
         evaluate_policy_registry_dependency_health=(
             pack.evaluate_policy_registry_dependency_health
         ),
+        evaluate_policy_release_fairness_gate=(
+            pack.evaluate_policy_release_fairness_gate
+        ),
         list_releases=pack.list_releases,
         list_audits=pack.list_audits,
         build_policy_domain_judge_family_overview=(
@@ -268,6 +273,7 @@ async def build_registry_prompt_tool_governance_route_payload(
     list_prompt_profiles: Callable[[], list[Any]],
     list_tool_profiles: Callable[[], list[Any]],
     evaluate_policy_registry_dependency_health: Callable[[str], Awaitable[dict[str, Any]]],
+    evaluate_policy_release_fairness_gate: Callable[[str], Awaitable[dict[str, Any]]],
     list_releases: Callable[..., Awaitable[list[dict[str, Any]]]],
     list_audits: Callable[..., Awaitable[list[dict[str, Any]]]],
     build_policy_domain_judge_family_overview: Callable[..., dict[str, Any]],
@@ -292,6 +298,7 @@ async def build_registry_prompt_tool_governance_route_payload(
         evaluate_policy_registry_dependency_health=(
             evaluate_policy_registry_dependency_health
         ),
+        evaluate_policy_release_fairness_gate=evaluate_policy_release_fairness_gate,
         list_releases=list_releases,
         list_audits=list_audits,
         build_policy_domain_judge_family_overview=(
@@ -337,6 +344,9 @@ async def build_registry_prompt_tool_governance_route_payload_from_pack(
         list_tool_profiles=pack.list_tool_profiles,
         evaluate_policy_registry_dependency_health=(
             pack.evaluate_policy_registry_dependency_health
+        ),
+        evaluate_policy_release_fairness_gate=(
+            pack.evaluate_policy_release_fairness_gate
         ),
         list_releases=pack.list_releases,
         list_audits=pack.list_audits,
