@@ -840,3 +840,8 @@
 | 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|---|---|---|
 | `ai-judge-p34-real-env-pass-window-execute-on-env`（真实环境窗口后置补证） | ai-judge-stage-closure-execute | 环境依赖 | 当前没有真实环境；本次已按用户确认完成 stage closure，real-env/on-env `pass` 仅作为后置补证 | REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后 | 完成真实环境复跑并产出 real-env/on-env `pass` 证据工件；必要时更新 completed/todo 结论 | 执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence |
+
+### C39. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| ai-judge-p35-real-env-pass-window-execute-on-env | `ai-judge-p35-local-reference-regression-pack` | 环境依赖 | 当前只有本地参考证据，真实样本、真实服务与 on-env 窗口尚不可用；本轮不得把 `local_reference_ready` 冒充为 real-env `pass`。 | `REAL_CALIBRATION_ENV_READY=true`、真实样本与真实服务窗口同时具备后 | 重新运行 P35 runtime ops / fairness / runtime SLA / real-env closure 链路，输出真实环境 `pass` 工件，并按结果更新 completed/todo。 | `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence`；必要时配套执行 on-env replay/ops read model 采样并归档到 `artifacts/harness` 与 `docs/loadtest/evidence`。 |
