@@ -2,11 +2,46 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
-from app.applications.artifact_pack import write_case_artifact_pack, write_trust_audit_artifact_pack
+from app.applications.artifact_pack import (
+    build_artifact_store_readiness_payload,
+    write_case_artifact_pack,
+    write_trust_audit_artifact_pack,
+)
 from app.domain.artifacts import ArtifactRef
-from app.infra.artifacts import LocalArtifactStore
+from app.infra.artifacts import LocalArtifactStore, S3CompatibleArtifactStore
+from app.settings import load_settings
+from app.wiring import build_artifact_store
+
+
+class _FakeS3Client:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.metadata: dict[tuple[str, str], dict[str, str]] = {}
+
+    def put_object(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        Body: bytes,
+        ContentType: str,
+        Metadata: dict[str, str],
+    ) -> None:
+        del ContentType
+        self.objects[(Bucket, Key)] = Body
+        self.metadata[(Bucket, Key)] = dict(Metadata)
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, BytesIO]:
+        return {"Body": BytesIO(self.objects[(Bucket, Key)])}
+
+    def head_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        if (Bucket, Key) not in self.objects:
+            raise KeyError(Key)
+        return {}
 
 
 class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
@@ -105,7 +140,17 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(payload["manifest"]["artifactCount"], 4)
-        self.assertEqual(payload["manifest"]["metadata"], {"source": "unit-test"})
+        self.assertEqual(payload["manifest"]["metadata"]["source"], "unit-test")
+        self.assertEqual(payload["manifest"]["metadata"]["storageMode"], "local_reference")
+        self.assertEqual(
+            payload["manifest"]["metadata"]["artifactStore"],
+            {
+                "provider": "local",
+                "status": "local_reference",
+                "productionReady": False,
+                "uriScheme": "local-artifact",
+            },
+        )
         self.assertEqual(len(payload["manifest"]["manifestHash"]), 64)
         self.assertEqual(
             payload["manifest"]["artifactHashes"]["audit_pack"],
@@ -155,6 +200,130 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             evidence_payload["verdictEvidenceRefs"][0]["itemHash"],
             "eb817ecdd6e8090037d4981b1e46084d977ae54ae80766593e165921cb33dbc2",
+        )
+
+    async def test_s3_compatible_store_should_put_and_get_json_ref_without_secret_uri(
+        self,
+    ) -> None:
+        client = _FakeS3Client()
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="ai/judge",
+            client=client,
+            force_path_style=True,
+        )
+        payload = {"version": "replay-v1", "winner": "draw"}
+
+        ref = await store.put_json(
+            case_id=9201,
+            kind="replay_snapshot",
+            payload=payload,
+            dispatch_type="final",
+            trace_id="trace-9201",
+        )
+
+        self.assertEqual(ref.kind, "replay_snapshot")
+        self.assertTrue(ref.uri.startswith("s3://judge-artifacts/ai/judge/"))
+        self.assertNotIn("secret", ref.uri.lower())
+        self.assertTrue(await store.exists(ref=ref))
+        self.assertEqual(await store.get_json(ref=ref), payload)
+        manifest = store.build_manifest(
+            case_id=9201,
+            dispatch_type="final",
+            trace_id="trace-9201",
+            refs=[ref],
+            metadata={"artifactStore": store.readiness_payload(), "storageMode": "production"},
+        )
+        manifest_payload = manifest.to_payload()
+        self.assertEqual(
+            manifest_payload["metadata"]["artifactStore"]["provider"],
+            "s3_compatible",
+        )
+        self.assertTrue(manifest_payload["metadata"]["artifactStore"]["productionReady"])
+
+    async def test_s3_compatible_store_should_reject_wrong_bucket_uri(self) -> None:
+        client = _FakeS3Client()
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="ai/judge",
+            client=client,
+        )
+        ref = await store.put_json(
+            case_id=9202,
+            kind="audit_pack",
+            payload={"version": "audit-v1"},
+        )
+        bad_ref = ArtifactRef(
+            artifact_id=ref.artifact_id,
+            kind=ref.kind,
+            uri=ref.uri.replace("judge-artifacts", "other-bucket"),
+            sha256=ref.sha256,
+        )
+
+        with self.assertRaisesRegex(ValueError, "artifact_uri_bucket_invalid"):
+            await store.get_json(ref=bad_ref)
+
+    async def test_case_artifact_pack_should_mark_s3_store_as_production(self) -> None:
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="ai/judge",
+            client=_FakeS3Client(),
+        )
+        pack = await write_case_artifact_pack(
+            artifact_store=store,
+            case_id=9203,
+            dispatch_type="final",
+            trace_id="trace-9203",
+            replay_snapshot={"version": "replay-v1", "winner": "pro"},
+        )
+
+        payload = pack.to_payload()
+        self.assertEqual(payload["manifest"]["metadata"]["storageMode"], "production")
+        self.assertEqual(
+            payload["manifest"]["metadata"]["artifactStore"]["provider"],
+            "s3_compatible",
+        )
+        self.assertEqual(
+            build_artifact_store_readiness_payload(store)["status"],
+            "production_configured",
+        )
+
+    def test_wiring_should_build_local_artifact_store_by_default(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            settings = load_settings()
+
+        store = build_artifact_store(settings=settings)
+
+        self.assertIsInstance(store, LocalArtifactStore)
+        self.assertEqual(
+            build_artifact_store_readiness_payload(store),
+            {
+                "provider": "local",
+                "status": "local_reference",
+                "productionReady": False,
+                "uriScheme": "local-artifact",
+            },
+        )
+
+    def test_wiring_should_build_s3_artifact_store_with_injected_client(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ARTIFACT_PREFIX": "prod/ai-judge",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        with patch("app.wiring._build_s3_client", return_value=_FakeS3Client()):
+            store = build_artifact_store(settings=settings)
+
+        self.assertIsInstance(store, S3CompatibleArtifactStore)
+        self.assertEqual(
+            build_artifact_store_readiness_payload(store)["provider"],
+            "s3_compatible",
         )
 
 

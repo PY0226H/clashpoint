@@ -189,6 +189,9 @@ build_subject() {
 
   if [[ "$module_key" == *"artifact-store"* || "$summary_lower" == *"artifact store"* ]]; then
     echo "add local artifact store adapter"
+  elif [[ "$module_key" == *"stage-closure"* ||
+          "$summary_lower" == *"stage closure"* ]]; then
+    echo "archive p36 stage closure"
   elif [[ "$module_key" == *"route-dependency-hotspot-split"* ||
           "$summary_lower" == *"route dependency"* ]]; then
     echo "split trust and ops route wiring"
@@ -229,6 +232,7 @@ build_alt_one_subject() {
   local subject="$2"
   case "$subject" in
     "add local artifact store adapter") echo "add artifact refs and manifest" ;;
+    "archive p36 stage closure") echo "record p36 closure state" ;;
     "split trust and ops route wiring") echo "extract trust dependency builders" ;;
     "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
@@ -242,6 +246,7 @@ build_alt_two_subject() {
   local subject="$2"
   case "$subject" in
     "add local artifact store adapter") echo "wire local artifact evidence" ;;
+    "archive p36 stage closure") echo "reset active ai judge plan" ;;
     "split trust and ops route wiring") echo "thin app factory route assembly" ;;
     "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;

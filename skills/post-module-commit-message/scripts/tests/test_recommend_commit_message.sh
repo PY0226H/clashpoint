@@ -69,6 +69,17 @@ expect_contains "local reference uses docs type" "docs(ai-judge): record p36 loc
 expect_not_contains "local reference avoids generic capability subject" "add ai-judge capability" "$LOCAL_REF_OUT"
 expect_not_contains "local reference avoids sync follow-up alternative" "sync ai-judge follow-up" "$LOCAL_REF_OUT"
 
+STAGE_OUT="$TMP_DIR/stage.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind non-dev \
+  --module ai-judge-p36-stage-closure-execute \
+  --summary "Archive P36 AI Judge stage closure, reset active plan, and record real environment follow-up" >"$STAGE_OUT"
+
+expect_contains "stage closure uses specific docs title" "docs(ai-judge): archive p36 stage closure" "$STAGE_OUT"
+expect_not_contains "stage closure avoids generic docs subject" "update ai-judge docs" "$STAGE_OUT"
+expect_not_contains "stage closure avoids sync follow-up alternative" "sync ai-judge follow-up" "$STAGE_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

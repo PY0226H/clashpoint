@@ -46,6 +46,12 @@ VALID_FAULT_INJECTION_NODES = {
     "final_pass_2",
     "display",
 }
+ARTIFACT_STORE_PROVIDER_LOCAL = "local"
+ARTIFACT_STORE_PROVIDER_S3_COMPATIBLE = "s3_compatible"
+VALID_ARTIFACT_STORE_PROVIDERS = {
+    ARTIFACT_STORE_PROVIDER_LOCAL,
+    ARTIFACT_STORE_PROVIDER_S3_COMPATIBLE,
+}
 
 
 def parse_csv_items(value: str | None) -> tuple[str, ...]:
@@ -61,6 +67,15 @@ def parse_csv_items(value: str | None) -> tuple[str, ...]:
         seen.add(item)
         items.append(item)
     return tuple(items)
+
+
+def normalize_artifact_store_provider(value: str | None) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if not token:
+        return ARTIFACT_STORE_PROVIDER_LOCAL
+    if token in {"s3", "minio", "s3_compatible"}:
+        return ARTIFACT_STORE_PROVIDER_S3_COMPATIBLE
+    return token
 
 
 @dataclass(frozen=True)
@@ -127,7 +142,13 @@ class Settings:
     topic_memory_min_evidence_refs: int
     topic_memory_min_rationale_chars: int
     topic_memory_min_quality_score: float
+    artifact_store_provider: str = ARTIFACT_STORE_PROVIDER_LOCAL
     artifact_store_root: str = "artifacts/ai_judge_service"
+    artifact_store_bucket: str = ""
+    artifact_store_prefix: str = "ai_judge_service"
+    artifact_store_endpoint_url: str = ""
+    artifact_store_region: str = ""
+    artifact_store_force_path_style: bool = False
     tokenizer_fallback_encoding: str = "o200k_base"
     phase_prompt_max_tokens: int = 3200
     agent2_prompt_max_tokens: int = 3600
@@ -260,6 +281,23 @@ def load_settings() -> Settings:
             os.getenv("AI_JUDGE_ARTIFACT_STORE_ROOT", "artifacts/ai_judge_service").strip()
             or "artifacts/ai_judge_service"
         ),
+        artifact_store_provider=normalize_artifact_store_provider(
+            os.getenv("AI_JUDGE_ARTIFACT_STORE_PROVIDER")
+        ),
+        artifact_store_bucket=os.getenv("AI_JUDGE_ARTIFACT_BUCKET", "").strip(),
+        artifact_store_prefix=(
+            os.getenv("AI_JUDGE_ARTIFACT_PREFIX", "ai_judge_service").strip()
+            or "ai_judge_service"
+        ),
+        artifact_store_endpoint_url=os.getenv(
+            "AI_JUDGE_ARTIFACT_ENDPOINT_URL",
+            "",
+        ).strip(),
+        artifact_store_region=os.getenv("AI_JUDGE_ARTIFACT_REGION", "").strip(),
+        artifact_store_force_path_style=parse_env_bool(
+            os.getenv("AI_JUDGE_ARTIFACT_FORCE_PATH_STYLE"),
+            default=False,
+        ),
         topic_memory_limit=int(os.getenv("AI_JUDGE_TOPIC_MEMORY_LIMIT", "5")),
         topic_memory_min_evidence_refs=int(
             os.getenv("AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS", "1")
@@ -370,6 +408,21 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_DB_URL cannot be empty")
     if not settings.artifact_store_root.strip():
         raise ValueError("AI_JUDGE_ARTIFACT_STORE_ROOT cannot be empty")
+    if settings.artifact_store_provider not in VALID_ARTIFACT_STORE_PROVIDERS:
+        raise ValueError(
+            "AI_JUDGE_ARTIFACT_STORE_PROVIDER must be one of "
+            + ",".join(sorted(VALID_ARTIFACT_STORE_PROVIDERS))
+        )
+    if settings.artifact_store_provider == ARTIFACT_STORE_PROVIDER_S3_COMPATIBLE:
+        if not settings.artifact_store_bucket.strip():
+            raise ValueError(
+                "AI_JUDGE_ARTIFACT_BUCKET cannot be empty when "
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER=s3_compatible"
+            )
+        if "/" in settings.artifact_store_bucket.strip():
+            raise ValueError("AI_JUDGE_ARTIFACT_BUCKET must be a bucket name, not a path")
+        if any(part in {".", ".."} for part in settings.artifact_store_prefix.split("/")):
+            raise ValueError("AI_JUDGE_ARTIFACT_PREFIX cannot contain . or .. segments")
     if settings.db_pool_size < 1 or settings.db_pool_size > 200:
         raise ValueError("AI_JUDGE_DB_POOL_SIZE must be between 1 and 200")
     if settings.db_max_overflow < 0 or settings.db_max_overflow > 200:
@@ -452,6 +505,10 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         if settings.fault_injection_nodes:
             raise ValueError(
                 "AI_JUDGE_FAULT_INJECTION_NODES is forbidden when runtime env is production"
+            )
+        if settings.artifact_store_provider == ARTIFACT_STORE_PROVIDER_LOCAL:
+            raise ValueError(
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER=local is forbidden when runtime env is production"
             )
 
 

@@ -9,12 +9,36 @@ from .callback_client import (
     callback_phase_failed,
     callback_phase_report,
 )
-from .infra.artifacts import LocalArtifactStore
+from .infra.artifacts import LocalArtifactStore, S3CompatibleArtifactStore
 from .runtime_types import CallbackReportFn
 from .settings import Settings
 
 
-def build_artifact_store(*, settings: Settings) -> LocalArtifactStore:
+def _build_s3_client(*, settings: Settings) -> Any:
+    try:
+        import boto3  # type: ignore[import-not-found]
+        from botocore.config import Config  # type: ignore[import-not-found]
+    except ImportError as err:
+        raise RuntimeError("artifact_store_s3_dependency_missing") from err
+
+    kwargs: dict[str, Any] = {}
+    if settings.artifact_store_endpoint_url:
+        kwargs["endpoint_url"] = settings.artifact_store_endpoint_url
+    if settings.artifact_store_region:
+        kwargs["region_name"] = settings.artifact_store_region
+    if settings.artifact_store_force_path_style:
+        kwargs["config"] = Config(s3={"addressing_style": "path"})
+    return boto3.client("s3", **kwargs)
+
+
+def build_artifact_store(*, settings: Settings) -> LocalArtifactStore | S3CompatibleArtifactStore:
+    if settings.artifact_store_provider == "s3_compatible":
+        return S3CompatibleArtifactStore(
+            bucket=settings.artifact_store_bucket,
+            prefix=settings.artifact_store_prefix,
+            client=_build_s3_client(settings=settings),
+            force_path_style=settings.artifact_store_force_path_style,
+        )
     return LocalArtifactStore(root_dir=settings.artifact_store_root)
 
 

@@ -44,6 +44,34 @@ def _payload_str(value: Any) -> str | None:
     return token or None
 
 
+def build_artifact_store_readiness_payload(artifact_store: ArtifactStorePort) -> dict[str, Any]:
+    readiness = getattr(artifact_store, "readiness_payload", None)
+    if callable(readiness):
+        payload = readiness()
+        if isinstance(payload, dict):
+            return dict(payload)
+    return {
+        "provider": "unknown",
+        "status": "unknown",
+        "productionReady": False,
+    }
+
+
+def _artifact_pack_metadata(
+    *,
+    artifact_store: ArtifactStorePort,
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(metadata or {})
+    readiness = build_artifact_store_readiness_payload(artifact_store)
+    payload["artifactStore"] = readiness
+    payload.setdefault(
+        "storageMode",
+        "production" if readiness.get("productionReady") is True else "local_reference",
+    )
+    return payload
+
+
 def _compact_evidence_ref(row: dict[str, Any]) -> dict[str, Any]:
     item = row.get("item")
     payload = {
@@ -273,7 +301,10 @@ async def write_case_artifact_pack(
         dispatch_type=dispatch_type,
         trace_id=trace_id,
         refs=refs,
-        metadata=dict(metadata or {}),
+        metadata=_artifact_pack_metadata(
+            artifact_store=artifact_store,
+            metadata=metadata,
+        ),
     )
     return CaseArtifactPack(manifest=manifest, refs=tuple(refs))
 
@@ -334,7 +365,6 @@ async def write_trust_audit_artifact_pack(
         ),
         metadata={
             "source": "trust_audit_anchor_export",
-            "storageMode": "local_reference",
             **dict(metadata or {}),
         },
     )

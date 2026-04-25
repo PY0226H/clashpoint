@@ -845,3 +845,8 @@
 | 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|---|---|---|
 | ai-judge-p35-real-env-pass-window-execute-on-env | `ai-judge-p35-local-reference-regression-pack` | 环境依赖 | 当前只有本地参考证据，真实样本、真实服务与 on-env 窗口尚不可用；本轮不得把 `local_reference_ready` 冒充为 real-env `pass`。 | `REAL_CALIBRATION_ENV_READY=true`、真实样本与真实服务窗口同时具备后 | 重新运行 P35 runtime ops / fairness / runtime SLA / real-env closure 链路，输出真实环境 `pass` 工件，并按结果更新 completed/todo。 | `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence`；必要时配套执行 on-env replay/ops read model 采样并归档到 `artifacts/harness` 与 `docs/loadtest/evidence`。 |
+
+### C40. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| ai-judge-p36-real-env-pass-window-execute-on-env | `ai-judge-p36-local-reference-regression-pack` | 环境依赖 | P36 当前只有本地参考证据，真实样本、真实 AI provider / callback 环境、真实服务窗口与生产对象存储尚不可用；本轮不得把 `local_reference_ready` 冒充为 real-env `pass`。 | `REAL_CALIBRATION_ENV_READY=true`、真实样本、真实服务窗口与生产对象存储同时具备后 | 重新运行 P36 runtime ops pack / trust registry / artifact manifest / public verify / challenge review / ops read model 链路，输出真实环境 `pass` 工件，并按结果更新 completed/todo。 | `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence`（不带 `--allow-local-reference`）；必要时配套执行 on-env trust/public-verify/artifact export 采样并归档到 `artifacts/harness` 与 `docs/loadtest/evidence`。 |

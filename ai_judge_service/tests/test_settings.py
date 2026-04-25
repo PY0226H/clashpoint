@@ -57,7 +57,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.db_pool_size, 10)
         self.assertEqual(settings.db_max_overflow, 20)
         self.assertTrue(settings.db_auto_create_schema)
+        self.assertEqual(settings.artifact_store_provider, "local")
         self.assertEqual(settings.artifact_store_root, "artifacts/ai_judge_service")
+        self.assertEqual(settings.artifact_store_bucket, "")
+        self.assertEqual(settings.artifact_store_prefix, "ai_judge_service")
+        self.assertEqual(settings.artifact_store_endpoint_url, "")
+        self.assertEqual(settings.artifact_store_region, "")
+        self.assertFalse(settings.artifact_store_force_path_style)
         self.assertEqual(settings.topic_memory_limit, 5)
         self.assertEqual(settings.topic_memory_min_evidence_refs, 1)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 20)
@@ -150,7 +156,13 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_DB_POOL_SIZE": "18",
                 "AI_JUDGE_DB_MAX_OVERFLOW": "25",
                 "AI_JUDGE_DB_AUTO_CREATE_SCHEMA": "false",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "minio",
                 "AI_JUDGE_ARTIFACT_STORE_ROOT": "/tmp/ai-judge-artifacts",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ARTIFACT_PREFIX": "prod/ai-judge",
+                "AI_JUDGE_ARTIFACT_ENDPOINT_URL": "http://minio:9000",
+                "AI_JUDGE_ARTIFACT_REGION": "us-west-2",
+                "AI_JUDGE_ARTIFACT_FORCE_PATH_STYLE": "true",
                 "AI_JUDGE_TOPIC_MEMORY_LIMIT": "7",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS": "2",
                 "AI_JUDGE_TOPIC_MEMORY_MIN_RATIONALE_CHARS": "60",
@@ -238,7 +250,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.db_pool_size, 18)
         self.assertEqual(settings.db_max_overflow, 25)
         self.assertFalse(settings.db_auto_create_schema)
+        self.assertEqual(settings.artifact_store_provider, "s3_compatible")
         self.assertEqual(settings.artifact_store_root, "/tmp/ai-judge-artifacts")
+        self.assertEqual(settings.artifact_store_bucket, "judge-artifacts")
+        self.assertEqual(settings.artifact_store_prefix, "prod/ai-judge")
+        self.assertEqual(settings.artifact_store_endpoint_url, "http://minio:9000")
+        self.assertEqual(settings.artifact_store_region, "us-west-2")
+        self.assertTrue(settings.artifact_store_force_path_style)
         self.assertEqual(settings.topic_memory_limit, 7)
         self.assertEqual(settings.topic_memory_min_evidence_refs, 2)
         self.assertEqual(settings.topic_memory_min_rationale_chars, 60)
@@ -431,6 +449,51 @@ class SettingsTests(unittest.TestCase):
                 ValueError,
                 "AI_JUDGE_FAULT_INJECTION_NODES is forbidden",
             ):
+                load_settings()
+
+    def test_load_settings_should_reject_local_artifact_store_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ECHOISLE_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "local",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER=local is forbidden",
+            ):
+                load_settings()
+
+    def test_load_settings_should_allow_s3_artifact_store_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ECHOISLE_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ARTIFACT_PREFIX": "prod/ai-judge",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+        self.assertEqual(settings.artifact_store_provider, "s3_compatible")
+        self.assertEqual(settings.artifact_store_bucket, "judge-artifacts")
+
+    def test_load_settings_should_reject_s3_artifact_store_without_bucket(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JUDGE_ARTIFACT_BUCKET cannot be empty"):
                 load_settings()
 
     def test_load_settings_should_accept_runtime_fault_injection_nodes_in_non_production(
