@@ -7,6 +7,7 @@ from typing import Any
 from app.domain.trust import TRUST_REGISTRY_VERSION, TrustRegistrySnapshot
 
 from .trust_phasea_bundle import build_trust_phasea_bundle
+from .trust_public_verify_contract import build_trust_public_verify_visibility_contract
 
 TRUST_READ_DISPATCH_TYPES: frozenset[str] = frozenset({"auto", "phase", "final"})
 
@@ -428,6 +429,7 @@ def build_trust_public_verify_route_payload(
         "dispatchType": str(dispatch_type),
         "traceId": str(trace_id),
         "verifyPayload": verify_payload_dict,
+        "visibilityContract": build_trust_public_verify_visibility_contract(),
     }
 
 

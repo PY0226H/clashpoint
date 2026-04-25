@@ -11,6 +11,8 @@ from app.applications.trust_public_verify_contract import (
     TRUST_PUBLIC_VERIFY_PAYLOAD_KEYS,
     TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS,
     TRUST_PUBLIC_VERIFY_VERDICT_ATTESTATION_KEYS,
+    TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS,
+    build_trust_public_verify_visibility_contract,
     validate_trust_public_verify_contract,
 )
 
@@ -21,6 +23,7 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
             "caseId": 9101,
             "dispatchType": "final",
             "traceId": "trace-final-9101",
+            "visibilityContract": build_trust_public_verify_visibility_contract(),
             "verifyPayload": {
                 "caseCommitment": {
                     "version": "trust-phaseA-case-commitment-v1",
@@ -109,6 +112,10 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
             set(payload["verifyPayload"]["auditAnchor"]["componentHashes"].keys()),
             set(TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS),
         )
+        self.assertEqual(
+            set(payload["visibilityContract"].keys()),
+            set(TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS),
+        )
         validate_trust_public_verify_contract(payload)
 
     def test_validate_trust_public_verify_contract_should_fail_on_missing_verify_payload_key(
@@ -136,6 +143,52 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
             "trust_public_verify_audit_anchor_component_hashes_missing_keys:kernelVersionHash",
             str(ctx.exception),
         )
+
+    def test_validate_trust_public_verify_contract_should_fail_on_forbidden_field(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["verifyPayload"]["caseCommitment"]["rawPrompt"] = "hidden prompt"
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_trust_public_verify_contract(payload)
+        self.assertIn("trust_public_verify_forbidden_fields:rawPrompt", str(ctx.exception))
+
+    def test_validate_trust_public_verify_contract_should_fail_on_unknown_section_field(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["verifyPayload"]["challengeReview"]["timeline"] = []
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_trust_public_verify_contract(payload)
+        self.assertIn(
+            "trust_public_verify_challenge_review_unexpected_keys:timeline",
+            str(ctx.exception),
+        )
+
+    def test_validate_trust_public_verify_contract_should_fail_on_internal_kernel_vector_key(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["verifyPayload"]["kernelVersion"]["kernelVector"]["provider"] = "openai"
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_trust_public_verify_contract(payload)
+        self.assertIn(
+            "trust_public_verify_kernel_version_kernel_vector_unexpected_keys:provider",
+            str(ctx.exception),
+        )
+
+    def test_validate_trust_public_verify_contract_should_fail_on_bad_visibility_contract(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["visibilityContract"]["layer"] = "internal"
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_trust_public_verify_contract(payload)
+        self.assertIn("trust_public_verify_visibility_contract_layer_invalid", str(ctx.exception))
 
 
 if __name__ == "__main__":

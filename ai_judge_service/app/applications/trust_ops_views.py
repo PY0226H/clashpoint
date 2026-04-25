@@ -3,6 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .trust_public_verify_contract import TRUST_PUBLIC_VERIFY_KERNEL_VECTOR_PUBLIC_KEYS
+
+
+def _build_public_kernel_vector(payload: dict[str, Any]) -> dict[str, Any]:
+    kernel_vector = payload.get("kernelVector")
+    if not isinstance(kernel_vector, dict):
+        return {}
+    return {
+        key: kernel_vector.get(key)
+        for key in TRUST_PUBLIC_VERIFY_KERNEL_VECTOR_PUBLIC_KEYS
+        if kernel_vector.get(key) is not None
+    }
+
 
 def build_public_trust_verify_payload(
     *,
@@ -77,11 +90,7 @@ def build_public_trust_verify_payload(
             "version": kernel_version.get("version"),
             "registryHash": kernel_version.get("registryHash"),
             "kernelHash": kernel_version.get("kernelHash"),
-            "kernelVector": (
-                dict(kernel_version.get("kernelVector"))
-                if isinstance(kernel_version.get("kernelVector"), dict)
-                else {}
-            ),
+            "kernelVector": _build_public_kernel_vector(kernel_version),
         },
         "auditAnchor": {
             "version": audit_anchor.get("version"),

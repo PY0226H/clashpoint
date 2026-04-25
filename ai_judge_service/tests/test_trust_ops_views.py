@@ -49,7 +49,11 @@ class TrustOpsViewsTests(unittest.TestCase):
                 "version": "trust-phaseA-kernel-version-v1",
                 "registryHash": "kv_hash",
                 "kernelHash": "k_hash",
-                "kernelVector": {"judgeCoreVersion": "judge-core-v3"},
+                "kernelVector": {
+                    "judgeCoreVersion": "judge-core-v3",
+                    "provider": "openai",
+                    "rawTrace": {"hidden": True},
+                },
             },
             audit_anchor={
                 "version": "trust-phaseA-audit-anchor-v1",
@@ -63,6 +67,12 @@ class TrustOpsViewsTests(unittest.TestCase):
         self.assertNotIn("attestation", payload["verdictAttestation"])
         self.assertNotIn("timeline", payload["challengeReview"])
         self.assertNotIn("openAlertIds", payload["challengeReview"])
+        self.assertNotIn("provider", payload["kernelVersion"]["kernelVector"])
+        self.assertNotIn("rawTrace", payload["kernelVersion"]["kernelVector"])
+        self.assertEqual(
+            payload["kernelVersion"]["kernelVector"]["judgeCoreVersion"],
+            "judge-core-v3",
+        )
         self.assertNotIn("payload", payload["auditAnchor"])
 
     def test_build_trust_challenge_ops_queue_item_and_payload_should_build_stable_shape(self) -> None:

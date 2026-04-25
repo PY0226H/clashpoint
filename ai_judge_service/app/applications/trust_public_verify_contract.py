@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain.trust import find_public_verify_forbidden_keys
+
 TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "caseId",
     "dispatchType",
     "traceId",
     "verifyPayload",
+    "visibilityContract",
 )
 
 TRUST_PUBLIC_VERIFY_PAYLOAD_KEYS: tuple[str, ...] = (
@@ -67,6 +70,42 @@ TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS: tuple[str, ...] = (
     "kernelVersionHash",
 )
 
+TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS: tuple[str, ...] = (
+    "version",
+    "layer",
+    "payloadLayer",
+    "allowedSections",
+    "forbiddenFieldFamilies",
+    "internalAuditRouteRequired",
+)
+
+TRUST_PUBLIC_VERIFY_ALLOWED_FIELD_FAMILIES: tuple[str, ...] = (
+    "case_commitment_hashes",
+    "verdict_attestation_hashes",
+    "challenge_public_state",
+    "kernel_version_hashes",
+    "audit_anchor_hashes",
+    "component_hashes",
+)
+
+TRUST_PUBLIC_VERIFY_FORBIDDEN_FIELD_FAMILIES: tuple[str, ...] = (
+    "raw_prompt",
+    "raw_trace",
+    "raw_transcript",
+    "internal_fairness_details",
+    "user_identity",
+    "spend_or_reputation",
+)
+
+TRUST_PUBLIC_VERIFY_KERNEL_VECTOR_PUBLIC_KEYS: tuple[str, ...] = (
+    "judgeCoreVersion",
+    "pipelineVersion",
+    "policyVersion",
+    "promptVersion",
+    "toolsetVersion",
+    "agentRuntimeVersion",
+)
+
 TRUST_PUBLIC_VERIFY_ATTESTATION_HASH_KEYS: tuple[str, ...] = (
     "commitmentHash",
     "verdictHash",
@@ -89,6 +128,18 @@ def _assert_required_keys(
         raise ValueError(f"{section}_missing_keys:{','.join(sorted(missing))}")
 
 
+def _assert_only_keys(
+    *,
+    section: str,
+    payload: dict[str, Any],
+    keys: tuple[str, ...],
+) -> None:
+    allowed = set(keys)
+    extra = sorted(str(key) for key in payload.keys() if str(key) not in allowed)
+    if extra:
+        raise ValueError(f"{section}_unexpected_keys:{','.join(extra)}")
+
+
 def _non_negative_int(value: Any, *, default: int = 0) -> int:
     try:
         if isinstance(value, bool):
@@ -106,6 +157,11 @@ def _assert_non_empty_string(section: str, value: Any) -> None:
 
 def _validate_case_commitment(payload: dict[str, Any]) -> None:
     _assert_required_keys(
+        section="trust_public_verify_case_commitment",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_CASE_COMMITMENT_KEYS,
+    )
+    _assert_only_keys(
         section="trust_public_verify_case_commitment",
         payload=payload,
         keys=TRUST_PUBLIC_VERIFY_CASE_COMMITMENT_KEYS,
@@ -134,6 +190,11 @@ def _validate_case_commitment(payload: dict[str, Any]) -> None:
 
 def _validate_verdict_attestation(payload: dict[str, Any]) -> None:
     _assert_required_keys(
+        section="trust_public_verify_verdict_attestation",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_VERDICT_ATTESTATION_KEYS,
+    )
+    _assert_only_keys(
         section="trust_public_verify_verdict_attestation",
         payload=payload,
         keys=TRUST_PUBLIC_VERIFY_VERDICT_ATTESTATION_KEYS,
@@ -170,6 +231,11 @@ def _validate_challenge_review(payload: dict[str, Any]) -> None:
         payload=payload,
         keys=TRUST_PUBLIC_VERIFY_CHALLENGE_REVIEW_KEYS,
     )
+    _assert_only_keys(
+        section="trust_public_verify_challenge_review",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_CHALLENGE_REVIEW_KEYS,
+    )
     _assert_non_empty_string(
         "trust_public_verify_challenge_review_version",
         payload.get("version"),
@@ -197,6 +263,11 @@ def _validate_kernel_version(payload: dict[str, Any]) -> None:
         payload=payload,
         keys=TRUST_PUBLIC_VERIFY_KERNEL_VERSION_KEYS,
     )
+    _assert_only_keys(
+        section="trust_public_verify_kernel_version",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_KERNEL_VERSION_KEYS,
+    )
     _assert_non_empty_string(
         "trust_public_verify_kernel_version_version",
         payload.get("version"),
@@ -212,10 +283,20 @@ def _validate_kernel_version(payload: dict[str, Any]) -> None:
     kernel_vector = payload.get("kernelVector")
     if not isinstance(kernel_vector, dict):
         raise ValueError("trust_public_verify_kernel_version_kernel_vector_not_dict")
+    _assert_only_keys(
+        section="trust_public_verify_kernel_version_kernel_vector",
+        payload=kernel_vector,
+        keys=TRUST_PUBLIC_VERIFY_KERNEL_VECTOR_PUBLIC_KEYS,
+    )
 
 
 def _validate_audit_anchor(payload: dict[str, Any]) -> None:
     _assert_required_keys(
+        section="trust_public_verify_audit_anchor",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_KEYS,
+    )
+    _assert_only_keys(
         section="trust_public_verify_audit_anchor",
         payload=payload,
         keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_KEYS,
@@ -236,6 +317,11 @@ def _validate_audit_anchor(payload: dict[str, Any]) -> None:
         payload=component_hashes,
         keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
     )
+    _assert_only_keys(
+        section="trust_public_verify_audit_anchor_component_hashes",
+        payload=component_hashes,
+        keys=TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
+    )
     for key in TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS:
         _assert_non_empty_string(
             f"trust_public_verify_audit_anchor_component_hashes_{key}",
@@ -243,10 +329,67 @@ def _validate_audit_anchor(payload: dict[str, Any]) -> None:
         )
 
 
+def build_trust_public_verify_visibility_contract() -> dict[str, Any]:
+    return {
+        "version": "trust-public-verify-visibility-v1",
+        "layer": "public",
+        "payloadLayer": "commitment_hashes_only",
+        "allowedSections": list(TRUST_PUBLIC_VERIFY_ALLOWED_FIELD_FAMILIES),
+        "forbiddenFieldFamilies": list(TRUST_PUBLIC_VERIFY_FORBIDDEN_FIELD_FAMILIES),
+        "internalAuditRouteRequired": True,
+    }
+
+
+def _validate_visibility_contract(payload: dict[str, Any]) -> None:
+    _assert_required_keys(
+        section="trust_public_verify_visibility_contract",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS,
+    )
+    _assert_only_keys(
+        section="trust_public_verify_visibility_contract",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS,
+    )
+    if payload.get("version") != "trust-public-verify-visibility-v1":
+        raise ValueError("trust_public_verify_visibility_contract_version_invalid")
+    if payload.get("layer") != "public":
+        raise ValueError("trust_public_verify_visibility_contract_layer_invalid")
+    if payload.get("payloadLayer") != "commitment_hashes_only":
+        raise ValueError("trust_public_verify_visibility_contract_payload_layer_invalid")
+    allowed_sections = payload.get("allowedSections")
+    if not isinstance(allowed_sections, list):
+        raise ValueError("trust_public_verify_visibility_contract_allowed_sections_not_list")
+    if set(allowed_sections) != set(TRUST_PUBLIC_VERIFY_ALLOWED_FIELD_FAMILIES):
+        raise ValueError("trust_public_verify_visibility_contract_allowed_sections_invalid")
+    forbidden_families = payload.get("forbiddenFieldFamilies")
+    if not isinstance(forbidden_families, list):
+        raise ValueError("trust_public_verify_visibility_contract_forbidden_families_not_list")
+    if set(forbidden_families) != set(TRUST_PUBLIC_VERIFY_FORBIDDEN_FIELD_FAMILIES):
+        raise ValueError("trust_public_verify_visibility_contract_forbidden_families_invalid")
+    if payload.get("internalAuditRouteRequired") is not True:
+        raise ValueError("trust_public_verify_visibility_contract_internal_audit_route_invalid")
+
+
+def _assert_no_forbidden_public_verify_fields(payload: dict[str, Any]) -> None:
+    forbidden_keys = sorted(find_public_verify_forbidden_keys(payload))
+    if forbidden_keys:
+        raise ValueError(
+            "trust_public_verify_forbidden_fields:"
+            + ",".join(forbidden_keys)
+        )
+
+
 def validate_trust_public_verify_contract(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValueError("trust_public_verify_payload_not_dict")
+    _assert_no_forbidden_public_verify_fields(payload)
     _assert_required_keys(
+        section="trust_public_verify",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS,
+    )
+    _assert_only_keys(
         section="trust_public_verify",
         payload=payload,
         keys=TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS,
@@ -267,6 +410,16 @@ def validate_trust_public_verify_contract(payload: dict[str, Any]) -> None:
         payload=verify_payload,
         keys=TRUST_PUBLIC_VERIFY_PAYLOAD_KEYS,
     )
+    _assert_only_keys(
+        section="trust_public_verify_verify_payload",
+        payload=verify_payload,
+        keys=TRUST_PUBLIC_VERIFY_PAYLOAD_KEYS,
+    )
+
+    visibility_contract = payload.get("visibilityContract")
+    if not isinstance(visibility_contract, dict):
+        raise ValueError("trust_public_verify_visibility_contract_not_dict")
+    _validate_visibility_contract(visibility_contract)
 
     case_commitment = verify_payload.get("caseCommitment")
     if not isinstance(case_commitment, dict):

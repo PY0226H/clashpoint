@@ -247,6 +247,11 @@ class AppFactoryTrustAttestationRouteTests(
         public_verify_payload = public_verify_resp.json()
         self.assertEqual(public_verify_payload["dispatchType"], "final")
         self.assertEqual(public_verify_payload["traceId"], f"trace-final-{case_id}")
+        self.assertEqual(public_verify_payload["visibilityContract"]["layer"], "public")
+        self.assertEqual(
+            public_verify_payload["visibilityContract"]["payloadLayer"],
+            "commitment_hashes_only",
+        )
         verify_payload = public_verify_payload["verifyPayload"]
         self.assertEqual(
             verify_payload["caseCommitment"]["commitmentHash"],
@@ -273,6 +278,7 @@ class AppFactoryTrustAttestationRouteTests(
         self.assertNotIn("timeline", verify_payload["challengeReview"])
         self.assertNotIn("reviewDecisions", verify_payload["challengeReview"])
         self.assertNotIn("openAlertIds", verify_payload["challengeReview"])
+        self.assertNotIn("provider", verify_payload["kernelVersion"]["kernelVector"])
         self.assertNotIn("payload", verify_payload["auditAnchor"])
 
     async def test_trust_public_verify_route_should_return_500_when_contract_validation_fails(
