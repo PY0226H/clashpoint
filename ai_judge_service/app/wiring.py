@@ -9,7 +9,13 @@ from .callback_client import (
     callback_phase_failed,
     callback_phase_report,
 )
+from .infra.artifacts import LocalArtifactStore
 from .runtime_types import CallbackReportFn
+from .settings import Settings
+
+
+def build_artifact_store(*, settings: Settings) -> LocalArtifactStore:
+    return LocalArtifactStore(root_dir=settings.artifact_store_root)
 
 
 def bind_callback_phase_report(

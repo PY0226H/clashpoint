@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app.domain.artifacts import ArtifactManifest, ArtifactRef, ArtifactStorePort
+
 
 def _normalize_dispatch_type(value: Any) -> str | None:
     normalized = str(value or "").strip().lower()
@@ -122,6 +124,45 @@ class AuditAlertStore:
 
     def mark_outbox_delivery(self, **kwargs: Any) -> Any:
         return self.store.mark_alert_outbox_delivery(**kwargs)
+
+
+@dataclass(frozen=True)
+class ArtifactStoreBoundary:
+    store: ArtifactStorePort | None = None
+
+    async def put_json(self, **kwargs: Any) -> ArtifactRef:
+        if self.store is None:
+            raise RuntimeError("artifact_store_not_configured")
+        return await self.store.put_json(**kwargs)
+
+    async def get_json(self, *, ref: ArtifactRef) -> dict[str, Any]:
+        if self.store is None:
+            raise RuntimeError("artifact_store_not_configured")
+        return await self.store.get_json(ref=ref)
+
+    async def exists(self, *, ref: ArtifactRef) -> bool:
+        if self.store is None:
+            return False
+        return await self.store.exists(ref=ref)
+
+    def build_manifest(
+        self,
+        *,
+        case_id: int,
+        dispatch_type: str,
+        trace_id: str,
+        refs: list[ArtifactRef] | tuple[ArtifactRef, ...],
+        metadata: dict[str, Any] | None = None,
+    ) -> ArtifactManifest:
+        if self.store is None:
+            raise RuntimeError("artifact_store_not_configured")
+        return self.store.build_manifest(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            refs=refs,
+            metadata=metadata,
+        )
 
 
 @dataclass(frozen=True)
@@ -299,6 +340,7 @@ class TraceStoreBoundaries:
     read_model: TraceReadModel
     replay_store: ReplayStore
     audit_alert_store: AuditAlertStore
+    artifact_store: ArtifactStoreBoundary
 
 
 def build_trace_store_boundaries(
@@ -306,6 +348,7 @@ def build_trace_store_boundaries(
     trace_store: Any,
     workflow_store: Any | None = None,
     fact_repository: Any | None = None,
+    artifact_store: ArtifactStorePort | None = None,
 ) -> TraceStoreBoundaries:
     return TraceStoreBoundaries(
         write_store=TraceWriteStore(store=trace_store),
@@ -319,11 +362,13 @@ def build_trace_store_boundaries(
             fact_repository=fact_repository,
         ),
         audit_alert_store=AuditAlertStore(store=trace_store),
+        artifact_store=ArtifactStoreBoundary(store=artifact_store),
     )
 
 
 __all__ = [
     "AuditAlertStore",
+    "ArtifactStoreBoundary",
     "ReplayStore",
     "TraceReadModel",
     "TraceStoreBoundaries",

@@ -127,6 +127,7 @@ class Settings:
     topic_memory_min_evidence_refs: int
     topic_memory_min_rationale_chars: int
     topic_memory_min_quality_score: float
+    artifact_store_root: str = "artifacts/ai_judge_service"
     tokenizer_fallback_encoding: str = "o200k_base"
     phase_prompt_max_tokens: int = 3200
     agent2_prompt_max_tokens: int = 3600
@@ -255,6 +256,10 @@ def load_settings() -> Settings:
             os.getenv("AI_JUDGE_DB_AUTO_CREATE_SCHEMA"),
             default=True,
         ),
+        artifact_store_root=(
+            os.getenv("AI_JUDGE_ARTIFACT_STORE_ROOT", "artifacts/ai_judge_service").strip()
+            or "artifacts/ai_judge_service"
+        ),
         topic_memory_limit=int(os.getenv("AI_JUDGE_TOPIC_MEMORY_LIMIT", "5")),
         topic_memory_min_evidence_refs=int(
             os.getenv("AI_JUDGE_TOPIC_MEMORY_MIN_EVIDENCE_REFS", "1")
@@ -363,6 +368,8 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_REDIS_POOL_SIZE must be >= 1")
     if not settings.db_url.strip():
         raise ValueError("AI_JUDGE_DB_URL cannot be empty")
+    if not settings.artifact_store_root.strip():
+        raise ValueError("AI_JUDGE_ARTIFACT_STORE_ROOT cannot be empty")
     if settings.db_pool_size < 1 or settings.db_pool_size > 200:
         raise ValueError("AI_JUDGE_DB_POOL_SIZE must be between 1 and 200")
     if settings.db_max_overflow < 0 or settings.db_max_overflow > 200:

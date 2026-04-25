@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
+from app.infra.artifacts import LocalArtifactStore
 from app.trace_store import TraceStore
 from app.trace_store_boundaries import build_trace_store_boundaries
 
@@ -222,6 +225,33 @@ class TraceStoreBoundariesTests(unittest.TestCase):
         self.assertEqual(row.dispatch_type, "phase")
         self.assertEqual(row.trace_id, "trace-7301")
         self.assertEqual(row.winner, "draw")
+
+    def test_artifact_store_boundary_should_delegate_local_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifact_store = LocalArtifactStore(root_dir=Path(tmpdir) / "artifacts")
+            boundaries = build_trace_store_boundaries(
+                trace_store=TraceStore(ttl_secs=3600),
+                artifact_store=artifact_store,
+            )
+
+            ref = asyncio.run(
+                boundaries.artifact_store.put_json(
+                    case_id=7401,
+                    kind="replay_snapshot",
+                    payload={"version": "replay-v1", "winner": "draw"},
+                    dispatch_type="phase",
+                    trace_id="trace-7401",
+                )
+            )
+            manifest = boundaries.artifact_store.build_manifest(
+                case_id=7401,
+                dispatch_type="phase",
+                trace_id="trace-7401",
+                refs=[ref],
+            )
+
+            self.assertTrue(asyncio.run(boundaries.artifact_store.exists(ref=ref)))
+            self.assertEqual(manifest.to_payload()["artifactRefs"][0]["kind"], "replay_snapshot")
 
 
 if __name__ == "__main__":

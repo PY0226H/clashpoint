@@ -316,6 +316,7 @@ from .domain.agents import (
     AGENT_KIND_JUDGE,
     AgentExecutionRequest,
 )
+from .domain.artifacts import ArtifactStorePort
 from .domain.facts import (
     AuditAlert as FactAuditAlert,
 )
@@ -335,7 +336,7 @@ from .settings import (
 )
 from .trace_store import TraceStoreProtocol, build_trace_store_from_settings
 from .trace_store_boundaries import TraceStoreBoundaries, build_trace_store_boundaries
-from .wiring import build_v3_dispatch_callbacks
+from .wiring import build_artifact_store, build_v3_dispatch_callbacks
 
 LoadSettingsFn = Callable[[], Settings]
 
@@ -351,6 +352,7 @@ class AppRuntime:
     sleep_fn: SleepFn
     trace_store: TraceStoreProtocol
     trace_store_boundaries: TraceStoreBoundaries
+    artifact_store: ArtifactStorePort
     workflow_runtime: WorkflowRuntime
     gateway_runtime: GatewayRuntime
     registry_product_runtime: RegistryProductRuntime
@@ -378,10 +380,12 @@ def create_runtime(
 ) -> AppRuntime:
     trace_store = build_trace_store_from_settings(settings=settings)
     workflow_runtime = build_workflow_runtime(settings=settings)
+    artifact_store = build_artifact_store(settings=settings)
     trace_store_boundaries = build_trace_store_boundaries(
         trace_store=trace_store,
         workflow_store=workflow_runtime.store,
         fact_repository=workflow_runtime.facts,
+        artifact_store=artifact_store,
     )
     gateway_runtime = build_gateway_runtime(settings=settings)
     agent_runtime = build_agent_runtime(settings=settings)
@@ -412,6 +416,7 @@ def create_runtime(
         sleep_fn=sleep_fn,
         trace_store=trace_store,
         trace_store_boundaries=trace_store_boundaries,
+        artifact_store=artifact_store,
         workflow_runtime=workflow_runtime,
         gateway_runtime=gateway_runtime,
         registry_product_runtime=registry_product_runtime,
