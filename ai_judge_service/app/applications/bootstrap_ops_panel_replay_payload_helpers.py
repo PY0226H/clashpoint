@@ -27,10 +27,12 @@ from .judge_trace_replay_routes import (
 from .ops_read_model_pack import (
     build_ops_read_model_pack_adaptive_summary,
     build_ops_read_model_pack_case_chain_coverage,
+    build_ops_read_model_pack_case_lifecycle_overview,
     build_ops_read_model_pack_fairness_gate_overview,
     build_ops_read_model_pack_filters,
     build_ops_read_model_pack_judge_workflow_coverage,
     build_ops_read_model_pack_policy_kernel_binding,
+    build_ops_read_model_pack_read_contract,
     build_ops_read_model_pack_route_payload,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
@@ -334,12 +336,16 @@ async def build_ops_read_model_pack_payload_for_runtime(
         build_ops_read_model_pack_case_chain_coverage_fn=(
             build_ops_read_model_pack_case_chain_coverage
         ),
+        build_ops_read_model_pack_case_lifecycle_overview_fn=(
+            build_ops_read_model_pack_case_lifecycle_overview
+        ),
         build_ops_read_model_pack_fairness_gate_overview_fn=(
             build_ops_read_model_pack_fairness_gate_overview
         ),
         build_ops_read_model_pack_policy_kernel_binding_fn=(
             build_ops_read_model_pack_policy_kernel_binding
         ),
+        build_ops_read_model_pack_read_contract_fn=build_ops_read_model_pack_read_contract,
         build_ops_read_model_pack_adaptive_summary_fn=(
             build_ops_read_model_pack_adaptive_summary
         ),

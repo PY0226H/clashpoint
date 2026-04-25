@@ -5,18 +5,22 @@ import unittest
 from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
     OPS_READ_MODEL_PACK_V5_CASE_CHAIN_COVERAGE_KEYS,
+    OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS,
     OPS_READ_MODEL_PACK_V5_FAIRNESS_GATE_OVERVIEW_KEYS,
     OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
     OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
     OPS_READ_MODEL_PACK_V5_POLICY_KERNEL_BINDING_KEYS,
+    OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     build_ops_read_model_pack_adaptive_summary,
     build_ops_read_model_pack_case_chain_coverage,
+    build_ops_read_model_pack_case_lifecycle_overview,
     build_ops_read_model_pack_fairness_gate_overview,
     build_ops_read_model_pack_filters,
     build_ops_read_model_pack_judge_workflow_coverage,
     build_ops_read_model_pack_policy_kernel_binding,
+    build_ops_read_model_pack_read_contract,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
@@ -116,6 +120,15 @@ class OpsReadModelPackTests(unittest.TestCase):
                 },
                 "fullCoverageRate": 0.0,
             },
+            "caseLifecycleOverview": {
+                "totalCases": 0,
+                "workflowStatusCounts": {},
+                "lifecycleBucketCounts": {},
+                "reviewRequiredCount": 0,
+                "drawPendingCount": 0,
+                "blockedCount": 0,
+                "callbackFailedCount": 0,
+            },
             "caseChainCoverage": {
                 "totalCases": 0,
                 "completeCount": 0,
@@ -162,6 +175,30 @@ class OpsReadModelPackTests(unittest.TestCase):
                     "blocked": 0,
                     "override_activated": 0,
                     "pass": 0,
+                },
+            },
+            "readContract": {
+                "contractVersion": "ops_read_model_pack_v5",
+                "businessRoutes": [
+                    "/internal/judge/cases/{case_id}",
+                    "/internal/judge/cases/{case_id}/courtroom-read-model",
+                ],
+                "opsRoutes": [
+                    "/internal/judge/ops/read-model/pack",
+                    "/internal/judge/review/cases",
+                ],
+                "policyRoutes": [
+                    "/internal/judge/registries/governance/overview",
+                    "/internal/judge/registries/policy/gate-simulation",
+                ],
+                "fieldLayers": {
+                    "userVisible": ["winner", "needsDrawVote", "reviewRequired"],
+                    "opsVisible": ["workflowStatus", "caseLifecycleOverview"],
+                    "internalAudit": ["traceId", "judgeCore"],
+                },
+                "errorSemantics": {
+                    "structuredErrorCodeRequired": True,
+                    "rawStringFallbackAllowed": False,
                 },
             },
             "filters": filters or {
@@ -362,6 +399,54 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(payload["missingAnyCount"], 1)
         self.assertEqual(payload["byObjectPresence"]["claimGraph"], 1)
 
+    def test_build_ops_read_model_pack_case_lifecycle_overview_should_count_states(
+        self,
+    ) -> None:
+        payload = build_ops_read_model_pack_case_lifecycle_overview(
+            courtroom_items=[
+                {
+                    "workflowStatus": "callback_reported",
+                    "callbackStatus": "reported",
+                    "reviewRequired": False,
+                    "needsDrawVote": False,
+                    "blocked": False,
+                    "lifecycleBucket": "reported",
+                },
+                {
+                    "workflowStatus": "review_required",
+                    "callbackStatus": "blocked_failed_reported",
+                    "reviewRequired": True,
+                    "needsDrawVote": True,
+                    "blocked": True,
+                    "lifecycleBucket": "blocked",
+                },
+            ]
+        )
+        self.assertEqual(
+            set(payload.keys()),
+            set(OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS),
+        )
+        self.assertEqual(payload["totalCases"], 2)
+        self.assertEqual(payload["workflowStatusCounts"]["callback_reported"], 1)
+        self.assertEqual(payload["lifecycleBucketCounts"]["blocked"], 1)
+        self.assertEqual(payload["reviewRequiredCount"], 1)
+        self.assertEqual(payload["drawPendingCount"], 1)
+        self.assertEqual(payload["blockedCount"], 1)
+        self.assertEqual(payload["callbackFailedCount"], 1)
+
+    def test_build_ops_read_model_pack_read_contract_should_layer_fields(self) -> None:
+        payload = build_ops_read_model_pack_read_contract()
+        self.assertEqual(
+            set(payload.keys()),
+            set(OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS),
+        )
+        self.assertIn("/internal/judge/ops/read-model/pack", payload["opsRoutes"])
+        self.assertIn("winner", payload["fieldLayers"]["userVisible"])
+        self.assertIn("caseLifecycleOverview", payload["fieldLayers"]["opsVisible"])
+        self.assertIn("policyKernelHash", payload["fieldLayers"]["internalAudit"])
+        self.assertTrue(payload["errorSemantics"]["structuredErrorCodeRequired"])
+        self.assertFalse(payload["errorSemantics"]["rawStringFallbackAllowed"])
+
     def test_build_ops_read_model_pack_fairness_gate_overview_should_summarize_case_and_policy(
         self,
     ) -> None:
@@ -519,9 +604,11 @@ class OpsReadModelPackTests(unittest.TestCase):
             adaptive_summary=seed["adaptiveSummary"],
             trust_overview=seed["trustOverview"],
             judge_workflow_coverage=seed["judgeWorkflowCoverage"],
+            case_lifecycle_overview=seed["caseLifecycleOverview"],
             case_chain_coverage=seed["caseChainCoverage"],
             fairness_gate_overview=seed["fairnessGateOverview"],
             policy_kernel_binding=seed["policyKernelBinding"],
+            read_contract=seed["readContract"],
             pack_filters=seed["filters"],
         )
         self.assertEqual(set(payload.keys()), set(OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS))

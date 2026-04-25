@@ -7,8 +7,10 @@ from unittest.mock import patch
 from app.app_factory import create_app, create_runtime
 from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
+    OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS,
     OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
     OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
+    OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     validate_ops_read_model_pack_v5_contract,
@@ -110,6 +112,14 @@ class AppFactoryOpsPanelRouteTests(
             set(OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS),
         )
         self.assertEqual(
+            set(payload["caseLifecycleOverview"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS),
+        )
+        self.assertEqual(
+            set(payload["readContract"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS),
+        )
+        self.assertEqual(
             set(payload["filters"].keys()),
             set(OPS_READ_MODEL_PACK_V5_FILTER_KEYS),
         )
@@ -130,9 +140,11 @@ class AppFactoryOpsPanelRouteTests(
         self.assertIsInstance(payload["adaptiveSummary"], dict)
         self.assertIsInstance(payload["trustOverview"], dict)
         self.assertIsInstance(payload["judgeWorkflowCoverage"], dict)
+        self.assertIsInstance(payload["caseLifecycleOverview"], dict)
         self.assertIsInstance(payload["caseChainCoverage"], dict)
         self.assertIsInstance(payload["fairnessGateOverview"], dict)
         self.assertIsInstance(payload["policyKernelBinding"], dict)
+        self.assertIsInstance(payload["readContract"], dict)
         self.assertGreaterEqual(
             payload["fairnessDashboard"]["overview"]["totalMatched"],
             1,
@@ -213,6 +225,21 @@ class AppFactoryOpsPanelRouteTests(
         self.assertGreaterEqual(payload["judgeWorkflowCoverage"]["totalCases"], 1)
         self.assertGreaterEqual(payload["judgeWorkflowCoverage"]["fullCount"], 1)
         self.assertLessEqual(payload["judgeWorkflowCoverage"]["fullCoverageRate"], 1.0)
+        self.assertGreaterEqual(payload["caseLifecycleOverview"]["totalCases"], 1)
+        self.assertIn("workflowStatusCounts", payload["caseLifecycleOverview"])
+        self.assertIn("lifecycleBucketCounts", payload["caseLifecycleOverview"])
+        self.assertIn(
+            "/internal/judge/ops/read-model/pack",
+            payload["readContract"]["opsRoutes"],
+        )
+        self.assertIn("winner", payload["readContract"]["fieldLayers"]["userVisible"])
+        self.assertIn(
+            "caseLifecycleOverview",
+            payload["readContract"]["fieldLayers"]["opsVisible"],
+        )
+        self.assertFalse(
+            payload["readContract"]["errorSemantics"]["rawStringFallbackAllowed"]
+        )
         self.assertGreaterEqual(payload["caseChainCoverage"]["totalCases"], 1)
         self.assertGreaterEqual(payload["caseChainCoverage"]["completeCount"], 1)
         self.assertIn("byObjectPresence", payload["caseChainCoverage"])
@@ -226,6 +253,11 @@ class AppFactoryOpsPanelRouteTests(
         self.assertGreaterEqual(payload["policyKernelBinding"]["kernelBoundPolicyCount"], 1)
         self.assertIn("v3-default", payload["policyKernelBinding"]["casePolicyVersionCounts"])
         courtroom_item = payload["courtroomReadModel"]["items"][0]
+        self.assertIn("workflowStatus", courtroom_item)
+        self.assertIn("callbackStatus", courtroom_item)
+        self.assertIn("needsDrawVote", courtroom_item)
+        self.assertIn("blocked", courtroom_item)
+        self.assertIn("lifecycleBucket", courtroom_item)
         self.assertIn("policyVersion", courtroom_item)
         self.assertIn("policyKernelVersion", courtroom_item)
         self.assertIn("policyKernelHash", courtroom_item)

@@ -21,9 +21,11 @@ OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "adaptiveSummary",
     "trustOverview",
     "judgeWorkflowCoverage",
+    "caseLifecycleOverview",
     "caseChainCoverage",
     "fairnessGateOverview",
     "policyKernelBinding",
+    "readContract",
     "filters",
 )
 
@@ -38,8 +40,13 @@ OPS_READ_MODEL_PACK_V5_COURTROOM_READ_MODEL_KEYS: tuple[str, ...] = (
 OPS_READ_MODEL_PACK_V5_COURTROOM_ITEM_KEYS: tuple[str, ...] = (
     "caseId",
     "dispatchType",
+    "workflowStatus",
+    "callbackStatus",
     "winner",
     "reviewRequired",
+    "needsDrawVote",
+    "blocked",
+    "lifecycleBucket",
     "gateDecision",
     "policyVersion",
     "policyKernelVersion",
@@ -203,6 +210,32 @@ OPS_READ_MODEL_PACK_V5_POLICY_KERNEL_BINDING_KEYS: tuple[str, ...] = (
     "casePolicyVersionCounts",
     "gateDecisionCounts",
 )
+OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS: tuple[str, ...] = (
+    "totalCases",
+    "workflowStatusCounts",
+    "lifecycleBucketCounts",
+    "reviewRequiredCount",
+    "drawPendingCount",
+    "blockedCount",
+    "callbackFailedCount",
+)
+OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS: tuple[str, ...] = (
+    "contractVersion",
+    "businessRoutes",
+    "opsRoutes",
+    "policyRoutes",
+    "fieldLayers",
+    "errorSemantics",
+)
+OPS_READ_MODEL_PACK_V5_FIELD_LAYER_KEYS: tuple[str, ...] = (
+    "userVisible",
+    "opsVisible",
+    "internalAudit",
+)
+OPS_READ_MODEL_PACK_V5_ERROR_SEMANTIC_KEYS: tuple[str, ...] = (
+    "structuredErrorCodeRequired",
+    "rawStringFallbackAllowed",
+)
 
 
 def _to_int(value: Any, *, default: int = 0) -> int:
@@ -212,6 +245,11 @@ def _to_int(value: Any, *, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_optional_token(value: Any) -> str | None:
+    token = str(value or "").strip().lower()
+    return token or None
 
 
 def _clamp_int(value: Any, *, minimum: int, maximum: int) -> int:
@@ -405,6 +443,44 @@ def _collect_top_case_ids(
     return result
 
 
+def _build_ops_read_model_pack_lifecycle_bucket(
+    *,
+    workflow_status: str | None,
+    callback_status: str | None,
+    review_required: bool,
+    needs_draw_vote: bool,
+    blocked: bool,
+) -> str:
+    status = _normalize_optional_token(workflow_status)
+    callback = _normalize_optional_token(callback_status)
+    if blocked or status == "blocked_failed" or callback == "blocked_failed_reported":
+        return "blocked"
+    if review_required or status == "review_required":
+        return "review_required"
+    if needs_draw_vote or status == "draw_pending_vote":
+        return "draw_pending"
+    if callback is not None and "failed" in callback:
+        return "callback_failed"
+    if status in {"callback_reported", "archived"}:
+        return "reported"
+    if status in {
+        "panel_judged",
+        "fairness_checked",
+        "arbitrated",
+        "opinion_written",
+    }:
+        return "judging"
+    if status in {
+        "queued",
+        "blinded",
+        "case_built",
+        "claim_graph_ready",
+        "evidence_ready",
+    }:
+        return "building"
+    return status or "unknown"
+
+
 def _as_httpish_error(err: Exception) -> tuple[int, str] | None:
     status_code = getattr(err, "status_code", None)
     if isinstance(status_code, bool) or not isinstance(status_code, int):
@@ -454,8 +530,10 @@ async def build_ops_read_model_pack_route_payload(
     summarize_ops_read_model_pack_trust_items_fn: Callable[..., dict[str, int]],
     summarize_ops_read_model_pack_review_items_fn: Callable[..., dict[str, int]],
     build_ops_read_model_pack_case_chain_coverage_fn: Callable[..., dict[str, Any]],
+    build_ops_read_model_pack_case_lifecycle_overview_fn: Callable[..., dict[str, Any]],
     build_ops_read_model_pack_fairness_gate_overview_fn: Callable[..., dict[str, Any]],
     build_ops_read_model_pack_policy_kernel_binding_fn: Callable[..., dict[str, Any]],
+    build_ops_read_model_pack_read_contract_fn: Callable[..., dict[str, Any]],
     build_ops_read_model_pack_adaptive_summary_fn: Callable[..., dict[str, Any]],
     build_ops_read_model_pack_trust_overview_fn: Callable[..., dict[str, Any]],
     build_ops_read_model_pack_judge_workflow_coverage_fn: Callable[..., dict[str, Any]],
@@ -764,6 +842,21 @@ async def build_ops_read_model_pack_route_payload(
             if isinstance(courtroom_view.get("governance"), dict)
             else {}
         )
+        workflow_view = (
+            courtroom_payload.get("workflow")
+            if isinstance(courtroom_payload.get("workflow"), dict)
+            else {}
+        )
+        callback_view = (
+            courtroom_payload.get("callback")
+            if isinstance(courtroom_payload.get("callback"), dict)
+            else {}
+        )
+        report_view = (
+            courtroom_payload.get("report")
+            if isinstance(courtroom_payload.get("report"), dict)
+            else {}
+        )
         key_claims = (
             claim_view.get("keyClaimsBySide")
             if isinstance(claim_view.get("keyClaimsBySide"), dict)
@@ -812,6 +905,31 @@ async def build_ops_read_model_pack_route_payload(
             if isinstance(gate_binding, dict)
             else None
         )
+        workflow_status = _normalize_optional_token(workflow_view.get("status"))
+        callback_status = _normalize_optional_token(callback_view.get("status"))
+        winner = _normalize_optional_token(report_view.get("winner"))
+        review_required = bool(
+            report_view.get("reviewRequired") or fairness_view.get("reviewRequired")
+        )
+        needs_draw_vote = bool(report_view.get("needsDrawVote"))
+        gate_decision = (
+            normalize_fairness_gate_decision(
+                fairness_view.get("gateDecision"),
+                review_required=review_required,
+            )
+            or None
+        )
+        blocked = bool(
+            workflow_status == "blocked_failed"
+            or callback_status == "blocked_failed_reported"
+        )
+        lifecycle_bucket = _build_ops_read_model_pack_lifecycle_bucket(
+            workflow_status=workflow_status,
+            callback_status=callback_status,
+            review_required=review_required,
+            needs_draw_vote=needs_draw_vote,
+            blocked=blocked,
+        )
         chain_presence = {
             "caseDossier": bool(
                 isinstance(recorder_view.get("caseDossier"), dict)
@@ -852,19 +970,14 @@ async def build_ops_read_model_pack_route_payload(
             {
                 "caseId": case_id,
                 "dispatchType": courtroom_payload.get("dispatchType"),
-                "winner": (
-                    courtroom_payload.get("report", {})
-                    if isinstance(courtroom_payload.get("report"), dict)
-                    else {}
-                ).get("winner"),
-                "reviewRequired": bool(fairness_view.get("reviewRequired")),
-                "gateDecision": (
-                    normalize_fairness_gate_decision(
-                        fairness_view.get("gateDecision"),
-                        review_required=bool(fairness_view.get("reviewRequired")),
-                    )
-                    or None
-                ),
+                "workflowStatus": workflow_status,
+                "callbackStatus": callback_status,
+                "winner": winner,
+                "reviewRequired": review_required,
+                "needsDrawVote": needs_draw_vote,
+                "blocked": blocked,
+                "lifecycleBucket": lifecycle_bucket,
+                "gateDecision": gate_decision,
                 "policyVersion": policy_version_token,
                 "policyKernelVersion": policy_kernel_version,
                 "policyKernelHash": policy_kernel_hash,
@@ -1084,6 +1197,9 @@ async def build_ops_read_model_pack_route_payload(
     case_chain_coverage = build_ops_read_model_pack_case_chain_coverage_fn(
         chain_rows=chain_rows,
     )
+    case_lifecycle_overview = build_ops_read_model_pack_case_lifecycle_overview_fn(
+        courtroom_items=courtroom_items,
+    )
     policy_gate_rows: list[dict[str, Any]] = []
     for row in dependency_overview_rows:
         if not isinstance(row, dict):
@@ -1136,6 +1252,7 @@ async def build_ops_read_model_pack_route_payload(
         policy_gate_rows=policy_gate_rows,
         courtroom_items=courtroom_items,
     )
+    read_contract = build_ops_read_model_pack_read_contract_fn()
     pack_filters = build_ops_read_model_pack_filters_fn(
         dispatch_type=dispatch_type,
         policy_version=policy_version,
@@ -1177,9 +1294,11 @@ async def build_ops_read_model_pack_route_payload(
         adaptive_summary=adaptive_summary,
         trust_overview=trust_overview,
         judge_workflow_coverage=judge_workflow_coverage,
+        case_lifecycle_overview=case_lifecycle_overview,
         case_chain_coverage=case_chain_coverage,
         fairness_gate_overview=fairness_gate_overview,
         policy_kernel_binding=policy_kernel_binding,
+        read_contract=read_contract,
         pack_filters=pack_filters,
     )
 
@@ -1360,6 +1479,101 @@ def build_ops_read_model_pack_case_chain_coverage(
         "fullCoverageRate": full_coverage_rate,
         "missingAnyRate": missing_any_rate,
         "byObjectPresence": object_presence,
+    }
+
+
+def build_ops_read_model_pack_case_lifecycle_overview(
+    *,
+    courtroom_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    workflow_status_counts: dict[str, int] = {}
+    lifecycle_bucket_counts: dict[str, int] = {}
+    review_required_count = 0
+    draw_pending_count = 0
+    blocked_count = 0
+    callback_failed_count = 0
+
+    for row in courtroom_items:
+        status = _normalize_optional_token(row.get("workflowStatus")) or "unknown"
+        bucket = _normalize_optional_token(row.get("lifecycleBucket")) or "unknown"
+        callback_status = _normalize_optional_token(row.get("callbackStatus"))
+        workflow_status_counts[status] = workflow_status_counts.get(status, 0) + 1
+        lifecycle_bucket_counts[bucket] = lifecycle_bucket_counts.get(bucket, 0) + 1
+        if bool(row.get("reviewRequired")):
+            review_required_count += 1
+        if bool(row.get("needsDrawVote")) or bucket == "draw_pending":
+            draw_pending_count += 1
+        if bool(row.get("blocked")) or bucket == "blocked":
+            blocked_count += 1
+        if callback_status is not None and "failed" in callback_status:
+            callback_failed_count += 1
+
+    return {
+        "totalCases": len(courtroom_items),
+        "workflowStatusCounts": dict(
+            sorted(workflow_status_counts.items(), key=lambda kv: kv[0])
+        ),
+        "lifecycleBucketCounts": dict(
+            sorted(lifecycle_bucket_counts.items(), key=lambda kv: kv[0])
+        ),
+        "reviewRequiredCount": review_required_count,
+        "drawPendingCount": draw_pending_count,
+        "blockedCount": blocked_count,
+        "callbackFailedCount": callback_failed_count,
+    }
+
+
+def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
+    return {
+        "contractVersion": "ops_read_model_pack_v5",
+        "businessRoutes": [
+            "/internal/judge/cases/{case_id}",
+            "/internal/judge/cases/{case_id}/courtroom-read-model",
+            "/internal/judge/cases/{case_id}/trust/public-verify",
+        ],
+        "opsRoutes": [
+            "/internal/judge/ops/read-model/pack",
+            "/internal/judge/review/cases",
+            "/internal/judge/cases/replay/reports",
+            "/internal/judge/cases/{case_id}/alerts",
+        ],
+        "policyRoutes": [
+            "/internal/judge/registries/governance/overview",
+            "/internal/judge/registries/prompt-tool/governance",
+            "/internal/judge/registries/policy/dependencies/health",
+            "/internal/judge/registries/policy/gate-simulation",
+        ],
+        "fieldLayers": {
+            "userVisible": [
+                "winner",
+                "needsDrawVote",
+                "reviewRequired",
+                "debateSummary",
+                "sideAnalysis",
+                "verdictReason",
+            ],
+            "opsVisible": [
+                "workflowStatus",
+                "callbackStatus",
+                "lifecycleBucket",
+                "caseLifecycleOverview",
+                "caseChainCoverage",
+                "fairnessGateOverview",
+                "policyKernelBinding",
+            ],
+            "internalAudit": [
+                "traceId",
+                "judgeCore",
+                "auditAlerts",
+                "policyKernelHash",
+                "policyGateSource",
+                "eventSeq",
+            ],
+        },
+        "errorSemantics": {
+            "structuredErrorCodeRequired": True,
+            "rawStringFallbackAllowed": False,
+        },
     }
 
 
@@ -1581,7 +1795,20 @@ def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
             field="pivotalMomentCount",
             value=row.get("pivotalMomentCount"),
         )
+        for field in ("reviewRequired", "needsDrawVote", "blocked"):
+            if not isinstance(row.get(field), bool):
+                raise ValueError(
+                    f"ops_read_model_pack_courtroomReadModel_item_{field}_not_bool"
+                )
+        lifecycle_bucket = row.get("lifecycleBucket")
+        if not isinstance(lifecycle_bucket, str) or not lifecycle_bucket.strip():
+            raise ValueError(
+                "ops_read_model_pack_courtroomReadModel_item_lifecycleBucket_invalid"
+            )
         for field in (
+            "workflowStatus",
+            "callbackStatus",
+            "winner",
             "policyVersion",
             "policyKernelVersion",
             "policyKernelHash",
@@ -1729,6 +1956,48 @@ def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
             value=object_presence.get(field),
         )
 
+    case_lifecycle_overview = payload.get("caseLifecycleOverview")
+    if not isinstance(case_lifecycle_overview, dict):
+        raise ValueError("ops_read_model_pack_caseLifecycleOverview_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_caseLifecycleOverview",
+        payload=case_lifecycle_overview,
+        required_keys=OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS,
+    )
+    for field in (
+        "totalCases",
+        "reviewRequiredCount",
+        "drawPendingCount",
+        "blockedCount",
+        "callbackFailedCount",
+    ):
+        _require_non_negative_int(
+            section="ops_read_model_pack_caseLifecycleOverview",
+            field=field,
+            value=case_lifecycle_overview.get(field),
+        )
+    lifecycle_total_cases = int(case_lifecycle_overview.get("totalCases") or 0)
+    for field in ("workflowStatusCounts", "lifecycleBucketCounts"):
+        value = case_lifecycle_overview.get(field)
+        if not isinstance(value, dict):
+            raise ValueError(f"ops_read_model_pack_caseLifecycleOverview_{field}_not_dict")
+        total_count = 0
+        for key, count in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(
+                    f"ops_read_model_pack_caseLifecycleOverview_{field}_key_invalid"
+                )
+            _require_non_negative_int(
+                section=f"ops_read_model_pack_caseLifecycleOverview_{field}",
+                field=key,
+                value=count,
+            )
+            total_count += int(count)
+        if total_count != lifecycle_total_cases:
+            raise ValueError(
+                f"ops_read_model_pack_caseLifecycleOverview_{field}_count_mismatch"
+            )
+
     fairness_gate_overview = payload.get("fairnessGateOverview")
     if not isinstance(fairness_gate_overview, dict):
         raise ValueError("ops_read_model_pack_fairnessGateOverview_not_dict")
@@ -1787,6 +2056,58 @@ def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
         if not isinstance(value, dict):
             raise ValueError(f"ops_read_model_pack_policyKernelBinding_{field}_not_dict")
 
+    read_contract = payload.get("readContract")
+    if not isinstance(read_contract, dict):
+        raise ValueError("ops_read_model_pack_readContract_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_readContract",
+        payload=read_contract,
+        required_keys=OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS,
+    )
+    contract_version = read_contract.get("contractVersion")
+    if not isinstance(contract_version, str) or not contract_version.strip():
+        raise ValueError("ops_read_model_pack_readContract_contractVersion_invalid")
+    for field in ("businessRoutes", "opsRoutes", "policyRoutes"):
+        value = read_contract.get(field)
+        if not isinstance(value, list) or not value:
+            raise ValueError(f"ops_read_model_pack_readContract_{field}_not_non_empty_list")
+        for row in value:
+            if not isinstance(row, str) or not row.strip():
+                raise ValueError(f"ops_read_model_pack_readContract_{field}_item_invalid")
+    field_layers = read_contract.get("fieldLayers")
+    if not isinstance(field_layers, dict):
+        raise ValueError("ops_read_model_pack_readContract_fieldLayers_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_readContract_fieldLayers",
+        payload=field_layers,
+        required_keys=OPS_READ_MODEL_PACK_V5_FIELD_LAYER_KEYS,
+    )
+    for field in OPS_READ_MODEL_PACK_V5_FIELD_LAYER_KEYS:
+        value = field_layers.get(field)
+        if not isinstance(value, list) or not value:
+            raise ValueError(f"ops_read_model_pack_readContract_fieldLayers_{field}_invalid")
+        for row in value:
+            if not isinstance(row, str) or not row.strip():
+                raise ValueError(
+                    f"ops_read_model_pack_readContract_fieldLayers_{field}_item_invalid"
+                )
+    error_semantics = read_contract.get("errorSemantics")
+    if not isinstance(error_semantics, dict):
+        raise ValueError("ops_read_model_pack_readContract_errorSemantics_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_readContract_errorSemantics",
+        payload=error_semantics,
+        required_keys=OPS_READ_MODEL_PACK_V5_ERROR_SEMANTIC_KEYS,
+    )
+    if error_semantics.get("structuredErrorCodeRequired") is not True:
+        raise ValueError(
+            "ops_read_model_pack_readContract_structuredErrorCodeRequired_not_true"
+        )
+    if error_semantics.get("rawStringFallbackAllowed") is not False:
+        raise ValueError(
+            "ops_read_model_pack_readContract_rawStringFallbackAllowed_not_false"
+        )
+
     filters = payload.get("filters")
     if not isinstance(filters, dict):
         raise ValueError("ops_read_model_pack_filters_not_dict")
@@ -1834,9 +2155,11 @@ def build_ops_read_model_pack_v5_payload(
     adaptive_summary: dict[str, Any],
     trust_overview: dict[str, Any],
     judge_workflow_coverage: dict[str, Any],
+    case_lifecycle_overview: dict[str, Any],
     case_chain_coverage: dict[str, Any],
     fairness_gate_overview: dict[str, Any],
     policy_kernel_binding: dict[str, Any],
+    read_contract: dict[str, Any],
     pack_filters: dict[str, Any],
 ) -> dict[str, Any]:
     payload = {
@@ -1864,9 +2187,11 @@ def build_ops_read_model_pack_v5_payload(
         "adaptiveSummary": adaptive_summary,
         "trustOverview": trust_overview,
         "judgeWorkflowCoverage": judge_workflow_coverage,
+        "caseLifecycleOverview": case_lifecycle_overview,
         "caseChainCoverage": case_chain_coverage,
         "fairnessGateOverview": fairness_gate_overview,
         "policyKernelBinding": policy_kernel_binding,
+        "readContract": read_contract,
         "filters": pack_filters,
     }
     validate_ops_read_model_pack_v5_contract(payload)
