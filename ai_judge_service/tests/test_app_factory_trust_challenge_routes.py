@@ -80,9 +80,24 @@ class AppFactoryTrustChallengeRouteTests(
         self.assertTrue(str(request_payload["challengeId"]).startswith(f"chlg-{case_id}-"))
         self.assertEqual(request_payload["item"]["version"], "trust-phaseB-challenge-review-v1")
         self.assertEqual(request_payload["item"]["reviewState"], "pending_review")
-        self.assertEqual(request_payload["item"]["challengeState"], "under_review")
+        self.assertEqual(request_payload["item"]["challengeState"], "under_internal_review")
         self.assertEqual(request_payload["item"]["activeChallengeId"], request_payload["challengeId"])
         self.assertGreaterEqual(request_payload["item"]["totalChallenges"], 1)
+        self.assertEqual(
+            request_payload["item"]["latestRegistryEvent"]["state"],
+            "under_internal_review",
+        )
+
+        duplicate_request_resp = await self._post(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{case_id}/trust/challenges/request"
+                "?dispatch_type=auto&reason_code=manual_challenge&reason=duplicate"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(duplicate_request_resp.status_code, 409)
+        self.assertIn("trust_challenge_already_open", duplicate_request_resp.text)
 
         review_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=case_id)
         self.assertIsNotNone(review_job)
@@ -195,7 +210,7 @@ class AppFactoryTrustChallengeRouteTests(
         open_case_item = next(
             item for item in open_queue_payload["items"] if item["caseId"] == open_case_id
         )
-        self.assertEqual(open_case_item["challengeReview"]["state"], "under_review")
+        self.assertEqual(open_case_item["challengeReview"]["state"], "under_internal_review")
         self.assertEqual(open_case_item["challengeReview"]["activeChallengeId"], open_challenge_id)
         self.assertEqual(open_case_item["review"]["state"], "pending_review")
         self.assertIn(

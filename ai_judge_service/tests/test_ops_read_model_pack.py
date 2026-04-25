@@ -619,9 +619,13 @@ class OpsReadModelPackTests(unittest.TestCase):
             trust_items=[
                 {"verdictVerified": True, "reviewRequired": True, "challengeState": "requested"},
                 {"verdictVerified": False, "reviewRequired": False, "challengeState": "closed"},
-                {"verdictVerified": True, "reviewRequired": False, "challengeState": "UNDER_REVIEW"},
+                {
+                    "verdictVerified": True,
+                    "reviewRequired": False,
+                    "challengeState": "UNDER_INTERNAL_REVIEW",
+                },
             ],
-            open_challenge_states={"requested", "under_review"},
+            open_challenge_states={"requested", "under_internal_review"},
         )
         self.assertEqual(summary["verifiedCount"], 2)
         self.assertEqual(summary["reviewRequiredCount"], 1)
@@ -647,7 +651,7 @@ class OpsReadModelPackTests(unittest.TestCase):
                 {"priorityProfile": {"level": "high", "slaBucket": "urgent"}},
                 {"priorityProfile": {"level": "low", "slaBucket": "normal"}},
             ],
-            open_challenge_states={"requested", "under_review"},
+            open_challenge_states={"requested", "under_internal_review"},
         )
         self.assertEqual(summary["reviewHighRiskCount"], 1)
         self.assertEqual(summary["reviewUrgentCount"], 1)

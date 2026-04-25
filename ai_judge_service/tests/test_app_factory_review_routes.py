@@ -620,7 +620,7 @@ class AppFactoryReviewRouteTests(
         self.assertEqual(open_only_payload["count"], 1)
         item = open_only_payload["items"][0]
         self.assertEqual(item["workflow"]["caseId"], challenged_case_id)
-        self.assertEqual(item["trustChallenge"]["state"], "under_review")
+        self.assertEqual(item["trustChallenge"]["state"], "under_internal_review")
         self.assertEqual(item["trustChallenge"]["reviewState"], "pending_review")
         self.assertIsInstance(item["trustPriorityProfile"], dict)
         self.assertIsInstance(item["unifiedPriorityProfile"], dict)

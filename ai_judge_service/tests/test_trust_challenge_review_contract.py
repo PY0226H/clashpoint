@@ -19,11 +19,22 @@ class TrustChallengeReviewContractTests(unittest.TestCase):
                 "version": "trust-phaseB-challenge-review-v1",
                 "caseId": 9303,
                 "traceId": "trace-final-9303",
-                "challengeState": "open",
+                "challengeState": "under_internal_review",
                 "activeChallengeId": "challenge-9303",
                 "totalChallenges": 1,
-                "challenges": [{"challengeId": "challenge-9303"}],
-                "timeline": [],
+                "challenges": [
+                    {
+                        "challengeId": "challenge-9303",
+                        "currentState": "under_internal_review",
+                    }
+                ],
+                "timeline": [
+                    {
+                        "eventSeq": 1,
+                        "challengeId": "challenge-9303",
+                        "state": "under_internal_review",
+                    }
+                ],
                 "reviewState": "pending_review",
                 "reviewRequired": True,
                 "reviewDecisions": [],

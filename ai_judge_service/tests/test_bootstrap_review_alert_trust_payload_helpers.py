@@ -204,6 +204,7 @@ class BootstrapReviewAlertTrustPayloadHelpersTests(unittest.IsolatedAsyncioTestC
                 trust_challenge_state_verdict_upheld="verdict_upheld",
                 trust_challenge_state_verdict_overturned="verdict_overturned",
                 trust_challenge_state_draw_after_review="draw_after_review",
+                trust_challenge_state_review_retained="review_retained",
                 workflow_transition_error_cls=_TransitionError,
                 case_id=42,
                 challenge_id="chlg-42",
@@ -229,6 +230,10 @@ class BootstrapReviewAlertTrustPayloadHelpersTests(unittest.IsolatedAsyncioTestC
         self.assertEqual(
             calls["decision"]["trust_challenge_state_verdict_overturned"],
             "verdict_overturned",
+        )
+        self.assertEqual(
+            calls["decision"]["trust_challenge_state_review_retained"],
+            "review_retained",
         )
 
     async def test_trust_read_sync_wrappers_should_map_route_error(self) -> None:

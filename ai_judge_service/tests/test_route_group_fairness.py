@@ -53,7 +53,7 @@ class RouteGroupFairnessTests(unittest.TestCase):
             workflow_statuses={"completed", "failed"},
             case_fairness_sort_fields={"updated_at", "risk_score"},
             case_fairness_gate_conclusions={"pass_through", "blocked_to_draw"},
-            case_fairness_challenge_states={"open", "under_review"},
+            case_fairness_challenge_states={"open", "under_internal_review"},
             validate_case_fairness_detail_contract=lambda _payload: None,
             validate_case_fairness_list_contract=lambda _payload: None,
             validate_fairness_dashboard_contract=lambda _payload: None,

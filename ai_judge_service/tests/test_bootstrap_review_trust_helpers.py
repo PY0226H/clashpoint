@@ -16,7 +16,7 @@ from app.applications.bootstrap_review_trust_helpers import (
 class BootstrapReviewTrustHelpersTests(unittest.TestCase):
     def test_review_and_trust_helpers_should_inject_runtime_dependencies(self) -> None:
         now = datetime(2026, 4, 24, 8, 30, tzinfo=timezone.utc)
-        open_states = {"requested", "under_review"}
+        open_states = {"requested", "under_internal_review"}
 
         def _normalize(value: datetime | None) -> datetime | None:
             return value

@@ -48,7 +48,7 @@ class TrustChallengeQueueContractTests(unittest.TestCase):
                         "updatedAt": "2026-04-20T00:00:00Z",
                     },
                     "challengeReview": {
-                        "state": "under_review",
+                        "state": "under_internal_review",
                         "activeChallengeId": "chlg-9201-aaaa",
                         "totalChallenges": 1,
                         "reviewState": "pending_review",
@@ -64,7 +64,7 @@ class TrustChallengeQueueContractTests(unittest.TestCase):
                         "tags": ["open_challenge"],
                         "ageMinutes": 30,
                         "slaBucket": "normal",
-                        "challengeState": "under_review",
+                        "challengeState": "under_internal_review",
                         "reviewState": "pending_review",
                         "reviewRequired": True,
                         "totalChallenges": 1,

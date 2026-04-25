@@ -512,6 +512,7 @@ async def build_review_case_decision_payload(
     workflow_mark_failed: Callable[..., Awaitable[None]],
     resolve_open_alerts_for_review: Callable[..., Awaitable[list[str]]],
     serialize_workflow_job: Callable[[Any], dict[str, Any]],
+    refresh_trust_registry_snapshot: Callable[..., Awaitable[Any]] | None = None,
 ) -> dict[str, Any]:
     normalized_decision = str(decision or "").strip().lower()
     if normalized_decision not in {"approve", "reject"}:
@@ -555,6 +556,11 @@ async def build_review_case_decision_payload(
         transitioned = await workflow_get_job(job_id=case_id)
         if transitioned is None:
             raise LookupError("review_job_not_found")
+    if refresh_trust_registry_snapshot is not None:
+        await refresh_trust_registry_snapshot(
+            case_id=case_id,
+            dispatch_type=current_job.dispatch_type,
+        )
     return {
         "ok": True,
         "job": serialize_workflow_job(transitioned),

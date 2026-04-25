@@ -102,7 +102,7 @@ class TrustOpsViewsTests(unittest.TestCase):
                 "updatedAt": "2026-04-20T00:10:00Z",
             },
             challenge_review={
-                "challengeState": "under_review",
+                "challengeState": "under_internal_review",
                 "activeChallengeId": "chlg-9301-aaaa",
                 "totalChallenges": 1,
                 "reviewState": "pending_review",
@@ -118,7 +118,7 @@ class TrustOpsViewsTests(unittest.TestCase):
                 "tags": ["open_challenge"],
                 "ageMinutes": 20,
                 "slaBucket": "normal",
-                "challengeState": "under_review",
+                "challengeState": "under_internal_review",
                 "reviewState": "pending_review",
                 "reviewRequired": True,
                 "totalChallenges": 1,

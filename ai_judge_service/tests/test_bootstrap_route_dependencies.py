@@ -44,11 +44,13 @@ class BootstrapRouteDependenciesTests(unittest.TestCase):
             workflow_mark_review_required=_async_none,
             build_trust_phasea_bundle=_async_payload,
             serialize_workflow_job=lambda _record: {},
+            append_trust_challenge_event=_async_payload,
             trust_challenge_event_type="trust_challenge_requested",
             trust_challenge_state_accepted="accepted",
-            trust_challenge_state_under_review="under_review",
+            trust_challenge_state_under_review="under_internal_review",
         )
 
         self.assertEqual(deps["trust_challenge_event_type"], "trust_challenge_requested")
         self.assertEqual(deps["trust_challenge_state_accepted"], "accepted")
-        self.assertEqual(deps["trust_challenge_state_under_review"], "under_review")
+        self.assertEqual(deps["trust_challenge_state_under_review"], "under_internal_review")
+        self.assertIs(deps["append_trust_challenge_event"], _async_payload)

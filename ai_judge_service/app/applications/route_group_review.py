@@ -44,6 +44,7 @@ class ReviewRouteDependencies:
     resolve_open_alerts_for_review: Callable[..., Awaitable[list[str]]]
     serialize_workflow_job: Callable[[Any], dict[str, Any]]
     serialize_alert_item: Callable[[Any], dict[str, Any]]
+    refresh_trust_registry_snapshot: Callable[..., Awaitable[Any]] | None = None
 
 
 def register_review_routes(
@@ -138,6 +139,9 @@ def register_review_routes(
                         deps.resolve_open_alerts_for_review
                     ),
                     serialize_workflow_job=deps.serialize_workflow_job,
+                    refresh_trust_registry_snapshot=(
+                        deps.refresh_trust_registry_snapshot
+                    ),
                 )
             ),
         )

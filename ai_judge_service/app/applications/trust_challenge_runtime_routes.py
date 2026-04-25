@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+
+from app.domain.trust import TrustChallengeEvent
 
 
 class TrustChallengeRouteError(Exception):
@@ -8,6 +11,165 @@ class TrustChallengeRouteError(Exception):
         super().__init__(str(detail))
         self.status_code = int(status_code)
         self.detail = detail
+
+
+TRUST_CHALLENGE_STATE_REVIEW_RETAINED = "review_retained"
+_TRUST_CHALLENGE_OPEN_STATES = {
+    "challenge_requested",
+    "challenge_accepted",
+    "under_internal_review",
+}
+_TRUST_CHALLENGE_ALLOWED_TRANSITIONS = {
+    "challenge_requested": {"challenge_accepted", "challenge_closed"},
+    "challenge_accepted": {"under_internal_review", "challenge_closed"},
+    "under_internal_review": {
+        "verdict_upheld",
+        "verdict_overturned",
+        "draw_after_review",
+        TRUST_CHALLENGE_STATE_REVIEW_RETAINED,
+        "challenge_closed",
+    },
+    "verdict_upheld": {"challenge_closed"},
+    "verdict_overturned": {"challenge_closed"},
+    "draw_after_review": {"challenge_closed"},
+    TRUST_CHALLENGE_STATE_REVIEW_RETAINED: {"challenge_closed"},
+    "challenge_closed": set(),
+}
+
+
+def _challenge_review_items(challenge_review: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(challenge_review, dict):
+        return []
+    challenges = challenge_review.get("challenges")
+    if not isinstance(challenges, list):
+        return []
+    return [item for item in challenges if isinstance(item, dict)]
+
+
+def _find_active_challenge(challenge_review: dict[str, Any] | None) -> dict[str, Any] | None:
+    for item in _challenge_review_items(challenge_review):
+        state = str(item.get("currentState") or "").strip().lower()
+        if state in _TRUST_CHALLENGE_OPEN_STATES:
+            return item
+    return None
+
+
+def _find_challenge(
+    *,
+    challenge_review: dict[str, Any] | None,
+    challenge_id: str,
+) -> dict[str, Any] | None:
+    normalized_challenge_id = str(challenge_id or "").strip()
+    for item in _challenge_review_items(challenge_review):
+        if str(item.get("challengeId") or "").strip() == normalized_challenge_id:
+            return item
+    return None
+
+
+def _require_challenge_transition(
+    *,
+    current_state: str,
+    next_state: str,
+) -> None:
+    normalized_current = str(current_state or "").strip().lower()
+    normalized_next = str(next_state or "").strip().lower()
+    if normalized_next not in _TRUST_CHALLENGE_ALLOWED_TRANSITIONS.get(
+        normalized_current,
+        set(),
+    ):
+        raise TrustChallengeRouteError(
+            status_code=409,
+            detail="trust_challenge_invalid_transition",
+        )
+
+
+async def _append_trust_registry_challenge_event(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    event_type: str,
+    event_payload: dict[str, Any],
+    append_trust_challenge_event: Any | None,
+) -> None:
+    if append_trust_challenge_event is None:
+        return
+    try:
+        updated = await append_trust_challenge_event(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            registry_version=None,
+            event=TrustChallengeEvent(
+                event_type=event_type,
+                challenge_id=str(event_payload.get("challengeId") or "").strip(),
+                state=str(event_payload.get("challengeState") or "").strip().lower(),
+                actor=(
+                    str(
+                        event_payload.get("challengeActor")
+                        or event_payload.get("challengeRequestedBy")
+                        or event_payload.get("challengeAcceptedBy")
+                        or event_payload.get("challengeClosedBy")
+                        or event_payload.get("reviewActor")
+                        or ""
+                    ).strip()
+                    or None
+                ),
+                reason_code=(
+                    str(event_payload.get("challengeReasonCode") or "").strip()
+                    or None
+                ),
+                reason=(
+                    str(
+                        event_payload.get("challengeReason")
+                        or event_payload.get("challengeDecisionReason")
+                        or event_payload.get("challengeCloseReason")
+                        or event_payload.get("reviewReason")
+                        or ""
+                    ).strip()
+                    or None
+                ),
+                payload=dict(event_payload),
+                created_at=datetime.now(timezone.utc),
+            ),
+        )
+    except Exception as err:  # noqa: BLE001
+        raise TrustChallengeRouteError(
+            status_code=500,
+            detail={
+                "code": "trust_challenge_registry_append_failed",
+                "message": str(err),
+            },
+        ) from err
+    if updated is None:
+        raise TrustChallengeRouteError(
+            status_code=409,
+            detail="trust_registry_snapshot_missing",
+        )
+
+
+async def _append_challenge_workflow_event(
+    *,
+    case_id: int,
+    event_type: str,
+    event_payload: dict[str, Any],
+    workflow_append_event: Any,
+    append_trust_challenge_event: Any | None,
+) -> None:
+    await workflow_append_event(
+        job_id=case_id,
+        event_type=event_type,
+        event_payload=event_payload,
+        not_found_detail="review_job_not_found",
+    )
+    await _append_trust_registry_challenge_event(
+        case_id=case_id,
+        dispatch_type=str(event_payload.get("dispatchType") or ""),
+        trace_id=str(event_payload.get("traceId") or ""),
+        event_type=event_type,
+        event_payload=event_payload,
+        append_trust_challenge_event=append_trust_challenge_event,
+    )
 
 
 async def build_trust_challenge_request_payload(
@@ -31,6 +193,7 @@ async def build_trust_challenge_request_payload(
     trust_challenge_state_requested: str,
     trust_challenge_state_accepted: str,
     trust_challenge_state_under_review: str,
+    append_trust_challenge_event: Any | None = None,
 ) -> dict[str, Any]:
     normalized_reason_code = str(reason_code or "").strip().lower()
     if not normalized_reason_code:
@@ -54,6 +217,16 @@ async def build_trust_challenge_request_payload(
             status_code=409,
             detail="challenge_request_not_allowed",
         )
+    before_bundle = await build_trust_phasea_bundle(
+        case_id=case_id,
+        dispatch_type=context["dispatchType"],
+    )
+    active_challenge = _find_active_challenge(before_bundle.get("challengeReview"))
+    if active_challenge is not None:
+        raise TrustChallengeRouteError(
+            status_code=409,
+            detail="trust_challenge_already_open",
+        )
 
     challenge_id = new_challenge_id(case_id=case_id)
     base_payload = {
@@ -65,47 +238,66 @@ async def build_trust_challenge_request_payload(
         "challengeRequestedBy": actor,
         "challengeActor": actor,
     }
-    await workflow_append_event(
-        job_id=case_id,
+    await _append_challenge_workflow_event(
+        case_id=case_id,
         event_type=trust_challenge_event_type,
         event_payload={
             **base_payload,
             "challengeState": trust_challenge_state_requested,
         },
-        not_found_detail="review_job_not_found",
+        workflow_append_event=workflow_append_event,
+        append_trust_challenge_event=append_trust_challenge_event,
     )
 
-    if current_job.status != "review_required":
-        # challenge 受理后强制进入 review_required 队列，避免绕过复核主状态机。
+    if not auto_accept and current_job.status != "review_required":
+        # challenge 打开后必须进入复核工作流；是否接受只影响 challenge 状态推进。
         await workflow_mark_review_required(
             job_id=case_id,
             event_payload={
                 **base_payload,
-                "challengeState": trust_challenge_state_under_review,
-                "judgeCoreStage": trust_challenge_state_under_review,
+                "judgeCoreStage": trust_challenge_state_requested,
             },
         )
 
     if auto_accept:
-        await workflow_append_event(
-            job_id=case_id,
+        _require_challenge_transition(
+            current_state=trust_challenge_state_requested,
+            next_state=trust_challenge_state_accepted,
+        )
+        await _append_challenge_workflow_event(
+            case_id=case_id,
             event_type=trust_challenge_event_type,
             event_payload={
                 **base_payload,
                 "challengeState": trust_challenge_state_accepted,
                 "challengeAcceptedBy": actor,
             },
-            not_found_detail="review_job_not_found",
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
         )
-        await workflow_append_event(
-            job_id=case_id,
+        _require_challenge_transition(
+            current_state=trust_challenge_state_accepted,
+            next_state=trust_challenge_state_under_review,
+        )
+        if current_job.status != "review_required":
+            # challenge 受理后强制进入 review_required 队列，避免绕过复核主状态机。
+            await workflow_mark_review_required(
+                job_id=case_id,
+                event_payload={
+                    **base_payload,
+                    "judgeCoreStage": trust_challenge_state_under_review,
+                },
+            )
+        await _append_challenge_workflow_event(
+            case_id=case_id,
             event_type=trust_challenge_event_type,
             event_payload={
                 **base_payload,
                 "challengeState": trust_challenge_state_under_review,
                 "challengeActor": actor,
             },
-            not_found_detail="review_job_not_found",
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
         )
 
     alert = upsert_audit_alert(
@@ -167,10 +359,19 @@ async def build_trust_challenge_decision_payload(
     trust_challenge_state_verdict_upheld: str,
     trust_challenge_state_verdict_overturned: str,
     trust_challenge_state_draw_after_review: str,
+    trust_challenge_state_review_retained: str,
     workflow_transition_error_cls: Any,
+    append_trust_challenge_event: Any | None = None,
 ) -> dict[str, Any]:
     normalized_decision = str(decision or "").strip().lower()
-    if normalized_decision not in {"accept", "uphold", "overturn", "draw", "close"}:
+    if normalized_decision not in {
+        "accept",
+        "uphold",
+        "overturn",
+        "draw",
+        "retain_review",
+        "close",
+    }:
         raise TrustChallengeRouteError(
             status_code=422,
             detail="invalid_challenge_decision",
@@ -195,24 +396,22 @@ async def build_trust_challenge_decision_payload(
         case_id=case_id,
         dispatch_type=context["dispatchType"],
     )
-    challenge_item = next(
-        (
-            item
-            for item in (
-                before_bundle["challengeReview"].get("challenges")
-                if isinstance(before_bundle["challengeReview"].get("challenges"), list)
-                else []
-            )
-            if str(item.get("challengeId") or "") == normalized_challenge_id
-        ),
-        None,
+    challenge_item = _find_challenge(
+        challenge_review=before_bundle.get("challengeReview"),
+        challenge_id=normalized_challenge_id,
     )
     if challenge_item is None:
         raise TrustChallengeRouteError(status_code=404, detail="trust_challenge_not_found")
-    if str(challenge_item.get("currentState") or "") == trust_challenge_state_closed:
+    current_state = str(challenge_item.get("currentState") or "").strip().lower()
+    if current_state == trust_challenge_state_closed:
         raise TrustChallengeRouteError(
             status_code=409,
             detail="trust_challenge_already_closed",
+        )
+    if normalized_decision != "close" and current_state not in _TRUST_CHALLENGE_OPEN_STATES:
+        raise TrustChallengeRouteError(
+            status_code=409,
+            detail="trust_challenge_not_open",
         )
 
     base_payload = {
@@ -227,36 +426,52 @@ async def build_trust_challenge_decision_payload(
     updated_job = current_job
 
     if normalized_decision == "accept":
-        await workflow_append_event(
-            job_id=case_id,
+        _require_challenge_transition(
+            current_state=current_state,
+            next_state=trust_challenge_state_accepted,
+        )
+        await _append_challenge_workflow_event(
+            case_id=case_id,
             event_type=trust_challenge_event_type,
             event_payload={
                 **base_payload,
                 "challengeState": trust_challenge_state_accepted,
                 "challengeAcceptedBy": actor_text,
             },
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
         )
-        await workflow_append_event(
-            job_id=case_id,
-            event_type=trust_challenge_event_type,
-            event_payload={
-                **base_payload,
-                "challengeState": trust_challenge_state_under_review,
-            },
+        _require_challenge_transition(
+            current_state=trust_challenge_state_accepted,
+            next_state=trust_challenge_state_under_review,
         )
         if current_job.status != "review_required":
             await workflow_mark_review_required(
                 job_id=case_id,
                 event_payload={
                     **base_payload,
-                    "challengeState": trust_challenge_state_under_review,
                     "judgeCoreStage": trust_challenge_state_under_review,
                 },
             )
             updated_job = await workflow_get_job(job_id=case_id)
+        await _append_challenge_workflow_event(
+            case_id=case_id,
+            event_type=trust_challenge_event_type,
+            event_payload={
+                **base_payload,
+                "challengeState": trust_challenge_state_under_review,
+            },
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
+        )
+        current_state = trust_challenge_state_under_review
     elif normalized_decision == "uphold":
-        await workflow_append_event(
-            job_id=case_id,
+        _require_challenge_transition(
+            current_state=current_state,
+            next_state=trust_challenge_state_verdict_upheld,
+        )
+        await _append_challenge_workflow_event(
+            case_id=case_id,
             event_type=trust_challenge_event_type,
             event_payload={
                 **base_payload,
@@ -265,6 +480,8 @@ async def build_trust_challenge_decision_payload(
                 "reviewActor": actor_text,
                 "reviewReason": reason_text or "challenge_upheld",
             },
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
         )
         if current_job.status == "review_required":
             await workflow_mark_completed(
@@ -283,52 +500,64 @@ async def build_trust_challenge_decision_payload(
                 reason=reason_text or "challenge_upheld",
             )
             updated_job = await workflow_get_job(job_id=case_id)
-    elif normalized_decision in {"overturn", "draw"}:
-        overturned_state = (
-            trust_challenge_state_verdict_overturned
-            if normalized_decision == "overturn"
-            else trust_challenge_state_draw_after_review
-        )
-        await workflow_append_event(
-            job_id=case_id,
-            event_type=trust_challenge_event_type,
-            event_payload={
-                **base_payload,
-                "challengeState": overturned_state,
-            },
-        )
-        draw_payload = {
-            **base_payload,
-            "challengeState": trust_challenge_state_draw_after_review,
-            "judgeCoreStage": trust_challenge_state_draw_after_review,
+        current_state = trust_challenge_state_verdict_upheld
+    elif normalized_decision in {"overturn", "draw", "retain_review"}:
+        decision_state_by_name = {
+            "overturn": trust_challenge_state_verdict_overturned,
+            "draw": trust_challenge_state_draw_after_review,
+            "retain_review": trust_challenge_state_review_retained,
         }
-        try:
-            await workflow_mark_draw_pending_vote(
-                job_id=case_id,
-                event_payload=draw_payload,
-            )
-            updated_job = await workflow_get_job(job_id=case_id)
-        except workflow_transition_error_cls:
-            pass
-        await workflow_append_event(
-            job_id=case_id,
+        next_state = decision_state_by_name[normalized_decision]
+        _require_challenge_transition(
+            current_state=current_state,
+            next_state=next_state,
+        )
+        review_decision = "retain" if normalized_decision == "retain_review" else "reject"
+        await _append_challenge_workflow_event(
+            case_id=case_id,
             event_type=trust_challenge_event_type,
             event_payload={
                 **base_payload,
-                "challengeState": trust_challenge_state_draw_after_review,
+                "challengeState": next_state,
+                "reviewDecision": review_decision,
+                "reviewActor": actor_text,
+                "reviewReason": reason_text or f"challenge_{normalized_decision}",
             },
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
         )
+        if normalized_decision in {"overturn", "draw"}:
+            draw_payload = {
+                **base_payload,
+                "judgeCoreStage": next_state,
+            }
+            try:
+                await workflow_mark_draw_pending_vote(
+                    job_id=case_id,
+                    event_payload=draw_payload,
+                )
+                updated_job = await workflow_get_job(job_id=case_id)
+            except workflow_transition_error_cls:
+                pass
+        current_state = next_state
 
-    await workflow_append_event(
-        job_id=case_id,
-        event_type=trust_challenge_event_type,
-        event_payload={
-            **base_payload,
-            "challengeState": trust_challenge_state_closed,
-            "challengeClosedBy": actor_text,
-            "challengeCloseReason": reason_text,
-        },
-    )
+    if normalized_decision != "accept":
+        _require_challenge_transition(
+            current_state=current_state,
+            next_state=trust_challenge_state_closed,
+        )
+        await _append_challenge_workflow_event(
+            case_id=case_id,
+            event_type=trust_challenge_event_type,
+            event_payload={
+                **base_payload,
+                "challengeState": trust_challenge_state_closed,
+                "challengeClosedBy": actor_text,
+                "challengeCloseReason": reason_text,
+            },
+            workflow_append_event=workflow_append_event,
+            append_trust_challenge_event=append_trust_challenge_event,
+        )
 
     after_bundle = await build_trust_phasea_bundle(
         case_id=case_id,

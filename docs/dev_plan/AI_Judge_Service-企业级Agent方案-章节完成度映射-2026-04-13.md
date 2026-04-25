@@ -1,7 +1,7 @@
 # AI_Judge_Service 企业级 Agent 方案章节完成度映射（2026-04-13）
 
 更新时间：2026-04-25
-状态：已更新（对齐 P35 stage closure；P36 已完成 trust-registry store/write-through 与 public verify redaction）
+状态：已更新（对齐 P35 stage closure；P36 已完成 trust-registry store/write-through、public verify redaction 与 challenge review state machine）
 映射对象：[AI_judge_service 企业级 Agent 服务设计方案（2026-04-13）](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md)
 
 ## 1. 判定口径
@@ -19,13 +19,13 @@
 | Enterprise MVP（方案 Phase 1） | 基本落地 | 8 Agent 官方裁决主链、六对象 ledger、workflow、trace/replay、review/audit 已形成本地闭环 |
 | Fairness Hardened（方案 Phase 2） | 部分落地（高） | Fairness gate、panel disagreement、local reference benchmark/freeze 已完成；真实样本 benchmark 与 real-env pass 待窗口 |
 | Adaptive Judge Platform（方案 Phase 3） | 部分落地 | gateway core、policy/prompt/tool registry、ops read model 已推进；auto-calibration、多模型 panel 生产化仍未完成 |
-| Verifiable Trust Layer（方案第15章 Phase A） | 部分落地（高） | commitment/attestation/challenge/audit/public verify 合同与路由已出现；P36 已新增 durable trust registry store/write-through，并完成 public verify redaction；artifact manifest 与 challenge state machine 待后续 |
+| Verifiable Trust Layer（方案第15章 Phase A） | 部分落地（高） | commitment/attestation/challenge/audit/public verify 合同与路由已出现；P36 已新增 durable trust registry store/write-through，完成 public verify redaction 与 challenge review durable state machine；artifact manifest 待后续 |
 | Protocol Expansion Layer（方案第15章 Phase B-D） | 未落地（按计划后置） | Public verification 外部化、Identity Proof、Constitution Registry、Reason Passport、on-chain anchor 均不属于当前主线 |
 | 真实环境闭环 | 环境阻塞 | 当前证据为 `local_reference_ready`，不得宣称 real-env `pass` |
 
 一句话结论：
 
-`截至 P36 public verify redaction，AI Judge 已从“评分器/大 prompt 服务”推进到“本地可验证的裁判庭主链”，并开始拥有可持久化、主链写入、公开字段红线可校验的 trust registry 事实源；下一步应推进 challenge review 状态机，并继续补 artifact/audit manifest。`
+`截至 P36 challenge review state machine，AI Judge 已从“评分器/大 prompt 服务”推进到“本地可验证的裁判庭主链”，并开始拥有可持久化、主链写入、公开字段红线可校验、challenge 生命周期可审计的 trust registry 事实源；下一步应推进 artifact/audit manifest。`
 
 ## 3. 章节级完成度总览
 
@@ -45,7 +45,7 @@
 | 12. 企业级可靠性要求 | 幂等、callback、trace、replay、观测 | 基本落地 | [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py), [replay_audit_ops.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/replay_audit_ops.py), [scripts/harness/](/Users/panyihang/Documents/EchoIsle/scripts/harness) | 本地可靠性与证据脚本充足；真实环境稳定性和对象化审计包待补 |
 | 13. 对外接口模型 | cases/trace/replay/fairness/review/policies | 基本落地 | [route_group_case_read.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_case_read.py), [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py), [route_group_trust.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_trust.py), [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py) | 内部接口层已覆盖大多数设计面；public verify visibility/redaction 已稳定，trust coverage 字段待 ops pack 后续补齐 |
 | 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地 | [P35 归档](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260425T022246Z-ai-judge-stage-closure-execute.md) | P35 已完成从旧 pipeline 资产到六对象/role runtime/gateway core 的迁移主线 |
-| 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_phasea.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_phasea.py), [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py), [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/trust/models.py), [trust_read_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_read_routes.py), [20260425_0009_judge_trust_registry_snapshots.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/alembic/versions/20260425_0009_judge_trust_registry_snapshots.py) | trust 合同、路由、challenge ops queue、durable registry store、phase/final write-through 与 public verify 红线已出现；challenge 状态机、artifact manifest 与外部验证仍待 P36/后续 |
+| 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_phasea.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_phasea.py), [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py), [trust_challenge_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_runtime_routes.py), [repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/trust/repository.py), [trust_read_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_read_routes.py), [20260425_0009_judge_trust_registry_snapshots.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/alembic/versions/20260425_0009_judge_trust_registry_snapshots.py) | trust 合同、路由、challenge ops queue、durable registry store、phase/final write-through、public verify 红线与 challenge 状态机已出现；artifact manifest 与外部验证仍待 P36/后续 |
 | 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 基本守住 | [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | NPC/Room QA 已标注 advisory-only；topic memory/Reason Passport 未进入单场裁决主链 |
 | 17. 推荐落地路线 | Phase1/2/3 路线图 | Phase1 基本完成，Phase2/3 进行中 | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) | 当前已从 Phase1 主链转入 Phase2/3 的生产化、可信化、运营化阶段 |
 | 18. 最后产品判断 | 企业级裁判系统目标态 | 方向成立，未完全完成 | 同上 | 已具备“制度化裁判庭”的本地形态；距离完整目标态还差真实环境、trust durable source、artifact/object store 与公开验证外部化 |
@@ -60,7 +60,7 @@
 | 6.4 Evidence Agent | 检索与证据核验 | 基本落地 | [evidence_ledger.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/evidence_ledger.py), [runtime_rag.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_rag.py), [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py) | Evidence pack artifact 化、citation verifier 产品化待 P36/后续 |
 | 6.5 Judge Panel Agent | 多法官独立判定 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [panel_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_routes.py) | 多模型 panel 与策略版本生产化仍待后续 |
 | 6.6 Fairness Sentinel Agent | 稳定性与公平门禁 | 部分落地（高） | [fairness_analysis.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_analysis.py), [fairness_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_runtime_routes.py) | 真实样本 benchmark 与 on-env pass 待环境 |
-| 6.7 Chief Arbiter Agent | 汇总裁决与状态决策 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py), [repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/trust/repository.py), [route_group_judge_command.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_judge_command.py) | durable trust registry store 与 phase/final write-through 已补；review 状态机与 artifact refs 待 P36 后续模块 |
+| 6.7 Chief Arbiter Agent | 汇总裁决与状态决策 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py), [repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/trust/repository.py), [trust_challenge_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_runtime_routes.py), [route_group_judge_command.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_judge_command.py) | durable trust registry store、phase/final write-through 与 challenge/review 状态机已补；artifact refs 待 P36 后续模块 |
 | 6.8 Opinion Writer Agent | 生成可读裁决书 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) | 裁决书 artifact 化、audit export 引用待 P36 |
 
 ## 5. 关键结论（当前真实状态）
@@ -81,13 +81,13 @@
    - [trust_verdict_attestation_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_verdict_attestation_contract.py)
    - [trust_challenge_review_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_review_contract.py)
    - [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py)
-4. P36 已补独立 durable registry store foundation、phase/final 成功路径 write-through 与 public verify 字段红线；架构方案中的 Object Store 仍尚未落地主链 port/adapter。
+4. P36 已补独立 durable registry store foundation、phase/final 成功路径 write-through、public verify 字段红线与 challenge/review 状态机；架构方案中的 Object Store 仍尚未落地主链 port/adapter。
 5. 当前主要环境阻塞仍是 `real-env pass window`；所有真实环境结论必须等 `REAL_CALIBRATION_ENV_READY=true` 与真实样本窗口具备后再写入。
 
 ## 6. 下一步优先级
 
-1. 执行 `ai-judge-p36-challenge-review-state-machine-pack`，把 challenge/request/review/decision/close 接到 registry 状态机。
-2. 执行 `ai-judge-p36-artifact-store-port-local-pack` 与 `ai-judge-p36-audit-anchor-export-pack`，补齐本地 artifact refs、manifest 与 audit anchor export。
-3. 执行 `ai-judge-p36-ops-read-model-trust-pack`，让 ops pack 能解释 registry source 与 trust coverage。
-4. 执行 `ai-judge-p36-route-dependency-hotspot-split-pack`，继续拆出 trust/ops dependency wiring 热点。
+1. 执行 `ai-judge-p36-artifact-store-port-local-pack` 与 `ai-judge-p36-audit-anchor-export-pack`，补齐本地 artifact refs、manifest 与 audit anchor export。
+2. 执行 `ai-judge-p36-ops-read-model-trust-pack`，让 ops pack 能解释 registry source、trust coverage 与 artifact coverage。
+3. 执行 `ai-judge-p36-route-dependency-hotspot-split-pack`，继续拆出 trust/ops dependency wiring 热点。
+4. 执行 `ai-judge-p36-local-reference-regression-pack`，封板 P36 本地参考证据。
 5. 在真实环境具备后执行 `ai-judge-p36-real-env-pass-window-execute-on-env`，补齐真实环境 `pass` 证据。

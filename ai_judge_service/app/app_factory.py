@@ -425,10 +425,11 @@ def create_runtime(
 TRUST_CHALLENGE_EVENT_TYPE = "trust_challenge_state_changed"
 TRUST_CHALLENGE_STATE_REQUESTED = "challenge_requested"
 TRUST_CHALLENGE_STATE_ACCEPTED = "challenge_accepted"
-TRUST_CHALLENGE_STATE_UNDER_REVIEW = "under_review"
+TRUST_CHALLENGE_STATE_UNDER_REVIEW = "under_internal_review"
 TRUST_CHALLENGE_STATE_VERDICT_UPHELD = "verdict_upheld"
 TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED = "verdict_overturned"
 TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW = "draw_after_review"
+TRUST_CHALLENGE_STATE_REVIEW_RETAINED = "review_retained"
 TRUST_CHALLENGE_STATE_CLOSED = "challenge_closed"
 
 REGISTRY_TYPE_POLICY = "policy"
@@ -508,6 +509,7 @@ CASE_FAIRNESS_CHALLENGE_STATES = {
     TRUST_CHALLENGE_STATE_VERDICT_UPHELD,
     TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED,
     TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+    TRUST_CHALLENGE_STATE_REVIEW_RETAINED,
     TRUST_CHALLENGE_STATE_CLOSED,
 }
 TRUST_CHALLENGE_OPEN_STATES = {
@@ -1737,6 +1739,35 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         run_trust_read_guard=_run_trust_read_guard,
         get_trust_registry_snapshot=_get_trust_registry_snapshot,
     )
+
+    async def _refresh_trust_registry_snapshot_for_case(
+        *,
+        case_id: int,
+        dispatch_type: str,
+    ) -> Any:
+        context = await _resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="trust_receipt_not_found",
+            missing_report_detail="trust_report_payload_missing",
+        )
+        workflow_job = await _workflow_get_job(job_id=case_id)
+        workflow_events = await _workflow_list_events(job_id=case_id)
+        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
+        workflow_snapshot = (
+            _serialize_workflow_job(workflow_job) if workflow_job is not None else None
+        )
+        return await _write_trust_registry_snapshot(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            request_snapshot=context["requestSnapshot"],
+            report_payload=context["reportPayload"],
+            workflow_snapshot=workflow_snapshot,
+            workflow_status=workflow_job.status if workflow_job is not None else None,
+            workflow_events=workflow_events,
+            alerts=alerts,
+        )
     _transition_judge_alert_status = partial(
         transition_judge_alert_status_for_runtime,
         transition_audit_alert=(
@@ -1789,6 +1820,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             TRUST_CHALLENGE_STATE_VERDICT_OVERTURNED
         ),
         trust_challenge_state_draw_after_review=TRUST_CHALLENGE_STATE_DRAW_AFTER_REVIEW,
+        trust_challenge_state_review_retained=TRUST_CHALLENGE_STATE_REVIEW_RETAINED,
         workflow_transition_error_cls=WorkflowTransitionError,
     )
     serialize_policy_profile_with_domain_family = partial(
@@ -1835,6 +1867,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             workflow_mark_review_required=_workflow_mark_review_required,
             build_trust_phasea_bundle=_build_trust_phasea_bundle,
             serialize_workflow_job=_serialize_workflow_job,
+            append_trust_challenge_event=(
+                runtime.workflow_runtime.trust_registry.append_challenge_event
+            ),
             trust_challenge_event_type=TRUST_CHALLENGE_EVENT_TYPE,
             trust_challenge_state_accepted=TRUST_CHALLENGE_STATE_ACCEPTED,
             trust_challenge_state_under_review=TRUST_CHALLENGE_STATE_UNDER_REVIEW,
@@ -2310,6 +2345,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             resolve_open_alerts_for_review=resolve_open_alerts_for_review,
             serialize_workflow_job=_serialize_workflow_job,
             serialize_alert_item=serialize_alert_item_v3,
+            refresh_trust_registry_snapshot=(
+                _refresh_trust_registry_snapshot_for_case
+            ),
         ),
     )
 

@@ -451,14 +451,14 @@ class AppFactoryFairnessRouteTests(
         )
         self.assertEqual(challenge_resp.status_code, 200)
         challenge_payload = challenge_resp.json()
-        self.assertEqual(challenge_payload["item"]["challengeState"], "under_review")
+        self.assertEqual(challenge_payload["item"]["challengeState"], "under_internal_review")
 
         filtered_resp = await self._get(
             app=app,
             path=(
                 "/internal/judge/fairness/cases"
                 f"?dispatch_type=final&gate_conclusion={item['gateConclusion']}"
-                "&challenge_state=under_review&limit=50"
+                "&challenge_state=under_internal_review&limit=50"
             ),
             internal_key=runtime.settings.ai_internal_key,
         )

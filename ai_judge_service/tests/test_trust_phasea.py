@@ -159,7 +159,7 @@ class TrustPhaseATests(unittest.TestCase):
                     seq=3,
                     payload={
                         "challengeId": "chlg-9006-1",
-                        "challengeState": "under_review",
+                        "challengeState": "under_internal_review",
                         "challengeActor": "reviewer-a",
                     },
                 ),

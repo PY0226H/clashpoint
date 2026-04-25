@@ -36,6 +36,28 @@ TRUST_CHALLENGE_REVIEW_ALERT_SUMMARY_KEYS: tuple[str, ...] = (
     "warning",
 )
 
+TRUST_CHALLENGE_REVIEW_CHALLENGE_STATES: frozenset[str] = frozenset(
+    {
+        "not_challenged",
+        "challenge_requested",
+        "challenge_accepted",
+        "under_internal_review",
+        "verdict_upheld",
+        "verdict_overturned",
+        "draw_after_review",
+        "review_retained",
+        "challenge_closed",
+    }
+)
+
+TRUST_CHALLENGE_REVIEW_OPEN_STATES: frozenset[str] = frozenset(
+    {
+        "challenge_requested",
+        "challenge_accepted",
+        "under_internal_review",
+    }
+)
+
 
 def _required_keys_missing(payload: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     return [key for key in keys if key not in payload]
@@ -105,6 +127,9 @@ def validate_trust_challenge_review_contract(payload: dict[str, Any]) -> None:
         "trust_challenge_review_item_challenge_state",
         item.get("challengeState"),
     )
+    challenge_state = str(item.get("challengeState") or "").strip().lower()
+    if challenge_state not in TRUST_CHALLENGE_REVIEW_CHALLENGE_STATES:
+        raise ValueError("trust_challenge_review_item_challenge_state_invalid")
     review_state = str(item.get("reviewState") or "").strip().lower()
     if review_state not in {"not_required", "pending_review", "approved", "rejected"}:
         raise ValueError("trust_challenge_review_item_review_state_invalid")
@@ -132,6 +157,23 @@ def validate_trust_challenge_review_contract(payload: dict[str, Any]) -> None:
         raise ValueError("trust_challenge_review_item_total_challenges_invalid")
     if total_challenges != len(challenges):
         raise ValueError("trust_challenge_review_item_total_challenges_mismatch")
+    active_challenge_id = str(item.get("activeChallengeId") or "").strip() or None
+    if challenge_state in TRUST_CHALLENGE_REVIEW_OPEN_STATES and not active_challenge_id:
+        raise ValueError("trust_challenge_review_item_active_challenge_id_required")
+    if challenge_state not in TRUST_CHALLENGE_REVIEW_OPEN_STATES and active_challenge_id:
+        raise ValueError("trust_challenge_review_item_active_challenge_id_unexpected")
+    for row in challenges:
+        if not isinstance(row, dict):
+            raise ValueError("trust_challenge_review_item_challenge_not_dict")
+        row_state = str(row.get("currentState") or "").strip().lower()
+        if row_state not in TRUST_CHALLENGE_REVIEW_CHALLENGE_STATES:
+            raise ValueError("trust_challenge_review_item_challenge_state_invalid")
+    for row in timeline:
+        if not isinstance(row, dict):
+            raise ValueError("trust_challenge_review_item_timeline_item_not_dict")
+        row_state = str(row.get("state") or "").strip().lower()
+        if row_state and row_state not in TRUST_CHALLENGE_REVIEW_CHALLENGE_STATES:
+            raise ValueError("trust_challenge_review_item_timeline_state_invalid")
 
     alert_summary = item.get("alertSummary")
     if not isinstance(alert_summary, dict):

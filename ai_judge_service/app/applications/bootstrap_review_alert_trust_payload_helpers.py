@@ -516,6 +516,7 @@ async def build_trust_challenge_decision_payload_for_runtime(
     trust_challenge_state_verdict_upheld: str,
     trust_challenge_state_verdict_overturned: str,
     trust_challenge_state_draw_after_review: str,
+    trust_challenge_state_review_retained: str,
     workflow_transition_error_cls: type[Exception],
     case_id: int,
     challenge_id: str,
@@ -550,6 +551,9 @@ async def build_trust_challenge_decision_payload_for_runtime(
             ),
             trust_challenge_state_draw_after_review=(
                 trust_challenge_state_draw_after_review
+            ),
+            trust_challenge_state_review_retained=(
+                trust_challenge_state_review_retained
             ),
             workflow_transition_error_cls=workflow_transition_error_cls,
         )

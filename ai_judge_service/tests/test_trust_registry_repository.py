@@ -214,6 +214,17 @@ class TrustRegistryRepositoryTests(unittest.IsolatedAsyncioTestCase):
             updated.challenge_review["latestRegistryEvent"]["state"],
             "challenge_requested",
         )
+        self.assertEqual(updated.challenge_review["challengeState"], "challenge_requested")
+        self.assertEqual(updated.challenge_review["activeChallengeId"], "chlg-9701-1")
+        self.assertEqual(updated.challenge_review["totalChallenges"], 1)
+        self.assertEqual(
+            updated.public_verify["verifyPayload"]["challengeReview"]["challengeState"],
+            "challenge_requested",
+        )
+        self.assertEqual(
+            updated.component_hashes["challengeReviewHash"],
+            updated.challenge_review["registryHash"],
+        )
 
 
 if __name__ == "__main__":

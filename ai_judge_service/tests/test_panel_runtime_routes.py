@@ -52,7 +52,7 @@ class PanelRuntimeRoutesTests(unittest.TestCase):
             winner=" Draw ",
             policy_version=" v3-default ",
             gate_conclusion="blocked_to_draw",
-            challenge_state="under_review",
+            challenge_state="under_internal_review",
             judge_id=" judgeA ",
             profile_source="trace",
             profile_id=" profile-1 ",
