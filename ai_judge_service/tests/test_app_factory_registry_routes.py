@@ -776,6 +776,11 @@ class AppFactoryRegistryRouteTests(
         self.assertIn("dependencyHealth", target)
         self.assertIn("fairnessGate", target)
         self.assertIn("releaseGate", target)
+        self.assertIn("releaseReadinessEvidence", target)
+        self.assertEqual(
+            target["releaseReadinessEvidence"]["decision"],
+            target["releaseGate"]["decision"],
+        )
         self.assertIn("simulatedGate", target)
         self.assertIn(
             target["simulatedGate"]["status"],
@@ -904,6 +909,11 @@ class AppFactoryRegistryRouteTests(
         self.assertTrue(str(invalid_row["policyKernelHash"] or "").strip())
         self.assertIn("releaseGate", invalid_row)
         self.assertEqual(invalid_row["releaseGateDecision"], "blocked")
+        self.assertIn("releaseReadinessEvidence", invalid_row)
+        self.assertEqual(
+            invalid_row["releaseReadinessEvidence"]["decision"],
+            "blocked",
+        )
         self.assertIn(f"promptset-missing-{suffix}", dependency["byPromptRegistryVersion"])
 
         reverse_usage = payload["reverseUsage"]
@@ -931,6 +941,18 @@ class AppFactoryRegistryRouteTests(
         self.assertIsInstance(release_readiness, dict)
         self.assertGreaterEqual(release_readiness["blockedCount"], 1)
         self.assertIn("dependencyHealth", release_readiness["componentBlockCounts"])
+        self.assertGreaterEqual(release_readiness["evidenceCount"], 1)
+        release_readiness_item = next(
+            (
+                row
+                for row in release_readiness["items"]
+                if row["policyVersion"] == policy_invalid_version
+            ),
+            None,
+        )
+        self.assertIsNotNone(release_readiness_item)
+        assert release_readiness_item is not None
+        self.assertEqual(release_readiness_item["evidence"]["decision"], "blocked")
 
         release_state = payload["releaseState"]
         self.assertIn("policy", release_state)

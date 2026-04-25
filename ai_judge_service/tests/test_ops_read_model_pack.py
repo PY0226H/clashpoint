@@ -873,7 +873,30 @@ class OpsReadModelPackTests(unittest.TestCase):
                 "summary": {"riskTotalCount": 2, "riskHighCount": 1},
                 "riskItems": [],
             },
-            policy_gate_simulation={"summary": {"blockedCount": 1}},
+            policy_gate_simulation={
+                "summary": {"blockedCount": 1},
+                "items": [
+                    {
+                        "policyVersion": "v3-default",
+                        "releaseReadinessEvidence": {
+                            "evidenceVersion": "policy-release-readiness-evidence-v1",
+                            "policyVersion": "v3-default",
+                            "decision": "env_blocked",
+                            "decisionCode": "registry_release_gate_env_blocked",
+                            "reasonCodes": [
+                                (
+                                    "registry_release_gate_fairness_benchmark_"
+                                    "local_reference_only"
+                                )
+                            ],
+                            "envBlockedComponents": ["fairnessBenchmark"],
+                            "artifactRefs": ["release-manifest"],
+                            "publicVerificationReadiness": {"status": "ready"},
+                            "realEnvEvidenceStatus": {"status": "env_blocked"},
+                        },
+                    }
+                ],
+            },
             fairness_calibration_advisor={
                 "overview": {
                     "shadowRunCount": 0,
@@ -905,6 +928,27 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(payload["publicVerificationReadiness"]["status"], "blocked")
         self.assertEqual(payload["challengeReviewLag"]["status"], "blocked")
         self.assertEqual(payload["registryReleaseReadiness"]["status"], "blocked")
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["releaseReadinessEvidenceCount"],
+            1,
+        )
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["envBlockedComponents"],
+            ["fairnessBenchmark"],
+        )
+        self.assertIn(
+            "registry_release_gate_fairness_benchmark_local_reference_only",
+            payload["registryReleaseReadiness"]["reasonCodes"],
+        )
+        self.assertEqual(payload["registryReleaseReadiness"]["artifactRefCount"], 1)
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["publicVerificationReadyCount"],
+            1,
+        )
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["realEnvEvidenceStatusCounts"],
+            {"env_blocked": 1},
+        )
         self.assertEqual(payload["panelShadowDrift"]["status"], "missing")
         self.assertEqual(payload["realEnvEvidenceStatus"]["status"], "env_blocked")
         self.assertFalse(payload["redactionContract"]["internalAuditPayloadVisible"])

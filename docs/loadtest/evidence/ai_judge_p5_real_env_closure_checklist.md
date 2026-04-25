@@ -1,27 +1,27 @@
 # AI Judge P5 Real Env 证据收口清单
 
 更新时间：2026-04-25
-状态：env_blocked
+状态：local_reference_ready
 
 ## 1. 当前判定
 
 1. marker_ready: `false`
 2. env_marker: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env`
 3. evidence_dir: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence`
-4. environment_mode: `blocked`
-5. 本机参考开关：未启用（可使用 `--allow-local-reference` 进行本机预检）。
-6. 收口原则：默认只接受 real 环境；若未启用本机参考，结果保持 `env_blocked`。
+4. environment_mode: `local_reference`
+5. 本机参考开关：已启用（`--allow-local-reference`）。
+6. 收口原则：本机参考模式启用，六轨道满足 local 预检后判定 `local_reference_ready`（不替代 real pass）。
 
 ## 2. 轨道缺口明细
 
 | 轨道 | 状态 | 校准状态 | 缺失基础键 | 缺失 real 键 | 缺失 local 键 | 说明 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Latency Baseline | env_blocked | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | environment blocked (real marker not ready) |
-| Cost Baseline | env_blocked | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | environment blocked (real marker not ready) |
-| Fairness Benchmark | env_blocked | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | environment blocked (real marker not ready) |
-| Fault Drill | env_blocked | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | environment blocked (real marker not ready) |
-| Trust Attestation | env_blocked | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | environment blocked (real marker not ready) |
-| Runtime SLA Freeze | env_blocked | env_blocked | OBS_P95_MS;OBS_P99_MS | RUNTIME_SLA_EVIDENCE;FREEZE_DATASET_REF | RUNTIME_SLA_EVIDENCE;FREEZE_DATASET_REF | environment blocked (real marker not ready) |
+| Latency Baseline | local_reference_ready | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | local reference evidence ready (not real pass) |
+| Cost Baseline | local_reference_ready | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | local reference evidence ready (not real pass) |
+| Fairness Benchmark | local_reference_ready | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | local reference evidence ready (not real pass) |
+| Fault Drill | local_reference_ready | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | local reference evidence ready (not real pass) |
+| Trust Attestation | local_reference_ready | validated | （无） | REAL_ENV_EVIDENCE;DATASET_REF | （无） | local reference evidence ready (not real pass) |
+| Runtime SLA Freeze | local_reference_ready | local_reference_frozen | （无） | （无） | （无） | local reference evidence ready (not real pass) |
 
 ## 3. 执行建议
 

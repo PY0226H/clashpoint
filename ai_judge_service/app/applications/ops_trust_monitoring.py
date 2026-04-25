@@ -66,6 +66,115 @@ def _count_dict(value: Any) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: kv[0]))
 
 
+def _release_readiness_evidence_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("releaseReadinessEvidence", "evidence"):
+        value = row.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    release_gate = row.get("releaseGate")
+    if isinstance(release_gate, dict) and isinstance(
+        release_gate.get("releaseReadinessEvidence"),
+        dict,
+    ):
+        return dict(release_gate["releaseReadinessEvidence"])
+    return None
+
+
+def _collect_release_readiness_evidence_items(
+    *,
+    registry_prompt_tool_governance: dict[str, Any],
+    policy_gate_simulation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    evidence_items: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+
+    def _append(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        policy_version = _token(value.get("policyVersion")) or ""
+        evidence_version = _token(value.get("evidenceVersion")) or ""
+        decision_code = _token(value.get("decisionCode")) or ""
+        key = (policy_version, evidence_version, decision_code)
+        if key == ("", "", ""):
+            key = (f"index:{len(evidence_items)}", "", "")
+        if key in seen_keys:
+            return
+        seen_keys.add(key)
+        evidence_items.append(dict(value))
+
+    for row in _list_of_dicts(policy_gate_simulation.get("items")):
+        _append(_release_readiness_evidence_from_row(row))
+
+    release_readiness = _dict_or_empty(
+        registry_prompt_tool_governance.get("releaseReadiness")
+    )
+    for row in _list_of_dicts(release_readiness.get("items")):
+        _append(_release_readiness_evidence_from_row(row))
+
+    dependency_health = _dict_or_empty(
+        registry_prompt_tool_governance.get("dependencyHealth")
+    )
+    for row in _list_of_dicts(dependency_health.get("items")):
+        _append(_release_readiness_evidence_from_row(row))
+
+    return evidence_items
+
+
+def _summarize_release_readiness_evidence_items(
+    evidence_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence_version = next(
+        (_token(item.get("evidenceVersion")) for item in evidence_items),
+        None,
+    )
+    env_blocked_components = sorted(
+        {
+            str(component or "").strip()
+            for item in evidence_items
+            for component in (item.get("envBlockedComponents") or [])
+            if str(component or "").strip()
+        }
+    )
+    reason_codes = sorted(
+        {
+            str(code or "").strip()
+            for item in evidence_items
+            for code in (item.get("reasonCodes") or [])
+            if str(code or "").strip()
+        }
+    )
+    artifact_refs = sorted(
+        {
+            str(ref or "").strip()
+            for item in evidence_items
+            for ref in (item.get("artifactRefs") or [])
+            if str(ref or "").strip()
+        }
+    )
+    public_verification_ready_count = 0
+    real_env_evidence_status_counts: dict[str, int] = {}
+    for item in evidence_items:
+        public_verification = _dict_or_empty(item.get("publicVerificationReadiness"))
+        if _lower_token(public_verification.get("status")) == "ready":
+            public_verification_ready_count += 1
+        real_env_status = _dict_or_empty(item.get("realEnvEvidenceStatus"))
+        status = _lower_token(real_env_status.get("status")) or "unknown"
+        real_env_evidence_status_counts[status] = (
+            real_env_evidence_status_counts.get(status, 0) + 1
+        )
+    return {
+        "evidenceVersion": evidence_version,
+        "evidenceCount": len(evidence_items),
+        "envBlockedComponents": env_blocked_components,
+        "reasonCodes": reason_codes,
+        "artifactRefCount": len(artifact_refs),
+        "publicVerificationReadyCount": public_verification_ready_count,
+        "realEnvEvidenceStatusCounts": dict(
+            sorted(real_env_evidence_status_counts.items(), key=lambda kv: kv[0])
+        ),
+    }
+
+
 def _add_blocker(
     blockers: list[dict[str, Any]],
     *,
@@ -249,6 +358,12 @@ def _build_registry_release_readiness(
     missing_kernel_binding_count = _to_int(
         policy_kernel_binding.get("missingKernelBindingCount")
     )
+    evidence_summary = _summarize_release_readiness_evidence_items(
+        _collect_release_readiness_evidence_items(
+            registry_prompt_tool_governance=registry_prompt_tool_governance,
+            policy_gate_simulation=policy_gate_simulation,
+        )
+    )
     high_risk_count = _to_int(prompt_tool_summary.get("riskHighCount")) or sum(
         1
         for row in _list_of_dicts(registry_prompt_tool_governance.get("riskItems"))
@@ -273,6 +388,17 @@ def _build_registry_release_readiness(
         "riskItemCount": risk_total_count,
         "highRiskItemCount": high_risk_count,
         "gateDecisionCounts": gate_decision_counts,
+        "releaseReadinessEvidenceVersion": evidence_summary["evidenceVersion"],
+        "releaseReadinessEvidenceCount": evidence_summary["evidenceCount"],
+        "envBlockedComponents": evidence_summary["envBlockedComponents"],
+        "reasonCodes": evidence_summary["reasonCodes"],
+        "artifactRefCount": evidence_summary["artifactRefCount"],
+        "publicVerificationReadyCount": evidence_summary[
+            "publicVerificationReadyCount"
+        ],
+        "realEnvEvidenceStatusCounts": evidence_summary[
+            "realEnvEvidenceStatusCounts"
+        ],
     }
 
 

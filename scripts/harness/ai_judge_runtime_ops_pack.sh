@@ -30,6 +30,17 @@ FAIRNESS_STATUS=""
 RUNTIME_SLA_STATUS=""
 REAL_ENV_CLOSURE_STATUS=""
 STAGE_CLOSURE_EVIDENCE_STATUS=""
+STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS=""
+STAGE_CLOSURE_ARCHIVE_DETECTED="false"
+STAGE_CLOSURE_ARCHIVE_SOURCE=""
+STAGE_CLOSURE_ARCHIVE_STATUS=""
+STAGE_CLOSURE_ARCHIVE_PATH=""
+STAGE_CLOSURE_COMPLETED_SECTION=""
+STAGE_CLOSURE_COMPLETED_MODULE_COUNT=0
+STAGE_CLOSURE_TODO_SECTION=""
+STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT=0
+STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID=""
+STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS=""
 
 FAIRNESS_THRESHOLD_DECISION=""
 RUNTIME_SLA_THRESHOLD_DECISION=""
@@ -344,6 +355,12 @@ derive_pack_status() {
     fi
   done
   for status in "${statuses[@]}"; do
+    if [[ "$status" == "stage_closure_archive_missing" ]]; then
+      STATUS="evidence_missing"
+      return
+    fi
+  done
+  for status in "${statuses[@]}"; do
     if [[ "$status" == "env_blocked" ]]; then
       STATUS="env_blocked"
       return
@@ -416,6 +433,17 @@ FAIRNESS_INGEST_STATUS=$FAIRNESS_INGEST_STATUS
 RUNTIME_SLA_STATUS=$RUNTIME_SLA_STATUS
 REAL_ENV_CLOSURE_STATUS=$REAL_ENV_CLOSURE_STATUS
 STAGE_CLOSURE_EVIDENCE_STATUS=$STAGE_CLOSURE_EVIDENCE_STATUS
+STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS=$STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS
+STAGE_CLOSURE_ARCHIVE_DETECTED=$STAGE_CLOSURE_ARCHIVE_DETECTED
+STAGE_CLOSURE_ARCHIVE_SOURCE=$STAGE_CLOSURE_ARCHIVE_SOURCE
+STAGE_CLOSURE_ARCHIVE_STATUS=$STAGE_CLOSURE_ARCHIVE_STATUS
+STAGE_CLOSURE_ARCHIVE_PATH=$STAGE_CLOSURE_ARCHIVE_PATH
+STAGE_CLOSURE_COMPLETED_SECTION=$STAGE_CLOSURE_COMPLETED_SECTION
+STAGE_CLOSURE_COMPLETED_MODULE_COUNT=$STAGE_CLOSURE_COMPLETED_MODULE_COUNT
+STAGE_CLOSURE_TODO_SECTION=$STAGE_CLOSURE_TODO_SECTION
+STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT=$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT
+STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID=$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID
+STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS=$STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS
 FAIRNESS_THRESHOLD_DECISION=$FAIRNESS_THRESHOLD_DECISION
 RUNTIME_SLA_THRESHOLD_DECISION=$RUNTIME_SLA_THRESHOLD_DECISION
 FAIRNESS_EXIT_CODE=$FAIRNESS_EXIT_CODE
@@ -450,6 +478,20 @@ write_output_doc() {
 2. pack doc: \`$OUTPUT_DOC\`
 3. pack json: \`$EMIT_JSON\`
 4. pack md: \`$EMIT_MD\`
+
+## closure backfill
+
+1. active_plan_evidence_status：\`$STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS\`
+2. archive_detected：\`$STAGE_CLOSURE_ARCHIVE_DETECTED\`
+3. archive_source：\`$STAGE_CLOSURE_ARCHIVE_SOURCE\`
+4. archive_status：\`$STAGE_CLOSURE_ARCHIVE_STATUS\`
+5. archive_path：\`$STAGE_CLOSURE_ARCHIVE_PATH\`
+6. completed_section：\`$STAGE_CLOSURE_COMPLETED_SECTION\`
+7. completed_module_count：\`$STAGE_CLOSURE_COMPLETED_MODULE_COUNT\`
+8. todo_section：\`$STAGE_CLOSURE_TODO_SECTION\`
+9. todo_env_blocked_debt_count：\`$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT\`
+10. linked_real_env_debt_id：\`$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID\`
+11. local_reference_allowed：\`$ALLOW_LOCAL_REFERENCE\`
 EOF_MD
 }
 
@@ -489,7 +531,21 @@ write_json_summary() {
       "threshold_decision": "",
       "exit_code": $STAGE_CLOSURE_EVIDENCE_EXIT_CODE
     }
-  ]
+  ],
+  "closure_backfill": {
+    "active_plan_evidence_status": "$(json_escape "$STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS")",
+    "archive_detected": $([[ "$STAGE_CLOSURE_ARCHIVE_DETECTED" == "true" ]] && echo "true" || echo "false"),
+    "archive_source": "$(json_escape "$STAGE_CLOSURE_ARCHIVE_SOURCE")",
+    "archive_status": "$(json_escape "$STAGE_CLOSURE_ARCHIVE_STATUS")",
+    "archive_path": "$(json_escape "$STAGE_CLOSURE_ARCHIVE_PATH")",
+    "completed_section": "$(json_escape "$STAGE_CLOSURE_COMPLETED_SECTION")",
+    "completed_module_count": $STAGE_CLOSURE_COMPLETED_MODULE_COUNT,
+    "todo_section": "$(json_escape "$STAGE_CLOSURE_TODO_SECTION")",
+    "todo_env_blocked_debt_count": $STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT,
+    "linked_real_env_debt_id": "$(json_escape "$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID")",
+    "long_term_evidence_status": "$(json_escape "$STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS")",
+    "local_reference_allowed": $([[ "$ALLOW_LOCAL_REFERENCE" == "true" ]] && echo "true" || echo "false")
+  }
 }
 EOF_JSON
 }
@@ -511,6 +567,20 @@ write_md_summary() {
 2. runtime_sla_freeze: \`$RUNTIME_SLA_STATUS\` (threshold=\`$RUNTIME_SLA_THRESHOLD_DECISION\`, exit=\`$RUNTIME_SLA_EXIT_CODE\`)
 3. real_env_evidence_closure: \`$REAL_ENV_CLOSURE_STATUS\` (exit=\`$REAL_ENV_CLOSURE_EXIT_CODE\`)
 4. stage_closure_evidence: \`$STAGE_CLOSURE_EVIDENCE_STATUS\` (exit=\`$STAGE_CLOSURE_EVIDENCE_EXIT_CODE\`)
+
+## closure_backfill
+
+1. active_plan_evidence_status: \`$STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS\`
+2. archive_detected: \`$STAGE_CLOSURE_ARCHIVE_DETECTED\`
+3. archive_source: \`$STAGE_CLOSURE_ARCHIVE_SOURCE\`
+4. archive_status: \`$STAGE_CLOSURE_ARCHIVE_STATUS\`
+5. archive_path: \`$STAGE_CLOSURE_ARCHIVE_PATH\`
+6. completed_section: \`$STAGE_CLOSURE_COMPLETED_SECTION\`
+7. completed_module_count: \`$STAGE_CLOSURE_COMPLETED_MODULE_COUNT\`
+8. todo_section: \`$STAGE_CLOSURE_TODO_SECTION\`
+9. todo_env_blocked_debt_count: \`$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT\`
+10. linked_real_env_debt_id: \`$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID\`
+11. local_reference_allowed: \`$ALLOW_LOCAL_REFERENCE\`
 EOF_MD
 }
 
@@ -665,12 +735,32 @@ main() {
   local stage_closure_env
   stage_closure_env="$EVIDENCE_DIR/ai_judge_stage_closure_evidence.env"
   STAGE_CLOSURE_EVIDENCE_STATUS="$(trim "$(read_env_value "$stage_closure_env" "AI_JUDGE_STAGE_CLOSURE_EVIDENCE_STATUS")")"
+  STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS="$(trim "$(read_env_value "$stage_closure_env" "ACTIVE_PLAN_EVIDENCE_STATUS")")"
+  STAGE_CLOSURE_ARCHIVE_DETECTED="$(trim "$(read_env_value "$stage_closure_env" "CLOSURE_ARCHIVE_DETECTED")")"
+  STAGE_CLOSURE_ARCHIVE_SOURCE="$(trim "$(read_env_value "$stage_closure_env" "CLOSURE_ARCHIVE_SOURCE")")"
+  STAGE_CLOSURE_ARCHIVE_STATUS="$(trim "$(read_env_value "$stage_closure_env" "CLOSURE_ARCHIVE_STATUS")")"
+  STAGE_CLOSURE_ARCHIVE_PATH="$(trim "$(read_env_value "$stage_closure_env" "CLOSURE_ARCHIVE_PATH")")"
+  STAGE_CLOSURE_COMPLETED_SECTION="$(trim "$(read_env_value "$stage_closure_env" "COMPLETED_SECTION_ID")")"
+  STAGE_CLOSURE_COMPLETED_MODULE_COUNT="$(trim "$(read_env_value "$stage_closure_env" "COMPLETED_MODULE_COUNT")")"
+  STAGE_CLOSURE_TODO_SECTION="$(trim "$(read_env_value "$stage_closure_env" "TODO_SECTION_ID")")"
+  STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT="$(trim "$(read_env_value "$stage_closure_env" "TODO_ENV_BLOCKED_DEBT_COUNT")")"
+  STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID="$(trim "$(read_env_value "$stage_closure_env" "LINKED_REAL_ENV_DEBT_ID")")"
+  STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS="$(trim "$(read_env_value "$stage_closure_env" "LONG_TERM_EVIDENCE_STATUS")")"
   if [[ -z "$STAGE_CLOSURE_EVIDENCE_STATUS" ]]; then
     if [[ "$STAGE_CLOSURE_EVIDENCE_EXIT_CODE" == "0" ]]; then
       STAGE_CLOSURE_EVIDENCE_STATUS="pass"
     else
       STAGE_CLOSURE_EVIDENCE_STATUS="stage_failed"
     fi
+  fi
+  if [[ -z "$STAGE_CLOSURE_ARCHIVE_DETECTED" ]]; then
+    STAGE_CLOSURE_ARCHIVE_DETECTED="false"
+  fi
+  if [[ -z "$STAGE_CLOSURE_COMPLETED_MODULE_COUNT" ]]; then
+    STAGE_CLOSURE_COMPLETED_MODULE_COUNT=0
+  fi
+  if [[ -z "$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT" ]]; then
+    STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT=0
   fi
 
   derive_pack_status
@@ -686,6 +776,11 @@ main() {
   echo "runtime_sla_status: $RUNTIME_SLA_STATUS (exit=$RUNTIME_SLA_EXIT_CODE)"
   echo "real_env_closure_status: $REAL_ENV_CLOSURE_STATUS (exit=$REAL_ENV_CLOSURE_EXIT_CODE)"
   echo "stage_closure_evidence_status: $STAGE_CLOSURE_EVIDENCE_STATUS (exit=$STAGE_CLOSURE_EVIDENCE_EXIT_CODE)"
+  echo "closure_backfill_archive_detected: $STAGE_CLOSURE_ARCHIVE_DETECTED"
+  echo "closure_backfill_archive_status: $STAGE_CLOSURE_ARCHIVE_STATUS"
+  echo "closure_backfill_completed_section: $STAGE_CLOSURE_COMPLETED_SECTION"
+  echo "closure_backfill_todo_section: $STAGE_CLOSURE_TODO_SECTION"
+  echo "closure_backfill_linked_real_env_debt_id: $STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID"
   echo "allow_local_reference: $ALLOW_LOCAL_REFERENCE"
   echo "output_env: $OUTPUT_ENV"
   echo "output_doc: $OUTPUT_DOC"

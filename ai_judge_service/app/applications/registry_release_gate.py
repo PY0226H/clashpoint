@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
+RELEASE_READINESS_EVIDENCE_VERSION = "policy-release-readiness-evidence-v1"
+
 RELEASE_GATE_READY_STATUSES = {
     "ready",
     "readiness_ready",
-    "local_reference_ready",
     "pass",
     "passed",
     "accepted",
     "ok",
+}
+RELEASE_GATE_LOCAL_REFERENCE_STATUSES = {
+    "local_reference_ready",
+    "local_reference_frozen",
+}
+RELEASE_GATE_LOCAL_REFERENCE_ENVIRONMENTS = {
+    "local",
+    "local_reference",
+    "local-reference",
 }
 RELEASE_GATE_BLOCKED_STATUSES = {
     "blocked",
@@ -26,6 +36,17 @@ RELEASE_GATE_ENV_BLOCKED_STATUSES = {
     "pending_real_samples",
     "missing_real_env",
     "missing_real_samples",
+}
+RELEASE_GATE_EVIDENCE_STATUSES = {
+    "allowed",
+    "blocked",
+    "env_blocked",
+    "needs_review",
+    "ready",
+    "pending",
+    "missing",
+    "local_reference_ready",
+    "local_reference_frozen",
 }
 
 
@@ -53,6 +74,40 @@ def _extract_release_readiness_section(metadata: dict[str, Any]) -> dict[str, An
     return {}
 
 
+def _safe_token(value: Any) -> str | None:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _lower_token(value: Any) -> str | None:
+    token = _safe_token(value)
+    return token.lower() if token is not None else None
+
+
+def _is_local_reference_status(value: Any) -> bool:
+    return (_lower_token(value) or "") in RELEASE_GATE_LOCAL_REFERENCE_STATUSES
+
+
+def _is_local_reference_environment(value: Any) -> bool:
+    return (_lower_token(value) or "") in RELEASE_GATE_LOCAL_REFERENCE_ENVIRONMENTS
+
+
+def _is_local_reference_payload(payload: dict[str, Any]) -> bool:
+    return _is_local_reference_status(
+        payload.get("status") or payload.get("decision")
+    ) or _is_local_reference_environment(
+        payload.get("environmentMode") or payload.get("environment_mode")
+    )
+
+
+def _artifact_ref_from_payload(payload: dict[str, Any]) -> str | None:
+    for key in ("evidenceRef", "evidence_ref", "artifactRef", "artifact_ref", "ref"):
+        token = _safe_token(payload.get(key))
+        if token:
+            return token
+    return None
+
+
 def _coerce_release_component(
     *,
     name: str,
@@ -69,6 +124,16 @@ def _coerce_release_component(
         status = "ready"
         code = f"registry_release_gate_{name}_ready"
         message = str(payload.get("message") or "").strip() or ready_message
+    elif raw_status in RELEASE_GATE_LOCAL_REFERENCE_STATUSES:
+        status = "env_blocked"
+        code = (
+            str(payload.get("code") or "").strip()
+            or f"registry_release_gate_{name}_local_reference_only"
+        )
+        message = (
+            str(payload.get("message") or "").strip()
+            or f"{name} only has local reference evidence"
+        )
     elif raw_status in RELEASE_GATE_BLOCKED_STATUSES:
         status = "blocked"
         code = (
@@ -100,11 +165,13 @@ def _coerce_release_component(
         "code": code,
         "message": message,
         "sourceStatus": raw_status,
-        "evidenceRef": (
-            str(payload.get("evidenceRef") or payload.get("evidence_ref") or "").strip()
-            or None
-        ),
+        "evidenceRef": _artifact_ref_from_payload(payload),
     }
+
+
+def _fairness_run_is_local_reference(run: Any) -> bool:
+    payload = run if isinstance(run, dict) else {}
+    return _is_local_reference_payload(payload)
 
 
 def _build_fairness_benchmark_release_component(
@@ -112,6 +179,19 @@ def _build_fairness_benchmark_release_component(
 ) -> dict[str, Any]:
     gate = fairness_gate if isinstance(fairness_gate, dict) else {}
     if bool(gate.get("benchmarkGatePassed")):
+        if _fairness_run_is_local_reference(gate.get("latestRun")):
+            latest_run = gate.get("latestRun") if isinstance(gate.get("latestRun"), dict) else {}
+            return {
+                "name": "fairnessBenchmark",
+                "status": "env_blocked",
+                "code": "registry_release_gate_fairness_benchmark_local_reference_only",
+                "message": "fairness benchmark only has local reference evidence",
+                "sourceStatus": str(
+                    latest_run.get("status") or gate.get("thresholdDecision") or ""
+                ).strip()
+                or None,
+                "evidenceRef": _artifact_ref_from_payload(latest_run),
+            }
         return {
             "name": "fairnessBenchmark",
             "status": "ready",
@@ -144,6 +224,25 @@ def _build_panel_shadow_release_component(
     gate = fairness_gate if isinstance(fairness_gate, dict) else {}
     if bool(gate.get("shadowGateApplied")):
         if bool(gate.get("shadowGatePassed")):
+            if _fairness_run_is_local_reference(gate.get("latestShadowRun")):
+                latest_shadow_run = (
+                    gate.get("latestShadowRun")
+                    if isinstance(gate.get("latestShadowRun"), dict)
+                    else {}
+                )
+                return {
+                    "name": "panelShadowDrift",
+                    "status": "env_blocked",
+                    "code": "registry_release_gate_panel_shadow_local_reference_only",
+                    "message": "panel shadow gate only has local reference evidence",
+                    "sourceStatus": str(
+                        latest_shadow_run.get("status")
+                        or gate.get("thresholdDecision")
+                        or ""
+                    ).strip()
+                    or None,
+                    "evidenceRef": _artifact_ref_from_payload(latest_shadow_run),
+                }
             return {
                 "name": "panelShadowDrift",
                 "status": "ready",
@@ -174,6 +273,182 @@ def _build_panel_shadow_release_component(
         missing_code="registry_release_gate_panel_shadow_missing",
         ready_message="panel shadow drift readiness is marked ready",
     )
+
+
+def _component_evidence(component: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "component": _safe_token(component.get("name")),
+        "status": _lower_token(component.get("status")) or "needs_review",
+        "code": _safe_token(component.get("code")),
+        "sourceStatus": _lower_token(component.get("sourceStatus")),
+        "evidenceRef": _safe_token(component.get("evidenceRef")),
+    }
+
+
+def _collect_artifact_refs(
+    *,
+    release_inputs: dict[str, Any],
+    components: list[dict[str, Any]],
+) -> list[str]:
+    refs: list[str] = []
+    for component in components:
+        ref = _safe_token(component.get("evidenceRef"))
+        if ref:
+            refs.append(ref)
+    raw_refs = (
+        release_inputs.get("artifactRefs")
+        if release_inputs.get("artifactRefs") is not None
+        else release_inputs.get("artifact_refs")
+    )
+    if isinstance(raw_refs, list):
+        for row in raw_refs:
+            if isinstance(row, dict):
+                ref = _artifact_ref_from_payload(row)
+                if ref:
+                    refs.append(ref)
+            else:
+                ref = _safe_token(row)
+                if ref:
+                    refs.append(ref)
+    return list(dict.fromkeys(refs))
+
+
+def _release_input_component(
+    *,
+    release_inputs: dict[str, Any],
+    camel_key: str,
+    snake_key: str,
+) -> dict[str, Any]:
+    raw = (
+        release_inputs.get(camel_key)
+        if release_inputs.get(camel_key) is not None
+        else release_inputs.get(snake_key)
+    )
+    return raw if isinstance(raw, dict) else {}
+
+
+def _build_public_verification_readiness_evidence(
+    *,
+    release_inputs: dict[str, Any],
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    component = next(
+        (
+            row
+            for row in components
+            if str(row.get("name") or "").strip() == "publicVerificationReadiness"
+        ),
+        {},
+    )
+    raw = _release_input_component(
+        release_inputs=release_inputs,
+        camel_key="publicVerificationReadiness",
+        snake_key="public_verification_readiness",
+    )
+    externalizable = raw.get("externalizable")
+    return {
+        "status": _lower_token(component.get("status")) or "needs_review",
+        "code": _safe_token(component.get("code")),
+        "sourceStatus": _lower_token(component.get("sourceStatus")),
+        "evidenceRef": _safe_token(component.get("evidenceRef")),
+        "externalizable": bool(externalizable) if externalizable is not None else None,
+        "errorCode": _safe_token(raw.get("errorCode") or raw.get("error_code")),
+    }
+
+
+def _build_real_env_evidence_status(
+    *,
+    release_inputs: dict[str, Any],
+    decision: str,
+    env_blocked_components: list[str],
+) -> dict[str, Any]:
+    raw = _release_input_component(
+        release_inputs=release_inputs,
+        camel_key="realEnvEvidenceStatus",
+        snake_key="real_env_evidence_status",
+    )
+    explicit_status = _lower_token(raw.get("status") or raw.get("decision"))
+    if explicit_status in RELEASE_GATE_EVIDENCE_STATUSES:
+        status = explicit_status
+        source = "release_inputs"
+    elif env_blocked_components:
+        status = "env_blocked"
+        source = "release_gate"
+    elif decision == "allowed":
+        status = "ready"
+        source = "release_gate"
+    else:
+        status = decision
+        source = "release_gate"
+
+    available = raw.get("realEnvEvidenceAvailable")
+    if available is None:
+        available = raw.get("real_env_evidence_available")
+    return {
+        "status": status,
+        "source": source,
+        "code": _safe_token(raw.get("code")),
+        "evidenceRef": _artifact_ref_from_payload(raw),
+        "realEnvEvidenceAvailable": (
+            bool(available) if available is not None else status == "ready"
+        ),
+    }
+
+
+def _build_release_readiness_evidence(
+    *,
+    dependency_health: dict[str, Any] | None,
+    release_inputs: dict[str, Any],
+    components: list[dict[str, Any]],
+    decision: str,
+    decision_code: str,
+    reasons: list[dict[str, Any]],
+) -> dict[str, Any]:
+    dependency_payload = dependency_health if isinstance(dependency_health, dict) else {}
+    reason_codes = [
+        code
+        for code in (
+            _safe_token(reason.get("code"))
+            for reason in reasons
+            if isinstance(reason, dict)
+        )
+        if code
+    ]
+    env_blocked_components = [
+        str(component.get("name") or "").strip()
+        for component in components
+        if str(component.get("status") or "").strip().lower() == "env_blocked"
+        and str(component.get("name") or "").strip()
+    ]
+    generated_at = (
+        _safe_token(release_inputs.get("generatedAt"))
+        or _safe_token(release_inputs.get("generated_at"))
+        or _safe_token(release_inputs.get("evidenceGeneratedAt"))
+        or _safe_token(release_inputs.get("evidence_generated_at"))
+    )
+    return {
+        "evidenceVersion": RELEASE_READINESS_EVIDENCE_VERSION,
+        "generatedAt": generated_at,
+        "policyVersion": _safe_token(dependency_payload.get("policyVersion")),
+        "decision": decision,
+        "decisionCode": decision_code,
+        "componentStatuses": [_component_evidence(component) for component in components],
+        "reasonCodes": list(dict.fromkeys(reason_codes)),
+        "envBlockedComponents": list(dict.fromkeys(env_blocked_components)),
+        "artifactRefs": _collect_artifact_refs(
+            release_inputs=release_inputs,
+            components=components,
+        ),
+        "publicVerificationReadiness": _build_public_verification_readiness_evidence(
+            release_inputs=release_inputs,
+            components=components,
+        ),
+        "realEnvEvidenceStatus": _build_real_env_evidence_status(
+            release_inputs=release_inputs,
+            decision=decision,
+            env_blocked_components=env_blocked_components,
+        ),
+    }
 
 
 def build_policy_release_gate_decision(
@@ -276,12 +551,21 @@ def build_policy_release_gate_decision(
         for component in components
         if str(component.get("status") or "").strip() != "ready"
     ]
+    decision_code = f"registry_release_gate_{decision}"
+    evidence = _build_release_readiness_evidence(
+        dependency_health=dependency_health,
+        release_inputs=release_inputs,
+        components=components,
+        decision=decision,
+        decision_code=decision_code,
+        reasons=reasons,
+    )
     return {
         "version": "policy-release-gate-v1",
         "allowed": decision == "allowed",
         "decision": decision,
         "status": decision,
-        "code": f"registry_release_gate_{decision}",
+        "code": decision_code,
         "message": (
             "all release gate components passed"
             if decision == "allowed"
@@ -290,5 +574,6 @@ def build_policy_release_gate_decision(
         "components": components,
         "statusCounts": status_counts,
         "reasons": reasons,
+        "releaseReadinessEvidence": evidence,
         "metadataInputPresent": bool(release_inputs),
     }

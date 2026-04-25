@@ -238,6 +238,11 @@ class RegistryGovernanceRoutesTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["riskLevel"], "healthy")
         self.assertEqual(payload["summary"]["riskTotalCount"], 0)
         self.assertEqual(payload["summary"]["riskReturned"], 0)
+        self.assertEqual(payload["releaseReadiness"]["evidenceCount"], 1)
+        self.assertEqual(
+            payload["releaseReadiness"]["items"][0]["evidence"]["policyVersion"],
+            "policy-v3-default",
+        )
         self.assertEqual(payload["filters"]["riskLimit"], 20)
 
 

@@ -219,6 +219,8 @@ expect_contains "local fairness" "fairness_status: local_reference_frozen" "$LOC
 expect_contains "local runtime" "runtime_sla_status: local_reference_frozen" "$LOCAL_STDOUT"
 expect_contains "local closure" "real_env_closure_status: local_reference_ready" "$LOCAL_STDOUT"
 expect_contains "local stage closure" "stage_closure_evidence_status: pass" "$LOCAL_STDOUT"
+expect_contains "local closure backfill stdout" "closure_backfill_archive_detected: false" "$LOCAL_STDOUT"
+expect_contains "local closure backfill env" "STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS=pass" "$EVIDENCE_LOCAL/ai_judge_runtime_ops_pack.env"
 
 # 场景3：real pass -> pass
 WORK_PASS="$TMP_DIR/pass"
@@ -238,6 +240,7 @@ expect_contains "pass fairness" "fairness_status: pass" "$PASS_STDOUT"
 expect_contains "pass runtime" "runtime_sla_status: pass" "$PASS_STDOUT"
 expect_contains "pass closure" "real_env_closure_status: pass" "$PASS_STDOUT"
 expect_contains "pass stage closure" "stage_closure_evidence_status: pass" "$PASS_STDOUT"
+expect_contains "pass closure backfill json" "\"closure_backfill\"" "$WORK_PASS/artifacts/harness/$(basename "$(grep -E '^summary_json:' "$PASS_STDOUT" | awk -F ': ' '{print $2}')")"
 
 # 场景4：real threshold violation -> threshold_violation
 WORK_VIOLATION="$TMP_DIR/violation"

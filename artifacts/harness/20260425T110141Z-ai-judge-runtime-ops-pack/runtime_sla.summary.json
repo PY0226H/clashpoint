@@ -1,0 +1,49 @@
+{
+  "run_id": "20260425T110141Z-ai-judge-runtime-sla-freeze",
+  "status": "local_reference_frozen",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "latency_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_latency_baseline.env",
+  "fault_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fault_drill.env",
+  "trust_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_trust_attestation.env",
+  "env_marker": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env",
+  "environment_mode": "local_reference",
+  "allow_local_reference": true,
+  "policy_version": "runtime-sla-v1",
+  "threshold_decision": "accepted",
+  "needs_real_env_reconfirm": true,
+  "needs_remediation": false,
+  "metrics": {
+    "sample_size": "720",
+    "p95_ms": "910",
+    "p99_ms": "1760",
+    "callback_failure_recovery_pass": true,
+    "replay_consistency_pass": true,
+    "audit_alert_delivery_pass": true,
+    "trace_hash_coverage": "1.00",
+    "commitment_coverage": "0.99",
+    "attestation_gap": "0",
+    "p95_ok": true,
+    "p99_ok": true,
+    "fault_ok": true,
+    "trace_ok": true,
+    "commitment_ok": true,
+    "gap_ok": true
+  },
+  "thresholds": {
+    "p95_ms_max": "1200",
+    "p99_ms_max": "2200",
+    "trace_hash_coverage_min": "0.99",
+    "commitment_coverage_min": "0.98",
+    "attestation_gap_max": "0.01"
+  },
+  "missing_keys": "",
+  "note": "local reference runtime sla frozen; waiting real environment reconfirmation",
+  "started_at": "2026-04-25T11:01:41Z",
+  "finished_at": "2026-04-25T11:01:41Z",
+  "outputs": {
+    "threshold_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_sla_thresholds.env",
+    "freeze_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Runtime_SLA_冻结口径-2026-04-25.md",
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260425T110141Z-ai-judge-runtime-ops-pack/runtime_sla.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260425T110141Z-ai-judge-runtime-ops-pack/runtime_sla.summary.md"
+  }
+}
