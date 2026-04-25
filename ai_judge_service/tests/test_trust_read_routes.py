@@ -208,6 +208,13 @@ class TrustReadRoutesTests(unittest.TestCase):
             public_payload["verificationRequest"]["requestKey"],
             "case:1001:dispatch:final:trace:trace-final-1001:registry:trust-registry-v1:verification:trust-public-verification-v1",
         )
+        self.assertTrue(public_payload["proxyRequired"])
+        self.assertFalse(public_payload["cacheProfile"]["cacheable"])
+        self.assertEqual(public_payload["cacheProfile"]["ttlSeconds"], 0)
+        self.assertEqual(
+            public_payload["cacheProfile"]["cacheKey"],
+            public_payload["verificationRequest"]["requestKey"],
+        )
         self.assertEqual(
             public_payload["verificationReadiness"]["status"],
             "artifact_manifest_pending",

@@ -15,6 +15,8 @@ TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "verificationReadiness",
     "verifyPayload",
     "visibilityContract",
+    "cacheProfile",
+    "proxyRequired",
 )
 
 TRUST_PUBLIC_VERIFY_REQUEST_KEYS: tuple[str, ...] = (
@@ -115,6 +117,22 @@ TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS: tuple[str, ...] = (
     "internalAuditRouteRequired",
     "chatProxyRequired",
     "directAiServiceAccessAllowed",
+)
+
+TRUST_PUBLIC_VERIFY_CACHE_PROFILE_KEYS: tuple[str, ...] = (
+    "cacheable",
+    "ttlSeconds",
+    "staleIfErrorSeconds",
+    "cacheKey",
+    "varyBy",
+)
+
+TRUST_PUBLIC_VERIFY_CACHE_VARY_BY: tuple[str, ...] = (
+    "caseId",
+    "dispatchType",
+    "traceId",
+    "registryVersion",
+    "verificationVersion",
 )
 
 TRUST_PUBLIC_VERIFY_ALLOWED_FIELD_FAMILIES: tuple[str, ...] = (
@@ -274,6 +292,21 @@ def build_trust_public_verify_readiness(
     }
 
 
+def build_trust_public_verify_cache_profile(
+    *,
+    verification_request: dict[str, Any],
+    verification_readiness: dict[str, Any],
+) -> dict[str, Any]:
+    ready = bool(verification_readiness.get("ready"))
+    return {
+        "cacheable": ready,
+        "ttlSeconds": 300 if ready else 0,
+        "staleIfErrorSeconds": 0,
+        "cacheKey": str(verification_request.get("requestKey") or "").strip(),
+        "varyBy": list(TRUST_PUBLIC_VERIFY_CACHE_VARY_BY),
+    }
+
+
 def _validate_verification_request(
     payload: dict[str, Any],
     *,
@@ -354,6 +387,51 @@ def _validate_verification_readiness(payload: dict[str, Any]) -> None:
             raise ValueError("trust_public_verify_readiness_blockers_required")
         if payload.get("externalizable") is not False:
             raise ValueError("trust_public_verify_readiness_blocked_externalizable_invalid")
+
+
+def _validate_cache_profile(
+    payload: dict[str, Any],
+    *,
+    verification_request: dict[str, Any],
+    verification_readiness: dict[str, Any],
+) -> None:
+    _assert_required_keys(
+        section="trust_public_verify_cache_profile",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_CACHE_PROFILE_KEYS,
+    )
+    _assert_only_keys(
+        section="trust_public_verify_cache_profile",
+        payload=payload,
+        keys=TRUST_PUBLIC_VERIFY_CACHE_PROFILE_KEYS,
+    )
+    if not isinstance(payload.get("cacheable"), bool):
+        raise ValueError("trust_public_verify_cache_profile_cacheable_not_bool")
+    ttl_seconds = _non_negative_int(payload.get("ttlSeconds"), default=-1)
+    if ttl_seconds < 0:
+        raise ValueError("trust_public_verify_cache_profile_ttl_invalid")
+    stale_if_error_seconds = _non_negative_int(
+        payload.get("staleIfErrorSeconds"),
+        default=-1,
+    )
+    if stale_if_error_seconds < 0:
+        raise ValueError("trust_public_verify_cache_profile_stale_invalid")
+    cache_key = str(payload.get("cacheKey") or "").strip()
+    if not cache_key:
+        raise ValueError("trust_public_verify_cache_profile_cache_key_empty")
+    if cache_key != str(verification_request.get("requestKey") or "").strip():
+        raise ValueError("trust_public_verify_cache_profile_cache_key_mismatch")
+    vary_by = payload.get("varyBy")
+    if not isinstance(vary_by, list):
+        raise ValueError("trust_public_verify_cache_profile_vary_by_not_list")
+    if vary_by != list(TRUST_PUBLIC_VERIFY_CACHE_VARY_BY):
+        raise ValueError("trust_public_verify_cache_profile_vary_by_invalid")
+    ready = bool(verification_readiness.get("ready"))
+    if ready:
+        if payload.get("cacheable") is not True or ttl_seconds <= 0:
+            raise ValueError("trust_public_verify_cache_profile_ready_cache_invalid")
+    elif payload.get("cacheable") is not False or ttl_seconds != 0:
+        raise ValueError("trust_public_verify_cache_profile_not_ready_cache_invalid")
 
 
 def _validate_case_commitment(payload: dict[str, Any]) -> None:
@@ -639,6 +717,29 @@ def validate_trust_public_verify_contract(payload: dict[str, Any]) -> None:
     verify_payload = payload.get("verifyPayload")
     if not isinstance(verify_payload, dict):
         raise ValueError("trust_public_verify_verify_payload_not_dict")
+
+    visibility_contract = payload.get("visibilityContract")
+    if not isinstance(visibility_contract, dict):
+        raise ValueError("trust_public_verify_visibility_contract_not_dict")
+    _validate_visibility_contract(visibility_contract)
+
+    if payload.get("proxyRequired") is not True:
+        raise ValueError("trust_public_verify_proxy_required_invalid")
+    if payload.get("proxyRequired") != visibility_contract.get("chatProxyRequired"):
+        raise ValueError("trust_public_verify_proxy_visibility_mismatch")
+
+    cache_profile = payload.get("cacheProfile")
+    if not isinstance(cache_profile, dict):
+        raise ValueError("trust_public_verify_cache_profile_not_dict")
+    _validate_cache_profile(
+        cache_profile,
+        verification_request=verification_request,
+        verification_readiness=verification_readiness,
+    )
+
+    if not bool(verification_readiness.get("ready")) and not verify_payload:
+        return
+
     _assert_required_keys(
         section="trust_public_verify_verify_payload",
         payload=verify_payload,
@@ -649,11 +750,6 @@ def validate_trust_public_verify_contract(payload: dict[str, Any]) -> None:
         payload=verify_payload,
         keys=TRUST_PUBLIC_VERIFY_PAYLOAD_KEYS,
     )
-
-    visibility_contract = payload.get("visibilityContract")
-    if not isinstance(visibility_contract, dict):
-        raise ValueError("trust_public_verify_visibility_contract_not_dict")
-    _validate_visibility_contract(visibility_contract)
 
     case_commitment = verify_payload.get("caseCommitment")
     if not isinstance(case_commitment, dict):

@@ -10,6 +10,7 @@ from .artifact_pack import write_trust_audit_artifact_pack
 from .trust_phasea_bundle import build_trust_phasea_bundle
 from .trust_public_verify_contract import (
     TRUST_PUBLIC_VERIFICATION_VERSION,
+    build_trust_public_verify_cache_profile,
     build_trust_public_verify_readiness,
     build_trust_public_verify_request,
     build_trust_public_verify_visibility_contract,
@@ -475,27 +476,34 @@ def build_trust_public_verify_route_payload(
     source: str | None = None,
 ) -> dict[str, Any]:
     verify_payload_dict = (
-        dict(verify_payload) if isinstance(verify_payload, dict) else verify_payload
+        dict(verify_payload) if isinstance(verify_payload, dict) else {}
     )
     normalized_dispatch_type = str(dispatch_type or "").strip().lower()
     normalized_trace_id = str(trace_id or "").strip()
+    verification_request = build_trust_public_verify_request(
+        case_id=int(case_id),
+        dispatch_type=normalized_dispatch_type,
+        trace_id=normalized_trace_id,
+        registry_version=registry_version,
+    )
+    verification_readiness = build_trust_public_verify_readiness(
+        verify_payload=verify_payload_dict,
+        source=source,
+    )
     return {
         "caseId": int(case_id),
         "dispatchType": normalized_dispatch_type,
         "traceId": normalized_trace_id,
         "verificationVersion": TRUST_PUBLIC_VERIFICATION_VERSION,
-        "verificationRequest": build_trust_public_verify_request(
-            case_id=int(case_id),
-            dispatch_type=normalized_dispatch_type,
-            trace_id=normalized_trace_id,
-            registry_version=registry_version,
-        ),
-        "verificationReadiness": build_trust_public_verify_readiness(
-            verify_payload=verify_payload_dict if isinstance(verify_payload_dict, dict) else None,
-            source=source,
-        ),
+        "verificationRequest": verification_request,
+        "verificationReadiness": verification_readiness,
         "verifyPayload": verify_payload_dict,
         "visibilityContract": build_trust_public_verify_visibility_contract(),
+        "cacheProfile": build_trust_public_verify_cache_profile(
+            verification_request=verification_request,
+            verification_readiness=verification_readiness,
+        ),
+        "proxyRequired": True,
     }
 
 

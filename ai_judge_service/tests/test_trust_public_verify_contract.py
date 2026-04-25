@@ -7,6 +7,7 @@ from app.applications.trust_public_verify_contract import (
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_KEYS,
+    TRUST_PUBLIC_VERIFY_CACHE_PROFILE_KEYS,
     TRUST_PUBLIC_VERIFY_CASE_COMMITMENT_KEYS,
     TRUST_PUBLIC_VERIFY_CHALLENGE_REVIEW_KEYS,
     TRUST_PUBLIC_VERIFY_KERNEL_VERSION_KEYS,
@@ -16,6 +17,7 @@ from app.applications.trust_public_verify_contract import (
     TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS,
     TRUST_PUBLIC_VERIFY_VERDICT_ATTESTATION_KEYS,
     TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS,
+    build_trust_public_verify_cache_profile,
     build_trust_public_verify_readiness,
     build_trust_public_verify_request,
     build_trust_public_verify_visibility_contract,
@@ -25,25 +27,32 @@ from app.applications.trust_public_verify_contract import (
 
 class TrustPublicVerifyContractTests(unittest.TestCase):
     def _build_payload(self) -> dict:
+        verification_request = build_trust_public_verify_request(
+            case_id=9101,
+            dispatch_type="final",
+            trace_id="trace-final-9101",
+            registry_version="trust-registry-v1",
+        )
+        verification_readiness = {
+            "ready": True,
+            "status": "ready",
+            "errorCode": None,
+            "blockers": [],
+            "externalizable": True,
+        }
         return {
             "caseId": 9101,
             "dispatchType": "final",
             "traceId": "trace-final-9101",
             "verificationVersion": TRUST_PUBLIC_VERIFICATION_VERSION,
-            "verificationRequest": build_trust_public_verify_request(
-                case_id=9101,
-                dispatch_type="final",
-                trace_id="trace-final-9101",
-                registry_version="trust-registry-v1",
-            ),
-            "verificationReadiness": {
-                "ready": True,
-                "status": "ready",
-                "errorCode": None,
-                "blockers": [],
-                "externalizable": True,
-            },
+            "verificationRequest": verification_request,
+            "verificationReadiness": verification_readiness,
             "visibilityContract": build_trust_public_verify_visibility_contract(),
+            "cacheProfile": build_trust_public_verify_cache_profile(
+                verification_request=verification_request,
+                verification_readiness=verification_readiness,
+            ),
+            "proxyRequired": True,
             "verifyPayload": {
                 "caseCommitment": {
                     "version": "trust-phaseA-case-commitment-v1",
@@ -137,6 +146,16 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
         self.assertEqual(
             set(payload["visibilityContract"].keys()),
             set(TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS),
+        )
+        self.assertEqual(
+            set(payload["cacheProfile"].keys()),
+            set(TRUST_PUBLIC_VERIFY_CACHE_PROFILE_KEYS),
+        )
+        self.assertTrue(payload["proxyRequired"])
+        self.assertTrue(payload["cacheProfile"]["cacheable"])
+        self.assertEqual(
+            payload["cacheProfile"]["cacheKey"],
+            payload["verificationRequest"]["requestKey"],
         )
         self.assertEqual(
             set(payload["verificationRequest"].keys()),
@@ -245,6 +264,58 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             validate_trust_public_verify_contract(payload)
         self.assertIn("trust_public_verify_visibility_contract_layer_invalid", str(ctx.exception))
+
+    def test_validate_trust_public_verify_contract_should_fail_when_proxy_not_required(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["proxyRequired"] = False
+
+        with self.assertRaisesRegex(ValueError, "proxy_required_invalid"):
+            validate_trust_public_verify_contract(payload)
+
+    def test_validate_trust_public_verify_contract_should_fail_on_bad_cache_profile(
+        self,
+    ) -> None:
+        payload = self._build_payload()
+        payload["cacheProfile"]["cacheKey"] = "other-cache-key"
+
+        with self.assertRaisesRegex(ValueError, "cache_key_mismatch"):
+            validate_trust_public_verify_contract(payload)
+
+    def test_validate_trust_public_verify_contract_should_allow_not_ready_empty_payload(
+        self,
+    ) -> None:
+        verification_request = build_trust_public_verify_request(
+            case_id=9102,
+            dispatch_type="final",
+            trace_id="trace-final-9102",
+            registry_version="trust-registry-v1",
+        )
+        verification_readiness = build_trust_public_verify_readiness(
+            verify_payload=None,
+            source=None,
+        )
+        payload = {
+            "caseId": 9102,
+            "dispatchType": "final",
+            "traceId": "trace-final-9102",
+            "verificationVersion": TRUST_PUBLIC_VERIFICATION_VERSION,
+            "verificationRequest": verification_request,
+            "verificationReadiness": verification_readiness,
+            "verifyPayload": {},
+            "visibilityContract": build_trust_public_verify_visibility_contract(),
+            "cacheProfile": build_trust_public_verify_cache_profile(
+                verification_request=verification_request,
+                verification_readiness=verification_readiness,
+            ),
+            "proxyRequired": True,
+        }
+
+        self.assertEqual(payload["verificationReadiness"]["status"], "verification_not_ready")
+        self.assertFalse(payload["cacheProfile"]["cacheable"])
+        self.assertEqual(payload["cacheProfile"]["ttlSeconds"], 0)
+        validate_trust_public_verify_contract(payload)
 
     def test_build_trust_public_verify_readiness_should_explain_externalization_blockers(
         self,
