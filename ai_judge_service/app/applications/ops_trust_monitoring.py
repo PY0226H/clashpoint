@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.applications.fairness_panel_evidence import (
+    build_fairness_panel_evidence_normalization,
+)
+
 OPS_TRUST_MONITORING_VERSION = "ops-trust-monitoring-v1"
 
 OPS_TRUST_MONITORING_KEYS: tuple[str, ...] = (
@@ -420,11 +424,25 @@ def _build_panel_shadow_drift(
     shadow_gate_passed = release_gate.get("shadowGatePassed")
     shadow_violation_count = _to_int(overview.get("shadowThresholdViolationCount"))
     drift_breach_count = _to_int(overview.get("driftBreachCount"))
-    if shadow_gate_passed is False or shadow_violation_count > 0:
+    normalized_evidence = build_fairness_panel_evidence_normalization(
+        fairness_calibration_advisor=fairness_calibration_advisor,
+    )
+    shadow_evidence_status = _lower_token(normalized_evidence.get("shadowEvidenceStatus"))
+    if (
+        shadow_evidence_status == "blocked"
+        or shadow_gate_passed is False
+        or shadow_violation_count > 0
+    ):
         status = "blocked"
-    elif not shadow_gate_applied:
+    elif shadow_evidence_status == "missing" or not shadow_gate_applied:
         status = "missing"
-    elif drift_breach_count > 0 or bool(drift_summary.get("hasBreach")):
+    elif shadow_evidence_status == "env_blocked":
+        status = "env_blocked"
+    elif (
+        shadow_evidence_status == "watch"
+        or drift_breach_count > 0
+        or bool(drift_summary.get("hasBreach"))
+    ):
         status = "watch"
     else:
         status = "ready"
@@ -451,6 +469,7 @@ def _build_panel_shadow_drift(
             if latest_shadow_run.get("needsRemediation") is not None
             else None
         ),
+        "normalizedEvidence": normalized_evidence,
     }
 
 
@@ -459,6 +478,9 @@ def _build_real_env_evidence_status(
     fairness_calibration_advisor: dict[str, Any],
 ) -> dict[str, Any]:
     release_gate = _release_gate_from_advisor(fairness_calibration_advisor)
+    normalized_evidence = build_fairness_panel_evidence_normalization(
+        fairness_calibration_advisor=fairness_calibration_advisor,
+    )
     latest_run = _dict_or_empty(release_gate.get("latestRun"))
     environment_mode = _lower_token(latest_run.get("environmentMode"))
     latest_status = _lower_token(latest_run.get("status"))
@@ -470,7 +492,8 @@ def _build_real_env_evidence_status(
     )
     real_env = environment_mode in {"real", "prod", "production", "staging"}
     pass_status = latest_status in {"pass", "passed", "completed", "success"}
-    if not real_env:
+    real_sample_status = _lower_token(normalized_evidence.get("realSampleManifestStatus"))
+    if real_sample_status in {"env_blocked", "pending_real_samples"} or not real_env:
         status = "env_blocked"
     elif needs_remediation is True or threshold_decision in {"blocked", "fail", "failed"}:
         status = "blocked"
@@ -487,6 +510,8 @@ def _build_real_env_evidence_status(
         "latestRunEnvironmentMode": environment_mode,
         "latestRunNeedsRemediation": needs_remediation,
         "realEnvEvidenceAvailable": bool(real_env),
+        "realSampleManifestStatus": real_sample_status,
+        "normalizedEvidence": normalized_evidence,
     }
 
 

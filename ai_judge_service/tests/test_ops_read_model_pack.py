@@ -951,6 +951,21 @@ class OpsReadModelPackTests(unittest.TestCase):
         )
         self.assertEqual(payload["panelShadowDrift"]["status"], "missing")
         self.assertEqual(payload["realEnvEvidenceStatus"]["status"], "env_blocked")
+        self.assertEqual(
+            payload["realEnvEvidenceStatus"]["realSampleManifestStatus"],
+            "env_blocked",
+        )
+        self.assertEqual(
+            payload["realEnvEvidenceStatus"]["normalizedEvidence"][
+                "benchmarkEvidenceStatus"
+            ],
+            "env_blocked",
+        )
+        self.assertFalse(
+            payload["panelShadowDrift"]["normalizedEvidence"][
+                "officialWinnerMutationAllowed"
+            ]
+        )
         self.assertFalse(payload["redactionContract"]["internalAuditPayloadVisible"])
 
     def test_summarize_ops_read_model_pack_trust_items_should_count_flags(self) -> None:

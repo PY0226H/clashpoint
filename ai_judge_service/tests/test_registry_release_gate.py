@@ -38,6 +38,12 @@ class RegistryReleaseGateTests(unittest.TestCase):
             "shadowGateApplied": False,
             "shadowGatePassed": None,
             "thresholdDecision": "accepted",
+            "latestRun": {
+                "runId": "benchmark-real",
+                "status": "pass",
+                "thresholdDecision": "accepted",
+                "environmentMode": "real",
+            },
         }
 
         payload = build_policy_release_gate_decision(
@@ -74,6 +80,14 @@ class RegistryReleaseGateTests(unittest.TestCase):
             ["public-verify-manifest", "release-manifest"],
         )
         self.assertEqual(evidence["realEnvEvidenceStatus"]["status"], "env_blocked")
+        self.assertEqual(
+            evidence["fairnessPanelEvidence"]["benchmarkEvidenceStatus"],
+            "ready",
+        )
+        self.assertEqual(
+            evidence["fairnessPanelEvidence"]["realSampleManifestStatus"],
+            "ready",
+        )
 
     def test_policy_release_gate_should_env_block_without_benchmark(self) -> None:
         dependency_health = {
@@ -106,6 +120,12 @@ class RegistryReleaseGateTests(unittest.TestCase):
         self.assertEqual(payload["decision"], "env_blocked")
         reason_codes = {row["code"] for row in payload["reasons"]}
         self.assertIn("registry_fairness_gate_no_benchmark", reason_codes)
+        self.assertEqual(
+            payload["releaseReadinessEvidence"]["fairnessPanelEvidence"][
+                "benchmarkEvidenceStatus"
+            ],
+            "pending_real_samples",
+        )
 
     def test_policy_release_gate_should_need_review_for_missing_p37_inputs(self) -> None:
         dependency_health = {
@@ -118,6 +138,12 @@ class RegistryReleaseGateTests(unittest.TestCase):
             "benchmarkGatePassed": True,
             "shadowGateApplied": False,
             "thresholdDecision": "accepted",
+            "latestRun": {
+                "runId": "benchmark-real",
+                "status": "pass",
+                "thresholdDecision": "accepted",
+                "environmentMode": "real",
+            },
         }
 
         payload = build_policy_release_gate_decision(
@@ -184,6 +210,14 @@ class RegistryReleaseGateTests(unittest.TestCase):
         self.assertEqual(evidence["realEnvEvidenceStatus"]["status"], "env_blocked")
         self.assertIn("fairnessBenchmark", evidence["envBlockedComponents"])
         self.assertIn("panelShadowDrift", evidence["envBlockedComponents"])
+        self.assertEqual(
+            evidence["fairnessPanelEvidence"]["benchmarkEvidenceStatus"],
+            "env_blocked",
+        )
+        self.assertEqual(
+            evidence["fairnessPanelEvidence"]["shadowEvidenceStatus"],
+            "env_blocked",
+        )
 
     def test_policy_release_readiness_evidence_should_redact_unknown_raw_payload(self) -> None:
         dependency_health = {
@@ -220,6 +254,12 @@ class RegistryReleaseGateTests(unittest.TestCase):
             "benchmarkGatePassed": True,
             "shadowGateApplied": False,
             "thresholdDecision": "accepted",
+            "latestRun": {
+                "runId": "benchmark-real",
+                "status": "pass",
+                "thresholdDecision": "accepted",
+                "environmentMode": "real",
+            },
         }
 
         payload = build_policy_release_gate_decision(

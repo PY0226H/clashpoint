@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.applications.fairness_panel_evidence import (
+    build_fairness_panel_evidence_normalization,
+)
+
 RELEASE_READINESS_EVIDENCE_VERSION = "policy-release-readiness-evidence-v1"
 
 RELEASE_GATE_READY_STATUSES = {
@@ -175,10 +179,26 @@ def _fairness_run_is_local_reference(run: Any) -> bool:
 
 
 def _build_fairness_benchmark_release_component(
+    *,
     fairness_gate: dict[str, Any] | None,
+    release_inputs: dict[str, Any],
 ) -> dict[str, Any]:
     gate = fairness_gate if isinstance(fairness_gate, dict) else {}
-    if bool(gate.get("benchmarkGatePassed")):
+    normalized = build_fairness_panel_evidence_normalization(
+        fairness_gate=gate,
+        release_inputs=release_inputs,
+    )
+    evidence_status = str(normalized.get("benchmarkEvidenceStatus") or "").strip().lower()
+    if evidence_status == "ready":
+        return {
+            "name": "fairnessBenchmark",
+            "status": "ready",
+            "code": "registry_release_gate_fairness_benchmark_ready",
+            "message": "fairness benchmark gate passed",
+            "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
+            "evidenceRef": None,
+        }
+    if evidence_status == "env_blocked":
         if _fairness_run_is_local_reference(gate.get("latestRun")):
             latest_run = gate.get("latestRun") if isinstance(gate.get("latestRun"), dict) else {}
             return {
@@ -192,11 +212,17 @@ def _build_fairness_benchmark_release_component(
                 or None,
                 "evidenceRef": _artifact_ref_from_payload(latest_run),
             }
+    if evidence_status == "pending_real_samples":
+        code = (
+            str(gate.get("code") or "").strip()
+            or "registry_release_gate_fairness_benchmark_pending_real_samples"
+        )
         return {
             "name": "fairnessBenchmark",
-            "status": "ready",
-            "code": "registry_release_gate_fairness_benchmark_ready",
-            "message": "fairness benchmark gate passed",
+            "status": "env_blocked",
+            "code": code,
+            "message": str(gate.get("message") or "").strip()
+            or "fairness benchmark is waiting for real sample evidence",
             "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
             "evidenceRef": None,
         }
@@ -204,7 +230,12 @@ def _build_fairness_benchmark_release_component(
         str(gate.get("code") or "").strip()
         or "registry_release_gate_fairness_benchmark_missing"
     )
-    status = "env_blocked" if code == "registry_fairness_gate_no_benchmark" else "blocked"
+    if code == "registry_fairness_gate_no_benchmark":
+        status = "env_blocked"
+    elif evidence_status == "blocked":
+        status = "blocked"
+    else:
+        status = "needs_review"
     return {
         "name": "fairnessBenchmark",
         "status": status,
@@ -222,8 +253,22 @@ def _build_panel_shadow_release_component(
     release_inputs: dict[str, Any],
 ) -> dict[str, Any]:
     gate = fairness_gate if isinstance(fairness_gate, dict) else {}
+    normalized = build_fairness_panel_evidence_normalization(
+        fairness_gate=gate,
+        release_inputs=release_inputs,
+    )
+    evidence_status = str(normalized.get("shadowEvidenceStatus") or "").strip().lower()
     if bool(gate.get("shadowGateApplied")):
-        if bool(gate.get("shadowGatePassed")):
+        if evidence_status == "ready":
+            return {
+                "name": "panelShadowDrift",
+                "status": "ready",
+                "code": "registry_release_gate_panel_shadow_ready",
+                "message": "panel shadow gate passed",
+                "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
+                "evidenceRef": None,
+            }
+        if evidence_status == "env_blocked":
             if _fairness_run_is_local_reference(gate.get("latestShadowRun")):
                 latest_shadow_run = (
                     gate.get("latestShadowRun")
@@ -243,17 +288,9 @@ def _build_panel_shadow_release_component(
                     or None,
                     "evidenceRef": _artifact_ref_from_payload(latest_shadow_run),
                 }
-            return {
-                "name": "panelShadowDrift",
-                "status": "ready",
-                "code": "registry_release_gate_panel_shadow_ready",
-                "message": "panel shadow gate passed",
-                "sourceStatus": str(gate.get("thresholdDecision") or "").strip() or None,
-                "evidenceRef": None,
-            }
         return {
             "name": "panelShadowDrift",
-            "status": "blocked",
+            "status": "blocked" if evidence_status == "blocked" else "needs_review",
             "code": str(gate.get("code") or "").strip()
             or "registry_release_gate_panel_shadow_blocked",
             "message": str(gate.get("message") or "").strip()
@@ -399,6 +436,7 @@ def _build_release_readiness_evidence(
     *,
     dependency_health: dict[str, Any] | None,
     release_inputs: dict[str, Any],
+    fairness_gate: dict[str, Any] | None,
     components: list[dict[str, Any]],
     decision: str,
     decision_code: str,
@@ -443,6 +481,10 @@ def _build_release_readiness_evidence(
             release_inputs=release_inputs,
             components=components,
         ),
+        "fairnessPanelEvidence": build_fairness_panel_evidence_normalization(
+            fairness_gate=fairness_gate if isinstance(fairness_gate, dict) else {},
+            release_inputs=release_inputs,
+        ),
         "realEnvEvidenceStatus": _build_real_env_evidence_status(
             release_inputs=release_inputs,
             decision=decision,
@@ -482,7 +524,10 @@ def build_policy_release_gate_decision(
             ),
             "evidenceRef": None,
         },
-        _build_fairness_benchmark_release_component(fairness_gate),
+        _build_fairness_benchmark_release_component(
+            fairness_gate=fairness_gate,
+            release_inputs=release_inputs,
+        ),
         _build_panel_shadow_release_component(
             fairness_gate=fairness_gate,
             release_inputs=release_inputs,
@@ -555,6 +600,7 @@ def build_policy_release_gate_decision(
     evidence = _build_release_readiness_evidence(
         dependency_health=dependency_health,
         release_inputs=release_inputs,
+        fairness_gate=fairness_gate,
         components=components,
         decision=decision,
         decision_code=decision_code,
