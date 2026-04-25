@@ -259,11 +259,23 @@ class AppFactoryTrustAttestationRouteTests(
         public_verify_payload = public_verify_resp.json()
         self.assertEqual(public_verify_payload["dispatchType"], "final")
         self.assertEqual(public_verify_payload["traceId"], f"trace-final-{case_id}")
+        self.assertEqual(
+            public_verify_payload["verificationVersion"],
+            "trust-public-verification-v1",
+        )
+        self.assertIn(
+            f"case:{case_id}:dispatch:final:trace:trace-final-{case_id}",
+            public_verify_payload["verificationRequest"]["requestKey"],
+        )
+        self.assertEqual(public_verify_payload["verificationReadiness"]["status"], "ready")
+        self.assertTrue(public_verify_payload["verificationReadiness"]["externalizable"])
         self.assertEqual(public_verify_payload["visibilityContract"]["layer"], "public")
         self.assertEqual(
             public_verify_payload["visibilityContract"]["payloadLayer"],
             "commitment_hashes_only",
         )
+        self.assertTrue(public_verify_payload["visibilityContract"]["chatProxyRequired"])
+        self.assertFalse(public_verify_payload["visibilityContract"]["directAiServiceAccessAllowed"])
         verify_payload = public_verify_payload["verifyPayload"]
         self.assertEqual(
             verify_payload["caseCommitment"]["commitmentHash"],

@@ -203,11 +203,23 @@ class TrustReadRoutesTests(unittest.TestCase):
         self.assertIsNot(item_payload["item"], item)
         self.assertEqual(public_payload["verifyPayload"], verify_payload)
         self.assertIsNot(public_payload["verifyPayload"], verify_payload)
+        self.assertEqual(public_payload["verificationVersion"], "trust-public-verification-v1")
+        self.assertEqual(
+            public_payload["verificationRequest"]["requestKey"],
+            "case:1001:dispatch:final:trace:trace-final-1001:registry:trust-registry-v1:verification:trust-public-verification-v1",
+        )
+        self.assertEqual(
+            public_payload["verificationReadiness"]["status"],
+            "artifact_manifest_pending",
+        )
+        self.assertFalse(public_payload["verificationReadiness"]["externalizable"])
         self.assertEqual(public_payload["visibilityContract"]["layer"], "public")
         self.assertEqual(
             public_payload["visibilityContract"]["payloadLayer"],
             "commitment_hashes_only",
         )
+        self.assertTrue(public_payload["visibilityContract"]["chatProxyRequired"])
+        self.assertFalse(public_payload["visibilityContract"]["directAiServiceAccessAllowed"])
 
     def test_resolve_trust_report_context_for_case_should_choose_final_on_auto(self) -> None:
         final_receipt = _DummyReceipt(

@@ -8,7 +8,12 @@ from app.domain.trust import TRUST_REGISTRY_VERSION, TrustRegistrySnapshot
 
 from .artifact_pack import write_trust_audit_artifact_pack
 from .trust_phasea_bundle import build_trust_phasea_bundle
-from .trust_public_verify_contract import build_trust_public_verify_visibility_contract
+from .trust_public_verify_contract import (
+    TRUST_PUBLIC_VERIFICATION_VERSION,
+    build_trust_public_verify_readiness,
+    build_trust_public_verify_request,
+    build_trust_public_verify_visibility_contract,
+)
 
 TRUST_READ_DISPATCH_TYPES: frozenset[str] = frozenset({"auto", "phase", "final"})
 
@@ -325,6 +330,8 @@ def build_trust_registry_snapshot_from_bundle(
             kernel_version=kernel_version,
             audit_anchor=audit_anchor,
         ),
+        registry_version=registry_version,
+        source="trust_registry",
     )
     return TrustRegistrySnapshot(
         case_id=int(case_id),
@@ -464,14 +471,29 @@ def build_trust_public_verify_route_payload(
     dispatch_type: str,
     trace_id: str,
     verify_payload: dict[str, Any] | Any,
+    registry_version: str = TRUST_REGISTRY_VERSION,
+    source: str | None = None,
 ) -> dict[str, Any]:
     verify_payload_dict = (
         dict(verify_payload) if isinstance(verify_payload, dict) else verify_payload
     )
+    normalized_dispatch_type = str(dispatch_type or "").strip().lower()
+    normalized_trace_id = str(trace_id or "").strip()
     return {
         "caseId": int(case_id),
-        "dispatchType": str(dispatch_type),
-        "traceId": str(trace_id),
+        "dispatchType": normalized_dispatch_type,
+        "traceId": normalized_trace_id,
+        "verificationVersion": TRUST_PUBLIC_VERIFICATION_VERSION,
+        "verificationRequest": build_trust_public_verify_request(
+            case_id=int(case_id),
+            dispatch_type=normalized_dispatch_type,
+            trace_id=normalized_trace_id,
+            registry_version=registry_version,
+        ),
+        "verificationReadiness": build_trust_public_verify_readiness(
+            verify_payload=verify_payload_dict if isinstance(verify_payload_dict, dict) else None,
+            source=source,
+        ),
         "verifyPayload": verify_payload_dict,
         "visibilityContract": build_trust_public_verify_visibility_contract(),
     }
@@ -608,6 +630,8 @@ def build_trust_public_verify_bundle_payload(
             kernel_version=kernel_version,
             audit_anchor=audit_anchor,
         ),
+        registry_version=str(context.get("registryVersion") or TRUST_REGISTRY_VERSION),
+        source=str(context.get("source") or ""),
     )
     return validate_trust_route_contract_payload(
         payload=payload,

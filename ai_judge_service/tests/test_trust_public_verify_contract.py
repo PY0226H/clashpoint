@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.applications.trust_public_verify_contract import (
+    TRUST_PUBLIC_VERIFICATION_VERSION,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_COMPONENT_HASH_KEYS,
     TRUST_PUBLIC_VERIFY_AUDIT_ANCHOR_KEYS,
@@ -10,9 +11,13 @@ from app.applications.trust_public_verify_contract import (
     TRUST_PUBLIC_VERIFY_CHALLENGE_REVIEW_KEYS,
     TRUST_PUBLIC_VERIFY_KERNEL_VERSION_KEYS,
     TRUST_PUBLIC_VERIFY_PAYLOAD_KEYS,
+    TRUST_PUBLIC_VERIFY_READINESS_KEYS,
+    TRUST_PUBLIC_VERIFY_REQUEST_KEYS,
     TRUST_PUBLIC_VERIFY_TOP_LEVEL_KEYS,
     TRUST_PUBLIC_VERIFY_VERDICT_ATTESTATION_KEYS,
     TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS,
+    build_trust_public_verify_readiness,
+    build_trust_public_verify_request,
     build_trust_public_verify_visibility_contract,
     validate_trust_public_verify_contract,
 )
@@ -24,6 +29,20 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
             "caseId": 9101,
             "dispatchType": "final",
             "traceId": "trace-final-9101",
+            "verificationVersion": TRUST_PUBLIC_VERIFICATION_VERSION,
+            "verificationRequest": build_trust_public_verify_request(
+                case_id=9101,
+                dispatch_type="final",
+                trace_id="trace-final-9101",
+                registry_version="trust-registry-v1",
+            ),
+            "verificationReadiness": {
+                "ready": True,
+                "status": "ready",
+                "errorCode": None,
+                "blockers": [],
+                "externalizable": True,
+            },
             "visibilityContract": build_trust_public_verify_visibility_contract(),
             "verifyPayload": {
                 "caseCommitment": {
@@ -118,6 +137,14 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
         self.assertEqual(
             set(payload["visibilityContract"].keys()),
             set(TRUST_PUBLIC_VERIFY_VISIBILITY_CONTRACT_KEYS),
+        )
+        self.assertEqual(
+            set(payload["verificationRequest"].keys()),
+            set(TRUST_PUBLIC_VERIFY_REQUEST_KEYS),
+        )
+        self.assertEqual(
+            set(payload["verificationReadiness"].keys()),
+            set(TRUST_PUBLIC_VERIFY_READINESS_KEYS),
         )
         validate_trust_public_verify_contract(payload)
 
@@ -218,6 +245,33 @@ class TrustPublicVerifyContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             validate_trust_public_verify_contract(payload)
         self.assertIn("trust_public_verify_visibility_contract_layer_invalid", str(ctx.exception))
+
+    def test_build_trust_public_verify_readiness_should_explain_externalization_blockers(
+        self,
+    ) -> None:
+        payload = self._build_payload()["verifyPayload"]
+        payload["auditAnchor"]["anchorStatus"] = "artifact_pending"
+        payload["auditAnchor"]["anchorHash"] = None
+        payload["auditAnchor"]["componentHashes"].pop("artifactManifestHash")
+        payload["challengeReview"]["challengeState"] = "under_internal_review"
+
+        readiness = build_trust_public_verify_readiness(
+            verify_payload=payload,
+            source="derived_from_receipt",
+        )
+
+        self.assertFalse(readiness["ready"])
+        self.assertEqual(readiness["status"], "trust_registry_missing")
+        self.assertEqual(readiness["errorCode"], "trust_registry_missing")
+        self.assertEqual(
+            readiness["blockers"],
+            [
+                "trust_registry_missing",
+                "artifact_manifest_pending",
+                "challenge_under_review",
+            ],
+        )
+        self.assertFalse(readiness["externalizable"])
 
 
 if __name__ == "__main__":
