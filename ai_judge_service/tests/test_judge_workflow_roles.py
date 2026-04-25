@@ -96,6 +96,26 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
         dossier_message_ids = set(dossier["transcriptSnapshot"]["messageIds"])
         for ref in evidence_bundle["messageRefs"]:
             self.assertIn(ref["messageId"], dossier_message_ids)
+        panel_bundle = payload[JUDGE_WORKFLOW_ROOT_KEY]["panelBundle"]
+        self.assertEqual(set(panel_bundle["judges"].keys()), {"logic", "evidence", "rebuttal"})
+        self.assertEqual(panel_bundle["topWinner"], "pro")
+        self.assertFalse(panel_bundle["agentMeta"]["officialVerdictAuthority"])
+        for role, decision in panel_bundle["judges"].items():
+            self.assertEqual(decision["role"], role)
+            self.assertIn("sideScores", decision)
+            self.assertIn("acceptedClaims", decision)
+            self.assertFalse(decision["officialVerdictAuthority"])
+        fairness_gate = payload[JUDGE_WORKFLOW_ROOT_KEY]["fairnessGate"]
+        self.assertEqual(fairness_gate["decision"], "pass_through")
+        self.assertTrue(fairness_gate["autoJudgeAllowed"])
+        self.assertTrue(fairness_gate["fairnessReport"]["doesNotDecideWinner"])
+        verdict = payload[JUDGE_WORKFLOW_ROOT_KEY]["verdict"]
+        self.assertEqual(
+            verdict["decisionPath"],
+            ["judge_panel", "fairness_sentinel", "chief_arbiter"],
+        )
+        self.assertEqual(verdict["gateDecision"], "pass_through")
+        self.assertTrue(verdict["agentMeta"]["officialVerdictAuthority"])
         validate_judge_app_domain_payload(payload)
 
     def test_build_final_judge_workflow_payload_should_pass_contract(self) -> None:
@@ -122,6 +142,11 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
                     "topWinner": "pro",
                     "panelDisagreementRatio": 0.12,
                     "judges": {"judgeA": {"winner": "pro"}},
+                    "semanticDecisions": {
+                        "logic": {"winner": "pro"},
+                        "evidence": {"winner": "pro"},
+                        "rebuttal": {"winner": "draw"},
+                    },
                 },
                 "arbitration": {
                     "gateDecision": "pass_through",
@@ -132,7 +157,12 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
                     ],
                 },
             },
-            "fairnessSummary": {"reviewReasons": []},
+            "fairnessSummary": {
+                "reviewReasons": [],
+                "autoJudgeAllowed": True,
+                "panelHighDisagreement": False,
+                "identityLeakage": {"detected": False},
+            },
             "auditAlerts": [{"alertId": "alert-1"}],
             "phaseRollupSummary": [
                 {"phaseNo": 1, "messageCount": 20},
@@ -169,6 +199,16 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
         self.assertEqual(
             payload[JUDGE_WORKFLOW_ROOT_KEY]["panelBundle"]["topWinner"],
             "pro",
+        )
+        self.assertEqual(
+            set(payload[JUDGE_WORKFLOW_ROOT_KEY]["panelBundle"]["semanticDecisions"].keys()),
+            {"logic", "evidence", "rebuttal"},
+        )
+        self.assertTrue(payload[JUDGE_WORKFLOW_ROOT_KEY]["fairnessGate"]["autoJudgeAllowed"])
+        self.assertTrue(
+            payload[JUDGE_WORKFLOW_ROOT_KEY]["verdict"]["agentMeta"][
+                "officialVerdictAuthority"
+            ]
         )
         validate_judge_app_domain_payload(payload)
 
@@ -279,6 +319,7 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
         )
         fairness_gate = payload[JUDGE_WORKFLOW_ROOT_KEY]["fairnessGate"]
         self.assertEqual(fairness_gate["decision"], "blocked_to_draw")
+        self.assertFalse(fairness_gate["autoJudgeAllowed"])
         self.assertEqual(
             fairness_gate["reasons"],
             ["judge_panel_high_disagreement", "fairness_gate_review_required"],

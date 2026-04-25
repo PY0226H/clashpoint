@@ -41,13 +41,13 @@ _SENSITIVE_DOSSIER_KEYS = {
 }
 
 
-def _safe_int(value: Any) -> int | None:
+def _safe_int(value: Any, *, default: int | None = None) -> int | None:
     if value is None or isinstance(value, bool):
-        return None
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
-        return None
+        return default
 
 
 def _safe_str(value: Any) -> str | None:
@@ -680,6 +680,27 @@ def _normalize_winner(value: Any) -> str | None:
     return None
 
 
+def _safe_float(value: Any, *, default: float = 50.0) -> float:
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_score(value: float) -> float:
+    return max(0.0, min(100.0, float(value)))
+
+
+def _resolve_score_winner(pro_score: float, con_score: float, *, margin: float = 0.8) -> str:
+    if pro_score - con_score >= margin:
+        return "pro"
+    if con_score - pro_score >= margin:
+        return "con"
+    return "draw"
+
+
 def _derive_winner_from_weighted_score(payload: dict[str, Any]) -> str | None:
     weighted = payload.get("agent3WeightedScore")
     if not isinstance(weighted, dict):
@@ -694,6 +715,102 @@ def _derive_winner_from_weighted_score(payload: dict[str, Any]) -> str | None:
     if con_score > pro_score:
         return "con"
     return "draw"
+
+
+def _weighted_scores(payload: dict[str, Any]) -> tuple[float, float]:
+    weighted = payload.get("agent3WeightedScore")
+    if not isinstance(weighted, dict):
+        return 50.0, 50.0
+    return (
+        _clamp_score(_safe_float(weighted.get("pro"))),
+        _clamp_score(_safe_float(weighted.get("con"))),
+    )
+
+
+def _dimension_scores(payload: dict[str, Any], *, dimension: str) -> tuple[float, float]:
+    agent1 = payload.get("agent1Score") if isinstance(payload.get("agent1Score"), dict) else {}
+    dimensions = agent1.get("dimensions") if isinstance(agent1.get("dimensions"), dict) else {}
+    pro = dimensions.get("pro") if isinstance(dimensions.get("pro"), dict) else {}
+    con = dimensions.get("con") if isinstance(dimensions.get("con"), dict) else {}
+    fallback_pro, fallback_con = _weighted_scores(payload)
+    return (
+        _clamp_score(_safe_float(pro.get(dimension), default=fallback_pro)),
+        _clamp_score(_safe_float(con.get(dimension), default=fallback_con)),
+    )
+
+
+def _agent2_rebuttal_scores(payload: dict[str, Any]) -> tuple[float, float]:
+    agent2 = payload.get("agent2Score") if isinstance(payload.get("agent2Score"), dict) else {}
+    hit_items = agent2.get("hitItems") if isinstance(agent2.get("hitItems"), list) else []
+    miss_items = agent2.get("missItems") if isinstance(agent2.get("missItems"), list) else []
+    side_score = {"pro": 50.0, "con": 50.0}
+    for raw in hit_items:
+        side = str(raw or "").split(":", 1)[0].strip().lower()
+        if side in side_score:
+            side_score[side] += 8.0
+    for raw in miss_items:
+        side = str(raw or "").split(":", 1)[0].strip().lower()
+        if side in side_score:
+            side_score[side] -= 6.0
+    fallback_pro, fallback_con = _weighted_scores(payload)
+    if not hit_items and not miss_items:
+        return fallback_pro, fallback_con
+    return _clamp_score(side_score["pro"]), _clamp_score(side_score["con"])
+
+
+def _panel_vote_summary(votes: list[str]) -> dict[str, Any]:
+    normalized = [vote for vote in votes if vote in {"pro", "con", "draw"}]
+    counts = {side: normalized.count(side) for side in ("pro", "con", "draw")}
+    if not normalized:
+        return {"topWinner": None, "disagreementRatio": 0.0, "voteCounts": counts}
+    top_winner = max(counts, key=lambda key: counts[key])
+    if list(counts.values()).count(counts[top_winner]) > 1:
+        top_winner = "draw"
+    disagreement = 1.0 - (max(counts.values()) / float(len(normalized)))
+    return {
+        "topWinner": top_winner,
+        "disagreementRatio": round(max(0.0, min(1.0, disagreement)), 4),
+        "voteCounts": counts,
+    }
+
+
+def _claim_ids_by_side(claim_graph: dict[str, Any], *, side: str) -> list[str]:
+    claims = claim_graph.get("claims")
+    if not isinstance(claims, list):
+        claims = claim_graph.get("items") if isinstance(claim_graph.get("items"), list) else []
+    out: list[str] = []
+    for row in claims:
+        if not isinstance(row, dict):
+            continue
+        row_side = str(row.get("side") or "").strip().lower()
+        claim_id = str(row.get("claimId") or row.get("id") or "").strip()
+        if claim_id and (not row_side or row_side == side):
+            out.append(claim_id)
+    return out[:8]
+
+
+def _evidence_ref_ids(evidence_ledger: dict[str, Any], *, side: str | None = None) -> list[str]:
+    entries = evidence_ledger.get("entries")
+    if not isinstance(entries, list):
+        return []
+    out: list[str] = []
+    for row in entries:
+        if not isinstance(row, dict):
+            continue
+        row_side = str(row.get("side") or "").strip().lower()
+        if side is not None and row_side not in {"", side}:
+            continue
+        evidence_id = str(row.get("evidenceId") or row.get("id") or "").strip()
+        if evidence_id:
+            out.append(evidence_id)
+    return out[:8]
+
+
+def _pivotal_turn_refs(claim_graph: dict[str, Any]) -> list[Any]:
+    pivotal = claim_graph.get("pivotalTurns")
+    if not isinstance(pivotal, list):
+        pivotal = claim_graph.get("pivotal_turns") if isinstance(claim_graph.get("pivotal_turns"), list) else []
+    return list(pivotal[:8])
 
 
 def _phase_claim_graph(payload: dict[str, Any]) -> dict[str, Any]:
@@ -744,108 +861,409 @@ def _phase_evidence_bundle(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _phase_panel_bundle(payload: dict[str, Any]) -> dict[str, Any]:
-    weighted = payload.get("agent3WeightedScore")
-    pro_score = weighted.get("pro") if isinstance(weighted, dict) else None
-    con_score = weighted.get("con") if isinstance(weighted, dict) else None
-    winner = _derive_winner_from_weighted_score(payload)
-    judges = {
-        "phasePanel": {
+@dataclass(frozen=True)
+class JudgePanelRole:
+    """输出独立裁判团意见；这里只产生 panel vote，不直接锁定官方 winner。"""
+
+    def _judge_decision(
+        self,
+        *,
+        role: str,
+        source: str,
+        pro_score: float,
+        con_score: float,
+        claim_graph: dict[str, Any],
+        evidence_ledger: dict[str, Any],
+    ) -> dict[str, Any]:
+        winner = _resolve_score_winner(pro_score, con_score)
+        accepted_side = winner if winner in {"pro", "con"} else None
+        rejected_side = "con" if accepted_side == "pro" else ("pro" if accepted_side == "con" else None)
+        return {
+            "judgeId": f"{role}_judge",
+            "role": role,
+            "source": source,
             "winner": winner,
-            "proScore": pro_score,
-            "conScore": con_score,
-            "reason": "phase_weighted_score",
+            "sideScores": {
+                "pro": round(_clamp_score(pro_score), 2),
+                "con": round(_clamp_score(con_score), 2),
+            },
+            "acceptedClaims": (
+                _claim_ids_by_side(claim_graph, side=accepted_side)
+                if accepted_side is not None
+                else []
+            ),
+            "rejectedClaims": (
+                _claim_ids_by_side(claim_graph, side=rejected_side)
+                if rejected_side is not None
+                else []
+            ),
+            "pivotalTurns": _pivotal_turn_refs(claim_graph),
+            "evidenceRefs": _evidence_ref_ids(evidence_ledger, side=accepted_side),
+            "judgeNotes": [
+                f"{role} lane compares pro={round(_clamp_score(pro_score), 2)} "
+                f"against con={round(_clamp_score(con_score), 2)}."
+            ],
+            "decisionAuthority": "panel_vote_only",
+            "officialVerdictAuthority": False,
         }
-    }
-    return {
-        "topWinner": winner,
-        "disagreementRatio": 0.0,
-        "judges": judges,
-    }
 
+    def build_phase_panel_bundle(
+        self,
+        *,
+        report_payload: dict[str, Any],
+        claim_graph: dict[str, Any],
+        evidence_ledger: dict[str, Any],
+    ) -> dict[str, Any]:
+        logic_pro, logic_con = _dimension_scores(report_payload, dimension="logic")
+        evidence_pro, evidence_con = _dimension_scores(report_payload, dimension="evidence")
+        rebuttal_pro, rebuttal_con = _agent2_rebuttal_scores(report_payload)
+        judges = {
+            "logic": self._judge_decision(
+                role="logic",
+                source="agent1Dimensions.logic",
+                pro_score=logic_pro,
+                con_score=logic_con,
+                claim_graph=claim_graph,
+                evidence_ledger=evidence_ledger,
+            ),
+            "evidence": self._judge_decision(
+                role="evidence",
+                source="agent1Dimensions.evidence",
+                pro_score=evidence_pro,
+                con_score=evidence_con,
+                claim_graph=claim_graph,
+                evidence_ledger=evidence_ledger,
+            ),
+            "rebuttal": self._judge_decision(
+                role="rebuttal",
+                source="agent2Score.hit_miss_path",
+                pro_score=rebuttal_pro,
+                con_score=rebuttal_con,
+                claim_graph=claim_graph,
+                evidence_ledger=evidence_ledger,
+            ),
+        }
+        summary = _panel_vote_summary(
+            [str(judge.get("winner") or "").strip().lower() for judge in judges.values()]
+        )
+        return {
+            "topWinner": summary["topWinner"],
+            "disagreementRatio": summary["disagreementRatio"],
+            "judges": judges,
+            "semanticDecisions": judges,
+            "panelDisagreement": {
+                "ratio": summary["disagreementRatio"],
+                "voteCounts": summary["voteCounts"],
+                "high": bool(summary["disagreementRatio"] >= 0.34),
+            },
+            "agentMeta": {
+                "ownerAgent": "judge_panel",
+                "decisionAuthority": "panel_vote_only",
+                "officialVerdictAuthority": False,
+            },
+        }
 
-def _extract_final_panel_bundle(payload: dict[str, Any]) -> dict[str, Any]:
-    verdict_ledger = payload.get("verdictLedger")
-    if not isinstance(verdict_ledger, dict):
-        return {
-            "topWinner": _normalize_winner(payload.get("winner")),
-            "disagreementRatio": 0.0,
-            "judges": {},
-        }
-    panel_decisions = verdict_ledger.get("panelDecisions")
-    if not isinstance(panel_decisions, dict):
-        return {
-            "topWinner": _normalize_winner(payload.get("winner")),
-            "disagreementRatio": 0.0,
-            "judges": {},
-        }
-    return {
-        "topWinner": _normalize_winner(
-            panel_decisions.get("topWinner") or payload.get("winner")
-        ),
-        "disagreementRatio": float(panel_decisions.get("panelDisagreementRatio") or 0.0),
-        "judges": (
+    def normalize_final_panel_bundle(self, payload: dict[str, Any]) -> dict[str, Any]:
+        verdict_ledger = payload.get("verdictLedger")
+        if not isinstance(verdict_ledger, dict):
+            return {
+                "topWinner": _normalize_winner(payload.get("winner")),
+                "disagreementRatio": 0.0,
+                "judges": {},
+                "semanticDecisions": {},
+            }
+        panel_decisions = verdict_ledger.get("panelDecisions")
+        if not isinstance(panel_decisions, dict):
+            return {
+                "topWinner": _normalize_winner(payload.get("winner")),
+                "disagreementRatio": 0.0,
+                "judges": {},
+                "semanticDecisions": {},
+            }
+        judges = (
             panel_decisions.get("judges")
             if isinstance(panel_decisions.get("judges"), dict)
             else {}
-        ),
-    }
+        )
+        semantic_decisions = (
+            panel_decisions.get("semanticDecisions")
+            if isinstance(panel_decisions.get("semanticDecisions"), dict)
+            else {}
+        )
+        return {
+            "topWinner": _normalize_winner(
+                panel_decisions.get("topWinner") or payload.get("winner")
+            ),
+            "disagreementRatio": float(panel_decisions.get("panelDisagreementRatio") or 0.0),
+            "judges": judges,
+            "semanticDecisions": semantic_decisions,
+            "panelDisagreement": (
+                panel_decisions.get("panelDisagreement")
+                if isinstance(panel_decisions.get("panelDisagreement"), dict)
+                else {}
+            ),
+        }
 
 
-def _extract_final_fairness_gate(payload: dict[str, Any]) -> dict[str, Any]:
-    verdict_ledger = payload.get("verdictLedger")
-    arbitration = (
-        verdict_ledger.get("arbitration")
-        if isinstance(verdict_ledger, dict) and isinstance(verdict_ledger.get("arbitration"), dict)
-        else {}
-    )
-    gate_decision = str(arbitration.get("gateDecision") or "").strip().lower()
-    review_required = bool(payload.get("reviewRequired"))
-    if gate_decision not in {"pass_through", "blocked_to_draw"}:
-        gate_decision = "blocked_to_draw" if review_required else "pass_through"
-
-    audit_alert_ids = [
-        str(item.get("alertId"))
-        for item in (payload.get("auditAlerts") if isinstance(payload.get("auditAlerts"), list) else [])
-        if isinstance(item, dict) and str(item.get("alertId") or "").strip()
-    ]
-    fairness_summary = payload.get("fairnessSummary")
-    reasons = (
-        fairness_summary.get("reviewReasons")
-        if isinstance(fairness_summary, dict)
-        and isinstance(fairness_summary.get("reviewReasons"), list)
-        else []
-    )
-    if not reasons and review_required:
-        reasons = (
-            payload.get("errorCodes")
-            if isinstance(payload.get("errorCodes"), list)
+@dataclass(frozen=True)
+class FairnessSentinelRole:
+    def build_gate(
+        self,
+        *,
+        panel_bundle: dict[str, Any],
+        evidence_ledger: dict[str, Any],
+        case_dossier: dict[str, Any],
+        report_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        fairness_summary = (
+            report_payload.get("fairnessSummary")
+            if isinstance(report_payload.get("fairnessSummary"), dict)
+            else {}
+        )
+        existing_reasons = (
+            fairness_summary.get("reviewReasons")
+            if isinstance(fairness_summary.get("reviewReasons"), list)
             else []
         )
-    return {
-        "decision": gate_decision,
-        "reviewRequired": review_required,
-        "reasons": [str(item) for item in reasons if str(item or "").strip()],
-        "auditAlertIds": audit_alert_ids,
-    }
+        reasons = [str(item).strip() for item in existing_reasons if str(item).strip()]
+        error_codes = report_payload.get("errorCodes") if isinstance(report_payload.get("errorCodes"), list) else []
+        reasons.extend(str(code).strip() for code in error_codes if str(code).strip())
+
+        disagreement_ratio = _safe_float(panel_bundle.get("disagreementRatio"), default=0.0)
+        panel_disagreement = bool(
+            fairness_summary.get("panelHighDisagreement")
+            or disagreement_ratio >= 0.34
+            or "judge_panel_high_disagreement" in reasons
+        )
+        if panel_disagreement and "judge_panel_high_disagreement" not in reasons:
+            reasons.append("judge_panel_high_disagreement")
+
+        label_swap_instability = bool(
+            fairness_summary.get("swapInstability")
+            or "label_swap_instability" in reasons
+            or (
+                _normalize_winner(report_payload.get("winnerFirst")) in {"pro", "con"}
+                and _normalize_winner(report_payload.get("winnerSecond")) in {"pro", "con"}
+                and _normalize_winner(report_payload.get("winnerFirst"))
+                != _normalize_winner(report_payload.get("winnerSecond"))
+            )
+        )
+        if label_swap_instability and "label_swap_instability" not in reasons:
+            reasons.append("label_swap_instability")
+
+        style_shift_instability = bool(
+            fairness_summary.get("styleShiftInstability")
+            or "style_shift_instability" in reasons
+        )
+        if style_shift_instability and "style_shift_instability" not in reasons:
+            reasons.append("style_shift_instability")
+
+        sufficiency = (
+            evidence_ledger.get("evidenceSufficiency")
+            if isinstance(evidence_ledger.get("evidenceSufficiency"), dict)
+            else {}
+        )
+        evidence_passed = bool(sufficiency.get("passed", bool(evidence_ledger.get("entries"))))
+        if not evidence_passed and "evidence_support_too_low" not in reasons:
+            reasons.append("evidence_support_too_low")
+
+        redaction_summary = (
+            case_dossier.get("redactionSummary")
+            if isinstance(case_dossier.get("redactionSummary"), dict)
+            else {}
+        )
+        identity_leakage_detected = bool(
+            _safe_int(redaction_summary.get("identityFieldsRemoved"), default=0) > 0
+            or _safe_int(redaction_summary.get("semanticRedactionCount"), default=0) > 0
+        )
+        if identity_leakage_detected and "identity_leakage_detected" not in reasons:
+            reasons.append("identity_leakage_detected")
+
+        review_required = bool(report_payload.get("reviewRequired") or reasons)
+        unique_reasons: list[str] = []
+        for reason in reasons:
+            if reason and reason not in unique_reasons:
+                unique_reasons.append(reason)
+        if review_required and not unique_reasons:
+            unique_reasons.append("fairness_gate_review_required")
+        decision = "blocked_to_draw" if review_required else "pass_through"
+        audit_alert_ids = [
+            str(item.get("alertId"))
+            for item in (report_payload.get("auditAlerts") if isinstance(report_payload.get("auditAlerts"), list) else [])
+            if isinstance(item, dict) and str(item.get("alertId") or "").strip()
+        ]
+        return {
+            "decision": decision,
+            "reviewRequired": review_required,
+            "reasons": unique_reasons,
+            "auditAlertIds": audit_alert_ids,
+            "autoJudgeAllowed": not review_required,
+            "panelDisagreement": {
+                "detected": panel_disagreement,
+                "ratio": round(max(0.0, min(1.0, disagreement_ratio)), 4),
+                "threshold": 0.34,
+            },
+            "labelSwapInstability": label_swap_instability,
+            "styleShiftInstability": style_shift_instability,
+            "evidenceSufficiency": {
+                "passed": evidence_passed,
+                "source": "evidence_ledger",
+                "details": sufficiency,
+            },
+            "identityLeakage": {
+                "detected": identity_leakage_detected,
+                "source": "case_dossier_redaction",
+                "redactionSummary": redaction_summary,
+            },
+            "fairnessReport": {
+                "ownerAgent": "fairness_sentinel",
+                "autoJudgeAllowed": not review_required,
+                "blockedSignals": unique_reasons,
+                "doesNotDecideWinner": True,
+            },
+        }
+
+    def extract_final_gate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        verdict_ledger = payload.get("verdictLedger")
+        arbitration = (
+            verdict_ledger.get("arbitration")
+            if isinstance(verdict_ledger, dict) and isinstance(verdict_ledger.get("arbitration"), dict)
+            else {}
+        )
+        gate_decision = str(arbitration.get("gateDecision") or "").strip().lower()
+        review_required = bool(payload.get("reviewRequired"))
+        if gate_decision not in {"pass_through", "blocked_to_draw"}:
+            gate_decision = "blocked_to_draw" if review_required else "pass_through"
+
+        audit_alert_ids = [
+            str(item.get("alertId"))
+            for item in (payload.get("auditAlerts") if isinstance(payload.get("auditAlerts"), list) else [])
+            if isinstance(item, dict) and str(item.get("alertId") or "").strip()
+        ]
+        fairness_summary = payload.get("fairnessSummary")
+        reasons = (
+            fairness_summary.get("reviewReasons")
+            if isinstance(fairness_summary, dict)
+            and isinstance(fairness_summary.get("reviewReasons"), list)
+            else []
+        )
+        if not reasons and review_required:
+            reasons = (
+                payload.get("errorCodes")
+                if isinstance(payload.get("errorCodes"), list)
+                else []
+            )
+        fairness_payload = fairness_summary if isinstance(fairness_summary, dict) else {}
+        return {
+            "decision": gate_decision,
+            "reviewRequired": review_required,
+            "reasons": [str(item) for item in reasons if str(item or "").strip()],
+            "auditAlertIds": audit_alert_ids,
+            "autoJudgeAllowed": not review_required,
+            "panelDisagreement": {
+                "detected": bool(fairness_payload.get("panelHighDisagreement")),
+                "ratio": _safe_float(fairness_payload.get("panelDisagreementRatio"), default=0.0),
+                "threshold": _safe_float(
+                    fairness_payload.get("panelDisagreementRatioMax"),
+                    default=0.34,
+                ),
+            },
+            "labelSwapInstability": bool(fairness_payload.get("swapInstability")),
+            "styleShiftInstability": bool(fairness_payload.get("styleShiftInstability")),
+            "evidenceSufficiency": (
+                fairness_payload.get("evidenceSufficiency")
+                if isinstance(fairness_payload.get("evidenceSufficiency"), dict)
+                else {}
+            ),
+            "identityLeakage": (
+                fairness_payload.get("identityLeakage")
+                if isinstance(fairness_payload.get("identityLeakage"), dict)
+                else {"detected": False, "source": "not_reported"}
+            ),
+            "fairnessReport": (
+                fairness_payload.get("fairnessReport")
+                if isinstance(fairness_payload.get("fairnessReport"), dict)
+                else {
+                    "ownerAgent": "fairness_sentinel",
+                    "autoJudgeAllowed": not review_required,
+                    "doesNotDecideWinner": True,
+                }
+            ),
+        }
 
 
-def _extract_final_verdict(payload: dict[str, Any]) -> dict[str, Any]:
-    verdict_ledger = payload.get("verdictLedger")
-    arbitration = (
-        verdict_ledger.get("arbitration")
-        if isinstance(verdict_ledger, dict) and isinstance(verdict_ledger.get("arbitration"), dict)
-        else {}
-    )
-    decision_path = arbitration.get("decisionPath")
-    if not isinstance(decision_path, list) or not decision_path:
-        decision_path = ["judge_panel", "fairness_sentinel", "chief_arbiter"]
-    return {
-        "winner": _normalize_winner(payload.get("winner")),
-        "needsDrawVote": bool(payload.get("needsDrawVote")),
-        "reviewRequired": bool(payload.get("reviewRequired")),
-        "decisionPath": [str(item) for item in decision_path if str(item or "").strip()],
-    }
+@dataclass(frozen=True)
+class ChiefArbiterRole:
+    def build_verdict(
+        self,
+        *,
+        panel_bundle: dict[str, Any],
+        fairness_gate: dict[str, Any],
+        report_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        winner_before_gate = (
+            _normalize_winner(report_payload.get("winner"))
+            or _normalize_winner(panel_bundle.get("topWinner"))
+        )
+        review_required = bool(fairness_gate.get("reviewRequired"))
+        winner_after = "draw" if review_required else winner_before_gate
+        needs_draw_vote = bool(report_payload.get("needsDrawVote")) or winner_after == "draw"
+        return {
+            "winner": winner_after,
+            "needsDrawVote": needs_draw_vote,
+            "reviewRequired": review_required,
+            "decisionPath": [
+                "judge_panel",
+                "fairness_sentinel",
+                "chief_arbiter",
+            ],
+            "gateDecision": fairness_gate.get("decision"),
+            "winnerBeforeFairnessGate": winner_before_gate,
+            "winnerAfterArbitration": winner_after,
+            "verdictLedgerLocked": bool(winner_after in {"pro", "con", "draw"}),
+            "inputSources": ["panelBundle", "fairnessGate", "evidenceBundle"],
+            "agentMeta": {
+                "ownerAgent": "chief_arbiter",
+                "decisionAuthority": "official_verdict",
+                "officialVerdictAuthority": True,
+            },
+        }
+
+    def extract_final_verdict(self, payload: dict[str, Any]) -> dict[str, Any]:
+        verdict_ledger = payload.get("verdictLedger")
+        arbitration = (
+            verdict_ledger.get("arbitration")
+            if isinstance(verdict_ledger, dict) and isinstance(verdict_ledger.get("arbitration"), dict)
+            else {}
+        )
+        decision_path = arbitration.get("decisionPath")
+        if not isinstance(decision_path, list) or not decision_path:
+            decision_path = ["judge_panel", "fairness_sentinel", "chief_arbiter"]
+        winner = _normalize_winner(payload.get("winner"))
+        review_required = bool(payload.get("reviewRequired"))
+        if review_required and winner != "draw":
+            winner = "draw"
+        return {
+            "winner": winner,
+            "needsDrawVote": bool(payload.get("needsDrawVote")) or winner == "draw",
+            "reviewRequired": review_required,
+            "decisionPath": [str(item) for item in decision_path if str(item or "").strip()],
+            "gateDecision": arbitration.get("gateDecision"),
+            "winnerBeforeFairnessGate": _normalize_winner(
+                arbitration.get("winnerBeforeFairnessGate")
+            ),
+            "winnerAfterArbitration": _normalize_winner(
+                arbitration.get("winnerAfterArbitration")
+            )
+            or winner,
+            "verdictLedgerLocked": isinstance(verdict_ledger, dict),
+            "inputSources": ["verdictLedger.panelDecisions", "fairnessSummary", "evidenceLedger"],
+            "agentMeta": {
+                "ownerAgent": "chief_arbiter",
+                "decisionAuthority": "official_verdict",
+                "officialVerdictAuthority": True,
+            },
+        }
 
 
 def _extract_final_message_count(payload: dict[str, Any]) -> int:
@@ -869,8 +1287,6 @@ def build_phase_judge_workflow_payload(
     report_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     payload = report_payload if isinstance(report_payload, dict) else {}
-    winner = _normalize_winner(payload.get("winner")) or _derive_winner_from_weighted_score(payload)
-    review_required = bool(payload.get("reviewRequired"))
     case_dossier_enrichment = build_case_dossier_enrichment(
         request=request,
         dispatch_type="phase",
@@ -894,6 +1310,22 @@ def build_phase_judge_workflow_payload(
         ),
     )
     evidence_ledger = evidence_builder.build_payload()
+    panel_bundle = JudgePanelRole().build_phase_panel_bundle(
+        report_payload=payload,
+        claim_graph=claim_graph,
+        evidence_ledger=evidence_ledger,
+    )
+    fairness_gate = FairnessSentinelRole().build_gate(
+        panel_bundle=panel_bundle,
+        evidence_ledger=evidence_ledger,
+        case_dossier=case_dossier_enrichment,
+        report_payload=payload,
+    )
+    verdict = ChiefArbiterRole().build_verdict(
+        panel_bundle=panel_bundle,
+        fairness_gate=fairness_gate,
+        report_payload=payload,
+    )
     state = build_judge_role_domain_state(
         case_id=request.case_id,
         dispatch_type="phase",
@@ -908,16 +1340,9 @@ def build_phase_judge_workflow_payload(
         topic_domain=request.topic_domain,
         claim_graph=claim_graph,
         evidence_bundle=evidence_ledger,
-        panel_bundle=_phase_panel_bundle(payload),
-        fairness_gate={
-            "decision": "blocked_to_draw" if review_required else "pass_through",
-            "reviewRequired": review_required,
-        },
-        verdict={
-            "winner": winner,
-            "needsDrawVote": bool(payload.get("needsDrawVote")),
-            "reviewRequired": review_required,
-        },
+        panel_bundle=panel_bundle,
+        fairness_gate=fairness_gate,
+        verdict=verdict,
         opinion={
             "debateSummary": payload.get("debateSummary"),
             "sideAnalysis": (
@@ -969,9 +1394,9 @@ def build_final_judge_workflow_payload(
             if isinstance(payload.get("evidenceLedger"), dict)
             else None
         ),
-        panel_bundle=_extract_final_panel_bundle(payload),
-        fairness_gate=_extract_final_fairness_gate(payload),
-        verdict=_extract_final_verdict(payload),
+        panel_bundle=JudgePanelRole().normalize_final_panel_bundle(payload),
+        fairness_gate=FairnessSentinelRole().extract_final_gate(payload),
+        verdict=ChiefArbiterRole().extract_final_verdict(payload),
         opinion={
             "debateSummary": payload.get("debateSummary"),
             "sideAnalysis": (

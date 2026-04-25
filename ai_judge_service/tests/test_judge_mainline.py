@@ -177,8 +177,16 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
         assert judges[key]["winner"] in {"pro", "con", "draw"}
         assert isinstance(judges[key]["proScore"], float)
         assert isinstance(judges[key]["conScore"], float)
+        assert isinstance(judges[key]["sideScores"], dict)
         assert isinstance(judges[key]["reason"], str) and judges[key]["reason"]
         assert isinstance(judges[key]["runtimeProfile"], dict)
+        assert judges[key]["officialVerdictAuthority"] is False
+    semantic = payload["verdictLedger"]["panelDecisions"]["semanticDecisions"]
+    assert set(semantic.keys()) == {"logic", "evidence", "rebuttal"}
+    for role in ("logic", "evidence", "rebuttal"):
+        assert semantic[role]["role"] == role
+        assert semantic[role]["winner"] in {"pro", "con", "draw"}
+        assert semantic[role]["officialVerdictAuthority"] is False
     runtime_profiles = payload["verdictLedger"]["panelDecisions"]["runtimeProfiles"]
     assert set(runtime_profiles.keys()) == {"judgeA", "judgeB", "judgeC"}
     assert runtime_profiles["judgeA"]["profileId"] == "panel-judgeA-weighted-v1"
@@ -193,8 +201,13 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert arbitration["chainVersion"] == "v1-panel-fairness-arbiter"
     assert arbitration["decisionPath"] == ["judge_panel", "fairness_sentinel", "chief_arbiter"]
     assert arbitration["fairnessGateApplied"] is True
+    assert arbitration["inputSources"] == ["panelDecisions", "fairnessSummary", "evidenceLedger"]
+    assert arbitration["verdictLedgerLocked"] is True
     assert arbitration["gateDecision"] == "pass_through"
     assert arbitration["winnerAfterArbitration"] == payload["winner"]
+    assert payload["fairnessSummary"]["autoJudgeAllowed"] is True
+    assert payload["fairnessSummary"]["fairnessReport"]["doesNotDecideWinner"] is True
+    assert payload["fairnessSummary"]["identityLeakage"]["detected"] is False
     invariants = payload["judgeTrace"]["panelArbiter"]["nonBypassInvariant"]
     assert invariants["reviewRequiredImpliesDraw"] is True
     assert invariants["arbitrationWinnerMatchesTopWinner"] is True

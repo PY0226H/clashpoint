@@ -154,16 +154,21 @@ def _build_panel_judge_item(
     pro_score: float,
     con_score: float,
     reason: str,
+    role: str | None = None,
     runtime_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     gap = _score_gap(pro_score, con_score)
-    return {
+    payload = {
         "judgeId": judge_id,
         "name": name,
         "source": source,
         "winner": winner,
         "proScore": round(_clamp_score(pro_score), 2),
         "conScore": round(_clamp_score(con_score), 2),
+        "sideScores": {
+            "pro": round(_clamp_score(pro_score), 2),
+            "con": round(_clamp_score(con_score), 2),
+        },
         "scoreGap": gap,
         "confidence": _score_confidence(score_gap=gap),
         "reason": str(reason or "").strip(),
@@ -172,7 +177,12 @@ def _build_panel_judge_item(
             if isinstance(runtime_profile, dict)
             else {}
         ),
+        "decisionAuthority": "panel_vote_only",
+        "officialVerdictAuthority": False,
     }
+    if role is not None:
+        payload["role"] = role
+    return payload
 
 
 def _normalize_panel_runtime_profiles(
@@ -582,6 +592,7 @@ def _build_verdict_ledger(
     con_score: float,
     dimension_scores: dict[str, Any],
     panel_judges: dict[str, Any],
+    semantic_panel_decisions: dict[str, Any],
     panel_runtime_profiles: dict[str, Any],
     winner_first: str,
     winner_second: str,
@@ -619,6 +630,11 @@ def _build_verdict_ledger(
             "agent1Dimensions": winner_third,
         },
         "judges": panel_decisions_payload,
+        "semanticDecisions": (
+            dict(semantic_panel_decisions)
+            if isinstance(semantic_panel_decisions, dict)
+            else {}
+        ),
         "runtimeProfiles": (
             dict(panel_runtime_profiles)
             if isinstance(panel_runtime_profiles, dict)
@@ -649,6 +665,8 @@ def _build_verdict_ledger(
         "gateLockedToDraw": bool(review_required and winner == "draw"),
         "rejudgeTriggered": rejudge_triggered,
         "needsDrawVote": needs_draw_vote,
+        "inputSources": ["panelDecisions", "fairnessSummary", "evidenceLedger"],
+        "verdictLedgerLocked": True,
         "fairnessErrorCodes": [
             str(code).strip()
             for code in fairness_error_codes
@@ -1106,6 +1124,7 @@ def _evaluate_fairness_gate(
         "phase": "phase2",
         "gateDecision": gate_decision,
         "reviewReasons": review_reason_codes,
+        "autoJudgeAllowed": not review_required,
         "swapInstability": swap_instability,
         "styleShiftInstability": style_shift_instability,
         "panelHighDisagreement": panel_high_disagreement,
@@ -1144,6 +1163,16 @@ def _evaluate_fairness_gate(
                 "maxConflictRatio": evidence_conflict_ratio_max,
                 "maxLowReliabilityRatio": evidence_max_low_reliability_ratio,
             },
+        },
+        "identityLeakage": {
+            "detected": False,
+            "source": "final_report_receipts_are_blinded",
+        },
+        "fairnessReport": {
+            "ownerAgent": "fairness_sentinel",
+            "autoJudgeAllowed": not review_required,
+            "blockedSignals": review_reason_codes,
+            "doesNotDecideWinner": True,
         },
         "reviewRequired": review_required,
     }
@@ -1832,6 +1861,12 @@ def build_final_report_payload(
     second_con = 50.0
     pro_dimension_composite = 50.0
     con_dimension_composite = 50.0
+    logic_pro_score = 50.0
+    logic_con_score = 50.0
+    evidence_pro_score = 50.0
+    evidence_con_score = 50.0
+    rebuttal_pro_score = 50.0
+    rebuttal_con_score = 50.0
 
     if phase_rollup_summary:
         pro_score = round(sum(pro_agent3_scores) / float(len(pro_agent3_scores)), 2)
@@ -1848,20 +1883,26 @@ def build_final_report_payload(
                 len(rows)
             )
 
+        logic_pro_score = _clamp_score(_avg_dim(pro_dimensions_rows, "logic"))
+        logic_con_score = _clamp_score(_avg_dim(con_dimensions_rows, "logic"))
+        evidence_pro_score = _clamp_score(_avg_dim(pro_dimensions_rows, "evidence"))
+        evidence_con_score = _clamp_score(_avg_dim(con_dimensions_rows, "evidence"))
+        rebuttal_pro_score = _clamp_score(_avg_dim(pro_dimensions_rows, "rebuttal"))
+        rebuttal_con_score = _clamp_score(_avg_dim(con_dimensions_rows, "rebuttal"))
         pro_dimension_composite = _clamp_score(
             (
-                _avg_dim(pro_dimensions_rows, "logic")
-                + _avg_dim(pro_dimensions_rows, "evidence")
-                + _avg_dim(pro_dimensions_rows, "rebuttal")
+                logic_pro_score
+                + evidence_pro_score
+                + rebuttal_pro_score
                 + _avg_dim(pro_dimensions_rows, "clarity")
             )
             / 4.0
         )
         con_dimension_composite = _clamp_score(
             (
-                _avg_dim(con_dimensions_rows, "logic")
-                + _avg_dim(con_dimensions_rows, "evidence")
-                + _avg_dim(con_dimensions_rows, "rebuttal")
+                logic_con_score
+                + evidence_con_score
+                + rebuttal_con_score
                 + _avg_dim(con_dimensions_rows, "clarity")
             )
             / 4.0
@@ -1935,6 +1976,38 @@ def build_final_report_payload(
                 "Uses agent1 logic/evidence/rebuttal/clarity composite scores as an independent lane."
             ),
             runtime_profile=normalized_panel_runtime_profiles.get("judgeC"),
+        ),
+    }
+    semantic_panel_decisions = {
+        "logic": _build_panel_judge_item(
+            judge_id="logic_judge",
+            name="Logic Judge",
+            source="agent1Dimensions.logic",
+            winner=_resolve_winner(logic_pro_score, logic_con_score, margin=0.8),
+            pro_score=logic_pro_score,
+            con_score=logic_con_score,
+            reason="Evaluates argument structure, causal chain integrity, and premise-to-conclusion support.",
+            role="logic",
+        ),
+        "evidence": _build_panel_judge_item(
+            judge_id="evidence_judge",
+            name="Evidence Judge",
+            source="agent1Dimensions.evidence",
+            winner=_resolve_winner(evidence_pro_score, evidence_con_score, margin=0.8),
+            pro_score=evidence_pro_score,
+            con_score=evidence_con_score,
+            reason="Evaluates whether claims are supported by relevant evidence and not misused.",
+            role="evidence",
+        ),
+        "rebuttal": _build_panel_judge_item(
+            judge_id="rebuttal_judge",
+            name="Rebuttal Judge",
+            source="agent1Dimensions.rebuttal",
+            winner=_resolve_winner(rebuttal_pro_score, rebuttal_con_score, margin=0.8),
+            pro_score=rebuttal_pro_score,
+            con_score=rebuttal_con_score,
+            reason="Evaluates whether each side answers the opponent's core claims instead of talking past them.",
+            role="rebuttal",
         ),
     }
 
@@ -2040,6 +2113,7 @@ def build_final_report_payload(
         con_score=con_score,
         dimension_scores=dimension_scores,
         panel_judges=panel_judges,
+        semantic_panel_decisions=semantic_panel_decisions,
         panel_runtime_profiles=normalized_panel_runtime_profiles,
         winner_first=winner_first,
         winner_second=winner_second,

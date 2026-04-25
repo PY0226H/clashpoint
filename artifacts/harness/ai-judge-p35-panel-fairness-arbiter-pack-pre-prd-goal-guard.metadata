@@ -1,0 +1,5 @@
+effective_mode=full
+evidence_paths=/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md;/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md
+reason=命中高风险认证/权限关键词: auth
+summary_doc=/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md
+authority_prd=/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md
