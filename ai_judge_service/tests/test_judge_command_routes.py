@@ -518,6 +518,10 @@ class JudgeCommandRoutesTests(unittest.TestCase):
                     "adaptiveEnabled": True,
                     "candidateModels": ["gpt-5.4", "gpt-5.4", "gpt-5.4-mini"],
                     "strategyMetadata": {"calibrationVersion": "calib-local-v2"},
+                    "shadowEnabled": True,
+                    "shadowModelStrategy": "shadow_tri_panel_v1",
+                    "shadowCostEstimate": "0.031",
+                    "shadowLatencyEstimate": 1450,
                 },
                 "panelRuntimeProfiles": {
                     "judgeA": {
@@ -529,6 +533,7 @@ class JudgeCommandRoutesTests(unittest.TestCase):
                         "promptVersion": "panel-prompt-v9",
                         "toolsetVersion": "toolset-custom",
                         "candidateModels": ["gpt-5.4", "gpt-5.4"],
+                        "shadowCostEstimate": "0.027",
                     }
                 },
             },
@@ -576,6 +581,10 @@ class JudgeCommandRoutesTests(unittest.TestCase):
         self.assertEqual(judge_a["candidateModels"], ["gpt-5.4"])
         self.assertEqual(judge_a["profileSource"], "policy_metadata")
         self.assertEqual(judge_a["policyVersion"], "v3-custom")
+        self.assertTrue(judge_a["shadowEnabled"])
+        self.assertEqual(judge_a["shadowModelStrategy"], "shadow_tri_panel_v1")
+        self.assertEqual(judge_a["shadowCostEstimate"], 0.027)
+        self.assertEqual(judge_a["shadowLatencyEstimate"], 1450.0)
 
         judge_b = result["judgeB"]
         self.assertEqual(judge_b["profileId"], "panel-judgeB-default-v1")
@@ -590,6 +599,10 @@ class JudgeCommandRoutesTests(unittest.TestCase):
             {"calibrationVersion": "calib-local-v2"},
         )
         self.assertEqual(judge_b["profileSource"], "builtin_default")
+        self.assertTrue(judge_b["shadowEnabled"])
+        self.assertEqual(judge_b["shadowModelStrategy"], "shadow_tri_panel_v1")
+        self.assertEqual(judge_b["shadowCostEstimate"], 0.031)
+        self.assertEqual(judge_b["shadowLatencyEstimate"], 1450.0)
 
     def test_resolve_panel_runtime_profiles_should_fallback_to_general_topic_defaults(self) -> None:
         profile = SimpleNamespace(
@@ -627,6 +640,10 @@ class JudgeCommandRoutesTests(unittest.TestCase):
         self.assertEqual(judge_a["decisionMargin"], 0.75)
         self.assertIsNone(judge_a["toolsetVersion"])
         self.assertIsNone(judge_a["promptVersion"])
+        self.assertFalse(judge_a["shadowEnabled"])
+        self.assertEqual(judge_a["shadowModelStrategy"], "judge_dimension_composite")
+        self.assertEqual(judge_a["shadowCostEstimate"], 0.0)
+        self.assertEqual(judge_a["shadowLatencyEstimate"], 0.0)
         self.assertEqual(judge_a["profileSource"], "builtin_default")
 
     def test_build_case_create_route_payload_should_return_case_built_response(self) -> None:

@@ -294,6 +294,34 @@ def _normalize_panel_runtime_profiles(
                     else {}
                 )
             ),
+            "shadowEnabled": _to_bool(
+                row.get("shadowEnabled")
+                if row.get("shadowEnabled") is not None
+                else row.get("shadow_enabled"),
+                default=False,
+            ),
+            "shadowModelStrategy": (
+                str(
+                    row.get("shadowModelStrategy")
+                    or row.get("shadow_model_strategy")
+                    or row.get("modelStrategy")
+                    or row.get("model_strategy")
+                    or defaults["modelStrategy"]
+                ).strip()
+                or defaults["modelStrategy"]
+            ),
+            "shadowCostEstimate": _safe_float(
+                row.get("shadowCostEstimate")
+                if row.get("shadowCostEstimate") is not None
+                else row.get("shadow_cost_estimate"),
+                default=0.0,
+            ),
+            "shadowLatencyEstimate": _safe_float(
+                row.get("shadowLatencyEstimate")
+                if row.get("shadowLatencyEstimate") is not None
+                else row.get("shadow_latency_estimate"),
+                default=0.0,
+            ),
             "profileSource": str(
                 row.get("profileSource")
                 or row.get("profile_source")

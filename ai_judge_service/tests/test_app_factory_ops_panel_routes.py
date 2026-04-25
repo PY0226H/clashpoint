@@ -369,9 +369,20 @@ class AppFactoryOpsPanelRouteTests(
         self.assertGreaterEqual(payload["count"], 3)
         self.assertGreaterEqual(payload["returned"], 3)
         self.assertEqual(set(payload["items"][0].keys()), set(PANEL_RUNTIME_PROFILE_ITEM_KEYS))
+        first_item = payload["items"][0]
+        self.assertIsInstance(first_item["shadowEvaluation"], dict)
+        self.assertIsInstance(first_item["shadowReleaseGateSignal"], dict)
+        self.assertFalse(first_item["shadowEvaluation"]["officialWinnerMutationAllowed"])
         self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeA"], 1)
         self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeB"], 1)
         self.assertGreaterEqual(payload["aggregations"]["byJudgeId"]["judgeC"], 1)
+        self.assertGreaterEqual(payload["aggregations"]["shadowEnabledCount"], 0)
+        self.assertGreaterEqual(payload["aggregations"]["shadowAgreementCount"], 0)
+        self.assertGreaterEqual(payload["aggregations"]["shadowDriftSignalCount"], 0)
+        self.assertGreaterEqual(payload["aggregations"]["avgShadowDecisionAgreement"], 0.0)
+        self.assertGreaterEqual(payload["aggregations"]["avgShadowCostEstimate"], 0.0)
+        self.assertGreaterEqual(payload["aggregations"]["avgShadowLatencyEstimate"], 0.0)
+        self.assertIn("byShadowModelStrategy", payload["aggregations"])
         self.assertGreaterEqual(
             payload["aggregations"]["byModelStrategy"]["deterministic_path_alignment"],
             1,
@@ -572,11 +583,18 @@ class AppFactoryOpsPanelRouteTests(
         self.assertGreaterEqual(payload["overview"]["scannedRecords"], 3)
         self.assertGreaterEqual(payload["overview"]["totalGroups"], 1)
         self.assertIn("readinessCounts", payload["overview"])
+        self.assertIn("shadow", payload["overview"])
+        self.assertFalse(payload["overview"]["shadow"]["officialWinnerMutationAllowed"])
         self.assertTrue(any(int(row.get("caseCount") or 0) >= 1 for row in payload["groups"]))
 
         first_group = payload["groups"][0]
         self.assertIn("recommendedSwitchConditions", first_group)
         self.assertIn("simulations", first_group)
+        self.assertIn("shadowReleaseGateSignals", first_group)
+        self.assertIn("avgShadowDecisionAgreement", first_group)
+        self.assertIn("avgShadowCostEstimate", first_group)
+        self.assertIn("avgShadowLatencyEstimate", first_group)
+        self.assertIsInstance(first_group["shadowReleaseGateSignals"], list)
         self.assertIsInstance(first_group["recommendedSwitchConditions"], list)
         self.assertIsInstance(first_group["simulations"], list)
         self.assertTrue(

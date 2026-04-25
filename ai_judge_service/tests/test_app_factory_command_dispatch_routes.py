@@ -514,6 +514,10 @@ class AppFactoryCommandDispatchRouteTests(
                             "adaptiveEnabled": True,
                             "candidateModels": ["gpt-5.4", "gpt-5.4-mini"],
                             "strategyMetadata": {"calibrationVersion": "calib-local-v2"},
+                            "shadowEnabled": True,
+                            "shadowModelStrategy": "shadow_tri_panel_v1",
+                            "shadowCostEstimate": 0.031,
+                            "shadowLatencyEstimate": 1450,
                         },
                         "panelRuntimeProfiles": {
                             "judgeA": {
@@ -523,6 +527,7 @@ class AppFactoryCommandDispatchRouteTests(
                                 "promptVersion": "panel-prompt-v9",
                                 "candidateModels": ["gpt-5.4"],
                                 "profileSource": "policy_metadata",
+                                "shadowCostEstimate": "0.027",
                             }
                         }
                     },
@@ -562,6 +567,10 @@ class AppFactoryCommandDispatchRouteTests(
             "calib-local-v2",
         )
         self.assertEqual(judge_a_profile["profileSource"], "policy_metadata")
+        self.assertTrue(judge_a_profile["shadowEnabled"])
+        self.assertEqual(judge_a_profile["shadowModelStrategy"], "shadow_tri_panel_v1")
+        self.assertEqual(judge_a_profile["shadowCostEstimate"], 0.027)
+        self.assertEqual(judge_a_profile["shadowLatencyEstimate"], 1450.0)
         self.assertEqual(
             final_payload["judgeTrace"]["panelRuntimeProfiles"]["judgeA"]["profileId"],
             "panel-a-custom",
@@ -569,6 +578,9 @@ class AppFactoryCommandDispatchRouteTests(
         self.assertEqual(
             final_payload["judgeTrace"]["panelRuntimeProfiles"]["judgeB"]["domainSlot"],
             "tft_ranked",
+        )
+        self.assertTrue(
+            final_payload["judgeTrace"]["panelRuntimeProfiles"]["judgeB"]["shadowEnabled"]
         )
 
     async def test_final_dispatch_should_mark_workflow_review_required_when_gate_triggers(

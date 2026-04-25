@@ -675,6 +675,29 @@ def resolve_panel_runtime_profiles(
             else {}
         )
     )
+    default_shadow_enabled = _to_bool(
+        runtime_context.get("shadowEnabled")
+        if runtime_context.get("shadowEnabled") is not None
+        else runtime_context.get("shadow_enabled"),
+        default=False,
+    )
+    default_shadow_model_strategy = str(
+        runtime_context.get("shadowModelStrategy")
+        or runtime_context.get("shadow_model_strategy")
+        or ""
+    ).strip()
+    default_shadow_cost_estimate = safe_float(
+        runtime_context.get("shadowCostEstimate")
+        if runtime_context.get("shadowCostEstimate") is not None
+        else runtime_context.get("shadow_cost_estimate"),
+        default=0.0,
+    )
+    default_shadow_latency_estimate = safe_float(
+        runtime_context.get("shadowLatencyEstimate")
+        if runtime_context.get("shadowLatencyEstimate") is not None
+        else runtime_context.get("shadow_latency_estimate"),
+        default=0.0,
+    )
 
     for judge_id in panel_judge_ids:
         defaults = panel_runtime_profile_defaults[judge_id]
@@ -762,6 +785,35 @@ def resolve_panel_runtime_profiles(
                     if isinstance(row.get("strategy_metadata"), dict)
                     else dict(default_strategy_metadata)
                 )
+            ),
+            "shadowEnabled": _to_bool(
+                row.get("shadowEnabled")
+                if row.get("shadowEnabled") is not None
+                else row.get("shadow_enabled"),
+                default=default_shadow_enabled,
+            ),
+            "shadowModelStrategy": (
+                str(
+                    row.get("shadowModelStrategy")
+                    or row.get("shadow_model_strategy")
+                    or default_shadow_model_strategy
+                    or row.get("modelStrategy")
+                    or row.get("model_strategy")
+                    or defaults["modelStrategy"]
+                ).strip()
+                or defaults["modelStrategy"]
+            ),
+            "shadowCostEstimate": safe_float(
+                row.get("shadowCostEstimate")
+                if row.get("shadowCostEstimate") is not None
+                else row.get("shadow_cost_estimate"),
+                default=default_shadow_cost_estimate,
+            ),
+            "shadowLatencyEstimate": safe_float(
+                row.get("shadowLatencyEstimate")
+                if row.get("shadowLatencyEstimate") is not None
+                else row.get("shadow_latency_estimate"),
+                default=default_shadow_latency_estimate,
             ),
             # 这里显式记录来源，便于重放时判断是策略配置还是默认值导致的分歧。
             "profileSource": "policy_metadata" if row else "builtin_default",

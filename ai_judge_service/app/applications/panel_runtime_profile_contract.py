@@ -37,6 +37,14 @@ PANEL_RUNTIME_PROFILE_ITEM_KEYS: tuple[str, ...] = (
     "candidateModels",
     "strategyMetadata",
     "policyVersion",
+    "shadowEnabled",
+    "shadowModelStrategy",
+    "shadowDecisionAgreement",
+    "shadowCostEstimate",
+    "shadowLatencyEstimate",
+    "shadowDriftSignals",
+    "shadowReleaseGateSignal",
+    "shadowEvaluation",
     "runtimeProfile",
 )
 
@@ -62,7 +70,14 @@ PANEL_RUNTIME_PROFILE_AGGREGATIONS_KEYS: tuple[str, ...] = (
     "byDomainSlot",
     "byProfileSource",
     "byPolicyVersion",
+    "byShadowModelStrategy",
     "winnerCounts",
+    "shadowEnabledCount",
+    "shadowAgreementCount",
+    "shadowDriftSignalCount",
+    "avgShadowDecisionAgreement",
+    "avgShadowCostEstimate",
+    "avgShadowLatencyEstimate",
 )
 
 PANEL_RUNTIME_PROFILE_FILTER_KEYS: tuple[str, ...] = (
@@ -155,6 +170,12 @@ def _validate_item(payload: dict[str, Any]) -> None:
         raise ValueError("panel_runtime_profile_item_candidate_models_not_list")
     if not isinstance(payload.get("strategyMetadata"), dict):
         raise ValueError("panel_runtime_profile_item_strategy_metadata_not_dict")
+    if not isinstance(payload.get("shadowDriftSignals"), list):
+        raise ValueError("panel_runtime_profile_item_shadow_drift_signals_not_list")
+    if not isinstance(payload.get("shadowReleaseGateSignal"), dict):
+        raise ValueError("panel_runtime_profile_item_shadow_release_gate_signal_not_dict")
+    if not isinstance(payload.get("shadowEvaluation"), dict):
+        raise ValueError("panel_runtime_profile_item_shadow_evaluation_not_dict")
     if not isinstance(payload.get("runtimeProfile"), dict):
         raise ValueError("panel_runtime_profile_item_runtime_profile_not_dict")
     panel = payload.get("panelDisagreement")
@@ -215,10 +236,26 @@ def validate_panel_runtime_profile_contract(payload: dict[str, Any]) -> None:
         value = _non_negative_int(aggregations.get(key), default=0)
         if value > total_matched:
             raise ValueError(f"panel_runtime_profile_{key}_exceeds_total")
+    for key in (
+        "shadowEnabledCount",
+        "shadowAgreementCount",
+        "shadowDriftSignalCount",
+    ):
+        value = _non_negative_int(aggregations.get(key), default=0)
+        if value > total_matched:
+            raise ValueError(f"panel_runtime_profile_{key}_exceeds_total")
 
     avg_panel_disagreement_ratio = float(aggregations.get("avgPanelDisagreementRatio") or 0.0)
     if avg_panel_disagreement_ratio < 0:
         raise ValueError("panel_runtime_profile_avg_panel_disagreement_ratio_invalid")
+    for key in (
+        "avgShadowDecisionAgreement",
+        "avgShadowCostEstimate",
+        "avgShadowLatencyEstimate",
+    ):
+        value = float(aggregations.get(key) or 0.0)
+        if value < 0:
+            raise ValueError(f"panel_runtime_profile_{key}_invalid")
 
     _assert_count_map(
         section="panel_runtime_profile_by_judge_id",
@@ -253,6 +290,11 @@ def validate_panel_runtime_profile_contract(payload: dict[str, Any]) -> None:
     _assert_count_map(
         section="panel_runtime_profile_by_policy_version",
         payload=aggregations.get("byPolicyVersion"),
+        total=total_matched,
+    )
+    _assert_count_map(
+        section="panel_runtime_profile_by_shadow_model_strategy",
+        payload=aggregations.get("byShadowModelStrategy"),
         total=total_matched,
     )
     _assert_count_map(

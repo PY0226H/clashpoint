@@ -24,6 +24,31 @@ def _safe_float(value: Any, *, default: float = 0.0) -> float:
     return parsed
 
 
+def _safe_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    token = str(value or "").strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _unique_tokens(values: list[Any] | tuple[Any, ...] | set[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        token = str(value or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
 def normalize_panel_runtime_profile_source(value: str | None) -> str | None:
     if value is None:
         return None
@@ -39,6 +64,120 @@ def normalize_panel_runtime_profile_sort_by(value: str | None) -> str:
 
 def normalize_panel_runtime_profile_sort_order(value: str | None) -> str:
     return str(value or "").strip().lower() or "desc"
+
+
+def build_panel_shadow_evaluation(
+    *,
+    case_item: dict[str, Any],
+    runtime_profile: dict[str, Any],
+    model_strategy: str | None,
+) -> dict[str, Any]:
+    strategy_metadata = (
+        runtime_profile.get("strategyMetadata")
+        if isinstance(runtime_profile.get("strategyMetadata"), dict)
+        else {}
+    )
+    shadow_summary = (
+        case_item.get("shadowSummary")
+        if isinstance(case_item.get("shadowSummary"), dict)
+        else {}
+    )
+    latest_run = (
+        shadow_summary.get("latestRun")
+        if isinstance(shadow_summary.get("latestRun"), dict)
+        else {}
+    )
+    latest_metrics = (
+        latest_run.get("metrics") if isinstance(latest_run.get("metrics"), dict) else {}
+    )
+    shadow_enabled = _safe_bool(
+        runtime_profile.get("shadowEnabled")
+        if runtime_profile.get("shadowEnabled") is not None
+        else strategy_metadata.get("shadowEnabled"),
+        default=latest_run != {},
+    )
+    shadow_model_strategy = (
+        str(
+            runtime_profile.get("shadowModelStrategy")
+            or strategy_metadata.get("shadowModelStrategy")
+            or model_strategy
+            or ""
+        ).strip()
+        or None
+    )
+    winner_flip_rate = _safe_float(
+        latest_run.get("winnerFlipRate")
+        if latest_run.get("winnerFlipRate") is not None
+        else latest_metrics.get("winnerFlipRate"),
+        default=0.0,
+    )
+    if shadow_summary.get("decisionAgreement") is not None:
+        raw_agreement = shadow_summary.get("decisionAgreement")
+    elif latest_metrics.get("decisionAgreement") is not None:
+        raw_agreement = latest_metrics.get("decisionAgreement")
+    elif latest_run:
+        raw_agreement = 1.0 - winner_flip_rate
+    else:
+        raw_agreement = 0.0
+    decision_agreement = max(0.0, min(1.0, _safe_float(raw_agreement, default=0.0)))
+    cost_estimate = _safe_float(
+        runtime_profile.get("shadowCostEstimate")
+        if runtime_profile.get("shadowCostEstimate") is not None
+        else strategy_metadata.get("shadowCostEstimate"),
+        default=0.0,
+    )
+    latency_estimate = _safe_float(
+        runtime_profile.get("shadowLatencyEstimate")
+        if runtime_profile.get("shadowLatencyEstimate") is not None
+        else strategy_metadata.get("shadowLatencyEstimate"),
+        default=0.0,
+    )
+    breaches = (
+        shadow_summary.get("breaches")
+        if isinstance(shadow_summary.get("breaches"), list)
+        else []
+    )
+    signals = _unique_tokens(list(breaches))
+    has_shadow_breach = bool(shadow_summary.get("hasShadowBreach"))
+    if has_shadow_breach:
+        signals = _unique_tokens([*signals, "shadow_breach"])
+    panel = (
+        case_item.get("panelDisagreement")
+        if isinstance(case_item.get("panelDisagreement"), dict)
+        else {}
+    )
+    if bool(panel.get("high")):
+        signals = _unique_tokens([*signals, "panel_high_disagreement"])
+    if shadow_enabled and not latest_run:
+        signals = _unique_tokens([*signals, "shadow_run_missing"])
+
+    if has_shadow_breach or bool(panel.get("high")):
+        release_gate_signal = "blocked"
+    elif shadow_enabled and not latest_run:
+        release_gate_signal = "watch"
+    elif shadow_enabled:
+        release_gate_signal = "ready"
+    else:
+        release_gate_signal = "advisory_only"
+
+    return {
+        "enabled": shadow_enabled,
+        "modelStrategy": shadow_model_strategy,
+        "decisionAgreement": round(decision_agreement, 4),
+        "costEstimate": round(cost_estimate, 6),
+        "latencyEstimate": round(latency_estimate, 2),
+        "driftSignals": signals,
+        "releaseGateSignal": {
+            "status": release_gate_signal,
+            "blocksAutoRelease": release_gate_signal == "blocked",
+            "reasons": signals,
+            "advisoryOnly": True,
+        },
+        "latestRun": latest_run or None,
+        "benchmarkRunId": shadow_summary.get("benchmarkRunId"),
+        "officialWinnerMutationAllowed": False,
+        "advisoryOnly": True,
+    }
 
 
 def build_panel_runtime_profile_item(
@@ -98,6 +237,11 @@ def build_panel_runtime_profile_item(
         or str(drift_summary.get("policyVersion") or "").strip()
         or None
     )
+    shadow = build_panel_shadow_evaluation(
+        case_item=case_item,
+        runtime_profile=runtime_profile,
+        model_strategy=model_strategy,
+    )
 
     return {
         "caseId": int(case_item.get("caseId") or 0),
@@ -141,6 +285,14 @@ def build_panel_runtime_profile_item(
         "candidateModels": candidate_models,
         "strategyMetadata": strategy_metadata,
         "policyVersion": policy_version,
+        "shadowEnabled": bool(shadow["enabled"]),
+        "shadowModelStrategy": shadow["modelStrategy"],
+        "shadowDecisionAgreement": shadow["decisionAgreement"],
+        "shadowCostEstimate": shadow["costEstimate"],
+        "shadowLatencyEstimate": shadow["latencyEstimate"],
+        "shadowDriftSignals": shadow["driftSignals"],
+        "shadowReleaseGateSignal": shadow["releaseGateSignal"],
+        "shadowEvaluation": shadow,
         "runtimeProfile": dict(runtime_profile),
     }
 
@@ -210,6 +362,7 @@ def build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dic
     domain_slot_counts: dict[str, int] = {"unknown": 0}
     profile_source_counts: dict[str, int] = {"unknown": 0}
     policy_version_counts: dict[str, int] = {"unknown": 0}
+    shadow_model_strategy_counts: dict[str, int] = {"unknown": 0}
     winner_counts: dict[str, int] = {
         "pro": 0,
         "con": 0,
@@ -220,6 +373,12 @@ def build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dic
     open_review_count = 0
     panel_high_disagreement_count = 0
     disagreement_ratio_sum = 0.0
+    shadow_enabled_count = 0
+    shadow_agreement_count = 0
+    shadow_drift_signal_count = 0
+    shadow_decision_agreement_sum = 0.0
+    shadow_cost_estimate_sum = 0.0
+    shadow_latency_estimate_sum = 0.0
 
     for item in items:
         judge_id = str(item.get("judgeId") or "").strip() or "unknown"
@@ -263,6 +422,14 @@ def build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dic
         else:
             policy_version_counts["unknown"] += 1
 
+        shadow_model_strategy = str(item.get("shadowModelStrategy") or "").strip()
+        if shadow_model_strategy:
+            shadow_model_strategy_counts[shadow_model_strategy] = (
+                shadow_model_strategy_counts.get(shadow_model_strategy, 0) + 1
+            )
+        else:
+            shadow_model_strategy_counts["unknown"] += 1
+
         winner = str(item.get("winner") or "").strip().lower()
         if winner in winner_counts:
             winner_counts[winner] += 1
@@ -281,6 +448,23 @@ def build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dic
         if bool(panel.get("high")):
             panel_high_disagreement_count += 1
         disagreement_ratio_sum += _safe_float(panel.get("ratio"), default=0.0)
+        if bool(item.get("shadowEnabled")):
+            shadow_enabled_count += 1
+        shadow_decision_agreement = _safe_float(
+            item.get("shadowDecisionAgreement"),
+            default=0.0,
+        )
+        if shadow_decision_agreement >= 0.8:
+            shadow_agreement_count += 1
+        shadow_decision_agreement_sum += shadow_decision_agreement
+        shadow_cost_estimate_sum += _safe_float(item.get("shadowCostEstimate"), default=0.0)
+        shadow_latency_estimate_sum += _safe_float(
+            item.get("shadowLatencyEstimate"),
+            default=0.0,
+        )
+        signals = item.get("shadowDriftSignals")
+        if isinstance(signals, list) and len(signals) > 0:
+            shadow_drift_signal_count += 1
 
     total_matched = len(items)
     return {
@@ -298,7 +482,22 @@ def build_panel_runtime_profile_aggregations(items: list[dict[str, Any]]) -> dic
         "byDomainSlot": dict(sorted(domain_slot_counts.items(), key=lambda kv: kv[0])),
         "byProfileSource": dict(sorted(profile_source_counts.items(), key=lambda kv: kv[0])),
         "byPolicyVersion": dict(sorted(policy_version_counts.items(), key=lambda kv: kv[0])),
+        "byShadowModelStrategy": dict(
+            sorted(shadow_model_strategy_counts.items(), key=lambda kv: kv[0])
+        ),
         "winnerCounts": winner_counts,
+        "shadowEnabledCount": shadow_enabled_count,
+        "shadowAgreementCount": shadow_agreement_count,
+        "shadowDriftSignalCount": shadow_drift_signal_count,
+        "avgShadowDecisionAgreement": (
+            shadow_decision_agreement_sum / total_matched if total_matched > 0 else 0.0
+        ),
+        "avgShadowCostEstimate": (
+            shadow_cost_estimate_sum / total_matched if total_matched > 0 else 0.0
+        ),
+        "avgShadowLatencyEstimate": (
+            shadow_latency_estimate_sum / total_matched if total_matched > 0 else 0.0
+        ),
     }
 
 
@@ -338,6 +537,12 @@ def build_panel_runtime_readiness_summary(
                 "openReviewCount": 0,
                 "panelHighDisagreementCount": 0,
                 "panelDisagreementRatioSum": 0.0,
+                "shadowEnabledCount": 0,
+                "shadowDriftSignalCount": 0,
+                "shadowDecisionAgreementSum": 0.0,
+                "shadowCostEstimateSum": 0.0,
+                "shadowLatencyEstimateSum": 0.0,
+                "shadowReleaseGateSignals": set(),
             },
         )
         row["recordCount"] += 1
@@ -364,6 +569,31 @@ def build_panel_runtime_readiness_summary(
         if bool(panel.get("high")):
             row["panelHighDisagreementCount"] += 1
         row["panelDisagreementRatioSum"] += _safe_float(panel.get("ratio"), default=0.0)
+        if bool(item.get("shadowEnabled")):
+            row["shadowEnabledCount"] += 1
+        signals = item.get("shadowDriftSignals")
+        if isinstance(signals, list) and len(signals) > 0:
+            row["shadowDriftSignalCount"] += 1
+        row["shadowDecisionAgreementSum"] += _safe_float(
+            item.get("shadowDecisionAgreement"),
+            default=0.0,
+        )
+        row["shadowCostEstimateSum"] += _safe_float(
+            item.get("shadowCostEstimate"),
+            default=0.0,
+        )
+        row["shadowLatencyEstimateSum"] += _safe_float(
+            item.get("shadowLatencyEstimate"),
+            default=0.0,
+        )
+        release_signal = (
+            item.get("shadowReleaseGateSignal")
+            if isinstance(item.get("shadowReleaseGateSignal"), dict)
+            else {}
+        )
+        signal_status = str(release_signal.get("status") or "").strip()
+        if signal_status:
+            row["shadowReleaseGateSignals"].add(signal_status)
         for candidate_model in item.get("candidateModels") or []:
             candidate_model_token = str(candidate_model).strip()
             if candidate_model_token:
@@ -389,6 +619,27 @@ def build_panel_runtime_readiness_summary(
         adaptive_enabled_rate = (
             int(row["adaptiveEnabledCount"]) / record_count if record_count > 0 else 0.0
         )
+        shadow_enabled_rate = (
+            int(row["shadowEnabledCount"]) / record_count if record_count > 0 else 0.0
+        )
+        shadow_drift_signal_rate = (
+            int(row["shadowDriftSignalCount"]) / record_count if record_count > 0 else 0.0
+        )
+        avg_shadow_decision_agreement = (
+            float(row["shadowDecisionAgreementSum"]) / record_count
+            if record_count > 0
+            else 0.0
+        )
+        avg_shadow_cost_estimate = (
+            float(row["shadowCostEstimateSum"]) / record_count
+            if record_count > 0
+            else 0.0
+        )
+        avg_shadow_latency_estimate = (
+            float(row["shadowLatencyEstimateSum"]) / record_count
+            if record_count > 0
+            else 0.0
+        )
         readiness_score = max(
             0.0,
             min(
@@ -396,7 +647,8 @@ def build_panel_runtime_readiness_summary(
                 100.0
                 - panel_high_rate * 60.0
                 - review_required_rate * 30.0
-                - open_review_rate * 10.0,
+                - open_review_rate * 10.0
+                - shadow_drift_signal_rate * 20.0,
             ),
         )
 
@@ -414,6 +666,8 @@ def build_panel_runtime_readiness_summary(
             switch_conditions.append("review_required_rate_high")
         if open_review_rate >= 0.1:
             switch_conditions.append("open_review_backlog")
+        if shadow_drift_signal_rate > 0:
+            switch_conditions.append("shadow_drift_signal")
         if not candidate_models:
             switch_conditions.append("candidate_models_missing")
         if not switch_conditions:
@@ -456,6 +710,16 @@ def build_panel_runtime_readiness_summary(
                 "candidateModels": candidate_models,
                 "candidateModelCount": len(candidate_models),
                 "adaptiveEnabledRate": round(adaptive_enabled_rate, 4),
+                "shadowEnabledCount": int(row["shadowEnabledCount"]),
+                "shadowEnabledRate": round(shadow_enabled_rate, 4),
+                "shadowDriftSignalCount": int(row["shadowDriftSignalCount"]),
+                "shadowDriftSignalRate": round(shadow_drift_signal_rate, 4),
+                "avgShadowDecisionAgreement": round(avg_shadow_decision_agreement, 4),
+                "avgShadowCostEstimate": round(avg_shadow_cost_estimate, 6),
+                "avgShadowLatencyEstimate": round(avg_shadow_latency_estimate, 2),
+                "shadowReleaseGateSignals": sorted(
+                    str(item) for item in row["shadowReleaseGateSignals"]
+                ),
                 "panelHighDisagreementCount": panel_high_count,
                 "panelHighDisagreementRate": round(panel_high_rate, 4),
                 "reviewRequiredCount": review_required_count,
@@ -488,10 +752,32 @@ def build_panel_runtime_readiness_summary(
         "watch": 0,
         "attention": 0,
     }
+    shadow_enabled_groups = 0
+    shadow_blocked_groups = 0
+    shadow_watch_groups = 0
+    shadow_drift_signal_groups = 0
+    shadow_cost_sum = 0.0
+    shadow_latency_sum = 0.0
     for row in limited_group_rows:
         level = str(row.get("readinessLevel") or "").strip().lower()
         if level in readiness_counts:
             readiness_counts[level] += 1
+        signals = row.get("shadowReleaseGateSignals")
+        signal_tokens = (
+            {str(item).strip() for item in signals if str(item).strip()}
+            if isinstance(signals, list)
+            else set()
+        )
+        if float(row.get("shadowEnabledRate") or 0.0) > 0:
+            shadow_enabled_groups += 1
+        if "blocked" in signal_tokens:
+            shadow_blocked_groups += 1
+        if "watch" in signal_tokens:
+            shadow_watch_groups += 1
+        if int(row.get("shadowDriftSignalCount") or 0) > 0:
+            shadow_drift_signal_groups += 1
+        shadow_cost_sum += float(row.get("avgShadowCostEstimate") or 0.0)
+        shadow_latency_sum += float(row.get("avgShadowLatencyEstimate") or 0.0)
 
     return {
         "groups": limited_group_rows,
@@ -501,6 +787,23 @@ def build_panel_runtime_readiness_summary(
             "totalGroups": len(limited_group_rows),
             "readinessCounts": readiness_counts,
             "attentionGroupCount": len(attention_rows),
+            "shadow": {
+                "enabledGroupCount": shadow_enabled_groups,
+                "blockedGroupCount": shadow_blocked_groups,
+                "watchGroupCount": shadow_watch_groups,
+                "driftSignalGroupCount": shadow_drift_signal_groups,
+                "avgCostEstimate": (
+                    shadow_cost_sum / len(limited_group_rows)
+                    if limited_group_rows
+                    else 0.0
+                ),
+                "avgLatencyEstimate": (
+                    shadow_latency_sum / len(limited_group_rows)
+                    if limited_group_rows
+                    else 0.0
+                ),
+                "officialWinnerMutationAllowed": False,
+            },
         },
     }
 
@@ -930,6 +1233,19 @@ async def build_panel_runtime_readiness_payload(
                 overview.get("readinessCounts")
                 if isinstance(overview.get("readinessCounts"), dict)
                 else {"ready": 0, "watch": 0, "attention": 0}
+            ),
+            "shadow": (
+                overview.get("shadow")
+                if isinstance(overview.get("shadow"), dict)
+                else {
+                    "enabledGroupCount": 0,
+                    "blockedGroupCount": 0,
+                    "watchGroupCount": 0,
+                    "driftSignalGroupCount": 0,
+                    "avgCostEstimate": 0.0,
+                    "avgLatencyEstimate": 0.0,
+                    "officialWinnerMutationAllowed": False,
+                }
             ),
         },
         "groups": (

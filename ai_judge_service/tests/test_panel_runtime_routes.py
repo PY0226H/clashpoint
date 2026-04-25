@@ -4,11 +4,71 @@ import unittest
 
 from app.applications.panel_runtime_routes import (
     PanelRuntimeRouteError,
+    build_panel_shadow_evaluation,
     normalize_panel_runtime_profile_query,
 )
 
 
 class PanelRuntimeRoutesTests(unittest.TestCase):
+    def test_build_panel_shadow_evaluation_should_emit_blocking_drift_signal(
+        self,
+    ) -> None:
+        payload = build_panel_shadow_evaluation(
+            case_item={
+                "shadowSummary": {
+                    "benchmarkRunId": "shadow-run-v1",
+                    "latestRun": {
+                        "runId": "shadow-run-v1",
+                        "metrics": {"winnerFlipRate": 0.2},
+                    },
+                    "hasShadowBreach": True,
+                    "breaches": ["winner_flip_rate", "winner_flip_rate"],
+                },
+                "panelDisagreement": {"high": True},
+            },
+            runtime_profile={
+                "shadowEnabled": True,
+                "shadowModelStrategy": "shadow_tri_panel_v1",
+                "shadowCostEstimate": "0.031",
+                "shadowLatencyEstimate": "1450",
+            },
+            model_strategy="deterministic_weighted",
+        )
+
+        self.assertTrue(payload["enabled"])
+        self.assertEqual(payload["modelStrategy"], "shadow_tri_panel_v1")
+        self.assertEqual(payload["decisionAgreement"], 0.8)
+        self.assertEqual(payload["costEstimate"], 0.031)
+        self.assertEqual(payload["latencyEstimate"], 1450.0)
+        self.assertEqual(
+            payload["driftSignals"],
+            ["winner_flip_rate", "shadow_breach", "panel_high_disagreement"],
+        )
+        self.assertEqual(payload["releaseGateSignal"]["status"], "blocked")
+        self.assertTrue(payload["releaseGateSignal"]["blocksAutoRelease"])
+        self.assertFalse(payload["officialWinnerMutationAllowed"])
+        self.assertTrue(payload["advisoryOnly"])
+
+    def test_build_panel_shadow_evaluation_should_watch_enabled_missing_run(
+        self,
+    ) -> None:
+        payload = build_panel_shadow_evaluation(
+            case_item={"shadowSummary": {}, "panelDisagreement": {"high": False}},
+            runtime_profile={
+                "strategyMetadata": {
+                    "shadowEnabled": True,
+                    "shadowModelStrategy": "shadow_watch_v1",
+                }
+            },
+            model_strategy="deterministic_weighted",
+        )
+
+        self.assertTrue(payload["enabled"])
+        self.assertEqual(payload["decisionAgreement"], 0.0)
+        self.assertEqual(payload["driftSignals"], ["shadow_run_missing"])
+        self.assertEqual(payload["releaseGateSignal"]["status"], "watch")
+        self.assertFalse(payload["releaseGateSignal"]["blocksAutoRelease"])
+
     def test_normalize_panel_runtime_profile_query_should_raise_for_invalid_judge_id(
         self,
     ) -> None:
