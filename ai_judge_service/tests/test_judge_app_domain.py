@@ -35,6 +35,14 @@ class JudgeAppDomainTests(unittest.TestCase):
             workflow["caseDossier"]["roleOrder"],
             list(JUDGE_ROLE_ORDER),
         )
+        for key in (
+            "inputValidation",
+            "redactionSummary",
+            "transcriptSnapshot",
+            "completeness",
+        ):
+            self.assertIn(key, workflow["caseDossier"])
+            self.assertIsInstance(workflow["caseDossier"][key], dict)
         validate_judge_app_domain_payload(payload)
 
     def test_validate_judge_app_domain_payload_should_fail_on_missing_root_key(self) -> None:

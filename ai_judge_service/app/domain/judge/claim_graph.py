@@ -454,11 +454,46 @@ def build_claim_graph_payload(
     ]
     weak_supported_count = sum(1 for row in normalized_nodes if int(row.get("evidenceRefCount") or 0) <= 0)
     verdict_referenced_count = sum(1 for row in normalized_nodes if bool(row.get("verdictReferenced")))
+    support_edges: list[dict[str, Any]] = []
+    for row in normalized_nodes:
+        claim_id = str(row.get("claimId") or "").strip()
+        if not claim_id:
+            continue
+        for index, evidence_ref_id in enumerate(row.get("evidenceRefIds") or [], start=1):
+            token = str(evidence_ref_id or "").strip()
+            if not token:
+                continue
+            support_edges.append(
+                {
+                    "edgeId": f"support-{claim_id}-{index}",
+                    "fromClaimId": claim_id,
+                    "toEvidenceRefId": token,
+                    "relation": "supported_by_evidence",
+                }
+            )
+            if len(support_edges) >= 96:
+                break
+        if len(support_edges) >= 96:
+            break
+    rebuttal_edges = [dict(edge) for edge in edges]
+    pivotal_turns = [
+        {
+            "claimId": row.get("claimId"),
+            "side": row.get("side"),
+            "phaseNo": row.get("phaseFirstNo"),
+            "evidenceRefCount": row.get("evidenceRefCount"),
+            "verdictReferenced": row.get("verdictReferenced"),
+        }
+        for row in normalized_nodes
+        if bool(row.get("verdictReferenced")) or int(row.get("supportCount") or 0) > 1
+    ][:12]
     stats = {
         "totalClaims": len(normalized_nodes),
         "proClaims": sum(1 for row in normalized_nodes if row.get("side") == "pro"),
         "conClaims": sum(1 for row in normalized_nodes if row.get("side") == "con"),
         "conflictEdges": len(edges),
+        "supportEdges": len(support_edges),
+        "rebuttalEdges": len(rebuttal_edges),
         "unansweredClaims": len(unanswered_claims),
         "weakSupportedClaims": weak_supported_count,
         "verdictReferencedClaims": verdict_referenced_count,
@@ -480,15 +515,31 @@ def build_claim_graph_payload(
         "unansweredClaims": unanswered_claims[:12],
         "stats": stats,
     }
-    return {
-        "claimGraph": {
-            "pipelineVersion": "v1-claim-graph-bootstrap",
-            "nodes": normalized_nodes,
-            "edges": edges,
-            "unansweredClaimIds": [
-                str(item.get("claimId") or "") for item in unanswered_claims if str(item.get("claimId") or "")
-            ],
-            "stats": stats,
+    claim_graph = {
+        "pipelineVersion": "v1-claim-graph-bootstrap",
+        "nodes": normalized_nodes,
+        "items": normalized_nodes,
+        "edges": edges,
+        "claims": normalized_nodes,
+        "supportEdges": support_edges,
+        "support_edges": support_edges,
+        "rebuttalEdges": rebuttal_edges,
+        "rebuttal_edges": rebuttal_edges,
+        "unansweredClaims": unanswered_claims[:12],
+        "unanswered_claims": unanswered_claims[:12],
+        "pivotalTurns": pivotal_turns,
+        "pivotal_turns": pivotal_turns,
+        "unansweredClaimIds": [
+            str(item.get("claimId") or "") for item in unanswered_claims if str(item.get("claimId") or "")
+        ],
+        "stats": stats,
+        "agentMeta": {
+            "ownerAgent": "claim_graph_agent",
+            "decisionAuthority": "non_verdict",
+            "officialVerdictAuthority": False,
         },
+    }
+    return {
+        "claimGraph": claim_graph,
         "claimGraphSummary": summary,
     }

@@ -93,6 +93,88 @@ def _build_case_dossier_from_request_payload(
     else:
         phase_scope = {"no": phase_no}
 
+    observed_message_ids = [
+        int(item["messageId"])
+        for item in message_digest
+        if _payload_int_from_mapping(item, "messageId") is not None
+    ]
+    expected_message_ids = (
+        list(range(int(message_start_id), int(message_end_id) + 1))
+        if message_start_id is not None
+        and message_end_id is not None
+        and message_end_id >= message_start_id
+        else []
+    )
+    observed_set = set(observed_message_ids)
+    expected_set = set(expected_message_ids)
+    missing_message_ids = [
+        item for item in expected_message_ids if item not in observed_set
+    ]
+    extra_message_ids = [
+        item for item in observed_message_ids if expected_set and item not in expected_set
+    ]
+    if expected_message_ids:
+        coverage_ratio = len(expected_set & observed_set) / float(len(expected_message_ids))
+    else:
+        coverage_ratio = 1.0
+    completeness_complete = not missing_message_ids and not extra_message_ids
+    completeness = {
+        "guard": "case_dossier_completeness_v1",
+        "complete": completeness_complete,
+        "status": "complete" if completeness_complete else "partial",
+        "coverageRatio": round(max(0.0, min(1.0, coverage_ratio)), 4),
+        "expectedMessageIds": expected_message_ids,
+        "observedMessageIds": observed_message_ids,
+        "missingMessageIds": missing_message_ids,
+        "extraMessageIds": extra_message_ids,
+        "invalidReplyLinks": [],
+    }
+    transcript_snapshot = {
+        "version": "recorder_case_dossier_v1",
+        "messageIds": observed_message_ids,
+        "messageDigest": message_digest,
+        "timeline": [
+            {
+                "sequence": index,
+                "messageId": row.get("messageId"),
+                "side": row.get("side"),
+                "createdAt": row.get("createdAt"),
+            }
+            for index, row in enumerate(message_digest, start=1)
+        ],
+        "turnIndex": [
+            {
+                "sequence": index,
+                "messageId": row.get("messageId"),
+                "side": row.get("side"),
+                "createdAt": row.get("createdAt"),
+            }
+            for index, row in enumerate(message_digest, start=1)
+        ],
+        "replyLinks": [],
+        "phaseWindows": [
+            {
+                "phaseNo": phase_no,
+                "messageStartId": message_start_id,
+                "messageEndId": message_end_id,
+                "messageCount": message_count,
+            }
+        ]
+        if dispatch_type != "final"
+        else [],
+        "coverageGuard": completeness,
+    }
+    input_validation = {
+        "status": "accepted" if completeness_complete else "blocked",
+        "blocked": not completeness_complete,
+        "dispatchType": dispatch_type,
+        "messageWindowValid": completeness_complete,
+        "messageCountExpected": message_count,
+        "messageCountObserved": len(observed_message_ids),
+        "sensitiveFieldHits": [],
+        "auditReasons": [] if completeness_complete else ["message_ids_missing"],
+    }
+
     return {
         "version": "v1",
         "dispatchType": dispatch_type,
@@ -121,6 +203,16 @@ def _build_case_dossier_from_request_payload(
         "sideDistribution": side_distribution,
         "speakerTags": speaker_tags,
         "messageDigest": message_digest,
+        "inputValidation": input_validation,
+        "redactionSummary": {
+            "status": "clean",
+            "identityFieldsRemoved": 0,
+            "semanticRedactionCount": 0,
+            "redactedMessageIds": [],
+            "auditReasons": [],
+        },
+        "transcriptSnapshot": transcript_snapshot,
+        "completeness": completeness,
     }
 
 

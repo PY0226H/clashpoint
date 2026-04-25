@@ -47,6 +47,13 @@ def test_evidence_ledger_should_build_entries_and_lookup() -> None:
     assert payload["stats"]["verdictReferencedReliabilityCounts"]["high"] >= 1
     assert payload["stats"]["verdictReferencedReliabilityCounts"]["low"] == 0
     assert payload["stats"]["conflictReasonCounts"]["agent2_path_alignment"] == 1
+    assert payload["evidenceSufficiency"]["passed"] is True
+    assert payload["evidence_sufficiency"]["status"] == "sufficient"
+    assert payload["reliabilityNotes"]["level"] == "high"
+    assert "winner" not in payload
+    assert payload["message_refs"] == payload["messageRefs"]
+    assert payload["source_citations"] == payload["sourceCitations"]
+    assert payload["conflict_sources"] == payload["conflictSources"]
     assert len(payload["sourceCitations"]) == 1
     assert payload["sourceCitations"][0]["sourceUrl"] == "https://example.com/a"
     assert len(payload["conflictSources"]) == 1

@@ -87,6 +87,25 @@ class JudgeCoreOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(completed.status, WORKFLOW_STATUS_CALLBACK_REPORTED)
         events = await self._workflow_orchestrator.list_events(job_id=9202)
+        status_stages = [
+            event.payload.get("judgeCoreStage")
+            for event in events
+            if event.event_type == "status_changed"
+        ]
+        self.assertEqual(
+            status_stages,
+            [
+                "blinded",
+                "case_built",
+                "claim_graph_ready",
+                "evidence_ready",
+                "panel_judged",
+                "fairness_checked",
+                "arbitrated",
+                "opinion_written",
+                "reported",
+            ],
+        )
         self.assertEqual(events[-1].payload.get("judgeCoreStage"), "reported")
         self.assertEqual(events[-1].payload.get("dispatchType"), "final")
         self.assertEqual(events[-1].payload.get("winner"), "pro")
@@ -108,6 +127,26 @@ class JudgeCoreOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(review_required.status, WORKFLOW_STATUS_REVIEW_REQUIRED)
         events_review = await self._workflow_orchestrator.list_events(job_id=9203)
+        status_stages_review = [
+            event.payload.get("judgeCoreStage")
+            for event in events_review
+            if event.event_type == "status_changed"
+        ]
+        self.assertEqual(
+            status_stages_review,
+            [
+                "blinded",
+                "case_built",
+                "claim_graph_ready",
+                "evidence_ready",
+                "panel_judged",
+                "fairness_checked",
+                "arbitrated",
+                "opinion_written",
+                "reported",
+                "review_required",
+            ],
+        )
         self.assertEqual(events_review[-1].payload.get("judgeCoreStage"), "review_required")
         self.assertEqual(events_review[-1].payload.get("dispatchType"), "final")
         self.assertEqual(events_review[-1].payload.get("reviewRequired"), True)

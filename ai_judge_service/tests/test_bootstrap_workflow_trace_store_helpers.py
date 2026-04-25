@@ -487,6 +487,15 @@ class BootstrapWorkflowTraceStoreHelpersTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(record["case_dossier"]["speakerTags"], ["A", "B"])
         self.assertEqual(len(record["case_dossier"]["messageDigest"]), 3)
+        self.assertTrue(record["case_dossier"]["completeness"]["complete"])
+        self.assertEqual(
+            record["case_dossier"]["transcriptSnapshot"]["messageIds"],
+            [100, 101, 102],
+        )
+        self.assertEqual(
+            record["case_dossier"]["inputValidation"]["status"],
+            "accepted",
+        )
 
     async def test_upsert_claim_ledger_should_skip_without_report_or_request(self) -> None:
         runtime, facts, _orchestrator, _trace_store = self._runtime()

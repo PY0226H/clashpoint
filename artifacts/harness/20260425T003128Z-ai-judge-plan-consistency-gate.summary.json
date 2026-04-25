@@ -1,0 +1,27 @@
+{
+  "run_id": "20260425T003128Z-ai-judge-plan-consistency-gate",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "arch_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md",
+  "consistency_section_found": true,
+  "arch_checklist_found": true,
+  "checks": [
+    {"label":"角色一致性","status":"pass","answer":"P35 明确以 `Clerk -> Recorder -> Claim Graph -> Evidence -> Panel -> Fairness Sentinel -> Chief Arbiter -> Opinion Writer` 为 Judge App 官方链路，不允许把 Evidence、Fairness 或 Opinion 折叠为不可观察的单 pipeline。"},
+    {"label":"数据一致性","status":"pass","answer":"P35 主体围绕 `case_dossier/claim_graph/evidence_ledger/verdict_ledger/fairness_report/opinion_pack` 六对象展开，并计划将当前混合 JSON 事实逐步收敛到可追踪 ledger/store 边界。"},
+    {"label":"门禁一致性","status":"pass","answer":"P35 要求 Fairness Sentinel 必须先于 Chief Arbiter，证据不足、panel 分歧、身份泄漏、稳定性不足时优先触发 draw/review/blocked_failed，不允许静默强判。"},
+    {"label":"边界一致性","status":"pass","answer":"P35 中 NPC Coach 与 Room QA 只建立 advisory-only 外壳和 shared platform core 复用边界，不写 `verdict_ledger`，不触发官方裁决链，不污染 Judge App。"},
+    {"label":"跨层一致性","status":"pass","answer":"P35 任何 API/DTO/callback/error/status 变更都要求同轮检查 `ai_judge_service`、`chat_server` 代理、前端 ops/domain SDK 与必要测试，不保留长期 alias 或双 payload。"},
+    {"label":"收口一致性","status":"pass","answer":"P35 区分 `local_reference_ready` 与真实环境 `pass`；当前没有真实环境时，只执行本地参考和 on-env 补证准备，不宣称 real-env 已通过。"}
+  ],
+  "missing_items": [],
+  "empty_items": [],
+  "placeholder_items": [],
+  "arch_missing_items": [],
+  "started_at": "2026-04-25T00:31:28Z",
+  "finished_at": "2026-04-25T00:31:28Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260425T003128Z-ai-judge-plan-consistency-gate.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260425T003128Z-ai-judge-plan-consistency-gate.summary.md"
+  }
+}

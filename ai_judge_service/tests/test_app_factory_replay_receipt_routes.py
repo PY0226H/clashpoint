@@ -67,6 +67,29 @@ class AppFactoryReplayReceiptRouteTests(
             internal_key=runtime.settings.ai_internal_key,
         )
         self.assertEqual(final_resp.status_code, 200)
+        workflow_events_before_replay = (
+            await runtime.workflow_runtime.orchestrator.list_events(job_id=5001)
+        )
+        final_status_stages = [
+            event.payload.get("judgeCoreStage")
+            for event in workflow_events_before_replay
+            if event.event_type == "status_changed"
+            and event.payload.get("dispatchType") == "final"
+        ]
+        self.assertEqual(
+            final_status_stages,
+            [
+                "blinded",
+                "case_built",
+                "claim_graph_ready",
+                "evidence_ready",
+                "panel_judged",
+                "fairness_checked",
+                "arbitrated",
+                "opinion_written",
+                "reported",
+            ],
+        )
         callback_total_before_replay = len(phase_calls) + len(final_calls)
 
         replay_resp = await self._post(

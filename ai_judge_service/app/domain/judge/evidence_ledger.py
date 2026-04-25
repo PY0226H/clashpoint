@@ -315,13 +315,55 @@ class EvidenceLedgerBuilder:
                         "primaryReason": primary_reason,
                     }
                 )
+        low_count = int(reliability_counts.get("low", 0))
+        medium_count = int(reliability_counts.get("medium", 0))
+        high_count = int(reliability_counts.get("high", 0))
+        total_entries = len(entries)
+        citation_count = len(source_citations)
+        message_ref_count = len(message_refs)
+        low_ratio = round(low_count / float(max(1, total_entries)), 4)
+        sufficient = total_entries > 0 and (message_ref_count > 0 or citation_count > 0) and low_ratio <= 0.5
+        review_signals: list[str] = []
+        if total_entries <= 0:
+            review_signals.append("evidence_missing")
+        if message_ref_count <= 0:
+            review_signals.append("message_refs_missing")
+        if citation_count <= 0:
+            review_signals.append("source_citations_missing")
+        if low_ratio > 0.5:
+            review_signals.append("low_reliability_ratio_high")
+        reliability_notes = {
+            "level": (
+                "high"
+                if sufficient and high_count >= max(medium_count, low_count)
+                else ("medium" if sufficient else "low")
+            ),
+            "lowReliabilityRatio": low_ratio,
+            "reviewSignals": review_signals,
+        }
+        evidence_sufficiency = {
+            "passed": sufficient,
+            "status": "sufficient" if sufficient else "insufficient",
+            "totalEntries": total_entries,
+            "messageRefCount": message_ref_count,
+            "sourceCitationCount": citation_count,
+            "conflictSourceCount": len(conflict_sources),
+            "reviewSignals": review_signals,
+        }
         return {
             "pipelineVersion": "v3-evidence-bundle",
             "entries": entries,
             "refsById": refs_by_id,
             "messageRefs": message_refs,
+            "message_refs": message_refs,
             "sourceCitations": source_citations,
+            "source_citations": source_citations,
             "conflictSources": conflict_sources,
+            "conflict_sources": conflict_sources,
+            "reliabilityNotes": reliability_notes,
+            "reliability_notes": reliability_notes,
+            "evidenceSufficiency": evidence_sufficiency,
+            "evidence_sufficiency": evidence_sufficiency,
             "stats": {
                 "totalEntries": len(entries),
                 "messageRefCount": len(message_refs),

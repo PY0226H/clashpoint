@@ -56,6 +56,11 @@ JUDGE_OPINION_KEYS: tuple[str, ...] = (
     "sideAnalysis",
     "verdictReason",
 )
+JUDGE_CASE_DOSSIER_KEYS: tuple[str, ...] = (
+    "caseId",
+    "dispatchType",
+    "roleOrder",
+)
 
 _ALLOWED_DISPATCH_TYPES = {"phase", "final"}
 _ALLOWED_WINNERS = {"pro", "con", "draw"}
@@ -74,6 +79,10 @@ def _merge_defaults(default_payload: dict[str, Any], value: dict[str, Any] | Non
 
 def _required_keys_missing(payload: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     return [key for key in keys if key not in payload]
+
+
+def _dict_payload(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _assert_required_keys(
@@ -101,8 +110,47 @@ class JudgeCaseDossier:
     rubric_version: str | None = None
     topic_domain: str | None = None
     role_order: tuple[str, ...] = JUDGE_ROLE_ORDER
+    phase: dict[str, Any] = field(default_factory=dict)
+    message_window: dict[str, Any] = field(default_factory=dict)
+    input_validation: dict[str, Any] = field(default_factory=dict)
+    redaction_summary: dict[str, Any] = field(default_factory=dict)
+    transcript_snapshot: dict[str, Any] = field(default_factory=dict)
+    completeness: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
+        input_validation = {
+            "status": "accepted",
+            "blocked": False,
+            "auditReasons": [],
+        }
+        input_validation.update(self.input_validation)
+        redaction_summary = {
+            "status": "clean",
+            "identityFieldsRemoved": 0,
+            "semanticRedactionCount": 0,
+            "redactedMessageIds": [],
+            "auditReasons": [],
+        }
+        redaction_summary.update(self.redaction_summary)
+        transcript_snapshot = {
+            "version": "recorder_case_dossier_v1",
+            "messageIds": [],
+            "messageDigest": [],
+            "timeline": [],
+            "turnIndex": [],
+            "replyLinks": [],
+            "phaseWindows": [],
+        }
+        transcript_snapshot.update(self.transcript_snapshot)
+        completeness = {
+            "guard": "case_dossier_completeness_v1",
+            "complete": True,
+            "status": "complete",
+            "coverageRatio": 1.0,
+            "missingMessageIds": [],
+            "invalidReplyLinks": [],
+        }
+        completeness.update(self.completeness)
         return {
             "caseId": int(self.case_id),
             "scopeId": self.scope_id,
@@ -120,6 +168,12 @@ class JudgeCaseDossier:
                 "topicDomain": self.topic_domain,
             },
             "roleOrder": list(self.role_order),
+            "phase": dict(self.phase),
+            "messageWindow": dict(self.message_window),
+            "inputValidation": input_validation,
+            "redactionSummary": redaction_summary,
+            "transcriptSnapshot": transcript_snapshot,
+            "completeness": completeness,
         }
 
 
@@ -215,7 +269,9 @@ def build_judge_role_domain_state(
     fairness_gate: dict[str, Any] | None = None,
     verdict: dict[str, Any] | None = None,
     opinion: dict[str, Any] | None = None,
+    case_dossier_enrichment: dict[str, Any] | None = None,
 ) -> JudgeRoleDomainState:
+    enrichment = dict(case_dossier_enrichment or {})
     return JudgeRoleDomainState(
         case_dossier=JudgeCaseDossier(
             case_id=case_id,
@@ -229,6 +285,12 @@ def build_judge_role_domain_state(
             judge_policy_version=judge_policy_version,
             rubric_version=rubric_version,
             topic_domain=topic_domain,
+            phase=_dict_payload(enrichment.get("phase")),
+            message_window=_dict_payload(enrichment.get("messageWindow")),
+            input_validation=_dict_payload(enrichment.get("inputValidation")),
+            redaction_summary=_dict_payload(enrichment.get("redactionSummary")),
+            transcript_snapshot=_dict_payload(enrichment.get("transcriptSnapshot")),
+            completeness=_dict_payload(enrichment.get("completeness")),
         ),
         claim_graph=dict(claim_graph) if isinstance(claim_graph, dict) else {},
         evidence_bundle=(
@@ -262,7 +324,7 @@ def validate_judge_app_domain_payload(payload: dict[str, Any]) -> None:
     _assert_required_keys(
         section="judge_workflow_case_dossier",
         payload=dossier,
-        keys=("caseId", "dispatchType", "roleOrder"),
+        keys=JUDGE_CASE_DOSSIER_KEYS,
     )
     try:
         case_id = int(dossier.get("caseId"))
@@ -279,6 +341,23 @@ def validate_judge_app_domain_payload(payload: dict[str, Any]) -> None:
     normalized_role_order = tuple(str(item or "").strip().lower() for item in role_order)
     if normalized_role_order != JUDGE_ROLE_ORDER:
         raise ValueError("judge_workflow_case_dossier_role_order_invalid")
+    for key in (
+        "inputValidation",
+        "redactionSummary",
+        "transcriptSnapshot",
+        "completeness",
+    ):
+        if key in dossier and not isinstance(dossier.get(key), dict):
+            raise ValueError(f"judge_workflow_case_dossier_{key}_not_dict")
+    completeness = dossier.get("completeness")
+    if isinstance(completeness, dict):
+        if not isinstance(completeness.get("complete"), bool):
+            raise ValueError("judge_workflow_case_dossier_completeness_complete_not_bool")
+        coverage_ratio = completeness.get("coverageRatio")
+        if isinstance(coverage_ratio, bool) or not isinstance(coverage_ratio, (int, float)):
+            raise ValueError("judge_workflow_case_dossier_completeness_coverage_ratio_invalid")
+        if float(coverage_ratio) < 0.0 or float(coverage_ratio) > 1.0:
+            raise ValueError("judge_workflow_case_dossier_completeness_coverage_ratio_invalid")
 
     claim_graph = workflow.get("claimGraph")
     if not isinstance(claim_graph, dict):

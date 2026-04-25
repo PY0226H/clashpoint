@@ -113,6 +113,22 @@ class JudgeCoreOrchestrator:
             event_payload=event_payload,
         )
         if review_required:
+            current = await self._workflow_orchestrator.get_job(job_id=job_id)
+            if current is None:
+                raise LookupError(f"workflow job not found: job_id={job_id}")
+            if current.status == WORKFLOW_STATUS_REVIEW_REQUIRED:
+                return current
+            # 复核分支也先记录已回调事实，再把最终状态收敛到 review_required。
+            callback_payload = self._build_event_payload(
+                dispatch_type=dispatch_type,
+                stage=JUDGE_CORE_STAGE_REPORTED,
+                event_payload=event_payload,
+            )
+            await self._advance_to_callback_reported(
+                job_id=job_id,
+                dispatch_type=dispatch_type,
+                final_payload=callback_payload,
+            )
             return await self._workflow_orchestrator.mark_review_required(
                 job_id=job_id,
                 event_payload=payload,
@@ -176,6 +192,16 @@ class JudgeCoreOrchestrator:
 
         progress_chain = [
             (
+                WORKFLOW_STATUS_BLINDED,
+                JUDGE_CORE_STAGE_BLINDED,
+                self._workflow_orchestrator.mark_blinded,
+            ),
+            (
+                WORKFLOW_STATUS_CASE_BUILT,
+                JUDGE_CORE_STAGE_CASE_BUILT,
+                self._workflow_orchestrator.mark_case_built,
+            ),
+            (
                 WORKFLOW_STATUS_CLAIM_GRAPH_READY,
                 JUDGE_CORE_STAGE_CLAIM_GRAPH_READY,
                 self._workflow_orchestrator.mark_claim_graph_ready,
@@ -229,12 +255,13 @@ class JudgeCoreOrchestrator:
             ),
         ]
 
-        if current.status in {WORKFLOW_STATUS_REVIEW_REQUIRED, WORKFLOW_STATUS_DRAW_PENDING_VOTE}:
-            chain = review_resume_chain
-        elif current.status in {WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUS_BLINDED, WORKFLOW_STATUS_CASE_BUILT}:
+        progress_statuses = [status for status, _stage, _transition in progress_chain]
+        if current.status == WORKFLOW_STATUS_QUEUED:
             chain = progress_chain
-        elif current.status == WORKFLOW_STATUS_CALLBACK_REPORTED:
-            return current
+        elif current.status in progress_statuses:
+            chain = progress_chain[progress_statuses.index(current.status) + 1 :]
+        elif current.status in {WORKFLOW_STATUS_REVIEW_REQUIRED, WORKFLOW_STATUS_DRAW_PENDING_VOTE}:
+            chain = review_resume_chain
         else:
             return await self._workflow_orchestrator.mark_callback_reported(
                 job_id=job_id,
