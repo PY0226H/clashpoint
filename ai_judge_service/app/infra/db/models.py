@@ -170,6 +170,41 @@ class JudgeLedgerSnapshotModel(Base):
     )
 
 
+class JudgeTrustRegistrySnapshotModel(Base):
+    __tablename__ = "judge_trust_registry_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dispatch_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    registry_version: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="trust-registry-v1",
+    )
+    case_commitment: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    verdict_attestation: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    challenge_review: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    kernel_version: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    audit_anchor: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    public_verify: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    component_hashes: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "dispatch_type",
+            "trace_id",
+            "registry_version",
+            name="uq_judge_trust_registry_case_dispatch_trace_version",
+        ),
+        Index("ix_judge_trust_registry_case_updated", "case_id", "updated_at"),
+        Index("ix_judge_trust_registry_trace", "trace_id"),
+    )
+
+
 class FairnessBenchmarkRunModel(Base):
     __tablename__ = "fairness_benchmark_runs"
 

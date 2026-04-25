@@ -1,64 +1,93 @@
 # AI_Judge_Service 企业级 Agent 方案章节完成度映射（2026-04-13）
 
-更新时间：2026-04-21  
-状态：已更新（对齐 P31：six-object 合同硬化 + policy-kernel 绑定强化 + ops/read-model/pack v7 + 本地回归包）  
+更新时间：2026-04-25
+状态：已更新（对齐 P35 stage closure；P36 已启动并完成 trust-registry-store foundation）
 映射对象：[AI_judge_service 企业级 Agent 服务设计方案（2026-04-13）](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md)
 
 ## 1. 判定口径
 
 1. 已落地：主链代码已存在，且可通过当前测试或收口证据验证。
-2. 部分落地：主链能力已上线，但仍缺关键子能力或治理闭环。
-3. 未落地：当前仅为设计目标，仓库内无对应主链实现。
-4. 环境阻塞：实现入口存在，但最终验收依赖真实环境或真实样本。
+2. 基本落地：主链已闭环，仍有运营化、真实环境或平台化增强项。
+3. 部分落地：主链能力已出现，但仍缺关键子能力、持久化事实源或治理闭环。
+4. 未落地：当前仅为设计目标，仓库内无对应主链实现。
+5. 环境阻塞：实现入口存在，但最终验收依赖真实环境、真实样本、真实对象存储或 on-env 窗口。
 
-## 2. 章节级完成度总览
+## 2. 当前总进度判断
+
+| 维度 | 当前阶段 | 结论 |
+| --- | --- | --- |
+| Enterprise MVP（方案 Phase 1） | 基本落地 | 8 Agent 官方裁决主链、六对象 ledger、workflow、trace/replay、review/audit 已形成本地闭环 |
+| Fairness Hardened（方案 Phase 2） | 部分落地（高） | Fairness gate、panel disagreement、local reference benchmark/freeze 已完成；真实样本 benchmark 与 real-env pass 待窗口 |
+| Adaptive Judge Platform（方案 Phase 3） | 部分落地 | gateway core、policy/prompt/tool registry、ops read model 已推进；auto-calibration、多模型 panel 生产化仍未完成 |
+| Verifiable Trust Layer（方案第15章 Phase A） | 部分落地（高） | commitment/attestation/challenge/audit/public verify 合同与路由已出现；P36 已新增 durable trust registry store foundation，write-through 与 artifact manifest 待后续 |
+| Protocol Expansion Layer（方案第15章 Phase B-D） | 未落地（按计划后置） | Public verification 外部化、Identity Proof、Constitution Registry、Reason Passport、on-chain anchor 均不属于当前主线 |
+| 真实环境闭环 | 环境阻塞 | 当前证据为 `local_reference_ready`，不得宣称 real-env `pass` |
+
+一句话结论：
+
+`截至 P36 首包，AI Judge 已从“评分器/大 prompt 服务”推进到“本地可验证的裁判庭主链”，并开始拥有可持久化 trust registry 事实源；下一步应把 phase/final 成功报告 write-through 到 registry，并继续补 artifact/audit manifest。`
+
+## 3. 章节级完成度总览
 
 | 方案章节 | 目标摘要 | 当前完成度 | 核心证据 | 结论 |
 | --- | --- | --- | --- | --- |
-| 1. 一句话结论 | 从“评分器”升级为“裁判庭系统” | 部分落地（高） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 裁判主链已平台化并具备 challenge/fairness/replay 能力，但多 Agent 平台入口仍在下一阶段 |
-| 2. 产品目标重新定义 | 丰富判决展示、公正、可运营 | 部分落地（高） | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [AI_Judge_Fairness_Benchmark_冻结口径-2026-04-15.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Fairness_Benchmark_冻结口径-2026-04-15.md), [AI_Judge_Runtime_SLA_冻结口径-2026-04-15.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Runtime_SLA_冻结口径-2026-04-15.md) | 富展示和公平治理主链已成型；真实环境 pass 与运营化治理仍待收口 |
-| 3. 为什么必须是 Agent | 具备分工、状态、工具、门禁 | 部分落地 | [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py), [test_agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_agent_runtime.py) | 已具备 runtime 壳与分工映射，但 NPC/Room QA 等新 Agent 入口尚未落地 |
-| 4. 总体设计理念 | 公平优先、事实先锁定、可回放 | 部分落地（高） | [trace_store.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/trace_store.py), [ai_judge_runtime_ops_pack.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_runtime_ops_pack.sh), [ai_judge_real_env_window_closure.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_real_env_window_closure.sh) | trace/replay/failed callback/challenge/fairness 收口已接通；real-env 仍是最后阻塞 |
-| 5. 推荐架构总览 | 法庭式流水线 | 部分落地（高） | [app/](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app), [infra/db/models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/db/models.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) | 分层架构与六对象主链已稳定，Prompt/Tool Registry 产品化治理读面已落地；后续仍需继续降低 `app_factory` 集中复杂度 |
-| 6. 法庭式 Agent 分工 | 8 类 Agent 职责闭环 | 部分落地 | 见“第3节 Agent 子项映射” | Clerk/Recorder/Fairness/Arbiter/Opinion 已有主链；Evidence 深化与 Agent 入口扩展待后续阶段 |
-| 7. 企业级核心数据对象 | Case/Claim/Evidence/Verdict/Fairness/Opinion | 部分落地（高） | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/db/models.py), [facts/models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/facts/models.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 六对象落库 + case 级 courtroom read model 已连通；真实环境口径冻结仍待窗口 |
-| 8. 丰富判决内容 | 用户层/高级层/Ops 层三层展示 | 部分落地（高） | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py), [ai_judge_ops_read_model_export.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_ops_read_model_export.sh) | 用户展示主字段稳定，Ops read model 已升级 v7（新增 `caseChainCoverage/fairnessGateOverview/policyKernelBinding` 聚合与 courtroom policy-kernel 可观测字段）；高级解释仍可继续增强 |
-| 9. 公平性保证机制 | 盲化、镜像、扰动、复核、benchmark | 部分落地（高） | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py), [ai_judge_fairness_benchmark_freeze.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_fairness_benchmark_freeze.sh) | 盲化 + panel gate + review/challenge + drift governance v1 + shadow-linked release gate 已落地；real-env pass 待完成 |
-| 10. 企业级工程架构 | Gateway/Orchestrator/Runtime/Ledger/Ops | 部分落地 | [core/workflow/orchestrator.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/core/workflow/orchestrator.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 模块化单体满足当前阶段目标，后续不阻塞业务情况下再评估拆分 |
-| 11. Agent Runtime 设计 | Prompt/Tool/Policy Registry + Model Gateway | 部分落地（高） | [policy_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/policy_registry.py), [registry_product_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_product_runtime.py), [registry_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_routes.py) | policy/prompt/tool 主链与 prompt-tool governance 读面已落地，且 `policyKernel(version/kernelHash/kernelVector)` 与 gate/override 审计字段已贯通；真实环境窗口验证仍待完成 |
-| 12. 企业级可靠性要求 | 可靠性/安全/观测/变更安全 | 部分落地（高） | [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py), [trace_store.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/trace_store.py), [scripts/harness/](/Users/panyihang/Documents/EchoIsle/scripts/harness) | 幂等、重放、告警、收口自动化已具备；真实环境稳定性结论仍待验证 |
-| 13. 对外接口模型 | cases/trace/replay/fairness/review/policies | 部分落地（高） | [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py), [test_app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/tests/test_app_factory.py) | 已新增 `registries/prompt-tool/governance`、`evidence-claim/ops-queue`、`courtroom/drilldown-bundle`，并完成 `ops/read-model/pack v7` 聚合；剩余缺口集中在真实环境验收 |
-| 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地（文档+实现一致） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md) | 当前开发轨迹与继承策略一致 |
-| 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_attestation.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_attestation.py), [trust_commitment_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_commitment_contract.py), [trust_verdict_attestation_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_verdict_attestation_contract.py), [trust_challenge_review_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_review_contract.py) | Trust PhaseA/PhaseB 三读面契约冻结已完成，公开可验证承诺与协议层扩展仍未进入主线 |
-| 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 部分落地 | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | 已守住主要边界，后续继续防止 NPC/Room QA 侵入官方裁决链 |
-| 17. 推荐落地路线 | Phase1/2/3 路线图 | 部分落地（Phase3 主线进行中） | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [20260421T070425Z-ai-judge-stage-closure-execute.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260421T070425Z-ai-judge-stage-closure-execute.md) | Phase1/2 主链已收敛，当前处于 Phase3 的 P31 执行段（six-object/policy-kernel/ops-pack-v7 与本地回归包已完成，下一步是 app_factory 热点继续下沉与 real-env pass window） |
-| 18. 最后产品判断 | 企业级裁判系统目标态 | 部分落地（明确推进） | 同上 | 方向正确，工程主链已显著成型；距离“完整目标态”仍有运营化与平台化差距 |
+| 1. 一句话结论 | 从“评分器”升级为“裁判庭系统” | 基本落地 | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [P35 归档](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260425T022246Z-ai-judge-stage-closure-execute.md) | 裁判庭主链已落地，下一步是可信制度层与生产化证据 |
+| 2. 产品目标重新定义 | 丰富判决展示、公正、可运营 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) | 富展示、review/draw/blocked 语义与 ops 读面已成型；真实环境可运营性待补 |
+| 3. 为什么必须是 Agent | 分工、状态、工具、门禁 | 基本落地 | [judge_workflow_roles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_workflow_roles.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | 8 Agent role runtime 与 advisory shell 均已出现；交互型 Agent 仍只做外壳 |
+| 4. 总体设计理念 | 公平优先、事实先锁定、可回放 | 基本落地 | [trace_store_boundaries.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/trace_store_boundaries.py), [ai_judge_runtime_ops_pack.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.md) | locked verdict、opinion fact lock、trace/replay/audit 均已接通；real-env 仍后置 |
+| 5. 推荐架构总览 | 法庭式流水线 + Ops/Replay/Audit | 基本落地 | [app/](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app), [route_group_trust.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_trust.py) | 模块化单体与 route group 架构已稳定；P36 继续补 trust/artifact core |
+| 6. 法庭式 Agent 分工 | 8 类 Agent 职责闭环 | 基本落地 | 见“第4节 Agent 子项映射” | 官方裁决链角色齐备；运行 profile、多模型与生产校准仍可增强 |
+| 7. 企业级核心数据对象 | Case/Claim/Evidence/Verdict/Fairness/Opinion | 基本落地 | [ledger_objects.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/ledger_objects.py), [repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py), [20260424_0008_judge_ledger_snapshots.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/alembic/versions/20260424_0008_judge_ledger_snapshots.py) | 六对象 typed snapshot 与 `judge_ledger_snapshots` 已落地；独立 artifact refs 待 P36 |
+| 8. 丰富判决内容 | 用户层/高级层/Ops 层展示 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [case_read_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/case_read_routes.py) | 用户报告、ops summary、case overview 已具备；高级可视化仍可继续产品化 |
+| 9. 公平性保证机制 | 盲化、镜像、扰动、复核、benchmark | 部分落地（高） | [fairness_analysis.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_analysis.py), [ai_judge_fairness_benchmark_freeze.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_fairness_benchmark_freeze.sh) | 本地 reference freeze 已达成；真实样本 benchmark、style/swap 生产数据闭环待 on-env |
+| 10. 企业级工程架构 | Gateway/Orchestrator/Runtime/Ledger/Ops | 基本落地 | [orchestrator.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/core/workflow/orchestrator.py), [gateway_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/gateway_runtime.py), [repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/trust/repository.py) | Postgres workflow、gateway core、ledger/read model 已形成；trust registry store foundation 已新增，Object Store 与主链 write-through 待后续 |
+| 11. Agent Runtime 设计 | Prompt/Tool/Policy Registry + Model Gateway | 部分落地（高） | [policy_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/policy_registry.py), [registry_product_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_product_runtime.py) | registry 与 gateway trace 已进入主链；多模型 panel 与 shadow rollout 生产化待后续 |
+| 12. 企业级可靠性要求 | 幂等、callback、trace、replay、观测 | 基本落地 | [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py), [replay_audit_ops.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/replay_audit_ops.py), [scripts/harness/](/Users/panyihang/Documents/EchoIsle/scripts/harness) | 本地可靠性与证据脚本充足；真实环境稳定性和对象化审计包待补 |
+| 13. 对外接口模型 | cases/trace/replay/fairness/review/policies | 基本落地 | [route_group_case_read.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_case_read.py), [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py), [route_group_trust.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_trust.py) | 内部接口层已覆盖大多数设计面；P36 需稳定 public verify / trust coverage 字段 |
+| 14. 继承映射表 | 从旧逻辑到新架构的继承策略 | 已落地 | [P35 归档](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260425T022246Z-ai-judge-stage-closure-execute.md) | P35 已完成从旧 pipeline 资产到六对象/role runtime/gateway core 的迁移主线 |
+| 15. 可验证信任层与协议化扩展 | commitment/attestation/challenge/protocol | 部分落地（高） | [trust_phasea.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_phasea.py), [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py), [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/trust/models.py), [20260425_0009_judge_trust_registry_snapshots.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/alembic/versions/20260425_0009_judge_trust_registry_snapshots.py) | trust 合同、路由、challenge ops queue 与 durable registry store foundation 已出现；write-through、artifact manifest 与外部验证仍待 P36/后续 |
+| 16. 不推荐设计边界 | 不做画像污染、不过早 memory 主链等 | 基本守住 | [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py), [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py) | NPC/Room QA 已标注 advisory-only；topic memory/Reason Passport 未进入单场裁决主链 |
+| 17. 推荐落地路线 | Phase1/2/3 路线图 | Phase1 基本完成，Phase2/3 进行中 | [当前开发计划](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md), [completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) | 当前已从 Phase1 主链转入 Phase2/3 的生产化、可信化、运营化阶段 |
+| 18. 最后产品判断 | 企业级裁判系统目标态 | 方向成立，未完全完成 | 同上 | 已具备“制度化裁判庭”的本地形态；距离完整目标态还差真实环境、trust durable source、artifact/object store 与公开验证外部化 |
 
-## 3. Agent 子项映射（方案第6章）
+## 4. Agent 子项映射（方案第6章）
 
 | Agent 子项 | 目标 | 当前完成度 | 证据 | 主要缺口 |
 | --- | --- | --- | --- | --- |
-| 6.1 Clerk Agent | 收案、盲化、准入门禁 | 已落地（核心） | [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/models.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 语义级盲化策略仍可继续细化 |
-| 6.2 Recorder Agent | 时间线重建与结构化 transcript | 部分落地（高） | [phase_pipeline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/phase_pipeline.py), [claim_graph.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/claim_graph.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | case 级 courtroom read model 已落地，timeline 细粒度运营检索仍可增强 |
-| 6.3 Claim Graph Agent | 争点图谱构建 | 部分落地（高） | [claim_graph.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/claim_graph.py), [models.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/db/models.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) | 已有 claim ledger v3，且 courtroom list/ops pack v7 已纳入 claim 与 case-chain 轻摘要；claim graph 深层运营检索仍可增强 |
-| 6.4 Evidence Agent | 检索与证据核验 | 部分落地（高） | [runtime_rag.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_rag.py), [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 已补齐 evidence/claim ops queue 批量治理入口；证据核验策略与工具注册表仍可继续产品化 |
-| 6.5 Judge Panel Agent | 多法官独立判定 | 部分落地（高） | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py) | A/B/C 结构已独立，运行 profile 独立化与策略版本治理待继续深化 |
-| 6.6 Fairness Sentinel Agent | 稳定性与公平门禁 | 部分落地（高） | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py), [ai_judge_fairness_benchmark_freeze.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_fairness_benchmark_freeze.sh), [ai_judge_real_env_window_closure.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_real_env_window_closure.sh) | drift governance v1 与 ingest 已落地，且 release gate v2 已接入 shadow；real-env pass 待完成 |
-| 6.7 Chief Arbiter Agent | 汇总裁决与状态决策 | 部分落地（高） | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) | 复核/挑战主链已具备，仍需与 registry triple 主链完全绑定 |
-| 6.8 Opinion Writer Agent | 生成可读裁决书 | 部分落地（高） | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) | 基础裁决书稳定，Ops v7 输出已纳入 courtroom/review/trust/evidence/registry 摘要与 policy-kernel/gate 观测；高级解释仍可增强 |
+| 6.1 Clerk Agent | 收案、盲化、准入门禁 | 基本落地 | [judge_workflow_roles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_workflow_roles.py), [judge_app_domain.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_app_domain.py) | 语义级盲化策略仍可继续结合真实样本校准 |
+| 6.2 Recorder Agent | 时间线重建与结构化 transcript | 基本落地 | [judge_workflow_roles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_workflow_roles.py), [trace_store_boundaries.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/trace_store_boundaries.py) | transcript/replay snapshot 对象化存储待 P36 |
+| 6.3 Claim Graph Agent | 争点图谱构建 | 基本落地 | [claim_graph.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/claim_graph.py), [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py) | 深层 claim graph 运营检索与可视化仍可增强 |
+| 6.4 Evidence Agent | 检索与证据核验 | 基本落地 | [evidence_ledger.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/evidence_ledger.py), [runtime_rag.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_rag.py), [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py) | Evidence pack artifact 化、citation verifier 产品化待 P36/后续 |
+| 6.5 Judge Panel Agent | 多法官独立判定 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [panel_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_routes.py) | 多模型 panel 与策略版本生产化仍待后续 |
+| 6.6 Fairness Sentinel Agent | 稳定性与公平门禁 | 部分落地（高） | [fairness_analysis.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_analysis.py), [fairness_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_runtime_routes.py) | 真实样本 benchmark 与 on-env pass 待环境 |
+| 6.7 Chief Arbiter Agent | 汇总裁决与状态决策 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py), [repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/trust/repository.py) | durable trust registry store foundation 已补；attestation write-through 绑定待 P36 后续模块 |
+| 6.8 Opinion Writer Agent | 生成可读裁决书 | 基本落地 | [final_report.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/domain/judge/final_report.py), [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) | 裁决书 artifact 化、audit export 引用待 P36 |
 
-## 4. 关键结论（当前真实状态）
+## 5. 关键结论（当前真实状态）
 
-1. 当前阶段已进入 `P31`，主链重点从“功能补齐”转向“合同硬化 + 可运维聚合 + 架构一致性收敛”。
-2. 截至 2026-04-21 已完成：
-   - `six-object contract hardening v1`：在 [judge_app_domain.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_app_domain.py) 强化 `case_dossier/claim_graph/evidence_bundle/verdict_ledger/fairness_report/opinion_pack` 的必需键与跨对象一致性约束。
-   - `policy-kernel binding hardening v1`：在 [policy_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/policy_registry.py)、[registry_product_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_product_runtime.py)、[registry_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_routes.py) 贯通 `policyKernel` 稳定快照与 gate/override 审计字段。
-   - `ops-read-model-pack v7`：在 [ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/ops_read_model_pack.py) 新增 `caseChainCoverage/fairnessGateOverview/policyKernelBinding` 三段聚合，并扩展 courtroom item policy-kernel 可观测字段。
-   - `local regression bundle v1`：完成 `ruff + pytest -q + runtime_ops_pack(local_reference_ready)`，最新工件为 [20260421T215207Z-ai-judge-runtime-ops-pack.summary.json](/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260421T215207Z-ai-judge-runtime-ops-pack.summary.json)。
-3. 当前主要阻塞项仍是 `real-env pass window`；本地侧 P31 主链已进入可收口状态。
+1. 当前阶段已完成 `P35 stage closure`，P35 主体成果包括：
+   - 六对象 typed ledger snapshot 与 `judge_ledger_snapshots` 表。
+   - durable workflow mainline 与 ordered events。
+   - Clerk/Recorder/Claim/Evidence/Panel/Fairness/Arbiter/Opinion role runtime 主链。
+   - Opinion Writer ledger-driven fact lock。
+   - LLM/Knowledge Gateway core convergence。
+   - trace/replay/audit store boundary split。
+   - ops read model readContract 与 lifecycle overview。
+   - NPC/Room QA advisory-only shell。
+   - local reference regression pack，状态为 `local_reference_ready`。
+2. 当前最核心的未完成项不是“能不能判”，而是“可信制度层能不能从 durable store 进一步接入主链写入、对象化审计包与可公开验证”。
+3. 方案第15章已有多项合同和路由雏形：
+   - [trust_commitment_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_commitment_contract.py)
+   - [trust_verdict_attestation_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_verdict_attestation_contract.py)
+   - [trust_challenge_review_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_challenge_review_contract.py)
+   - [trust_public_verify_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/trust_public_verify_contract.py)
+4. P36 首包已补独立 durable registry store foundation；trust 层仍需 write-through 到 phase/final 主链，架构方案中的 Object Store 也尚未落地主链 port/adapter。
+5. 当前主要环境阻塞仍是 `real-env pass window`；所有真实环境结论必须等 `REAL_CALIBRATION_ENV_READY=true` 与真实样本窗口具备后再写入。
 
-## 5. 下一步优先级（收口后）
+## 6. 下一步优先级
 
-1. 继续推进 `ai-judge-p31-app-factory-hotspot-split-v2`，降低 `app_factory.py` 剩余高耦合路由装配复杂度。
-2. 在真实环境窗口可用后执行 `ai-judge-p31-real-env-pass-window-execute-on-env`，补齐 `pass` 证据。
-3. 执行 `ai-judge-p31-stage-closure-execute`，归档 P31 阶段计划与证据快照。
+1. 执行 `ai-judge-p36-trust-registry-write-through-pack`，让 phase/final 成功报告写入 trust registry，并让 trust routes 优先读取 durable source。
+2. 执行 `ai-judge-p36-public-verify-redaction-pack`，冻结 public verify 字段分层与禁止泄露字段。
+3. 执行 `ai-judge-p36-challenge-review-state-machine-pack`，把 challenge/request/review/decision/close 接到 registry 状态机。
+4. 执行 `ai-judge-p36-artifact-store-port-local-pack` 与 `ai-judge-p36-audit-anchor-export-pack`，补齐本地 artifact refs、manifest 与 audit anchor export。
+5. 在真实环境具备后执行 `ai-judge-p36-real-env-pass-window-execute-on-env`，补齐真实环境 `pass` 证据。
