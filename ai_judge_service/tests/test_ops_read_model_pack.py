@@ -4,14 +4,19 @@ import unittest
 
 from app.applications.ops_read_model_pack import (
     OPS_READ_MODEL_PACK_V5_ADAPTIVE_SUMMARY_KEYS,
+    OPS_READ_MODEL_PACK_V5_ARTIFACT_COVERAGE_KEYS,
+    OPS_READ_MODEL_PACK_V5_AUDIT_ANCHOR_STATUS_KEYS,
     OPS_READ_MODEL_PACK_V5_CASE_CHAIN_COVERAGE_KEYS,
     OPS_READ_MODEL_PACK_V5_CASE_LIFECYCLE_OVERVIEW_KEYS,
+    OPS_READ_MODEL_PACK_V5_CHALLENGE_REVIEW_STATE_KEYS,
     OPS_READ_MODEL_PACK_V5_FAIRNESS_GATE_OVERVIEW_KEYS,
     OPS_READ_MODEL_PACK_V5_FILTER_KEYS,
     OPS_READ_MODEL_PACK_V5_JUDGE_WORKFLOW_COVERAGE_KEYS,
     OPS_READ_MODEL_PACK_V5_POLICY_KERNEL_BINDING_KEYS,
+    OPS_READ_MODEL_PACK_V5_PUBLIC_VERIFY_STATUS_KEYS,
     OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS,
     OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS,
+    OPS_READ_MODEL_PACK_V5_TRUST_COVERAGE_KEYS,
     OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS,
     build_ops_read_model_pack_adaptive_summary,
     build_ops_read_model_pack_case_chain_coverage,
@@ -21,6 +26,7 @@ from app.applications.ops_read_model_pack import (
     build_ops_read_model_pack_judge_workflow_coverage,
     build_ops_read_model_pack_policy_kernel_binding,
     build_ops_read_model_pack_read_contract,
+    build_ops_read_model_pack_trust_artifact_coverage,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
@@ -101,6 +107,55 @@ class OpsReadModelPackTests(unittest.TestCase):
                 "errorCount": 0,
                 "items": [],
                 "errors": [],
+            },
+            "trustCoverage": {
+                "sampledCaseCount": 0,
+                "completeCount": 0,
+                "partialCount": 0,
+                "missingCount": 0,
+                "completeRate": 0.0,
+                "byComponent": {
+                    "caseCommitment": 0,
+                    "verdictAttestation": 0,
+                    "challengeReview": 0,
+                    "kernelVersion": 0,
+                    "auditAnchor": 0,
+                },
+                "sourceCounts": {},
+            },
+            "publicVerifyStatus": {
+                "sampledCaseCount": 0,
+                "verifiedCount": 0,
+                "failedCount": 0,
+                "pendingCount": 0,
+                "errorCount": 0,
+                "reasonCounts": {},
+            },
+            "challengeReviewState": {
+                "sampledCaseCount": 0,
+                "reviewRequiredCount": 0,
+                "openChallengeCount": 0,
+                "totalChallengeCount": 0,
+                "challengeStateCounts": {},
+                "reviewStateCounts": {},
+            },
+            "auditAnchorStatus": {
+                "sampledCaseCount": 0,
+                "readyCount": 0,
+                "pendingCount": 0,
+                "missingCount": 0,
+                "anchorHashPresentCount": 0,
+                "artifactManifestHashPresentCount": 0,
+                "statusCounts": {},
+            },
+            "artifactCoverage": {
+                "sampledCaseCount": 0,
+                "readyCount": 0,
+                "pendingCount": 0,
+                "missingCount": 0,
+                "manifestHashPresentCount": 0,
+                "artifactRefCount": 0,
+                "artifactKindCounts": {},
             },
             "judgeWorkflowCoverage": {
                 "totalCases": 0,
@@ -289,6 +344,109 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(payload["reviewRequiredCount"], 2)
         self.assertEqual(payload["openChallengeCount"], 3)
 
+    def test_build_ops_read_model_pack_trust_artifact_coverage_should_count_statuses(
+        self,
+    ) -> None:
+        sections = build_ops_read_model_pack_trust_artifact_coverage(
+            trust_items=[
+                {
+                    "trustArtifactSummary": {
+                        "source": "trust_registry",
+                        "trustCompleteness": {
+                            "caseCommitment": True,
+                            "verdictAttestation": True,
+                            "challengeReview": True,
+                            "kernelVersion": True,
+                            "auditAnchor": True,
+                            "complete": True,
+                        },
+                        "publicVerifyStatus": {"verified": True, "reason": "ok"},
+                        "challengeReview": {
+                            "reviewRequired": True,
+                            "challengeState": "under_internal_review",
+                            "reviewState": "pending_review",
+                            "totalChallenges": 2,
+                        },
+                        "auditAnchor": {
+                            "anchorStatus": "artifact_ready",
+                            "anchorHashPresent": True,
+                            "artifactManifestHashPresent": True,
+                        },
+                        "artifactCoverage": {
+                            "ready": True,
+                            "artifactRefCount": 5,
+                            "artifactKindCounts": {"audit_pack": 1},
+                        },
+                    }
+                },
+                {
+                    "trustArtifactSummary": {
+                        "source": "report_payload",
+                        "trustCompleteness": {
+                            "caseCommitment": True,
+                            "verdictAttestation": False,
+                            "challengeReview": False,
+                            "kernelVersion": False,
+                            "auditAnchor": False,
+                            "complete": False,
+                        },
+                        "publicVerifyStatus": {
+                            "verified": False,
+                            "reason": "registry_snapshot_missing",
+                        },
+                        "challengeReview": {
+                            "reviewRequired": False,
+                            "challengeState": None,
+                            "reviewState": "not_required",
+                            "totalChallenges": 0,
+                        },
+                        "auditAnchor": {
+                            "anchorStatus": "missing",
+                            "anchorHashPresent": False,
+                            "artifactManifestHashPresent": False,
+                        },
+                        "artifactCoverage": {
+                            "ready": False,
+                            "artifactRefCount": 0,
+                            "artifactKindCounts": {},
+                        },
+                    }
+                },
+            ],
+            trust_errors=[{"caseId": 103, "errorCode": "verify_failed"}],
+            open_challenge_states={"under_internal_review"},
+        )
+        self.assertEqual(
+            set(sections["trustCoverage"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_TRUST_COVERAGE_KEYS),
+        )
+        self.assertEqual(
+            set(sections["publicVerifyStatus"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_PUBLIC_VERIFY_STATUS_KEYS),
+        )
+        self.assertEqual(
+            set(sections["challengeReviewState"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_CHALLENGE_REVIEW_STATE_KEYS),
+        )
+        self.assertEqual(
+            set(sections["auditAnchorStatus"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_AUDIT_ANCHOR_STATUS_KEYS),
+        )
+        self.assertEqual(
+            set(sections["artifactCoverage"].keys()),
+            set(OPS_READ_MODEL_PACK_V5_ARTIFACT_COVERAGE_KEYS),
+        )
+        self.assertEqual(sections["trustCoverage"]["sampledCaseCount"], 3)
+        self.assertEqual(sections["trustCoverage"]["completeCount"], 1)
+        self.assertEqual(sections["trustCoverage"]["partialCount"], 1)
+        self.assertEqual(sections["trustCoverage"]["missingCount"], 1)
+        self.assertEqual(sections["publicVerifyStatus"]["verifiedCount"], 1)
+        self.assertEqual(sections["publicVerifyStatus"]["pendingCount"], 1)
+        self.assertEqual(sections["publicVerifyStatus"]["errorCount"], 1)
+        self.assertEqual(sections["challengeReviewState"]["openChallengeCount"], 1)
+        self.assertEqual(sections["auditAnchorStatus"]["readyCount"], 1)
+        self.assertEqual(sections["artifactCoverage"]["artifactRefCount"], 5)
+
     def test_build_ops_read_model_pack_judge_workflow_coverage_should_count_full_partial_missing(
         self,
     ) -> None:
@@ -443,7 +601,9 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertIn("/internal/judge/ops/read-model/pack", payload["opsRoutes"])
         self.assertIn("winner", payload["fieldLayers"]["userVisible"])
         self.assertIn("caseLifecycleOverview", payload["fieldLayers"]["opsVisible"])
+        self.assertIn("artifactCoverage", payload["fieldLayers"]["opsVisible"])
         self.assertIn("policyKernelHash", payload["fieldLayers"]["internalAudit"])
+        self.assertIn("artifactManifestHash", payload["fieldLayers"]["internalAudit"])
         self.assertTrue(payload["errorSemantics"]["structuredErrorCodeRequired"])
         self.assertFalse(payload["errorSemantics"]["rawStringFallbackAllowed"])
 
@@ -603,6 +763,11 @@ class OpsReadModelPackTests(unittest.TestCase):
             policy_gate_simulation=seed["policyGateSimulation"],
             adaptive_summary=seed["adaptiveSummary"],
             trust_overview=seed["trustOverview"],
+            trust_coverage=seed["trustCoverage"],
+            public_verify_status=seed["publicVerifyStatus"],
+            challenge_review_state=seed["challengeReviewState"],
+            audit_anchor_status=seed["auditAnchorStatus"],
+            artifact_coverage=seed["artifactCoverage"],
             judge_workflow_coverage=seed["judgeWorkflowCoverage"],
             case_lifecycle_overview=seed["caseLifecycleOverview"],
             case_chain_coverage=seed["caseChainCoverage"],

@@ -70,6 +70,46 @@ class CaseOverviewContractTests(unittest.TestCase):
                     "provider": "mock",
                 }
             ],
+            "trustArtifactSummary": {
+                "source": "trust_registry",
+                "caseId": 9401,
+                "dispatchType": "final",
+                "traceId": "trace-final-9401",
+                "trustCompleteness": {
+                    "caseCommitment": True,
+                    "verdictAttestation": True,
+                    "challengeReview": True,
+                    "kernelVersion": True,
+                    "auditAnchor": True,
+                    "complete": True,
+                },
+                "publicVerifyStatus": {
+                    "verified": True,
+                    "reason": "ok",
+                    "mismatchComponents": [],
+                },
+                "challengeReview": {
+                    "reviewRequired": False,
+                    "reviewState": "not_required",
+                    "challengeState": None,
+                    "totalChallenges": 0,
+                },
+                "auditAnchor": {
+                    "anchorStatus": "artifact_ready",
+                    "anchorHashPresent": True,
+                    "artifactManifestHashPresent": True,
+                    "artifactManifestHash": "manifest-hash",
+                },
+                "artifactCoverage": {
+                    "ready": True,
+                    "artifactManifestHashPresent": True,
+                    "artifactManifestHash": "manifest-hash",
+                    "artifactRefCount": 1,
+                    "artifactKinds": ["audit_pack"],
+                    "artifactKindCounts": {"audit_pack": 1},
+                    "artifactRefs": [],
+                },
+            },
         }
 
     def test_validate_case_overview_contract_should_pass_for_stable_payload(self) -> None:

@@ -132,6 +132,7 @@ class CaseReadRouteDependencies:
     validate_courtroom_read_model_contract: ValidateContractFn
     validate_courtroom_drilldown_bundle_contract: ValidateContractFn
     validate_evidence_claim_ops_queue_contract: ValidateContractFn
+    get_trust_registry_snapshot: Callable[..., Awaitable[Any | None]] | None = None
 
 
 def register_case_read_routes(
@@ -165,6 +166,7 @@ def register_case_read_routes(
                 serialize_workflow_job=deps.serialize_workflow_job,
                 serialize_dispatch_receipt=serialize_dispatch_receipt_v3,
                 serialize_alert_item=serialize_alert_item_v3,
+                get_trust_registry_snapshot=deps.get_trust_registry_snapshot,
             )
         )
         return deps.validate_contract_or_raise_http_500(

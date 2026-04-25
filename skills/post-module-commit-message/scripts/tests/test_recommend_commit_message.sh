@@ -47,6 +47,17 @@ expect_not_contains "dev output avoids long module scope" "(ai-judge-p36-artifac
 expect_not_contains "dev output avoids mechanical subject" "advance ai-judge-p36-artifact-store-port-local-pack workflow" "$DEV_OUT"
 expect_contains "dev output includes alternatives" "Alternatives:" "$DEV_OUT"
 
+ROUTE_OUT="$TMP_DIR/route.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p36-route-dependency-hotspot-split-pack \
+  --summary "Split AI Judge trust and ops route dependency assembly out of app_factory without changing route behavior" >"$ROUTE_OUT"
+
+expect_contains "route split uses refactor type" "refactor(ai-judge): split trust and ops route wiring" "$ROUTE_OUT"
+expect_not_contains "route split avoids generic capability subject" "add ai-judge capability" "$ROUTE_OUT"
+expect_not_contains "route split avoids sync follow-up alternative" "sync ai-judge follow-up" "$ROUTE_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

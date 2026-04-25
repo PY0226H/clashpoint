@@ -3,6 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from .trust_artifact_summary import (
+    TRUST_ARTIFACT_COMPONENT_KEYS,
+    build_trust_artifact_summary_from_public_verify_payload,
+)
+
 OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "generatedAt",
     "fairnessDashboard",
@@ -20,6 +25,11 @@ OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "policyGateSimulation",
     "adaptiveSummary",
     "trustOverview",
+    "trustCoverage",
+    "publicVerifyStatus",
+    "challengeReviewState",
+    "auditAnchorStatus",
+    "artifactCoverage",
     "judgeWorkflowCoverage",
     "caseLifecycleOverview",
     "caseChainCoverage",
@@ -108,6 +118,50 @@ OPS_READ_MODEL_PACK_V5_TRUST_OVERVIEW_KEYS: tuple[str, ...] = (
     "errorCount",
     "items",
     "errors",
+)
+
+OPS_READ_MODEL_PACK_V5_TRUST_COVERAGE_KEYS: tuple[str, ...] = (
+    "sampledCaseCount",
+    "completeCount",
+    "partialCount",
+    "missingCount",
+    "completeRate",
+    "byComponent",
+    "sourceCounts",
+)
+OPS_READ_MODEL_PACK_V5_PUBLIC_VERIFY_STATUS_KEYS: tuple[str, ...] = (
+    "sampledCaseCount",
+    "verifiedCount",
+    "failedCount",
+    "pendingCount",
+    "errorCount",
+    "reasonCounts",
+)
+OPS_READ_MODEL_PACK_V5_CHALLENGE_REVIEW_STATE_KEYS: tuple[str, ...] = (
+    "sampledCaseCount",
+    "reviewRequiredCount",
+    "openChallengeCount",
+    "totalChallengeCount",
+    "challengeStateCounts",
+    "reviewStateCounts",
+)
+OPS_READ_MODEL_PACK_V5_AUDIT_ANCHOR_STATUS_KEYS: tuple[str, ...] = (
+    "sampledCaseCount",
+    "readyCount",
+    "pendingCount",
+    "missingCount",
+    "anchorHashPresentCount",
+    "artifactManifestHashPresentCount",
+    "statusCounts",
+)
+OPS_READ_MODEL_PACK_V5_ARTIFACT_COVERAGE_KEYS: tuple[str, ...] = (
+    "sampledCaseCount",
+    "readyCount",
+    "pendingCount",
+    "missingCount",
+    "manifestHashPresentCount",
+    "artifactRefCount",
+    "artifactKindCounts",
 )
 
 OPS_READ_MODEL_PACK_V5_FILTER_KEYS: tuple[str, ...] = (
@@ -365,6 +419,206 @@ def build_ops_read_model_pack_trust_overview(
         "errorCount": len(trust_errors),
         "items": trust_items,
         "errors": trust_errors,
+    }
+
+
+def _increment_count(target: dict[str, int], key: Any) -> None:
+    token = str(key or "").strip().lower() or "unknown"
+    target[token] = target.get(token, 0) + 1
+
+
+def _sorted_counts(counts: dict[str, int]) -> dict[str, int]:
+    return dict(sorted(counts.items(), key=lambda kv: kv[0]))
+
+
+def build_ops_read_model_pack_trust_artifact_coverage(
+    *,
+    trust_items: list[dict[str, Any]],
+    trust_errors: list[dict[str, Any]],
+    open_challenge_states: set[str],
+) -> dict[str, Any]:
+    sampled_case_count = len(trust_items) + len(trust_errors)
+    complete_count = 0
+    partial_count = 0
+    missing_count = len(trust_errors)
+    by_component = {key: 0 for key in TRUST_ARTIFACT_COMPONENT_KEYS}
+    source_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    challenge_state_counts: dict[str, int] = {}
+    review_state_counts: dict[str, int] = {}
+    anchor_status_counts: dict[str, int] = {}
+    artifact_kind_counts: dict[str, int] = {}
+
+    verified_count = 0
+    failed_count = 0
+    pending_count = 0
+    review_required_count = 0
+    open_challenge_count = 0
+    total_challenge_count = 0
+    audit_ready_count = 0
+    audit_pending_count = 0
+    audit_missing_count = len(trust_errors)
+    anchor_hash_present_count = 0
+    artifact_manifest_hash_present_count = 0
+    artifact_ready_count = 0
+    artifact_pending_count = 0
+    artifact_missing_count = len(trust_errors)
+    artifact_ref_count = 0
+
+    normalized_open_states = {
+        str(state or "").strip().lower()
+        for state in open_challenge_states
+        if str(state or "").strip()
+    }
+
+    for item in trust_items:
+        summary = (
+            item.get("trustArtifactSummary")
+            if isinstance(item.get("trustArtifactSummary"), dict)
+            else {}
+        )
+        completeness = (
+            summary.get("trustCompleteness")
+            if isinstance(summary.get("trustCompleteness"), dict)
+            else {}
+        )
+        ready_components = 0
+        for key in TRUST_ARTIFACT_COMPONENT_KEYS:
+            if bool(completeness.get(key)):
+                by_component[key] += 1
+                ready_components += 1
+        if bool(completeness.get("complete")):
+            complete_count += 1
+        elif ready_components == 0:
+            missing_count += 1
+        else:
+            partial_count += 1
+
+        _increment_count(source_counts, summary.get("source"))
+
+        public_verify = (
+            summary.get("publicVerifyStatus")
+            if isinstance(summary.get("publicVerifyStatus"), dict)
+            else {}
+        )
+        reason = str(public_verify.get("reason") or "").strip().lower() or "unknown"
+        _increment_count(reason_counts, reason)
+        if bool(public_verify.get("verified")):
+            verified_count += 1
+        elif reason in {"registry_snapshot_missing", "unknown"}:
+            pending_count += 1
+        else:
+            failed_count += 1
+
+        challenge = (
+            summary.get("challengeReview")
+            if isinstance(summary.get("challengeReview"), dict)
+            else {}
+        )
+        review_required = bool(challenge.get("reviewRequired"))
+        review_required_count += 1 if review_required else 0
+        total_challenge_count += max(0, _to_int(challenge.get("totalChallenges"), default=0))
+        challenge_state = str(challenge.get("challengeState") or "").strip().lower()
+        _increment_count(challenge_state_counts, challenge_state or "none")
+        _increment_count(review_state_counts, challenge.get("reviewState") or "unknown")
+        if challenge_state in normalized_open_states:
+            open_challenge_count += 1
+
+        audit_anchor = (
+            summary.get("auditAnchor")
+            if isinstance(summary.get("auditAnchor"), dict)
+            else {}
+        )
+        anchor_status = str(audit_anchor.get("anchorStatus") or "").strip().lower() or "missing"
+        _increment_count(anchor_status_counts, anchor_status)
+        anchor_hash_present = bool(audit_anchor.get("anchorHashPresent"))
+        manifest_hash_present = bool(audit_anchor.get("artifactManifestHashPresent"))
+        anchor_hash_present_count += 1 if anchor_hash_present else 0
+        artifact_manifest_hash_present_count += 1 if manifest_hash_present else 0
+        if anchor_status == "artifact_ready" and anchor_hash_present:
+            audit_ready_count += 1
+        elif anchor_status == "artifact_pending":
+            audit_pending_count += 1
+        else:
+            audit_missing_count += 1
+
+        artifact = (
+            summary.get("artifactCoverage")
+            if isinstance(summary.get("artifactCoverage"), dict)
+            else {}
+        )
+        if bool(artifact.get("ready")):
+            artifact_ready_count += 1
+        elif manifest_hash_present or anchor_status == "artifact_pending":
+            artifact_pending_count += 1
+        else:
+            artifact_missing_count += 1
+        artifact_ref_count += max(0, _to_int(artifact.get("artifactRefCount"), default=0))
+        item_kind_counts = (
+            artifact.get("artifactKindCounts")
+            if isinstance(artifact.get("artifactKindCounts"), dict)
+            else {}
+        )
+        for kind, count in item_kind_counts.items():
+            token = str(kind or "").strip().lower() or "unknown"
+            artifact_kind_counts[token] = artifact_kind_counts.get(token, 0) + max(
+                0,
+                _to_int(count, default=0),
+            )
+
+    error_count = len(trust_errors)
+    if error_count:
+        source_counts["error"] = source_counts.get("error", 0) + error_count
+        reason_counts["error"] = reason_counts.get("error", 0) + error_count
+    complete_rate = (
+        round(float(complete_count) / float(sampled_case_count), 4)
+        if sampled_case_count > 0
+        else 0.0
+    )
+    return {
+        "trustCoverage": {
+            "sampledCaseCount": sampled_case_count,
+            "completeCount": complete_count,
+            "partialCount": partial_count,
+            "missingCount": missing_count,
+            "completeRate": complete_rate,
+            "byComponent": by_component,
+            "sourceCounts": _sorted_counts(source_counts),
+        },
+        "publicVerifyStatus": {
+            "sampledCaseCount": sampled_case_count,
+            "verifiedCount": verified_count,
+            "failedCount": failed_count,
+            "pendingCount": pending_count,
+            "errorCount": error_count,
+            "reasonCounts": _sorted_counts(reason_counts),
+        },
+        "challengeReviewState": {
+            "sampledCaseCount": sampled_case_count,
+            "reviewRequiredCount": review_required_count,
+            "openChallengeCount": open_challenge_count,
+            "totalChallengeCount": total_challenge_count,
+            "challengeStateCounts": _sorted_counts(challenge_state_counts),
+            "reviewStateCounts": _sorted_counts(review_state_counts),
+        },
+        "auditAnchorStatus": {
+            "sampledCaseCount": sampled_case_count,
+            "readyCount": audit_ready_count,
+            "pendingCount": audit_pending_count,
+            "missingCount": audit_missing_count,
+            "anchorHashPresentCount": anchor_hash_present_count,
+            "artifactManifestHashPresentCount": artifact_manifest_hash_present_count,
+            "statusCounts": _sorted_counts(anchor_status_counts),
+        },
+        "artifactCoverage": {
+            "sampledCaseCount": sampled_case_count,
+            "readyCount": artifact_ready_count,
+            "pendingCount": artifact_pending_count,
+            "missingCount": artifact_missing_count,
+            "manifestHashPresentCount": artifact_manifest_hash_present_count,
+            "artifactRefCount": artifact_ref_count,
+            "artifactKindCounts": _sorted_counts(artifact_kind_counts),
+        },
     }
 
 
@@ -1038,8 +1292,15 @@ async def build_ops_read_model_pack_route_payload(
                 if isinstance(verify_payload.get("challengeReview"), dict)
                 else {}
             )
+            trust_artifact_summary = build_trust_artifact_summary_from_public_verify_payload(
+                public_verify_payload=trust_payload,
+                include_artifact_refs=False,
+            )
             challenge_state = (
                 str(challenge_review.get("challengeState") or "").strip().lower() or None
+            )
+            review_state = (
+                str(challenge_review.get("reviewState") or "").strip().lower() or None
             )
             try:
                 total_challenges = int(challenge_review.get("totalChallenges") or 0)
@@ -1055,13 +1316,20 @@ async def build_ops_read_model_pack_route_payload(
                         str(verdict_attestation.get("reason") or "").strip() or None
                     ),
                     "reviewRequired": bool(challenge_review.get("reviewRequired")),
+                    "reviewState": review_state,
                     "challengeState": challenge_state,
                     "totalChallenges": max(0, total_challenges),
+                    "trustArtifactSummary": trust_artifact_summary,
                 }
             )
 
     trust_summary = summarize_ops_read_model_pack_trust_items_fn(
         trust_items=trust_items,
+        open_challenge_states=trust_challenge_open_states,
+    )
+    trust_artifact_sections = build_ops_read_model_pack_trust_artifact_coverage(
+        trust_items=trust_items,
+        trust_errors=trust_errors,
         open_challenge_states=trust_challenge_open_states,
     )
 
@@ -1293,6 +1561,11 @@ async def build_ops_read_model_pack_route_payload(
         policy_gate_simulation=policy_gate_simulation,
         adaptive_summary=adaptive_summary,
         trust_overview=trust_overview,
+        trust_coverage=trust_artifact_sections["trustCoverage"],
+        public_verify_status=trust_artifact_sections["publicVerifyStatus"],
+        challenge_review_state=trust_artifact_sections["challengeReviewState"],
+        audit_anchor_status=trust_artifact_sections["auditAnchorStatus"],
+        artifact_coverage=trust_artifact_sections["artifactCoverage"],
         judge_workflow_coverage=judge_workflow_coverage,
         case_lifecycle_overview=case_lifecycle_overview,
         case_chain_coverage=case_chain_coverage,
@@ -1552,7 +1825,7 @@ def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
                 "sideAnalysis",
                 "verdictReason",
             ],
-            "opsVisible": [
+    "opsVisible": [
                 "workflowStatus",
                 "callbackStatus",
                 "lifecycleBucket",
@@ -1560,6 +1833,11 @@ def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
                 "caseChainCoverage",
                 "fairnessGateOverview",
                 "policyKernelBinding",
+                "trustCoverage",
+                "publicVerifyStatus",
+                "challengeReviewState",
+                "auditAnchorStatus",
+                "artifactCoverage",
             ],
             "internalAudit": [
                 "traceId",
@@ -1568,6 +1846,9 @@ def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
                 "policyKernelHash",
                 "policyGateSource",
                 "eventSeq",
+                "anchorHash",
+                "artifactManifestHash",
+                "componentHashes",
             ],
         },
         "errorSemantics": {
@@ -1733,6 +2014,26 @@ def _require_positive_int(*, section: str, field: str, value: Any) -> None:
         raise ValueError(f"{section}_{field}_not_positive_int")
 
 
+def _require_rate(*, section: str, field: str, value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{section}_{field}_invalid")
+    if float(value) < 0.0 or float(value) > 1.0:
+        raise ValueError(f"{section}_{field}_invalid")
+
+
+def _require_count_dict(*, section: str, value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{section}_not_dict")
+    for key, count in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{section}_key_invalid")
+        _require_non_negative_int(
+            section=section,
+            field=key,
+            value=count,
+        )
+
+
 def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValueError("ops_read_model_pack_payload_not_dict")
@@ -1879,6 +2180,162 @@ def validate_ops_read_model_pack_v5_contract(payload: dict[str, Any]) -> None:
         raise ValueError("ops_read_model_pack_trustOverview_errorCount_mismatch")
     if int(trust_overview.get("verifiedCount") or 0) > int(trust_overview.get("count") or 0):
         raise ValueError("ops_read_model_pack_trustOverview_verifiedCount_exceeds_count")
+
+    trust_coverage = payload.get("trustCoverage")
+    if not isinstance(trust_coverage, dict):
+        raise ValueError("ops_read_model_pack_trustCoverage_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_trustCoverage",
+        payload=trust_coverage,
+        required_keys=OPS_READ_MODEL_PACK_V5_TRUST_COVERAGE_KEYS,
+    )
+    for field in ("sampledCaseCount", "completeCount", "partialCount", "missingCount"):
+        _require_non_negative_int(
+            section="ops_read_model_pack_trustCoverage",
+            field=field,
+            value=trust_coverage.get(field),
+        )
+    _require_rate(
+        section="ops_read_model_pack_trustCoverage",
+        field="completeRate",
+        value=trust_coverage.get("completeRate"),
+    )
+    by_component = trust_coverage.get("byComponent")
+    if not isinstance(by_component, dict):
+        raise ValueError("ops_read_model_pack_trustCoverage_byComponent_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_trustCoverage_byComponent",
+        payload=by_component,
+        required_keys=TRUST_ARTIFACT_COMPONENT_KEYS,
+    )
+    _require_count_dict(
+        section="ops_read_model_pack_trustCoverage_byComponent",
+        value=by_component,
+    )
+    _require_count_dict(
+        section="ops_read_model_pack_trustCoverage_sourceCounts",
+        value=trust_coverage.get("sourceCounts"),
+    )
+    if (
+        int(trust_coverage.get("completeCount") or 0)
+        + int(trust_coverage.get("partialCount") or 0)
+        + int(trust_coverage.get("missingCount") or 0)
+        != int(trust_coverage.get("sampledCaseCount") or 0)
+    ):
+        raise ValueError("ops_read_model_pack_trustCoverage_count_mismatch")
+
+    public_verify_status = payload.get("publicVerifyStatus")
+    if not isinstance(public_verify_status, dict):
+        raise ValueError("ops_read_model_pack_publicVerifyStatus_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_publicVerifyStatus",
+        payload=public_verify_status,
+        required_keys=OPS_READ_MODEL_PACK_V5_PUBLIC_VERIFY_STATUS_KEYS,
+    )
+    for field in (
+        "sampledCaseCount",
+        "verifiedCount",
+        "failedCount",
+        "pendingCount",
+        "errorCount",
+    ):
+        _require_non_negative_int(
+            section="ops_read_model_pack_publicVerifyStatus",
+            field=field,
+            value=public_verify_status.get(field),
+        )
+    _require_count_dict(
+        section="ops_read_model_pack_publicVerifyStatus_reasonCounts",
+        value=public_verify_status.get("reasonCounts"),
+    )
+    if (
+        int(public_verify_status.get("verifiedCount") or 0)
+        + int(public_verify_status.get("failedCount") or 0)
+        + int(public_verify_status.get("pendingCount") or 0)
+        + int(public_verify_status.get("errorCount") or 0)
+        != int(public_verify_status.get("sampledCaseCount") or 0)
+    ):
+        raise ValueError("ops_read_model_pack_publicVerifyStatus_count_mismatch")
+
+    challenge_review_state = payload.get("challengeReviewState")
+    if not isinstance(challenge_review_state, dict):
+        raise ValueError("ops_read_model_pack_challengeReviewState_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_challengeReviewState",
+        payload=challenge_review_state,
+        required_keys=OPS_READ_MODEL_PACK_V5_CHALLENGE_REVIEW_STATE_KEYS,
+    )
+    for field in (
+        "sampledCaseCount",
+        "reviewRequiredCount",
+        "openChallengeCount",
+        "totalChallengeCount",
+    ):
+        _require_non_negative_int(
+            section="ops_read_model_pack_challengeReviewState",
+            field=field,
+            value=challenge_review_state.get(field),
+        )
+    _require_count_dict(
+        section="ops_read_model_pack_challengeReviewState_challengeStateCounts",
+        value=challenge_review_state.get("challengeStateCounts"),
+    )
+    _require_count_dict(
+        section="ops_read_model_pack_challengeReviewState_reviewStateCounts",
+        value=challenge_review_state.get("reviewStateCounts"),
+    )
+
+    audit_anchor_status = payload.get("auditAnchorStatus")
+    if not isinstance(audit_anchor_status, dict):
+        raise ValueError("ops_read_model_pack_auditAnchorStatus_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_auditAnchorStatus",
+        payload=audit_anchor_status,
+        required_keys=OPS_READ_MODEL_PACK_V5_AUDIT_ANCHOR_STATUS_KEYS,
+    )
+    for field in (
+        "sampledCaseCount",
+        "readyCount",
+        "pendingCount",
+        "missingCount",
+        "anchorHashPresentCount",
+        "artifactManifestHashPresentCount",
+    ):
+        _require_non_negative_int(
+            section="ops_read_model_pack_auditAnchorStatus",
+            field=field,
+            value=audit_anchor_status.get(field),
+        )
+    _require_count_dict(
+        section="ops_read_model_pack_auditAnchorStatus_statusCounts",
+        value=audit_anchor_status.get("statusCounts"),
+    )
+
+    artifact_coverage = payload.get("artifactCoverage")
+    if not isinstance(artifact_coverage, dict):
+        raise ValueError("ops_read_model_pack_artifactCoverage_not_dict")
+    _require_keys(
+        section="ops_read_model_pack_artifactCoverage",
+        payload=artifact_coverage,
+        required_keys=OPS_READ_MODEL_PACK_V5_ARTIFACT_COVERAGE_KEYS,
+    )
+    for field in (
+        "sampledCaseCount",
+        "readyCount",
+        "pendingCount",
+        "missingCount",
+        "manifestHashPresentCount",
+        "artifactRefCount",
+    ):
+        _require_non_negative_int(
+            section="ops_read_model_pack_artifactCoverage",
+            field=field,
+            value=artifact_coverage.get(field),
+        )
+    _require_count_dict(
+        section="ops_read_model_pack_artifactCoverage_artifactKindCounts",
+        value=artifact_coverage.get("artifactKindCounts"),
+    )
 
     judge_workflow_coverage = payload.get("judgeWorkflowCoverage")
     if not isinstance(judge_workflow_coverage, dict):
@@ -2154,6 +2611,11 @@ def build_ops_read_model_pack_v5_payload(
     policy_gate_simulation: dict[str, Any],
     adaptive_summary: dict[str, Any],
     trust_overview: dict[str, Any],
+    trust_coverage: dict[str, Any],
+    public_verify_status: dict[str, Any],
+    challenge_review_state: dict[str, Any],
+    audit_anchor_status: dict[str, Any],
+    artifact_coverage: dict[str, Any],
     judge_workflow_coverage: dict[str, Any],
     case_lifecycle_overview: dict[str, Any],
     case_chain_coverage: dict[str, Any],
@@ -2186,6 +2648,11 @@ def build_ops_read_model_pack_v5_payload(
         "policyGateSimulation": policy_gate_simulation,
         "adaptiveSummary": adaptive_summary,
         "trustOverview": trust_overview,
+        "trustCoverage": trust_coverage,
+        "publicVerifyStatus": public_verify_status,
+        "challengeReviewState": challenge_review_state,
+        "auditAnchorStatus": audit_anchor_status,
+        "artifactCoverage": artifact_coverage,
         "judgeWorkflowCoverage": judge_workflow_coverage,
         "caseLifecycleOverview": case_lifecycle_overview,
         "caseChainCoverage": case_chain_coverage,

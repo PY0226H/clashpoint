@@ -22,9 +22,6 @@ from .applications import (
     build_workflow_runtime,
 )
 from .applications import (
-    build_audit_anchor_export as build_audit_anchor_export_v3,
-)
-from .applications import (
     build_final_report_payload as build_final_report_payload_v3_final,
 )
 from .applications import (
@@ -38,9 +35,6 @@ from .applications import (
 )
 from .applications import (
     validate_final_report_payload_contract as validate_final_report_payload_contract_v3_final,
-)
-from .applications import (
-    verify_report_attestation as verify_report_attestation_v3,
 )
 from .applications.assistant_agent_routes import (
     AssistantAgentRouteError as AssistantAgentRouteError_v3,
@@ -124,6 +118,11 @@ from .applications.bootstrap_route_guard_helpers import (
 from .applications.bootstrap_runtime_ready_helpers import (
     ensure_registry_runtime_ready_for_runtime,
     ensure_workflow_schema_ready_for_runtime,
+)
+from .applications.bootstrap_trust_ops_dependencies import (
+    build_ops_read_model_pack_route_dependencies_for_runtime,
+    build_trust_route_dependencies_for_runtime,
+    build_trust_runtime_dependency_pack_for_runtime,
 )
 from .applications.bootstrap_workflow_state_helpers import (
     workflow_mark_completed_for_runtime,
@@ -248,7 +247,6 @@ from .applications.route_group_judge_command import (
     register_judge_command_routes,
 )
 from .applications.route_group_ops_read_model_pack import (
-    OpsReadModelPackRouteDependencies,
     register_ops_read_model_pack_routes,
 )
 from .applications.route_group_panel_runtime import (
@@ -265,41 +263,16 @@ from .applications.route_group_review import (
     register_review_routes,
 )
 from .applications.route_group_trust import (
-    TrustRouteDependencies,
     register_trust_routes,
-)
-from .applications.trust_audit_anchor_contract import (
-    validate_trust_audit_anchor_contract as validate_trust_audit_anchor_contract_v3,
 )
 from .applications.trust_challenge_ops_queue_routes import (
     TrustChallengeOpsQueueRouteError as TrustChallengeOpsQueueRouteError_v3,
 )
-from .applications.trust_challenge_review_contract import (
-    validate_trust_challenge_review_contract as validate_trust_challenge_review_contract_v3,
-)
 from .applications.trust_challenge_runtime_routes import (
     TrustChallengeRouteError as TrustChallengeRouteError_v3,
 )
-from .applications.trust_commitment_contract import (
-    validate_trust_commitment_contract as validate_trust_commitment_contract_v3,
-)
-from .applications.trust_kernel_version_contract import (
-    validate_trust_kernel_version_contract as validate_trust_kernel_version_contract_v3,
-)
-from .applications.trust_ops_views import (
-    build_public_trust_verify_payload as build_public_trust_verify_payload_v3,
-)
-from .applications.trust_public_verify_contract import (
-    validate_trust_public_verify_contract as validate_trust_public_verify_contract_v3,
-)
 from .applications.trust_read_routes import (
     TrustReadRouteError as TrustReadRouteError_v3,
-)
-from .applications.trust_read_routes import (
-    write_trust_registry_snapshot_for_report as write_trust_registry_snapshot_for_report_v3,
-)
-from .applications.trust_verdict_attestation_contract import (
-    validate_trust_verdict_attestation_contract as validate_trust_verdict_attestation_contract_v3,
 )
 from .callback_client import (
     callback_final_failed,
@@ -1606,19 +1579,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
     )
-    _get_trust_registry_snapshot = (
-        runtime.workflow_runtime.trust_registry.get_trust_registry_snapshot
-    )
-    _write_trust_registry_snapshot = partial(
-        write_trust_registry_snapshot_for_report_v3,
-        provider=runtime.settings.provider,
-        upsert_trust_registry_snapshot=(
-            runtime.workflow_runtime.trust_registry.upsert_trust_registry_snapshot
-        ),
-        build_audit_anchor_export=build_audit_anchor_export_v3,
-        build_public_verify_payload=build_public_trust_verify_payload_v3,
-        artifact_store=runtime.trace_store_boundaries.artifact_store,
-    )
 
     _workflow_register_and_mark_blinded = partial(
         workflow_register_and_mark_blinded_for_runtime,
@@ -1670,6 +1630,30 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         workflow_append_event_for_runtime,
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
+    )
+    trust_runtime_dependencies = build_trust_runtime_dependency_pack_for_runtime(
+        runtime=runtime,
+        get_dispatch_receipt=_get_dispatch_receipt,
+        workflow_get_job=_workflow_get_job,
+        workflow_list_events=_workflow_list_events,
+        list_audit_alerts=_list_audit_alerts,
+        serialize_workflow_job=_serialize_workflow_job,
+        run_trust_read_guard=_run_trust_read_guard,
+        resolve_report_context_for_case=resolve_report_context_for_case_for_runtime,
+        build_trust_phasea_bundle_for_runtime=build_trust_phasea_bundle_for_runtime,
+    )
+    _get_trust_registry_snapshot = (
+        trust_runtime_dependencies.get_trust_registry_snapshot
+    )
+    _write_trust_registry_snapshot = (
+        trust_runtime_dependencies.write_trust_registry_snapshot
+    )
+    _resolve_report_context_for_case = (
+        trust_runtime_dependencies.resolve_report_context_for_case
+    )
+    _build_trust_phasea_bundle = trust_runtime_dependencies.build_trust_phasea_bundle
+    _refresh_trust_registry_snapshot_for_case = (
+        trust_runtime_dependencies.refresh_trust_registry_snapshot_for_case
     )
 
     evaluate_policy_release_fairness_gate = partial(
@@ -1729,51 +1713,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         judge_role_order=JUDGE_ROLE_ORDER,
         normalize_fairness_gate_decision=_normalize_fairness_gate_decision,
     )
-    _resolve_report_context_for_case = partial(
-        resolve_report_context_for_case_for_runtime,
-        get_dispatch_receipt=_get_dispatch_receipt,
-        run_trust_read_guard=_run_trust_read_guard,
-    )
-    _build_trust_phasea_bundle = partial(
-        build_trust_phasea_bundle_for_runtime,
-        get_dispatch_receipt=_get_dispatch_receipt,
-        get_workflow_job=_workflow_get_job,
-        list_workflow_events=_workflow_list_events,
-        list_audit_alerts=_list_audit_alerts,
-        serialize_workflow_job=_serialize_workflow_job,
-        provider=runtime.settings.provider,
-        run_trust_read_guard=_run_trust_read_guard,
-        get_trust_registry_snapshot=_get_trust_registry_snapshot,
-    )
-
-    async def _refresh_trust_registry_snapshot_for_case(
-        *,
-        case_id: int,
-        dispatch_type: str,
-    ) -> Any:
-        context = await _resolve_report_context_for_case(
-            case_id=case_id,
-            dispatch_type=dispatch_type,
-            not_found_detail="trust_receipt_not_found",
-            missing_report_detail="trust_report_payload_missing",
-        )
-        workflow_job = await _workflow_get_job(job_id=case_id)
-        workflow_events = await _workflow_list_events(job_id=case_id)
-        alerts = await _list_audit_alerts(job_id=case_id, status=None, limit=200)
-        workflow_snapshot = (
-            _serialize_workflow_job(workflow_job) if workflow_job is not None else None
-        )
-        return await _write_trust_registry_snapshot(
-            case_id=case_id,
-            dispatch_type=context["dispatchType"],
-            trace_id=context["traceId"],
-            request_snapshot=context["requestSnapshot"],
-            report_payload=context["reportPayload"],
-            workflow_snapshot=workflow_snapshot,
-            workflow_status=workflow_job.status if workflow_job is not None else None,
-            workflow_events=workflow_events,
-            alerts=alerts,
-        )
     _transition_judge_alert_status = partial(
         transition_judge_alert_status_for_runtime,
         transition_audit_alert=(
@@ -2160,6 +2099,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             validate_evidence_claim_ops_queue_contract=(
                 lambda payload: validate_evidence_claim_ops_queue_contract_v3(payload)
             ),
+            get_trust_registry_snapshot=_get_trust_registry_snapshot,
         ),
     )
 
@@ -2193,12 +2133,13 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             build_case_chain_summary=(
                 runtime.trace_store_boundaries.read_model.build_case_chain_summary
             ),
+            get_trust_registry_snapshot=_get_trust_registry_snapshot,
         ),
     )
 
     trust_route_handles = register_trust_routes(
         app=app,
-        deps=TrustRouteDependencies(
+        deps=build_trust_route_dependencies_for_runtime(
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             build_validated_trust_item_payload=(
@@ -2221,9 +2162,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
             run_trust_read_guard=_run_trust_read_guard,
             build_trust_phasea_bundle=_build_trust_phasea_bundle,
-            build_audit_anchor_export=build_audit_anchor_export_v3,
-            build_public_verify_payload=build_public_trust_verify_payload_v3,
-            verify_report_attestation=verify_report_attestation_v3,
             get_dispatch_receipt=_get_dispatch_receipt,
             workflow_list_jobs=_workflow_list_jobs,
             get_trace=runtime.trace_store_boundaries.read_model.get_trace,
@@ -2241,24 +2179,6 @@ def create_app(runtime: AppRuntime) -> FastAPI:
                 runtime.workflow_runtime.orchestrator.mark_draw_pending_vote
             ),
             resolve_open_alerts_for_review=resolve_open_alerts_for_review,
-            validate_trust_commitment_contract=(
-                lambda payload: validate_trust_commitment_contract_v3(payload)
-            ),
-            validate_trust_verdict_attestation_contract=(
-                lambda payload: validate_trust_verdict_attestation_contract_v3(payload)
-            ),
-            validate_trust_challenge_review_contract=(
-                lambda payload: validate_trust_challenge_review_contract_v3(payload)
-            ),
-            validate_trust_kernel_version_contract=(
-                lambda payload: validate_trust_kernel_version_contract_v3(payload)
-            ),
-            validate_trust_audit_anchor_contract=(
-                lambda payload: validate_trust_audit_anchor_contract_v3(payload)
-            ),
-            validate_trust_public_verify_contract=(
-                lambda payload: validate_trust_public_verify_contract_v3(payload)
-            ),
         ),
     )
 
@@ -2359,53 +2279,19 @@ def create_app(runtime: AppRuntime) -> FastAPI:
 
     register_ops_read_model_pack_routes(
         app=app,
-        deps=OpsReadModelPackRouteDependencies(
+        deps=build_ops_read_model_pack_route_dependencies_for_runtime(
             runtime=runtime,
             require_internal_key_fn=require_internal_key,
             await_payload_or_raise_http_500=(
                 await_payload_or_raise_http_500_for_runtime
             ),
             build_ops_read_model_pack_payload=build_ops_read_model_pack_payload,
-            get_judge_fairness_dashboard=(
-                fairness_route_handles.get_judge_fairness_dashboard
-            ),
-            get_registry_governance_overview=(
-                registry_route_handles.get_registry_governance_overview
-            ),
-            get_registry_prompt_tool_governance=(
-                registry_route_handles.get_registry_prompt_tool_governance
-            ),
-            get_policy_registry_dependency_health=(
-                registry_route_handles.get_policy_registry_dependency_health
-            ),
-            get_judge_fairness_policy_calibration_advisor=(
-                fairness_route_handles.get_judge_fairness_policy_calibration_advisor
-            ),
-            get_panel_runtime_readiness=(
-                panel_runtime_route_handles.get_panel_runtime_readiness
-            ),
-            list_judge_courtroom_cases=(
-                case_read_route_handles.list_judge_courtroom_cases
-            ),
-            list_judge_courtroom_drilldown_bundle=(
-                case_read_route_handles.list_judge_courtroom_drilldown_bundle
-            ),
-            list_judge_evidence_claim_ops_queue=(
-                case_read_route_handles.list_judge_evidence_claim_ops_queue
-            ),
-            list_judge_trust_challenge_ops_queue=(
-                trust_route_handles.list_judge_trust_challenge_ops_queue
-            ),
-            list_judge_review_jobs=review_route_handles.list_judge_review_jobs,
-            simulate_policy_release_gate=(
-                registry_route_handles.simulate_policy_release_gate
-            ),
-            get_judge_case_courtroom_read_model=(
-                case_read_route_handles.get_judge_case_courtroom_read_model
-            ),
-            get_judge_trust_public_verify=(
-                trust_route_handles.get_judge_trust_public_verify
-            ),
+            fairness_route_handles=fairness_route_handles,
+            registry_route_handles=registry_route_handles,
+            panel_runtime_route_handles=panel_runtime_route_handles,
+            case_read_route_handles=case_read_route_handles,
+            trust_route_handles=trust_route_handles,
+            review_route_handles=review_route_handles,
         ),
     )
 

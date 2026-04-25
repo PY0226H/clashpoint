@@ -136,6 +136,11 @@ collect_changed_files() {
 detect_type() {
   local files="$1"
   local non_docs_count
+  local module_key
+  local summary_lower
+
+  module_key="$(sanitize_scope "$MODULE")"
+  summary_lower="$(lower_ascii "$SUMMARY")"
 
   case "$TASK_KIND" in
     refactor) echo "refactor"; return 0 ;;
@@ -161,6 +166,12 @@ detect_type() {
     fi
   fi
 
+  if [[ "$module_key" == *"route-dependency-hotspot-split"* ||
+        "$summary_lower" == *"route dependency"* ]]; then
+    echo "refactor"
+    return 0
+  fi
+
   echo "feat"
 }
 
@@ -173,6 +184,9 @@ build_subject() {
 
   if [[ "$module_key" == *"artifact-store"* || "$summary_lower" == *"artifact store"* ]]; then
     echo "add local artifact store adapter"
+  elif [[ "$module_key" == *"route-dependency-hotspot-split"* ||
+          "$summary_lower" == *"route dependency"* ]]; then
+    echo "split trust and ops route wiring"
   elif [[ "$module_key" == *"audit-anchor-export"* || "$summary_lower" == *"audit anchor"* ]]; then
     echo "export audit anchor manifest"
   elif [[ "$module_key" == *"ops-read-model-trust"* || "$summary_lower" == *"ops read model"* ]]; then
@@ -207,6 +221,7 @@ build_alt_one_subject() {
   local subject="$2"
   case "$subject" in
     "add local artifact store adapter") echo "add artifact refs and manifest" ;;
+    "split trust and ops route wiring") echo "extract trust dependency builders" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
     *) echo "$subject" ;;
@@ -218,6 +233,7 @@ build_alt_two_subject() {
   local subject="$2"
   case "$subject" in
     "add local artifact store adapter") echo "wire local artifact evidence" ;;
+    "split trust and ops route wiring") echo "thin app factory route assembly" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;
     "export audit anchor manifest") echo "prepare audit anchor export" ;;
     *) echo "sync ${scope} follow-up" ;;

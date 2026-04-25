@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from .trust_artifact_summary import (
+    build_trust_artifact_summary_from_registry_snapshot,
+    build_trust_artifact_summary_from_report_payload,
+)
+
 
 @dataclass(frozen=True)
 class CaseReadRouteError(Exception):
@@ -27,6 +32,40 @@ class CaseReadReplayRecord:
     winner: str | None
     needs_draw_vote: bool | None
     provider: str | None
+
+
+async def build_case_trust_artifact_summary(
+    *,
+    case_id: int,
+    latest_dispatch_type: str | None,
+    trace_id: str | None,
+    report_payload: dict[str, Any],
+    get_trust_registry_snapshot: Callable[..., Awaitable[Any | None]] | None = None,
+) -> dict[str, Any]:
+    if get_trust_registry_snapshot is not None:
+        dispatch_candidates = (
+            [latest_dispatch_type]
+            if latest_dispatch_type in {"final", "phase"}
+            else ["final", "phase"]
+        )
+        for dispatch_type in dispatch_candidates:
+            snapshot = await get_trust_registry_snapshot(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+            )
+            if snapshot is not None:
+                return build_trust_artifact_summary_from_registry_snapshot(
+                    snapshot=snapshot,
+                    include_artifact_refs=True,
+                )
+
+    return build_trust_artifact_summary_from_report_payload(
+        report_payload=report_payload,
+        case_id=case_id,
+        dispatch_type=latest_dispatch_type,
+        trace_id=trace_id,
+        include_artifact_refs=True,
+    )
 
 
 def _raise_route_error_from_http_exception(err: Exception) -> None:
@@ -63,6 +102,7 @@ async def build_case_overview_route_payload(
     serialize_workflow_job: Callable[[Any], dict[str, Any]],
     serialize_dispatch_receipt: Callable[[Any], dict[str, Any]],
     serialize_alert_item: Callable[[Any], dict[str, Any]],
+    get_trust_registry_snapshot: Callable[..., Awaitable[Any | None]] | None = None,
 ) -> dict[str, Any]:
     workflow_job = await workflow_get_job(job_id=case_id)
     workflow_events = (
@@ -150,6 +190,23 @@ async def build_case_overview_route_payload(
         replay_records=replay_records,
         trace=trace,
     )
+    latest_dispatch_type = (
+        "final"
+        if final_receipt is not None
+        else ("phase" if phase_receipt is not None else None)
+    )
+    trace_id = (
+        str(trace.trace_id).strip()
+        if trace is not None and str(getattr(trace, "trace_id", "") or "").strip()
+        else None
+    )
+    trust_artifact_summary = await build_case_trust_artifact_summary(
+        case_id=case_id,
+        latest_dispatch_type=latest_dispatch_type,
+        trace_id=trace_id,
+        report_payload=report_payload,
+        get_trust_registry_snapshot=get_trust_registry_snapshot,
+    )
     return build_case_overview_payload(
         case_id=case_id,
         workflow=serialize_workflow_job(workflow_job) if workflow_job else None,
@@ -167,11 +224,7 @@ async def build_case_overview_route_payload(
             "phase": serialize_dispatch_receipt(phase_receipt) if phase_receipt else None,
             "final": serialize_dispatch_receipt(final_receipt) if final_receipt else None,
         },
-        latest_dispatch_type=(
-            "final"
-            if final_receipt is not None
-            else ("phase" if phase_receipt is not None else None)
-        ),
+        latest_dispatch_type=latest_dispatch_type,
         report_payload=report_payload,
         verdict_contract=verdict_contract,
         case_evidence=case_evidence,
@@ -196,6 +249,7 @@ async def build_case_overview_route_payload(
         ],
         alerts=[serialize_alert_item(item) for item in alerts],
         replays=replay_items,
+        trust_artifact_summary=trust_artifact_summary,
     )
 
 
@@ -1331,6 +1385,7 @@ def build_case_overview_payload(
     events: list[dict[str, Any]],
     alerts: list[dict[str, Any]],
     replays: list[dict[str, Any]],
+    trust_artifact_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "caseId": case_id,
@@ -1350,6 +1405,11 @@ def build_case_overview_payload(
         "events": events,
         "alerts": alerts,
         "replays": replays,
+        "trustArtifactSummary": (
+            dict(trust_artifact_summary)
+            if isinstance(trust_artifact_summary, dict)
+            else {}
+        ),
     }
 
 

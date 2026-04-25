@@ -27,6 +27,18 @@ class AppFactoryTrustAttestationRouteTests(
     AppFactoryRouteTestMixin,
     unittest.IsolatedAsyncioTestCase,
 ):
+    def _create_app_with_patched_trust_contract(
+        self,
+        runtime: object,
+        contract_name: str,
+        message: str,
+    ):
+        with patch(
+            f"app.applications.bootstrap_trust_ops_dependencies.{contract_name}",
+            side_effect=ValueError(message),
+        ):
+            return create_app(runtime)
+
     async def test_attestation_verify_should_use_auto_dispatch_and_return_verified(self) -> None:
         async def noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
             return None
@@ -294,7 +306,11 @@ class AppFactoryTrustAttestationRouteTests(
             callback_phase_failed_impl=noop_callback,
             callback_final_failed_impl=noop_callback,
         )
-        app = create_app(runtime)
+        app = self._create_app_with_patched_trust_contract(
+            runtime,
+            "validate_trust_public_verify_contract",
+            "trust_public_verify_missing_keys:verifyPayload",
+        )
         case_id = _unique_case_id(8106)
         phase_resp = await self._post_json(
             app=app,
@@ -319,15 +335,11 @@ class AppFactoryTrustAttestationRouteTests(
         )
         self.assertEqual(final_resp.status_code, 200)
 
-        with patch(
-            "app.app_factory.validate_trust_public_verify_contract_v3",
-            side_effect=ValueError("trust_public_verify_missing_keys:verifyPayload"),
-        ):
-            resp = await self._get(
-                app=app,
-                path=f"/internal/judge/cases/{case_id}/trust/public-verify?dispatch_type=final",
-                internal_key=runtime.settings.ai_internal_key,
-            )
+        resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/public-verify?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
 
         self.assertEqual(resp.status_code, 500)
         detail = resp.json()["detail"]
@@ -347,7 +359,11 @@ class AppFactoryTrustAttestationRouteTests(
             callback_phase_failed_impl=noop_callback,
             callback_final_failed_impl=noop_callback,
         )
-        app = create_app(runtime)
+        app = self._create_app_with_patched_trust_contract(
+            runtime,
+            "validate_trust_commitment_contract",
+            "trust_commitment_missing_keys:item",
+        )
         case_id = _unique_case_id(8109)
         phase_resp = await self._post_json(
             app=app,
@@ -372,15 +388,11 @@ class AppFactoryTrustAttestationRouteTests(
         )
         self.assertEqual(final_resp.status_code, 200)
 
-        with patch(
-            "app.app_factory.validate_trust_commitment_contract_v3",
-            side_effect=ValueError("trust_commitment_missing_keys:item"),
-        ):
-            resp = await self._get(
-                app=app,
-                path=f"/internal/judge/cases/{case_id}/trust/commitment?dispatch_type=final",
-                internal_key=runtime.settings.ai_internal_key,
-            )
+        resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/commitment?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
 
         self.assertEqual(resp.status_code, 500)
         detail = resp.json()["detail"]
@@ -400,7 +412,11 @@ class AppFactoryTrustAttestationRouteTests(
             callback_phase_failed_impl=noop_callback,
             callback_final_failed_impl=noop_callback,
         )
-        app = create_app(runtime)
+        app = self._create_app_with_patched_trust_contract(
+            runtime,
+            "validate_trust_verdict_attestation_contract",
+            "trust_verdict_attestation_missing_keys:item",
+        )
         case_id = _unique_case_id(8110)
         phase_resp = await self._post_json(
             app=app,
@@ -425,15 +441,11 @@ class AppFactoryTrustAttestationRouteTests(
         )
         self.assertEqual(final_resp.status_code, 200)
 
-        with patch(
-            "app.app_factory.validate_trust_verdict_attestation_contract_v3",
-            side_effect=ValueError("trust_verdict_attestation_missing_keys:item"),
-        ):
-            resp = await self._get(
-                app=app,
-                path=f"/internal/judge/cases/{case_id}/trust/verdict-attestation?dispatch_type=final",
-                internal_key=runtime.settings.ai_internal_key,
-            )
+        resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/verdict-attestation?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
 
         self.assertEqual(resp.status_code, 500)
         detail = resp.json()["detail"]
@@ -453,7 +465,11 @@ class AppFactoryTrustAttestationRouteTests(
             callback_phase_failed_impl=noop_callback,
             callback_final_failed_impl=noop_callback,
         )
-        app = create_app(runtime)
+        app = self._create_app_with_patched_trust_contract(
+            runtime,
+            "validate_trust_challenge_review_contract",
+            "trust_challenge_review_missing_keys:item",
+        )
         case_id = _unique_case_id(8111)
         phase_resp = await self._post_json(
             app=app,
@@ -478,15 +494,11 @@ class AppFactoryTrustAttestationRouteTests(
         )
         self.assertEqual(final_resp.status_code, 200)
 
-        with patch(
-            "app.app_factory.validate_trust_challenge_review_contract_v3",
-            side_effect=ValueError("trust_challenge_review_missing_keys:item"),
-        ):
-            resp = await self._get(
-                app=app,
-                path=f"/internal/judge/cases/{case_id}/trust/challenges?dispatch_type=final",
-                internal_key=runtime.settings.ai_internal_key,
-            )
+        resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/challenges?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
 
         self.assertEqual(resp.status_code, 500)
         detail = resp.json()["detail"]
@@ -506,7 +518,11 @@ class AppFactoryTrustAttestationRouteTests(
             callback_phase_failed_impl=noop_callback,
             callback_final_failed_impl=noop_callback,
         )
-        app = create_app(runtime)
+        app = self._create_app_with_patched_trust_contract(
+            runtime,
+            "validate_trust_kernel_version_contract",
+            "trust_kernel_version_missing_keys:item",
+        )
         case_id = _unique_case_id(8107)
         phase_resp = await self._post_json(
             app=app,
@@ -531,15 +547,11 @@ class AppFactoryTrustAttestationRouteTests(
         )
         self.assertEqual(final_resp.status_code, 200)
 
-        with patch(
-            "app.app_factory.validate_trust_kernel_version_contract_v3",
-            side_effect=ValueError("trust_kernel_version_missing_keys:item"),
-        ):
-            resp = await self._get(
-                app=app,
-                path=f"/internal/judge/cases/{case_id}/trust/kernel-version?dispatch_type=final",
-                internal_key=runtime.settings.ai_internal_key,
-            )
+        resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/kernel-version?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
 
         self.assertEqual(resp.status_code, 500)
         detail = resp.json()["detail"]
@@ -559,7 +571,11 @@ class AppFactoryTrustAttestationRouteTests(
             callback_phase_failed_impl=noop_callback,
             callback_final_failed_impl=noop_callback,
         )
-        app = create_app(runtime)
+        app = self._create_app_with_patched_trust_contract(
+            runtime,
+            "validate_trust_audit_anchor_contract",
+            "trust_audit_anchor_missing_keys:item",
+        )
         case_id = _unique_case_id(8108)
         phase_resp = await self._post_json(
             app=app,
@@ -584,15 +600,11 @@ class AppFactoryTrustAttestationRouteTests(
         )
         self.assertEqual(final_resp.status_code, 200)
 
-        with patch(
-            "app.app_factory.validate_trust_audit_anchor_contract_v3",
-            side_effect=ValueError("trust_audit_anchor_missing_keys:item"),
-        ):
-            resp = await self._get(
-                app=app,
-                path=f"/internal/judge/cases/{case_id}/trust/audit-anchor?dispatch_type=final",
-                internal_key=runtime.settings.ai_internal_key,
-            )
+        resp = await self._get(
+            app=app,
+            path=f"/internal/judge/cases/{case_id}/trust/audit-anchor?dispatch_type=final",
+            internal_key=runtime.settings.ai_internal_key,
+        )
 
         self.assertEqual(resp.status_code, 500)
         detail = resp.json()["detail"]

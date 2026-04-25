@@ -20,6 +20,7 @@ CASE_OVERVIEW_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "events",
     "alerts",
     "replays",
+    "trustArtifactSummary",
 )
 
 CASE_OVERVIEW_RECEIPTS_KEYS: tuple[str, ...] = (
@@ -76,6 +77,27 @@ CASE_OVERVIEW_EVENT_ITEM_KEYS: tuple[str, ...] = (
     "eventType",
     "payload",
     "createdAt",
+)
+
+CASE_OVERVIEW_TRUST_ARTIFACT_SUMMARY_KEYS: tuple[str, ...] = (
+    "source",
+    "caseId",
+    "dispatchType",
+    "traceId",
+    "trustCompleteness",
+    "publicVerifyStatus",
+    "challengeReview",
+    "auditAnchor",
+    "artifactCoverage",
+)
+
+CASE_OVERVIEW_TRUST_COMPLETENESS_KEYS: tuple[str, ...] = (
+    "caseCommitment",
+    "verdictAttestation",
+    "challengeReview",
+    "kernelVersion",
+    "auditAnchor",
+    "complete",
 )
 
 
@@ -269,3 +291,27 @@ def validate_case_overview_contract(payload: dict[str, Any]) -> None:
             payload=row,
             keys=CASE_OVERVIEW_REPLAY_ITEM_KEYS,
         )
+
+    trust_artifact_summary = payload.get("trustArtifactSummary")
+    if not isinstance(trust_artifact_summary, dict):
+        raise ValueError("case_overview_trust_artifact_summary_not_dict")
+    _assert_required_keys(
+        section="case_overview_trust_artifact_summary",
+        payload=trust_artifact_summary,
+        keys=CASE_OVERVIEW_TRUST_ARTIFACT_SUMMARY_KEYS,
+    )
+    trust_completeness = trust_artifact_summary.get("trustCompleteness")
+    if not isinstance(trust_completeness, dict):
+        raise ValueError("case_overview_trust_completeness_not_dict")
+    _assert_required_keys(
+        section="case_overview_trust_completeness",
+        payload=trust_completeness,
+        keys=CASE_OVERVIEW_TRUST_COMPLETENESS_KEYS,
+    )
+    for key in CASE_OVERVIEW_TRUST_COMPLETENESS_KEYS:
+        if not isinstance(trust_completeness.get(key), bool):
+            raise ValueError(f"case_overview_trust_completeness_{key}_not_bool")
+    for key in ("publicVerifyStatus", "challengeReview", "auditAnchor", "artifactCoverage"):
+        value = trust_artifact_summary.get(key)
+        if not isinstance(value, dict):
+            raise ValueError(f"case_overview_trust_artifact_summary_{key}_not_dict")

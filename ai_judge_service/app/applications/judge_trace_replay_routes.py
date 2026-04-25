@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from .trust_artifact_summary import (
+    build_trust_artifact_summary_from_registry_snapshot,
+    build_trust_artifact_summary_from_report_payload,
+)
+
 REPLAY_DISPATCH_TYPES: frozenset[str] = frozenset({"auto", "phase", "final"})
 
 
@@ -134,6 +139,7 @@ def build_trace_route_payload(
     verdict_contract: dict[str, Any],
     replay_items: list[dict[str, Any]],
     case_chain_summary: dict[str, Any] | None = None,
+    trust_artifact_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = report_summary if isinstance(report_summary, dict) else {}
     role_nodes = summary.get("roleNodes") if isinstance(summary.get("roleNodes"), list) else []
@@ -154,6 +160,11 @@ def build_trace_route_payload(
             dict(case_chain_summary) if isinstance(case_chain_summary, dict) else {}
         ),
         "replays": list(replay_items),
+        "trustArtifactSummary": (
+            dict(trust_artifact_summary)
+            if isinstance(trust_artifact_summary, dict)
+            else {}
+        ),
     }
 
 
@@ -169,6 +180,7 @@ def build_replay_route_payload(
     trace_id: str,
     judge_core_stage: str,
     judge_core_version: str,
+    trust_artifact_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if isinstance(replayed_at, datetime):
         replayed_at_value = replayed_at.isoformat()
@@ -185,6 +197,17 @@ def build_replay_route_payload(
         "traceId": str(trace_id),
         "judgeCoreStage": str(judge_core_stage),
         "judgeCoreVersion": str(judge_core_version),
+        "trustArtifactSummary": (
+            dict(trust_artifact_summary)
+            if isinstance(trust_artifact_summary, dict)
+            else build_trust_artifact_summary_from_report_payload(
+                report_payload=report_payload,
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                trace_id=trace_id,
+                include_artifact_refs=True,
+            )
+        ),
     }
 
 
@@ -303,6 +326,7 @@ async def build_trace_route_read_payload(
     build_verdict_contract: Any,
     build_trace_route_payload: Any,
     build_case_chain_summary: Any | None = None,
+    get_trust_registry_snapshot: Any | None = None,
 ) -> dict[str, Any]:
     record = get_trace(case_id)
     if record is None:
@@ -324,12 +348,36 @@ async def build_trace_route_read_payload(
         if build_case_chain_summary is not None
         else None
     )
+    trust_artifact_summary: dict[str, Any]
+    registry_snapshot = None
+    if get_trust_registry_snapshot is not None:
+        for dispatch_type in ("final", "phase"):
+            registry_snapshot = await get_trust_registry_snapshot(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+            )
+            if registry_snapshot is not None:
+                break
+    if registry_snapshot is not None:
+        trust_artifact_summary = build_trust_artifact_summary_from_registry_snapshot(
+            snapshot=registry_snapshot,
+            include_artifact_refs=True,
+        )
+    else:
+        trust_artifact_summary = build_trust_artifact_summary_from_report_payload(
+            report_payload=report_payload,
+            case_id=case_id,
+            dispatch_type=None,
+            trace_id=record.trace_id,
+            include_artifact_refs=True,
+        )
     return build_trace_route_payload(
         record=record,
         report_summary=report_summary,
         verdict_contract=verdict_contract,
         replay_items=replay_items,
         case_chain_summary=case_chain_summary,
+        trust_artifact_summary=trust_artifact_summary,
     )
 
 
