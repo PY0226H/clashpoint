@@ -214,6 +214,29 @@ pub struct GetJudgeReportQuery {
     pub rejudge_run_no: Option<u32>,
 }
 
+#[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgePublicVerifyQuery {
+    pub rejudge_run_no: Option<u32>,
+    pub dispatch_type: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgePublicVerifyOutput {
+    pub session_id: u64,
+    pub status: String,
+    pub status_reason: String,
+    pub case_id: Option<u64>,
+    pub dispatch_type: String,
+    #[serde(default)]
+    pub verification_readiness: Value,
+    #[serde(default)]
+    pub cache_profile: Value,
+    #[serde(default)]
+    pub public_verify: Value,
+}
+
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetJudgeReportFinalOutput {

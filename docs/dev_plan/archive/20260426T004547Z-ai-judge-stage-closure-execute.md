@@ -1,0 +1,605 @@
+# 当前开发计划
+
+关联 slot：`default`
+更新时间：2026-04-25
+当前主线：`AI_judge_service P38（Runtime Ops Evidence Automation + Public Verification Proxy Readiness）`
+当前状态：执行中（P38 completion map refresh、runtime ops phase2 auto-backfill、release readiness evidence export、public verification proxy-facing contract、production artifact healthcheck、fairness/panel evidence normalization、ops read model hotspot split 与 local reference regression 已完成；下一步建议推进 stage closure）
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接 P37 stage closure 之后的下一轮主线，输入包括：
+   - `docs/dev_plan/archive/20260425T111521Z-ai-judge-stage-closure-execute.md`
+   - `docs/dev_plan/completed.md`
+   - `docs/dev_plan/todo.md`
+   - `docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md`
+   - 当前 `ai_judge_service` 代码状态。
+2. P37 已完成生产可信外部化的本地参考主线：Artifact Store 生产配置与 S3 兼容适配器、public verification readiness 合同、real-env evidence readiness、fairness real sample benchmark 入口、panel shadow evaluation、registry release gate hardening、ops trust monitoring、route/test hotspot split 与 local reference regression。
+3. 当前最明显的文档状态差异是：章节完成度映射仍停留在 P36 口径，尚未吸收 P37 stage closure。P38 第一批应先修正这个“决策仪表盘”，否则后续计划容易继续引用旧完成度。
+4. P38 不重写官方裁判主链，不新增平行 winner 写链，不把 public verification 变成客户端直连 AI 服务；P38 的重点是让本地可信制度层进入更可运营、更可自动回填、更接近外部代理发布的状态。
+5. 当前没有真实 provider/callback、真实样本、真实服务窗口与生产对象存储验收窗口，所有真实环境模块继续保持 `env_blocked` 或 `local_reference_ready`，不得宣称 real-env `pass`。
+6. 工作区仍保留 P37 stage closure 与 local reference evidence 产物；本计划不要求清空工作区，但进入首个开发模块前建议先确认这些 P37 变更已提交或明确保留。
+
+---
+
+## 2. 当前代码状态快照
+
+| 维度 | 当前状态 | P38 判断 |
+| --- | --- | --- |
+| 代码规模 | `ai_judge_service/app` 当前约 274 个文件，`ai_judge_service/tests` 当前约 247 个测试文件 | 主体已进入平台化阶段，下一轮应优先收敛证据、边界与热点，而不是扩张主链 |
+| 官方裁判主链 | Clerk/Recorder/Claim/Evidence/Panel/Fairness/Arbiter/Opinion 主链、本地 ledger、workflow、trace/replay、review/audit 已形成闭环 | P38 不改变 8 Agent 顺序，不绕过 Fairness Sentinel |
+| Artifact Store | 已有 `LocalArtifactStore` 与 `S3CompatibleArtifactStore`，`settings.py` 已包含 provider/bucket/prefix/endpoint/region/healthcheck 开关，S3 readiness 与 healthcheck evidence 已按 no-secret 口径输出，生产 local provider 有 fail-closed 基础 | 下一步可被 release readiness 与 runtime ops pack 继续引用，不再发明第三套存储抽象 |
+| Public Verification | `trust_public_verify_contract.py` 已有 verificationVersion、requestKey、readiness、visibilityContract、forbidden key guard | 下一步应补 chat proxy 契约与可外部代理边界，仍禁止客户端直连 AI 服务 |
+| Registry Release Gate | `registry_release_gate.py` 已能合并 dependency、fairness benchmark、panel shadow、artifact/public verification/trust registry readiness | 下一步应输出可归档的 release readiness evidence，供 runtime ops pack、stage closure 和 ops 读面复用 |
+| Ops Trust Monitoring | `ops_trust_monitoring.py` 已聚合 artifact、公验、challenge、registry、panel shadow 与 real-env evidence 状态 | 下一步应把 stage closure、completed/todo 与 runtime ops pack 自动回填打通，减少人工修补证据 |
+| Fairness / Panel | 本地 reference benchmark、真实样本 readiness、panel shadow read model 与 release gate 输入已出现，fairness/panel evidence 已统一输出 normalized status | 真实样本仍缺；P38 继续保持 `pending_real_samples / env_blocked`，不输出真实 pass |
+| 章节完成度映射 | 已刷新为“对齐 P37 stage closure”，纳入 P37 completed/todo、P37 real-env debt 与 P38 下一阶段优先级 | P38 后续模块可基于该映射继续推进 runtime ops 自动回填与 release readiness evidence |
+| 热点文件 | `ops_read_model_pack.py` 已下沉 trust/public verification/artifact coverage 与 release gate rows projection；`registry_routes.py`、`phase_pipeline.py`、`trace_store.py` 仍偏厚 | P38 可继续做绑定证据收益的小型拆分，但不做无目的大重构 |
+| 真实环境 | `todo.md` 已记录 `ai-judge-p37-real-env-pass-window-execute-on-env`，P38 local regression 已复跑 real-env closure，`real_env_readiness_status=env_blocked`、`real_pass_ready=false` | 真实环境模块只在 `REAL_CALIBRATION_ENV_READY=true` 且必要资源齐备时执行 |
+
+---
+
+## 3. 本轮北极星与不可变边界
+
+1. 北极星仍是“辩论结束后 5 分钟内获得可读、可信、可执行的官方裁决”；P38 的证据自动化与公验代理边界都服务于这一体验。
+2. 官方公开结果只支持 `pro / con / draw`；高分歧、高不确定、证据不足、公平风险或 release gate 风险继续进入受保护复核、blocked 或 env_blocked。
+3. `Fairness Sentinel -> Chief Arbiter -> Opinion Writer` 的顺序不得绕过；panel shadow 与 release readiness 只能做观测、门禁和发布依据，不能直接改写 official verdict。
+4. 六对象主链仍是唯一业务事实源：`case_dossier / claim_graph / evidence_ledger / verdict_ledger / fairness_report / opinion_pack`。
+5. Trust Registry、Artifact Store、Audit Anchor 与 Public Verification 是对既有裁决事实做承诺、验证、导出和运营观测，不是新的平行裁决事实源。
+6. `NPC Coach / Room QA` 继续保持 `advisory_only`，不得写 `verdict_ledger`、`judge_ledger_snapshots`、trust registry 官方链路或 public verification 结果。
+7. 客户端仍通过 `chat_server` 间接访问 AI 能力；AI 服务不新增公众直连接口。
+8. Redis 继续只用于幂等锁、短 TTL 缓存、速率限制和临时上下文；artifact/trust/challenge/benchmark/release readiness 不得只存在 Redis。
+9. 不引入 LangChain/LangGraph 作为生产主骨架；P38 不引入 Temporal/Kafka 作为强依赖。
+10. 未获得真实环境窗口前，只能声明 `local_reference_ready`、`readiness_ready`、`env_blocked` 或 `pending_real_samples`，不得声明 real-env `pass`。
+
+---
+
+### 已完成/未完成矩阵
+
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-p37-stage-closure-execute` | P37 阶段收口 | 已完成 | 活动计划已归档，completed/todo 已同步，P37 real-env pass window 已进入后置债务 |
+| `ai-judge-p38-plan-bootstrap-current-state` | 基于当前代码状态与两份设计方案生成 P38 计划 | 已完成 | 本文档即本模块输出 |
+| `ai-judge-p38-completion-map-refresh-current-state` | 刷新企业级 Agent 章节完成度映射到 P37/P38 口径 | 已完成 | 已纳入 P37 成果、P37 real-env debt 与 P38 下一阶段优先级 |
+| `ai-judge-p38-runtime-ops-pack-phase2-auto-backfill` | runtime ops pack 与 stage closure evidence 自动回填 | 已完成 | 已识别 P37 archive、completed B41、todo C41 与 linked real-env debt，并输出 closureBackfill |
+| `ai-judge-p38-release-readiness-evidence-export-pack` | 输出统一 release readiness evidence artifact | 已完成 | registry release gate 已输出稳定 `releaseReadinessEvidence`，governance/gate simulation 与 ops trust monitoring 已复用 evidence 摘要 |
+| `ai-judge-p38-public-verification-chat-proxy-contract-pack` | Public Verification 的 chat proxy 契约与外部代理边界 | 已完成 | AI 服务 public verify 合同已新增 `cacheProfile` 与 `proxyRequired`，支持 not-ready 空 payload 合法表达；本轮未新增 chat/frontend 代理入口 |
+| `ai-judge-p38-production-artifact-healthcheck-pack` | 生产对象存储健康检查与 no-secret readiness | 已完成 | 已新增 artifact store healthcheck evidence；local 保持 local_reference，S3 roundtrip 仅显式开启，readiness 不输出 bucket/prefix/endpoint/path/secret |
+| `ai-judge-p38-fairness-panel-evidence-normalization-pack` | fairness benchmark 与 panel shadow evidence 统一口径 | 已完成 | 已新增 `fairness-panel-evidence-normalized-v1`，release readiness evidence 与 ops trust monitoring 共用 benchmark/real sample/shadow drift 状态 |
+| `ai-judge-p38-ops-read-model-hotspot-split-pack` | 继续收敛 ops/read model 热点 | 已完成 | 已新增 `ops_read_model_trust_projection.py`，下沉 public verification/trust artifact coverage 与 policy gate rows 投影，v5 顶层合同保持稳定 |
+| `ai-judge-p38-local-reference-regression-pack` | P38 本地参考回归与证据刷新 | 已完成 | `ruff check app tests`、全量 `pytest -q`、targeted regression、runtime ops pack 与 real-env closure 均已通过；真实环境仍为 `env_blocked` |
+| `ai-judge-p38-stage-closure-execute` | P38 阶段收口 | 待执行 | P38 主体完成后归档活动计划并拆分 completed/todo |
+| `ai-judge-p37-real-env-pass-window-execute-on-env` | P37 真实环境 pass 补证 | 阻塞（环境依赖） | 仅在真实样本、真实 provider/callback、生产对象存储与真实服务窗口齐备后执行 |
+
+### 下一开发模块建议
+
+1. `ai-judge-p38-stage-closure-execute`
+2. `ai-judge-p37-real-env-pass-window-execute-on-env`（环境齐备后）
+3. P39 下一阶段计划生成（P38 stage closure 后）
+
+### 模块完成同步历史
+
+- 2026-04-25：推进 `ai-judge-p38-plan-bootstrap-current-state`；基于 P37 stage closure、当前代码状态、架构与技术栈方案、企业级 Agent 服务设计方案生成 P38 完整开发计划。
+- 2026-04-25：推进 `ai-judge-p38-completion-map-refresh-current-state`；将企业级 Agent 章节完成度映射从 P36 口径刷新到 P37/P38 当前状态，纳入 P37 stage closure、completed/todo、real-env `env_blocked` 与 P38 runtime ops/release readiness/public verification 下一阶段优先级。
+- 2026-04-25：推进 `ai-judge-p38-runtime-ops-pack-phase2-auto-backfill`；stage closure evidence 与 runtime ops pack 已输出 `closure_backfill`，可在活动计划重置后识别最近 P37 archive、completed B41、todo C41 与 `ai-judge-p37-real-env-pass-window-execute-on-env`，本地参考复跑状态为 `local_reference_ready`。
+- 2026-04-25：推进 `ai-judge-p38-release-readiness-evidence-export-pack`；registry release gate 已输出 `policy-release-readiness-evidence-v1`，并在 governance overview、policy gate simulation 与 ops trust monitoring 中复用 evidence 摘要，同时将 local reference 公平性证据保持为 `env_blocked` 发布门禁依据。
+- 2026-04-25：推进 `ai-judge-p38-public-verification-chat-proxy-contract-pack`；public verification 合同已新增 `cacheProfile` 与 `proxyRequired`，ready 响应可缓存、not-ready 响应不可缓存且可携带空 `verifyPayload`，继续要求 chat proxy 代理访问并禁止 AI 服务公众直连。
+- 2026-04-25：推进 `ai-judge-p38-production-artifact-healthcheck-pack`；artifact store 已输出 no-secret healthcheck evidence，S3 readiness 只暴露配置布尔值，真实 write/read roundtrip 仅在 `AI_JUDGE_ARTIFACT_HEALTHCHECK_ENABLED=true` 时执行，无真实对象存储时保持 `env_blocked`。
+- 2026-04-25：推进 `ai-judge-p38-fairness-panel-evidence-normalization-pack`；新增 `fairness-panel-evidence-normalized-v1`，统一 benchmark evidence、real sample manifest、shadow evidence、threshold decision 与 release gate input status，release readiness evidence 和 ops trust monitoring 已复用该口径。
+- 2026-04-25：推进 `ai-judge-p38-ops-read-model-hotspot-split-pack`；新增 `ops_read_model_trust_projection.py`，将 trust/public verification/artifact coverage 与 release gate rows 投影从 `ops_read_model_pack.py` 下沉，保持 v5 payload 顶层合同稳定。
+- 2026-04-25：推进 `ai-judge-p38-local-reference-regression-pack`；`ruff check app tests`、全量 `pytest -q`、artifact/audit/public verification/registry/fairness/panel targeted regression 均通过，runtime ops pack 为 `local_reference_ready`，real-env closure 为 `local_reference_ready` 且真实 readiness 明确 `env_blocked`、`real_pass_ready=false`。
+
+---
+
+## 4. P38 总体执行路线图
+
+| 批次 | 模块包 | 本批目标 | 退出条件 |
+| --- | --- | --- | --- |
+| Batch-A | `completion-map-refresh-current-state` | 先把章节完成度映射刷新到 P37/P38 口径，避免后续计划继续引用 P36 状态 | 映射明确 P37 已完成项、P38 当前目标与 real-env 阻塞项；docs lint 通过 |
+| Batch-B | `runtime-ops-pack-phase2-auto-backfill` | 让 runtime ops pack 自动读取 stage closure、completed/todo 与最新 archive，输出可解释闭环 | 本地 reference 与 env_blocked 输出稳定；不再需要手工补 C41/B41 映射 |
+| Batch-C | `release-readiness-evidence-export` | 将 release gate 组件状态沉淀为统一 evidence artifact | registry、ops、runtime ops、stage closure 使用同一 readiness summary |
+| Batch-D | `public-verification-chat-proxy + production-artifact-healthcheck` | 推进外部公验代理与生产对象存储健康检查边界 | 无 direct AI service；无密钥泄露；无真实对象存储时保持 env_blocked |
+| Batch-E | `fairness-panel-evidence-normalization + ops-hotspot-split` | 收敛 fairness/panel/release evidence 输入并继续拆热点 | release gate 输入更稳定，ops_read_model_pack 不继续膨胀 |
+| Batch-F | `local-reference-regression + stage-closure` | 刷新本地证据并完成阶段收口 | full local gate 通过；真实环境 debt 进入 todo；completed 只记录主体完成快照 |
+
+---
+
+## 5. 详细模块计划
+
+### 5.1 `ai-judge-p38-completion-map-refresh-current-state`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 将 `AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md` 从 P36 口径刷新为 P37 stage closure 后口径。
+2. 纳入 P37 已完成成果：生产 Artifact Store readiness、Public Verification boundary、Real-env evidence readiness、Fairness real sample benchmark、Panel shadow evaluation、Registry release gate、Ops trust monitoring、Route/test hotspot continuation 与 local reference regression。
+3. 明确当前真实状态：Enterprise MVP 基本落地，Fairness Hardened 部分落地偏高，Verifiable Trust Layer 本地参考基本落地，真实环境闭环仍 `env_blocked`。
+4. 将 P38 下一阶段目标写入“下一步优先级”，优先指向 runtime ops phase2 自动回填与 release readiness evidence。
+
+**优先文件**
+
+1. `docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md`
+2. `docs/dev_plan/completed.md`
+3. `docs/dev_plan/todo.md`
+4. `docs/dev_plan/archive/20260425T111521Z-ai-judge-stage-closure-execute.md`
+5. `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
+6. `docs/loadtest/evidence/ai_judge_real_env_window_closure.md`
+
+**落地内容**
+
+1. 更新文档头部状态为“对齐 P37 stage closure”。
+2. 将总进度判断中的 P36 结论改为 P37 结论，并保留 real-env blocked 口径。
+3. 第 3 节章节级完成度总览中补充 P37 证据文件与代码证据：
+   - `ai_judge_service/app/infra/artifacts/s3_store.py`
+   - `ai_judge_service/app/applications/trust_public_verify_contract.py`
+   - `ai_judge_service/app/applications/ops_trust_monitoring.py`
+   - `ai_judge_service/app/applications/registry_release_gate.py`
+   - `ai_judge_service/app/applications/panel_runtime_profile_contract.py`
+4. 第 4 节 Agent 子项映射同步 P37 的 Artifact/Public Verification/Panel Shadow/Release Gate 结论。
+5. 第 6 节下一步优先级更新为 P38：
+   - runtime ops pack phase2 自动回填
+   - release readiness evidence export
+   - public verification chat proxy contract
+   - production artifact healthcheck
+   - real-env pass window 后置执行
+
+**DoD**
+
+1. 映射已不再使用 P36 作为当前状态基线。
+2. P37 已完成项与 `completed.md` B41 一致。
+3. P37 real-env debt 与 `todo.md` C41 一致。
+4. 不把 `local_reference_ready` 写成 real-env `pass`。
+
+**建议回归**
+
+1. `bash scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle`
+2. `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --arch-doc docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+
+### 5.2 `ai-judge-p38-runtime-ops-pack-phase2-auto-backfill`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 将 `ai_judge_runtime_ops_pack.sh` 与 `ai_judge_stage_closure_evidence.sh` 从“读当前活动计划为主”升级为“能识别最近 stage closure archive、completed/todo linkage、runtime ops evidence 的闭环证据”。
+2. 避免阶段收口后只剩重置计划时，runtime ops pack 对真实完成态判断不完整。
+3. 输出可被 stage closure、real-env closure、completed/todo 与后续计划复用的 backfill summary。
+
+**优先文件**
+
+1. `scripts/harness/ai_judge_runtime_ops_pack.sh`
+2. `scripts/harness/ai_judge_stage_closure_evidence.sh`
+3. `scripts/harness/ai_judge_stage_closure_draft.sh`
+4. `scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`
+5. `scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh`
+6. `scripts/harness/tests/test_ai_judge_stage_closure_draft.sh`
+7. `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
+
+**落地内容**
+
+1. 新增 latest stage closure archive 探测逻辑：
+   - 优先读取当前计划中的 archive path。
+   - 当前计划已重置但存在最新 archive 时，读取最新 `docs/dev_plan/archive/*-ai-judge-stage-closure-execute.md`。
+   - 若 archive 缺失，输出 `stage_closure_archive_missing`，不伪造通过。
+2. 新增 completed/todo linkage 摘要：
+   - latest completed section id。
+   - linked real-env debt id。
+   - completed modules count。
+   - todo env-blocked debt count。
+3. runtime ops pack 输出新增 `closureBackfill` 或等价 JSON 区块：
+   - `archiveDetected`
+   - `archivePath`
+   - `completedSection`
+   - `todoSection`
+   - `realEnvDebtLinked`
+   - `localReferenceAllowed`
+4. stage closure evidence 输出明确区分：
+   - active plan evidence
+   - archived closure evidence
+   - long-term completed/todo evidence
+5. 保持现有 `--allow-local-reference` 行为；不带该参数且真实环境缺失时仍为 `env_blocked`。
+
+**DoD**
+
+1. P37 stage closure 后的重置计划可被 runtime ops pack 正确解释，不再只看到“下一阶段待规划”。
+2. local reference 模式仍输出 `local_reference_ready`。
+3. 非 local reference 且缺真实环境时仍输出 `env_blocked`。
+4. tests 覆盖 active plan、archived plan、missing archive、todo debt linked 四类场景。
+
+**建议回归**
+
+1. `bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`
+2. `bash scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh`
+3. `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference --emit-json artifacts/harness/ai-judge-p38-runtime-ops-pack-phase2.summary.json --emit-md artifacts/harness/ai-judge-p38-runtime-ops-pack-phase2.summary.md`
+
+### 5.3 `ai-judge-p38-release-readiness-evidence-export-pack`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 将 registry release gate 的组件判断沉淀为统一 release readiness evidence artifact。
+2. 让 registry governance、ops trust monitoring、runtime ops pack 与 stage closure evidence 复用同一组 readiness 字段。
+3. 减少各模块分别理解 `artifactStoreReadiness / publicVerificationReadiness / trustRegistryWriteThrough / fairnessBenchmark / panelShadowDrift` 的漂移。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/registry_release_gate.py`
+2. `ai_judge_service/app/applications/registry_routes.py`
+3. `ai_judge_service/app/applications/ops_trust_monitoring.py`
+4. `ai_judge_service/app/applications/ops_read_model_pack.py`
+5. `ai_judge_service/tests/test_registry_release_gate.py`
+6. `ai_judge_service/tests/test_registry_governance_routes.py`
+7. `ai_judge_service/tests/test_ops_read_model_pack.py`
+
+**落地内容**
+
+1. 新增 release readiness evidence builder，字段建议：
+   - `evidenceVersion`
+   - `generatedAt`
+   - `policyVersion`
+   - `decision`
+   - `decisionCode`
+   - `componentStatuses`
+   - `reasonCodes`
+   - `envBlockedComponents`
+   - `artifactRefs`
+   - `publicVerificationReadiness`
+   - `realEnvEvidenceStatus`
+2. release gate 输出只允许 `allowed / blocked / env_blocked / needs_review`。
+3. `local_reference_ready` 只能作为 evidence status，不得升级为 release `allowed` 的真实环境依据。
+4. governance 路由与 ops read model 可展示 evidence 摘要，但不暴露 raw internal payload。
+5. stage closure evidence 可以引用 release readiness evidence summary，而不是重新拼装组件状态。
+
+**DoD**
+
+1. release readiness evidence 是稳定、可快照测试的 dict。
+2. blocked/env_blocked/needs_review 的 reason code 可追踪到组件。
+3. public payload 不包含 raw prompt、raw trace、raw transcript、user identity、spend/reputation。
+4. registry activate/publish 的阻断语义不弱化。
+
+**建议回归**
+
+1. `bash skills/python-venv-guard/scripts/assert_venv.sh --project /Users/panyihang/Documents/EchoIsle/ai_judge_service --venv /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv`
+2. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_registry_release_gate.py tests/test_registry_governance_routes.py tests/test_app_factory_registry_routes.py`
+3. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_ops_read_model_pack.py`
+
+### 5.4 `ai-judge-p38-public-verification-chat-proxy-contract-pack`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 将 AI 服务内部 public verification 合同整理成 chat proxy 可安全代理的接口边界。
+2. 明确 request/response/error/cache/redaction 语义，避免未来前端或外部用户直接请求 AI 服务。
+3. 与产品边界对齐：普通用户只能看到公开承诺与验证状态，内部审计、raw trace、raw prompt、完整公平细节仍只给内部 ops。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/trust_public_verify_contract.py`
+2. `ai_judge_service/app/applications/trust_read_routes.py`
+3. `ai_judge_service/tests/test_trust_public_verify_contract.py`
+4. `ai_judge_service/tests/test_trust_read_routes.py`
+5. `chat/chat_server/src/handlers/debate_judge.rs`
+6. `frontend/packages/ops-domain/src/index.ts`
+
+**落地内容**
+
+1. AI 服务侧先稳定 proxy-facing response contract：
+   - `verificationRequest`
+   - `verificationReadiness`
+   - `verifyPayload`
+   - `visibilityContract`
+   - `cacheProfile`
+   - `proxyRequired`
+2. chat proxy 只做鉴权、限流、case access check、错误映射与响应转发，不复制 AI 服务校验逻辑。
+3. 若本轮触及 Rust 或 frontend：
+   - 同步 route/handler/model/error contract。
+   - 同步 `ops-domain` 或相关 SDK 类型。
+   - 增加最小 Rust/API 回归。
+4. public verification 未 ready 时返回可解释状态，不返回 500 式模糊错误。
+
+**DoD**
+
+1. AI 服务仍不新增公众直连接口。
+2. public verification 代理合同能表达 `verification_not_ready / artifact_manifest_pending / challenge_under_review / trust_registry_missing`。
+3. 公开响应递归拒绝 forbidden keys。
+4. 若跨层改动，chat/frontend 类型与测试同轮同步。
+
+**建议回归**
+
+1. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_trust_public_verify_contract.py tests/test_trust_read_routes.py tests/test_route_group_trust.py`
+2. 若修改 `chat/`：`cargo test -p chat-server debate_judge -- --nocapture`
+3. 若修改 `frontend/`：按受影响包执行 `pnpm` typecheck 或对应 smoke。
+
+### 5.5 `ai-judge-p38-production-artifact-healthcheck-pack`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 在 P37 S3 compatible adapter 基础上补 production artifact healthcheck。
+2. 输出不含密钥、不含本地绝对路径、不含 raw payload 的 readiness evidence。
+3. 真实对象存储不存在时保持 `env_blocked`，存在时可通过显式配置执行可审计健康检查。
+
+**优先文件**
+
+1. `ai_judge_service/app/infra/artifacts/s3_store.py`
+2. `ai_judge_service/app/applications/artifact_pack.py`
+3. `ai_judge_service/app/settings.py`
+4. `ai_judge_service/app/wiring.py`
+5. `ai_judge_service/tests/test_artifact_store.py`
+6. `ai_judge_service/tests/test_settings.py`
+
+**落地内容**
+
+1. 新增 artifact store healthcheck builder：
+   - provider
+   - uriScheme
+   - bucketConfigured
+   - prefixConfigured
+   - endpointConfigured
+   - writeReadRoundtripStatus
+   - lastErrorCode
+   - productionReady
+2. 真实 roundtrip 仅在显式 `AI_JUDGE_ARTIFACT_HEALTHCHECK_ENABLED=true` 时执行，避免本地误写外部对象存储。
+3. fake client 测试覆盖 put/head/get 失败、sha mismatch、bucket missing、prefix invalid、local production forbidden。
+4. readiness payload 不输出 endpoint secret、access key、secret key、本地绝对路径或 artifact raw body。
+
+**DoD**
+
+1. local provider 在 production profile 下仍 fail-closed。
+2. S3 compatible provider 缺 bucket 或 prefix 非法时返回明确错误。
+3. healthcheck evidence 可被 release readiness 与 runtime ops pack 引用。
+4. 无真实对象存储时不宣称 production `pass`。
+
+**建议回归**
+
+1. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_artifact_store.py tests/test_settings.py`
+2. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_trust_audit_anchor_contract.py tests/test_trust_public_verify_contract.py`
+
+### 5.6 `ai-judge-p38-fairness-panel-evidence-normalization-pack`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 将 fairness real sample benchmark、panel shadow drift 与 release gate 输入收敛为统一 evidence normalization。
+2. 让 `registry_release_gate.py`、`ops_trust_monitoring.py` 与 runtime ops pack 不再各自解析 shadow/fairness 字段。
+3. 保持真实样本缺失时的 `pending_real_samples / env_blocked` 语义。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/fairness_analysis.py`
+2. `ai_judge_service/app/applications/fairness_runtime_routes.py`
+3. `ai_judge_service/app/applications/panel_runtime_profile_contract.py`
+4. `ai_judge_service/app/applications/registry_release_gate.py`
+5. `ai_judge_service/app/applications/ops_trust_monitoring.py`
+6. `ai_judge_service/tests/test_fairness_dashboard_contract.py`
+7. `ai_judge_service/tests/test_panel_runtime_profile_contract.py`
+8. `ai_judge_service/tests/test_registry_release_gate.py`
+
+**落地内容**
+
+1. 新增 fairness/panel evidence normalized payload：
+   - `benchmarkEvidenceStatus`
+   - `realSampleManifestStatus`
+   - `thresholdDecision`
+   - `shadowGateApplied`
+   - `shadowGatePassed`
+   - `driftBreachCount`
+   - `latestRunEnvironmentMode`
+   - `releaseGateInputStatus`
+2. 统一大小写与状态枚举，减少 `pass/passed/ready/local_reference_ready` 在多处各自处理。
+3. 将 normalized evidence 接入 release readiness evidence。
+4. 所有 shadow 字段继续标记为 advisory/observational，不写 official verdict。
+
+**DoD**
+
+1. release gate、ops monitoring 与 fairness runtime 对同一输入给出一致状态。
+2. 缺真实样本时不会输出真实 `pass`。
+3. shadow drift breach 会进入 `needs_review` 或 `blocked/watch`，但不直接改判。
+
+**建议回归**
+
+1. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_fairness_dashboard_contract.py tests/test_panel_runtime_profile_contract.py tests/test_registry_release_gate.py tests/test_ops_read_model_pack.py`
+2. `bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`
+
+### 5.7 `ai-judge-p38-ops-read-model-hotspot-split-pack`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 继续收敛 `ops_read_model_pack.py` 的增长压力。
+2. 将 release readiness、public verification、trust monitoring 相关组装下沉到小型 builder 模块。
+3. 保持 API contract 不变或同轮同步测试，不为未发布能力保留长期 alias。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/ops_read_model_pack.py`
+2. `ai_judge_service/app/applications/ops_trust_monitoring.py`
+3. `ai_judge_service/app/applications/trust_artifact_summary.py`
+4. `ai_judge_service/app/applications/registry_release_gate.py`
+5. `ai_judge_service/tests/test_ops_read_model_pack.py`
+
+**落地内容**
+
+1. 提取 release readiness projection builder。
+2. 提取 public verification ops projection builder。
+3. 保留 `build_ops_read_model_pack_v5_payload` 顶层合同稳定。
+4. 增加 focused tests，避免全量 route tests 承担 builder 语义验证。
+
+**DoD**
+
+1. `ops_read_model_pack.py` 减少高耦合新增逻辑。
+2. 顶层 response key 不漂移。
+3. redaction contract 保持不暴露 internal audit payload。
+
+**建议回归**
+
+1. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_ops_read_model_pack.py`
+2. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q tests/test_app_factory_ops_panel_routes.py tests/test_route_group_panel_runtime.py`
+
+### 5.8 `ai-judge-p38-local-reference-regression-pack`
+
+状态：已完成（2026-04-25）
+
+**目标**
+
+1. 在 P38 主体模块完成后刷新本地参考证据。
+2. 证明 P38 的 release readiness evidence、runtime ops phase2、public verification proxy readiness 与 artifact healthcheck 没有破坏 P37 可信层。
+3. 明确真实环境仍未 ready 时只输出 `local_reference_ready` 或 `env_blocked`。
+
+**优先文件**
+
+1. `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
+2. `docs/loadtest/evidence/ai_judge_real_env_window_closure.md`
+3. `docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`
+4. `artifacts/harness/*ai-judge-p38*`
+
+**落地内容**
+
+1. 运行 ruff。
+2. 运行 AI Judge 全量 pytest。
+3. 运行 artifact/audit/public verification/registry/fairness/panel 相关 targeted tests。
+4. 运行 runtime ops pack local reference。
+5. 运行 real-env window closure，并确认缺真实环境时仍为 `env_blocked`。
+6. 运行 test change guard 与 docs lint。
+
+**DoD**
+
+1. `ruff check app tests` 通过。
+2. `pytest -q` 通过。
+3. runtime ops pack local reference 通过。
+4. real-env closure 不伪造 pass。
+5. evidence 写入 `docs/loadtest/evidence` 与 `artifacts/harness`。
+
+**建议回归**
+
+1. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m ruff check app tests`
+2. `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q`
+3. `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference --emit-json artifacts/harness/ai-judge-p38-local-reference-regression-runtime-ops.summary.json --emit-md artifacts/harness/ai-judge-p38-local-reference-regression-runtime-ops.summary.md`
+4. `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference --emit-json artifacts/harness/ai-judge-p38-local-reference-regression-real-env-window.summary.json --emit-md artifacts/harness/ai-judge-p38-local-reference-regression-real-env-window.summary.md`
+5. `bash skills/post-module-test-guard/scripts/test_change_guard.sh --root /Users/panyihang/Documents/EchoIsle`
+
+### 5.9 `ai-judge-p38-stage-closure-execute`
+
+状态：待执行
+
+**目标**
+
+1. P38 主体完成后执行阶段收口。
+2. 将主体完成快照写入 `completed.md`。
+3. 将真实环境、外部对象存储或外部代理无法在本地完成的事项写入 `todo.md`。
+4. 归档活动计划并重置当前计划。
+
+**优先文件**
+
+1. `docs/dev_plan/当前开发计划.md`
+2. `docs/dev_plan/completed.md`
+3. `docs/dev_plan/todo.md`
+4. `docs/dev_plan/archive/`
+5. `scripts/harness/ai_judge_stage_closure_evidence.sh`
+6. `scripts/harness/ai_judge_stage_closure_execute.sh`
+
+**DoD**
+
+1. stage closure evidence status 为 `pass` 或可解释的 blocked。
+2. completed 只记录主体完成快照。
+3. todo 只记录明确后置技术债。
+4. 活动计划归档并重置。
+
+**建议回归**
+
+1. `bash scripts/harness/ai_judge_stage_closure_evidence.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --emit-json artifacts/harness/ai-judge-p38-stage-closure-evidence.summary.json --emit-md artifacts/harness/ai-judge-p38-stage-closure-evidence.summary.md`
+2. `bash scripts/harness/ai_judge_stage_closure_execute.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --emit-json artifacts/harness/ai-judge-p38-stage-closure-execute.summary.json --emit-md artifacts/harness/ai-judge-p38-stage-closure-execute.summary.md`
+3. `bash scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle`
+
+### 5.10 `ai-judge-p37-real-env-pass-window-execute-on-env`
+
+状态：阻塞（环境依赖）
+
+**目标**
+
+1. 等真实环境具备后，复跑 P37 real-env pass window。
+2. 覆盖真实样本、真实 provider/callback、生产对象存储、registry release readiness 与 public verification readiness。
+3. 输出真实环境 `pass` 证据，并按结果更新 completed/todo。
+
+**触发条件**
+
+1. `REAL_CALIBRATION_ENV_READY=true`。
+2. 真实样本 manifest 可用。
+3. 真实 AI provider 与 callback 环境可用。
+4. 生产对象存储已配置并通过健康检查。
+5. P37/P38 release readiness 输入完整。
+
+**当前不做原因**
+
+1. 当前本地环境没有真实 provider/callback。
+2. 当前没有真实样本窗口。
+3. 当前生产对象存储没有真实验收。
+4. 当前不能把 `local_reference_ready` 冒充为 real-env `pass`。
+
+---
+
+## 6. 验证与门禁策略
+
+1. 涉及 Python 命令前必须先运行：
+   - `bash skills/python-venv-guard/scripts/assert_venv.sh --project /Users/panyihang/Documents/EchoIsle/ai_judge_service --venv /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv`
+2. 涉及项目代码、架构或模块行为变更前必须执行 PRD/product goal 对齐：
+   - `bash skills/pre-module-prd-goal-guard/scripts/run_prd_goal_guard.sh --root /Users/panyihang/Documents/EchoIsle --task-kind dev --module <module> --summary "<summary>" --mode auto --metadata-out artifacts/harness/<module>-prd-guard.env`
+3. 文档计划类变更默认至少执行：
+   - `bash scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle`
+   - `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --arch-doc docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+4. 后端 Python 模块完成后按风险选择：
+   - targeted tests
+   - `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m ruff check app tests`
+   - `/Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q`
+5. 脚本模块完成后补对应 `scripts/harness/tests/*`。
+6. 跨 `chat/` 或 `frontend/` 时，必须同步检查 route、DTO、SDK/domain、错误语义与必要 smoke/typecheck。
+7. 模块结束后再执行 post hooks：
+   - test guard
+   - commit message 推荐
+   - plan sync
+8. 阶段收口只按 stage-closure flow 执行，不把普通 dev post hooks 强套到收口流程里。
+
+---
+
+## 7. 架构方案第13章一致性校验（下一轮执行必须通过）
+
+1. **角色一致性**：P38 不新增绕过 Clerk/Recorder/Claim/Evidence/Panel/Fairness/Arbiter/Opinion 的捷径路径；public verification、release evidence 与 artifact healthcheck 都是旁路验证能力。
+2. **数据一致性**：六对象主链仍是唯一业务事实源；release readiness evidence 与 trust/artifact summary 只能引用事实，不创建平行 winner。
+3. **门禁一致性**：Fairness Sentinel 仍先于 Chief Arbiter；registry release gate 不因 local reference 自动允许真实 release。
+4. **边界一致性**：NPC Coach / Room QA 仍为 `advisory_only`；Public Verification 只能通过 chat proxy 进入外部访问边界。
+5. **跨层一致性**：若 P38 修改 chat proxy、前端 ops-domain、API DTO、错误码或状态字段，必须同轮同步调用方与测试。
+6. **收口一致性**：real-env 项继续区分 `local_reference_ready` 与 `pass`；P37/P38 阶段收口不得把环境阻塞项写成完成态。
+
+---
+
+## 8. 风险与非目标
+
+1. 不在 P38 直接引入链上 anchor、第三方审计网络、Reason Passport 或 Constitution Registry；这些属于企业方案第15章 Phase B-D 后续。
+2. 不把生产对象存储健康检查写成默认外部写入；真实 roundtrip 必须显式开启。
+3. 不把 public verification 变成用户可见完整审计。
+4. 不把 panel shadow drift 结果直接写入 official verdict。
+5. 不把 runtime ops pack 的 `--allow-local-reference` 输出作为真实环境 release pass。
+6. 不进行无目标的大文件重构；热点拆分必须绑定可验证合同或测试收益。
+
+---
+
+## 9. 当前推荐下一步
+
+建议下一回合先执行：
+
+`ai-judge-p38-stage-closure-execute`
+
+理由：
+
+1. P38 主体模块和 local-reference regression 已完成，当前只剩阶段收口。
+2. stage closure 应把主体完成快照写入 completed，将真实样本、真实 provider/callback、生产对象存储和真实服务窗口继续作为明确后置技术债。
+3. 当前仍无真实环境窗口，收口时必须继续保留 `ai-judge-p37-real-env-pass-window-execute-on-env` 的环境依赖状态，不写成真实完成。

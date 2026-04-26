@@ -138,6 +138,10 @@ pub struct AiJudgeConfig {
     pub alert_outbox_delivery_path: String,
     #[serde(default = "default_ai_judge_alert_outbox_timeout_ms")]
     pub alert_outbox_timeout_ms: u64,
+    #[serde(default = "default_ai_judge_public_verify_path")]
+    pub public_verify_path: String,
+    #[serde(default = "default_ai_judge_public_verify_timeout_ms")]
+    pub public_verify_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +251,8 @@ impl Default for AiJudgeConfig {
             alert_outbox_path: default_ai_judge_alert_outbox_path(),
             alert_outbox_delivery_path: default_ai_judge_alert_outbox_delivery_path(),
             alert_outbox_timeout_ms: default_ai_judge_alert_outbox_timeout_ms(),
+            public_verify_path: default_ai_judge_public_verify_path(),
+            public_verify_timeout_ms: default_ai_judge_public_verify_timeout_ms(),
         }
     }
 }
@@ -482,6 +488,14 @@ fn default_ai_judge_alert_outbox_delivery_path() -> String {
 }
 
 fn default_ai_judge_alert_outbox_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_ai_judge_public_verify_path() -> String {
+    "/internal/judge/cases/{case_id}/trust/public-verify".to_string()
+}
+
+fn default_ai_judge_public_verify_timeout_ms() -> u64 {
     5_000
 }
 
@@ -781,6 +795,11 @@ mod tests {
             "/internal/judge/alerts/outbox/{event_id}/delivery"
         );
         assert_eq!(cfg.alert_outbox_timeout_ms, 5_000);
+        assert_eq!(
+            cfg.public_verify_path,
+            "/internal/judge/cases/{case_id}/trust/public-verify"
+        );
+        assert_eq!(cfg.public_verify_timeout_ms, 5_000);
     }
 
     #[test]

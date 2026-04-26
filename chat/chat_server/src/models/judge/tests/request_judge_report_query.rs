@@ -1,8 +1,17 @@
 use super::*;
 use crate::models::UpsertOpsRoleInput;
 use anyhow::{Context, Result};
+use axum::{
+    extract::{Path, Query},
+    http::{HeaderMap, StatusCode as AxumStatusCode},
+    routing::get,
+    Json, Router,
+};
 use chrono::{Duration, Utc};
+use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
+use tokio::net::TcpListener;
 
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
 
@@ -271,6 +280,74 @@ fn replay_execute_input(
         case_id,
         reason,
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct MockPublicVerifyQuery {
+    dispatch_type: Option<String>,
+}
+
+async fn spawn_mock_public_verify_server(
+    expected_internal_key: String,
+    extra_payload: serde_json::Value,
+) -> Result<String> {
+    let app = Router::new().route(
+        "/internal/judge/cases/:case_id/trust/public-verify",
+        get(
+            move |Path(case_id): Path<u64>,
+                  Query(query): Query<MockPublicVerifyQuery>,
+                  headers: HeaderMap| {
+                let expected_internal_key = expected_internal_key.clone();
+                let extra_payload = extra_payload.clone();
+                async move {
+                    if headers
+                        .get("x-ai-internal-key")
+                        .and_then(|value| value.to_str().ok())
+                        != Some(expected_internal_key.as_str())
+                    {
+                        return (AxumStatusCode::UNAUTHORIZED, Json(json!({ "ok": false })));
+                    }
+                    let dispatch_type = query.dispatch_type.unwrap_or_else(|| "final".to_string());
+                    let mut payload = json!({
+                        "proxyRequired": true,
+                        "caseId": case_id,
+                        "dispatchType": dispatch_type,
+                        "verificationReadiness": {
+                            "ready": true,
+                            "status": "ready",
+                            "blockers": [],
+                            "externalizable": true
+                        },
+                        "cacheProfile": {
+                            "cacheable": true,
+                            "ttlSeconds": 60,
+                            "staleWhileRevalidateSeconds": 120,
+                            "cacheKey": format!("public-verify:{case_id}"),
+                            "varyBy": ["dispatchType"]
+                        },
+                        "verifyPayload": {
+                            "checksum": format!("case-{case_id}")
+                        }
+                    });
+                    if let Some(object) = extra_payload.as_object() {
+                        let payload_object = payload
+                            .as_object_mut()
+                            .expect("mock public verify payload should be object");
+                        for (key, value) in object {
+                            payload_object.insert(key.clone(), value.clone());
+                        }
+                    }
+                    (AxumStatusCode::OK, Json(payload))
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
 }
 
 async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Result<i64> {
@@ -689,6 +766,83 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
     assert_eq!(final_report.claim_graph, json!({}));
     assert_eq!(final_report.verdict_ledger, json!({}));
     assert_eq!(final_report.trust_attestation, json!({}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_public_verify_should_proxy_final_case_and_preserve_public_payload() -> Result<()>
+{
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url =
+        spawn_mock_public_verify_server("public-verify-key".to_string(), json!({})).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "public-verify-key".to_string();
+    inner.config.ai_judge.public_verify_timeout_ms = 2_000;
+
+    let out = state
+        .get_judge_public_verify(
+            session_id as u64,
+            &participant,
+            GetJudgePublicVerifyQuery {
+                rejudge_run_no: None,
+                dispatch_type: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "ready");
+    assert_eq!(out.status_reason, "public_verify_ready");
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert_eq!(out.dispatch_type, "final");
+    assert_eq!(out.public_verify["caseId"], json!(final_job_id as u64));
+    assert_eq!(out.public_verify["dispatchType"], json!("final"));
+    assert_eq!(out.verification_readiness["ready"], json!(true));
+    assert_eq!(out.cache_profile["cacheable"], json!(true));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_public_verify_should_return_proxy_error_when_ai_contract_leaks_private_key(
+) -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url = spawn_mock_public_verify_server(
+        "public-verify-key".to_string(),
+        json!({ "provider": { "name": "must-not-leak" } }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "public-verify-key".to_string();
+    inner.config.ai_judge.public_verify_timeout_ms = 2_000;
+
+    let out = state
+        .get_judge_public_verify(
+            session_id as u64,
+            &participant,
+            GetJudgePublicVerifyQuery {
+                rejudge_run_no: None,
+                dispatch_type: Some("final".to_string()),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "proxy_error");
+    assert_eq!(out.status_reason, "public_verify_contract_violation");
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert_eq!(out.public_verify, json!({}));
+    assert_eq!(
+        out.verification_readiness["blockers"],
+        json!(["public_verify_contract_violation"])
+    );
     Ok(())
 }
 

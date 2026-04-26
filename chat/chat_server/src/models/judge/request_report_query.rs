@@ -1,8 +1,10 @@
 use super::*;
 use crate::models::OpsPermission;
-use serde_json::Value;
+use reqwest::Client;
+use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 const CONTRACT_FAILURE_FINAL_BLOCKED: &str = "final_contract_blocked";
@@ -50,6 +52,16 @@ const JUDGE_REPORT_REASON_FINAL_REPORT_MISSING: &str = "final_report_missing_aft
 const JUDGE_REPORT_REASON_PHASE_FAILED_WAITING_REPLAY: &str = "phase_failed_waiting_replay";
 const JUDGE_REPORT_REASON_PHASE_IN_PROGRESS: &str = "phase_jobs_in_progress";
 const JUDGE_REPORT_REASON_NO_JUDGE_JOBS: &str = "no_judge_jobs";
+
+const JUDGE_PUBLIC_VERIFY_STATUS_READY: &str = "ready";
+const JUDGE_PUBLIC_VERIFY_STATUS_NOT_READY: &str = "not_ready";
+const JUDGE_PUBLIC_VERIFY_STATUS_ABSENT: &str = "absent";
+const JUDGE_PUBLIC_VERIFY_STATUS_PROXY_ERROR: &str = "proxy_error";
+const JUDGE_PUBLIC_VERIFY_REASON_READY: &str = "public_verify_ready";
+const JUDGE_PUBLIC_VERIFY_REASON_NOT_READY: &str = "public_verify_not_ready";
+const JUDGE_PUBLIC_VERIFY_REASON_CASE_ABSENT: &str = "public_verify_case_absent";
+const JUDGE_PUBLIC_VERIFY_REASON_PROXY_FAILED: &str = "public_verify_proxy_failed";
+const JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION: &str = "public_verify_contract_violation";
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
@@ -213,6 +225,222 @@ async fn resolve_target_rejudge_run_no(
     .fetch_one(&mut **tx)
     .await?;
     Ok(latest_run_no)
+}
+
+fn normalize_public_verify_dispatch_type(
+    dispatch_type: Option<String>,
+) -> Result<String, AppError> {
+    let normalized = dispatch_type
+        .unwrap_or_else(|| "final".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "final" {
+        Ok("final".to_string())
+    } else if normalized == "phase" {
+        Ok(normalized)
+    } else {
+        Err(AppError::DebateError(
+            "dispatchType must be one of: phase, final".to_string(),
+        ))
+    }
+}
+
+fn build_ai_judge_http_url(base_url: &str, path: &str, case_id: u64) -> String {
+    let resolved_path = path
+        .replace("{case_id}", &case_id.to_string())
+        .replace(":case_id", &case_id.to_string());
+    let resolved_path = if resolved_path.starts_with('/') {
+        resolved_path
+    } else {
+        format!("/{resolved_path}")
+    };
+    format!("{}{}", base_url.trim_end_matches('/'), resolved_path)
+}
+
+fn default_public_verify_readiness(ready: bool, status: &str, blocker: Option<&str>) -> Value {
+    let blockers = blocker
+        .map(|item| json!([item]))
+        .unwrap_or_else(|| json!([]));
+    json!({
+        "ready": ready,
+        "status": status,
+        "blockers": blockers,
+        "externalizable": ready
+    })
+}
+
+fn default_public_verify_cache_profile(session_id: u64, dispatch_type: &str) -> Value {
+    json!({
+        "cacheable": false,
+        "ttlSeconds": 0,
+        "staleWhileRevalidateSeconds": 0,
+        "cacheKey": format!(
+            "public-verify:chat-proxy:session:{session_id}:dispatch:{dispatch_type}"
+        ),
+        "varyBy": ["authorization", "rejudgeRunNo", "dispatchType"]
+    })
+}
+
+fn build_public_verify_absent_output(
+    session_id: u64,
+    dispatch_type: String,
+) -> GetJudgePublicVerifyOutput {
+    GetJudgePublicVerifyOutput {
+        session_id,
+        status: JUDGE_PUBLIC_VERIFY_STATUS_ABSENT.to_string(),
+        status_reason: JUDGE_PUBLIC_VERIFY_REASON_CASE_ABSENT.to_string(),
+        case_id: None,
+        dispatch_type: dispatch_type.clone(),
+        verification_readiness: default_public_verify_readiness(
+            false,
+            JUDGE_PUBLIC_VERIFY_STATUS_ABSENT,
+            Some(JUDGE_PUBLIC_VERIFY_REASON_CASE_ABSENT),
+        ),
+        cache_profile: default_public_verify_cache_profile(session_id, &dispatch_type),
+        public_verify: json!({}),
+    }
+}
+
+fn build_public_verify_proxy_error_output(
+    session_id: u64,
+    case_id: u64,
+    dispatch_type: String,
+    reason_code: &str,
+) -> GetJudgePublicVerifyOutput {
+    GetJudgePublicVerifyOutput {
+        session_id,
+        status: JUDGE_PUBLIC_VERIFY_STATUS_PROXY_ERROR.to_string(),
+        status_reason: reason_code.to_string(),
+        case_id: Some(case_id),
+        dispatch_type: dispatch_type.clone(),
+        verification_readiness: default_public_verify_readiness(
+            false,
+            JUDGE_PUBLIC_VERIFY_STATUS_PROXY_ERROR,
+            Some(reason_code),
+        ),
+        cache_profile: default_public_verify_cache_profile(session_id, &dispatch_type),
+        public_verify: json!({}),
+    }
+}
+
+async fn fetch_ai_judge_public_verify_payload(
+    base_url: &str,
+    path: &str,
+    timeout_ms: u64,
+    internal_key: &str,
+    case_id: u64,
+    dispatch_type: &str,
+) -> Result<Value, &'static str> {
+    let url = build_ai_judge_http_url(base_url, path, case_id);
+    let client = Client::builder()
+        .timeout(Duration::from_millis(timeout_ms.max(1)))
+        .build()
+        .map_err(|_| "public_verify_proxy_http_client_failed")?;
+    let response = client
+        .get(url)
+        .header("x-ai-internal-key", internal_key)
+        .query(&[("dispatch_type", dispatch_type)])
+        .send()
+        .await
+        .map_err(|_| "public_verify_proxy_request_failed")?;
+    if !response.status().is_success() {
+        return Err("public_verify_proxy_bad_status");
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "public_verify_proxy_bad_json")
+}
+
+fn is_public_verify_forbidden_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .flat_map(char::to_lowercase)
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "provider"
+            | "rawtrace"
+            | "prompt"
+            | "privateaudit"
+            | "bucket"
+            | "endpoint"
+            | "path"
+            | "secret"
+            | "secretref"
+            | "credential"
+            | "internalkey"
+            | "xaiinternalkey"
+    )
+}
+
+fn public_verify_value_contains_forbidden_key(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            is_public_verify_forbidden_key(key) || public_verify_value_contains_forbidden_key(value)
+        }),
+        Value::Array(items) => items.iter().any(public_verify_value_contains_forbidden_key),
+        _ => false,
+    }
+}
+
+fn validate_public_verify_payload(
+    payload: &Value,
+    expected_case_id: u64,
+    dispatch_type: &str,
+) -> Result<(), &'static str> {
+    let Some(object) = payload.as_object() else {
+        return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
+    };
+    if object
+        .get("proxyRequired")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        != true
+    {
+        return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
+    }
+    if object.get("caseId").and_then(Value::as_u64) != Some(expected_case_id) {
+        return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
+    }
+    if object.get("dispatchType").and_then(Value::as_str) != Some(dispatch_type) {
+        return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
+    }
+    if !object.contains_key("verificationReadiness") || !object.contains_key("cacheProfile") {
+        return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
+    }
+    if public_verify_value_contains_forbidden_key(payload) {
+        return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
+    }
+    Ok(())
+}
+
+fn resolve_public_verify_status(payload: &Value) -> (String, String) {
+    let readiness = payload
+        .get("verificationReadiness")
+        .cloned()
+        .unwrap_or_else(|| default_public_verify_readiness(false, "missing", None));
+    if readiness
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return (
+            JUDGE_PUBLIC_VERIFY_STATUS_READY.to_string(),
+            JUDGE_PUBLIC_VERIFY_REASON_READY.to_string(),
+        );
+    }
+
+    let reason = readiness
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(JUDGE_PUBLIC_VERIFY_REASON_NOT_READY);
+    (
+        JUDGE_PUBLIC_VERIFY_STATUS_NOT_READY.to_string(),
+        reason.to_string(),
+    )
 }
 
 fn is_replay_eligible_status(status: &str) -> bool {
@@ -2002,6 +2230,93 @@ impl AppState {
             final_dispatch_failure_stats,
             progress,
             final_report_summary: final_report.as_ref().map(map_final_report_summary),
+        })
+    }
+
+    pub async fn get_judge_public_verify(
+        &self,
+        session_id: u64,
+        user: &User,
+        query: GetJudgePublicVerifyQuery,
+    ) -> Result<GetJudgePublicVerifyOutput, AppError> {
+        let dispatch_type = normalize_public_verify_dispatch_type(query.dispatch_type)?;
+        let report = self
+            .get_latest_judge_report(session_id, user, query.rejudge_run_no)
+            .await?;
+        let case_id = if dispatch_type == "phase" {
+            report.latest_phase_job.map(|job| job.phase_job_id)
+        } else {
+            report.latest_final_job.map(|job| job.final_job_id)
+        };
+        let Some(case_id) = case_id else {
+            return Ok(build_public_verify_absent_output(session_id, dispatch_type));
+        };
+
+        let payload = match fetch_ai_judge_public_verify_payload(
+            &self.config.ai_judge.service_base_url,
+            &self.config.ai_judge.public_verify_path,
+            self.config.ai_judge.public_verify_timeout_ms,
+            &self.config.ai_judge.internal_key,
+            case_id,
+            &dispatch_type,
+        )
+        .await
+        {
+            Ok(payload) => payload,
+            Err(reason_code) => {
+                tracing::warn!(
+                    session_id,
+                    case_id,
+                    dispatch_type,
+                    reason_code,
+                    "AI judge public verification proxy request failed"
+                );
+                return Ok(build_public_verify_proxy_error_output(
+                    session_id,
+                    case_id,
+                    dispatch_type,
+                    JUDGE_PUBLIC_VERIFY_REASON_PROXY_FAILED,
+                ));
+            }
+        };
+
+        if let Err(reason_code) = validate_public_verify_payload(&payload, case_id, &dispatch_type)
+        {
+            // 代理层二次校验公开合同，避免 AI 内部字段被穿透到客户端。
+            tracing::warn!(
+                session_id,
+                case_id,
+                dispatch_type,
+                reason_code,
+                "AI judge public verification contract violation blocked"
+            );
+            return Ok(build_public_verify_proxy_error_output(
+                session_id,
+                case_id,
+                dispatch_type,
+                reason_code,
+            ));
+        }
+
+        let (status, status_reason) = resolve_public_verify_status(&payload);
+        let verification_readiness = payload
+            .get("verificationReadiness")
+            .cloned()
+            .unwrap_or_else(|| default_public_verify_readiness(false, &status, None));
+        let cache_profile = payload
+            .get("cacheProfile")
+            .cloned()
+            .unwrap_or_else(|| default_public_verify_cache_profile(session_id, &dispatch_type));
+
+        Ok(GetJudgePublicVerifyOutput {
+            session_id,
+            status,
+            status_reason,
+            case_id: Some(case_id),
+            dispatch_type,
+            verification_readiness,
+            cache_profile,
+            public_verify: payload,
         })
     }
 
