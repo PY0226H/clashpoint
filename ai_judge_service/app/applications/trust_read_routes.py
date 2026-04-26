@@ -7,14 +7,11 @@ from typing import Any
 from app.domain.trust import TRUST_REGISTRY_VERSION, TrustRegistrySnapshot
 
 from .artifact_pack import write_trust_audit_artifact_pack
-from .trust_phasea_bundle import build_trust_phasea_bundle
-from .trust_public_verify_contract import (
-    TRUST_PUBLIC_VERIFICATION_VERSION,
-    build_trust_public_verify_cache_profile,
-    build_trust_public_verify_readiness,
-    build_trust_public_verify_request,
-    build_trust_public_verify_visibility_contract,
+from .public_verify_projection import (
+    build_trust_public_verify_payload_from_bundle,
+    build_trust_public_verify_route_payload,
 )
+from .trust_phasea_bundle import build_trust_phasea_bundle
 
 TRUST_READ_DISPATCH_TYPES: frozenset[str] = frozenset({"auto", "phase", "final"})
 
@@ -466,47 +463,6 @@ def build_trust_item_route_payload(
     }
 
 
-def build_trust_public_verify_route_payload(
-    *,
-    case_id: int,
-    dispatch_type: str,
-    trace_id: str,
-    verify_payload: dict[str, Any] | Any,
-    registry_version: str = TRUST_REGISTRY_VERSION,
-    source: str | None = None,
-) -> dict[str, Any]:
-    verify_payload_dict = (
-        dict(verify_payload) if isinstance(verify_payload, dict) else {}
-    )
-    normalized_dispatch_type = str(dispatch_type or "").strip().lower()
-    normalized_trace_id = str(trace_id or "").strip()
-    verification_request = build_trust_public_verify_request(
-        case_id=int(case_id),
-        dispatch_type=normalized_dispatch_type,
-        trace_id=normalized_trace_id,
-        registry_version=registry_version,
-    )
-    verification_readiness = build_trust_public_verify_readiness(
-        verify_payload=verify_payload_dict,
-        source=source,
-    )
-    return {
-        "caseId": int(case_id),
-        "dispatchType": normalized_dispatch_type,
-        "traceId": normalized_trace_id,
-        "verificationVersion": TRUST_PUBLIC_VERIFICATION_VERSION,
-        "verificationRequest": verification_request,
-        "verificationReadiness": verification_readiness,
-        "verifyPayload": verify_payload_dict,
-        "visibilityContract": build_trust_public_verify_visibility_contract(),
-        "cacheProfile": build_trust_public_verify_cache_profile(
-            verification_request=verification_request,
-            verification_readiness=verification_readiness,
-        ),
-        "proxyRequired": True,
-    }
-
-
 def validate_trust_route_contract_payload(
     *,
     payload: dict[str, Any],
@@ -603,43 +559,12 @@ def build_trust_public_verify_bundle_payload(
     validate_contract: Any,
     violation_code: str,
 ) -> dict[str, Any]:
-    context = bundle["context"] if isinstance(bundle.get("context"), dict) else {}
-    commitment = dict(bundle["commitment"]) if isinstance(bundle.get("commitment"), dict) else {}
-    verdict_attestation = (
-        dict(bundle["verdictAttestation"])
-        if isinstance(bundle.get("verdictAttestation"), dict)
-        else {}
-    )
-    challenge_review = (
-        dict(bundle["challengeReview"])
-        if isinstance(bundle.get("challengeReview"), dict)
-        else {}
-    )
-    kernel_version = dict(bundle["kernelVersion"]) if isinstance(bundle.get("kernelVersion"), dict) else {}
-    audit_anchor = build_audit_anchor_export(
+    payload = build_trust_public_verify_payload_from_bundle(
         case_id=case_id,
-        dispatch_type=context.get("dispatchType"),
-        trace_id=context.get("traceId"),
-        case_commitment=commitment,
-        verdict_attestation=verdict_attestation,
-        challenge_review=challenge_review,
-        kernel_version=kernel_version,
-        include_payload=False,
+        bundle=bundle,
+        build_audit_anchor_export=build_audit_anchor_export,
+        build_public_verify_payload=build_public_verify_payload,
         artifact_manifest=_artifact_manifest_from_bundle(bundle),
-    )
-    payload = build_trust_public_verify_route_payload(
-        case_id=case_id,
-        dispatch_type=str(context.get("dispatchType") or ""),
-        trace_id=str(context.get("traceId") or ""),
-        verify_payload=build_public_verify_payload(
-            commitment=commitment,
-            verdict_attestation=verdict_attestation,
-            challenge_review=challenge_review,
-            kernel_version=kernel_version,
-            audit_anchor=audit_anchor,
-        ),
-        registry_version=str(context.get("registryVersion") or TRUST_REGISTRY_VERSION),
-        source=str(context.get("source") or ""),
     )
     return validate_trust_route_contract_payload(
         payload=payload,

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .trust_artifact_summary import TRUST_ARTIFACT_COMPONENT_KEYS
+from .trust_artifact_summary import (
+    TRUST_ARTIFACT_COMPONENT_KEYS,
+    build_trust_artifact_summary_from_public_verify_payload,
+)
 
 
 def _to_int(value: Any, *, default: int = 0) -> int:
@@ -21,6 +24,51 @@ def _increment_count(target: dict[str, int], key: Any) -> None:
 
 def _sorted_counts(counts: dict[str, int]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: kv[0]))
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _normalize_optional_token(value: Any) -> str | None:
+    token = str(value or "").strip().lower()
+    return token or None
+
+
+def build_ops_read_model_pack_trust_item_from_public_verify_payload(
+    *,
+    case_id: int,
+    trust_payload: dict[str, Any],
+    include_artifact_refs: bool = False,
+) -> dict[str, Any]:
+    verify_payload = _dict_or_empty(trust_payload.get("verifyPayload"))
+    verdict_attestation = _dict_or_empty(verify_payload.get("verdictAttestation"))
+    challenge_review = _dict_or_empty(verify_payload.get("challengeReview"))
+    verification_readiness = _dict_or_empty(trust_payload.get("verificationReadiness"))
+    trust_artifact_summary = build_trust_artifact_summary_from_public_verify_payload(
+        public_verify_payload=trust_payload,
+        include_artifact_refs=include_artifact_refs,
+    )
+    return {
+        "caseId": int(case_id),
+        "dispatchType": trust_payload.get("dispatchType"),
+        "traceId": trust_payload.get("traceId"),
+        "verdictVerified": bool(verdict_attestation.get("verified")),
+        "verdictReason": (
+            str(verdict_attestation.get("reason") or "").strip() or None
+        ),
+        "reviewRequired": bool(challenge_review.get("reviewRequired")),
+        "reviewState": _normalize_optional_token(challenge_review.get("reviewState")),
+        "challengeState": _normalize_optional_token(
+            challenge_review.get("challengeState")
+        ),
+        "totalChallenges": max(
+            0,
+            _to_int(challenge_review.get("totalChallenges"), default=0),
+        ),
+        "publicVerificationReadiness": verification_readiness,
+        "trustArtifactSummary": trust_artifact_summary,
+    }
 
 
 def summarize_ops_read_model_pack_trust_items(

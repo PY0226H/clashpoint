@@ -58,6 +58,18 @@ expect_contains "route split uses refactor type" "refactor(ai-judge): split trus
 expect_not_contains "route split avoids generic capability subject" "add ai-judge capability" "$ROUTE_OUT"
 expect_not_contains "route split avoids sync follow-up alternative" "sync ai-judge follow-up" "$ROUTE_OUT"
 
+REGISTRY_TRUST_OUT="$TMP_DIR/registry-trust.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p39-registry-trust-route-hotspot-split-pack \
+  --summary "Split AI Judge release readiness and public verification route projections without changing contracts" >"$REGISTRY_TRUST_OUT"
+
+expect_contains "registry trust split uses refactor type" "refactor(ai-judge): split registry trust route projections" "$REGISTRY_TRUST_OUT"
+expect_contains "registry trust split includes concrete alternative" "refactor(ai-judge): extract public verify projections" "$REGISTRY_TRUST_OUT"
+expect_not_contains "registry trust split avoids generic capability subject" "add ai-judge capability" "$REGISTRY_TRUST_OUT"
+expect_not_contains "registry trust split avoids sync follow-up alternative" "sync ai-judge follow-up" "$REGISTRY_TRUST_OUT"
+
 LOCAL_REF_OUT="$TMP_DIR/local-reference.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

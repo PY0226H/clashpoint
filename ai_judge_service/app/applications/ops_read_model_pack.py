@@ -6,16 +6,14 @@ from typing import Any, Awaitable, Callable
 from .ops_read_model_trust_projection import (
     build_ops_read_model_pack_policy_gate_rows,
     build_ops_read_model_pack_trust_artifact_coverage,
+    build_ops_read_model_pack_trust_item_from_public_verify_payload,
 )
 from .ops_trust_monitoring import (
     OPS_TRUST_MONITORING_BLOCKER_BUCKETS,
     OPS_TRUST_MONITORING_KEYS,
     build_ops_trust_monitoring_summary,
 )
-from .trust_artifact_summary import (
-    TRUST_ARTIFACT_COMPONENT_KEYS,
-    build_trust_artifact_summary_from_public_verify_payload,
-)
+from .trust_artifact_summary import TRUST_ARTIFACT_COMPONENT_KEYS
 
 OPS_READ_MODEL_PACK_V5_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "generatedAt",
@@ -1088,56 +1086,12 @@ async def build_ops_read_model_pack_route_payload(
                     }
                 )
                 continue
-            verify_payload = (
-                trust_payload.get("verifyPayload")
-                if isinstance(trust_payload.get("verifyPayload"), dict)
-                else {}
-            )
-            verdict_attestation = (
-                verify_payload.get("verdictAttestation")
-                if isinstance(verify_payload.get("verdictAttestation"), dict)
-                else {}
-            )
-            challenge_review = (
-                verify_payload.get("challengeReview")
-                if isinstance(verify_payload.get("challengeReview"), dict)
-                else {}
-            )
-            verification_readiness = (
-                trust_payload.get("verificationReadiness")
-                if isinstance(trust_payload.get("verificationReadiness"), dict)
-                else {}
-            )
-            trust_artifact_summary = build_trust_artifact_summary_from_public_verify_payload(
-                public_verify_payload=trust_payload,
-                include_artifact_refs=False,
-            )
-            challenge_state = (
-                str(challenge_review.get("challengeState") or "").strip().lower() or None
-            )
-            review_state = (
-                str(challenge_review.get("reviewState") or "").strip().lower() or None
-            )
-            try:
-                total_challenges = int(challenge_review.get("totalChallenges") or 0)
-            except (TypeError, ValueError):
-                total_challenges = 0
             trust_items.append(
-                {
-                    "caseId": case_id,
-                    "dispatchType": trust_payload.get("dispatchType"),
-                    "traceId": trust_payload.get("traceId"),
-                    "verdictVerified": bool(verdict_attestation.get("verified")),
-                    "verdictReason": (
-                        str(verdict_attestation.get("reason") or "").strip() or None
-                    ),
-                    "reviewRequired": bool(challenge_review.get("reviewRequired")),
-                    "reviewState": review_state,
-                    "challengeState": challenge_state,
-                    "totalChallenges": max(0, total_challenges),
-                    "publicVerificationReadiness": verification_readiness,
-                    "trustArtifactSummary": trust_artifact_summary,
-                }
+                build_ops_read_model_pack_trust_item_from_public_verify_payload(
+                    case_id=case_id,
+                    trust_payload=trust_payload,
+                    include_artifact_refs=False,
+                )
             )
 
     trust_summary = summarize_ops_read_model_pack_trust_items_fn(

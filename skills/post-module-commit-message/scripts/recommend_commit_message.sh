@@ -167,6 +167,10 @@ detect_type() {
   fi
 
   if [[ "$module_key" == *"route-dependency-hotspot-split"* ||
+        "$module_key" == *"registry-trust-route-hotspot-split"* ||
+        "$summary_lower" == *"route projection"* ||
+        "$summary_lower" == *"route projections"* ||
+        "$summary_lower" == *"hotspot split"* ||
         "$summary_lower" == *"route dependency"* ]]; then
     echo "refactor"
     return 0
@@ -198,6 +202,11 @@ build_subject() {
   elif [[ "$module_key" == *"route-dependency-hotspot-split"* ||
           "$summary_lower" == *"route dependency"* ]]; then
     echo "split trust and ops route wiring"
+  elif [[ "$module_key" == *"registry-trust-route-hotspot-split"* ||
+          "$summary_lower" == *"route projection"* ||
+          "$summary_lower" == *"route projections"* ||
+          "$summary_lower" == *"hotspot split"* ]]; then
+    echo "split registry trust route projections"
   elif [[ "$module_key" == *"local-reference-regression"* ||
           "$summary_lower" == *"local reference"* ]]; then
     echo "record p36 local reference evidence"
@@ -247,6 +256,7 @@ build_alt_one_subject() {
     "add local artifact store adapter") echo "add artifact refs and manifest" ;;
     "archive p36 stage closure") echo "record p36 closure state" ;;
     "split trust and ops route wiring") echo "extract trust dependency builders" ;;
+    "split registry trust route projections") echo "extract public verify projections" ;;
     "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
@@ -265,6 +275,7 @@ build_alt_two_subject() {
     "add local artifact store adapter") echo "wire local artifact evidence" ;;
     "archive p36 stage closure") echo "reset active ai judge plan" ;;
     "split trust and ops route wiring") echo "thin app factory route assembly" ;;
+    "split registry trust route projections") echo "thin registry and trust routes" ;;
     "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;
     "export audit anchor manifest") echo "prepare audit anchor export" ;;

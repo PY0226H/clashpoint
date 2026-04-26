@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from .registry_release_gate import build_policy_release_gate_decision
+from .release_readiness_projection import build_registry_release_readiness_projection
 
 REGISTRY_DEPENDENCY_NOT_FOUND_CODE = "policy_registry_not_found"
 
@@ -54,64 +55,6 @@ def build_registry_releases_payload(
 
 def build_registry_release_payload(*, item: dict[str, Any]) -> dict[str, Any]:
     return {"item": dict(item)}
-
-
-def _summarize_release_readiness_evidence(
-    evidence_items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    evidence_version = next(
-        (
-            str(item.get("evidenceVersion") or "").strip()
-            for item in evidence_items
-            if str(item.get("evidenceVersion") or "").strip()
-        ),
-        None,
-    )
-    env_blocked_components = sorted(
-        {
-            str(component or "").strip()
-            for item in evidence_items
-            for component in (item.get("envBlockedComponents") or [])
-            if str(component or "").strip()
-        }
-    )
-    reason_codes = sorted(
-        {
-            str(code or "").strip()
-            for item in evidence_items
-            for code in (item.get("reasonCodes") or [])
-            if str(code or "").strip()
-        }
-    )
-    artifact_refs = sorted(
-        {
-            str(ref or "").strip()
-            for item in evidence_items
-            for ref in (item.get("artifactRefs") or [])
-            if str(ref or "").strip()
-        }
-    )
-    real_env_evidence_status_counts: dict[str, int] = {}
-    for item in evidence_items:
-        real_env_status = (
-            item.get("realEnvEvidenceStatus")
-            if isinstance(item.get("realEnvEvidenceStatus"), dict)
-            else {}
-        )
-        status = str(real_env_status.get("status") or "").strip().lower() or "unknown"
-        real_env_evidence_status_counts[status] = (
-            real_env_evidence_status_counts.get(status, 0) + 1
-        )
-    return {
-        "evidenceVersion": evidence_version,
-        "evidenceCount": len(evidence_items),
-        "envBlockedComponents": env_blocked_components,
-        "reasonCodes": reason_codes,
-        "artifactRefCount": len(artifact_refs),
-        "realEnvEvidenceStatusCounts": dict(
-            sorted(real_env_evidence_status_counts.items(), key=lambda kv: kv[0])
-        ),
-    }
 
 
 async def build_policy_registry_dependency_health_payload(
@@ -952,15 +895,6 @@ async def build_registry_governance_overview_payload(
                 audit_counts_by_action.get(action_token, 0) + 1
             )
 
-    release_readiness_evidence_items = [
-        row.get("releaseReadinessEvidence")
-        for row in dependency_rows
-        if isinstance(row.get("releaseReadinessEvidence"), dict)
-    ]
-    release_readiness_evidence_summary = _summarize_release_readiness_evidence(
-        release_readiness_evidence_items,
-    )
-
     return {
         "activeVersions": {
             "policyVersion": default_policy_version,
@@ -988,36 +922,11 @@ async def build_registry_governance_overview_payload(
             "missingToolRegistryRefs": missing_tool_refs,
         },
         "domainJudgeFamilies": domain_family_overview,
-        "releaseReadiness": {
-            "decisionCounts": release_gate_decision_counts,
-            "allowedCount": release_gate_decision_counts["allowed"],
-            "blockedCount": release_gate_decision_counts["blocked"],
-            "envBlockedCount": release_gate_decision_counts["env_blocked"],
-            "needsReviewCount": release_gate_decision_counts["needs_review"],
-            "componentBlockCounts": dict(
-                sorted(release_gate_component_block_counts.items(), key=lambda kv: kv[0])
-            ),
-            "evidenceVersion": release_readiness_evidence_summary["evidenceVersion"],
-            "evidenceCount": release_readiness_evidence_summary["evidenceCount"],
-            "envBlockedComponents": release_readiness_evidence_summary[
-                "envBlockedComponents"
-            ],
-            "reasonCodes": release_readiness_evidence_summary["reasonCodes"],
-            "artifactRefCount": release_readiness_evidence_summary["artifactRefCount"],
-            "realEnvEvidenceStatusCounts": release_readiness_evidence_summary[
-                "realEnvEvidenceStatusCounts"
-            ],
-            "items": [
-                {
-                    "policyVersion": row.get("policyVersion"),
-                    "decision": row.get("releaseGateDecision"),
-                    "code": row.get("releaseGateCode"),
-                    "reasonCodes": row.get("releaseGateReasonCodes"),
-                    "evidence": row.get("releaseReadinessEvidence"),
-                }
-                for row in dependency_rows
-            ],
-        },
+        "releaseReadiness": build_registry_release_readiness_projection(
+            decision_counts=release_gate_decision_counts,
+            component_block_counts=release_gate_component_block_counts,
+            dependency_rows=dependency_rows,
+        ),
         "releaseState": release_state,
         "auditSummary": {
             "countsByRegistryType": dict(

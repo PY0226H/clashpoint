@@ -35,6 +35,7 @@ from app.applications.ops_read_model_pack import (
 from app.applications.ops_read_model_trust_projection import (
     build_ops_read_model_pack_policy_gate_rows,
     build_ops_read_model_pack_trust_artifact_coverage,
+    build_ops_read_model_pack_trust_item_from_public_verify_payload,
     summarize_ops_read_model_pack_trust_items,
 )
 from app.applications.ops_trust_monitoring import (
@@ -1024,6 +1025,67 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(summary["verifiedCount"], 2)
         self.assertEqual(summary["reviewRequiredCount"], 1)
         self.assertEqual(summary["openChallengeCount"], 2)
+
+    def test_build_ops_read_model_pack_trust_item_should_project_public_verify_payload(
+        self,
+    ) -> None:
+        item = build_ops_read_model_pack_trust_item_from_public_verify_payload(
+            case_id=501,
+            trust_payload={
+                "caseId": 501,
+                "dispatchType": "final",
+                "traceId": "trace-trust-501",
+                "verificationReadiness": {
+                    "status": "ready",
+                    "externalizable": True,
+                },
+                "verifyPayload": {
+                    "caseCommitment": {"commitmentHash": "commit-hash"},
+                    "verdictAttestation": {
+                        "registryHash": "attestation-hash",
+                        "verified": True,
+                        "reason": "ok",
+                    },
+                    "challengeReview": {
+                        "registryHash": "challenge-hash",
+                        "reviewRequired": True,
+                        "reviewState": "Pending_Review",
+                        "challengeState": "UNDER_INTERNAL_REVIEW",
+                        "totalChallenges": "2",
+                    },
+                    "kernelVersion": {
+                        "registryHash": "kernel-hash",
+                        "kernelHash": "kernel-hash",
+                    },
+                    "auditAnchor": {
+                        "anchorHash": "anchor-hash",
+                        "anchorStatus": "artifact_ready",
+                        "componentHashes": {
+                            "caseCommitmentHash": "commit-hash",
+                            "verdictAttestationHash": "attestation-hash",
+                            "challengeReviewHash": "challenge-hash",
+                            "kernelVersionHash": "kernel-hash",
+                            "artifactManifestHash": "manifest-hash",
+                        },
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(item["caseId"], 501)
+        self.assertEqual(item["dispatchType"], "final")
+        self.assertEqual(item["traceId"], "trace-trust-501")
+        self.assertTrue(item["verdictVerified"])
+        self.assertEqual(item["verdictReason"], "ok")
+        self.assertTrue(item["reviewRequired"])
+        self.assertEqual(item["reviewState"], "pending_review")
+        self.assertEqual(item["challengeState"], "under_internal_review")
+        self.assertEqual(item["totalChallenges"], 2)
+        self.assertEqual(item["publicVerificationReadiness"]["status"], "ready")
+        self.assertTrue(item["trustArtifactSummary"]["trustCompleteness"]["complete"])
+        self.assertFalse(
+            item["trustArtifactSummary"]["artifactCoverage"].get("artifactRefs")
+        )
 
     def test_build_ops_read_model_pack_policy_gate_rows_should_prefer_dependency_overview(
         self,
