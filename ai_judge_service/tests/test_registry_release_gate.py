@@ -29,6 +29,11 @@ class RegistryReleaseGateTests(unittest.TestCase):
                         "trustRegistryWriteThrough": {"status": "ready"},
                         "panelShadowDrift": {"status": "ready"},
                         "artifactRefs": [{"ref": "release-manifest"}],
+                        "releaseReadinessArtifactSummary": {
+                            "artifactRef": "release-readiness-artifact",
+                            "manifestHash": "a" * 64,
+                            "storageUri": "s3://hidden-bucket/path",
+                        },
                     }
                 }
             },
@@ -79,6 +84,18 @@ class RegistryReleaseGateTests(unittest.TestCase):
         self.assertEqual(
             evidence["artifactRefs"],
             ["public-verify-manifest", "release-manifest"],
+        )
+        self.assertEqual(
+            evidence["releaseReadinessArtifactSummary"]["artifactRef"],
+            "release-readiness-artifact",
+        )
+        self.assertEqual(
+            evidence["releaseReadinessArtifactSummary"]["manifestHash"],
+            "a" * 64,
+        )
+        self.assertNotIn(
+            "s3://hidden-bucket/path",
+            json.dumps(evidence, ensure_ascii=False),
         )
         self.assertEqual(evidence["realEnvEvidenceStatus"]["status"], "env_blocked")
         self.assertEqual(

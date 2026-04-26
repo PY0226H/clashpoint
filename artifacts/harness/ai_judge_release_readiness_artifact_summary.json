@@ -1,0 +1,62 @@
+{
+  "artifactKind": "release_readiness",
+  "artifactRef": "release_readiness-3905-final-p39_release_readiness_artifact_e-8e1b33444b4df74b",
+  "artifactSha256": "8e1b33444b4df74b538618631734da832ac459bbfd6b75a9dd9c0801f1cae449",
+  "artifactStore": {
+    "productionReady": false,
+    "provider": "local",
+    "status": "local_reference"
+  },
+  "componentStatuses": [
+    {
+      "code": "registry_release_gate_artifactStoreReadiness_local_reference_only",
+      "component": "artifactStoreReadiness",
+      "reasonCodes": [],
+      "status": "env_blocked"
+    },
+    {
+      "code": "registry_release_gate_fairness_benchmark_local_reference_only",
+      "component": "fairnessBenchmark",
+      "reasonCodes": [],
+      "status": "env_blocked"
+    },
+    {
+      "code": "registry_release_gate_public_verification_ready",
+      "component": "publicVerificationReadiness",
+      "reasonCodes": [],
+      "status": "ready"
+    },
+    {
+      "code": "registry_release_gate_citation_verifier_ready",
+      "component": "citationVerifier",
+      "reasonCodes": [],
+      "status": "ready"
+    }
+  ],
+  "createdAt": "2026-04-26T05:03:52.546015+00:00",
+  "decision": "env_blocked",
+  "envBlockedComponents": [
+    "artifactStoreReadiness",
+    "fairnessBenchmark"
+  ],
+  "evidenceVersion": "policy-release-readiness-evidence-v1",
+  "manifestHash": "419e68249e86d5ebcb7e99b14070c325129e28a92e973eccb28dc9b2cb5460ca",
+  "policyVersion": "policy-v3-local-reference",
+  "realEnvEvidenceStatus": {
+    "code": "real_env_evidence_not_available",
+    "realEnvEvidenceAvailable": false,
+    "source": "release_gate",
+    "status": "env_blocked"
+  },
+  "redactionContract": {
+    "artifactRefsVisible": false,
+    "hashesOnly": true,
+    "internalAuditPayloadVisible": false,
+    "objectStorePathVisible": false,
+    "rawPromptVisible": false,
+    "rawTraceVisible": false,
+    "storageUriVisible": false
+  },
+  "storageMode": "local_reference",
+  "version": "release-readiness-artifact-summary-v1"
+}

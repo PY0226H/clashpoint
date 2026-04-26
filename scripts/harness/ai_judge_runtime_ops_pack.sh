@@ -42,6 +42,13 @@ STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT=0
 STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID=""
 STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS=""
 
+RELEASE_READINESS_ARTIFACT_STATUS="missing"
+RELEASE_READINESS_ARTIFACT_SUMMARY_PATH=""
+RELEASE_READINESS_ARTIFACT_REF=""
+RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=""
+RELEASE_READINESS_ARTIFACT_DECISION=""
+RELEASE_READINESS_ARTIFACT_STORAGE_MODE=""
+
 FAIRNESS_THRESHOLD_DECISION=""
 RUNTIME_SLA_THRESHOLD_DECISION=""
 FAIRNESS_INGEST_STATUS=""
@@ -160,6 +167,64 @@ read_env_value() {
     return
   fi
   printf '%s' "${line#*=}"
+}
+
+read_json_string() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    printf '%s' ""
+    return
+  fi
+  local compact pattern
+  compact="$(tr '\n' ' ' <"$file")"
+  pattern="\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""
+  if [[ "$compact" =~ $pattern ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return
+  fi
+  printf '%s' ""
+}
+
+find_release_readiness_artifact_summary() {
+  local candidate latest
+  for candidate in \
+    "$EVIDENCE_DIR/ai_judge_release_readiness_artifact_summary.json" \
+    "$EVIDENCE_DIR/release_readiness_artifact_summary.json" \
+    "$ROOT/artifacts/harness/ai_judge_release_readiness_artifact_summary.json"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  latest="$(
+    find "$EVIDENCE_DIR" "$ROOT/artifacts/harness" -type f \
+      \( -iname '*release*readiness*artifact*summary*.json' -o -iname '*release-readiness-artifact*.json' \) \
+      2>/dev/null | sort | tail -n 1 || true
+  )"
+  printf '%s' "$latest"
+}
+
+detect_release_readiness_artifact() {
+  RELEASE_READINESS_ARTIFACT_SUMMARY_PATH="$(find_release_readiness_artifact_summary)"
+  RELEASE_READINESS_ARTIFACT_REF=""
+  RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=""
+  RELEASE_READINESS_ARTIFACT_DECISION=""
+  RELEASE_READINESS_ARTIFACT_STORAGE_MODE=""
+  if [[ -z "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" || ! -f "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" ]]; then
+    RELEASE_READINESS_ARTIFACT_STATUS="missing"
+    return
+  fi
+
+  RELEASE_READINESS_ARTIFACT_REF="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "artifactRef")")"
+  RELEASE_READINESS_ARTIFACT_MANIFEST_HASH="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "manifestHash")")"
+  RELEASE_READINESS_ARTIFACT_DECISION="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "decision")")"
+  RELEASE_READINESS_ARTIFACT_STORAGE_MODE="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "storageMode")")"
+  if [[ -n "$RELEASE_READINESS_ARTIFACT_REF" && -n "$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH" ]]; then
+    RELEASE_READINESS_ARTIFACT_STATUS="present"
+    return
+  fi
+  RELEASE_READINESS_ARTIFACT_STATUS="invalid"
 }
 
 parse_args() {
@@ -348,6 +413,10 @@ derive_pack_status() {
       return
     fi
   done
+  if [[ "$RELEASE_READINESS_ARTIFACT_STATUS" == "missing" || "$RELEASE_READINESS_ARTIFACT_STATUS" == "invalid" ]]; then
+    STATUS="evidence_missing"
+    return
+  fi
   for status in "${statuses[@]}"; do
     if [[ "$status" == "evidence_missing" ]]; then
       STATUS="evidence_missing"
@@ -444,6 +513,12 @@ STAGE_CLOSURE_TODO_SECTION=$STAGE_CLOSURE_TODO_SECTION
 STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT=$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT
 STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID=$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID
 STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS=$STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS
+RELEASE_READINESS_ARTIFACT_STATUS=$RELEASE_READINESS_ARTIFACT_STATUS
+RELEASE_READINESS_ARTIFACT_SUMMARY_PATH=$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH
+RELEASE_READINESS_ARTIFACT_REF=$RELEASE_READINESS_ARTIFACT_REF
+RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH
+RELEASE_READINESS_ARTIFACT_DECISION=$RELEASE_READINESS_ARTIFACT_DECISION
+RELEASE_READINESS_ARTIFACT_STORAGE_MODE=$RELEASE_READINESS_ARTIFACT_STORAGE_MODE
 FAIRNESS_THRESHOLD_DECISION=$FAIRNESS_THRESHOLD_DECISION
 RUNTIME_SLA_THRESHOLD_DECISION=$RUNTIME_SLA_THRESHOLD_DECISION
 FAIRNESS_EXIT_CODE=$FAIRNESS_EXIT_CODE
@@ -492,6 +567,15 @@ write_output_doc() {
 9. todo_env_blocked_debt_count：\`$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT\`
 10. linked_real_env_debt_id：\`$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID\`
 11. local_reference_allowed：\`$ALLOW_LOCAL_REFERENCE\`
+
+## release readiness artifact
+
+1. artifact_status：\`$RELEASE_READINESS_ARTIFACT_STATUS\`
+2. artifact_ref：\`$RELEASE_READINESS_ARTIFACT_REF\`
+3. manifest_hash：\`$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH\`
+4. decision：\`$RELEASE_READINESS_ARTIFACT_DECISION\`
+5. storage_mode：\`$RELEASE_READINESS_ARTIFACT_STORAGE_MODE\`
+6. summary_path：\`$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH\`
 EOF_MD
 }
 
@@ -545,6 +629,14 @@ write_json_summary() {
     "linked_real_env_debt_id": "$(json_escape "$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID")",
     "long_term_evidence_status": "$(json_escape "$STAGE_CLOSURE_LONG_TERM_EVIDENCE_STATUS")",
     "local_reference_allowed": $([[ "$ALLOW_LOCAL_REFERENCE" == "true" ]] && echo "true" || echo "false")
+  },
+  "release_readiness_artifact": {
+    "status": "$(json_escape "$RELEASE_READINESS_ARTIFACT_STATUS")",
+    "summary_path": "$(json_escape "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH")",
+    "artifact_ref": "$(json_escape "$RELEASE_READINESS_ARTIFACT_REF")",
+    "manifest_hash": "$(json_escape "$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH")",
+    "decision": "$(json_escape "$RELEASE_READINESS_ARTIFACT_DECISION")",
+    "storage_mode": "$(json_escape "$RELEASE_READINESS_ARTIFACT_STORAGE_MODE")"
   }
 }
 EOF_JSON
@@ -581,6 +673,15 @@ write_md_summary() {
 9. todo_env_blocked_debt_count: \`$STAGE_CLOSURE_TODO_ENV_BLOCKED_DEBT_COUNT\`
 10. linked_real_env_debt_id: \`$STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID\`
 11. local_reference_allowed: \`$ALLOW_LOCAL_REFERENCE\`
+
+## release_readiness_artifact
+
+1. status: \`$RELEASE_READINESS_ARTIFACT_STATUS\`
+2. artifact_ref: \`$RELEASE_READINESS_ARTIFACT_REF\`
+3. manifest_hash: \`$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH\`
+4. decision: \`$RELEASE_READINESS_ARTIFACT_DECISION\`
+5. storage_mode: \`$RELEASE_READINESS_ARTIFACT_STORAGE_MODE\`
+6. summary_path: \`$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH\`
 EOF_MD
 }
 
@@ -713,6 +814,7 @@ main() {
   if [[ -z "$FAIRNESS_INGEST_STATUS" ]]; then
     FAIRNESS_INGEST_STATUS="unknown"
   fi
+  detect_release_readiness_artifact
 
   # 先基于前三阶段生成 pack 快照，供 stage closure evidence 回读关联。
   STAGE_CLOSURE_EVIDENCE_STATUS="pass"
@@ -781,6 +883,9 @@ main() {
   echo "closure_backfill_completed_section: $STAGE_CLOSURE_COMPLETED_SECTION"
   echo "closure_backfill_todo_section: $STAGE_CLOSURE_TODO_SECTION"
   echo "closure_backfill_linked_real_env_debt_id: $STAGE_CLOSURE_LINKED_REAL_ENV_DEBT_ID"
+  echo "release_readiness_artifact_status: $RELEASE_READINESS_ARTIFACT_STATUS"
+  echo "release_readiness_artifact_ref: $RELEASE_READINESS_ARTIFACT_REF"
+  echo "release_readiness_manifest_hash: $RELEASE_READINESS_ARTIFACT_MANIFEST_HASH"
   echo "allow_local_reference: $ALLOW_LOCAL_REFERENCE"
   echo "output_env: $OUTPUT_ENV"
   echo "output_doc: $OUTPUT_DOC"

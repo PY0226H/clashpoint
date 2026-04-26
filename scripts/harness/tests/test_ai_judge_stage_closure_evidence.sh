@@ -118,6 +118,12 @@ mkdir -p "$WORK_PASS" "$EVIDENCE_PASS"
 write_plan_doc_with_candidates "$PLAN_PASS"
 cat >"$EVIDENCE_PASS/ai_judge_runtime_ops_pack.env" <<'EOF_ENV'
 AI_JUDGE_RUNTIME_OPS_PACK_STATUS=local_reference_ready
+RELEASE_READINESS_ARTIFACT_STATUS=present
+RELEASE_READINESS_ARTIFACT_SUMMARY_PATH=/tmp/test-ai-judge-release-readiness-artifact-summary.json
+RELEASE_READINESS_ARTIFACT_REF=release-readiness-artifact-test
+RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+RELEASE_READINESS_ARTIFACT_DECISION=env_blocked
+RELEASE_READINESS_ARTIFACT_STORAGE_MODE=local_reference
 EOF_ENV
 cat >"$EVIDENCE_PASS/ai_judge_runtime_ops_pack.md" <<'EOF_MD'
 # runtime pack
@@ -140,7 +146,37 @@ expect_contains "pass stdout active plan" "active_plan_evidence_status: pass" "$
 expect_contains "pass json status" "\"status\": \"pass\"" "$PASS_JSON"
 expect_contains "pass json linked" "\"linked\": true" "$PASS_JSON"
 expect_contains "pass json backfill" "\"closure_backfill\"" "$PASS_JSON"
+expect_contains "pass release artifact" "\"artifact_ref\": \"release-readiness-artifact-test\"" "$PASS_JSON"
 expect_contains "pass markdown title" "# ai-judge-stage-closure-evidence" "$PASS_MD"
+
+# 场景1b：runtime pack 已关联但 release artifact 缺失 -> evidence_missing
+WORK_RELEASE_MISSING="$TMP_DIR/release-missing"
+PLAN_RELEASE_MISSING="$WORK_RELEASE_MISSING/plan-release-missing.md"
+EVIDENCE_RELEASE_MISSING="$WORK_RELEASE_MISSING/docs/loadtest/evidence"
+mkdir -p "$WORK_RELEASE_MISSING" "$EVIDENCE_RELEASE_MISSING"
+write_plan_doc_with_candidates "$PLAN_RELEASE_MISSING"
+cat >"$EVIDENCE_RELEASE_MISSING/ai_judge_runtime_ops_pack.env" <<'EOF_ENV'
+AI_JUDGE_RUNTIME_OPS_PACK_STATUS=local_reference_ready
+RELEASE_READINESS_ARTIFACT_STATUS=missing
+EOF_ENV
+cat >"$EVIDENCE_RELEASE_MISSING/ai_judge_runtime_ops_pack.md" <<'EOF_MD'
+# runtime pack
+EOF_MD
+
+RELEASE_MISSING_STDOUT="$TMP_DIR/release-missing.stdout"
+RELEASE_MISSING_JSON="$TMP_DIR/release-missing.summary.json"
+RELEASE_MISSING_MD="$TMP_DIR/release-missing.summary.md"
+
+bash "$SCRIPT" \
+  --root "$WORK_RELEASE_MISSING" \
+  --plan-doc "$PLAN_RELEASE_MISSING" \
+  --draft-script "$DRAFT_SCRIPT" \
+  --emit-json "$RELEASE_MISSING_JSON" \
+  --emit-md "$RELEASE_MISSING_MD" >"$RELEASE_MISSING_STDOUT"
+
+expect_contains "release missing status" "ai_judge_stage_closure_evidence_status: evidence_missing" "$RELEASE_MISSING_STDOUT"
+expect_contains "release missing artifact status" "release_readiness_artifact_status: missing" "$RELEASE_MISSING_STDOUT"
+expect_contains "release missing json status" "\"status\": \"evidence_missing\"" "$RELEASE_MISSING_JSON"
 
 # 场景2：draft 有候选 + runtime pack 缺失 -> pending_data
 WORK_PENDING="$TMP_DIR/pending"
@@ -206,6 +242,12 @@ EOF_ARCHIVE
 write_reset_plan_with_archive "$PLAN_ARCHIVE" "$ARCHIVE_PATH"
 cat >"$EVIDENCE_ARCHIVE/ai_judge_runtime_ops_pack.env" <<'EOF_ENV'
 AI_JUDGE_RUNTIME_OPS_PACK_STATUS=local_reference_ready
+RELEASE_READINESS_ARTIFACT_STATUS=present
+RELEASE_READINESS_ARTIFACT_SUMMARY_PATH=/tmp/test-ai-judge-release-readiness-artifact-summary.json
+RELEASE_READINESS_ARTIFACT_REF=release-readiness-artifact-test
+RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+RELEASE_READINESS_ARTIFACT_DECISION=env_blocked
+RELEASE_READINESS_ARTIFACT_STORAGE_MODE=local_reference
 EOF_ENV
 cat >"$EVIDENCE_ARCHIVE/ai_judge_runtime_ops_pack.md" <<'EOF_MD'
 # runtime pack

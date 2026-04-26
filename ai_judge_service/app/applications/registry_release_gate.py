@@ -406,6 +406,33 @@ def _citation_verification_input(release_inputs: dict[str, Any]) -> dict[str, An
     return {}
 
 
+def _release_readiness_artifact_summary_input(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw: dict[str, Any] = {}
+    for key in (
+        "releaseReadinessArtifactSummary",
+        "release_readiness_artifact_summary",
+        "releaseReadinessArtifact",
+        "release_readiness_artifact",
+    ):
+        value = release_inputs.get(key)
+        if isinstance(value, dict):
+            raw = dict(value)
+            break
+    if not raw:
+        return {}
+    return {
+        "version": _safe_token(raw.get("version")),
+        "artifactRef": _safe_token(raw.get("artifactRef") or raw.get("artifact_ref")),
+        "manifestHash": _safe_token(raw.get("manifestHash") or raw.get("manifest_hash")),
+        "evidenceVersion": _safe_token(raw.get("evidenceVersion")),
+        "policyVersion": _safe_token(raw.get("policyVersion")),
+        "decision": _safe_token(raw.get("decision")),
+        "storageMode": _safe_token(raw.get("storageMode") or raw.get("storage_mode")),
+    }
+
+
 def _build_citation_verifier_release_component(
     *,
     release_inputs: dict[str, Any],
@@ -595,6 +622,9 @@ def _build_release_readiness_evidence(
         "artifactRefs": _collect_artifact_refs(
             release_inputs=release_inputs,
             components=components,
+        ),
+        "releaseReadinessArtifactSummary": _release_readiness_artifact_summary_input(
+            release_inputs
         ),
         "publicVerificationReadiness": _build_public_verification_readiness_evidence(
             release_inputs=release_inputs,

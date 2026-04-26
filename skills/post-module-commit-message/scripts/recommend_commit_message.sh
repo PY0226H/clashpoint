@@ -187,7 +187,10 @@ build_subject() {
   module_key="$(sanitize_scope "$MODULE")"
   summary_lower="$(lower_ascii "$SUMMARY")"
 
-  if [[ "$module_key" == *"artifact-store"* || "$summary_lower" == *"artifact store"* ]]; then
+  if [[ "$module_key" == *"release-readiness-artifact-export"* ||
+          "$summary_lower" == *"release readiness artifact"* ]]; then
+    echo "export release readiness artifacts"
+  elif [[ "$module_key" == *"artifact-store"* || "$summary_lower" == *"artifact store"* ]]; then
     echo "add local artifact store adapter"
   elif [[ "$module_key" == *"stage-closure"* ||
           "$summary_lower" == *"stage closure"* ]]; then
@@ -216,9 +219,6 @@ build_subject() {
           "$summary_lower" == *"citation verifier"* ||
           "$summary_lower" == *"citation verification"* ]]; then
     echo "add citation verification evidence gate"
-  elif [[ "$module_key" == *"release-readiness-artifact-export"* ||
-          "$summary_lower" == *"release readiness artifact"* ]]; then
-    echo "export release readiness artifacts"
   elif [[ "$module_key" == *"trust-registry-write-through"* ]]; then
     echo "write trust registry from judge flow"
   elif [[ "$module_key" == *"trust-registry-store"* ]]; then

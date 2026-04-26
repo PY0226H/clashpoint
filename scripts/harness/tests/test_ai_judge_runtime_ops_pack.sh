@@ -167,6 +167,26 @@ seed_stage_closure_plan() {
 EOF_PLAN
 }
 
+seed_release_readiness_summary() {
+  local dir="$1"
+  local decision="${2:-env_blocked}"
+  mkdir -p "$dir"
+  cat >"$dir/ai_judge_release_readiness_artifact_summary.json" <<EOF_JSON
+{
+  "version": "release-readiness-artifact-summary-v1",
+  "artifactRef": "release-readiness-artifact-test",
+  "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "evidenceVersion": "policy-release-readiness-evidence-v1",
+  "decision": "$decision",
+  "storageMode": "local_reference",
+  "redactionContract": {
+    "storageUriVisible": false,
+    "objectStorePathVisible": false
+  }
+}
+EOF_JSON
+}
+
 run_pack() {
   local work="$1"
   local plan_doc="$work/plan-stage-closure.md"
@@ -189,6 +209,7 @@ WORK_BLOCKED="$TMP_DIR/blocked"
 EVIDENCE_BLOCKED="$WORK_BLOCKED/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_BLOCKED"
 seed_tracks_real "$EVIDENCE_BLOCKED"
+seed_release_readiness_summary "$EVIDENCE_BLOCKED"
 cat >"$EVIDENCE_BLOCKED/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=false
 EOF
@@ -206,6 +227,7 @@ WORK_LOCAL="$TMP_DIR/local"
 EVIDENCE_LOCAL="$WORK_LOCAL/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_LOCAL"
 seed_tracks_local "$EVIDENCE_LOCAL"
+seed_release_readiness_summary "$EVIDENCE_LOCAL"
 cat >"$EVIDENCE_LOCAL/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=false
 LOCAL_REFERENCE_ENV_READY=true
@@ -221,12 +243,30 @@ expect_contains "local closure" "real_env_closure_status: local_reference_ready"
 expect_contains "local stage closure" "stage_closure_evidence_status: pass" "$LOCAL_STDOUT"
 expect_contains "local closure backfill stdout" "closure_backfill_archive_detected: false" "$LOCAL_STDOUT"
 expect_contains "local closure backfill env" "STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS=pass" "$EVIDENCE_LOCAL/ai_judge_runtime_ops_pack.env"
+expect_contains "local release artifact present" "RELEASE_READINESS_ARTIFACT_STATUS=present" "$EVIDENCE_LOCAL/ai_judge_runtime_ops_pack.env"
+
+# 场景2b：release readiness artifact 缺失 -> evidence_missing
+WORK_MISSING_ARTIFACT="$TMP_DIR/missing-artifact"
+EVIDENCE_MISSING_ARTIFACT="$WORK_MISSING_ARTIFACT/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_MISSING_ARTIFACT"
+seed_tracks_local "$EVIDENCE_MISSING_ARTIFACT"
+cat >"$EVIDENCE_MISSING_ARTIFACT/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=false
+LOCAL_REFERENCE_ENV_READY=true
+CALIBRATION_ENV_MODE=local_reference
+EOF
+
+MISSING_ARTIFACT_STDOUT="$TMP_DIR/missing-artifact.stdout"
+run_pack "$WORK_MISSING_ARTIFACT" --allow-local-reference >"$MISSING_ARTIFACT_STDOUT"
+expect_contains "missing artifact status" "ai_judge_runtime_ops_pack_status: evidence_missing" "$MISSING_ARTIFACT_STDOUT"
+expect_contains "missing artifact stdout" "release_readiness_artifact_status: missing" "$MISSING_ARTIFACT_STDOUT"
 
 # 场景3：real pass -> pass
 WORK_PASS="$TMP_DIR/pass"
 EVIDENCE_PASS="$WORK_PASS/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_PASS"
 seed_tracks_real "$EVIDENCE_PASS"
+seed_release_readiness_summary "$EVIDENCE_PASS" "allowed"
 cat >"$EVIDENCE_PASS/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/runtime-ops/manifest.json
@@ -247,6 +287,7 @@ WORK_VIOLATION="$TMP_DIR/violation"
 EVIDENCE_VIOLATION="$WORK_VIOLATION/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_VIOLATION"
 seed_tracks_real "$EVIDENCE_VIOLATION" "0.45" "1600" "2900" "false" "0.90" "0.90" "0.12"
+seed_release_readiness_summary "$EVIDENCE_VIOLATION" "blocked"
 cat >"$EVIDENCE_VIOLATION/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/runtime-ops/manifest.json
@@ -265,6 +306,7 @@ WORK_INGEST="$TMP_DIR/ingest"
 EVIDENCE_INGEST="$WORK_INGEST/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_INGEST"
 seed_tracks_local "$EVIDENCE_INGEST"
+seed_release_readiness_summary "$EVIDENCE_INGEST"
 cat >"$EVIDENCE_INGEST/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=false
 LOCAL_REFERENCE_ENV_READY=true

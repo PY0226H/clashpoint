@@ -393,11 +393,10 @@ fn validate_public_verify_payload(
     let Some(object) = payload.as_object() else {
         return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
     };
-    if object
+    if !object
         .get("proxyRequired")
         .and_then(Value::as_bool)
         .unwrap_or(false)
-        != true
     {
         return Err(JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION);
     }

@@ -77,6 +77,38 @@ class TrustAuditAnchorContractTests(unittest.TestCase):
         )
         validate_trust_audit_anchor_contract(payload)
 
+    def test_validate_trust_audit_anchor_contract_should_accept_release_readiness_manifest_hash(
+        self,
+    ) -> None:
+        payload = self._build_payload(include_payload=False)
+        payload["item"]["componentHashes"][
+            "releaseReadinessManifestHash"
+        ] = "release-readiness-manifest-hash"
+        payload["item"]["artifactManifest"]["releaseReadinessArtifactSummary"] = {
+            "artifactRef": "release-readiness-artifact",
+            "manifestHash": "release-readiness-manifest-hash",
+        }
+
+        validate_trust_audit_anchor_contract(payload)
+
+    def test_validate_trust_audit_anchor_contract_should_reject_release_readiness_hash_mismatch(
+        self,
+    ) -> None:
+        payload = self._build_payload(include_payload=False)
+        payload["item"]["componentHashes"][
+            "releaseReadinessManifestHash"
+        ] = "release-readiness-manifest-hash"
+        payload["item"]["artifactManifest"]["releaseReadinessArtifactSummary"] = {
+            "artifactRef": "release-readiness-artifact",
+            "manifestHash": "other-manifest-hash",
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "release_readiness_manifest_hash_mismatch",
+        ):
+            validate_trust_audit_anchor_contract(payload)
+
     def test_validate_trust_audit_anchor_contract_should_fail_on_missing_component_hash(self) -> None:
         payload = self._build_payload(include_payload=False)
         payload["item"]["componentHashes"].pop("kernelVersionHash")

@@ -38,6 +38,12 @@ class TrustArtifactSummaryTests(unittest.TestCase):
                         },
                         "artifactManifest": {
                             "manifestHash": "manifest-hash",
+                            "releaseReadinessArtifactSummary": {
+                                "artifactRef": "release-artifact-1",
+                                "manifestHash": "release-manifest-hash",
+                                "decision": "env_blocked",
+                                "storageMode": "local_reference",
+                            },
                             "artifactRefs": [
                                 {
                                     "kind": "audit_pack",
@@ -58,6 +64,14 @@ class TrustArtifactSummaryTests(unittest.TestCase):
         self.assertTrue(payload["artifactCoverage"]["ready"])
         self.assertEqual(payload["artifactCoverage"]["artifactRefCount"], 1)
         self.assertEqual(payload["artifactCoverage"]["artifactRefs"][0]["kind"], "audit_pack")
+        self.assertEqual(
+            payload["artifactCoverage"]["releaseReadinessArtifact"]["artifactRef"],
+            "release-artifact-1",
+        )
+        self.assertEqual(
+            payload["artifactCoverage"]["releaseReadinessArtifact"]["decision"],
+            "env_blocked",
+        )
         self.assertNotIn("payload", payload["artifactCoverage"]["artifactRefs"][0])
 
     def test_report_payload_summary_should_mark_registry_snapshot_missing(self) -> None:

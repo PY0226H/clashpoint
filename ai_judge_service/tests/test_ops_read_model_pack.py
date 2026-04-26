@@ -902,6 +902,11 @@ class OpsReadModelPackTests(unittest.TestCase):
                             ],
                             "envBlockedComponents": ["fairnessBenchmark"],
                             "artifactRefs": ["release-manifest"],
+                            "releaseReadinessArtifactSummary": {
+                                "artifactRef": "release-readiness-artifact",
+                                "manifestHash": "a" * 64,
+                                "storageUri": "s3://hidden-bucket/path",
+                            },
                             "publicVerificationReadiness": {"status": "ready"},
                             "citationVerification": {
                                 "status": "warning",
@@ -962,9 +967,18 @@ class OpsReadModelPackTests(unittest.TestCase):
         )
         self.assertEqual(payload["registryReleaseReadiness"]["artifactRefCount"], 1)
         self.assertEqual(
+            payload["registryReleaseReadiness"]["releaseReadinessArtifactCount"],
+            1,
+        )
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["releaseReadinessManifestHashCount"],
+            1,
+        )
+        self.assertEqual(
             payload["registryReleaseReadiness"]["publicVerificationReadyCount"],
             1,
         )
+        self.assertNotIn("hidden-bucket", str(payload["registryReleaseReadiness"]))
         self.assertEqual(
             payload["registryReleaseReadiness"]["realEnvEvidenceStatusCounts"],
             {"env_blocked": 1},

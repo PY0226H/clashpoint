@@ -78,6 +78,11 @@ def _component_hashes_from_anchor(audit_anchor: dict[str, Any]) -> dict[str, Any
     )
 
 
+def _release_readiness_artifact_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    summary = manifest.get("releaseReadinessArtifactSummary")
+    return dict(summary) if isinstance(summary, dict) else {}
+
+
 def build_trust_artifact_summary(
     *,
     case_id: int | None,
@@ -98,6 +103,7 @@ def build_trust_artifact_summary(
     anchor = _dict_or_empty(audit_anchor)
     manifest = _artifact_manifest_from_anchor(anchor)
     component_hashes = _component_hashes_from_anchor(anchor)
+    release_readiness_artifact = _release_readiness_artifact_from_manifest(manifest)
     artifact_refs = _artifact_refs_from_manifest(manifest)
     artifact_kind_counts = _artifact_kind_counts(artifact_refs)
 
@@ -133,6 +139,13 @@ def build_trust_artifact_summary(
         "artifactRefCount": len(artifact_refs),
         "artifactKinds": sorted(artifact_kind_counts.keys()),
         "artifactKindCounts": artifact_kind_counts,
+        "releaseReadinessArtifact": {
+            "present": bool(release_readiness_artifact),
+            "artifactRef": _token(release_readiness_artifact.get("artifactRef")),
+            "manifestHash": _token(release_readiness_artifact.get("manifestHash")),
+            "decision": _lower_token(release_readiness_artifact.get("decision")),
+            "storageMode": _lower_token(release_readiness_artifact.get("storageMode")),
+        },
     }
     if include_artifact_refs:
         artifact_coverage["artifactRefs"] = artifact_refs

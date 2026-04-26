@@ -156,6 +156,22 @@ def _summarize_release_readiness_evidence_items(
             if str(ref or "").strip()
         }
     )
+    release_readiness_artifact_refs = sorted(
+        {
+            str(summary.get("artifactRef") or "").strip()
+            for item in evidence_items
+            for summary in [_dict_or_empty(item.get("releaseReadinessArtifactSummary"))]
+            if str(summary.get("artifactRef") or "").strip()
+        }
+    )
+    release_readiness_manifest_hashes = sorted(
+        {
+            str(summary.get("manifestHash") or "").strip()
+            for item in evidence_items
+            for summary in [_dict_or_empty(item.get("releaseReadinessArtifactSummary"))]
+            if str(summary.get("manifestHash") or "").strip()
+        }
+    )
     public_verification_ready_count = 0
     real_env_evidence_status_counts: dict[str, int] = {}
     citation_verifier_status_counts: dict[str, int] = {}
@@ -197,6 +213,8 @@ def _summarize_release_readiness_evidence_items(
         "envBlockedComponents": env_blocked_components,
         "reasonCodes": reason_codes,
         "artifactRefCount": len(artifact_refs),
+        "releaseReadinessArtifactCount": len(release_readiness_artifact_refs),
+        "releaseReadinessManifestHashCount": len(release_readiness_manifest_hashes),
         "publicVerificationReadyCount": public_verification_ready_count,
         "realEnvEvidenceStatusCounts": dict(
             sorted(real_env_evidence_status_counts.items(), key=lambda kv: kv[0])
@@ -429,6 +447,12 @@ def _build_registry_release_readiness(
         "envBlockedComponents": evidence_summary["envBlockedComponents"],
         "reasonCodes": evidence_summary["reasonCodes"],
         "artifactRefCount": evidence_summary["artifactRefCount"],
+        "releaseReadinessArtifactCount": evidence_summary[
+            "releaseReadinessArtifactCount"
+        ],
+        "releaseReadinessManifestHashCount": evidence_summary[
+            "releaseReadinessManifestHashCount"
+        ],
         "publicVerificationReadyCount": evidence_summary[
             "publicVerificationReadyCount"
         ],

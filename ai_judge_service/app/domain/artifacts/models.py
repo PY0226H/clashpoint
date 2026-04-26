@@ -17,6 +17,7 @@ ARTIFACT_KINDS = frozenset(
         "replay_snapshot",
         "audit_pack",
         "trust_registry_snapshot",
+        "release_readiness",
     }
 )
 ARTIFACT_FORBIDDEN_KEYS = frozenset(
@@ -24,11 +25,15 @@ ARTIFACT_FORBIDDEN_KEYS = frozenset(
         "accesstoken",
         "apikey",
         "authorization",
+        "bucket",
         "email",
+        "endpoint",
         "messagecontent",
         "messages",
+        "objectstorepath",
         "password",
         "phone",
+        "prefix",
         "prompt",
         "prompttext",
         "rawmessages",
@@ -38,6 +43,8 @@ ARTIFACT_FORBIDDEN_KEYS = frozenset(
         "refreshtoken",
         "secret",
         "sourcemessages",
+        "storagepath",
+        "storageuri",
         "token",
         "userid",
         "useridentity",

@@ -25,6 +25,12 @@ DRAFT_SUMMARY_MD=""
 
 RUNTIME_OPS_PACK_LINKED="false"
 RUNTIME_OPS_PACK_STATUS="unknown"
+RELEASE_READINESS_ARTIFACT_STATUS="missing"
+RELEASE_READINESS_ARTIFACT_SUMMARY_PATH=""
+RELEASE_READINESS_ARTIFACT_REF=""
+RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=""
+RELEASE_READINESS_ARTIFACT_DECISION=""
+RELEASE_READINESS_ARTIFACT_STORAGE_MODE=""
 
 ACTIVE_PLAN_EVIDENCE_STATUS="unknown"
 CLOSURE_ARCHIVE_DETECTED="false"
@@ -138,6 +144,64 @@ read_json_number() {
     return
   fi
   printf '%s' "$raw" | sed -E "s/.*\"${key}\"[[:space:]]*:[[:space:]]*([0-9]+).*/\\1/"
+}
+
+read_json_string() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    printf '%s' ""
+    return
+  fi
+  local compact pattern
+  compact="$(tr '\n' ' ' <"$file")"
+  pattern="\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""
+  if [[ "$compact" =~ $pattern ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return
+  fi
+  printf '%s' ""
+}
+
+find_release_readiness_artifact_summary() {
+  local candidate latest
+  for candidate in \
+    "$EVIDENCE_DIR/ai_judge_release_readiness_artifact_summary.json" \
+    "$EVIDENCE_DIR/release_readiness_artifact_summary.json" \
+    "$ROOT/artifacts/harness/ai_judge_release_readiness_artifact_summary.json"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  latest="$(
+    find "$EVIDENCE_DIR" "$ROOT/artifacts/harness" -type f \
+      \( -iname '*release*readiness*artifact*summary*.json' -o -iname '*release-readiness-artifact*.json' \) \
+      2>/dev/null | sort | tail -n 1 || true
+  )"
+  printf '%s' "$latest"
+}
+
+detect_release_readiness_artifact_file() {
+  RELEASE_READINESS_ARTIFACT_SUMMARY_PATH="$(find_release_readiness_artifact_summary)"
+  RELEASE_READINESS_ARTIFACT_REF=""
+  RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=""
+  RELEASE_READINESS_ARTIFACT_DECISION=""
+  RELEASE_READINESS_ARTIFACT_STORAGE_MODE=""
+  if [[ -z "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" || ! -f "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" ]]; then
+    RELEASE_READINESS_ARTIFACT_STATUS="missing"
+    return
+  fi
+
+  RELEASE_READINESS_ARTIFACT_REF="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "artifactRef")")"
+  RELEASE_READINESS_ARTIFACT_MANIFEST_HASH="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "manifestHash")")"
+  RELEASE_READINESS_ARTIFACT_DECISION="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "decision")")"
+  RELEASE_READINESS_ARTIFACT_STORAGE_MODE="$(trim "$(read_json_string "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH" "storageMode")")"
+  if [[ -n "$RELEASE_READINESS_ARTIFACT_REF" && -n "$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH" ]]; then
+    RELEASE_READINESS_ARTIFACT_STATUS="present"
+    return
+  fi
+  RELEASE_READINESS_ARTIFACT_STATUS="invalid"
 }
 
 latest_section_id() {
@@ -323,12 +387,22 @@ detect_runtime_ops_link() {
   if [[ -f "$RUNTIME_OPS_ENV" && -f "$RUNTIME_OPS_DOC" ]]; then
     RUNTIME_OPS_PACK_LINKED="true"
     RUNTIME_OPS_PACK_STATUS="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "AI_JUDGE_RUNTIME_OPS_PACK_STATUS")")"
+    RELEASE_READINESS_ARTIFACT_STATUS="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "RELEASE_READINESS_ARTIFACT_STATUS")")"
+    RELEASE_READINESS_ARTIFACT_SUMMARY_PATH="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "RELEASE_READINESS_ARTIFACT_SUMMARY_PATH")")"
+    RELEASE_READINESS_ARTIFACT_REF="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "RELEASE_READINESS_ARTIFACT_REF")")"
+    RELEASE_READINESS_ARTIFACT_MANIFEST_HASH="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "RELEASE_READINESS_ARTIFACT_MANIFEST_HASH")")"
+    RELEASE_READINESS_ARTIFACT_DECISION="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "RELEASE_READINESS_ARTIFACT_DECISION")")"
+    RELEASE_READINESS_ARTIFACT_STORAGE_MODE="$(trim "$(read_env_value "$RUNTIME_OPS_ENV" "RELEASE_READINESS_ARTIFACT_STORAGE_MODE")")"
     if [[ -z "$RUNTIME_OPS_PACK_STATUS" ]]; then
       RUNTIME_OPS_PACK_STATUS="unknown"
+    fi
+    if [[ -z "$RELEASE_READINESS_ARTIFACT_STATUS" ]]; then
+      RELEASE_READINESS_ARTIFACT_STATUS="missing"
     fi
   else
     RUNTIME_OPS_PACK_LINKED="false"
     RUNTIME_OPS_PACK_STATUS="unknown"
+    detect_release_readiness_artifact_file
   fi
 }
 
@@ -381,6 +455,11 @@ derive_status() {
     return
   fi
 
+  if [[ "$RUNTIME_OPS_PACK_LINKED" == "true" && ( "$RELEASE_READINESS_ARTIFACT_STATUS" == "missing" || "$RELEASE_READINESS_ARTIFACT_STATUS" == "invalid" ) ]]; then
+    STATUS="evidence_missing"
+    return
+  fi
+
   if [[ "$ACTIVE_PLAN_EVIDENCE_STATUS" == "pass" ]]; then
     if [[ "$RUNTIME_OPS_PACK_LINKED" != "true" || "$RUNTIME_OPS_PACK_STATUS" == "unknown" ]]; then
       STATUS="pending_data"
@@ -429,6 +508,12 @@ RUNTIME_OPS_PACK_LINKED=$RUNTIME_OPS_PACK_LINKED
 RUNTIME_OPS_PACK_STATUS=$RUNTIME_OPS_PACK_STATUS
 RUNTIME_OPS_PACK_ENV=$RUNTIME_OPS_ENV
 RUNTIME_OPS_PACK_DOC=$RUNTIME_OPS_DOC
+RELEASE_READINESS_ARTIFACT_STATUS=$RELEASE_READINESS_ARTIFACT_STATUS
+RELEASE_READINESS_ARTIFACT_SUMMARY_PATH=$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH
+RELEASE_READINESS_ARTIFACT_REF=$RELEASE_READINESS_ARTIFACT_REF
+RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH
+RELEASE_READINESS_ARTIFACT_DECISION=$RELEASE_READINESS_ARTIFACT_DECISION
+RELEASE_READINESS_ARTIFACT_STORAGE_MODE=$RELEASE_READINESS_ARTIFACT_STORAGE_MODE
 ACTIVE_PLAN_EVIDENCE_STATUS=$ACTIVE_PLAN_EVIDENCE_STATUS
 CLOSURE_ARCHIVE_DETECTED=$CLOSURE_ARCHIVE_DETECTED
 CLOSURE_ARCHIVE_SOURCE=$CLOSURE_ARCHIVE_SOURCE
@@ -469,6 +554,15 @@ write_output_doc() {
 2. runtime_ops_pack_status：\`$RUNTIME_OPS_PACK_STATUS\`
 3. runtime_ops_pack_env：\`$RUNTIME_OPS_ENV\`
 4. runtime_ops_pack_doc：\`$RUNTIME_OPS_DOC\`
+
+## release readiness artifact
+
+1. artifact_status：\`$RELEASE_READINESS_ARTIFACT_STATUS\`
+2. artifact_ref：\`$RELEASE_READINESS_ARTIFACT_REF\`
+3. manifest_hash：\`$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH\`
+4. decision：\`$RELEASE_READINESS_ARTIFACT_DECISION\`
+5. storage_mode：\`$RELEASE_READINESS_ARTIFACT_STORAGE_MODE\`
+6. summary_path：\`$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH\`
 
 ## active plan evidence
 
@@ -520,7 +614,15 @@ write_json_summary() {
     "linked": $([[ "$RUNTIME_OPS_PACK_LINKED" == "true" ]] && echo "true" || echo "false"),
     "status": "$(json_escape "$RUNTIME_OPS_PACK_STATUS")",
     "env": "$(json_escape "$RUNTIME_OPS_ENV")",
-    "doc": "$(json_escape "$RUNTIME_OPS_DOC")"
+    "doc": "$(json_escape "$RUNTIME_OPS_DOC")",
+    "release_readiness_artifact": {
+      "status": "$(json_escape "$RELEASE_READINESS_ARTIFACT_STATUS")",
+      "summary_path": "$(json_escape "$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH")",
+      "artifact_ref": "$(json_escape "$RELEASE_READINESS_ARTIFACT_REF")",
+      "manifest_hash": "$(json_escape "$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH")",
+      "decision": "$(json_escape "$RELEASE_READINESS_ARTIFACT_DECISION")",
+      "storage_mode": "$(json_escape "$RELEASE_READINESS_ARTIFACT_STORAGE_MODE")"
+    }
   },
   "closure_backfill": {
     "active_plan_evidence_status": "$(json_escape "$ACTIVE_PLAN_EVIDENCE_STATUS")",
@@ -571,6 +673,15 @@ write_md_summary() {
 2. status: \`$RUNTIME_OPS_PACK_STATUS\`
 3. env: \`$RUNTIME_OPS_ENV\`
 4. doc: \`$RUNTIME_OPS_DOC\`
+
+## release_readiness_artifact
+
+1. status: \`$RELEASE_READINESS_ARTIFACT_STATUS\`
+2. artifact_ref: \`$RELEASE_READINESS_ARTIFACT_REF\`
+3. manifest_hash: \`$RELEASE_READINESS_ARTIFACT_MANIFEST_HASH\`
+4. decision: \`$RELEASE_READINESS_ARTIFACT_DECISION\`
+5. storage_mode: \`$RELEASE_READINESS_ARTIFACT_STORAGE_MODE\`
+6. summary_path: \`$RELEASE_READINESS_ARTIFACT_SUMMARY_PATH\`
 
 ## closure_backfill
 
@@ -676,6 +787,9 @@ main() {
   echo "draft_todo_candidates: $DRAFT_TODO_TOTAL"
   echo "runtime_ops_pack_linked: $RUNTIME_OPS_PACK_LINKED"
   echo "runtime_ops_pack_status: $RUNTIME_OPS_PACK_STATUS"
+  echo "release_readiness_artifact_status: $RELEASE_READINESS_ARTIFACT_STATUS"
+  echo "release_readiness_artifact_ref: $RELEASE_READINESS_ARTIFACT_REF"
+  echo "release_readiness_manifest_hash: $RELEASE_READINESS_ARTIFACT_MANIFEST_HASH"
   echo "active_plan_evidence_status: $ACTIVE_PLAN_EVIDENCE_STATUS"
   echo "closure_backfill_archive_detected: $CLOSURE_ARCHIVE_DETECTED"
   echo "closure_backfill_archive_source: $CLOSURE_ARCHIVE_SOURCE"

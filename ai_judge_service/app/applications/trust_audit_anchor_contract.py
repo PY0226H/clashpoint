@@ -31,6 +31,9 @@ TRUST_AUDIT_ANCHOR_COMPONENT_HASH_KEYS: tuple[str, ...] = (
     *TRUST_AUDIT_ANCHOR_BASE_COMPONENT_HASH_KEYS,
     "artifactManifestHash",
 )
+TRUST_AUDIT_ANCHOR_OPTIONAL_COMPONENT_HASH_KEYS: tuple[str, ...] = (
+    "releaseReadinessManifestHash",
+)
 
 TRUST_AUDIT_ANCHOR_PAYLOAD_KEYS: tuple[str, ...] = (
     "caseCommitment",
@@ -137,11 +140,26 @@ def validate_trust_audit_anchor_contract(payload: dict[str, Any]) -> None:
             != str(component_hashes.get("artifactManifestHash") or "").strip()
         ):
             raise ValueError("trust_audit_anchor_artifact_manifest_hash_mismatch")
+        release_readiness_manifest_hash = str(
+            component_hashes.get("releaseReadinessManifestHash") or ""
+        ).strip()
+        if release_readiness_manifest_hash:
+            release_summary = artifact_manifest.get("releaseReadinessArtifactSummary")
+            if isinstance(release_summary, dict):
+                summary_manifest_hash = str(release_summary.get("manifestHash") or "").strip()
+                if summary_manifest_hash and summary_manifest_hash != release_readiness_manifest_hash:
+                    raise ValueError(
+                        "trust_audit_anchor_release_readiness_manifest_hash_mismatch"
+                    )
     else:
         if str(item.get("anchorHash") or "").strip():
             raise ValueError("trust_audit_anchor_pending_anchor_hash_forbidden")
         if str(component_hashes.get("artifactManifestHash") or "").strip():
             raise ValueError("trust_audit_anchor_pending_artifact_manifest_hash_forbidden")
+        if str(component_hashes.get("releaseReadinessManifestHash") or "").strip():
+            raise ValueError(
+                "trust_audit_anchor_pending_release_readiness_manifest_hash_forbidden"
+            )
         if isinstance(artifact_manifest, dict) and artifact_manifest:
             raise ValueError("trust_audit_anchor_pending_artifact_manifest_forbidden")
 

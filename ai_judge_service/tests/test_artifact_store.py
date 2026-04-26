@@ -10,6 +10,7 @@ from app.applications.artifact_pack import (
     build_artifact_store_healthcheck_payload,
     build_artifact_store_readiness_payload,
     write_case_artifact_pack,
+    write_release_readiness_artifact,
     write_trust_audit_artifact_pack,
 )
 from app.domain.artifacts import ArtifactRef
@@ -233,6 +234,67 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
             evidence_payload["verdictEvidenceRefs"][0]["itemHash"],
             "eb817ecdd6e8090037d4981b1e46084d977ae54ae80766593e165921cb33dbc2",
         )
+
+    async def test_release_readiness_artifact_should_write_summary_without_storage_paths(
+        self,
+    ) -> None:
+        export = await write_release_readiness_artifact(
+            artifact_store=self._store,
+            case_id=9106,
+            dispatch_type="final",
+            trace_id="trace-release-9106",
+            release_readiness_evidence={
+                "evidenceVersion": "policy-release-readiness-evidence-v1",
+                "generatedAt": "2026-04-26T00:00:00Z",
+                "policyVersion": "policy-v3-local",
+                "decision": "env_blocked",
+                "decisionCode": "registry_release_gate_env_blocked",
+                "componentStatuses": [
+                    {
+                        "component": "fairnessBenchmark",
+                        "status": "env_blocked",
+                        "code": "registry_release_gate_fairness_benchmark_local_reference_only",
+                    }
+                ],
+                "reasonCodes": [
+                    "registry_release_gate_fairness_benchmark_local_reference_only"
+                ],
+                "envBlockedComponents": ["fairnessBenchmark"],
+                "artifactRefs": ["internal-release-manifest"],
+                "realEnvEvidenceStatus": {
+                    "status": "env_blocked",
+                    "source": "release_gate",
+                    "realEnvEvidenceAvailable": False,
+                },
+            },
+        )
+
+        self.assertEqual(export["artifact"]["version"], "release-readiness-artifact-v1")
+        self.assertEqual(export["summary"]["artifactKind"], "release_readiness")
+        self.assertEqual(len(export["summary"]["manifestHash"]), 64)
+        self.assertEqual(export["summary"]["storageMode"], "local_reference")
+        self.assertEqual(export["summary"]["envBlockedComponents"], ["fairnessBenchmark"])
+        self.assertFalse(export["summary"]["redactionContract"]["storageUriVisible"])
+        summary_text = str(export["summary"])
+        self.assertNotIn(self._tmpdir.name, summary_text)
+        self.assertNotIn(str(self._root), summary_text)
+        self.assertNotIn("local-artifact://", summary_text)
+        ref = ArtifactRef.from_payload(export["ref"])
+        self.assertTrue(await self._store.exists(ref=ref))
+
+    async def test_release_readiness_artifact_should_reject_storage_metadata_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, "artifact_payload_forbidden_keys"):
+            await self._store.put_json(
+                case_id=9107,
+                kind="release_readiness",
+                payload={
+                    "version": "release-readiness-artifact-v1",
+                    "evidenceVersion": "policy-release-readiness-evidence-v1",
+                    "decision": "allowed",
+                    "componentStatuses": [],
+                    "bucket": "must-not-enter-artifact-payload",
+                },
+            )
 
     async def test_s3_compatible_store_should_put_and_get_json_ref_without_secret_uri(
         self,
@@ -503,6 +565,43 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
             "http://minio:9000",
             str(build_artifact_store_readiness_payload(store)),
         )
+
+    async def test_release_readiness_summary_should_hide_s3_uri_parts(self) -> None:
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="prod/ai-judge",
+            client=_FakeS3Client(),
+            endpoint_configured=True,
+        )
+
+        export = await write_release_readiness_artifact(
+            artifact_store=store,
+            case_id=9204,
+            dispatch_type="final",
+            trace_id="trace-release-9204",
+            release_readiness_evidence={
+                "evidenceVersion": "policy-release-readiness-evidence-v1",
+                "policyVersion": "policy-v3-prod",
+                "decision": "allowed",
+                "decisionCode": "registry_release_gate_allowed",
+                "componentStatuses": [
+                    {"component": "artifactStoreReadiness", "status": "ready"}
+                ],
+                "realEnvEvidenceStatus": {
+                    "status": "ready",
+                    "source": "release_gate",
+                    "realEnvEvidenceAvailable": True,
+                },
+            },
+        )
+
+        summary_text = str(export["summary"])
+        self.assertNotIn("judge-artifacts", summary_text)
+        self.assertNotIn("prod/ai-judge", summary_text)
+        self.assertNotIn("s3://", summary_text)
+        self.assertNotIn("endpoint", summary_text.lower())
+        self.assertEqual(export["summary"]["artifactStore"]["provider"], "s3_compatible")
+        self.assertTrue(export["summary"]["artifactStore"]["productionReady"])
 
 
 if __name__ == "__main__":

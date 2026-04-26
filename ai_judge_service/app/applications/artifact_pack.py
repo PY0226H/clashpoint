@@ -11,10 +11,13 @@ CASE_ARTIFACT_KINDS: tuple[str, ...] = (
     "replay_snapshot",
     "audit_pack",
     "trust_registry_snapshot",
+    "release_readiness",
 )
 ARTIFACT_STORE_HEALTHCHECK_VERSION = "artifact-store-healthcheck-v1"
 ARTIFACT_STORE_HEALTHCHECK_PROBE_CASE_ID = 1
 ARTIFACT_STORE_HEALTHCHECK_PROBE_ARTIFACT_ID = "artifact-store-healthcheck-probe"
+RELEASE_READINESS_ARTIFACT_VERSION = "release-readiness-artifact-v1"
+RELEASE_READINESS_ARTIFACT_SUMMARY_VERSION = "release-readiness-artifact-summary-v1"
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,38 @@ def _safe_int(value: Any) -> int | None:
 def _payload_str(value: Any) -> str | None:
     token = str(value or "").strip()
     return token or None
+
+
+def _list_of_tokens(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(row) for row in value if isinstance(row, dict)]
+
+
+def _redaction_contract() -> dict[str, Any]:
+    return {
+        "artifactRefsVisible": False,
+        "hashesOnly": True,
+        "internalAuditPayloadVisible": False,
+        "objectStorePathVisible": False,
+        "rawPromptVisible": False,
+        "rawTraceVisible": False,
+        "storageUriVisible": False,
+    }
 
 
 def build_artifact_store_readiness_payload(artifact_store: ArtifactStorePort) -> dict[str, Any]:
@@ -416,6 +451,128 @@ def build_trust_registry_artifact(
     }
 
 
+def _release_component_statuses(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in _list_of_dicts(evidence.get("componentStatuses")):
+        component = _payload_str(row.get("component"))
+        if not component:
+            continue
+        rows.append(
+            {
+                "component": component,
+                "status": _payload_str(row.get("status")) or "needs_review",
+                "code": _payload_str(row.get("code")),
+                "reasonCodes": _list_of_tokens(row.get("reasonCodes")),
+            }
+        )
+    return rows
+
+
+def build_release_readiness_artifact(
+    *,
+    release_readiness_evidence: dict[str, Any] | None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    evidence = _dict_or_empty(release_readiness_evidence)
+    public_verification = _dict_or_empty(evidence.get("publicVerificationReadiness"))
+    citation_verification = _dict_or_empty(evidence.get("citationVerification"))
+    fairness_panel = _dict_or_empty(evidence.get("fairnessPanelEvidence"))
+    real_env = _dict_or_empty(evidence.get("realEnvEvidenceStatus"))
+    return {
+        "version": RELEASE_READINESS_ARTIFACT_VERSION,
+        "createdAt": (
+            _payload_str(created_at)
+            or _payload_str(evidence.get("generatedAt"))
+            or _payload_str(evidence.get("createdAt"))
+        ),
+        "policyVersion": _payload_str(evidence.get("policyVersion")),
+        "evidenceVersion": _payload_str(evidence.get("evidenceVersion")),
+        "decision": _payload_str(evidence.get("decision")),
+        "decisionCode": _payload_str(evidence.get("decisionCode")),
+        "componentStatuses": _release_component_statuses(evidence),
+        "reasonCodes": _list_of_tokens(evidence.get("reasonCodes")),
+        "envBlockedComponents": _list_of_tokens(evidence.get("envBlockedComponents")),
+        "artifactRefCount": len(_list_of_tokens(evidence.get("artifactRefs"))),
+        "publicVerificationReadiness": {
+            "status": _payload_str(public_verification.get("status")),
+            "code": _payload_str(public_verification.get("code")),
+            "externalizable": (
+                bool(public_verification.get("externalizable"))
+                if public_verification.get("externalizable") is not None
+                else None
+            ),
+            "errorCode": _payload_str(public_verification.get("errorCode")),
+        },
+        "citationVerification": {
+            "version": _payload_str(citation_verification.get("version")),
+            "status": _payload_str(citation_verification.get("status")),
+            "reasonCodes": _list_of_tokens(citation_verification.get("reasonCodes")),
+            "missingCitationCount": _safe_int(
+                citation_verification.get("missingCitationCount")
+            )
+            or 0,
+            "weakCitationCount": _safe_int(citation_verification.get("weakCitationCount"))
+            or 0,
+            "forbiddenSourceCount": _safe_int(
+                citation_verification.get("forbiddenSourceCount")
+            )
+            or 0,
+        },
+        "fairnessPanelEvidence": {
+            "benchmarkEvidenceStatus": _payload_str(
+                fairness_panel.get("benchmarkEvidenceStatus")
+            ),
+            "realSampleManifestStatus": _payload_str(
+                fairness_panel.get("realSampleManifestStatus")
+            ),
+            "shadowEvidenceStatus": _payload_str(fairness_panel.get("shadowEvidenceStatus")),
+        },
+        "realEnvEvidenceStatus": {
+            "status": _payload_str(real_env.get("status")),
+            "source": _payload_str(real_env.get("source")),
+            "code": _payload_str(real_env.get("code")),
+            "realEnvEvidenceAvailable": bool(real_env.get("realEnvEvidenceAvailable")),
+        },
+        "redactionContract": _redaction_contract(),
+        "decisionAuthority": "release_gate_only",
+        "officialVerdictAuthority": False,
+    }
+
+
+def build_release_readiness_artifact_summary(
+    *,
+    artifact_ref: ArtifactRef,
+    manifest: ArtifactManifest,
+    release_readiness_artifact: dict[str, Any],
+) -> dict[str, Any]:
+    ref_payload = artifact_ref.to_payload()
+    manifest_payload = manifest.to_payload()
+    artifact = _dict_or_empty(release_readiness_artifact)
+    metadata = _dict_or_empty(manifest_payload.get("metadata"))
+    artifact_store = _dict_or_empty(metadata.get("artifactStore"))
+    return {
+        "version": RELEASE_READINESS_ARTIFACT_SUMMARY_VERSION,
+        "artifactRef": ref_payload["artifactId"],
+        "artifactKind": "release_readiness",
+        "artifactSha256": ref_payload["sha256"],
+        "manifestHash": manifest_payload["manifestHash"],
+        "evidenceVersion": _payload_str(artifact.get("evidenceVersion")),
+        "policyVersion": _payload_str(artifact.get("policyVersion")),
+        "decision": _payload_str(artifact.get("decision")),
+        "componentStatuses": _release_component_statuses(artifact),
+        "envBlockedComponents": _list_of_tokens(artifact.get("envBlockedComponents")),
+        "createdAt": ref_payload.get("createdAt") or manifest_payload.get("createdAt"),
+        "storageMode": _payload_str(metadata.get("storageMode")),
+        "artifactStore": {
+            "provider": _payload_str(artifact_store.get("provider")),
+            "status": _payload_str(artifact_store.get("status")),
+            "productionReady": bool(artifact_store.get("productionReady")),
+        },
+        "realEnvEvidenceStatus": _dict_or_empty(artifact.get("realEnvEvidenceStatus")),
+        "redactionContract": _redaction_contract(),
+    }
+
+
 async def write_case_artifact_pack(
     *,
     artifact_store: ArtifactStorePort,
@@ -427,6 +584,7 @@ async def write_case_artifact_pack(
     replay_snapshot: dict[str, Any] | None = None,
     audit_pack: dict[str, Any] | None = None,
     trust_registry_snapshot: dict[str, Any] | None = None,
+    release_readiness: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> CaseArtifactPack:
     sections = {
@@ -435,6 +593,7 @@ async def write_case_artifact_pack(
         "replay_snapshot": _dict_or_empty(replay_snapshot),
         "audit_pack": _dict_or_empty(audit_pack),
         "trust_registry_snapshot": _dict_or_empty(trust_registry_snapshot),
+        "release_readiness": _dict_or_empty(release_readiness),
     }
     refs: list[ArtifactRef] = []
     for kind in CASE_ARTIFACT_KINDS:
@@ -466,6 +625,45 @@ async def write_case_artifact_pack(
         ),
     )
     return CaseArtifactPack(manifest=manifest, refs=tuple(refs))
+
+
+async def write_release_readiness_artifact(
+    *,
+    artifact_store: ArtifactStorePort,
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str,
+    release_readiness_evidence: dict[str, Any],
+    created_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    artifact = build_release_readiness_artifact(
+        release_readiness_evidence=release_readiness_evidence,
+        created_at=created_at,
+    )
+    pack = await write_case_artifact_pack(
+        artifact_store=artifact_store,
+        case_id=case_id,
+        dispatch_type=dispatch_type,
+        trace_id=trace_id,
+        release_readiness=artifact,
+        metadata={
+            "source": "release_readiness_artifact_export",
+            **dict(metadata or {}),
+        },
+    )
+    ref = next(ref for ref in pack.refs if ref.kind == "release_readiness")
+    summary = build_release_readiness_artifact_summary(
+        artifact_ref=ref,
+        manifest=pack.manifest,
+        release_readiness_artifact=artifact,
+    )
+    return {
+        "artifact": artifact,
+        "manifest": pack.manifest.to_payload(),
+        "ref": ref.to_payload(),
+        "summary": summary,
+    }
 
 
 async def write_trust_audit_artifact_pack(
