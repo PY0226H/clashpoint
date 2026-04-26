@@ -27,12 +27,15 @@ from app.applications.ops_read_model_pack import (
     build_ops_read_model_pack_judge_workflow_coverage,
     build_ops_read_model_pack_policy_kernel_binding,
     build_ops_read_model_pack_read_contract,
-    build_ops_read_model_pack_trust_artifact_coverage,
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
-    summarize_ops_read_model_pack_trust_items,
     validate_ops_read_model_pack_v5_contract,
+)
+from app.applications.ops_read_model_trust_projection import (
+    build_ops_read_model_pack_policy_gate_rows,
+    build_ops_read_model_pack_trust_artifact_coverage,
+    summarize_ops_read_model_pack_trust_items,
 )
 from app.applications.ops_trust_monitoring import (
     OPS_TRUST_MONITORING_KEYS,
@@ -984,6 +987,80 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(summary["verifiedCount"], 2)
         self.assertEqual(summary["reviewRequiredCount"], 1)
         self.assertEqual(summary["openChallengeCount"], 2)
+
+    def test_build_ops_read_model_pack_policy_gate_rows_should_prefer_dependency_overview(
+        self,
+    ) -> None:
+        rows = build_ops_read_model_pack_policy_gate_rows(
+            dependency_overview_rows=[
+                {
+                    "policyVersion": "policy-v1",
+                    "latestGateDecision": "pass",
+                    "latestGateSource": "release_readiness",
+                    "overrideApplied": False,
+                }
+            ],
+            policy_gate_simulation={
+                "items": [
+                    {
+                        "policyVersion": "policy-v2",
+                        "simulatedGate": {"status": "blocked"},
+                        "fairnessGate": {"source": "benchmark"},
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "policyVersion": "policy-v1",
+                    "gateDecision": "pass",
+                    "gateSource": "release_readiness",
+                    "overrideApplied": False,
+                }
+            ],
+        )
+
+    def test_build_ops_read_model_pack_policy_gate_rows_should_fallback_to_simulation(
+        self,
+    ) -> None:
+        rows = build_ops_read_model_pack_policy_gate_rows(
+            dependency_overview_rows=[],
+            policy_gate_simulation={
+                "items": [
+                    {
+                        "policyVersion": "policy-v1",
+                        "simulatedGate": {"status": "pass"},
+                        "fairnessGate": {"source": "shadow"},
+                    },
+                    {
+                        "policyVersion": "policy-v2",
+                        "simulatedGate": {"status": "env_blocked"},
+                        "fairnessGate": {"source": "benchmark"},
+                    },
+                ]
+            },
+        )
+
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "policyVersion": "policy-v1",
+                    "gateDecision": "pass",
+                    "gateSource": "shadow",
+                    "overrideApplied": False,
+                },
+                {
+                    "policyVersion": "policy-v2",
+                    "gateDecision": "blocked",
+                    "gateSource": "benchmark",
+                    "overrideApplied": False,
+                },
+            ],
+        )
 
     def test_summarize_ops_read_model_pack_review_items_should_count_risk_and_priority(self) -> None:
         summary = summarize_ops_read_model_pack_review_items(

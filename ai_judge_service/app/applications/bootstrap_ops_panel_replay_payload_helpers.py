@@ -37,8 +37,8 @@ from .ops_read_model_pack import (
     build_ops_read_model_pack_trust_overview,
     build_ops_read_model_pack_v5_payload,
     summarize_ops_read_model_pack_review_items,
-    summarize_ops_read_model_pack_trust_items,
 )
+from .ops_read_model_trust_projection import summarize_ops_read_model_pack_trust_items
 from .panel_runtime_profile_contract import (
     validate_panel_runtime_profile_contract as validate_panel_runtime_profile_contract_v3,
 )
