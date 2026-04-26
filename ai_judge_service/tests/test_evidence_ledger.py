@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.domain.judge.evidence_ledger import EvidenceLedgerBuilder
+import json
+
+from app.domain.judge.evidence_ledger import (
+    EvidenceLedgerBuilder,
+    build_citation_verification_summary,
+)
 
 
 def test_evidence_ledger_should_build_entries_and_lookup() -> None:
@@ -50,6 +55,12 @@ def test_evidence_ledger_should_build_entries_and_lookup() -> None:
     assert payload["evidenceSufficiency"]["passed"] is True
     assert payload["evidence_sufficiency"]["status"] == "sufficient"
     assert payload["reliabilityNotes"]["level"] == "high"
+    assert payload["citationVerification"]["version"] == "evidence-citation-verification-v1"
+    assert payload["citationVerification"]["status"] == "env_blocked"
+    assert payload["citationVerification"]["citationCount"] >= 2
+    assert payload["citationVerification"]["messageRefCount"] == 1
+    assert payload["citationVerification"]["sourceRefCount"] == 1
+    assert "citation_verifier_real_sample_env_blocked" in payload["citationVerification"]["reasonCodes"]
     assert "winner" not in payload
     assert payload["message_refs"] == payload["messageRefs"]
     assert payload["source_citations"] == payload["sourceCitations"]
@@ -70,3 +81,82 @@ def test_evidence_ledger_should_build_entries_and_lookup() -> None:
     )
     assert message_id in resolved
     assert chunk_id in resolved
+
+
+def test_citation_verifier_should_block_missing_and_forbidden_public_sources() -> None:
+    payload = {
+        "entries": [
+            {
+                "evidenceId": "ev-msg-pro-p1",
+                "kind": "message_ref",
+                "locator": {"messageId": 101},
+                "reliabilityLabel": "high",
+            },
+            {
+                "evidenceId": "ev-source-pro-p1",
+                "kind": "retrieval_chunk",
+                "locator": {"chunkId": "chunk-a"},
+                "reliabilityLabel": "high",
+            },
+        ],
+        "refsById": {
+            "ev-msg-pro-p1": {"kind": "message_ref"},
+            "ev-source-pro-p1": {"kind": "retrieval_chunk"},
+        },
+        "messageRefs": [
+            {"evidenceId": "ev-msg-pro-p1", "messageId": 101},
+        ],
+        "sourceCitations": [
+            {
+                "evidenceId": "ev-source-pro-p1",
+                "sourceId": "src-safe",
+                "chunkId": "chunk-a",
+                "sourceType": "web",
+                "rawPrompt": "must not leave private citation verifier input",
+            }
+        ],
+        "evidenceSufficiency": {"passed": True},
+    }
+
+    summary = build_citation_verification_summary(
+        payload,
+        verdict_evidence_refs=[
+            {"evidenceId": "ev-source-pro-p1"},
+            {"evidenceId": "ev-missing"},
+        ],
+        environment_mode="real",
+        real_sample_ready=True,
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["missingCitationCount"] == 1
+    assert summary["forbiddenSourceCount"] == 1
+    assert "citation_verifier_missing_evidence_refs" in summary["reasonCodes"]
+    assert "citation_verifier_forbidden_source_metadata" in summary["reasonCodes"]
+    summary_text = json.dumps(summary, ensure_ascii=False)
+    assert "must not leave private citation verifier input" not in summary_text
+
+
+def test_citation_verifier_should_warn_for_decisive_refs_without_message_or_source() -> None:
+    builder = EvidenceLedgerBuilder()
+    path_id = builder.register_agent2_path_item(
+        phase_no=1,
+        side="pro",
+        path_type="agent2_hit",
+        item="pro:claim-a",
+        reason="agent2_path_alignment",
+    )
+    assert path_id is not None
+    builder.mark_verdict_referenced(path_id)
+    payload = builder.build_payload()
+
+    summary = build_citation_verification_summary(
+        payload,
+        environment_mode="real",
+        real_sample_ready=True,
+    )
+
+    assert summary["status"] == "warning"
+    assert summary["weakCitationCount"] >= 1
+    assert "citation_verifier_weak_citations" in summary["reasonCodes"]
+    assert summary["officialVerdictAuthority"] is False

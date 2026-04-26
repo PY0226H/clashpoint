@@ -206,6 +206,19 @@ build_subject() {
     echo "harden challenge review state machine"
   elif [[ "$module_key" == *"public-verify-redaction"* ]]; then
     echo "harden public verify redaction"
+  elif [[ "$module_key" == *"public-verification-chat-proxy"* ||
+          "$summary_lower" == *"public verification proxy"* ]]; then
+    echo "proxy judge public verification"
+  elif [[ "$module_key" == *"public-verification-client-read-model"* ||
+          "$summary_lower" == *"public verification read model"* ]]; then
+    echo "add judge public verification read model"
+  elif [[ "$module_key" == *"citation-verifier"* ||
+          "$summary_lower" == *"citation verifier"* ||
+          "$summary_lower" == *"citation verification"* ]]; then
+    echo "add citation verification evidence gate"
+  elif [[ "$module_key" == *"release-readiness-artifact-export"* ||
+          "$summary_lower" == *"release readiness artifact"* ]]; then
+    echo "export release readiness artifacts"
   elif [[ "$module_key" == *"trust-registry-write-through"* ]]; then
     echo "write trust registry from judge flow"
   elif [[ "$module_key" == *"trust-registry-store"* ]]; then
@@ -237,6 +250,10 @@ build_alt_one_subject() {
     "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
+    "proxy judge public verification") echo "add chat public verify proxy" ;;
+    "add judge public verification read model") echo "display judge verification readiness" ;;
+    "add citation verification evidence gate") echo "wire citation verifier into release evidence" ;;
+    "export release readiness artifacts") echo "attach release readiness manifest" ;;
     *) echo "$subject" ;;
   esac
 }
@@ -251,6 +268,10 @@ build_alt_two_subject() {
     "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;
     "export audit anchor manifest") echo "prepare audit anchor export" ;;
+    "proxy judge public verification") echo "protect public verification contract" ;;
+    "add judge public verification read model") echo "sync judge verification client state" ;;
+    "add citation verification evidence gate") echo "summarize citation gate readiness" ;;
+    "export release readiness artifacts") echo "sync release readiness evidence" ;;
     *) echo "sync ${scope} follow-up" ;;
   esac
 }

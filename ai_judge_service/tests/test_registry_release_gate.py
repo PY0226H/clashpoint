@@ -25,6 +25,7 @@ class RegistryReleaseGateTests(unittest.TestCase):
                             "externalizable": True,
                             "evidenceRef": "public-verify-manifest",
                         },
+                        "citationVerification": {"status": "passed"},
                         "trustRegistryWriteThrough": {"status": "ready"},
                         "panelShadowDrift": {"status": "ready"},
                         "artifactRefs": [{"ref": "release-manifest"}],
@@ -98,6 +99,7 @@ class RegistryReleaseGateTests(unittest.TestCase):
                     "releaseGateInputs": {
                         "artifactStoreReadiness": {"status": "ready"},
                         "publicVerificationReadiness": {"status": "ready"},
+                        "citationVerification": {"status": "passed"},
                         "trustRegistryWriteThrough": {"status": "ready"},
                         "panelShadowDrift": {"status": "ready"},
                     }
@@ -154,7 +156,7 @@ class RegistryReleaseGateTests(unittest.TestCase):
         self.assertFalse(payload["allowed"])
         self.assertEqual(payload["decision"], "needs_review")
         self.assertFalse(payload["metadataInputPresent"])
-        self.assertEqual(payload["statusCounts"]["needs_review"], 4)
+        self.assertEqual(payload["statusCounts"]["needs_review"], 5)
 
     def test_policy_release_gate_should_env_block_local_reference_fairness(self) -> None:
         dependency_health = {
@@ -166,6 +168,7 @@ class RegistryReleaseGateTests(unittest.TestCase):
                     "releaseGateInputs": {
                         "artifactStoreReadiness": {"status": "ready"},
                         "publicVerificationReadiness": {"status": "ready"},
+                        "citationVerification": {"status": "passed"},
                         "trustRegistryWriteThrough": {"status": "ready"},
                         "panelShadowDrift": {"status": "ready"},
                     }
@@ -237,6 +240,11 @@ class RegistryReleaseGateTests(unittest.TestCase):
                             "spend": "hidden spend",
                             "reputation": "hidden reputation",
                         },
+                        "citationVerification": {
+                            "status": "passed",
+                            "reasonCodes": [],
+                            "rawPrompt": "hidden citation prompt",
+                        },
                         "trustRegistryWriteThrough": {"status": "ready"},
                         "panelShadowDrift": {"status": "ready"},
                         "artifactRefs": [
@@ -278,7 +286,69 @@ class RegistryReleaseGateTests(unittest.TestCase):
         self.assertNotIn("hidden identity", evidence_text)
         self.assertNotIn("hidden spend", evidence_text)
         self.assertNotIn("hidden reputation", evidence_text)
+        self.assertNotIn("hidden citation prompt", evidence_text)
         self.assertIn("safe-release-manifest", evidence_text)
+
+    def test_policy_release_gate_should_block_for_citation_verifier_blocked(self) -> None:
+        dependency_health = {
+            "ok": True,
+            "code": "dependency_ok",
+            "policyVersion": "policy-v3-citation",
+            "policyProfile": {
+                "metadata": {
+                    "releaseGateInputs": {
+                        "artifactStoreReadiness": {"status": "ready"},
+                        "publicVerificationReadiness": {"status": "ready"},
+                        "trustRegistryWriteThrough": {"status": "ready"},
+                        "panelShadowDrift": {"status": "ready"},
+                        "citationVerification": {
+                            "version": "evidence-citation-verification-v1",
+                            "status": "blocked",
+                            "citationCount": 2,
+                            "messageRefCount": 1,
+                            "sourceRefCount": 1,
+                            "missingCitationCount": 1,
+                            "weakCitationCount": 0,
+                            "forbiddenSourceCount": 1,
+                            "reasonCodes": [
+                                "citation_verifier_missing_evidence_refs",
+                                "citation_verifier_forbidden_source_metadata",
+                            ],
+                        },
+                    }
+                }
+            },
+        }
+        fairness_gate = {
+            "passed": True,
+            "benchmarkGatePassed": True,
+            "shadowGateApplied": False,
+            "thresholdDecision": "accepted",
+            "latestRun": {
+                "runId": "benchmark-real",
+                "status": "pass",
+                "thresholdDecision": "accepted",
+                "environmentMode": "real",
+            },
+        }
+
+        payload = build_policy_release_gate_decision(
+            dependency_health=dependency_health,
+            fairness_gate=fairness_gate,
+        )
+
+        self.assertFalse(payload["allowed"])
+        self.assertEqual(payload["decision"], "blocked")
+        reason_codes = {row["code"] for row in payload["reasons"]}
+        self.assertIn("citation_verifier_missing_evidence_refs", reason_codes)
+        evidence = payload["releaseReadinessEvidence"]
+        self.assertEqual(evidence["citationVerification"]["status"], "blocked")
+        self.assertEqual(evidence["citationVerification"]["missingCitationCount"], 1)
+        self.assertEqual(evidence["citationVerification"]["forbiddenSourceCount"], 1)
+        self.assertIn(
+            "citation_verifier_forbidden_source_metadata",
+            evidence["reasonCodes"],
+        )
 
 
 if __name__ == "__main__":

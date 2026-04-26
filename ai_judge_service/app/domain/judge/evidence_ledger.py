@@ -3,6 +3,67 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+CITATION_VERIFICATION_VERSION = "evidence-citation-verification-v1"
+CITATION_VERIFICATION_STATUSES = {
+    "passed",
+    "warning",
+    "blocked",
+    "env_blocked",
+}
+
+_REAL_ENVIRONMENT_MODES = {
+    "real",
+    "prod",
+    "production",
+    "staging",
+}
+_LOCAL_REFERENCE_ENVIRONMENT_MODES = {
+    "local",
+    "local_reference",
+    "local-reference",
+}
+_FORBIDDEN_CITATION_KEYS = {
+    "apikey",
+    "api_key",
+    "bucket",
+    "endpoint",
+    "internalaudit",
+    "internal_audit",
+    "objectstorepath",
+    "object_store_path",
+    "privateaudit",
+    "private_audit",
+    "privatenote",
+    "private_note",
+    "provider",
+    "providertoken",
+    "provider_token",
+    "rawnote",
+    "raw_note",
+    "rawprivate",
+    "raw_private",
+    "rawprompt",
+    "raw_prompt",
+    "rawtrace",
+    "raw_trace",
+    "secret",
+    "storagepath",
+    "storage_path",
+    "systemprompt",
+    "system_prompt",
+    "token",
+}
+_ALLOWED_SOURCE_TYPES = {
+    "document",
+    "external_source",
+    "knowledge_base",
+    "local_reference",
+    "manual_reference",
+    "message_ref",
+    "retrieval_chunk",
+    "web",
+}
+
 
 def _normalize_side(value: Any) -> str:
     side = str(value or "").strip().lower()
@@ -32,6 +93,258 @@ def _normalize_reliability_label(value: Any) -> str:
     if token in {"high", "medium", "low"}:
         return token
     return "unknown"
+
+
+def _safe_token(value: Any) -> str | None:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _lower_token(value: Any) -> str | None:
+    token = _safe_token(value)
+    return token.lower() if token is not None else None
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(row) for row in value if isinstance(row, dict)]
+
+
+def _normalize_citation_key(value: Any) -> str:
+    return str(value or "").replace("-", "_").replace(" ", "_").lower()
+
+
+def _iter_forbidden_citation_key_hits(value: Any, *, path: str = "$") -> list[str]:
+    hits: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key or "")
+            normalized = _normalize_citation_key(key_text)
+            child_path = f"{path}.{key_text}"
+            if normalized in _FORBIDDEN_CITATION_KEYS:
+                hits.append(child_path)
+            hits.extend(_iter_forbidden_citation_key_hits(child, path=child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            hits.extend(_iter_forbidden_citation_key_hits(child, path=f"{path}[{index}]"))
+    return hits
+
+
+def _explicit_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    token = str(value or "").strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _environment_mode_from_payload(
+    *,
+    payload: dict[str, Any],
+    environment_mode: Any = None,
+) -> str:
+    bundle_meta = _dict_or_empty(payload.get("bundleMeta"))
+    token = _lower_token(
+        environment_mode
+        or payload.get("environmentMode")
+        or payload.get("environment_mode")
+        or bundle_meta.get("environmentMode")
+        or bundle_meta.get("environment_mode")
+    )
+    if token in _REAL_ENVIRONMENT_MODES:
+        return token
+    if token in _LOCAL_REFERENCE_ENVIRONMENT_MODES:
+        return "local_reference"
+    return "local_reference"
+
+
+def _real_sample_ready_from_payload(
+    *,
+    payload: dict[str, Any],
+    environment_mode: str,
+    real_sample_ready: bool | None = None,
+) -> bool:
+    if real_sample_ready is not None:
+        return bool(real_sample_ready)
+    bundle_meta = _dict_or_empty(payload.get("bundleMeta"))
+    for key in (
+        "realSampleReady",
+        "real_sample_ready",
+        "realEnvEvidenceAvailable",
+        "real_env_evidence_available",
+    ):
+        value = payload.get(key)
+        if value is None:
+            value = bundle_meta.get(key)
+        parsed = _explicit_bool(value)
+        if parsed is not None:
+            return parsed
+    return environment_mode in _REAL_ENVIRONMENT_MODES
+
+
+def _append_reason(reason_codes: list[str], code: str) -> None:
+    if code not in reason_codes:
+        reason_codes.append(code)
+
+
+def build_citation_verification_summary(
+    evidence_payload: dict[str, Any] | None,
+    *,
+    verdict_evidence_refs: list[dict[str, Any]] | None = None,
+    environment_mode: str | None = None,
+    real_sample_ready: bool | None = None,
+) -> dict[str, Any]:
+    payload = _dict_or_empty(evidence_payload)
+    entries = _list_of_dicts(payload.get("entries"))
+    message_refs = _list_of_dicts(payload.get("messageRefs"))
+    source_citations = _list_of_dicts(payload.get("sourceCitations"))
+    refs_by_id = payload.get("refsById") if isinstance(payload.get("refsById"), dict) else {}
+    sufficiency = _dict_or_empty(payload.get("evidenceSufficiency"))
+
+    entry_by_id: dict[str, dict[str, Any]] = {}
+    message_ref_ids: set[str] = set()
+    for row in entries:
+        evidence_id = _safe_token(row.get("evidenceId"))
+        if not evidence_id:
+            continue
+        entry_by_id.setdefault(evidence_id, row)
+        locator = _dict_or_empty(row.get("locator"))
+        if str(row.get("kind") or "").strip() == "message_ref" and locator.get("messageId") is not None:
+            message_ref_ids.add(evidence_id)
+    for row in message_refs:
+        evidence_id = _safe_token(row.get("evidenceId"))
+        if evidence_id and row.get("messageId") is not None:
+            message_ref_ids.add(evidence_id)
+
+    approved_source_ref_ids: set[str] = set()
+    weak_ref_ids: set[str] = set()
+    forbidden_source_ids: set[str] = set()
+    missing_ref_ids: set[str] = set()
+    reason_codes: list[str] = []
+
+    for row in source_citations:
+        evidence_id = _safe_token(row.get("evidenceId"))
+        source_id = _safe_token(row.get("sourceId"))
+        source_type = _lower_token(row.get("sourceType") or row.get("source_type"))
+        trace_field_present = any(
+            _safe_token(row.get(key))
+            for key in (
+                "chunkId",
+                "chunk_id",
+                "documentId",
+                "document_id",
+                "sourceUrl",
+                "source_url",
+                "title",
+                "uri",
+            )
+        )
+        forbidden_hits = _iter_forbidden_citation_key_hits(row)
+        if evidence_id and forbidden_hits:
+            forbidden_source_ids.add(evidence_id)
+        if source_type and source_type not in _ALLOWED_SOURCE_TYPES and evidence_id:
+            forbidden_source_ids.add(evidence_id)
+        if not evidence_id:
+            missing_ref_ids.add(f"source:{len(missing_ref_ids) + 1}")
+            continue
+        if not source_id or not trace_field_present:
+            weak_ref_ids.add(evidence_id)
+            continue
+        if evidence_id not in forbidden_source_ids:
+            approved_source_ref_ids.add(evidence_id)
+
+    referenced_ids: set[str] = set()
+    for row in _list_of_dicts(verdict_evidence_refs):
+        evidence_id = _safe_token(row.get("evidenceId"))
+        if evidence_id:
+            referenced_ids.add(evidence_id)
+    for row in entries:
+        evidence_id = _safe_token(row.get("evidenceId"))
+        if evidence_id and bool(row.get("verdictReferenced")):
+            referenced_ids.add(evidence_id)
+
+    known_ids = set(entry_by_id) | {str(key) for key in refs_by_id.keys()}
+    for evidence_id in sorted(referenced_ids):
+        if evidence_id not in known_ids:
+            missing_ref_ids.add(evidence_id)
+            continue
+        if evidence_id in message_ref_ids or evidence_id in approved_source_ref_ids:
+            continue
+        weak_ref_ids.add(evidence_id)
+
+    for row in entries:
+        evidence_id = _safe_token(row.get("evidenceId"))
+        if not evidence_id:
+            continue
+        if _normalize_reliability_label(row.get("reliabilityLabel")) == "low" and (
+            evidence_id in referenced_ids or not referenced_ids
+        ):
+            weak_ref_ids.add(evidence_id)
+
+    if not entries:
+        _append_reason(reason_codes, "citation_verifier_evidence_missing")
+    if not message_ref_ids:
+        _append_reason(reason_codes, "citation_verifier_message_refs_missing")
+    if not source_citations:
+        _append_reason(reason_codes, "citation_verifier_source_refs_missing")
+    if missing_ref_ids:
+        _append_reason(reason_codes, "citation_verifier_missing_evidence_refs")
+    if weak_ref_ids:
+        _append_reason(reason_codes, "citation_verifier_weak_citations")
+    if forbidden_source_ids:
+        _append_reason(reason_codes, "citation_verifier_forbidden_source_metadata")
+    if sufficiency and bool(sufficiency.get("passed")) is False:
+        _append_reason(reason_codes, "citation_verifier_evidence_sufficiency_failed")
+
+    normalized_environment = _environment_mode_from_payload(
+        payload=payload,
+        environment_mode=environment_mode,
+    )
+    real_ready = _real_sample_ready_from_payload(
+        payload=payload,
+        environment_mode=normalized_environment,
+        real_sample_ready=real_sample_ready,
+    )
+    if not real_ready:
+        _append_reason(reason_codes, "citation_verifier_real_sample_env_blocked")
+
+    if missing_ref_ids or forbidden_source_ids:
+        status = "blocked"
+    elif not real_ready:
+        status = "env_blocked"
+    elif weak_ref_ids or (sufficiency and bool(sufficiency.get("passed")) is False):
+        status = "warning"
+    else:
+        status = "passed"
+
+    return {
+        "version": CITATION_VERIFICATION_VERSION,
+        "status": status,
+        "citationCount": len(message_ref_ids | approved_source_ref_ids),
+        "messageRefCount": len(message_refs),
+        "sourceRefCount": len(source_citations),
+        "missingCitationCount": len(missing_ref_ids),
+        "weakCitationCount": len(weak_ref_ids),
+        "forbiddenSourceCount": len(forbidden_source_ids),
+        "reasonCodes": reason_codes,
+        "verdictRefCount": len(referenced_ids),
+        "approvedCitationRefCount": len(message_ref_ids | approved_source_ref_ids),
+        "environmentMode": normalized_environment,
+        "realSampleReady": real_ready,
+        "publicSummaryOnly": True,
+        "decisionAuthority": "evidence_gate_only",
+        "officialVerdictAuthority": False,
+    }
 
 
 class EvidenceLedgerBuilder:
@@ -350,7 +663,7 @@ class EvidenceLedgerBuilder:
             "conflictSourceCount": len(conflict_sources),
             "reviewSignals": review_signals,
         }
-        return {
+        payload = {
             "pipelineVersion": "v3-evidence-bundle",
             "entries": entries,
             "refsById": refs_by_id,
@@ -381,3 +694,5 @@ class EvidenceLedgerBuilder:
                 "officialVerdictAuthority": False,
             },
         }
+        payload["citationVerification"] = build_citation_verification_summary(payload)
+        return payload

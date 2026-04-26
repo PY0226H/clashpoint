@@ -93,6 +93,11 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
         self.assertIn("conflict_sources", evidence_bundle)
         self.assertIn("reliability_notes", evidence_bundle)
         self.assertIn("evidence_sufficiency", evidence_bundle)
+        self.assertEqual(evidence_bundle["citationVerification"]["status"], "env_blocked")
+        self.assertIn(
+            "citation_verifier_real_sample_env_blocked",
+            evidence_bundle["citationVerification"]["reasonCodes"],
+        )
         dossier_message_ids = set(dossier["transcriptSnapshot"]["messageIds"])
         for ref in evidence_bundle["messageRefs"]:
             self.assertIn(ref["messageId"], dossier_message_ids)
@@ -109,6 +114,7 @@ class JudgeWorkflowRolesTests(unittest.TestCase):
         self.assertEqual(fairness_gate["decision"], "pass_through")
         self.assertTrue(fairness_gate["autoJudgeAllowed"])
         self.assertTrue(fairness_gate["fairnessReport"]["doesNotDecideWinner"])
+        self.assertEqual(fairness_gate["citationVerification"]["status"], "env_blocked")
         verdict = payload[JUDGE_WORKFLOW_ROOT_KEY]["verdict"]
         self.assertEqual(
             verdict["decisionPath"],

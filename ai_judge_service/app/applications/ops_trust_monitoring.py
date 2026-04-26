@@ -16,6 +16,7 @@ OPS_TRUST_MONITORING_KEYS: tuple[str, ...] = (
     "publicVerificationReadiness",
     "challengeReviewLag",
     "registryReleaseReadiness",
+    "citationVerifierEvidence",
     "panelShadowDrift",
     "realEnvEvidenceStatus",
     "blockerCounts",
@@ -157,6 +158,11 @@ def _summarize_release_readiness_evidence_items(
     )
     public_verification_ready_count = 0
     real_env_evidence_status_counts: dict[str, int] = {}
+    citation_verifier_status_counts: dict[str, int] = {}
+    citation_verifier_reason_codes: set[str] = set()
+    citation_verifier_missing_count = 0
+    citation_verifier_weak_count = 0
+    citation_verifier_forbidden_count = 0
     for item in evidence_items:
         public_verification = _dict_or_empty(item.get("publicVerificationReadiness"))
         if _lower_token(public_verification.get("status")) == "ready":
@@ -165,6 +171,25 @@ def _summarize_release_readiness_evidence_items(
         status = _lower_token(real_env_status.get("status")) or "unknown"
         real_env_evidence_status_counts[status] = (
             real_env_evidence_status_counts.get(status, 0) + 1
+        )
+        citation_verification = _dict_or_empty(item.get("citationVerification"))
+        citation_status = _lower_token(citation_verification.get("status")) or "unknown"
+        citation_verifier_status_counts[citation_status] = (
+            citation_verifier_status_counts.get(citation_status, 0) + 1
+        )
+        citation_verifier_reason_codes.update(
+            str(code or "").strip()
+            for code in (citation_verification.get("reasonCodes") or [])
+            if str(code or "").strip()
+        )
+        citation_verifier_missing_count += _to_int(
+            citation_verification.get("missingCitationCount")
+        )
+        citation_verifier_weak_count += _to_int(
+            citation_verification.get("weakCitationCount")
+        )
+        citation_verifier_forbidden_count += _to_int(
+            citation_verification.get("forbiddenSourceCount")
         )
     return {
         "evidenceVersion": evidence_version,
@@ -176,6 +201,13 @@ def _summarize_release_readiness_evidence_items(
         "realEnvEvidenceStatusCounts": dict(
             sorted(real_env_evidence_status_counts.items(), key=lambda kv: kv[0])
         ),
+        "citationVerifierStatusCounts": dict(
+            sorted(citation_verifier_status_counts.items(), key=lambda kv: kv[0])
+        ),
+        "citationVerifierReasonCodes": sorted(citation_verifier_reason_codes),
+        "citationVerifierMissingCitationCount": citation_verifier_missing_count,
+        "citationVerifierWeakCitationCount": citation_verifier_weak_count,
+        "citationVerifierForbiddenSourceCount": citation_verifier_forbidden_count,
     }
 
 
@@ -403,6 +435,71 @@ def _build_registry_release_readiness(
         "realEnvEvidenceStatusCounts": evidence_summary[
             "realEnvEvidenceStatusCounts"
         ],
+        "citationVerifierStatusCounts": evidence_summary[
+            "citationVerifierStatusCounts"
+        ],
+        "citationVerifierReasonCodes": evidence_summary[
+            "citationVerifierReasonCodes"
+        ],
+        "citationVerifierMissingCitationCount": evidence_summary[
+            "citationVerifierMissingCitationCount"
+        ],
+        "citationVerifierWeakCitationCount": evidence_summary[
+            "citationVerifierWeakCitationCount"
+        ],
+        "citationVerifierForbiddenSourceCount": evidence_summary[
+            "citationVerifierForbiddenSourceCount"
+        ],
+    }
+
+
+def _build_citation_verifier_evidence(
+    *,
+    registry_readiness: dict[str, Any],
+) -> dict[str, Any]:
+    status_counts = _count_dict(registry_readiness.get("citationVerifierStatusCounts"))
+    evidence_count = _to_int(registry_readiness.get("releaseReadinessEvidenceCount"))
+    blocked_like = (
+        _to_int(status_counts.get("blocked"))
+        + _to_int(registry_readiness.get("citationVerifierMissingCitationCount"))
+        + _to_int(registry_readiness.get("citationVerifierForbiddenSourceCount"))
+    )
+    warning_like = (
+        _to_int(status_counts.get("needs_review"))
+        + _to_int(status_counts.get("warning"))
+        + _to_int(registry_readiness.get("citationVerifierWeakCitationCount"))
+    )
+    env_blocked = _to_int(status_counts.get("env_blocked"))
+    ready_like = _to_int(status_counts.get("ready")) + _to_int(status_counts.get("passed"))
+    if evidence_count <= 0 or not status_counts:
+        status = "not_sampled"
+    elif blocked_like > 0:
+        status = "blocked"
+    elif env_blocked > 0:
+        status = "env_blocked"
+    elif warning_like > 0:
+        status = "watch"
+    elif ready_like > 0:
+        status = "ready"
+    else:
+        status = "watch"
+    return {
+        "status": status,
+        "statusCounts": status_counts,
+        "reasonCodes": [
+            str(code or "").strip()
+            for code in (registry_readiness.get("citationVerifierReasonCodes") or [])
+            if str(code or "").strip()
+        ],
+        "missingCitationCount": _to_int(
+            registry_readiness.get("citationVerifierMissingCitationCount")
+        ),
+        "weakCitationCount": _to_int(
+            registry_readiness.get("citationVerifierWeakCitationCount")
+        ),
+        "forbiddenSourceCount": _to_int(
+            registry_readiness.get("citationVerifierForbiddenSourceCount")
+        ),
     }
 
 
@@ -555,6 +652,9 @@ def build_ops_trust_monitoring_summary(
         policy_gate_simulation=policy_gate_simulation,
         policy_kernel_binding=policy_kernel_binding,
     )
+    citation_verifier_evidence = _build_citation_verifier_evidence(
+        registry_readiness=registry_readiness,
+    )
     shadow_drift = _build_panel_shadow_drift(
         fairness_calibration_advisor=fairness_calibration_advisor,
     )
@@ -609,6 +709,25 @@ def build_ops_trust_monitoring_summary(
         count=0 if real_env_status["status"] == "ready" else 1,
         severity="watch" if real_env_status["status"] == "env_blocked" else "blocker",
     )
+    _add_blocker(
+        blockers,
+        bucket="evidence",
+        code="citation_verifier_not_ready",
+        count=(
+            citation_verifier_evidence["missingCitationCount"]
+            + citation_verifier_evidence["forbiddenSourceCount"]
+            + (
+                0
+                if citation_verifier_evidence["status"] in {"ready", "not_sampled"}
+                else 1
+            )
+        ),
+        severity=(
+            "blocker"
+            if citation_verifier_evidence["status"] == "blocked"
+            else "watch"
+        ),
+    )
 
     blocker_counts = {bucket: 0 for bucket in OPS_TRUST_MONITORING_BLOCKER_BUCKETS}
     for blocker in blockers:
@@ -624,6 +743,7 @@ def build_ops_trust_monitoring_summary(
         "publicVerificationReadiness": verification_readiness,
         "challengeReviewLag": challenge_lag,
         "registryReleaseReadiness": registry_readiness,
+        "citationVerifierEvidence": citation_verifier_evidence,
         "panelShadowDrift": shadow_drift,
         "realEnvEvidenceStatus": real_env_status,
         "blockerCounts": blocker_counts,

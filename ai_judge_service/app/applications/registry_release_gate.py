@@ -5,6 +5,7 @@ from typing import Any
 from app.applications.fairness_panel_evidence import (
     build_fairness_panel_evidence_normalization,
 )
+from app.domain.judge.evidence_ledger import CITATION_VERIFICATION_VERSION
 
 RELEASE_READINESS_EVIDENCE_VERSION = "policy-release-readiness-evidence-v1"
 
@@ -36,6 +37,7 @@ RELEASE_GATE_BLOCKED_STATUSES = {
 }
 RELEASE_GATE_ENV_BLOCKED_STATUSES = {
     "env_blocked",
+    "local_reference_ready",
     "pending_real_env",
     "pending_real_samples",
     "missing_real_env",
@@ -51,6 +53,7 @@ RELEASE_GATE_EVIDENCE_STATUSES = {
     "missing",
     "local_reference_ready",
     "local_reference_frozen",
+    "warning",
 }
 
 
@@ -319,6 +322,7 @@ def _component_evidence(component: dict[str, Any]) -> dict[str, Any]:
         "code": _safe_token(component.get("code")),
         "sourceStatus": _lower_token(component.get("sourceStatus")),
         "evidenceRef": _safe_token(component.get("evidenceRef")),
+        "reasonCodes": _list_of_tokens(component.get("reasonCodes")),
     }
 
 
@@ -364,6 +368,86 @@ def _release_input_component(
     return raw if isinstance(raw, dict) else {}
 
 
+def _list_of_tokens(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _to_int(value: Any, *, default: int = 0) -> int:
+    try:
+        if isinstance(value, bool):
+            return default
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _citation_verification_input(release_inputs: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "citationVerification",
+        "citation_verification",
+        "citationVerifierEvidence",
+        "citation_verifier_evidence",
+        "evidenceCitationVerification",
+        "evidence_citation_verification",
+    ):
+        value = release_inputs.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _build_citation_verifier_release_component(
+    *,
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _citation_verification_input(release_inputs)
+    source_status = _lower_token(raw.get("status"))
+    reason_codes = _list_of_tokens(raw.get("reasonCodes") or raw.get("reason_codes"))
+    if source_status in {"passed", "ready", "ok"}:
+        status = "ready"
+        code = "registry_release_gate_citation_verifier_ready"
+        message = "citation verifier passed"
+    elif source_status == "blocked":
+        status = "blocked"
+        code = reason_codes[0] if reason_codes else "registry_release_gate_citation_verifier_blocked"
+        message = "citation verifier blocked release readiness"
+    elif source_status in {"env_blocked", "local_reference_ready", "local_reference_frozen"}:
+        status = "env_blocked"
+        code = reason_codes[0] if reason_codes else "registry_release_gate_citation_verifier_env_blocked"
+        message = "citation verifier is blocked by missing real environment evidence"
+    elif source_status == "warning":
+        status = "needs_review"
+        code = reason_codes[0] if reason_codes else "registry_release_gate_citation_verifier_warning"
+        message = "citation verifier requires release review"
+    else:
+        status = "needs_review"
+        code = "registry_release_gate_citation_verifier_missing"
+        message = "citation verifier evidence is missing"
+
+    return {
+        "name": "citationVerifier",
+        "status": status,
+        "code": code,
+        "message": message,
+        "sourceStatus": source_status,
+        "evidenceRef": _artifact_ref_from_payload(raw),
+        "reasonCodes": reason_codes,
+        "missingCitationCount": _to_int(raw.get("missingCitationCount")),
+        "weakCitationCount": _to_int(raw.get("weakCitationCount")),
+        "forbiddenSourceCount": _to_int(raw.get("forbiddenSourceCount")),
+    }
+
+
 def _build_public_verification_readiness_evidence(
     *,
     release_inputs: dict[str, Any],
@@ -390,6 +474,39 @@ def _build_public_verification_readiness_evidence(
         "evidenceRef": _safe_token(component.get("evidenceRef")),
         "externalizable": bool(externalizable) if externalizable is not None else None,
         "errorCode": _safe_token(raw.get("errorCode") or raw.get("error_code")),
+    }
+
+
+def _build_citation_verification_evidence(
+    *,
+    release_inputs: dict[str, Any],
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    component = next(
+        (
+            row
+            for row in components
+            if str(row.get("name") or "").strip() == "citationVerifier"
+        ),
+        {},
+    )
+    raw = _citation_verification_input(release_inputs)
+    return {
+        "version": _safe_token(raw.get("version")) or CITATION_VERIFICATION_VERSION,
+        "status": _lower_token(component.get("status")) or "needs_review",
+        "sourceStatus": _lower_token(component.get("sourceStatus")),
+        "code": _safe_token(component.get("code")),
+        "reasonCodes": _list_of_tokens(
+            component.get("reasonCodes")
+            if component.get("reasonCodes") is not None
+            else raw.get("reasonCodes")
+        ),
+        "citationCount": _to_int(raw.get("citationCount")),
+        "messageRefCount": _to_int(raw.get("messageRefCount")),
+        "sourceRefCount": _to_int(raw.get("sourceRefCount")),
+        "missingCitationCount": _to_int(raw.get("missingCitationCount")),
+        "weakCitationCount": _to_int(raw.get("weakCitationCount")),
+        "forbiddenSourceCount": _to_int(raw.get("forbiddenSourceCount")),
     }
 
 
@@ -452,6 +569,8 @@ def _build_release_readiness_evidence(
         )
         if code
     ]
+    for component in components:
+        reason_codes.extend(_list_of_tokens(component.get("reasonCodes")))
     env_blocked_components = [
         str(component.get("name") or "").strip()
         for component in components
@@ -478,6 +597,10 @@ def _build_release_readiness_evidence(
             components=components,
         ),
         "publicVerificationReadiness": _build_public_verification_readiness_evidence(
+            release_inputs=release_inputs,
+            components=components,
+        ),
+        "citationVerification": _build_citation_verification_evidence(
             release_inputs=release_inputs,
             components=components,
         ),
@@ -551,6 +674,9 @@ def build_policy_release_gate_decision(
             ),
             missing_code="registry_release_gate_public_verification_missing",
             ready_message="public verification readiness is marked ready",
+        ),
+        _build_citation_verifier_release_component(
+            release_inputs=release_inputs,
         ),
         _coerce_release_component(
             name="trustRegistryWriteThrough",

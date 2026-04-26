@@ -7,7 +7,10 @@ from datetime import datetime
 from typing import Any
 
 from app.domain.judge.claim_graph import build_claim_graph_payload
-from app.domain.judge.evidence_ledger import EvidenceLedgerBuilder
+from app.domain.judge.evidence_ledger import (
+    EvidenceLedgerBuilder,
+    build_citation_verification_summary,
+)
 
 from ..models import FinalDispatchRequest, PhaseDispatchRequest
 from .judge_app_domain import (
@@ -669,6 +672,10 @@ def _normalize_evidence_ledger(payload: dict[str, Any] | None) -> dict[str, Any]
     bundle_meta.setdefault("decisionAuthority", "non_verdict")
     bundle_meta.setdefault("officialVerdictAuthority", False)
     evidence["bundleMeta"] = bundle_meta
+    citation_verification = evidence.get("citationVerification")
+    if not isinstance(citation_verification, dict):
+        citation_verification = build_citation_verification_summary(evidence)
+    evidence["citationVerification"] = citation_verification
     evidence.pop("winner", None)
     return evidence
 
@@ -1067,6 +1074,15 @@ class FairnessSentinelRole:
         if not evidence_passed and "evidence_support_too_low" not in reasons:
             reasons.append("evidence_support_too_low")
 
+        citation_verification = (
+            evidence_ledger.get("citationVerification")
+            if isinstance(evidence_ledger.get("citationVerification"), dict)
+            else build_citation_verification_summary(evidence_ledger)
+        )
+        citation_status = str(citation_verification.get("status") or "").strip().lower()
+        if citation_status == "blocked" and "evidence_citation_verifier_blocked" not in reasons:
+            reasons.append("evidence_citation_verifier_blocked")
+
         redaction_summary = (
             case_dossier.get("redactionSummary")
             if isinstance(case_dossier.get("redactionSummary"), dict)
@@ -1110,6 +1126,7 @@ class FairnessSentinelRole:
                 "source": "evidence_ledger",
                 "details": sufficiency,
             },
+            "citationVerification": citation_verification,
             "identityLeakage": {
                 "detected": identity_leakage_detected,
                 "source": "case_dossier_redaction",
@@ -1173,6 +1190,11 @@ class FairnessSentinelRole:
             "evidenceSufficiency": (
                 fairness_payload.get("evidenceSufficiency")
                 if isinstance(fairness_payload.get("evidenceSufficiency"), dict)
+                else {}
+            ),
+            "citationVerification": (
+                fairness_payload.get("citationVerification")
+                if isinstance(fairness_payload.get("citationVerification"), dict)
                 else {}
             ),
             "identityLeakage": (

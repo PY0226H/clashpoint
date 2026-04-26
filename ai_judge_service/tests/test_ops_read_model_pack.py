@@ -173,6 +173,14 @@ class OpsReadModelPackTests(unittest.TestCase):
                 "publicVerificationReadiness": {},
                 "challengeReviewLag": {},
                 "registryReleaseReadiness": {},
+                "citationVerifierEvidence": {
+                    "status": "not_sampled",
+                    "statusCounts": {},
+                    "reasonCodes": [],
+                    "missingCitationCount": 0,
+                    "weakCitationCount": 0,
+                    "forbiddenSourceCount": 0,
+                },
                 "panelShadowDrift": {},
                 "realEnvEvidenceStatus": {},
                 "blockerCounts": {
@@ -895,6 +903,15 @@ class OpsReadModelPackTests(unittest.TestCase):
                             "envBlockedComponents": ["fairnessBenchmark"],
                             "artifactRefs": ["release-manifest"],
                             "publicVerificationReadiness": {"status": "ready"},
+                            "citationVerification": {
+                                "status": "warning",
+                                "reasonCodes": [
+                                    "citation_verifier_weak_citations",
+                                ],
+                                "missingCitationCount": 0,
+                                "weakCitationCount": 2,
+                                "forbiddenSourceCount": 0,
+                            },
                             "realEnvEvidenceStatus": {"status": "env_blocked"},
                         },
                     }
@@ -951,6 +968,12 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertEqual(
             payload["registryReleaseReadiness"]["realEnvEvidenceStatusCounts"],
             {"env_blocked": 1},
+        )
+        self.assertEqual(payload["citationVerifierEvidence"]["status"], "watch")
+        self.assertEqual(payload["citationVerifierEvidence"]["weakCitationCount"], 2)
+        self.assertIn(
+            "citation_verifier_weak_citations",
+            payload["citationVerifierEvidence"]["reasonCodes"],
         )
         self.assertEqual(payload["panelShadowDrift"]["status"], "missing")
         self.assertEqual(payload["realEnvEvidenceStatus"]["status"], "env_blocked")

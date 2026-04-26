@@ -6,7 +6,11 @@ from typing import Any
 from ...models import FinalDispatchRequest
 from ...style_mode import resolve_effective_style_mode
 from .claim_graph import build_claim_graph_payload
-from .evidence_ledger import EvidenceLedgerBuilder
+from .evidence_ledger import (
+    CITATION_VERIFICATION_STATUSES,
+    EvidenceLedgerBuilder,
+    build_citation_verification_summary,
+)
 
 PANEL_RUNTIME_PROFILE_DEFAULTS = {
     "judgeA": {
@@ -1113,6 +1117,26 @@ def _evaluate_fairness_gate(
         and verdict_referenced_count > 0
         and evidence_low_reliability_ratio > evidence_max_low_reliability_ratio
     )
+    citation_verification = (
+        evidence_ledger.get("citationVerification")
+        if isinstance(evidence_ledger.get("citationVerification"), dict)
+        else build_citation_verification_summary(
+            evidence_ledger,
+            verdict_evidence_refs=verdict_evidence_refs,
+        )
+    )
+    citation_verification_status = str(
+        citation_verification.get("status") or ""
+    ).strip().lower()
+    citation_verification_reason_codes = [
+        str(code).strip()
+        for code in (
+            citation_verification.get("reasonCodes")
+            if isinstance(citation_verification.get("reasonCodes"), list)
+            else []
+        )
+        if str(code).strip()
+    ]
 
     alerts: list[dict[str, Any]] = []
     error_codes: list[str] = []
@@ -1218,6 +1242,31 @@ def _evaluate_fairness_gate(
                 },
             }
         )
+    if citation_verification_status == "blocked":
+        error_codes.append("evidence_citation_verifier_blocked")
+        alerts.append(
+            {
+                "type": "evidence_citation_verifier_blocked",
+                "severity": "critical",
+                "message": "citation verification failed for decisive evidence references",
+                "details": {
+                    "status": citation_verification_status,
+                    "missingCitationCount": _safe_int(
+                        citation_verification.get("missingCitationCount"),
+                        default=0,
+                    ),
+                    "weakCitationCount": _safe_int(
+                        citation_verification.get("weakCitationCount"),
+                        default=0,
+                    ),
+                    "forbiddenSourceCount": _safe_int(
+                        citation_verification.get("forbiddenSourceCount"),
+                        default=0,
+                    ),
+                    "reasonCodes": citation_verification_reason_codes,
+                },
+            }
+        )
 
     review_required = bool(error_codes)
     review_reason_codes: list[str] = []
@@ -1272,6 +1321,9 @@ def _evaluate_fairness_gate(
                 "maxLowReliabilityRatio": evidence_max_low_reliability_ratio,
             },
         },
+        "citationVerification": citation_verification,
+        "citationVerificationStatus": citation_verification_status or None,
+        "citationVerificationReasonCodes": citation_verification_reason_codes,
         "identityLeakage": {
             "detected": False,
             "source": "final_report_receipts_are_blinded",
@@ -1531,6 +1583,39 @@ def validate_final_report_payload_contract(payload: dict[str, Any]) -> list[str]
             ):
                 if not isinstance(stats.get(key), (int, float)):
                     missing.append(f"evidenceLedger.stats.{key}")
+        citation_verification = evidence_ledger.get("citationVerification")
+        if not isinstance(citation_verification, dict):
+            missing.append("evidenceLedger.citationVerification")
+        else:
+            required_citation_keys = {
+                "version",
+                "status",
+                "citationCount",
+                "messageRefCount",
+                "sourceRefCount",
+                "missingCitationCount",
+                "weakCitationCount",
+                "forbiddenSourceCount",
+                "reasonCodes",
+            }
+            for key in sorted(required_citation_keys):
+                if key not in citation_verification:
+                    missing.append(f"evidenceLedger.citationVerification.{key}")
+            citation_status = str(citation_verification.get("status") or "").strip().lower()
+            if citation_status not in CITATION_VERIFICATION_STATUSES:
+                missing.append("evidenceLedger.citationVerification.status")
+            for key in (
+                "citationCount",
+                "messageRefCount",
+                "sourceRefCount",
+                "missingCitationCount",
+                "weakCitationCount",
+                "forbiddenSourceCount",
+            ):
+                if not isinstance(citation_verification.get(key), (int, float)):
+                    missing.append(f"evidenceLedger.citationVerification.{key}")
+            if not isinstance(citation_verification.get("reasonCodes"), list):
+                missing.append("evidenceLedger.citationVerification.reasonCodes")
         for row in entries:
             if not isinstance(row, dict):
                 continue

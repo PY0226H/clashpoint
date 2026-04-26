@@ -141,6 +141,8 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert isinstance(payload["evidenceLedger"]["stats"]["reliabilityCounts"], dict)
     assert isinstance(payload["evidenceLedger"]["stats"]["verdictReferencedReliabilityCounts"], dict)
     assert isinstance(payload["evidenceLedger"]["stats"]["conflictReasonCounts"], dict)
+    assert payload["evidenceLedger"]["citationVerification"]["status"] == "env_blocked"
+    assert payload["evidenceLedger"]["citationVerification"]["officialVerdictAuthority"] is False
     assert isinstance(payload["verdictLedger"], dict)
     assert isinstance(payload["verdictLedger"]["panelDecisions"], dict)
     assert isinstance(payload["verdictLedger"]["arbitration"], dict)
@@ -220,6 +222,7 @@ def test_build_final_report_payload_should_satisfy_contract() -> None:
     assert arbitration["gateDecision"] == "pass_through"
     assert arbitration["winnerAfterArbitration"] == payload["winner"]
     assert payload["fairnessSummary"]["autoJudgeAllowed"] is True
+    assert payload["fairnessSummary"]["citationVerification"]["status"] == "env_blocked"
     assert payload["fairnessSummary"]["fairnessReport"]["doesNotDecideWinner"] is True
     assert payload["fairnessSummary"]["identityLeakage"]["detected"] is False
     invariants = payload["judgeTrace"]["panelArbiter"]["nonBypassInvariant"]
