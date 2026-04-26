@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "@echoisle/config";
 import {
   createDebateMessage,
   getDebateDrawVoteStatus,
+  getDebateJudgePublicVerification,
   getDebateJudgeReport,
   getOldestDebateMessageId,
   getWalletBalance,
@@ -13,9 +14,10 @@ import {
   mergeDebateMessages,
   pinDebateMessage,
   requestDebateJudgeJob,
+  resolveDebateJudgePublicVerificationView,
   submitDebateDrawVote,
   toDebateDomainError,
-  type DebateMessage
+  type DebateMessage,
 } from "@echoisle/debate-domain";
 import {
   buildDebateRoomAckMessage,
@@ -23,7 +25,7 @@ import {
   buildDebateRoomWsUrl,
   buildNotifyTicketProtocol,
   computeWsReconnectDelayMs,
-  parseDebateRoomServerMessage
+  parseDebateRoomServerMessage,
 } from "@echoisle/realtime-sdk";
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 import { useNavigate, useParams } from "react-router-dom";
@@ -40,6 +42,14 @@ function formatUtc(iso: string): string {
   return date.toLocaleString();
 }
 
+function formatPublicHash(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 44) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 24)}...${trimmed.slice(-12)}`;
+}
+
 function toRoomMessage(payload: Record<string, unknown>): DebateMessage | null {
   const id = Number(payload.messageId ?? payload.id);
   if (!Number.isFinite(id) || id <= 0) {
@@ -51,7 +61,7 @@ function toRoomMessage(payload: Record<string, unknown>): DebateMessage | null {
     userId: Number(payload.userId || 0),
     side: String(payload.side || "unknown"),
     content: String(payload.content || ""),
-    createdAt: String(payload.createdAt || new Date().toISOString())
+    createdAt: String(payload.createdAt || new Date().toISOString()),
   };
 }
 
@@ -60,17 +70,21 @@ export function DebateRoomPage() {
   const { sessionId } = useParams();
   const sessionIdNum = Number(sessionId);
   const queryClient = useQueryClient();
-  const notifyTicket = useAuthStore((state) => state.accessTickets?.notifyToken || null);
-  const refreshAccessTickets = useAuthStore((state) => state.refreshAccessTickets);
+  const notifyTicket = useAuthStore(
+    (state) => state.accessTickets?.notifyToken || null,
+  );
+  const refreshAccessTickets = useAuthStore(
+    (state) => state.refreshAccessTickets,
+  );
   const [messages, setMessages] = useState<DebateMessage[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [messageInput, setMessageInput] = useState("");
   const [pinSecondsInput, setPinSecondsInput] = useState("60");
   const [pageHint, setPageHint] = useState<string | null>(null);
-  const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">(
-    "disconnected"
-  );
+  const [wsStatus, setWsStatus] = useState<
+    "disconnected" | "connecting" | "connected" | "reconnecting"
+  >("disconnected");
   const wsRef = useRef<WebSocket | null>(null);
   const connectWsRef = useRef<() => void>(() => undefined);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -81,75 +95,105 @@ export function DebateRoomPage() {
   const messagesQuery = useQuery({
     queryKey: ["debate-room-messages", sessionIdNum],
     queryFn: () => listDebateMessages(sessionIdNum, { limit: HISTORY_LIMIT }),
-    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
   const pinsQuery = useQuery({
     queryKey: ["debate-room-pins", sessionIdNum],
-    queryFn: () => listDebatePinnedMessages(sessionIdNum, { activeOnly: true, limit: PINS_LIMIT }),
-    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+    queryFn: () =>
+      listDebatePinnedMessages(sessionIdNum, {
+        activeOnly: true,
+        limit: PINS_LIMIT,
+      }),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
   const walletQuery = useQuery({
     queryKey: ["wallet-balance"],
-    queryFn: () => getWalletBalance()
+    queryFn: () => getWalletBalance(),
   });
 
   const judgeReportQuery = useQuery({
     queryKey: ["debate-room-judge-report", sessionIdNum],
     queryFn: () => getDebateJudgeReport(sessionIdNum),
-    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
+  });
+
+  const judgePublicVerificationQuery = useQuery({
+    queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+    queryFn: () =>
+      getDebateJudgePublicVerification(sessionIdNum, { dispatchType: "final" }),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
   const drawVoteQuery = useQuery({
     queryKey: ["debate-room-draw-vote", sessionIdNum],
     queryFn: () => getDebateDrawVoteStatus(sessionIdNum),
-    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
   const sendMutation = useMutation({
-    mutationFn: async (content: string) => createDebateMessage(sessionIdNum, content),
+    mutationFn: async (content: string) =>
+      createDebateMessage(sessionIdNum, content),
     onSuccess: (created) => {
       setMessageInput("");
       setPageHint("Message sent.");
       setMessages((current) => mergeDebateMessages(current, [created]));
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-messages", sessionIdNum],
+      });
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
-    }
+    },
   });
 
   const requestJudgeMutation = useMutation({
-    mutationFn: async () => requestDebateJudgeJob(sessionIdNum, { allowRejudge: false }),
+    mutationFn: async () =>
+      requestDebateJudgeJob(sessionIdNum, { allowRejudge: false }),
     onSuccess: (result) => {
       setPageHint(
-        `Judge request accepted (${result.status}), phaseJobs=${result.queuedPhaseJobs}, finalJob=${String(result.queuedFinalJob)}`
+        `Judge request accepted (${result.status}), phaseJobs=${result.queuedPhaseJobs}, finalJob=${String(result.queuedFinalJob)}`,
       );
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-report", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-draw-vote", sessionIdNum],
+      });
       void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
-    }
+    },
   });
 
   const drawVoteMutation = useMutation({
-    mutationFn: async (agreeDraw: boolean) => submitDebateDrawVote(sessionIdNum, agreeDraw),
+    mutationFn: async (agreeDraw: boolean) =>
+      submitDebateDrawVote(sessionIdNum, agreeDraw),
     onSuccess: (result, agreeDraw) => {
       setPageHint(
         agreeDraw
           ? `Draw vote submitted: agree (${result.vote.agreeVotes}/${result.vote.requiredVoters})`
-          : `Draw vote submitted: disagree (${result.vote.disagreeVotes}/${result.vote.requiredVoters})`
+          : `Draw vote submitted: disagree (${result.vote.disagreeVotes}/${result.vote.requiredVoters})`,
       );
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-draw-vote", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-report", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+      });
       void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
-    }
+    },
   });
 
   const pinMutation = useMutation({
@@ -157,22 +201,28 @@ export function DebateRoomPage() {
       pinDebateMessage(payload.messageId, payload.pinSeconds),
     onSuccess: (result) => {
       setPageHint(
-        `Pinned message #${result.messageId}: -${result.debitedCoins} coins, balance=${result.walletBalance}, expires=${formatUtc(result.expiresAt)}`
+        `Pinned message #${result.messageId}: -${result.debitedCoins} coins, balance=${result.walletBalance}, expires=${formatUtc(result.expiresAt)}`,
       );
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-pins", sessionIdNum],
+      });
       void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-messages", sessionIdNum],
+      });
     },
     onError: (error) => {
       setPageHint(toDebateDomainError(error));
-    }
+    },
   });
 
   useEffect(() => {
     if (!messagesQuery.data) {
       return;
     }
-    setMessages((current) => mergeDebateMessages(current, messagesQuery.data.items));
+    setMessages((current) =>
+      mergeDebateMessages(current, messagesQuery.data.items),
+    );
     setHasMoreHistory(Boolean(messagesQuery.data.hasMore));
   }, [messagesQuery.data]);
 
@@ -199,11 +249,22 @@ export function DebateRoomPage() {
     const delay = computeWsReconnectDelayMs(reconnectAttemptRef.current);
     reconnectTimerRef.current = setTimeout(() => {
       reconnectTimerRef.current = null;
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-messages", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-pins", sessionIdNum],
+      });
       void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
-      void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-report", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-draw-vote", sessionIdNum],
+      });
       connectWsRef.current();
     }, delay);
   }, [queryClient, sessionIdNum]);
@@ -230,7 +291,9 @@ export function DebateRoomPage() {
         return;
       }
       if (event === "DebateMessagePinned") {
-        void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-pins", sessionIdNum],
+        });
         void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
         return;
       }
@@ -240,16 +303,28 @@ export function DebateRoomPage() {
         event.includes("Rematch") ||
         event.includes("DebateSession")
       ) {
-        void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
-        void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-judge-report", sessionIdNum],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-draw-vote", sessionIdNum],
+        });
         void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
       }
     },
-    [queryClient, sessionIdNum]
+    [queryClient, sessionIdNum],
   );
 
   const connectWs = useCallback(() => {
-    if (closedRef.current || !notifyTicket || !Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
+    if (
+      closedRef.current ||
+      !notifyTicket ||
+      !Number.isFinite(sessionIdNum) ||
+      sessionIdNum <= 0
+    ) {
       return;
     }
     setWsStatus("connecting");
@@ -257,7 +332,7 @@ export function DebateRoomPage() {
       const url = buildDebateRoomWsUrl({
         notifyBase: runtime.server.notification,
         sessionId: sessionIdNum,
-        lastAckSeq: lastAckSeqRef.current
+        lastAckSeq: lastAckSeqRef.current,
       });
       const protocol = buildNotifyTicketProtocol(notifyTicket);
       const ws = new WebSocket(url, [protocol]);
@@ -276,17 +351,34 @@ export function DebateRoomPage() {
           return;
         }
         if (msg.type === "welcome") {
-          lastAckSeqRef.current = Math.max(lastAckSeqRef.current, msg.baselineAckSeq);
+          lastAckSeqRef.current = Math.max(
+            lastAckSeqRef.current,
+            msg.baselineAckSeq,
+          );
           return;
         }
         if (msg.type === "syncRequired") {
           setPageHint(`Realtime sync required: ${msg.reason}`);
-          lastAckSeqRef.current = Math.max(lastAckSeqRef.current, msg.suggestedLastAckSeq);
-          void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
-          void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
+          lastAckSeqRef.current = Math.max(
+            lastAckSeqRef.current,
+            msg.suggestedLastAckSeq,
+          );
+          void queryClient.invalidateQueries({
+            queryKey: ["debate-room-messages", sessionIdNum],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["debate-room-pins", sessionIdNum],
+          });
           void queryClient.invalidateQueries({ queryKey: ["wallet-balance"] });
-          void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
-          void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+          void queryClient.invalidateQueries({
+            queryKey: ["debate-room-judge-report", sessionIdNum],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["debate-room-draw-vote", sessionIdNum],
+          });
           ws.close();
           return;
         }
@@ -300,10 +392,21 @@ export function DebateRoomPage() {
           }
           if (msg.eventSeq > lastAckSeqRef.current + 1) {
             setPageHint("Realtime gap detected, recovering snapshot...");
-            void queryClient.invalidateQueries({ queryKey: ["debate-room-messages", sessionIdNum] });
-            void queryClient.invalidateQueries({ queryKey: ["debate-room-pins", sessionIdNum] });
-            void queryClient.invalidateQueries({ queryKey: ["debate-room-judge-report", sessionIdNum] });
-            void queryClient.invalidateQueries({ queryKey: ["debate-room-draw-vote", sessionIdNum] });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-messages", sessionIdNum],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-pins", sessionIdNum],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-judge-report", sessionIdNum],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-draw-vote", sessionIdNum],
+            });
           } else {
             handleRoomPayload(msg.payload);
           }
@@ -328,7 +431,13 @@ export function DebateRoomPage() {
       setPageHint(toDebateDomainError(error));
       scheduleReconnect();
     }
-  }, [handleRoomPayload, notifyTicket, queryClient, scheduleReconnect, sessionIdNum]);
+  }, [
+    handleRoomPayload,
+    notifyTicket,
+    queryClient,
+    scheduleReconnect,
+    sessionIdNum,
+  ]);
 
   useEffect(() => {
     connectWsRef.current = connectWs;
@@ -357,7 +466,7 @@ export function DebateRoomPage() {
     try {
       const result = await listDebateMessages(sessionIdNum, {
         lastId: oldestId,
-        limit: HISTORY_LIMIT
+        limit: HISTORY_LIMIT,
       });
       setMessages((current) => mergeDebateMessages(current, result.items));
       setHasMoreHistory(Boolean(result.hasMore));
@@ -383,7 +492,17 @@ export function DebateRoomPage() {
 
   const finalReport = judgeReportQuery.data?.finalReport ?? null;
   const drawVote = drawVoteQuery.data?.vote ?? null;
-  const normalizedPinSeconds = Math.max(1, Math.floor(Number(pinSecondsInput) || 60));
+  const publicVerificationView = useMemo(
+    () =>
+      resolveDebateJudgePublicVerificationView(
+        judgePublicVerificationQuery.data,
+      ),
+    [judgePublicVerificationQuery.data],
+  );
+  const normalizedPinSeconds = Math.max(
+    1,
+    Math.floor(Number(pinSecondsInput) || 60),
+  );
 
   if (!Number.isFinite(sessionIdNum) || sessionIdNum <= 0) {
     return (
@@ -399,7 +518,10 @@ export function DebateRoomPage() {
       <header className="echo-room-header">
         <div>
           <SectionTitle>Debate Room #{sessionIdNum}</SectionTitle>
-          <p>Phase 4 baseline: history paging + realtime stream + send message + pinned section.</p>
+          <p>
+            Phase 4 baseline: history paging + realtime stream + send message +
+            pinned section.
+          </p>
         </div>
         <div className="echo-room-top-actions">
           <InlineHint>Realtime: {wsStatusLabel}</InlineHint>
@@ -423,7 +545,9 @@ export function DebateRoomPage() {
           <span>Wallet Coins</span>
         </article>
         <article>
-          <strong>{(judgeReportQuery.data?.status || "unknown").toUpperCase()}</strong>
+          <strong>
+            {(judgeReportQuery.data?.status || "unknown").toUpperCase()}
+          </strong>
           <span>Judge Status</span>
         </article>
       </section>
@@ -431,7 +555,9 @@ export function DebateRoomPage() {
       <section className="echo-lobby-panel">
         <h3>Pinned Messages</h3>
         {pinsQuery.isLoading ? <InlineHint>Loading pins...</InlineHint> : null}
-        {pinsQuery.isError ? <p className="echo-error">{toDebateDomainError(pinsQuery.error)}</p> : null}
+        {pinsQuery.isError ? (
+          <p className="echo-error">{toDebateDomainError(pinsQuery.error)}</p>
+        ) : null}
         <div className="echo-room-pins">
           {(pinsQuery.data?.items || []).map((pin) => (
             <article className="echo-topic-item" key={pin.id}>
@@ -451,8 +577,14 @@ export function DebateRoomPage() {
       <section className="echo-lobby-panel">
         <h3>Judge & Draw</h3>
         <div className="echo-lobby-actions">
-          <Button disabled={requestJudgeMutation.isPending} onClick={() => requestJudgeMutation.mutate()} type="button">
-            {requestJudgeMutation.isPending ? "Requesting..." : "Request AI Judge"}
+          <Button
+            disabled={requestJudgeMutation.isPending}
+            onClick={() => requestJudgeMutation.mutate()}
+            type="button"
+          >
+            {requestJudgeMutation.isPending
+              ? "Requesting..."
+              : "Request AI Judge"}
           </Button>
           <Button
             disabled={drawVoteMutation.isPending || drawVote?.status !== "open"}
@@ -469,30 +601,61 @@ export function DebateRoomPage() {
             {drawVoteMutation.isPending ? "Submitting..." : "Keep Winner"}
           </Button>
           {drawVote?.rematchSessionId ? (
-            <Button onClick={() => navigate(`/debate/sessions/${drawVote.rematchSessionId}`)} type="button">
+            <Button
+              onClick={() =>
+                navigate(`/debate/sessions/${drawVote.rematchSessionId}`)
+              }
+              type="button"
+            >
               Go To Rematch #{drawVote.rematchSessionId}
             </Button>
           ) : null}
         </div>
-        {judgeReportQuery.isLoading ? <InlineHint>Loading judge report...</InlineHint> : null}
-        {drawVoteQuery.isLoading ? <InlineHint>Loading draw vote...</InlineHint> : null}
-        {judgeReportQuery.isError ? <p className="echo-error">{toDebateDomainError(judgeReportQuery.error)}</p> : null}
-        {drawVoteQuery.isError ? <p className="echo-error">{toDebateDomainError(drawVoteQuery.error)}</p> : null}
+        {judgeReportQuery.isLoading ? (
+          <InlineHint>Loading judge report...</InlineHint>
+        ) : null}
+        {drawVoteQuery.isLoading ? (
+          <InlineHint>Loading draw vote...</InlineHint>
+        ) : null}
+        {judgePublicVerificationQuery.isLoading ? (
+          <InlineHint>Loading public verification...</InlineHint>
+        ) : null}
+        {judgeReportQuery.isError ? (
+          <p className="echo-error">
+            {toDebateDomainError(judgeReportQuery.error)}
+          </p>
+        ) : null}
+        {judgePublicVerificationQuery.isError ? (
+          <p className="echo-error">
+            {toDebateDomainError(judgePublicVerificationQuery.error)}
+          </p>
+        ) : null}
+        {drawVoteQuery.isError ? (
+          <p className="echo-error">
+            {toDebateDomainError(drawVoteQuery.error)}
+          </p>
+        ) : null}
         <div className="echo-room-judge-grid">
           <article className="echo-topic-item">
             <h4>Final Report</h4>
-            <InlineHint>Status: {judgeReportQuery.data?.status || "unknown"}</InlineHint>
+            <InlineHint>
+              Status: {judgeReportQuery.data?.status || "unknown"}
+            </InlineHint>
             {finalReport ? (
               <>
                 <p>
-                  Winner: <strong>{String(finalReport.winner || "unknown").toUpperCase()}</strong>
+                  Winner:{" "}
+                  <strong>
+                    {String(finalReport.winner || "unknown").toUpperCase()}
+                  </strong>
                 </p>
                 <InlineHint>
-                  Score: PRO {finalReport.proScore} vs CON {finalReport.conScore}
+                  Score: PRO {finalReport.proScore} vs CON{" "}
+                  {finalReport.conScore}
                 </InlineHint>
                 <InlineHint>
-                  Needs Draw Vote: {finalReport.needsDrawVote ? "yes" : "no"} | Degrade:{" "}
-                  {String(finalReport.degradationLevel ?? "-")}
+                  Needs Draw Vote: {finalReport.needsDrawVote ? "yes" : "no"} |
+                  Degrade: {String(finalReport.degradationLevel ?? "-")}
                 </InlineHint>
                 <p>{finalReport.finalRationale || "No rationale yet."}</p>
               </>
@@ -502,25 +665,68 @@ export function DebateRoomPage() {
           </article>
 
           <article className="echo-topic-item">
+            <h4>Public Verification</h4>
+            <InlineHint>Status: {publicVerificationView.label}</InlineHint>
+            <InlineHint>Reason: {publicVerificationView.reasonCode}</InlineHint>
+            {publicVerificationView.caseId ? (
+              <InlineHint>
+                Case: #{publicVerificationView.caseId} | Type:{" "}
+                {publicVerificationView.dispatchType}
+              </InlineHint>
+            ) : null}
+            {publicVerificationView.verificationVersion ? (
+              <InlineHint>
+                Version: {publicVerificationView.verificationVersion}
+              </InlineHint>
+            ) : null}
+            {publicVerificationView.hashSummary ? (
+              <InlineHint>
+                Hash: {formatPublicHash(publicVerificationView.hashSummary)}
+              </InlineHint>
+            ) : null}
+            {publicVerificationView.blockers.length > 0 ? (
+              <InlineHint>
+                Blockers: {publicVerificationView.blockers.join(", ")}
+              </InlineHint>
+            ) : null}
+          </article>
+
+          <article className="echo-topic-item">
             <h4>Draw Vote Status</h4>
-            <InlineHint>Status: {drawVoteQuery.data?.status || "absent"}</InlineHint>
+            <InlineHint>
+              Status: {drawVoteQuery.data?.status || "absent"}
+            </InlineHint>
             {drawVote ? (
               <>
                 <InlineHint>
-                  Participation: {drawVote.participatedVoters}/{drawVote.requiredVoters} (eligible {drawVote.eligibleVoters})
+                  Participation: {drawVote.participatedVoters}/
+                  {drawVote.requiredVoters} (eligible {drawVote.eligibleVoters})
                 </InlineHint>
                 <InlineHint>
-                  Votes: agree {drawVote.agreeVotes} | disagree {drawVote.disagreeVotes}
+                  Votes: agree {drawVote.agreeVotes} | disagree{" "}
+                  {drawVote.disagreeVotes}
                 </InlineHint>
                 <InlineHint>Resolution: {drawVote.resolution}</InlineHint>
                 <InlineHint>
                   My Vote:{" "}
-                  {drawVote.myVote == null ? "not submitted" : drawVote.myVote ? "agree draw" : "keep winner"}
+                  {drawVote.myVote == null
+                    ? "not submitted"
+                    : drawVote.myVote
+                      ? "agree draw"
+                      : "keep winner"}
                 </InlineHint>
-                <InlineHint>Voting Ends: {formatUtc(drawVote.votingEndsAt)}</InlineHint>
-                {drawVote.decidedAt ? <InlineHint>Decided At: {formatUtc(drawVote.decidedAt)}</InlineHint> : null}
+                <InlineHint>
+                  Voting Ends: {formatUtc(drawVote.votingEndsAt)}
+                </InlineHint>
+                {drawVote.decidedAt ? (
+                  <InlineHint>
+                    Decided At: {formatUtc(drawVote.decidedAt)}
+                  </InlineHint>
+                ) : null}
                 {drawVote.rematchSessionId ? (
-                  <InlineHint>Rematch Opened: session #{drawVote.rematchSessionId}</InlineHint>
+                  <InlineHint>
+                    Rematch Opened: session #{drawVote.rematchSessionId}
+                  </InlineHint>
                 ) : null}
               </>
             ) : (
@@ -533,12 +739,26 @@ export function DebateRoomPage() {
       <section className="echo-lobby-panel">
         <h3>Message Stream</h3>
         <div className="echo-room-history-actions">
-          <Button disabled={!hasMoreHistory || historyLoading} onClick={() => void loadOlder()} type="button">
-            {historyLoading ? "Loading..." : hasMoreHistory ? "Load Older Messages" : "No Older Messages"}
+          <Button
+            disabled={!hasMoreHistory || historyLoading}
+            onClick={() => void loadOlder()}
+            type="button"
+          >
+            {historyLoading
+              ? "Loading..."
+              : hasMoreHistory
+                ? "Load Older Messages"
+                : "No Older Messages"}
           </Button>
         </div>
-        {messagesQuery.isLoading ? <InlineHint>Loading messages...</InlineHint> : null}
-        {messagesQuery.isError ? <p className="echo-error">{toDebateDomainError(messagesQuery.error)}</p> : null}
+        {messagesQuery.isLoading ? (
+          <InlineHint>Loading messages...</InlineHint>
+        ) : null}
+        {messagesQuery.isError ? (
+          <p className="echo-error">
+            {toDebateDomainError(messagesQuery.error)}
+          </p>
+        ) : null}
         <div className="echo-room-message-list">
           {messages.map((message) => (
             <article className="echo-room-message" key={message.id}>
@@ -552,15 +772,24 @@ export function DebateRoomPage() {
               <div className="echo-lobby-actions">
                 <Button
                   disabled={pinMutation.isPending}
-                  onClick={() => pinMutation.mutate({ messageId: message.id, pinSeconds: normalizedPinSeconds })}
+                  onClick={() =>
+                    pinMutation.mutate({
+                      messageId: message.id,
+                      pinSeconds: normalizedPinSeconds,
+                    })
+                  }
                   type="button"
                 >
-                  {pinMutation.isPending ? "Pinning..." : `Pin ${normalizedPinSeconds}s`}
+                  {pinMutation.isPending
+                    ? "Pinning..."
+                    : `Pin ${normalizedPinSeconds}s`}
                 </Button>
               </div>
             </article>
           ))}
-          {!messagesQuery.isLoading && messages.length === 0 ? <InlineHint>No messages yet.</InlineHint> : null}
+          {!messagesQuery.isLoading && messages.length === 0 ? (
+            <InlineHint>No messages yet.</InlineHint>
+          ) : null}
         </div>
       </section>
 
@@ -574,7 +803,9 @@ export function DebateRoomPage() {
             placeholder="pin seconds"
             value={pinSecondsInput}
           />
-          <InlineHint>Pin duration applies to the message-level pin action.</InlineHint>
+          <InlineHint>
+            Pin duration applies to the message-level pin action.
+          </InlineHint>
         </div>
         <div className="echo-room-composer">
           <textarea
