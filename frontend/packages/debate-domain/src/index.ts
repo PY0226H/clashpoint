@@ -239,6 +239,106 @@ export type DebateJudgePublicVerificationView = {
   blockers: string[];
 };
 
+export type JudgeChallengeEligibilityStatus =
+  | "eligible"
+  | "not_eligible"
+  | "already_open"
+  | "under_review"
+  | "closed"
+  | "case_absent"
+  | "env_blocked"
+  | "proxy_error"
+  | "absent"
+  | (string & {});
+
+export type JudgeChallengeEligibility = {
+  status: JudgeChallengeEligibilityStatus;
+  eligible: boolean;
+  requestable: boolean;
+  reasonCode?: string | null;
+  blockers: string[];
+  [key: string]: JsonValue | undefined;
+};
+
+export type JudgeChallengeSummary = {
+  state: string;
+  activeChallengeId?: string | null;
+  latestChallengeId?: string | null;
+  latestDecision?: string | null;
+  latestReasonCode?: string | null;
+  totalChallenges?: number;
+  [key: string]: JsonValue | undefined;
+};
+
+export type JudgeChallengeReviewSummary = {
+  state: string;
+  required: boolean;
+  workflowStatus?: string | null;
+  [key: string]: JsonValue | undefined;
+};
+
+export type JudgeChallengeCacheProfile = {
+  cacheable: boolean;
+  ttlSeconds: number;
+  staleIfErrorSeconds?: number;
+  cacheKey?: string;
+  varyBy?: string[];
+  [key: string]: JsonValue | undefined;
+};
+
+export type JudgeChallengePolicySummary = {
+  version?: string | null;
+  policyStatus?: string | null;
+  policyVersion?: string | null;
+  kernelHash?: string | null;
+  challengeWindow?: string | null;
+  maxOpenChallenges?: number;
+  [key: string]: JsonValue | undefined;
+};
+
+export type GetDebateJudgeChallengeOutput = {
+  sessionId: number;
+  status: JudgeChallengeEligibilityStatus;
+  statusReason: string;
+  caseId?: number | null;
+  dispatchType: "final" | "phase" | (string & {});
+  eligibility: JudgeChallengeEligibility;
+  challenge: JudgeChallengeSummary;
+  review: JudgeChallengeReviewSummary;
+  allowedActions: string[];
+  blockers: string[];
+  cacheProfile: JudgeChallengeCacheProfile;
+  policy: JudgeChallengePolicySummary;
+};
+
+export type RequestDebateJudgeChallengeOutput = GetDebateJudgeChallengeOutput;
+
+export type DebateJudgeChallengeView = {
+  state:
+    | "eligible"
+    | "blocked"
+    | "open"
+    | "under_review"
+    | "closed"
+    | "no_report"
+    | "proxy_error"
+    | "unknown";
+  label: string;
+  reasonCode: string;
+  requestable: boolean;
+  caseId: number | null;
+  dispatchType: string;
+  challengeState: string;
+  reviewState: string;
+  policyStatus: string | null;
+  activeChallengeId: string | null;
+  latestDecision: string | null;
+  totalChallenges: number;
+  allowedActions: string[];
+  blockers: string[];
+  blockerLabels: string[];
+};
+
 export type DrawVoteDetail = {
   voteId: number;
   finalReportId: number;
@@ -422,6 +522,182 @@ export function resolveDebateJudgePublicVerificationView(
   };
 }
 
+function challengeViewState(
+  status: string,
+  challengeState: string,
+): DebateJudgeChallengeView["state"] {
+  if (status === "eligible") {
+    return "eligible";
+  }
+  if (status === "absent" || status === "case_absent") {
+    return "no_report";
+  }
+  if (status === "proxy_error") {
+    return "proxy_error";
+  }
+  if (
+    status === "already_open" ||
+    challengeState === "challenge_requested" ||
+    challengeState === "challenge_accepted"
+  ) {
+    return "open";
+  }
+  if (status === "under_review" || challengeState === "under_internal_review") {
+    return "under_review";
+  }
+  if (
+    status === "closed" ||
+    challengeState === "verdict_upheld" ||
+    challengeState === "verdict_overturned" ||
+    challengeState === "draw_after_review" ||
+    challengeState === "review_retained" ||
+    challengeState === "challenge_closed"
+  ) {
+    return "closed";
+  }
+  if (status === "not_eligible" || status === "env_blocked") {
+    return "blocked";
+  }
+  return "unknown";
+}
+
+function challengeLabel(
+  state: DebateJudgeChallengeView["state"],
+  challengeState: string,
+): string {
+  if (state === "eligible") {
+    return "Challenge available";
+  }
+  if (state === "no_report") {
+    return "No judge report yet";
+  }
+  if (state === "proxy_error") {
+    return "Challenge status unavailable";
+  }
+  if (state === "open") {
+    return "Challenge open";
+  }
+  if (state === "under_review") {
+    return "Review in progress";
+  }
+  if (challengeState === "verdict_upheld") {
+    return "Verdict upheld";
+  }
+  if (challengeState === "verdict_overturned") {
+    return "Verdict changed";
+  }
+  if (challengeState === "draw_after_review") {
+    return "Draw after review";
+  }
+  if (challengeState === "review_retained") {
+    return "Review retained";
+  }
+  if (state === "closed") {
+    return "Review completed";
+  }
+  if (state === "blocked") {
+    return "Challenge unavailable";
+  }
+  return "Challenge status unknown";
+}
+
+function challengeBlockerLabel(reasonCode: string): string {
+  switch (reasonCode) {
+    case "challenge_case_absent":
+      return "Judge report is not ready";
+    case "challenge_report_not_final":
+      return "Final report is required";
+    case "challenge_policy_disabled":
+      return "Challenge policy is disabled";
+    case "challenge_window_closed":
+      return "Challenge window is closed";
+    case "challenge_duplicate_open":
+      return "A challenge is already open";
+    case "challenge_review_already_closed":
+      return "Review is already closed";
+    case "challenge_permission_required":
+    case "judge_challenge_request_forbidden":
+      return "Participant access is required";
+    case "challenge_env_blocked":
+      return "Challenge environment is blocked";
+    case "challenge_proxy_failed":
+    case "challenge_contract_violation":
+      return "Challenge status cannot be loaded";
+    default:
+      return reasonCode;
+  }
+}
+
+function jsonNumber(value: JsonValue | undefined): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function resolveDebateJudgeChallengeView(
+  output: GetDebateJudgeChallengeOutput | null | undefined,
+): DebateJudgeChallengeView {
+  if (!output) {
+    return {
+      state: "unknown",
+      label: "Challenge status unknown",
+      reasonCode: "not_loaded",
+      requestable: false,
+      caseId: null,
+      dispatchType: "final",
+      challengeState: "unknown",
+      reviewState: "unknown",
+      policyStatus: null,
+      activeChallengeId: null,
+      latestDecision: null,
+      totalChallenges: 0,
+      allowedActions: [],
+      blockers: [],
+      blockerLabels: [],
+    };
+  }
+
+  const eligibilityStatus = String(output.eligibility?.status || output.status);
+  const challengeState = String(output.challenge?.state || output.status);
+  const state = challengeViewState(eligibilityStatus, challengeState);
+  const blockers = [
+    ...new Set([
+      ...jsonStringArray(output.eligibility?.blockers),
+      ...jsonStringArray(output.blockers as JsonValue),
+    ]),
+  ];
+  const reasonCode =
+    jsonString(output.eligibility?.reasonCode) ||
+    blockers[0] ||
+    output.statusReason ||
+    eligibilityStatus ||
+    "unknown";
+  const allowedActions = jsonStringArray(output.allowedActions as JsonValue);
+  const requestable =
+    state === "eligible" &&
+    Boolean(output.eligibility?.requestable) &&
+    allowedActions.includes("challenge.request");
+
+  return {
+    state,
+    label: challengeLabel(state, challengeState),
+    reasonCode,
+    requestable,
+    caseId: Number.isFinite(Number(output.caseId))
+      ? Number(output.caseId)
+      : null,
+    dispatchType: String(output.dispatchType || "final"),
+    challengeState,
+    reviewState: String(output.review?.state || "unknown"),
+    policyStatus: jsonString(output.policy?.policyStatus),
+    activeChallengeId: jsonString(output.challenge?.activeChallengeId),
+    latestDecision: jsonString(output.challenge?.latestDecision),
+    totalChallenges: jsonNumber(output.challenge?.totalChallenges) ?? 0,
+    allowedActions,
+    blockers,
+    blockerLabels: blockers.slice(0, 3).map(challengeBlockerLabel),
+  };
+}
+
 export function toDebateDomainError(error: unknown): string {
   return toApiError(error);
 }
@@ -589,6 +865,61 @@ export async function getDebateJudgePublicVerification(
 ): Promise<GetDebateJudgePublicVerificationOutput> {
   const response = await http.get<GetDebateJudgePublicVerificationOutput>(
     `/debate/sessions/${sessionId}/judge-report/public-verify`,
+    {
+      params: {
+        rejudgeRunNo: input?.rejudgeRunNo,
+        dispatchType: input?.dispatchType || "final",
+      },
+    },
+  );
+  return response.data;
+}
+
+export async function getDebateJudgeChallenge(
+  sessionId: number,
+  input?: { rejudgeRunNo?: number; dispatchType?: "final" | "phase" },
+): Promise<GetDebateJudgeChallengeOutput> {
+  const response = await http.get<GetDebateJudgeChallengeOutput>(
+    `/debate/sessions/${sessionId}/judge-report/challenge`,
+    {
+      params: {
+        rejudgeRunNo: input?.rejudgeRunNo,
+        dispatchType: input?.dispatchType || "final",
+      },
+    },
+  );
+  return response.data;
+}
+
+function buildJudgeChallengeIdempotencyKey(): string {
+  if (
+    typeof globalThis !== "undefined" &&
+    typeof globalThis.crypto?.randomUUID === "function"
+  ) {
+    return `judge_challenge_${globalThis.crypto.randomUUID()}`;
+  }
+  return `judge_challenge_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+export async function requestDebateJudgeChallenge(
+  sessionId: number,
+  input?: {
+    rejudgeRunNo?: number;
+    dispatchType?: "final" | "phase";
+    idempotencyKey?: string;
+    reasonCode?: string;
+    userReason?: string;
+  },
+): Promise<RequestDebateJudgeChallengeOutput> {
+  const response = await http.post<RequestDebateJudgeChallengeOutput>(
+    `/debate/sessions/${sessionId}/judge-report/challenge/request`,
+    {
+      idempotencyKey:
+        String(input?.idempotencyKey || "").trim() ||
+        buildJudgeChallengeIdempotencyKey(),
+      reasonCode: String(input?.reasonCode || "manual_challenge").trim(),
+      userReason: String(input?.userReason || "").trim() || undefined,
+    },
     {
       params: {
         rejudgeRunNo: input?.rejudgeRunNo,

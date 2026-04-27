@@ -4,6 +4,7 @@ import {
   mergeDebateMessages,
   normalizeDebateSide,
   normalizeDebateStatusFilter,
+  resolveDebateJudgeChallengeView,
   resolveDebateJudgePublicVerificationView,
 } from "./index";
 
@@ -175,5 +176,141 @@ describe("debate-domain normalize helpers", () => {
     expect(proxyError.label).toBe("Verification unavailable");
     expect(proxyError.hashSummary).toBeNull();
     expect(proxyError.verificationVersion).toBeNull();
+  });
+
+  it("resolves eligible challenge status into a requestable view", () => {
+    const view = resolveDebateJudgeChallengeView({
+      sessionId: 9,
+      status: "eligible",
+      statusReason: "challenge_eligible",
+      caseId: 42,
+      dispatchType: "final",
+      eligibility: {
+        status: "eligible",
+        eligible: true,
+        requestable: true,
+        reasonCode: null,
+        blockers: [],
+      },
+      challenge: {
+        state: "not_challenged",
+        activeChallengeId: null,
+        latestChallengeId: null,
+        latestDecision: null,
+        latestReasonCode: null,
+        totalChallenges: 0,
+      },
+      review: {
+        state: "not_required",
+        required: false,
+        workflowStatus: null,
+      },
+      allowedActions: ["challenge.view", "challenge.request"],
+      blockers: [],
+      cacheProfile: {
+        cacheable: false,
+        ttlSeconds: 0,
+        staleIfErrorSeconds: 0,
+      },
+      policy: {
+        policyStatus: "enabled",
+        challengeWindow: "open",
+      },
+    });
+
+    expect(view.state).toBe("eligible");
+    expect(view.label).toBe("Challenge available");
+    expect(view.requestable).toBe(true);
+    expect(view.caseId).toBe(42);
+    expect(view.blockerLabels).toEqual([]);
+  });
+
+  it("maps challenge review states and blockers without exposing raw internals", () => {
+    const open = resolveDebateJudgeChallengeView({
+      sessionId: 9,
+      status: "under_review",
+      statusReason: "challenge_duplicate_open",
+      caseId: 42,
+      dispatchType: "final",
+      eligibility: {
+        status: "under_review",
+        eligible: false,
+        requestable: false,
+        reasonCode: "challenge_duplicate_open",
+        blockers: ["challenge_duplicate_open"],
+      },
+      challenge: {
+        state: "under_internal_review",
+        activeChallengeId: "challenge-1",
+        latestChallengeId: "challenge-1",
+        latestDecision: null,
+        latestReasonCode: "manual_challenge",
+        totalChallenges: 1,
+      },
+      review: {
+        state: "pending_review",
+        required: true,
+        workflowStatus: "review_required",
+      },
+      allowedActions: ["challenge.view", "review.view"],
+      blockers: ["challenge_duplicate_open"],
+      cacheProfile: {
+        cacheable: false,
+        ttlSeconds: 0,
+        staleIfErrorSeconds: 0,
+      },
+      policy: {
+        policyStatus: "enabled",
+        provider: "must-not-render",
+      },
+    });
+
+    expect(open.state).toBe("under_review");
+    expect(open.label).toBe("Review in progress");
+    expect(open.requestable).toBe(false);
+    expect(open.blockerLabels).toEqual(["A challenge is already open"]);
+
+    const overturned = resolveDebateJudgeChallengeView({
+      ...{
+        sessionId: 9,
+        status: "closed",
+        statusReason: "challenge_review_already_closed",
+        caseId: 42,
+        dispatchType: "final" as const,
+        eligibility: {
+          status: "closed",
+          eligible: false,
+          requestable: false,
+          reasonCode: "challenge_review_already_closed",
+          blockers: ["challenge_review_already_closed"],
+        },
+        challenge: {
+          state: "verdict_overturned",
+          activeChallengeId: null,
+          latestChallengeId: "challenge-1",
+          latestDecision: "overturn",
+          latestReasonCode: "manual_challenge",
+          totalChallenges: 1,
+        },
+        review: {
+          state: "approved",
+          required: false,
+          workflowStatus: "completed",
+        },
+        allowedActions: ["challenge.view", "review.view"],
+        blockers: ["challenge_review_already_closed"],
+        cacheProfile: {
+          cacheable: true,
+          ttlSeconds: 300,
+          staleIfErrorSeconds: 0,
+        },
+        policy: {
+          policyStatus: "enabled",
+        },
+      },
+    });
+    expect(overturned.state).toBe("closed");
+    expect(overturned.label).toBe("Verdict changed");
+    expect(overturned.latestDecision).toBe("overturn");
   });
 });

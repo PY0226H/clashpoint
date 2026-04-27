@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "@echoisle/config";
 import {
   createDebateMessage,
   getDebateDrawVoteStatus,
+  getDebateJudgeChallenge,
   getDebateJudgePublicVerification,
   getDebateJudgeReport,
   getOldestDebateMessageId,
@@ -13,7 +14,9 @@ import {
   listDebatePinnedMessages,
   mergeDebateMessages,
   pinDebateMessage,
+  requestDebateJudgeChallenge,
   requestDebateJudgeJob,
+  resolveDebateJudgeChallengeView,
   resolveDebateJudgePublicVerificationView,
   submitDebateDrawVote,
   toDebateDomainError,
@@ -126,6 +129,12 @@ export function DebateRoomPage() {
     enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
   });
 
+  const judgeChallengeQuery = useQuery({
+    queryKey: ["debate-room-judge-challenge", sessionIdNum],
+    queryFn: () => getDebateJudgeChallenge(sessionIdNum, { dispatchType: "final" }),
+    enabled: Number.isFinite(sessionIdNum) && sessionIdNum > 0,
+  });
+
   const drawVoteQuery = useQuery({
     queryKey: ["debate-room-draw-vote", sessionIdNum],
     queryFn: () => getDebateDrawVoteStatus(sessionIdNum),
@@ -162,6 +171,40 @@ export function DebateRoomPage() {
         queryKey: ["debate-room-judge-public-verification", sessionIdNum],
       });
       void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-challenge", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-draw-vote", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
+    },
+    onError: (error) => {
+      setPageHint(toDebateDomainError(error));
+    },
+  });
+
+  const requestJudgeChallengeMutation = useMutation({
+    mutationFn: async () =>
+      requestDebateJudgeChallenge(sessionIdNum, {
+        dispatchType: "final",
+        reasonCode: "manual_challenge",
+      }),
+    onSuccess: (result) => {
+      const view = resolveDebateJudgeChallengeView(result);
+      setPageHint(view.label);
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-challenge", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-report", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-challenge", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
         queryKey: ["debate-room-draw-vote", sessionIdNum],
       });
       void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
@@ -188,6 +231,9 @@ export function DebateRoomPage() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-challenge", sessionIdNum],
       });
       void queryClient.invalidateQueries({ queryKey: ["debate-sessions"] });
     },
@@ -263,6 +309,9 @@ export function DebateRoomPage() {
         queryKey: ["debate-room-judge-public-verification", sessionIdNum],
       });
       void queryClient.invalidateQueries({
+        queryKey: ["debate-room-judge-challenge", sessionIdNum],
+      });
+      void queryClient.invalidateQueries({
         queryKey: ["debate-room-draw-vote", sessionIdNum],
       });
       connectWsRef.current();
@@ -308,6 +357,9 @@ export function DebateRoomPage() {
         });
         void queryClient.invalidateQueries({
           queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["debate-room-judge-challenge", sessionIdNum],
         });
         void queryClient.invalidateQueries({
           queryKey: ["debate-room-draw-vote", sessionIdNum],
@@ -377,6 +429,9 @@ export function DebateRoomPage() {
             queryKey: ["debate-room-judge-public-verification", sessionIdNum],
           });
           void queryClient.invalidateQueries({
+            queryKey: ["debate-room-judge-challenge", sessionIdNum],
+          });
+          void queryClient.invalidateQueries({
             queryKey: ["debate-room-draw-vote", sessionIdNum],
           });
           ws.close();
@@ -403,6 +458,9 @@ export function DebateRoomPage() {
             });
             void queryClient.invalidateQueries({
               queryKey: ["debate-room-judge-public-verification", sessionIdNum],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["debate-room-judge-challenge", sessionIdNum],
             });
             void queryClient.invalidateQueries({
               queryKey: ["debate-room-draw-vote", sessionIdNum],
@@ -498,6 +556,10 @@ export function DebateRoomPage() {
         judgePublicVerificationQuery.data,
       ),
     [judgePublicVerificationQuery.data],
+  );
+  const judgeChallengeView = useMemo(
+    () => resolveDebateJudgeChallengeView(judgeChallengeQuery.data),
+    [judgeChallengeQuery.data],
   );
   const normalizedPinSeconds = Math.max(
     1,
@@ -620,6 +682,9 @@ export function DebateRoomPage() {
         {judgePublicVerificationQuery.isLoading ? (
           <InlineHint>Loading public verification...</InlineHint>
         ) : null}
+        {judgeChallengeQuery.isLoading ? (
+          <InlineHint>Loading challenge status...</InlineHint>
+        ) : null}
         {judgeReportQuery.isError ? (
           <p className="echo-error">
             {toDebateDomainError(judgeReportQuery.error)}
@@ -628,6 +693,11 @@ export function DebateRoomPage() {
         {judgePublicVerificationQuery.isError ? (
           <p className="echo-error">
             {toDebateDomainError(judgePublicVerificationQuery.error)}
+          </p>
+        ) : null}
+        {judgeChallengeQuery.isError ? (
+          <p className="echo-error">
+            {toDebateDomainError(judgeChallengeQuery.error)}
           </p>
         ) : null}
         {drawVoteQuery.isError ? (
@@ -688,6 +758,44 @@ export function DebateRoomPage() {
               <InlineHint>
                 Blockers: {publicVerificationView.blockers.join(", ")}
               </InlineHint>
+            ) : null}
+          </article>
+
+          <article className="echo-topic-item">
+            <h4>Challenge Review</h4>
+            <InlineHint>Status: {judgeChallengeView.label}</InlineHint>
+            {judgeChallengeView.caseId ? (
+              <InlineHint>
+                Case: #{judgeChallengeView.caseId} | Type:{" "}
+                {judgeChallengeView.dispatchType}
+              </InlineHint>
+            ) : null}
+            <InlineHint>
+              Review: {judgeChallengeView.reviewState} | Challenges:{" "}
+              {judgeChallengeView.totalChallenges}
+            </InlineHint>
+            {judgeChallengeView.latestDecision ? (
+              <InlineHint>
+                Decision: {judgeChallengeView.latestDecision}
+              </InlineHint>
+            ) : null}
+            {judgeChallengeView.blockerLabels.length > 0 ? (
+              <InlineHint>
+                Blockers: {judgeChallengeView.blockerLabels.join(", ")}
+              </InlineHint>
+            ) : null}
+            {judgeChallengeView.requestable ? (
+              <div className="echo-room-card-actions">
+                <Button
+                  disabled={requestJudgeChallengeMutation.isPending}
+                  onClick={() => requestJudgeChallengeMutation.mutate()}
+                  type="button"
+                >
+                  {requestJudgeChallengeMutation.isPending
+                    ? "Requesting..."
+                    : "Challenge Verdict"}
+                </Button>
+              </div>
             ) : null}
           </article>
 

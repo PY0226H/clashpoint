@@ -165,6 +165,19 @@ expect_contains "p40 chat challenge proxy has contract alternative" "chore(ai-ju
 expect_not_contains "p40 chat challenge proxy avoids generic capability subject" "add ai-judge capability" "$P40_CHAT_CHALLENGE_OUT"
 expect_not_contains "p40 chat challenge proxy avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CHAT_CHALLENGE_OUT"
 
+P40_CLIENT_CHALLENGE_OUT="$TMP_DIR/p40-client-challenge.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-client-challenge-read-model-pack \
+  --summary "Add frontend shared challenge read model and Debate Room challenge status/action view" >"$P40_CLIENT_CHALLENGE_OUT"
+
+expect_contains "p40 client challenge read model uses feature title" "feat(ai-judge): add judge challenge read model" "$P40_CLIENT_CHALLENGE_OUT"
+expect_contains "p40 client challenge read model has display alternative" "feat(ai-judge): display judge challenge status" "$P40_CLIENT_CHALLENGE_OUT"
+expect_contains "p40 client challenge read model has sync alternative" "chore(ai-judge): sync challenge client state" "$P40_CLIENT_CHALLENGE_OUT"
+expect_not_contains "p40 client challenge read model avoids generic capability subject" "add ai-judge capability" "$P40_CLIENT_CHALLENGE_OUT"
+expect_not_contains "p40 client challenge read model avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CLIENT_CHALLENGE_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

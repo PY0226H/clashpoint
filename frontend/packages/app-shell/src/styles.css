@@ -211,6 +211,13 @@
   justify-content: flex-start;
 }
 
+.echo-room-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
 .echo-room-message-list {
   display: flex;
   flex-direction: column;
