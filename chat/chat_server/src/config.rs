@@ -142,6 +142,12 @@ pub struct AiJudgeConfig {
     pub public_verify_path: String,
     #[serde(default = "default_ai_judge_public_verify_timeout_ms")]
     pub public_verify_timeout_ms: u64,
+    #[serde(default = "default_ai_judge_challenge_status_path")]
+    pub challenge_status_path: String,
+    #[serde(default = "default_ai_judge_challenge_request_path")]
+    pub challenge_request_path: String,
+    #[serde(default = "default_ai_judge_challenge_timeout_ms")]
+    pub challenge_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +259,9 @@ impl Default for AiJudgeConfig {
             alert_outbox_timeout_ms: default_ai_judge_alert_outbox_timeout_ms(),
             public_verify_path: default_ai_judge_public_verify_path(),
             public_verify_timeout_ms: default_ai_judge_public_verify_timeout_ms(),
+            challenge_status_path: default_ai_judge_challenge_status_path(),
+            challenge_request_path: default_ai_judge_challenge_request_path(),
+            challenge_timeout_ms: default_ai_judge_challenge_timeout_ms(),
         }
     }
 }
@@ -496,6 +505,18 @@ fn default_ai_judge_public_verify_path() -> String {
 }
 
 fn default_ai_judge_public_verify_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_ai_judge_challenge_status_path() -> String {
+    "/internal/judge/cases/{case_id}/trust/challenges/public-status".to_string()
+}
+
+fn default_ai_judge_challenge_request_path() -> String {
+    "/internal/judge/cases/{case_id}/trust/challenges/request".to_string()
+}
+
+fn default_ai_judge_challenge_timeout_ms() -> u64 {
     5_000
 }
 
@@ -800,6 +821,15 @@ mod tests {
             "/internal/judge/cases/{case_id}/trust/public-verify"
         );
         assert_eq!(cfg.public_verify_timeout_ms, 5_000);
+        assert_eq!(
+            cfg.challenge_status_path,
+            "/internal/judge/cases/{case_id}/trust/challenges/public-status"
+        );
+        assert_eq!(
+            cfg.challenge_request_path,
+            "/internal/judge/cases/{case_id}/trust/challenges/request"
+        );
+        assert_eq!(cfg.challenge_timeout_ms, 5_000);
     }
 
     #[test]

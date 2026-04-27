@@ -38,6 +38,7 @@ const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_INVALID: &str = "judge_request_idempote
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_TOO_LONG: &str = "judge_request_idempotency_key_too_long";
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_CONFLICT: &str = "judge_request_idempotency_conflict";
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
+const JUDGE_CHALLENGE_REQUEST_FORBIDDEN: &str = "judge_challenge_request_forbidden";
 
 #[derive(Debug, Default)]
 struct JudgeReportReadMetrics {
@@ -641,6 +642,72 @@ mod tests {
         assert!(out.case_id.is_none());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn judge_challenge_route_should_return_absent_for_participant() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-challenge-absent").await?;
+        let (user, token) = create_bound_user_and_token(
+            &state,
+            "judge challenge participant",
+            "judge-challenge-participant@acme.org",
+            "+8613800771008",
+            "judge-challenge-participant-sid",
+        )
+        .await?;
+        add_participant(&state, session_id, user.id, "pro").await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/sessions/{session_id}/judge-report/challenge"
+            ))
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await?.to_bytes();
+        let out: crate::GetJudgeChallengeOutput = serde_json::from_slice(&body)?;
+        assert_eq!(out.session_id, session_id as u64);
+        assert_eq!(out.status, "absent");
+        assert_eq!(out.status_reason, "challenge_case_absent");
+        assert_eq!(out.dispatch_type, "final");
+        assert!(out.case_id.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn judge_challenge_request_route_should_forbid_non_participant() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-challenge-forbid").await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "judge challenge outsider",
+            "judge-challenge-outsider@acme.org",
+            "+8613800771009",
+            "judge-challenge-outsider-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/api/debate/sessions/{session_id}/judge-report/challenge/request"
+            ))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "judge_report_read_forbidden");
+        Ok(())
+    }
 }
 
 /// Get latest AI judge report for a debate session.
@@ -971,6 +1038,232 @@ pub(crate) async fn get_judge_public_verify_handler(
         dispatch_type = ret.dispatch_type,
         latency_ms = started_at.elapsed().as_millis() as u64,
         "judge public verification proxy queried"
+    );
+    Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
+}
+
+/// Proxy participant-visible challenge status for latest AI judge case in a debate session.
+#[utoipa::path(
+    get,
+    path = "/api/debate/sessions/{id}/judge-report/challenge",
+    params(
+        ("id" = u64, Path, description = "Debate session id"),
+        ("rejudgeRunNo" = Option<u32>, Query, description = "Optional rejudge run number; defaults to latest run"),
+        ("dispatchType" = Option<String>, Query, description = "Judge case type: final or phase; defaults to final")
+    ),
+    responses(
+        (status = 200, description = "Judge challenge proxy result", body = crate::GetJudgeChallengeOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn get_judge_challenge_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Query(query): Query<crate::GetJudgeChallengeQuery>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    JUDGE_REPORT_READ_METRICS.observe_start();
+    let user_limiter_key = format!(
+        "{JUDGE_REPORT_READ_LIMITER_KEY_PREFIX}:user:{}:session:{}",
+        user.id, id
+    );
+    let user_decision = enforce_rate_limit(
+        &state,
+        JUDGE_REPORT_READ_LIMITER_SCOPE,
+        &user_limiter_key,
+        JUDGE_REPORT_READ_USER_RATE_LIMIT_PER_WINDOW,
+        JUDGE_REPORT_READ_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    if !user_decision.allowed {
+        JUDGE_REPORT_READ_METRICS.observe_rate_limited();
+        return Ok(rate_limit_exceeded_response(
+            JUDGE_REPORT_READ_LIMITER_SCOPE,
+            build_rate_limit_headers(&user_decision)?,
+        ));
+    }
+
+    let mut effective_decision = user_decision;
+    if let Some(ip_hash) = request_rate_limit_ip_key_from_headers(&headers) {
+        let ip_limiter_key =
+            format!("{JUDGE_REPORT_READ_LIMITER_KEY_PREFIX}:ip:{ip_hash}:session:{id}");
+        let ip_decision = enforce_rate_limit(
+            &state,
+            JUDGE_REPORT_READ_LIMITER_SCOPE,
+            &ip_limiter_key,
+            JUDGE_REPORT_READ_IP_RATE_LIMIT_PER_WINDOW,
+            JUDGE_REPORT_READ_RATE_LIMIT_WINDOW_SECS,
+        )
+        .await;
+        if !ip_decision.allowed {
+            JUDGE_REPORT_READ_METRICS.observe_rate_limited();
+            return Ok(rate_limit_exceeded_response(
+                JUDGE_REPORT_READ_LIMITER_SCOPE,
+                build_rate_limit_headers(&ip_decision)?,
+            ));
+        }
+        effective_decision = merge_rate_limit_decision(&effective_decision, &ip_decision);
+    }
+    let rate_headers = build_rate_limit_headers(&effective_decision)?;
+
+    let ret = match state.get_judge_challenge(id, &user, query).await {
+        Ok(v) => v,
+        Err(AppError::DebateConflict(code)) if code == JUDGE_REPORT_READ_FORBIDDEN => {
+            JUDGE_REPORT_READ_METRICS.observe_failed();
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(crate::ErrorOutput::new(JUDGE_REPORT_READ_FORBIDDEN)),
+            )
+                .into_response());
+        }
+        Err(err) => {
+            JUDGE_REPORT_READ_METRICS.observe_failed();
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                latency_ms = started_at.elapsed().as_millis() as u64,
+                err = %err,
+                "judge challenge proxy failed"
+            );
+            return Err(err);
+        }
+    };
+    JUDGE_REPORT_READ_METRICS.observe_success(&ret.status);
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        status = ret.status,
+        status_reason = ret.status_reason,
+        case_id = ret.case_id,
+        dispatch_type = ret.dispatch_type,
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "judge challenge proxy queried"
+    );
+    Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
+}
+
+/// Request a participant challenge for latest AI judge case in a debate session.
+#[utoipa::path(
+    post,
+    path = "/api/debate/sessions/{id}/judge-report/challenge/request",
+    params(
+        ("id" = u64, Path, description = "Debate session id"),
+        ("rejudgeRunNo" = Option<u32>, Query, description = "Optional rejudge run number; defaults to latest run"),
+        ("dispatchType" = Option<String>, Query, description = "Judge case type: final or phase; defaults to final")
+    ),
+    request_body = crate::RequestJudgeChallengeInput,
+    responses(
+        (status = 200, description = "Judge challenge request result", body = crate::GetJudgeChallengeOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn request_judge_challenge_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Query(query): Query<crate::GetJudgeChallengeQuery>,
+    headers: HeaderMap,
+    Json(input): Json<crate::RequestJudgeChallengeInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    JUDGE_REPORT_READ_METRICS.observe_start();
+    let user_limiter_key = format!(
+        "{JUDGE_REPORT_READ_LIMITER_KEY_PREFIX}:user:{}:session:{}",
+        user.id, id
+    );
+    let user_decision = enforce_rate_limit(
+        &state,
+        JUDGE_REPORT_READ_LIMITER_SCOPE,
+        &user_limiter_key,
+        JUDGE_REPORT_READ_USER_RATE_LIMIT_PER_WINDOW,
+        JUDGE_REPORT_READ_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    if !user_decision.allowed {
+        JUDGE_REPORT_READ_METRICS.observe_rate_limited();
+        return Ok(rate_limit_exceeded_response(
+            JUDGE_REPORT_READ_LIMITER_SCOPE,
+            build_rate_limit_headers(&user_decision)?,
+        ));
+    }
+
+    let mut effective_decision = user_decision;
+    if let Some(ip_hash) = request_rate_limit_ip_key_from_headers(&headers) {
+        let ip_limiter_key =
+            format!("{JUDGE_REPORT_READ_LIMITER_KEY_PREFIX}:ip:{ip_hash}:session:{id}");
+        let ip_decision = enforce_rate_limit(
+            &state,
+            JUDGE_REPORT_READ_LIMITER_SCOPE,
+            &ip_limiter_key,
+            JUDGE_REPORT_READ_IP_RATE_LIMIT_PER_WINDOW,
+            JUDGE_REPORT_READ_RATE_LIMIT_WINDOW_SECS,
+        )
+        .await;
+        if !ip_decision.allowed {
+            JUDGE_REPORT_READ_METRICS.observe_rate_limited();
+            return Ok(rate_limit_exceeded_response(
+                JUDGE_REPORT_READ_LIMITER_SCOPE,
+                build_rate_limit_headers(&ip_decision)?,
+            ));
+        }
+        effective_decision = merge_rate_limit_decision(&effective_decision, &ip_decision);
+    }
+    let rate_headers = build_rate_limit_headers(&effective_decision)?;
+
+    let ret = match state.request_judge_challenge(id, &user, query, input).await {
+        Ok(v) => v,
+        Err(AppError::DebateConflict(code))
+            if code == JUDGE_REPORT_READ_FORBIDDEN || code == JUDGE_CHALLENGE_REQUEST_FORBIDDEN =>
+        {
+            JUDGE_REPORT_READ_METRICS.observe_failed();
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(crate::ErrorOutput::new(code.as_str())),
+            )
+                .into_response());
+        }
+        Err(err) => {
+            JUDGE_REPORT_READ_METRICS.observe_failed();
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                latency_ms = started_at.elapsed().as_millis() as u64,
+                err = %err,
+                "judge challenge request failed"
+            );
+            return Err(err);
+        }
+    };
+    JUDGE_REPORT_READ_METRICS.observe_success(&ret.status);
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        status = ret.status,
+        status_reason = ret.status_reason,
+        case_id = ret.case_id,
+        dispatch_type = ret.dispatch_type,
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "judge challenge requested"
     );
     Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
 }

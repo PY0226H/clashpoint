@@ -283,6 +283,10 @@ build_subject() {
   elif [[ "$module_key" == *"public-verification-client-read-model"* ||
           "$summary_lower" == *"public verification read model"* ]]; then
     echo "add judge public verification read model"
+  elif [[ "$module_key" == *"chat-challenge-proxy"* ||
+          "$summary_lower" == *"challenge proxy"* ||
+          "$summary_lower" == *"challenge request proxy"* ]]; then
+    echo "proxy judge challenges through chat"
   elif [[ "$module_key" == *"challenge-eligibility-contract"* ||
           "$summary_lower" == *"challenge eligibility"* ||
           "$summary_lower" == *"challenge status contract"* ]]; then
@@ -342,6 +346,7 @@ build_alt_one_subject() {
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
     "proxy judge public verification") echo "add chat public verify proxy" ;;
     "add judge public verification read model") echo "display judge verification readiness" ;;
+    "proxy judge challenges through chat") echo "add chat challenge proxy" ;;
     "add challenge eligibility status contract") echo "expose public challenge status" ;;
     "add citation verification evidence gate") echo "wire citation verifier into release evidence" ;;
     "export release readiness artifacts") echo "attach release readiness manifest" ;;
@@ -372,6 +377,7 @@ build_alt_two_subject() {
     "export audit anchor manifest") echo "prepare audit anchor export" ;;
     "proxy judge public verification") echo "protect public verification contract" ;;
     "add judge public verification read model") echo "sync judge verification client state" ;;
+    "proxy judge challenges through chat") echo "protect challenge request contract" ;;
     "add challenge eligibility status contract") echo "protect challenge status redaction" ;;
     "add citation verification evidence gate") echo "summarize citation gate readiness" ;;
     "export release readiness artifacts") echo "sync release readiness evidence" ;;

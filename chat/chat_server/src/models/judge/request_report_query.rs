@@ -62,6 +62,20 @@ const JUDGE_PUBLIC_VERIFY_REASON_NOT_READY: &str = "public_verify_not_ready";
 const JUDGE_PUBLIC_VERIFY_REASON_CASE_ABSENT: &str = "public_verify_case_absent";
 const JUDGE_PUBLIC_VERIFY_REASON_PROXY_FAILED: &str = "public_verify_proxy_failed";
 const JUDGE_PUBLIC_VERIFY_REASON_CONTRACT_VIOLATION: &str = "public_verify_contract_violation";
+const JUDGE_CHALLENGE_STATUS_ABSENT: &str = "absent";
+const JUDGE_CHALLENGE_STATUS_PROXY_ERROR: &str = "proxy_error";
+const JUDGE_CHALLENGE_STATUS_BLOCKED: &str = "blocked";
+const JUDGE_CHALLENGE_REASON_ELIGIBLE: &str = "challenge_eligible";
+const JUDGE_CHALLENGE_REASON_NOT_ELIGIBLE: &str = "challenge_not_eligible";
+const JUDGE_CHALLENGE_REASON_CASE_ABSENT: &str = "challenge_case_absent";
+const JUDGE_CHALLENGE_REASON_PROXY_FAILED: &str = "challenge_proxy_failed";
+const JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION: &str = "challenge_contract_violation";
+const JUDGE_CHALLENGE_REQUEST_FORBIDDEN: &str = "judge_challenge_request_forbidden";
+const JUDGE_CHALLENGE_ACTION_REQUEST: &str = "challenge.request";
+const JUDGE_CHALLENGE_REQUEST_DEFAULT_REASON_CODE: &str = "manual_challenge";
+const JUDGE_CHALLENGE_REQUEST_REASON_CODE_MAX_LEN: usize = 64;
+const JUDGE_CHALLENGE_REQUEST_USER_REASON_MAX_LEN: usize = 500;
+const JUDGE_CHALLENGE_REQUEST_IDEMPOTENCY_KEY_MAX_LEN: usize = 160;
 
 fn normalize_ops_review_limit(limit: Option<u32>) -> i64 {
     let requested = limit.unwrap_or(DEFAULT_OPS_JUDGE_REVIEW_LIMIT);
@@ -415,6 +429,40 @@ fn validate_public_verify_payload(
     Ok(())
 }
 
+fn is_challenge_public_forbidden_key(key: &str) -> bool {
+    if is_public_verify_forbidden_key(key) {
+        return true;
+    }
+    let normalized: String = key
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .flat_map(char::to_lowercase)
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "objectkey"
+            | "objectpath"
+            | "objectstorelocator"
+            | "objectstorepath"
+            | "secretkey"
+            | "signedurl"
+            | "url"
+    )
+}
+
+fn challenge_public_value_contains_forbidden_key(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            is_challenge_public_forbidden_key(key)
+                || challenge_public_value_contains_forbidden_key(value)
+        }),
+        Value::Array(items) => items
+            .iter()
+            .any(challenge_public_value_contains_forbidden_key),
+        _ => false,
+    }
+}
+
 fn resolve_public_verify_status(payload: &Value) -> (String, String) {
     let readiness = payload
         .get("verificationReadiness")
@@ -440,6 +488,395 @@ fn resolve_public_verify_status(payload: &Value) -> (String, String) {
         JUDGE_PUBLIC_VERIFY_STATUS_NOT_READY.to_string(),
         reason.to_string(),
     )
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedJudgeChallengeRequest {
+    reason_code: String,
+    user_reason: Option<String>,
+    idempotency_key: Option<String>,
+}
+
+struct AiJudgeChallengeRequestProxyParams<'a> {
+    base_url: &'a str,
+    path: &'a str,
+    timeout_ms: u64,
+    internal_key: &'a str,
+    case_id: u64,
+    dispatch_type: &'a str,
+    requested_by: &'a str,
+    input: &'a NormalizedJudgeChallengeRequest,
+}
+
+fn normalize_challenge_dispatch_type(dispatch_type: Option<String>) -> Result<String, AppError> {
+    normalize_public_verify_dispatch_type(dispatch_type)
+}
+
+fn default_challenge_cache_profile(session_id: u64, dispatch_type: &str) -> Value {
+    json!({
+        "cacheable": false,
+        "ttlSeconds": 0,
+        "staleIfErrorSeconds": 0,
+        "cacheKey": format!(
+            "challenge:chat-proxy:session:{session_id}:dispatch:{dispatch_type}"
+        ),
+        "varyBy": ["authorization", "rejudgeRunNo", "dispatchType"]
+    })
+}
+
+fn default_challenge_eligibility(status: &str, reason_code: &str) -> Value {
+    let blockers = if reason_code.is_empty() {
+        json!([])
+    } else {
+        json!([reason_code])
+    };
+    json!({
+        "status": status,
+        "eligible": false,
+        "requestable": false,
+        "reasonCode": if reason_code.is_empty() { Value::Null } else { json!(reason_code) },
+        "blockers": blockers
+    })
+}
+
+fn default_challenge_section(state: &str) -> Value {
+    json!({
+        "state": state,
+        "activeChallengeId": Value::Null,
+        "latestChallengeId": Value::Null,
+        "latestDecision": Value::Null,
+        "latestReasonCode": Value::Null,
+        "totalChallenges": 0
+    })
+}
+
+fn default_challenge_review(state: &str) -> Value {
+    json!({
+        "state": state,
+        "required": false,
+        "workflowStatus": Value::Null
+    })
+}
+
+fn build_judge_challenge_absent_output(
+    session_id: u64,
+    dispatch_type: String,
+) -> GetJudgeChallengeOutput {
+    GetJudgeChallengeOutput {
+        session_id,
+        status: JUDGE_CHALLENGE_STATUS_ABSENT.to_string(),
+        status_reason: JUDGE_CHALLENGE_REASON_CASE_ABSENT.to_string(),
+        case_id: None,
+        dispatch_type: dispatch_type.clone(),
+        eligibility: default_challenge_eligibility(
+            "case_absent",
+            JUDGE_CHALLENGE_REASON_CASE_ABSENT,
+        ),
+        challenge: default_challenge_section("case_absent"),
+        review: default_challenge_review("not_available"),
+        allowed_actions: Vec::new(),
+        blockers: vec![JUDGE_CHALLENGE_REASON_CASE_ABSENT.to_string()],
+        cache_profile: default_challenge_cache_profile(session_id, &dispatch_type),
+        policy: json!({}),
+    }
+}
+
+fn build_judge_challenge_proxy_error_output(
+    session_id: u64,
+    case_id: u64,
+    dispatch_type: String,
+    reason_code: &str,
+) -> GetJudgeChallengeOutput {
+    GetJudgeChallengeOutput {
+        session_id,
+        status: JUDGE_CHALLENGE_STATUS_PROXY_ERROR.to_string(),
+        status_reason: reason_code.to_string(),
+        case_id: Some(case_id),
+        dispatch_type: dispatch_type.clone(),
+        eligibility: default_challenge_eligibility(JUDGE_CHALLENGE_STATUS_PROXY_ERROR, reason_code),
+        challenge: default_challenge_section(JUDGE_CHALLENGE_STATUS_PROXY_ERROR),
+        review: default_challenge_review("not_available"),
+        allowed_actions: Vec::new(),
+        blockers: vec![reason_code.to_string()],
+        cache_profile: default_challenge_cache_profile(session_id, &dispatch_type),
+        policy: json!({}),
+    }
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn resolve_challenge_status_reason(payload: &Value) -> (String, String) {
+    let eligibility_status = payload
+        .get("eligibility")
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(JUDGE_CHALLENGE_STATUS_BLOCKED)
+        .to_string();
+    if eligibility_status == "eligible" {
+        return (
+            eligibility_status,
+            JUDGE_CHALLENGE_REASON_ELIGIBLE.to_string(),
+        );
+    }
+
+    let reason = payload
+        .get("eligibility")
+        .and_then(|value| value.get("reasonCode"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .get("blockers")
+                .and_then(Value::as_array)?
+                .first()?
+                .as_str()
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(JUDGE_CHALLENGE_REASON_NOT_ELIGIBLE);
+    (eligibility_status, reason.to_string())
+}
+
+fn build_judge_challenge_output_from_payload(
+    session_id: u64,
+    case_id: u64,
+    dispatch_type: String,
+    payload: Value,
+) -> GetJudgeChallengeOutput {
+    let (status, status_reason) = resolve_challenge_status_reason(&payload);
+    GetJudgeChallengeOutput {
+        session_id,
+        status,
+        status_reason,
+        case_id: Some(case_id),
+        dispatch_type,
+        eligibility: payload
+            .get("eligibility")
+            .cloned()
+            .unwrap_or_else(|| default_challenge_eligibility("not_eligible", "")),
+        challenge: payload
+            .get("challenge")
+            .cloned()
+            .unwrap_or_else(|| default_challenge_section("not_challenged")),
+        review: payload
+            .get("review")
+            .cloned()
+            .unwrap_or_else(|| default_challenge_review("not_available")),
+        allowed_actions: string_array(payload.get("allowedActions")),
+        blockers: string_array(payload.get("blockers")),
+        cache_profile: payload
+            .get("cacheProfile")
+            .cloned()
+            .unwrap_or_else(|| default_challenge_cache_profile(session_id, "final")),
+        policy: payload.get("policy").cloned().unwrap_or_else(|| json!({})),
+    }
+}
+
+async fn fetch_ai_judge_challenge_status_payload(
+    base_url: &str,
+    path: &str,
+    timeout_ms: u64,
+    internal_key: &str,
+    case_id: u64,
+    dispatch_type: &str,
+) -> Result<Value, &'static str> {
+    let url = build_ai_judge_http_url(base_url, path, case_id);
+    let client = Client::builder()
+        .timeout(Duration::from_millis(timeout_ms.max(1)))
+        .build()
+        .map_err(|_| "challenge_proxy_http_client_failed")?;
+    let response = client
+        .get(url)
+        .header("x-ai-internal-key", internal_key)
+        .query(&[("dispatch_type", dispatch_type)])
+        .send()
+        .await
+        .map_err(|_| "challenge_proxy_request_failed")?;
+    if !response.status().is_success() {
+        return Err("challenge_proxy_bad_status");
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "challenge_proxy_bad_json")
+}
+
+async fn fetch_ai_judge_challenge_request_payload(
+    params: AiJudgeChallengeRequestProxyParams<'_>,
+) -> Result<Value, &'static str> {
+    let url = build_ai_judge_http_url(params.base_url, params.path, params.case_id);
+    let client = Client::builder()
+        .timeout(Duration::from_millis(params.timeout_ms.max(1)))
+        .build()
+        .map_err(|_| "challenge_request_http_client_failed")?;
+    let mut request = client
+        .post(url)
+        .header("x-ai-internal-key", params.internal_key)
+        .query(&[
+            ("dispatch_type", params.dispatch_type),
+            ("reason_code", params.input.reason_code.as_str()),
+            ("requested_by", params.requested_by),
+            ("auto_accept", "true"),
+        ]);
+    if let Some(reason) = params.input.user_reason.as_deref() {
+        request = request.query(&[("reason", reason)]);
+    }
+    if let Some(idempotency_key) = params.input.idempotency_key.as_deref() {
+        request = request.header("x-idempotency-key", idempotency_key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "challenge_request_failed")?;
+    if !response.status().is_success() {
+        return Err("challenge_request_bad_status");
+    }
+    let payload = response
+        .json::<Value>()
+        .await
+        .map_err(|_| "challenge_request_bad_json")?;
+    Ok(payload.get("publicStatus").cloned().unwrap_or(payload))
+}
+
+fn validate_challenge_public_status_payload(
+    payload: &Value,
+    expected_case_id: u64,
+    dispatch_type: &str,
+) -> Result<(), &'static str> {
+    let Some(object) = payload.as_object() else {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    };
+    if object.get("version").and_then(Value::as_str) != Some("trust-challenge-public-status-v1") {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    if object.get("caseId").and_then(Value::as_u64) != Some(expected_case_id) {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    if object.get("dispatchType").and_then(Value::as_str) != Some(dispatch_type) {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    for key in [
+        "eligibility",
+        "challenge",
+        "review",
+        "allowedActions",
+        "blockers",
+        "policy",
+        "visibilityContract",
+        "cacheProfile",
+    ] {
+        if !object.contains_key(key) {
+            return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+        }
+    }
+    let visibility = object
+        .get("visibilityContract")
+        .and_then(Value::as_object)
+        .ok_or(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION)?;
+    if visibility.get("chatProxyRequired").and_then(Value::as_bool) != Some(true) {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    if visibility
+        .get("directAiServiceAccessAllowed")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    if visibility
+        .get("internalRouteHintsAllowed")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    if challenge_public_value_contains_forbidden_key(payload) {
+        return Err(JUDGE_CHALLENGE_REASON_CONTRACT_VIOLATION);
+    }
+    Ok(())
+}
+
+fn normalize_judge_challenge_request_input(
+    input: RequestJudgeChallengeInput,
+) -> Result<NormalizedJudgeChallengeRequest, AppError> {
+    let reason_code = input
+        .reason_code
+        .unwrap_or_else(|| JUDGE_CHALLENGE_REQUEST_DEFAULT_REASON_CODE.to_string())
+        .trim()
+        .to_ascii_lowercase();
+    if reason_code.is_empty()
+        || reason_code.chars().count() > JUDGE_CHALLENGE_REQUEST_REASON_CODE_MAX_LEN
+        || !reason_code
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Err(AppError::DebateError(
+            "judge_challenge_reason_code_invalid".to_string(),
+        ));
+    }
+
+    let user_reason = input
+        .user_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if user_reason
+        .as_ref()
+        .map(|value| value.chars().count() > JUDGE_CHALLENGE_REQUEST_USER_REASON_MAX_LEN)
+        .unwrap_or(false)
+    {
+        return Err(AppError::DebateError(
+            "judge_challenge_user_reason_too_long".to_string(),
+        ));
+    }
+
+    let idempotency_key = input
+        .idempotency_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if idempotency_key
+        .as_ref()
+        .map(|value| value.chars().count() > JUDGE_CHALLENGE_REQUEST_IDEMPOTENCY_KEY_MAX_LEN)
+        .unwrap_or(false)
+    {
+        return Err(AppError::DebateError(
+            "judge_challenge_idempotency_key_too_long".to_string(),
+        ));
+    }
+
+    Ok(NormalizedJudgeChallengeRequest {
+        reason_code,
+        user_reason,
+        idempotency_key,
+    })
+}
+
+fn challenge_action_requestable(output: &GetJudgeChallengeOutput) -> bool {
+    output
+        .allowed_actions
+        .iter()
+        .any(|action| action == JUDGE_CHALLENGE_ACTION_REQUEST)
+        && output
+            .eligibility
+            .get("requestable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn is_replay_eligible_status(status: &str) -> bool {
@@ -2020,6 +2457,33 @@ impl AppState {
         ))
     }
 
+    async fn ensure_judge_challenge_request_access(
+        &self,
+        session_id: i64,
+        user: &User,
+    ) -> Result<(), AppError> {
+        let participant_exists: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM session_participants
+            WHERE session_id = $1
+              AND user_id = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .bind(user.id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if participant_exists.is_some() {
+            return Ok(());
+        }
+
+        Err(AppError::DebateConflict(
+            JUDGE_CHALLENGE_REQUEST_FORBIDDEN.to_string(),
+        ))
+    }
+
     pub async fn get_latest_judge_report(
         &self,
         session_id: u64,
@@ -2317,6 +2781,181 @@ impl AppState {
             cache_profile,
             public_verify: payload,
         })
+    }
+
+    pub async fn get_judge_challenge(
+        &self,
+        session_id: u64,
+        user: &User,
+        query: GetJudgeChallengeQuery,
+    ) -> Result<GetJudgeChallengeOutput, AppError> {
+        let dispatch_type = normalize_challenge_dispatch_type(query.dispatch_type)?;
+        let report = self
+            .get_latest_judge_report(session_id, user, query.rejudge_run_no)
+            .await?;
+        let case_id = if dispatch_type == "phase" {
+            report.latest_phase_job.map(|job| job.phase_job_id)
+        } else {
+            report.latest_final_job.map(|job| job.final_job_id)
+        };
+        let Some(case_id) = case_id else {
+            return Ok(build_judge_challenge_absent_output(
+                session_id,
+                dispatch_type,
+            ));
+        };
+
+        let payload = match fetch_ai_judge_challenge_status_payload(
+            &self.config.ai_judge.service_base_url,
+            &self.config.ai_judge.challenge_status_path,
+            self.config.ai_judge.challenge_timeout_ms,
+            &self.config.ai_judge.internal_key,
+            case_id,
+            &dispatch_type,
+        )
+        .await
+        {
+            Ok(payload) => payload,
+            Err(reason_code) => {
+                tracing::warn!(
+                    session_id,
+                    case_id,
+                    dispatch_type,
+                    reason_code,
+                    "AI judge challenge status proxy request failed"
+                );
+                return Ok(build_judge_challenge_proxy_error_output(
+                    session_id,
+                    case_id,
+                    dispatch_type,
+                    JUDGE_CHALLENGE_REASON_PROXY_FAILED,
+                ));
+            }
+        };
+
+        if let Err(reason_code) =
+            validate_challenge_public_status_payload(&payload, case_id, &dispatch_type)
+        {
+            // chat 侧二次校验 challenge 公开合同，避免内部路由、存储或 provider 细节穿透。
+            tracing::warn!(
+                session_id,
+                case_id,
+                dispatch_type,
+                reason_code,
+                "AI judge challenge public contract violation blocked"
+            );
+            return Ok(build_judge_challenge_proxy_error_output(
+                session_id,
+                case_id,
+                dispatch_type,
+                reason_code,
+            ));
+        }
+
+        Ok(build_judge_challenge_output_from_payload(
+            session_id,
+            case_id,
+            dispatch_type,
+            payload,
+        ))
+    }
+
+    pub async fn request_judge_challenge(
+        &self,
+        session_id: u64,
+        user: &User,
+        query: GetJudgeChallengeQuery,
+        input: RequestJudgeChallengeInput,
+    ) -> Result<GetJudgeChallengeOutput, AppError> {
+        let dispatch_type = normalize_challenge_dispatch_type(query.dispatch_type)?;
+        let normalized_input = normalize_judge_challenge_request_input(input)?;
+        let report = self
+            .get_latest_judge_report(session_id, user, query.rejudge_run_no)
+            .await?;
+        self.ensure_judge_challenge_request_access(session_id as i64, user)
+            .await?;
+        let case_id = if dispatch_type == "phase" {
+            report.latest_phase_job.map(|job| job.phase_job_id)
+        } else {
+            report.latest_final_job.map(|job| job.final_job_id)
+        };
+        let Some(case_id) = case_id else {
+            return Ok(build_judge_challenge_absent_output(
+                session_id,
+                dispatch_type,
+            ));
+        };
+
+        let current = self
+            .get_judge_challenge(
+                session_id,
+                user,
+                GetJudgeChallengeQuery {
+                    rejudge_run_no: query.rejudge_run_no,
+                    dispatch_type: Some(dispatch_type.clone()),
+                },
+            )
+            .await?;
+        if !challenge_action_requestable(&current) {
+            return Ok(current);
+        }
+
+        let requested_by = format!("chat_user:{}", user.id);
+        let payload =
+            match fetch_ai_judge_challenge_request_payload(AiJudgeChallengeRequestProxyParams {
+                base_url: &self.config.ai_judge.service_base_url,
+                path: &self.config.ai_judge.challenge_request_path,
+                timeout_ms: self.config.ai_judge.challenge_timeout_ms,
+                internal_key: &self.config.ai_judge.internal_key,
+                case_id,
+                dispatch_type: &dispatch_type,
+                requested_by: &requested_by,
+                input: &normalized_input,
+            })
+            .await
+            {
+                Ok(payload) => payload,
+                Err(reason_code) => {
+                    tracing::warn!(
+                        session_id,
+                        case_id,
+                        dispatch_type,
+                        reason_code,
+                        "AI judge challenge request proxy failed"
+                    );
+                    return Ok(build_judge_challenge_proxy_error_output(
+                        session_id,
+                        case_id,
+                        dispatch_type,
+                        JUDGE_CHALLENGE_REASON_PROXY_FAILED,
+                    ));
+                }
+            };
+
+        if let Err(reason_code) =
+            validate_challenge_public_status_payload(&payload, case_id, &dispatch_type)
+        {
+            tracing::warn!(
+                session_id,
+                case_id,
+                dispatch_type,
+                reason_code,
+                "AI judge challenge request public contract violation blocked"
+            );
+            return Ok(build_judge_challenge_proxy_error_output(
+                session_id,
+                case_id,
+                dispatch_type,
+                reason_code,
+            ));
+        }
+
+        Ok(build_judge_challenge_output_from_payload(
+            session_id,
+            case_id,
+            dispatch_type,
+            payload,
+        ))
     }
 
     pub async fn get_latest_judge_final_report(

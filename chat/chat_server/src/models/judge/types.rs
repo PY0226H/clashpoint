@@ -237,6 +237,45 @@ pub struct GetJudgePublicVerifyOutput {
     pub public_verify: Value,
 }
 
+#[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgeChallengeQuery {
+    pub rejudge_run_no: Option<u32>,
+    pub dispatch_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestJudgeChallengeInput {
+    pub idempotency_key: Option<String>,
+    pub reason_code: Option<String>,
+    pub user_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgeChallengeOutput {
+    pub session_id: u64,
+    pub status: String,
+    pub status_reason: String,
+    pub case_id: Option<u64>,
+    pub dispatch_type: String,
+    #[serde(default)]
+    pub eligibility: Value,
+    #[serde(default)]
+    pub challenge: Value,
+    #[serde(default)]
+    pub review: Value,
+    #[serde(default)]
+    pub allowed_actions: Vec<String>,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+    #[serde(default)]
+    pub cache_profile: Value,
+    #[serde(default)]
+    pub policy: Value,
+}
+
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetJudgeReportFinalOutput {

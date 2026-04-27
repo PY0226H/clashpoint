@@ -29,9 +29,9 @@ pub(crate) use super::debate_room::{
 };
 
 pub(crate) use super::debate_judge::{
-    get_draw_vote_status_handler, get_judge_public_verify_handler,
+    get_draw_vote_status_handler, get_judge_challenge_handler, get_judge_public_verify_handler,
     get_latest_judge_final_report_handler, get_latest_judge_report_handler,
-    request_judge_job_handler, submit_draw_vote_handler,
+    request_judge_challenge_handler, request_judge_job_handler, submit_draw_vote_handler,
 };
 pub(crate) use super::debate_ops::{
     apply_ops_observability_anomaly_action_handler, create_debate_session_ops_handler,

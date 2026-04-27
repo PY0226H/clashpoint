@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode as AxumStatusCode},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{Duration, Utc};
@@ -342,6 +342,208 @@ async fn spawn_mock_public_verify_server(
             },
         ),
     );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
+#[derive(Debug, Deserialize)]
+struct MockChallengeQuery {
+    dispatch_type: Option<String>,
+    reason_code: Option<String>,
+    reason: Option<String>,
+    requested_by: Option<String>,
+    auto_accept: Option<bool>,
+}
+
+fn mock_challenge_public_status_payload(
+    case_id: u64,
+    dispatch_type: String,
+    status: &str,
+    extra_payload: &serde_json::Value,
+) -> serde_json::Value {
+    let (eligible, blockers, challenge_state, review_required, workflow_status) = match status {
+        "eligible" => (
+            true,
+            json!([]),
+            "not_challenged",
+            false,
+            serde_json::Value::Null,
+        ),
+        "under_review" => (
+            false,
+            json!(["challenge_duplicate_open"]),
+            "under_internal_review",
+            true,
+            json!("review_required"),
+        ),
+        _ => (
+            false,
+            json!(["challenge_policy_disabled"]),
+            "not_challenged",
+            false,
+            serde_json::Value::Null,
+        ),
+    };
+    let allowed_actions = if eligible {
+        json!(["challenge.view", "challenge.request"])
+    } else {
+        json!(["challenge.view", "review.view"])
+    };
+    let mut payload = json!({
+        "version": "trust-challenge-public-status-v1",
+        "caseId": case_id,
+        "dispatchType": dispatch_type,
+        "traceId": format!("trace-final-{case_id}"),
+        "eligibility": {
+            "status": status,
+            "eligible": eligible,
+            "requestable": eligible,
+            "reasonCode": if blockers.as_array().is_some_and(|items| items.is_empty()) {
+                serde_json::Value::Null
+            } else {
+                blockers[0].clone()
+            },
+            "blockers": blockers
+        },
+        "challengeState": challenge_state,
+        "reviewState": if review_required { "pending_review" } else { "not_required" },
+        "allowedActions": allowed_actions,
+        "blockers": if eligible { json!([]) } else { json!(["challenge_duplicate_open"]) },
+        "policy": {
+            "version": "trust-challenge-policy-v1",
+            "policyStatus": "enabled",
+            "policyVersion": "v3-default",
+            "kernelHash": "mock-kernel-hash",
+            "challengeWindow": "open",
+            "maxOpenChallenges": 1
+        },
+        "challenge": {
+            "state": challenge_state,
+            "activeChallengeId": if status == "under_review" { json!("challenge-1") } else { serde_json::Value::Null },
+            "latestChallengeId": if status == "under_review" { json!("challenge-1") } else { serde_json::Value::Null },
+            "latestDecision": serde_json::Value::Null,
+            "latestReasonCode": if status == "under_review" { json!("manual_challenge") } else { serde_json::Value::Null },
+            "totalChallenges": if status == "under_review" { 1 } else { 0 }
+        },
+        "review": {
+            "state": if review_required { "pending_review" } else { "not_required" },
+            "required": review_required,
+            "workflowStatus": workflow_status
+        },
+        "visibilityContract": {
+            "version": "trust-challenge-public-visibility-v1",
+            "layer": "public",
+            "payloadLayer": "challenge_status_only",
+            "allowedSections": ["eligibility", "challenge_status", "review_status", "policy_summary", "cache_profile"],
+            "forbiddenFieldFamilies": ["raw_prompt", "raw_trace", "private_audit", "object_storage_locator", "internal_route", "provider_runtime"],
+            "chatProxyRequired": true,
+            "directAiServiceAccessAllowed": false,
+            "internalRouteHintsAllowed": false
+        },
+        "cacheProfile": {
+            "cacheable": false,
+            "ttlSeconds": 0,
+            "staleIfErrorSeconds": 0,
+            "cacheKey": format!("case:{case_id}:dispatch:final:trace:trace-final-{case_id}:status:trust-challenge-public-status-v1"),
+            "varyBy": ["caseId", "dispatchType", "traceId", "statusVersion"]
+        }
+    });
+    if let Some(object) = extra_payload.as_object() {
+        let payload_object = payload
+            .as_object_mut()
+            .expect("mock challenge payload should be object");
+        for (key, value) in object {
+            payload_object.insert(key.clone(), value.clone());
+        }
+    }
+    payload
+}
+
+async fn spawn_mock_challenge_server(
+    expected_internal_key: String,
+    extra_status_payload: serde_json::Value,
+) -> Result<String> {
+    let get_key = expected_internal_key.clone();
+    let get_extra = extra_status_payload.clone();
+    let post_key = expected_internal_key;
+    let app = Router::new()
+        .route(
+            "/internal/judge/cases/:case_id/trust/challenges/public-status",
+            get(
+                move |Path(case_id): Path<u64>,
+                      Query(query): Query<MockChallengeQuery>,
+                      headers: HeaderMap| {
+                    let expected_internal_key = get_key.clone();
+                    let extra_payload = get_extra.clone();
+                    async move {
+                        if headers
+                            .get("x-ai-internal-key")
+                            .and_then(|value| value.to_str().ok())
+                            != Some(expected_internal_key.as_str())
+                        {
+                            return (AxumStatusCode::UNAUTHORIZED, Json(json!({ "ok": false })));
+                        }
+                        let dispatch_type =
+                            query.dispatch_type.unwrap_or_else(|| "final".to_string());
+                        let payload = mock_challenge_public_status_payload(
+                            case_id,
+                            dispatch_type,
+                            "eligible",
+                            &extra_payload,
+                        );
+                        (AxumStatusCode::OK, Json(payload))
+                    }
+                },
+            ),
+        )
+        .route(
+            "/internal/judge/cases/:case_id/trust/challenges/request",
+            post(
+                move |Path(case_id): Path<u64>,
+                      Query(query): Query<MockChallengeQuery>,
+                      headers: HeaderMap| {
+                    let expected_internal_key = post_key.clone();
+                    async move {
+                        if headers
+                            .get("x-ai-internal-key")
+                            .and_then(|value| value.to_str().ok())
+                            != Some(expected_internal_key.as_str())
+                        {
+                            return (AxumStatusCode::UNAUTHORIZED, Json(json!({ "ok": false })));
+                        }
+                        if query.reason_code.as_deref() != Some("manual_challenge")
+                            || query.requested_by.as_deref().unwrap_or_default().is_empty()
+                            || query.auto_accept != Some(true)
+                        {
+                            return (
+                                AxumStatusCode::UNPROCESSABLE_ENTITY,
+                                Json(json!({ "ok": false })),
+                            );
+                        }
+                        let _reason = query.reason.as_deref().unwrap_or_default();
+                        let dispatch_type =
+                            query.dispatch_type.unwrap_or_else(|| "final".to_string());
+                        let payload = json!({
+                            "ok": true,
+                            "caseId": case_id,
+                            "dispatchType": dispatch_type,
+                            "challengeId": "challenge-1",
+                            "publicStatus": mock_challenge_public_status_payload(
+                                case_id,
+                                dispatch_type,
+                                "under_review",
+                                &json!({})
+                            )
+                        });
+                        (AxumStatusCode::OK, Json(payload))
+                    }
+                },
+            ),
+        );
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     tokio::spawn(async move {
@@ -843,6 +1045,175 @@ async fn get_judge_public_verify_should_return_proxy_error_when_ai_contract_leak
         out.verification_readiness["blockers"],
         json!(["public_verify_contract_violation"])
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_challenge_should_proxy_final_case_and_preserve_public_status() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url =
+        spawn_mock_challenge_server("challenge-key".to_string(), json!({})).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "challenge-key".to_string();
+    inner.config.ai_judge.challenge_timeout_ms = 2_000;
+
+    let out = state
+        .get_judge_challenge(
+            session_id as u64,
+            &participant,
+            GetJudgeChallengeQuery {
+                rejudge_run_no: None,
+                dispatch_type: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "eligible");
+    assert_eq!(out.status_reason, "challenge_eligible");
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert_eq!(out.dispatch_type, "final");
+    assert_eq!(out.eligibility["requestable"], json!(true));
+    assert_eq!(
+        out.allowed_actions,
+        vec![
+            "challenge.view".to_string(),
+            "challenge.request".to_string()
+        ]
+    );
+    assert_eq!(out.challenge["state"], json!("not_challenged"));
+    assert_eq!(out.policy["policyStatus"], json!("enabled"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_challenge_should_return_proxy_error_when_ai_contract_leaks_private_key(
+) -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url = spawn_mock_challenge_server(
+        "challenge-key".to_string(),
+        json!({ "provider": { "name": "must-not-leak" } }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "challenge-key".to_string();
+    inner.config.ai_judge.challenge_timeout_ms = 2_000;
+
+    let out = state
+        .get_judge_challenge(
+            session_id as u64,
+            &participant,
+            GetJudgeChallengeQuery {
+                rejudge_run_no: None,
+                dispatch_type: Some("final".to_string()),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "proxy_error");
+    assert_eq!(out.status_reason, "challenge_contract_violation");
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert!(out.allowed_actions.is_empty());
+    assert_eq!(
+        out.blockers,
+        vec!["challenge_contract_violation".to_string()]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_judge_challenge_should_submit_when_eligible() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url =
+        spawn_mock_challenge_server("challenge-key".to_string(), json!({})).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "challenge-key".to_string();
+    inner.config.ai_judge.challenge_timeout_ms = 2_000;
+
+    let out = state
+        .request_judge_challenge(
+            session_id as u64,
+            &participant,
+            GetJudgeChallengeQuery {
+                rejudge_run_no: None,
+                dispatch_type: None,
+            },
+            RequestJudgeChallengeInput {
+                idempotency_key: Some("challenge-idem-1".to_string()),
+                reason_code: Some("manual_challenge".to_string()),
+                user_reason: Some("please re-check the final verdict".to_string()),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert_eq!(out.status, "under_review");
+    assert_eq!(out.status_reason, "challenge_duplicate_open");
+    assert_eq!(out.challenge["activeChallengeId"], json!("challenge-1"));
+    assert_eq!(out.review["required"], json!(true));
+    assert!(!out
+        .allowed_actions
+        .contains(&"challenge.request".to_string()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_judge_challenge_should_forbid_ops_viewer_non_participant() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    state.grant_platform_admin(1).await?;
+    let owner = find_user(&state, 1).await?;
+    let ops_viewer = find_user(&state, 2).await?;
+    state
+        .upsert_ops_role_assignment_by_owner(
+            &owner,
+            ops_viewer.id as u64,
+            UpsertOpsRoleInput {
+                role: "ops_viewer".to_string(),
+            },
+        )
+        .await?;
+    upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url =
+        spawn_mock_challenge_server("challenge-key".to_string(), json!({})).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "challenge-key".to_string();
+    inner.config.ai_judge.challenge_timeout_ms = 2_000;
+
+    let err = state
+        .request_judge_challenge(
+            session_id as u64,
+            &ops_viewer,
+            GetJudgeChallengeQuery {
+                rejudge_run_no: None,
+                dispatch_type: None,
+            },
+            RequestJudgeChallengeInput::default(),
+        )
+        .await
+        .expect_err("ops viewer should not request participant challenge");
+
+    match err {
+        AppError::DebateConflict(code) => {
+            assert_eq!(code, "judge_challenge_request_forbidden");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
     Ok(())
 }
 

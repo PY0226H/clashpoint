@@ -152,6 +152,19 @@ expect_contains "p40 challenge eligibility has concrete alternative" "feat(ai-ju
 expect_not_contains "p40 challenge eligibility avoids generic capability subject" "add ai-judge capability" "$P40_CHALLENGE_OUT"
 expect_not_contains "p40 challenge eligibility avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CHALLENGE_OUT"
 
+P40_CHAT_CHALLENGE_OUT="$TMP_DIR/p40-chat-challenge.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-chat-challenge-proxy-pack \
+  --summary "Add chat challenge proxy for participant-visible AI Judge challenge status and request flow" >"$P40_CHAT_CHALLENGE_OUT"
+
+expect_contains "p40 chat challenge proxy uses feature title" "feat(ai-judge): proxy judge challenges through chat" "$P40_CHAT_CHALLENGE_OUT"
+expect_contains "p40 chat challenge proxy has concrete alternative" "feat(ai-judge): add chat challenge proxy" "$P40_CHAT_CHALLENGE_OUT"
+expect_contains "p40 chat challenge proxy has contract alternative" "chore(ai-judge): protect challenge request contract" "$P40_CHAT_CHALLENGE_OUT"
+expect_not_contains "p40 chat challenge proxy avoids generic capability subject" "add ai-judge capability" "$P40_CHAT_CHALLENGE_OUT"
+expect_not_contains "p40 chat challenge proxy avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CHAT_CHALLENGE_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \
