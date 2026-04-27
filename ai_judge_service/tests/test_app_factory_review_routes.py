@@ -11,6 +11,7 @@ from app.applications import (
 
 from tests.app_factory_test_helpers import (
     AppFactoryRouteTestMixin,
+    build_env_blocked_citation_verification,
 )
 from tests.app_factory_test_helpers import (
     build_final_request as _build_final_request,
@@ -94,6 +95,7 @@ class AppFactoryReviewRouteTests(
                 "messageRefs": [],
                 "sourceCitations": [],
                 "conflictSources": [],
+                "citationVerification": build_env_blocked_citation_verification(),
                 "stats": {
                     "totalEntries": 0,
                     "messageRefCount": 0,
@@ -326,6 +328,7 @@ class AppFactoryReviewRouteTests(
                     "messageRefs": [],
                     "sourceCitations": [],
                     "conflictSources": [],
+                    "citationVerification": build_env_blocked_citation_verification(),
                     "stats": {
                         "totalEntries": 0,
                         "messageRefCount": 0,

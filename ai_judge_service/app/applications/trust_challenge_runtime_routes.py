@@ -5,6 +5,11 @@ from typing import Any
 
 from app.domain.trust import TrustChallengeEvent
 
+from .trust_challenge_public_contract import (
+    build_trust_challenge_public_status,
+    validate_trust_challenge_public_contract,
+)
+
 
 class TrustChallengeRouteError(Exception):
     def __init__(self, *, status_code: int, detail: Any):
@@ -54,6 +59,44 @@ def _find_active_challenge(challenge_review: dict[str, Any] | None) -> dict[str,
     return None
 
 
+def _route_error_status_code(err: Exception) -> int | None:
+    status_code = getattr(err, "status_code", None)
+    try:
+        return int(status_code)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_validated_public_status(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    trace_id: str | None,
+    challenge_review: dict[str, Any] | None,
+    workflow_status: str | None,
+    kernel_version: dict[str, Any] | None = None,
+    case_absent: bool = False,
+) -> dict[str, Any]:
+    try:
+        return build_trust_challenge_public_status(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trace_id=trace_id,
+            challenge_review=challenge_review,
+            workflow_status=workflow_status,
+            kernel_version=kernel_version,
+            case_absent=case_absent,
+        )
+    except ValueError as err:
+        raise TrustChallengeRouteError(
+            status_code=500,
+            detail={
+                "code": "trust_challenge_public_status_contract_violation",
+                "message": str(err),
+            },
+        ) from err
+
+
 def _find_challenge(
     *,
     challenge_review: dict[str, Any] | None,
@@ -64,6 +107,64 @@ def _find_challenge(
         if str(item.get("challengeId") or "").strip() == normalized_challenge_id:
             return item
     return None
+
+
+async def build_trust_challenge_public_status_payload(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    resolve_report_context_for_case: Any,
+    workflow_get_job: Any,
+    build_trust_phasea_bundle: Any,
+) -> dict[str, Any]:
+    try:
+        context = await resolve_report_context_for_case(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            not_found_detail="trust_receipt_not_found",
+            missing_report_detail="trust_report_payload_missing",
+        )
+    except Exception as err:  # noqa: BLE001
+        if _route_error_status_code(err) == 404:
+            return _build_validated_public_status(
+                case_id=case_id,
+                dispatch_type=dispatch_type,
+                trace_id=None,
+                challenge_review=None,
+                workflow_status=None,
+                case_absent=True,
+            )
+        raise
+
+    workflow_job = await workflow_get_job(job_id=case_id)
+    if workflow_job is None:
+        return _build_validated_public_status(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=None,
+            challenge_review=None,
+            workflow_status=None,
+            case_absent=True,
+        )
+
+    bundle = await build_trust_phasea_bundle(
+        case_id=case_id,
+        dispatch_type=context["dispatchType"],
+    )
+    public_status = _build_validated_public_status(
+        case_id=case_id,
+        dispatch_type=context["dispatchType"],
+        trace_id=context["traceId"],
+        challenge_review=bundle.get("challengeReview"),
+        workflow_status=getattr(workflow_job, "status", None),
+        kernel_version=(
+            dict(bundle.get("kernelVersion"))
+            if isinstance(bundle.get("kernelVersion"), dict)
+            else None
+        ),
+    )
+    validate_trust_challenge_public_contract(public_status)
+    return public_status
 
 
 def _require_challenge_transition(
@@ -332,6 +433,18 @@ async def build_trust_challenge_request_payload(
         "alertId": alert.alert_id,
         "job": serialize_workflow_job(workflow_job) if workflow_job is not None else None,
         "item": bundle["challengeReview"],
+        "publicStatus": _build_validated_public_status(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            challenge_review=bundle.get("challengeReview"),
+            workflow_status=getattr(workflow_job, "status", None),
+            kernel_version=(
+                dict(bundle.get("kernelVersion"))
+                if isinstance(bundle.get("kernelVersion"), dict)
+                else None
+            ),
+        ),
     }
 
 
@@ -575,4 +688,16 @@ async def build_trust_challenge_decision_payload(
         "resolvedAlertIds": resolved_alert_ids,
         "job": serialize_workflow_job(updated_job) if updated_job is not None else None,
         "item": after_bundle["challengeReview"],
+        "publicStatus": _build_validated_public_status(
+            case_id=case_id,
+            dispatch_type=context["dispatchType"],
+            trace_id=context["traceId"],
+            challenge_review=after_bundle.get("challengeReview"),
+            workflow_status=getattr(updated_job, "status", None),
+            kernel_version=(
+                dict(after_bundle.get("kernelVersion"))
+                if isinstance(after_bundle.get("kernelVersion"), dict)
+                else None
+            ),
+        ),
     }

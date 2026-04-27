@@ -855,3 +855,8 @@
 | 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|---|---|---|
 | ai-judge-p37-real-env-pass-window-execute-on-env | `ai-judge-p37-local-reference-regression-pack` | 环境依赖 | P37 当前只有本地参考证据，真实样本、真实 provider/callback、生产对象存储与真实服务窗口尚不可用；本轮不得把 `local_reference_ready` 冒充为 real-env `pass`。 | `REAL_CALIBRATION_ENV_READY=true`、真实样本、真实服务窗口、生产对象存储与 P37 release readiness 输入同时具备后 | 重新运行 P37 runtime ops pack / fairness real sample benchmark / panel shadow / registry release gate / real-env closure 链路，输出真实环境 `pass` 工件，并按结果更新 completed/todo。 | `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence`（不带 `--allow-local-reference`）；必要时配套执行真实样本 benchmark、panel shadow 与 registry release gate 采样并归档到 `artifacts/harness` 与 `docs/loadtest/evidence`。 |
+
+### C42. AI Judge 平台化重构阶段收口（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| `ai-judge-p37-real-env-pass-window-execute-on-env`（仅真实环境齐备后执行） | ai-judge-stage-closure-execute | 环境依赖 | 当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口 | REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后 | 完成该模块并产出 real-env 证据工件，状态达到 pass | 执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence |

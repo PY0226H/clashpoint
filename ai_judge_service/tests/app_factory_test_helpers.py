@@ -172,6 +172,20 @@ def build_case_create_request(
     )
 
 
+def build_env_blocked_citation_verification() -> dict[str, Any]:
+    return {
+        "version": "evidence-citation-verification-v1",
+        "status": "env_blocked",
+        "citationCount": 0,
+        "messageRefCount": 0,
+        "sourceRefCount": 0,
+        "missingCitationCount": 0,
+        "weakCitationCount": 0,
+        "forbiddenSourceCount": 0,
+        "reasonCodes": ["citation_verifier_real_sample_env_blocked"],
+    }
+
+
 def unique_case_id(seed: int) -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1_000_000) + seed
 

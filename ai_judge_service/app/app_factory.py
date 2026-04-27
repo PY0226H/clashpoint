@@ -90,6 +90,7 @@ from .applications.bootstrap_review_alert_trust_payload_helpers import (
     build_trust_audit_anchor_payload_for_runtime,
     build_trust_challenge_decision_payload_for_runtime,
     build_trust_challenge_ops_queue_payload_for_runtime,
+    build_trust_challenge_public_status_payload_for_runtime,
     build_trust_challenge_request_payload_for_runtime,
     build_trust_phasea_bundle_for_runtime,
     build_trust_public_verify_payload_for_runtime,
@@ -2147,6 +2148,9 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             ),
             build_trust_challenge_ops_queue_payload=(
                 build_trust_challenge_ops_queue_payload
+            ),
+            build_trust_challenge_public_status_payload=(
+                build_trust_challenge_public_status_payload_for_runtime
             ),
             build_trust_challenge_request_payload=(
                 build_trust_challenge_request_payload

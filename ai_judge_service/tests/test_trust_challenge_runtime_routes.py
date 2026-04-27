@@ -8,6 +8,7 @@ from typing import Any
 from app.applications.trust_challenge_runtime_routes import (
     TrustChallengeRouteError,
     build_trust_challenge_decision_payload,
+    build_trust_challenge_public_status_payload,
     build_trust_challenge_request_payload,
 )
 
@@ -28,6 +29,75 @@ class _DummyWorkflowTransitionError(Exception):
 
 
 class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
+    def test_build_trust_challenge_public_status_payload_should_return_eligible_shape(
+        self,
+    ) -> None:
+        async def _resolve_report_context_for_case(**kwargs: Any) -> dict[str, Any]:
+            self.assertEqual(kwargs["case_id"], 3010)
+            return {"dispatchType": "final", "traceId": "trace-3010"}
+
+        async def _workflow_get_job(*, job_id: int) -> Any:
+            self.assertEqual(job_id, 3010)
+            return _DummyJob(status="callback_reported", scope_id=19)
+
+        async def _build_trust_phasea_bundle(**kwargs: Any) -> dict[str, Any]:
+            self.assertEqual(kwargs["dispatch_type"], "final")
+            return {
+                "challengeReview": {
+                    "challengeState": "not_challenged",
+                    "reviewState": "not_required",
+                    "reviewRequired": False,
+                    "totalChallenges": 0,
+                    "challenges": [],
+                },
+                "kernelVersion": {
+                    "kernelVector": {"policyVersion": "policy-v6"},
+                    "kernelHash": "kernel-hash",
+                },
+            }
+
+        payload = asyncio.run(
+            build_trust_challenge_public_status_payload(
+                case_id=3010,
+                dispatch_type="auto",
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                workflow_get_job=_workflow_get_job,
+                build_trust_phasea_bundle=_build_trust_phasea_bundle,
+            )
+        )
+
+        self.assertEqual(payload["eligibility"]["status"], "eligible")
+        self.assertIn("challenge.request", payload["allowedActions"])
+        self.assertEqual(payload["policy"]["policyVersion"], "policy-v6")
+        self.assertEqual(payload["review"]["workflowStatus"], "callback_reported")
+
+    def test_build_trust_challenge_public_status_payload_should_return_case_absent(
+        self,
+    ) -> None:
+        async def _resolve_report_context_for_case(**_kwargs: Any) -> dict[str, Any]:
+            raise TrustChallengeRouteError(
+                status_code=404,
+                detail="trust_receipt_not_found",
+            )
+
+        async def _unexpected(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            self.fail("case_absent should not read workflow or bundle")
+
+        payload = asyncio.run(
+            build_trust_challenge_public_status_payload(
+                case_id=3011,
+                dispatch_type="auto",
+                resolve_report_context_for_case=_resolve_report_context_for_case,
+                workflow_get_job=_unexpected,
+                build_trust_phasea_bundle=_unexpected,
+            )
+        )
+
+        self.assertEqual(payload["eligibility"]["status"], "case_absent")
+        self.assertEqual(payload["blockers"], ["challenge_case_absent"])
+        self.assertEqual(payload["allowedActions"], [])
+
     def test_build_trust_challenge_request_payload_should_return_route_shape(self) -> None:
         events: list[dict[str, Any]] = []
         registry_events: list[dict[str, Any]] = []
@@ -58,7 +128,22 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
             bundle_calls["count"] += 1
             if bundle_calls["count"] == 1:
                 return {"challengeReview": {"challenges": []}}
-            return {"challengeReview": {"state": "under_internal_review"}}
+            return {
+                "challengeReview": {
+                    "challengeState": "under_internal_review",
+                    "reviewState": "pending_review",
+                    "reviewRequired": True,
+                    "activeChallengeId": "ch-3001-01",
+                    "totalChallenges": 1,
+                    "challenges": [
+                        {
+                            "challengeId": "ch-3001-01",
+                            "currentState": "under_internal_review",
+                            "reasonCode": "manual_challenge",
+                        }
+                    ],
+                }
+            }
 
         def _new_challenge_id(*, case_id: int) -> str:
             self.assertEqual(case_id, 3001)
@@ -110,7 +195,9 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
         self.assertEqual(payload["alertId"], "alert-3001")
         self.assertEqual(payload["dispatchType"], "final")
         self.assertEqual(payload["traceId"], "trace-3001")
-        self.assertEqual(payload["item"]["state"], "under_internal_review")
+        self.assertEqual(payload["item"]["challengeState"], "under_internal_review")
+        self.assertEqual(payload["publicStatus"]["eligibility"]["status"], "under_review")
+        self.assertNotIn("challenge.request", payload["publicStatus"]["allowedActions"])
         self.assertEqual(len(review_mark_payloads), 1)
         self.assertNotIn("challengeState", review_mark_payloads[0])
         self.assertEqual(len(events), 3)
@@ -184,7 +271,21 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
             bundle_calls["count"] += 1
             if bundle_calls["count"] == 1:
                 return {"challengeReview": {"challenges": []}}
-            return {"challengeReview": {"challengeState": "challenge_requested"}}
+            return {
+                "challengeReview": {
+                    "challengeState": "challenge_requested",
+                    "reviewState": "pending_review",
+                    "reviewRequired": True,
+                    "activeChallengeId": "ch-3007-01",
+                    "totalChallenges": 1,
+                    "challenges": [
+                        {
+                            "challengeId": "ch-3007-01",
+                            "currentState": "challenge_requested",
+                        }
+                    ],
+                }
+            }
 
         async def _append_trust_challenge_event(**kwargs: Any) -> object:
             registry_events.append(kwargs["event"].to_payload())

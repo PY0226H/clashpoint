@@ -63,6 +63,9 @@ from .trust_challenge_runtime_routes import (
     build_trust_challenge_decision_payload as build_trust_challenge_decision_payload_v3,
 )
 from .trust_challenge_runtime_routes import (
+    build_trust_challenge_public_status_payload as build_trust_challenge_public_status_payload_v3,
+)
+from .trust_challenge_runtime_routes import (
     build_trust_challenge_request_payload as build_trust_challenge_request_payload_v3,
 )
 from .trust_ops_views import (
@@ -506,6 +509,31 @@ async def build_trust_challenge_request_payload_for_runtime(
             upsert_audit_alert=upsert_audit_alert,
             sync_audit_alert_to_facts=sync_audit_alert_to_facts,
             trust_challenge_state_requested=trust_challenge_state_requested,
+        )
+    )
+
+
+async def build_trust_challenge_public_status_payload_for_runtime(
+    *,
+    case_id: int,
+    dispatch_type: str,
+    trust_challenge_common_dependencies: dict[str, Any],
+    run_trust_challenge_guard: Callable[
+        [Awaitable[dict[str, Any]]],
+        Awaitable[dict[str, Any]],
+    ],
+) -> dict[str, Any]:
+    return await run_trust_challenge_guard(
+        build_trust_challenge_public_status_payload_v3(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            resolve_report_context_for_case=(
+                trust_challenge_common_dependencies["resolve_report_context_for_case"]
+            ),
+            workflow_get_job=trust_challenge_common_dependencies["workflow_get_job"],
+            build_trust_phasea_bundle=(
+                trust_challenge_common_dependencies["build_trust_phasea_bundle"]
+            ),
         )
     )
 

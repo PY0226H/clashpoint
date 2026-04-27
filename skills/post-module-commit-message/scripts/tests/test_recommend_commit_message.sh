@@ -81,6 +81,18 @@ expect_contains "local reference uses docs type" "docs(ai-judge): record p36 loc
 expect_not_contains "local reference avoids generic capability subject" "add ai-judge capability" "$LOCAL_REF_OUT"
 expect_not_contains "local reference avoids sync follow-up alternative" "sync ai-judge follow-up" "$LOCAL_REF_OUT"
 
+P39_LOCAL_REF_OUT="$TMP_DIR/p39-local-reference.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p39-local-reference-regression-pack \
+  --summary "Run P39 AI Judge local reference regression without claiming real environment pass" >"$P39_LOCAL_REF_OUT"
+
+expect_contains "p39 local reference uses p39 docs title" "docs(ai-judge): record p39 local reference evidence" "$P39_LOCAL_REF_OUT"
+expect_contains "p39 local reference uses p39 alternative" "docs(ai-judge): refresh p39 runtime ops evidence" "$P39_LOCAL_REF_OUT"
+expect_not_contains "p39 local reference avoids stale p36 subject" "record p36 local reference evidence" "$P39_LOCAL_REF_OUT"
+expect_not_contains "p39 local reference avoids sync follow-up alternative" "sync ai-judge follow-up" "$P39_LOCAL_REF_OUT"
+
 STAGE_OUT="$TMP_DIR/stage.out"
 bash "$SCRIPT" \
   --root "$ROOT" \
@@ -91,6 +103,54 @@ bash "$SCRIPT" \
 expect_contains "stage closure uses specific docs title" "docs(ai-judge): archive p36 stage closure" "$STAGE_OUT"
 expect_not_contains "stage closure avoids generic docs subject" "update ai-judge docs" "$STAGE_OUT"
 expect_not_contains "stage closure avoids sync follow-up alternative" "sync ai-judge follow-up" "$STAGE_OUT"
+
+P39_STAGE_OUT="$TMP_DIR/p39-stage.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind non-dev \
+  --module ai-judge-p39-stage-closure-execute \
+  --summary "Archive P39 AI Judge stage closure and reset active plan while preserving real environment follow-up" >"$P39_STAGE_OUT"
+
+expect_contains "p39 stage closure uses current phase title" "docs(ai-judge): archive p39 stage closure" "$P39_STAGE_OUT"
+expect_contains "p39 stage closure uses current phase alternative" "docs(ai-judge): record p39 closure state" "$P39_STAGE_OUT"
+expect_not_contains "p39 stage closure avoids stale p36 subject" "archive p36 stage closure" "$P39_STAGE_OUT"
+expect_not_contains "p39 stage closure avoids sync follow-up alternative" "sync ai-judge follow-up" "$P39_STAGE_OUT"
+
+P40_PLAN_OUT="$TMP_DIR/p40-plan.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-plan-bootstrap-current-state \
+  --summary "Generate P40 AI Judge development plan for bounded challenge product bridge and review sync" >"$P40_PLAN_OUT"
+
+expect_contains "p40 plan uses docs title" "docs(ai-judge): plan p40 challenge bridge" "$P40_PLAN_OUT"
+expect_contains "p40 plan includes review sync alternative" "docs(ai-judge): outline p40 review sync" "$P40_PLAN_OUT"
+expect_not_contains "p40 plan avoids generic capability subject" "add ai-judge capability" "$P40_PLAN_OUT"
+expect_not_contains "p40 plan avoids generic docs subject" "update ai-judge docs" "$P40_PLAN_OUT"
+
+P40_COMPLETION_OUT="$TMP_DIR/p40-completion.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-completion-map-refresh-p39-closure \
+  --summary "Refresh AI Judge enterprise agent completion map to P39 closure and P40 bounded challenge bridge start" >"$P40_COMPLETION_OUT"
+
+expect_contains "p40 completion map uses docs title" "docs(ai-judge): refresh p40 completion map" "$P40_COMPLETION_OUT"
+expect_contains "p40 completion map includes closure alternative" "docs(ai-judge): align p39 closure mapping" "$P40_COMPLETION_OUT"
+expect_not_contains "p40 completion map avoids generic capability subject" "add ai-judge capability" "$P40_COMPLETION_OUT"
+expect_not_contains "p40 completion map avoids generic docs subject" "update ai-judge docs" "$P40_COMPLETION_OUT"
+
+P40_CHALLENGE_OUT="$TMP_DIR/p40-challenge.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-challenge-eligibility-contract-pack \
+  --summary "Add public-safe AI Judge challenge eligibility and status contract with internal status route" >"$P40_CHALLENGE_OUT"
+
+expect_contains "p40 challenge eligibility uses feature title" "feat(ai-judge): add challenge eligibility status contract" "$P40_CHALLENGE_OUT"
+expect_contains "p40 challenge eligibility has concrete alternative" "feat(ai-judge): expose public challenge status" "$P40_CHALLENGE_OUT"
+expect_not_contains "p40 challenge eligibility avoids generic capability subject" "add ai-judge capability" "$P40_CHALLENGE_OUT"
+expect_not_contains "p40 challenge eligibility avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CHALLENGE_OUT"
 
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \

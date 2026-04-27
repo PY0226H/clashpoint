@@ -8,6 +8,7 @@ from .route_group_ops_read_model_pack import OpsReadModelPackRouteDependencies
 from .route_group_trust import TrustRouteDependencies
 from .trust_attestation import verify_report_attestation
 from .trust_audit_anchor_contract import validate_trust_audit_anchor_contract
+from .trust_challenge_public_contract import validate_trust_challenge_public_contract
 from .trust_challenge_review_contract import validate_trust_challenge_review_contract
 from .trust_commitment_contract import validate_trust_commitment_contract
 from .trust_kernel_version_contract import validate_trust_kernel_version_contract
@@ -114,6 +115,10 @@ def build_trust_route_dependencies_for_runtime(
     require_internal_key_fn: Callable[[Any, str | None], None],
     build_validated_trust_item_payload: Callable[..., Awaitable[dict[str, Any]]],
     build_trust_challenge_ops_queue_payload: Callable[..., Awaitable[dict[str, Any]]],
+    build_trust_challenge_public_status_payload: Callable[
+        ...,
+        Awaitable[dict[str, Any]],
+    ],
     build_trust_challenge_request_payload: Callable[..., Awaitable[dict[str, Any]]],
     build_trust_challenge_decision_payload: Callable[..., Awaitable[dict[str, Any]]],
     build_trust_audit_anchor_payload: Callable[..., Awaitable[dict[str, Any]]],
@@ -142,6 +147,9 @@ def build_trust_route_dependencies_for_runtime(
         require_internal_key_fn=require_internal_key_fn,
         build_validated_trust_item_payload=build_validated_trust_item_payload,
         build_trust_challenge_ops_queue_payload=build_trust_challenge_ops_queue_payload,
+        build_trust_challenge_public_status_payload=(
+            build_trust_challenge_public_status_payload
+        ),
         build_trust_challenge_request_payload=build_trust_challenge_request_payload,
         build_trust_challenge_decision_payload=build_trust_challenge_decision_payload,
         build_trust_audit_anchor_payload=build_trust_audit_anchor_payload,
@@ -170,6 +178,9 @@ def build_trust_route_dependencies_for_runtime(
         ),
         validate_trust_challenge_review_contract=(
             validate_trust_challenge_review_contract
+        ),
+        validate_trust_challenge_public_contract=(
+            validate_trust_challenge_public_contract
         ),
         validate_trust_kernel_version_contract=validate_trust_kernel_version_contract,
         validate_trust_audit_anchor_contract=validate_trust_audit_anchor_contract,

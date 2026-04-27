@@ -33,6 +33,7 @@ class RouteGroupTrustTests(unittest.TestCase):
             require_internal_key_fn=lambda _settings, _header: None,
             build_validated_trust_item_payload=_payload,
             build_trust_challenge_ops_queue_payload=_payload,
+            build_trust_challenge_public_status_payload=_payload,
             build_trust_challenge_request_payload=_payload,
             build_trust_challenge_decision_payload=_payload,
             build_trust_audit_anchor_payload=_payload,
@@ -58,6 +59,7 @@ class RouteGroupTrustTests(unittest.TestCase):
             validate_trust_commitment_contract=lambda _payload: None,
             validate_trust_verdict_attestation_contract=lambda _payload: None,
             validate_trust_challenge_review_contract=lambda _payload: None,
+            validate_trust_challenge_public_contract=lambda _payload: None,
             validate_trust_kernel_version_contract=lambda _payload: None,
             validate_trust_audit_anchor_contract=lambda _payload: None,
             validate_trust_public_verify_contract=lambda _payload: None,
@@ -72,6 +74,10 @@ class RouteGroupTrustTests(unittest.TestCase):
             paths,
         )
         self.assertIn("/internal/judge/cases/{case_id}/trust/challenges", paths)
+        self.assertIn(
+            "/internal/judge/cases/{case_id}/trust/challenges/public-status",
+            paths,
+        )
         self.assertIn("/internal/judge/trust/challenges/ops-queue", paths)
         self.assertIn(
             "/internal/judge/cases/{case_id}/trust/challenges/request",
@@ -88,6 +94,10 @@ class RouteGroupTrustTests(unittest.TestCase):
         self.assertEqual(
             handles.list_judge_trust_challenge_ops_queue.__name__,
             "list_judge_trust_challenge_ops_queue",
+        )
+        self.assertEqual(
+            handles.get_judge_trust_challenge_public_status.__name__,
+            "get_judge_trust_challenge_public_status",
         )
         self.assertEqual(
             handles.get_judge_trust_public_verify.__name__,

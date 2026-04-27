@@ -4,6 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from app.app_factory import create_app, create_runtime
+from app.applications.trust_challenge_public_contract import (
+    find_trust_challenge_public_forbidden_keys,
+)
 
 from tests.app_factory_test_helpers import (
     AppFactoryRouteTestMixin,
@@ -65,6 +68,23 @@ class AppFactoryTrustChallengeRouteTests(
         assert before_job is not None
         self.assertEqual(before_job.status, "callback_reported")
 
+        eligible_status_resp = await self._get(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{case_id}/trust/challenges/public-status"
+                "?dispatch_type=auto"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(eligible_status_resp.status_code, 200)
+        eligible_status = eligible_status_resp.json()
+        self.assertEqual(eligible_status["eligibility"]["status"], "eligible")
+        self.assertIn("challenge.request", eligible_status["allowedActions"])
+        self.assertEqual(
+            find_trust_challenge_public_forbidden_keys(eligible_status),
+            set(),
+        )
+
         request_resp = await self._post(
             app=app,
             path=(
@@ -87,6 +107,15 @@ class AppFactoryTrustChallengeRouteTests(
             request_payload["item"]["latestRegistryEvent"]["state"],
             "under_internal_review",
         )
+        self.assertEqual(
+            request_payload["publicStatus"]["eligibility"]["status"],
+            "under_review",
+        )
+        self.assertNotIn(
+            "challenge.request",
+            request_payload["publicStatus"]["allowedActions"],
+        )
+        self.assertNotIn("timeline", request_payload["publicStatus"]["challenge"])
 
         duplicate_request_resp = await self._post(
             app=app,
@@ -103,6 +132,23 @@ class AppFactoryTrustChallengeRouteTests(
         self.assertIsNotNone(review_job)
         assert review_job is not None
         self.assertEqual(review_job.status, "review_required")
+
+        under_review_status_resp = await self._get(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{case_id}/trust/challenges/public-status"
+                "?dispatch_type=auto"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(under_review_status_resp.status_code, 200)
+        under_review_status = under_review_status_resp.json()
+        self.assertEqual(under_review_status["eligibility"]["status"], "under_review")
+        self.assertEqual(
+            under_review_status["blockers"],
+            ["challenge_duplicate_open"],
+        )
+        self.assertNotIn("challenge.request", under_review_status["allowedActions"])
 
         decision_resp = await self._post(
             app=app,
@@ -126,11 +172,29 @@ class AppFactoryTrustChallengeRouteTests(
         self.assertEqual(target["currentState"], "challenge_closed")
         self.assertEqual(target["decision"], "verdict_upheld")
         self.assertEqual(target["decisionBy"], "reviewer")
+        self.assertEqual(decision_payload["publicStatus"]["eligibility"]["status"], "closed")
+        self.assertEqual(
+            decision_payload["publicStatus"]["blockers"],
+            ["challenge_review_already_closed"],
+        )
 
         final_job = await runtime.workflow_runtime.orchestrator.get_job(job_id=case_id)
         self.assertIsNotNone(final_job)
         assert final_job is not None
         self.assertEqual(final_job.status, "callback_reported")
+
+        closed_status_resp = await self._get(
+            app=app,
+            path=(
+                f"/internal/judge/cases/{case_id}/trust/challenges/public-status"
+                "?dispatch_type=auto"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(closed_status_resp.status_code, 200)
+        closed_status = closed_status_resp.json()
+        self.assertEqual(closed_status["eligibility"]["status"], "closed")
+        self.assertNotIn("challenge.request", closed_status["allowedActions"])
 
     async def test_trust_challenge_ops_queue_route_should_support_state_and_priority_filters(
         self,

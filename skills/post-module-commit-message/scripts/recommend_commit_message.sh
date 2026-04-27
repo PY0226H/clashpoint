@@ -114,6 +114,20 @@ short_scope_from_files() {
   fi
 }
 
+phase_from_context() {
+  local module_key="$1"
+  local summary_lower="$2"
+  if [[ "$module_key" =~ p([0-9]+) ]]; then
+    printf 'p%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$summary_lower" =~ p([0-9]+) ]]; then
+    printf 'p%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  printf ''
+}
+
 infer_scope() {
   local files="$1"
   local scope
@@ -146,6 +160,13 @@ detect_type() {
     refactor) echo "refactor"; return 0 ;;
     non-dev) echo "docs"; return 0 ;;
   esac
+
+  if [[ "$module_key" == *"plan-bootstrap"* ||
+        "$module_key" == *"completion-map"* ||
+        "$summary_lower" == *"development plan"* ]]; then
+    echo "docs"
+    return 0
+  fi
 
   if [[ -n "$files" ]]; then
     if ! printf '%s\n' "$files" | grep -qvE '^(docs/|AGENTS\.md$|README\.md$|.*\.md$)'; then
@@ -198,7 +219,37 @@ build_subject() {
     echo "add local artifact store adapter"
   elif [[ "$module_key" == *"stage-closure"* ||
           "$summary_lower" == *"stage closure"* ]]; then
-    echo "archive p36 stage closure"
+    local phase
+    phase="$(phase_from_context "$module_key" "$summary_lower")"
+    if [[ -n "$phase" ]]; then
+      echo "archive ${phase} stage closure"
+    else
+      echo "archive stage closure"
+    fi
+  elif [[ "$module_key" == *"plan-bootstrap"* ||
+          "$summary_lower" == *"development plan"* ]]; then
+    local phase
+    phase="$(phase_from_context "$module_key" "$summary_lower")"
+    if [[ "$summary_lower" == *"challenge"* || "$summary_lower" == *"review sync"* ]]; then
+      if [[ -n "$phase" ]]; then
+        echo "plan ${phase} challenge bridge"
+      else
+        echo "plan challenge bridge"
+      fi
+    elif [[ -n "$phase" ]]; then
+      echo "plan ${phase} ai judge work"
+    else
+      echo "plan ai judge work"
+    fi
+  elif [[ "$module_key" == *"completion-map"* ||
+          "$summary_lower" == *"completion map"* ]]; then
+    local phase
+    phase="$(phase_from_context "$module_key" "$summary_lower")"
+    if [[ -n "$phase" ]]; then
+      echo "refresh ${phase} completion map"
+    else
+      echo "refresh ai judge completion map"
+    fi
   elif [[ "$module_key" == *"route-dependency-hotspot-split"* ||
           "$summary_lower" == *"route dependency"* ]]; then
     echo "split trust and ops route wiring"
@@ -209,7 +260,15 @@ build_subject() {
     echo "split registry trust route projections"
   elif [[ "$module_key" == *"local-reference-regression"* ||
           "$summary_lower" == *"local reference"* ]]; then
-    echo "record p36 local reference evidence"
+    if [[ "$module_key" == *"p39-local-reference-regression"* ||
+          "$summary_lower" == *"p39"* ]]; then
+      echo "record p39 local reference evidence"
+    elif [[ "$module_key" == *"p36-local-reference-regression"* ||
+            "$summary_lower" == *"p36"* ]]; then
+      echo "record p36 local reference evidence"
+    else
+      echo "record local reference evidence"
+    fi
   elif [[ "$module_key" == *"audit-anchor-export"* || "$summary_lower" == *"audit anchor"* ]]; then
     echo "export audit anchor manifest"
   elif [[ "$module_key" == *"ops-read-model-trust"* || "$summary_lower" == *"ops read model"* ]]; then
@@ -224,6 +283,10 @@ build_subject() {
   elif [[ "$module_key" == *"public-verification-client-read-model"* ||
           "$summary_lower" == *"public verification read model"* ]]; then
     echo "add judge public verification read model"
+  elif [[ "$module_key" == *"challenge-eligibility-contract"* ||
+          "$summary_lower" == *"challenge eligibility"* ||
+          "$summary_lower" == *"challenge status contract"* ]]; then
+    echo "add challenge eligibility status contract"
   elif [[ "$module_key" == *"citation-verifier"* ||
           "$summary_lower" == *"citation verifier"* ||
           "$summary_lower" == *"citation verification"* ]]; then
@@ -254,14 +317,32 @@ build_alt_one_subject() {
   local subject="$2"
   case "$subject" in
     "add local artifact store adapter") echo "add artifact refs and manifest" ;;
-    "archive p36 stage closure") echo "record p36 closure state" ;;
+    "plan p40 challenge bridge") echo "outline p40 review sync" ;;
+    "plan challenge bridge") echo "outline challenge review sync" ;;
+    "refresh p40 completion map") echo "align p39 closure mapping" ;;
+    "refresh ai judge completion map") echo "align closure mapping" ;;
+    plan\ p[0-9]*\ ai\ judge\ work)
+      local phase="${subject#plan }"
+      phase="${phase% ai judge work}"
+      echo "outline ${phase} ai judge modules"
+      ;;
+    "plan ai judge work") echo "outline ai judge modules" ;;
+    archive\ p[0-9]*\ stage\ closure)
+      local phase="${subject#archive }"
+      phase="${phase% stage closure}"
+      echo "record ${phase} closure state"
+      ;;
+    "archive stage closure") echo "record stage closure state" ;;
     "split trust and ops route wiring") echo "extract trust dependency builders" ;;
     "split registry trust route projections") echo "extract public verify projections" ;;
     "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
+    "record p39 local reference evidence") echo "refresh p39 runtime ops evidence" ;;
+    "record local reference evidence") echo "refresh runtime ops evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
     "proxy judge public verification") echo "add chat public verify proxy" ;;
     "add judge public verification read model") echo "display judge verification readiness" ;;
+    "add challenge eligibility status contract") echo "expose public challenge status" ;;
     "add citation verification evidence gate") echo "wire citation verifier into release evidence" ;;
     "export release readiness artifacts") echo "attach release readiness manifest" ;;
     *) echo "$subject" ;;
@@ -273,14 +354,25 @@ build_alt_two_subject() {
   local subject="$2"
   case "$subject" in
     "add local artifact store adapter") echo "wire local artifact evidence" ;;
-    "archive p36 stage closure") echo "reset active ai judge plan" ;;
+    "plan p40 challenge bridge") echo "prepare bounded challenge work"
+    ;;
+    "plan challenge bridge") echo "prepare bounded challenge work" ;;
+    "refresh p40 completion map") echo "prepare challenge bridge map" ;;
+    "refresh ai judge completion map") echo "prepare next ai judge map" ;;
+    plan\ p[0-9]*\ ai\ judge\ work) echo "prepare ai judge next steps" ;;
+    "plan ai judge work") echo "prepare ai judge next steps" ;;
+    archive\ p[0-9]*\ stage\ closure) echo "reset active ai judge plan" ;;
+    "archive stage closure") echo "reset active plan" ;;
     "split trust and ops route wiring") echo "thin app factory route assembly" ;;
     "split registry trust route projections") echo "thin registry and trust routes" ;;
     "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
+    "record p39 local reference evidence") echo "mark p39 local reference ready" ;;
+    "record local reference evidence") echo "mark local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;
     "export audit anchor manifest") echo "prepare audit anchor export" ;;
     "proxy judge public verification") echo "protect public verification contract" ;;
     "add judge public verification read model") echo "sync judge verification client state" ;;
+    "add challenge eligibility status contract") echo "protect challenge status redaction" ;;
     "add citation verification evidence gate") echo "summarize citation gate readiness" ;;
     "export release readiness artifacts") echo "sync release readiness evidence" ;;
     *) echo "sync ${scope} follow-up" ;;

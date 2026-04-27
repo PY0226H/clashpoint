@@ -1,0 +1,58 @@
+{
+  "module": "ai-judge-runtime-ops-pack",
+  "status": "local_reference_ready",
+  "run_id": "20260426T103347Z-ai-judge-runtime-ops-pack",
+  "started_at": "2026-04-26T10:33:47Z",
+  "finished_at": "2026-04-26T10:33:49Z",
+  "allow_local_reference": "true",
+  "evidence_dir": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence",
+  "stages": [
+    {
+      "stage": "fairness_benchmark_freeze",
+      "status": "local_reference_frozen",
+      "ingest_status": "skipped",
+      "threshold_decision": "accepted",
+      "exit_code": 0
+    },
+    {
+      "stage": "runtime_sla_freeze",
+      "status": "local_reference_frozen",
+      "threshold_decision": "accepted",
+      "exit_code": 0
+    },
+    {
+      "stage": "real_env_evidence_closure",
+      "status": "local_reference_ready",
+      "threshold_decision": "",
+      "exit_code": 0
+    },
+    {
+      "stage": "stage_closure_evidence",
+      "status": "pass",
+      "threshold_decision": "",
+      "exit_code": 0
+    }
+  ],
+  "closure_backfill": {
+    "active_plan_evidence_status": "pass",
+    "archive_detected": true,
+    "archive_source": "plan_doc",
+    "archive_status": "archived",
+    "archive_path": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260426T004547Z-ai-judge-stage-closure-execute.md",
+    "completed_section": "B42",
+    "completed_module_count": 10,
+    "todo_section": "C41",
+    "todo_env_blocked_debt_count": 1,
+    "linked_real_env_debt_id": "ai-judge-p37-real-env-pass-window-execute-on-env",
+    "long_term_evidence_status": "pass",
+    "local_reference_allowed": true
+  },
+  "release_readiness_artifact": {
+    "status": "present",
+    "summary_path": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_release_readiness_artifact_summary.json",
+    "artifact_ref": "release_readiness-3905-final-p39_release_readiness_artifact_e-8e1b33444b4df74b",
+    "manifest_hash": "419e68249e86d5ebcb7e99b14070c325129e28a92e973eccb28dc9b2cb5460ca",
+    "decision": "env_blocked",
+    "storage_mode": "local_reference"
+  }
+}

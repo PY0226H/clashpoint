@@ -107,6 +107,7 @@ class BootstrapTrustOpsDependenciesTests(unittest.TestCase):
             require_internal_key_fn=lambda _settings, _key: None,
             build_validated_trust_item_payload=_payload,
             build_trust_challenge_ops_queue_payload=_payload,
+            build_trust_challenge_public_status_payload=_payload,
             build_trust_challenge_request_payload=_payload,
             build_trust_challenge_decision_payload=_payload,
             build_trust_audit_anchor_payload=_payload,
@@ -131,6 +132,7 @@ class BootstrapTrustOpsDependenciesTests(unittest.TestCase):
         self.assertIsInstance(deps, TrustRouteDependencies)
         self.assertIs(deps.runtime, runtime)
         self.assertIs(deps.build_validated_trust_item_payload, _payload)
+        self.assertIs(deps.build_trust_challenge_public_status_payload, _payload)
         self.assertEqual(deps.trust_challenge_common_dependencies, {"ok": True})
         self.assertIs(deps.build_audit_anchor_export, bootstrap.build_audit_anchor_export)
         self.assertIs(
@@ -140,6 +142,10 @@ class BootstrapTrustOpsDependenciesTests(unittest.TestCase):
         self.assertIs(
             deps.validate_trust_public_verify_contract,
             bootstrap.validate_trust_public_verify_contract,
+        )
+        self.assertIs(
+            deps.validate_trust_challenge_public_contract,
+            bootstrap.validate_trust_challenge_public_contract,
         )
 
     def test_build_ops_read_model_pack_route_dependencies_should_forward_handles(self) -> None:

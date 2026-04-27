@@ -20,6 +20,7 @@ class TrustRouteHandles:
     get_judge_trust_case_commitment: AsyncPayloadFn
     get_judge_trust_verdict_attestation: AsyncPayloadFn
     get_judge_trust_challenge_review: AsyncPayloadFn
+    get_judge_trust_challenge_public_status: AsyncPayloadFn
     list_judge_trust_challenge_ops_queue: AsyncPayloadFn
     request_judge_trust_challenge: AsyncPayloadFn
     decide_judge_trust_challenge: AsyncPayloadFn
@@ -35,6 +36,7 @@ class TrustRouteDependencies:
     require_internal_key_fn: RequireInternalKeyFn
     build_validated_trust_item_payload: AsyncPayloadFn
     build_trust_challenge_ops_queue_payload: AsyncPayloadFn
+    build_trust_challenge_public_status_payload: AsyncPayloadFn
     build_trust_challenge_request_payload: AsyncPayloadFn
     build_trust_challenge_decision_payload: AsyncPayloadFn
     build_trust_audit_anchor_payload: AsyncPayloadFn
@@ -60,6 +62,7 @@ class TrustRouteDependencies:
     validate_trust_commitment_contract: ValidateContractFn
     validate_trust_verdict_attestation_contract: ValidateContractFn
     validate_trust_challenge_review_contract: ValidateContractFn
+    validate_trust_challenge_public_contract: ValidateContractFn
     validate_trust_kernel_version_contract: ValidateContractFn
     validate_trust_audit_anchor_contract: ValidateContractFn
     validate_trust_public_verify_contract: ValidateContractFn
@@ -119,6 +122,24 @@ def register_trust_routes(
             violation_code="trust_challenge_review_contract_violation",
             build_trust_phasea_bundle=deps.build_trust_phasea_bundle,
         )
+
+    @app.get("/internal/judge/cases/{case_id}/trust/challenges/public-status")
+    async def get_judge_trust_challenge_public_status(
+        case_id: int,
+        x_ai_internal_key: str | None = Header(default=None),
+        dispatch_type: str = Query(default="auto"),
+    ) -> dict[str, Any]:
+        deps.require_internal_key_fn(runtime.settings, x_ai_internal_key)
+        payload = await deps.build_trust_challenge_public_status_payload(
+            case_id=case_id,
+            dispatch_type=dispatch_type,
+            trust_challenge_common_dependencies=(
+                deps.trust_challenge_common_dependencies
+            ),
+            run_trust_challenge_guard=deps.run_trust_challenge_guard,
+        )
+        deps.validate_trust_challenge_public_contract(payload)
+        return payload
 
     @app.get("/internal/judge/trust/challenges/ops-queue")
     async def list_judge_trust_challenge_ops_queue(
@@ -287,6 +308,9 @@ def register_trust_routes(
         get_judge_trust_case_commitment=get_judge_trust_case_commitment,
         get_judge_trust_verdict_attestation=get_judge_trust_verdict_attestation,
         get_judge_trust_challenge_review=get_judge_trust_challenge_review,
+        get_judge_trust_challenge_public_status=(
+            get_judge_trust_challenge_public_status
+        ),
         list_judge_trust_challenge_ops_queue=list_judge_trust_challenge_ops_queue,
         request_judge_trust_challenge=request_judge_trust_challenge,
         decide_judge_trust_challenge=decide_judge_trust_challenge,

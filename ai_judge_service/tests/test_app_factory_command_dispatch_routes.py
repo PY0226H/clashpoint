@@ -7,6 +7,7 @@ from app.app_factory import create_app, create_runtime
 
 from tests.app_factory_test_helpers import (
     AppFactoryRouteTestMixin,
+    build_env_blocked_citation_verification,
 )
 from tests.app_factory_test_helpers import (
     build_case_create_request as _build_case_create_request,
@@ -653,6 +654,7 @@ class AppFactoryCommandDispatchRouteTests(
                 "messageRefs": [],
                 "sourceCitations": [],
                 "conflictSources": [],
+                "citationVerification": build_env_blocked_citation_verification(),
                 "stats": {
                     "totalEntries": 0,
                     "messageRefCount": 0,
