@@ -124,3 +124,19 @@ class FairnessShadowRun:
     reported_at: datetime
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class FairnessCalibrationDecision:
+    version: str
+    decision_id: str
+    source_recommendation_id: str
+    policy_version: str
+    decision: str
+    actor: dict[str, Any]
+    reason_code: str
+    evidence_refs: list[dict[str, Any]]
+    visibility: dict[str, Any]
+    release_gate_input: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime

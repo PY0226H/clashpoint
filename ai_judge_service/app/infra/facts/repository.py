@@ -16,6 +16,7 @@ from app.domain.facts import (
     ClaimLedgerRecord,
     DispatchReceipt,
     FairnessBenchmarkRun,
+    FairnessCalibrationDecision,
     FairnessShadowRun,
     ReplayRecord,
 )
@@ -34,6 +35,7 @@ from app.infra.db.models import (
     ClaimLedgerRecordModel,
     DispatchReceiptModel,
     FairnessBenchmarkRunModel,
+    FairnessCalibrationDecisionModel,
     FairnessShadowRunModel,
     JudgeLedgerSnapshotModel,
     ReplayRecordModel,
@@ -626,6 +628,97 @@ class JudgeFactRepository:
             rows = (await session.execute(stmt)).scalars().all()
             return [self._to_fairness_shadow_run(row) for row in rows]
 
+    async def append_fairness_calibration_decision(
+        self,
+        *,
+        version: str,
+        decision_id: str,
+        source_recommendation_id: str,
+        policy_version: str,
+        decision: str,
+        actor: dict[str, Any],
+        reason_code: str,
+        evidence_refs: list[dict[str, Any]],
+        visibility: dict[str, Any],
+        release_gate_input: dict[str, Any],
+        created_at: datetime | None = None,
+    ) -> FairnessCalibrationDecision:
+        now = _utcnow()
+        normalized_created_at = _normalize_dt(created_at) if created_at else now
+        normalized_decision_id = str(decision_id or "").strip()
+        if not normalized_decision_id:
+            raise ValueError("invalid_calibration_decision_id")
+        normalized_source_recommendation_id = str(
+            source_recommendation_id or ""
+        ).strip()
+        if not normalized_source_recommendation_id:
+            raise ValueError("invalid_calibration_source_recommendation_id")
+        normalized_policy_version = str(policy_version or "").strip()
+        if not normalized_policy_version:
+            raise ValueError("invalid_calibration_policy_version")
+
+        stmt: Select[tuple[FairnessCalibrationDecisionModel]] = select(
+            FairnessCalibrationDecisionModel
+        ).where(
+            FairnessCalibrationDecisionModel.decision_id == normalized_decision_id
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                existing = (await session.execute(stmt)).scalars().first()
+                if existing is not None:
+                    raise ValueError("duplicate_calibration_decision_id")
+                row = FairnessCalibrationDecisionModel(
+                    version=str(version or "").strip(),
+                    decision_id=normalized_decision_id,
+                    source_recommendation_id=normalized_source_recommendation_id,
+                    policy_version=normalized_policy_version,
+                    decision=_normalize_token(decision),
+                    actor=dict(actor or {}),
+                    reason_code=_normalize_token(reason_code),
+                    evidence_refs=list(evidence_refs or []),
+                    visibility=dict(visibility or {}),
+                    release_gate_input=dict(release_gate_input or {}),
+                    created_at=normalized_created_at,
+                    updated_at=now,
+                )
+                session.add(row)
+            await session.refresh(row)
+            return self._to_fairness_calibration_decision(row)
+
+    async def list_fairness_calibration_decisions(
+        self,
+        *,
+        policy_version: str | None = None,
+        source_recommendation_id: str | None = None,
+        decision: str | None = None,
+        limit: int = 50,
+    ) -> list[FairnessCalibrationDecision]:
+        stmt: Select[tuple[FairnessCalibrationDecisionModel]] = (
+            select(FairnessCalibrationDecisionModel)
+            .order_by(
+                FairnessCalibrationDecisionModel.created_at.desc(),
+                FairnessCalibrationDecisionModel.id.desc(),
+            )
+            .limit(max(1, min(500, int(limit))))
+        )
+        if policy_version is not None:
+            stmt = stmt.where(
+                FairnessCalibrationDecisionModel.policy_version
+                == str(policy_version or "").strip()
+            )
+        if source_recommendation_id is not None:
+            stmt = stmt.where(
+                FairnessCalibrationDecisionModel.source_recommendation_id
+                == str(source_recommendation_id or "").strip()
+            )
+        if decision is not None:
+            stmt = stmt.where(
+                FairnessCalibrationDecisionModel.decision == _normalize_token(decision)
+            )
+        async with self._session_factory() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._to_fairness_calibration_decision(row) for row in rows]
+
     async def upsert_audit_alert(
         self,
         *,
@@ -936,6 +1029,30 @@ class JudgeFactRepository:
             source=row.source,
             reported_by=row.reported_by,
             reported_at=_normalize_dt(row.reported_at),
+            created_at=_normalize_dt(row.created_at),
+            updated_at=_normalize_dt(row.updated_at),
+        )
+
+    def _to_fairness_calibration_decision(
+        self,
+        row: FairnessCalibrationDecisionModel,
+    ) -> FairnessCalibrationDecision:
+        evidence_refs = row.evidence_refs if isinstance(row.evidence_refs, list) else []
+        return FairnessCalibrationDecision(
+            version=row.version,
+            decision_id=row.decision_id,
+            source_recommendation_id=row.source_recommendation_id,
+            policy_version=row.policy_version,
+            decision=row.decision,
+            actor=row.actor if isinstance(row.actor, dict) else {},
+            reason_code=row.reason_code,
+            evidence_refs=[dict(item) for item in evidence_refs if isinstance(item, dict)],
+            visibility=row.visibility if isinstance(row.visibility, dict) else {},
+            release_gate_input=(
+                row.release_gate_input
+                if isinstance(row.release_gate_input, dict)
+                else {}
+            ),
             created_at=_normalize_dt(row.created_at),
             updated_at=_normalize_dt(row.updated_at),
         )

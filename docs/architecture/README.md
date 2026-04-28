@@ -115,6 +115,7 @@ Python AI Ops 优先看：
 5. [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py)
 6. [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
 7. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
+8. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
 
 ### 3.5 钱包 / IAP / 账本
 
@@ -253,8 +254,11 @@ Python AI Ops 优先看：
 2. 回放、治理与运维读路径：
    - [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py)
    - [route_group_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_registry.py)
+   - [route_group_fairness.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_fairness.py)
+   - [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
    - [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
    - [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
+   - [facts repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py)
 
 3. RAG 与模型：
    - [openai_judge_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/openai_judge_client.py)

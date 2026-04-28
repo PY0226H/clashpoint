@@ -43,6 +43,96 @@ class AppFactoryFairnessRouteTests(
     AppFactoryRouteTestMixin,
     unittest.IsolatedAsyncioTestCase,
 ):
+    async def test_fairness_calibration_decision_routes_should_persist_safe_log(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+        policy_version = f"decision-policy-{_unique_case_id(7599)}"
+
+        post_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/policy-calibration-decisions",
+            payload={
+                "decisionId": "decision-route-1",
+                "sourceRecommendationId": "run_shadow_evaluation",
+                "policyVersion": policy_version,
+                "decision": "accept_for_review",
+                "actor": {"id": "ops-user-1", "type": "ai_ops"},
+                "reasonCode": "calibration_local_reference_only",
+                "environmentMode": "local_reference",
+                "evidenceRefs": [{"kind": "shadow_run", "ref": "shadow-route-1"}],
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(post_resp.status_code, 200)
+        post_payload = post_resp.json()
+        self.assertFalse(
+            post_payload["entry"]["releaseGateInput"]["eligibleForProductionReady"]
+        )
+        self.assertFalse(post_payload["entry"]["visibility"]["autoActivateAllowed"])
+
+        list_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/policy-calibration-decisions"
+                f"?policy_version={policy_version}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        list_payload = list_resp.json()
+        self.assertEqual(list_payload["summary"]["totalCount"], 1)
+        self.assertEqual(
+            list_payload["releaseGateReference"]["blockingDecisionCount"],
+            1,
+        )
+        fact_rows = await runtime.workflow_runtime.facts.list_fairness_calibration_decisions(
+            policy_version=policy_version,
+            limit=10,
+        )
+        self.assertEqual(len(fact_rows), 1)
+        self.assertEqual(fact_rows[0].decision_id, "decision-route-1")
+
+        advisor_resp = await self._get(
+            app=app,
+            path=(
+                "/internal/judge/fairness/policy-calibration-advisor"
+                f"?policy_version={policy_version}"
+            ),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(advisor_resp.status_code, 200)
+        advisor_payload = advisor_resp.json()
+        self.assertEqual(advisor_payload["decisionLog"]["summary"]["totalCount"], 1)
+        self.assertEqual(advisor_payload["overview"]["decisionCount"], 1)
+
+    async def test_fairness_calibration_decision_routes_should_reject_local_prod_ready(
+        self,
+    ) -> None:
+        runtime = create_runtime(settings=_build_settings())
+        app = create_app(runtime)
+
+        post_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/fairness/policy-calibration-decisions",
+            payload={
+                "sourceRecommendationId": "run_shadow_evaluation",
+                "policyVersion": "v3-default",
+                "decision": "accept_for_review",
+                "actor": "ops-user-1",
+                "reasonCode": "calibration_local_reference_only",
+                "environmentMode": "local_reference",
+                "productionReady": True,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+
+        self.assertEqual(post_resp.status_code, 422)
+        self.assertEqual(
+            post_resp.json()["detail"],
+            "calibration_local_reference_cannot_be_production_ready",
+        )
 
     async def test_fairness_benchmark_routes_should_persist_and_list_runs(self) -> None:
         runtime = create_runtime(settings=_build_settings())
@@ -1176,9 +1266,11 @@ class AppFactoryFairnessRouteTests(
         self.assertIsInstance(payload["releaseGate"], dict)
         self.assertIsInstance(payload["recommendedActions"], list)
         self.assertIsInstance(payload["riskItems"], list)
+        self.assertIsInstance(payload["decisionLog"], dict)
         self.assertEqual(payload["overview"]["policyVersion"], "v3-default")
         self.assertEqual(payload["overview"]["latestBenchmarkRunId"], benchmark_run_id)
         self.assertEqual(payload["overview"]["latestShadowRunId"], shadow_run_id)
+        self.assertEqual(payload["decisionLog"]["summary"]["totalCount"], 0)
 
         release_gate = payload["releaseGate"]
         self.assertFalse(release_gate["passed"])

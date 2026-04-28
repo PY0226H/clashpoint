@@ -35,6 +35,16 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
                         "provider": "should_not_leak",
                     }
                 ],
+                "decisionLog": {
+                    "summary": {
+                        "totalCount": 2,
+                        "acceptedForReviewCount": 1,
+                        "productionReadyDecisionCount": 0,
+                    },
+                    "releaseGateReference": {
+                        "blockingDecisionCount": 2,
+                    },
+                },
             },
             "adaptiveSummary": {
                 "calibrationGatePassed": release_gate_passed,
@@ -147,6 +157,15 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
         self.assertEqual(payload["statusReason"], "real_env_evidence_env_blocked")
         self.assertFalse(payload["releaseGate"]["passed"])
         self.assertEqual(payload["summary"]["calibrationHighRiskCount"], 2)
+        self.assertEqual(payload["fairnessCalibration"]["decisionCount"], 2)
+        self.assertEqual(
+            payload["fairnessCalibration"]["acceptedForReviewDecisionCount"],
+            1,
+        )
+        self.assertEqual(
+            payload["fairnessCalibration"]["decisionLogBlocksProductionReadyCount"],
+            2,
+        )
         self.assertEqual(payload["panelRuntime"]["attentionGroupCount"], 1)
         self.assertEqual(payload["trustAndChallenge"]["openChallengeCount"], 1)
         self.assertTrue(payload["realEnv"]["evidenceAvailable"])
@@ -177,4 +196,3 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "runtime_readiness_forbidden_key"):
             validate_runtime_readiness_public_contract(payload)
-

@@ -9,6 +9,7 @@ from .models import (
     ClaimLedgerRecord,
     DispatchReceipt,
     FairnessBenchmarkRun,
+    FairnessCalibrationDecision,
     FairnessShadowRun,
     ReplayRecord,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "ClaimLedgerRecord",
     "DispatchReceipt",
     "FairnessBenchmarkRun",
+    "FairnessCalibrationDecision",
     "FairnessShadowRun",
     "ReplayRecord",
     "JudgeFactPort",

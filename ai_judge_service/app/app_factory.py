@@ -162,6 +162,9 @@ from .applications.case_read_routes import (
 from .applications.courtroom_read_model_contract import (
     validate_courtroom_read_model_contract as validate_courtroom_read_model_contract_v3,
 )
+from .applications.fairness_calibration_decision_log import (
+    WorkflowFactsFairnessCalibrationDecisionLogStore,
+)
 from .applications.fairness_case_contract import (
     validate_case_fairness_detail_contract as validate_case_fairness_detail_contract_v3,
 )
@@ -1568,6 +1571,12 @@ def create_app(runtime: AppRuntime) -> FastAPI:
         runtime=runtime,
         ensure_workflow_schema_ready=_ensure_workflow_schema_ready,
     )
+    _fairness_calibration_decision_log_store = (
+        WorkflowFactsFairnessCalibrationDecisionLogStore(
+            facts=runtime.workflow_runtime.facts,
+            ensure_schema_ready=_ensure_workflow_schema_ready,
+        )
+    )
 
     _sync_audit_alert_to_facts = partial(
         sync_audit_alert_to_facts_for_runtime,
@@ -2223,6 +2232,7 @@ def create_app(runtime: AppRuntime) -> FastAPI:
             validate_fairness_dashboard_contract=(
                 lambda payload: validate_fairness_dashboard_contract_v3(payload)
             ),
+            calibration_decision_log_store=_fairness_calibration_decision_log_store,
         ),
     )
 

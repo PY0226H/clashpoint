@@ -315,6 +315,10 @@ export type OpsJudgeRuntimeReadinessFairnessCalibration = {
   shadowThresholdViolationCount?: number;
   driftBreachCount?: number;
   realSampleManifestStatus?: string | null;
+  decisionCount?: number;
+  acceptedForReviewDecisionCount?: number;
+  productionReadyDecisionCount?: number;
+  decisionLogBlocksProductionReadyCount?: number;
 };
 
 export type OpsJudgeRuntimeReadinessPanelRuntime = {

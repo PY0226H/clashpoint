@@ -23,9 +23,15 @@ from .fairness_analysis import (
 from .fairness_analysis import (
     build_fairness_dashboard_top_risk_cases as build_fairness_dashboard_top_risk_cases_v3,
 )
+from .fairness_calibration_decision_log import (
+    InMemoryFairnessCalibrationDecisionLogStore,
+    build_fairness_calibration_decision_create_payload,
+    build_fairness_calibration_decision_list_payload,
+)
 from .fairness_case_scan import (
     collect_fairness_case_items as collect_fairness_case_items_v3,
 )
+from .fairness_runtime_routes import FairnessRouteError
 from .fairness_runtime_routes import (
     build_case_fairness_sort_key as build_case_fairness_sort_key_v3,
 )
@@ -97,6 +103,8 @@ class FairnessRouteHandles:
     get_judge_fairness_dashboard: AsyncPayloadFn
     get_judge_fairness_calibration_pack: AsyncPayloadFn
     get_judge_fairness_policy_calibration_advisor: AsyncPayloadFn
+    create_judge_fairness_policy_calibration_decision: AsyncPayloadFn
+    list_judge_fairness_policy_calibration_decisions: AsyncPayloadFn
 
 
 @dataclass(frozen=True)
@@ -129,6 +137,7 @@ class FairnessRouteDependencies:
     validate_case_fairness_detail_contract: ValidateContractFn
     validate_case_fairness_list_contract: ValidateContractFn
     validate_fairness_dashboard_contract: ValidateContractFn
+    calibration_decision_log_store: Any | None = None
 
 
 async def _build_fairness_calibration_pack_payload(
@@ -191,8 +200,9 @@ async def _build_fairness_policy_calibration_advisor_payload(
     shadow_limit: int,
     deps: FairnessRouteDependencies,
     list_judge_case_fairness: AsyncPayloadFn,
+    calibration_decision_log_store: Any,
 ) -> dict[str, Any]:
-    return await build_fairness_policy_calibration_advisor_payload_v3(
+    payload = await build_fairness_policy_calibration_advisor_payload_v3(
         x_ai_internal_key=x_ai_internal_key,
         dispatch_type=dispatch_type,
         status=status,
@@ -224,6 +234,49 @@ async def _build_fairness_policy_calibration_advisor_payload(
             build_fairness_policy_calibration_recommended_actions_v3
         ),
     )
+    effective_policy_version = (
+        (payload.get("filters") or {}).get("effectivePolicyVersion")
+        or (payload.get("overview") or {}).get("policyVersion")
+        or policy_version
+    )
+    decision_log = await build_fairness_calibration_decision_list_payload(
+        store=calibration_decision_log_store,
+        policy_version=effective_policy_version,
+        source_recommendation_id=None,
+        decision=None,
+        limit=50,
+    )
+    payload["decisionLog"] = decision_log
+    overview = payload.get("overview")
+    if isinstance(overview, dict):
+        summary = decision_log.get("summary") or {}
+        release_gate_reference = decision_log.get("releaseGateReference") or {}
+        overview["decisionCount"] = int(summary.get("totalCount") or 0)
+        overview["acceptedForReviewDecisionCount"] = int(
+            summary.get("acceptedForReviewCount") or 0
+        )
+        overview["productionReadyDecisionCount"] = int(
+            summary.get("productionReadyDecisionCount") or 0
+        )
+        overview["decisionLogBlocksProductionReadyCount"] = int(
+            release_gate_reference.get("blockingDecisionCount") or 0
+        )
+    return payload
+
+
+def _raise_decision_log_error(err: ValueError) -> None:
+    detail = str(err)
+    status_code = 409 if detail == "duplicate_calibration_decision_id" else 422
+    raise FairnessRouteError(status_code=status_code, detail=detail) from err
+
+
+async def _guard_decision_log_value_errors(
+    awaitable: Awaitable[dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        return await awaitable
+    except ValueError as err:
+        _raise_decision_log_error(err)
 
 
 def register_fairness_routes(
@@ -232,6 +285,11 @@ def register_fairness_routes(
     deps: FairnessRouteDependencies,
 ) -> FairnessRouteHandles:
     runtime = deps.runtime
+    calibration_decision_log_store = (
+        deps.calibration_decision_log_store
+        if deps.calibration_decision_log_store is not None
+        else InMemoryFairnessCalibrationDecisionLogStore()
+    )
 
     @app.post("/internal/judge/fairness/benchmark-runs")
     async def upsert_judge_fairness_benchmark_run(
@@ -517,6 +575,44 @@ def register_fairness_routes(
             shadow_limit=shadow_limit,
             deps=deps,
             list_judge_case_fairness=list_judge_case_fairness,
+            calibration_decision_log_store=calibration_decision_log_store,
+        )
+
+    @app.post("/internal/judge/fairness/policy-calibration-decisions")
+    async def create_judge_fairness_policy_calibration_decision(
+        request: Request,
+        x_ai_internal_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        deps.require_internal_key_fn(runtime.settings, x_ai_internal_key)
+        raw_payload = await deps.read_json_object_or_raise_422(request=request)
+        return await deps.run_fairness_route_guard(
+            _guard_decision_log_value_errors(
+                build_fairness_calibration_decision_create_payload(
+                    raw_payload=raw_payload,
+                    store=calibration_decision_log_store,
+                )
+            )
+        )
+
+    @app.get("/internal/judge/fairness/policy-calibration-decisions")
+    async def list_judge_fairness_policy_calibration_decisions(
+        x_ai_internal_key: str | None = Header(default=None),
+        policy_version: str | None = Query(default=None),
+        source_recommendation_id: str | None = Query(default=None),
+        decision: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, Any]:
+        deps.require_internal_key_fn(runtime.settings, x_ai_internal_key)
+        return await deps.run_fairness_route_guard(
+            _guard_decision_log_value_errors(
+                build_fairness_calibration_decision_list_payload(
+                    store=calibration_decision_log_store,
+                    policy_version=policy_version,
+                    source_recommendation_id=source_recommendation_id,
+                    decision=decision,
+                    limit=limit,
+                )
+            )
         )
 
     return FairnessRouteHandles(
@@ -530,5 +626,11 @@ def register_fairness_routes(
         get_judge_fairness_calibration_pack=get_judge_fairness_calibration_pack,
         get_judge_fairness_policy_calibration_advisor=(
             get_judge_fairness_policy_calibration_advisor
+        ),
+        create_judge_fairness_policy_calibration_decision=(
+            create_judge_fairness_policy_calibration_decision
+        ),
+        list_judge_fairness_policy_calibration_decisions=(
+            list_judge_fairness_policy_calibration_decisions
         ),
     )

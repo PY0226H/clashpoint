@@ -891,6 +891,11 @@ export function OpsConsolePage() {
                   shadow violations: {runtimeReadiness?.fairnessCalibration.shadowThresholdViolationCount ?? 0} | drift breaches:{" "}
                   {runtimeReadiness?.fairnessCalibration.driftBreachCount ?? 0}
                 </InlineHint>
+                <InlineHint>
+                  decisions: {runtimeReadiness?.fairnessCalibration.decisionCount ?? 0} | accepted:{" "}
+                  {runtimeReadiness?.fairnessCalibration.acceptedForReviewDecisionCount ?? 0} | blockers:{" "}
+                  {runtimeReadiness?.fairnessCalibration.decisionLogBlocksProductionReadyCount ?? 0}
+                </InlineHint>
               </article>
 
               <article className="echo-topic-item">

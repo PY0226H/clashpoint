@@ -268,6 +268,35 @@ class FairnessShadowRunModel(Base):
     )
 
 
+class FairnessCalibrationDecisionModel(Base):
+    __tablename__ = "fairness_calibration_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version: Mapped[str] = mapped_column(String(96), nullable=False)
+    decision_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_recommendation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    reason_code: Mapped[str] = mapped_column(String(96), nullable=False)
+    evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    visibility: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    release_gate_input: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("decision_id", name="uq_fairness_calibration_decisions_decision_id"),
+        Index("ix_fairness_calibration_decisions_policy_created", "policy_version", "created_at"),
+        Index(
+            "ix_fairness_calibration_decisions_source_created",
+            "source_recommendation_id",
+            "created_at",
+        ),
+        Index("ix_fairness_calibration_decisions_decision_created", "decision", "created_at"),
+    )
+
+
 class AuditAlertModel(Base):
     __tablename__ = "audit_alerts"
 

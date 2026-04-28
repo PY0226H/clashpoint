@@ -245,6 +245,69 @@ class JudgeFactRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(filtered_rows), 1)
         self.assertEqual(filtered_rows[0].run_id, "shadow-run-2")
 
+    async def test_fairness_calibration_decisions_should_append_and_filter(self) -> None:
+        first = await self._repo.append_fairness_calibration_decision(
+            version="ai-judge-fairness-calibration-decision-log-v1",
+            decision_id="calibration-decision-1",
+            source_recommendation_id="run_shadow_evaluation",
+            policy_version="fairness-benchmark-v1",
+            decision="accept_for_review",
+            actor={"id": "ops-user-1", "type": "ai_ops"},
+            reason_code="calibration_local_reference_only",
+            evidence_refs=[{"kind": "shadow_run", "ref": "shadow-1"}],
+            visibility={"autoActivateAllowed": False},
+            release_gate_input={
+                "eligibleForProductionReady": False,
+                "blocksProductionReady": True,
+            },
+        )
+        second = await self._repo.append_fairness_calibration_decision(
+            version="ai-judge-fairness-calibration-decision-log-v1",
+            decision_id="calibration-decision-2",
+            source_recommendation_id="prepare_candidate_policy_patch",
+            policy_version="fairness-benchmark-v1",
+            decision="request_more_evidence",
+            actor={"id": "ops-user-1", "type": "ai_ops"},
+            reason_code="calibration_shadow_drift",
+            evidence_refs=[{"kind": "shadow_run", "ref": "shadow-2"}],
+            visibility={"autoActivateAllowed": False},
+            release_gate_input={
+                "eligibleForProductionReady": False,
+                "blocksProductionReady": True,
+            },
+        )
+        self.assertEqual(first.decision_id, "calibration-decision-1")
+        self.assertEqual(second.decision, "request_more_evidence")
+
+        rows = await self._repo.list_fairness_calibration_decisions(
+            policy_version="fairness-benchmark-v1",
+            limit=10,
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].decision_id, "calibration-decision-2")
+
+        filtered = await self._repo.list_fairness_calibration_decisions(
+            policy_version="fairness-benchmark-v1",
+            decision="accept_for_review",
+            limit=10,
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].source_recommendation_id, "run_shadow_evaluation")
+
+        with self.assertRaisesRegex(ValueError, "duplicate_calibration_decision_id"):
+            await self._repo.append_fairness_calibration_decision(
+                version="ai-judge-fairness-calibration-decision-log-v1",
+                decision_id="calibration-decision-1",
+                source_recommendation_id="run_shadow_evaluation",
+                policy_version="fairness-benchmark-v1",
+                decision="reject",
+                actor={"id": "ops-user-1", "type": "ai_ops"},
+                reason_code="calibration_manual_reject",
+                evidence_refs=[],
+                visibility={"autoActivateAllowed": False},
+                release_gate_input={"eligibleForProductionReady": False},
+            )
+
     async def test_audit_alert_should_dedupe_and_transition_status(self) -> None:
         alert = await self._repo.upsert_audit_alert(
             job_id=8301,

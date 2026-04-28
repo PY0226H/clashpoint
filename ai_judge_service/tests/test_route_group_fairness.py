@@ -69,6 +69,7 @@ class RouteGroupFairnessTests(unittest.TestCase):
         self.assertIn("/internal/judge/fairness/dashboard", paths)
         self.assertIn("/internal/judge/fairness/calibration-pack", paths)
         self.assertIn("/internal/judge/fairness/policy-calibration-advisor", paths)
+        self.assertIn("/internal/judge/fairness/policy-calibration-decisions", paths)
         self.assertEqual(
             handles.list_judge_case_fairness.__name__,
             "list_judge_case_fairness",
@@ -76,4 +77,8 @@ class RouteGroupFairnessTests(unittest.TestCase):
         self.assertEqual(
             handles.get_judge_fairness_policy_calibration_advisor.__name__,
             "get_judge_fairness_policy_calibration_advisor",
+        )
+        self.assertEqual(
+            handles.create_judge_fairness_policy_calibration_decision.__name__,
+            "create_judge_fairness_policy_calibration_decision",
         )

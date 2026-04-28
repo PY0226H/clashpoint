@@ -8,6 +8,7 @@ from .models import (
     ClaimLedgerRecord,
     DispatchReceipt,
     FairnessBenchmarkRun,
+    FairnessCalibrationDecision,
     FairnessShadowRun,
     ReplayRecord,
 )
@@ -142,6 +143,31 @@ class JudgeFactPort(Protocol):
         status: str | None = None,
         limit: int = 50,
     ) -> list[FairnessShadowRun]: ...
+
+    async def append_fairness_calibration_decision(
+        self,
+        *,
+        version: str,
+        decision_id: str,
+        source_recommendation_id: str,
+        policy_version: str,
+        decision: str,
+        actor: dict[str, Any],
+        reason_code: str,
+        evidence_refs: list[dict[str, Any]],
+        visibility: dict[str, Any],
+        release_gate_input: dict[str, Any],
+        created_at: datetime | None = None,
+    ) -> FairnessCalibrationDecision: ...
+
+    async def list_fairness_calibration_decisions(
+        self,
+        *,
+        policy_version: str | None = None,
+        source_recommendation_id: str | None = None,
+        decision: str | None = None,
+        limit: int = 50,
+    ) -> list[FairnessCalibrationDecision]: ...
 
     async def upsert_audit_alert(
         self,

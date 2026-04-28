@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 RUNTIME_READINESS_PUBLIC_CONTRACT_VERSION = "ai-judge-runtime-readiness-v1"
 
 RUNTIME_READINESS_PUBLIC_ALLOWED_STATUSES: tuple[str, ...] = (
@@ -189,11 +188,18 @@ def _build_release_gate_section(
 
 def _build_fairness_section(
     *,
+    fairness_calibration_advisor: dict[str, Any],
     trust_monitoring: dict[str, Any],
     adaptive_summary: dict[str, Any],
 ) -> dict[str, Any]:
     panel_shadow_drift = _dict_or_empty(trust_monitoring.get("panelShadowDrift"))
     real_env = _dict_or_empty(trust_monitoring.get("realEnvEvidenceStatus"))
+    advisor_overview = _dict_or_empty(fairness_calibration_advisor.get("overview"))
+    decision_log = _dict_or_empty(fairness_calibration_advisor.get("decisionLog"))
+    decision_summary = _dict_or_empty(decision_log.get("summary"))
+    release_gate_reference = _dict_or_empty(
+        decision_log.get("releaseGateReference")
+    )
     return {
         "gatePassed": _bool_or_none(adaptive_summary.get("calibrationGatePassed")),
         "gateCode": _token(adaptive_summary.get("calibrationGateCode")),
@@ -209,6 +215,22 @@ def _build_fairness_section(
         "driftBreachCount": _to_int(panel_shadow_drift.get("driftBreachCount")),
         "realSampleManifestStatus": _lower_token(
             real_env.get("realSampleManifestStatus")
+        ),
+        "decisionCount": _to_int(
+            decision_summary.get("totalCount")
+            or advisor_overview.get("decisionCount")
+        ),
+        "acceptedForReviewDecisionCount": _to_int(
+            decision_summary.get("acceptedForReviewCount")
+            or advisor_overview.get("acceptedForReviewDecisionCount")
+        ),
+        "productionReadyDecisionCount": _to_int(
+            decision_summary.get("productionReadyDecisionCount")
+            or advisor_overview.get("productionReadyDecisionCount")
+        ),
+        "decisionLogBlocksProductionReadyCount": _to_int(
+            release_gate_reference.get("blockingDecisionCount")
+            or advisor_overview.get("decisionLogBlocksProductionReadyCount")
         ),
     }
 
@@ -537,6 +559,7 @@ def build_runtime_readiness_public_payload(
             adaptive_summary=adaptive_summary,
         ),
         "fairnessCalibration": _build_fairness_section(
+            fairness_calibration_advisor=fairness_calibration_advisor,
             trust_monitoring=trust_monitoring,
             adaptive_summary=adaptive_summary,
         ),
