@@ -1529,6 +1529,7 @@ def build_ops_read_model_pack_read_contract() -> dict[str, Any]:
         ],
         "opsRoutes": [
             "/internal/judge/ops/read-model/pack",
+            "/internal/judge/ops/runtime-readiness",
             "/internal/judge/review/cases",
             "/internal/judge/cases/replay/reports",
             "/internal/judge/cases/{case_id}/alerts",

@@ -1,0 +1,607 @@
+# 当前开发计划
+
+关联 slot：`default`
+更新时间：2026-04-27
+当前主线：`AI_judge_service P40（Bounded Challenge Product Bridge + Review Sync）`
+当前状态：执行中（已完成 challenge eligibility、chat proxy、client read model、review sync、challenge ops bridge、route hotspot split 与 local reference regression，下一步建议进入 stage closure）
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接 P39 stage closure，输入包括：
+   - `docs/dev_plan/archive/20260426T104553Z-ai-judge-stage-closure-execute.md`
+   - `docs/dev_plan/completed.md`
+   - `docs/dev_plan/todo.md`
+   - `docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md`
+   - 当前 `ai_judge_service`、`chat_server` 与前端调用面代码状态。
+2. P39 已完成 public verification chat proxy、前端/共享 domain 公验读取模型、citation verifier evidence gate、release readiness artifact export、registry/trust/read-model hotspot split、本地参考回归与 stage closure。
+3. P40 的主线不是开启链上协议层，也不是把 Identity Proof、Constitution Registry 或 Reason Passport 接入单场裁决；P40 要先把企业方案与 PRD 中“受约束 challenge / review”从 AI 服务内部 Trust Registry 推进到主业务门面和用户可执行路径。
+4. 当前仍没有真实 provider/callback、真实样本、生产对象存储真实验收与真实服务窗口；所有真实环境结论继续保持 `env_blocked` 或 `local_reference_ready`，不得宣称 real-env `pass`。
+5. 本轮默认采用硬切主链：尚未发布能力不保留长期兼容 alias、双字段或双路径；若某模块无法同轮同步调用方，才允许短期兼容并写清移除条件。
+6. 本轮计划生成前已完成 PRD/product-goals 对齐：
+   - `bash skills/pre-module-prd-goal-guard/scripts/run_prd_goal_guard.sh --root /Users/panyihang/Documents/EchoIsle --task-kind dev --module ai-judge-p40-plan-bootstrap-current-state --summary "Generate next AI Judge development plan from current code state and enterprise architecture/design docs" --mode auto --metadata-out artifacts/harness/ai-judge-p40-plan-bootstrap-current-state-prd-guard.env`
+   - 结果：`prd_mode_effective=full`，命中 AI judge 高风险关键词，计划需遵守“内部 AI 服务、chat_server 唯一门面、官方结果 pro/con/draw、draw/review 保护、证据链与公平门禁不可弱化”的 PRD 边界。
+
+---
+
+## 2. 当前代码状态快照
+
+| 维度 | 当前状态 | P40 判断 |
+| --- | --- | --- |
+| P39 收口 | `completed.md` 已追加 B43，`当前开发计划.md` 已由 stage closure 重置；P39 stage closure 证据为 `pass` | P40 应先刷新章节完成度映射到 P39 closure 口径，避免继续把 P39 已完成项写成待做 |
+| Product public verification | `chat_server` 已有 `/api/debate/sessions/{id}/judge-report/public-verify`；`debate-domain` 与 `DebateRoomPage` 已消费 `verificationReadiness/cacheProfile/publicVerify` | P40 不重复做公验代理；只在 challenge/review 状态中复用 public verification 的 no-secret 与 readiness 口径 |
+| Challenge & Review Registry | AI 服务已有 `/internal/judge/cases/{case_id}/trust/challenges`、`/trust/challenges/public-status`、`/request`、`/{challenge_id}/decision`、ops queue 与 contract tests；request/decision 已补 `publicStatus` | 缺主业务门面的用户可执行受约束 challenge 路径；客户端不能直连 AI 服务 |
+| chat_server judge path | 已有 judge job、judge report、draw vote、公验代理、ops judge review 与 replay preview | 缺参与者侧 challenge eligibility / request / status API；review 决策结果与用户裁决视图的同步语义仍需收敛 |
+| 前端/SDK | `debate-domain` 已有 judge report、draw vote、public verification read model；`DebateRoomPage` 有 Judge & Draw 面板 | 缺 challenge eligibility、request challenge、review state 的共享 domain 与最小 UI |
+| Ops / review | chat 侧已有 ops judge reviews 与 RBAC；AI 服务已有 trust challenge ops queue | 两侧 review/challenge 读模型仍割裂，P40 应补一个桥接/投影视图，避免用户 challenge 进入 AI 服务后产品侧不可追踪 |
+| Trust Kernel / policy | `trust_kernel_version_contract.py`、policy registry、release gate 与 audit anchor 已存在 | P40 不做 Constitution Registry；只将 challenge eligibility 绑定当前规则版本、kernel/policy 摘要和 allowed actions |
+| 文件热点 | `ops_read_model_pack.py` 约 2462 行、`registry_routes.py` 约 1285 行、`final_report.py` 约 2546 行 | P40 若新增 challenge/read-model 逻辑，应下沉 projection/helper，避免把热点文件继续堆大 |
+| 真实环境 | P39 runtime ops / real-env closure 为 `local_reference_ready` + `env_blocked`，`real_pass_ready=false` | 本轮不执行真实环境 pass 模块，只保留后置触发条件 |
+
+---
+
+## 3. 架构方案第13章一致性校验
+
+1. **角色一致性**：P40 不改 8 Agent 官方裁决顺序；challenge / review 只作为 Trust Layer 与主业务后续流程，不绕过 `Fairness Sentinel -> Chief Arbiter -> Opinion Writer`。
+2. **数据一致性**：六对象主链仍为唯一裁决事实源；challenge eligibility、request 与 review sync 只引用 `case_dossier / claim_graph / evidence_ledger / verdict_ledger / fairness_report / opinion_pack` 的已锁定状态、摘要、承诺或登记记录，不建立平行 winner 写链。
+3. **门禁一致性**：challenge 必须受规则、角色、时机、案件状态、重复提交、证据门槛和 rate limit 约束；review 结果不得绕过既有 draw/review/blocked 保护。
+4. **边界一致性**：`NPC Coach / Room QA` 保持 `advisory_only`；P40 不把互动型 Agent、Reason Passport、Identity Proof、Constitution Registry、第三方 jury 或 on-chain anchor 接入单场官方裁决输入。
+5. **跨层一致性**：涉及 API、DTO、错误码、状态字段、WS/事件 payload 或 UI 展示时，同轮检查 `ai_judge_service`、`chat_server`、OpenAPI、前端共享 domain/SDK、必要测试与计划文档。
+6. **收口一致性**：P40 所有真实环境项继续区分 `local_reference_ready`、`readiness_ready`、`env_blocked` 与 real-env `pass`；未获得真实窗口前不得把本地参考证据写成真实通过。
+
+---
+
+## 4. 本轮北极星与不可变边界
+
+1. 北极星仍是“辩论结束后 5 分钟内获得可读、可信、可追溯、可执行的官方裁决，或明确进入受保护复核状态”。
+2. AI 裁判正式公开结果只支持 `pro / con / draw`；`review_required` 与 `blocked_failed` 是保护性状态，不被改写成胜负。
+3. 客户端永远通过 `chat_server` 使用裁判报告、公验状态、challenge/review 状态与后续产品能力；AI 服务继续保持内部服务，不新增普通用户直连接口。
+4. Challenge 不是无限制自由申诉；必须受赛事/规则、参与身份、案件状态、时间窗口、幂等键、重复提交和系统策略约束。
+5. Review 决策完成后，产品上必须能明确落到“维持原判 / 改判 / 转为 draw / 继续保留复核状态说明”之一；不能让用户只看到内部队列状态。
+6. Public Verification 与 challenge/review 对外只展示可公开验证的承诺、状态、规则版本、action hints 与必要错误码；不得暴露内部 prompt、provider、raw trace、私有审计细节、对象存储路径、bucket/prefix/endpoint 或敏感证据原文。
+7. P40 不做 Identity Proof Gateway、Constitution Registry、Reason Passport、第三方 review network 或链上发布；这些留到主产品 challenge/review 与 public verification 稳定后单独规划。
+
+---
+
+## 5. 执行矩阵与下一步
+
+### 已完成/未完成矩阵
+
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-p39-stage-closure-execute` | P39 阶段收口 | 已完成 | 归档到 `docs/dev_plan/archive/20260426T104553Z-ai-judge-stage-closure-execute.md`，completed B43 已追加 |
+| `ai-judge-p40-plan-bootstrap-current-state` | 基于当前代码状态与两份方案生成 P40 计划 | 已完成 | 本文档即本模块输出 |
+| `ai-judge-p40-completion-map-refresh-p39-closure` | 将企业级 Agent 章节完成度映射刷新到 P39 closure / P40 启动口径 | 已完成 | 映射已吸收 P39 公验代理、client read model、citation verifier、release readiness artifact、hotspot split 与 local reference regression 成果 |
+| `ai-judge-p40-challenge-eligibility-contract-pack` | 在 AI 服务形成 public-safe challenge eligibility / status 合同 | 已完成 | 新增 `trust_challenge_public_contract.py`、`/trust/challenges/public-status` 与 request/decision `publicStatus`；覆盖 stable schema、allowed actions、blockers、状态枚举与 no-secret 校验 |
+| `ai-judge-p40-chat-challenge-proxy-pack` | 在 `chat_server` 落地参与者侧 challenge 代理接口 | 已完成 | 新增 `judge-report/challenge` 与 `judge-report/challenge/request`；复用报告读权限、phone bind/auth、限流与参与者请求校验，chat 侧二次阻断 no-secret 合同泄漏 |
+| `ai-judge-p40-client-challenge-read-model-pack` | 补齐前端/共享 domain 的 challenge/review 读取模型与最小 UI | 已完成 | `debate-domain` 新增 challenge DTO/API/view resolver，`DebateRoomPage` 展示 eligibility/open/review/closed、blockers 与 eligible request action |
+| `ai-judge-p40-review-decision-sync-contract-pack` | 收敛 review 决策同步到主业务裁决视图的合同 | 已完成 | `reviewDecisionSync` 已可被 chat/front read model 消费；final report 只从 `verdict_ledger.reviewDecisionSync` 暴露同步来源，不建立第二条 winner 写链 |
+| `ai-judge-p40-challenge-ops-read-model-bridge-pack` | 桥接 AI trust challenge ops queue 与 chat ops review 视图 | 已完成 | AI 队列新增 public-safe summary，chat 按 `judge_review` RBAC 暴露白名单 ops projection，Ops Console 展示 open/high/urgent/latest items |
+| `ai-judge-p40-challenge-route-hotspot-split-pack` | 下沉 challenge/read-model helper，控制热点文件继续膨胀 | 已完成 | 新增 AI challenge ops projection 与 chat challenge ops projection；route/handler 保持薄装配，targeted tests 与 post-module full gate 通过 |
+| `ai-judge-p40-local-reference-regression-pack` | P40 本地参考回归与证据刷新 | 已完成 | AI full pytest、chat debate_judge/config/challenge、frontend typecheck、runtime ops local reference、real-env closure env_blocked 与 post-module full gate 均通过/符合预期 |
+| `ai-judge-p40-stage-closure-execute` | P40 阶段收口 | 待执行 | 主体完成后归档活动计划、同步 completed/todo，真实环境 debt 去重 |
+| `ai-judge-p37-real-env-pass-window-execute-on-env` | 真实环境 pass 补证 | 阻塞（环境依赖） | 仅在真实样本、真实 provider/callback、生产对象存储与真实服务窗口齐备后执行 |
+### 下一开发模块建议
+
+1. ai-judge-p40-stage-closure-execute
+2. ai-judge-p37-real-env-pass-window-execute-on-env
+### 模块完成同步历史
+
+- 2026-04-26：推进 `ai-judge-p40-plan-bootstrap-current-state`；基于 P39 closure、当前代码状态、架构与技术栈方案、企业级 Agent 服务设计方案、AI 裁判 PRD 与 product goals 生成 P40 完整开发计划。
+- 2026-04-26：推进 `ai-judge-p40-completion-map-refresh-p39-closure`；将企业级 Agent 章节完成度映射刷新到 P39 stage closure / P40 启动口径，纳入 public verification 产品代理、citation verifier、release readiness artifact 与 bounded challenge 下一步优先级。
+- 2026-04-26：推进 `ai-judge-p40-challenge-eligibility-contract-pack`；AI 服务新增 public-safe challenge eligibility/status 合同、内部 `public-status` 路由、request/decision `publicStatus`，并通过 targeted pytest 回归。
+- 2026-04-26：推进 `ai-judge-p40-chat-challenge-proxy-pack`；`chat_server` 新增参与者侧 challenge status/request 门面、AI 内部 public-safe 合同代理、chat 二次 no-secret 校验、参与者 request 权限收紧与 OpenAPI/route/DTO 同步；`cargo test -p chat-server judge_challenge`、`public_verify`、`request_judge_report_query`、`ai_judge_alert_outbox_defaults_should_be_stable` 与 `post-module-test-guard --mode full` 均通过。
+- 2026-04-26：推进 `ai-judge-p40-client-challenge-read-model-pack`；前端共享 `debate-domain` 新增 challenge typed DTO、GET/POST API client、public-safe view resolver 与 resolver tests，`DebateRoomPage` 接入 challenge status/request 并随 judge/public-verify/draw-vote 刷新；`debate-domain test`、`app-shell test`、两包 lint、`pnpm --dir frontend typecheck` 与 `post-module-test-guard --mode full` 均通过。
+- 2026-04-27：推进 `ai-judge-p40-review-decision-sync-contract-pack`；收敛 review decision sync 合同：AI service 生成 `reviewDecisionSync`，chat 校验/透传 challenge 状态并从 `verdict_ledger` 暴露 final report 同步摘要，frontend 展示 verdict sync 状态；覆盖 `verdict_upheld`、`verdict_overturned`、`draw_after_review`、`review_retained` 与无直接 winner 写入边界；targeted tests、frontend typecheck/lint 与 `post-module-test-guard --mode full` 均通过。
+- 2026-04-27：推进 `ai-judge-p40-challenge-ops-read-model-bridge-pack`；桥接 AI Trust Challenge ops queue 到 chat ops 与前端 ops-domain：AI 队列新增 public-safe summary，chat 新增 `judge_review` RBAC 代理，Ops Console 展示 open/high/urgent/latest items，并覆盖 no-secret 白名单测试；targeted tests、frontend typecheck/lint 与 `post-module-test-guard --mode full` 均通过。
+- 2026-04-27：推进 `ai-judge-p40-challenge-route-hotspot-split-pack`；下沉 P40 challenge ops/read-model 投影与 chat ops queue 白名单 helper，保持 API 合同不变并控制热点文件增长；AI targeted tests、chat targeted tests 与 `post-module-test-guard --mode full` 均通过。
+- 2026-04-27：推进 `ai-judge-p40-local-reference-regression-pack`；刷新 P40 AI Judge 本地参考回归证据，确认 challenge product bridge 未破坏 public verification、draw/review/challenge 与 runtime ops 口径；真实环境仍为 `env_blocked` / `real_pass_ready=false`。
+
+---
+## 6. P40 总体执行路线图
+
+| 批次 | 模块包 | 本批目标 | 退出条件 |
+| --- | --- | --- | --- |
+| Batch-A | `completion-map-refresh-p39-closure` | 先把章节完成度映射刷新到 P39 收口真实状态 | 映射不再把 P39 已完成模块列为下一步；docs lint 与 plan consistency 通过 |
+| Batch-B | `challenge-eligibility-contract` | 在 AI 服务内部形成 public-safe challenge eligibility / status 合同 | 合同有 stable schema、allowed actions、blockers、no-secret 校验和测试 |
+| Batch-C | `chat-challenge-proxy` | 通过 `chat_server` 暴露受约束 challenge 门面 | 参与者可查 eligibility/status，可按规则 request challenge；非参与者、重复提交、未就绪案件被阻断 |
+| Batch-D | `client-challenge-read-model` | 让 Web/Desktop 共享 domain 能消费 challenge/review 状态 | `debate-domain` 与 `DebateRoomPage` 展示 eligibility、open/review/closed、blockers 与 request action |
+| Batch-E | `review-decision-sync-contract` | 收敛 AI review 决策到主业务裁决视图 | review 决策结果有 typed contract、callback/事件或 read-model 同步语义，用户视图不漂移 |
+| Batch-F | `challenge-ops-read-model-bridge` | 让 ops 可追踪用户 challenge 与 AI trust challenge queue | chat ops review 或 ops-domain 能看到 challenge priority/SLA/status 的 public-safe 投影 |
+| Batch-G | `challenge-route-hotspot-split` | 控制新增能力带来的热点文件膨胀 | 新增 projection/helper，`registry_routes.py`、`ops_read_model_pack.py`、chat model/handler 不继续堆大 |
+| Batch-H | `local-reference-regression + stage-closure` | 刷新本地证据并完成阶段收口 | 本地门禁通过；real-env 仍阻塞时只进入 todo，不宣称 pass |
+
+---
+
+## 7. 详细模块计划
+
+### 7.1 `ai-judge-p40-completion-map-refresh-p39-closure`
+
+状态：已完成（2026-04-26）
+
+**目标**
+
+1. 将 `AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md` 从“P38 stage closure / P39 启动”刷新为“P39 stage closure / P40 启动”。
+2. 纳入 P39 已完成成果：
+   - public verification chat proxy
+   - public verification client read model
+   - citation verifier evidence gate
+   - release readiness artifact export
+   - registry/trust route hotspot split
+   - local reference regression
+3. 更新总进度判断：
+   - Enterprise MVP：基本落地。
+   - Fairness Hardened：本地参考高完成，真实样本仍阻塞。
+   - Adaptive Judge Platform：release readiness / policy gate / ops evidence 持续推进，auto-calibration 与多模型生产化仍后置。
+   - Verifiable Trust Layer：Phase A + Public Verification 产品代理在本地参考口径下基本闭环；受约束 challenge 产品桥接成为 P40 优先项。
+   - Protocol Expansion Layer：Identity Proof、Constitution Registry、Reason Passport、第三方 review network、on-chain anchor 继续后置。
+4. 将 P40 下一步优先级写入映射：challenge eligibility、chat proxy、client read model、review sync、ops bridge、热点拆分、local regression。
+
+**优先文件**
+
+1. `docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md`
+2. `docs/dev_plan/completed.md`
+3. `docs/dev_plan/todo.md`
+4. `docs/dev_plan/archive/20260426T104553Z-ai-judge-stage-closure-execute.md`
+5. `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
+6. `docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`
+
+**落地内容**
+
+1. 更新文档头部时间与状态。
+2. 将“一句话结论”从 P38/P39 口径改为 P39/P40 口径。
+3. 第 3 节章节级完成度总览补充 P39 证据：
+   - `chat/chat_server/src/handlers/debate_judge.rs`
+   - `chat/chat_server/src/models/judge/request_report_query.rs`
+   - `frontend/packages/debate-domain/src/index.ts`
+   - `frontend/packages/app-shell/src/pages/DebateRoomPage.tsx`
+   - `ai_judge_service/app/domain/judge/evidence_ledger.py`
+   - `ai_judge_service/app/applications/registry_release_gate.py`
+   - `ai_judge_service/app/applications/release_readiness_projection.py`
+   - `ai_judge_service/app/applications/public_verify_projection.py`
+4. 第 4 节 Agent 子项映射补齐 Evidence Agent citation verifier 已完成、Opinion/Trust public verification 产品面已完成、Challenge & Review 产品桥接仍待 P40。
+5. 第 6 节下一步优先级更新为 P40 模块。
+
+**DoD**
+
+1. 映射不再声称 P39 public verification、citation verifier、release readiness artifact export 待执行。
+2. P39 B43 完成项与映射一致。
+3. C42/C41 等真实环境债务仍保持环境阻塞口径，不新增重复 todo。
+4. 真实环境仍表述为 `env_blocked`，不出现 real-env `pass`。
+
+**建议回归**
+
+1. `bash scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle`
+2. `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --arch-doc docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+
+### 7.2 `ai-judge-p40-challenge-eligibility-contract-pack`
+
+**目标**
+
+1. 在 AI 服务内部建立 public-safe challenge eligibility / status 合同，供 chat proxy 与前端读取。
+2. 把 Trust Challenge & Review Registry 当前内部状态转成用户可见安全摘要：是否可请求 challenge、当前 challenge/review 状态、允许动作、阻塞原因、规则版本和下一步说明。
+3. 明确 challenge 不是无限制自由申诉；合同必须将“不允许”的原因稳定编码化。
+4. 保持 AI 服务仍为内部服务，不新增普通用户直连入口；P40 只为 chat proxy 准备安全载荷。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/trust_challenge_review_contract.py`
+2. `ai_judge_service/app/applications/trust_challenge_runtime_routes.py`
+3. `ai_judge_service/app/applications/trust_ops_views.py`
+4. `ai_judge_service/app/applications/public_verify_projection.py`
+5. `ai_judge_service/app/applications/route_group_trust.py`
+6. `ai_judge_service/tests/test_trust_challenge_review_contract.py`
+7. `ai_judge_service/tests/test_trust_challenge_runtime_routes.py`
+8. `ai_judge_service/tests/test_app_factory_trust_challenge_routes.py`
+
+**合同建议**
+
+1. 新增或扩展 public-safe 输出：
+   - `version`
+   - `caseId`
+   - `dispatchType`
+   - `eligibility`
+   - `challengeState`
+   - `reviewState`
+   - `allowedActions`
+   - `blockers`
+   - `policy`
+   - `challenge`
+   - `review`
+   - `visibilityContract`
+   - `cacheProfile`
+2. `eligibility.status` 建议枚举：
+   - `eligible`
+   - `not_eligible`
+   - `already_open`
+   - `under_review`
+   - `closed`
+   - `case_absent`
+   - `env_blocked`
+3. `blockers` 建议稳定 reason code：
+   - `challenge_case_absent`
+   - `challenge_report_not_final`
+   - `challenge_policy_disabled`
+   - `challenge_window_closed`
+   - `challenge_duplicate_open`
+   - `challenge_review_already_closed`
+   - `challenge_permission_required`
+   - `challenge_env_blocked`
+4. `allowedActions` 不直接给内部 route；给产品语义：
+   - `challenge.request`
+   - `challenge.view`
+   - `review.view`
+5. no-secret 禁止字段沿用 public verification 思路，递归阻断：
+   - `provider`
+   - `rawTrace`
+   - `prompt`
+   - `privateAudit`
+   - `bucket`
+   - `endpoint`
+   - `path`
+   - `secret`
+   - 内部对象存储 locator 原文
+
+**落地步骤**
+
+1. 提炼 `trust_challenge_public_contract.py` 或等价 helper，避免继续堆大 `trust_challenge_runtime_routes.py`。
+2. 从现有 challenge registry item、review state、case status、policy/kernel summary 中构造 public-safe eligibility。
+3. 为 request route 的输出补齐同一 public-safe shape，避免 request 后客户端还要猜状态。
+4. 为 duplicate/open/closed/invalid 状态增加稳定 contract test。
+5. 将 public-safe challenge summary 接入 public verification 或 release readiness 时，只作为状态摘要，不泄漏内部审计。
+
+**DoD**
+
+1. AI 服务能对 final case 输出稳定 challenge eligibility/status 合同。
+2. 合同中不出现 forbidden keys。
+3. duplicate challenge、closed review、policy disabled、case absent 都有稳定 reason code。
+4. 该合同不改变官方 verdict ledger，不直接改 winner。
+
+**建议回归**
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_trust_challenge_review_contract.py tests/test_trust_challenge_runtime_routes.py tests/test_app_factory_trust_challenge_routes.py`
+2. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_trust_public_verify_contract.py tests/test_public_verify_projection.py`
+
+### 7.3 `ai-judge-p40-chat-challenge-proxy-pack`
+
+**目标**
+
+1. 在 `chat_server` 提供参与者侧 challenge 门面，客户端仍只访问主业务 API。
+2. 代理 AI 内部 challenge eligibility / request / status 合同，并进行二次 no-secret 校验。
+3. 复用 judge report read 权限、phone bind/auth、会话参与者检查与限流；禁止非参与者读取或请求。
+4. 对重复请求、AI 不可达、合同违规、未找到 final case、未开放 policy 给出稳定错误语义。
+
+**优先文件**
+
+1. `chat/chat_server/src/config.rs`
+2. `chat/chat_server/src/handlers/debate_judge.rs`
+3. `chat/chat_server/src/models/judge/request_report_query.rs`
+4. `chat/chat_server/src/models/judge/types.rs`
+5. `chat/chat_server/src/models/judge/mod.rs`
+6. `chat/chat_server/src/lib.rs`
+7. `chat/chat_server/src/openapi.rs`
+8. `chat/chat_server/src/handlers/debate.rs`
+9. `chat/chat_server/src/models/judge/tests/request_judge_report_query.rs`
+
+**API 建议**
+
+1. `GET /api/debate/sessions/{id}/judge-report/challenge`
+   - 查询参数：`rejudgeRunNo?`、`dispatchType?=final`
+   - 返回：`GetJudgeChallengeOutput`
+2. `POST /api/debate/sessions/{id}/judge-report/challenge/request`
+   - body：`idempotencyKey?`、`reasonCode?`、`userReason?`
+   - 返回：同一 `GetJudgeChallengeOutput` 或 `RequestJudgeChallengeOutput`
+3. 响应稳定字段：
+   - `status`
+   - `statusReason`
+   - `eligibility`
+   - `challenge`
+   - `review`
+   - `allowedActions`
+   - `blockers`
+   - `cacheProfile`
+
+**落地步骤**
+
+1. 给 `AiJudgeConfig` 增加 challenge 相关 internal path 和 timeout：
+   - `challenge_status_path`
+   - `challenge_request_path`
+   - `challenge_timeout_ms`
+2. 从 session/final report 中解析 AI case id，与 public verify proxy 一样阻断 absent case。
+3. GET 代理 AI 内部 eligibility/status，POST 代理 request，并传递 chat 侧 request id / idempotency key。
+4. chat 侧递归校验 forbidden keys，坏 JSON/非 2xx/合同违规统一收敛为 `challenge_proxy_error`。
+5. 权限：
+   - 参与者可读和按策略 request。
+   - 观战者和非参与者默认不可 request；是否可读由产品规则决定，默认与 judge report read 权限一致。
+   - ops route 不复用普通用户接口做内部决策。
+6. OpenAPI 同步注册新 DTO 与 route。
+
+**DoD**
+
+1. 参与者可通过 chat API 获取 challenge eligibility/status。
+2. 非参与者、未绑定手机号、未登录、重复 request、AI 合同泄漏均被稳定阻断。
+3. API 不泄漏 AI internal key、AI URL、provider、raw trace、private audit 或对象存储路径。
+4. 新增 API/DTO/OpenAPI/handler/model/test 同轮同步。
+
+**建议回归**
+
+1. `cd chat && cargo test -p chat-server judge_public_verify`
+2. `cd chat && cargo test -p chat-server judge_challenge`
+3. `cd chat && cargo test -p chat-server request_judge_report_query`
+4. `cd chat && cargo test -p chat-server config`
+
+### 7.4 `ai-judge-p40-client-challenge-read-model-pack`
+
+**目标**
+
+1. 在前端共享 `debate-domain` 中新增 challenge/review typed DTO、API client 与 view resolver。
+2. 在 `DebateRoomPage` 的 Judge & Draw 区域展示 challenge eligibility、当前状态、阻塞原因和 request action。
+3. Web/Desktop 共享逻辑，应用壳只做平台装配和页面展示。
+4. UI 不描述内部实现，不暴露 prompt/provider/raw trace；只展示用户该知道的动作与状态。
+
+**优先文件**
+
+1. `frontend/packages/debate-domain/src/index.ts`
+2. `frontend/packages/debate-domain/src/index.test.ts`
+3. `frontend/packages/app-shell/src/pages/DebateRoomPage.tsx`
+4. `frontend/packages/app-shell/src/styles.css`
+5. 必要时：`frontend/packages/api-client/src/*`
+
+**落地内容**
+
+1. 新增类型：
+   - `GetDebateJudgeChallengeOutput`
+   - `RequestDebateJudgeChallengeOutput`
+   - `DebateJudgeChallengeView`
+   - `JudgeChallengeEligibility`
+2. 新增方法：
+   - `getDebateJudgeChallenge(sessionId, input?)`
+   - `requestDebateJudgeChallenge(sessionId, input?)`
+   - `resolveDebateJudgeChallengeView(output)`
+3. `DebateRoomPage`：
+   - judge report/public verify/draw vote 刷新时同步刷新 challenge query。
+   - only if eligible 显示 request 按钮。
+   - request 成功后 invalidate judge report/public verify/challenge。
+   - not eligible 时展示短 blockers 摘要，不展示内部调试信息。
+4. 如果后端返回 `review_retained`、`verdict_upheld`、`verdict_overturned`、`draw_after_review`，前端用稳定标签展示。
+
+**DoD**
+
+1. 前端 shared domain 能消费 challenge/read model。
+2. Debate Room 可显示 eligibility、open/review/closed、blockers 与 request action。
+3. Web/Desktop 共用语义，不在两个 app 壳重复实现。
+4. Typecheck 与对应 domain test 通过。
+
+**建议回归**
+
+1. `pnpm --dir frontend typecheck`
+2. `pnpm --dir frontend --filter @echoisle/debate-domain test`
+3. 若当前 test 脚本不可用，则至少运行仓库既有前端 typecheck，并记录未运行原因。
+
+### 7.5 `ai-judge-p40-review-decision-sync-contract-pack`
+
+**目标**
+
+1. 明确 AI review 决策结果如何同步到主业务裁决视图，避免 review 完成后用户只看到旧 final report。
+2. 收敛四类结果语义：
+   - `verdict_upheld`
+   - `verdict_overturned`
+   - `draw_after_review`
+   - `review_retained`
+3. 不允许 review decision 直接绕过 Verdict Ledger；所有对外裁决视图变化必须有可审计来源。
+4. 若本轮无法做完整异步 callback，则先实现 typed read-model sync contract 和 tests，不留长期兼容 alias。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/trust_challenge_runtime_routes.py`
+2. `ai_judge_service/app/applications/trust_challenge_review_contract.py`
+3. `ai_judge_service/app/applications/trust_phasea.py`
+4. `chat/chat_server/src/models/judge/phase_final_report_submit.rs`
+5. `chat/chat_server/src/models/judge/request_report_query.rs`
+6. `chat/chat_server/src/handlers/debate_judge.rs`
+7. `chat/chat_server/src/openapi.rs`
+
+**设计约束**
+
+1. `verdict_upheld`：用户 final report 标注 review completed/upheld，不改 winner。
+2. `verdict_overturned`：必须有新 review decision artifact/trace/source；不能无来源改 winner。
+3. `draw_after_review`：正式公开结果转为 draw 后，按产品规则触发 draw vote 或明确 draw closure。
+4. `review_retained`：继续显示 review_required/review_retained，给出原因和下一步，不误报为完成。
+5. 所有结果都要保留 original case id、original verdict version、review decision id、review decided at。
+
+**DoD**
+
+1. review decision 有稳定合同，并可被 chat/front read model 消费。
+2. 用户可见状态不会在 `completed/review_required/draw_pending_vote` 间漂移。
+3. 不建立第二条 winner 写链；变更来源可审计。
+4. 对现有 draw vote 语义无回归。
+
+**建议回归**
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_trust_challenge_runtime_routes.py tests/test_trust_phasea.py`
+2. `cd chat && cargo test -p chat-server phase_final_report_submit`
+3. `cd chat && cargo test -p chat-server request_judge_report_query`
+
+### 7.6 `ai-judge-p40-challenge-ops-read-model-bridge-pack`
+
+状态：已完成（2026-04-27）
+
+**目标**
+
+1. 将 AI Trust Challenge Ops Queue 与 chat ops review 视图桥接，让运营能追踪用户 challenge 的优先级、SLA、状态和公开安全摘要。
+2. 不把 AI private audit、raw trace、provider、prompt 或对象存储路径暴露给普通 ops 视图。
+3. 让 `OpsConsolePage` 或 `ops-domain` 至少具备 read model 入口；完整复杂 UI 可按风险拆分。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/trust_challenge_ops_queue_routes.py`
+2. `ai_judge_service/app/applications/ops_read_model_pack.py`
+3. `ai_judge_service/app/applications/ops_read_model_trust_projection.py`
+4. `chat/chat_server/src/handlers/debate_ops.rs`
+5. `chat/chat_server/src/models/judge/request_report_query.rs`
+6. `frontend/packages/ops-domain/src/index.ts`
+7. `frontend/packages/app-shell/src/pages/OpsConsolePage.tsx`
+
+**落地内容**
+
+1. AI 服务输出 public-safe challenge ops projection：
+   - count by state
+   - urgent/high priority count
+   - oldest open age
+   - reason code summary
+   - action hints
+2. chat ops 层读取或代理该 projection，按 RBAC `judge_review` 控制。
+3. 前端 ops-domain 新增类型和 API；UI 可先显示 summary + latest items，不做复杂决策面。
+4. 与 user challenge request 形成闭环：用户 request 后，ops 侧能看到对应 open challenge。
+
+**DoD**
+
+1. ops 能看到 challenge/review queue public-safe 摘要。
+2. 普通用户与非 `judge_review` ops 不能访问。
+3. projection 合同稳定、有 tests。
+4. 不泄漏 forbidden keys。
+
+**建议回归**
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_trust_challenge_ops_queue_routes.py tests/test_ops_read_model_pack.py`
+2. `cd chat && cargo test -p chat-server judge_review`
+3. `pnpm --dir frontend typecheck`
+
+### 7.7 `ai-judge-p40-challenge-route-hotspot-split-pack`
+
+状态：已完成（2026-04-27）
+
+**目标**
+
+1. 控制 P40 新增 challenge/read-model 能力带来的热点文件膨胀。
+2. 优先下沉纯投影、合同校验、payload builder 和 route dependency helper。
+3. 不做大范围重构，不改变已稳定 public verification / release readiness 合同。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/trust_challenge_runtime_routes.py`
+2. `ai_judge_service/app/applications/trust_ops_views.py`
+3. `ai_judge_service/app/applications/ops_read_model_pack.py`
+4. `ai_judge_service/app/applications/registry_routes.py`
+5. `chat/chat_server/src/models/judge/request_report_query.rs`
+6. `chat/chat_server/src/handlers/debate_judge.rs`
+
+**落地内容**
+
+1. 新增 `challenge_public_projection.py` 或等价模块，承接 eligibility/status projection。
+2. 新增 `challenge_review_sync_projection.py` 或等价模块，承接 review decision read-model 映射。
+3. 对 `ops_read_model_pack.py` 继续下沉 challenge summary projection，而不是直接在主文件添加大量条件分支。
+4. 对 chat 侧新增 helper 模块或局部分层，避免 `request_report_query.rs` 继续成为所有 judge 能力的唯一堆点。
+
+**DoD**
+
+1. 新增能力职责边界清楚，route/handler 仍保持薄装配。
+2. Top-level API 合同不变，测试覆盖不下降。
+3. 文件热点行数增长受控，并在计划同步中说明边界。
+
+**建议回归**
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_route_group_trust.py tests/test_app_factory_smoke.py`
+2. `cd chat && cargo test -p chat-server debate_judge`
+
+### 7.8 `ai-judge-p40-local-reference-regression-pack`
+
+状态：已完成（2026-04-27）
+
+**目标**
+
+1. 刷新 P40 本地参考证据，验证 challenge product bridge 未破坏 P39 public verification、draw vote、review_required、citation verifier 与 release readiness artifact。
+2. 明确输出仍是 `local_reference_ready` 或 `env_blocked`，不替代真实环境 `pass`。
+3. 更新 runtime ops / stage closure evidence 所需的本地证据输入。
+
+**建议执行**
+
+1. AI 服务核心回归：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q`
+2. chat 关键回归：
+   - `cd chat && cargo test -p chat-server debate_judge`
+   - `cd chat && cargo test -p chat-server config`
+   - 若新增 challenge test pattern，可加 `cd chat && cargo test -p chat-server challenge`
+3. 前端回归：
+   - `pnpm --dir frontend typecheck`
+4. runtime ops / real-env local reference：
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence --allow-local-reference`
+   - `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+5. full post-module gate：
+   - `bash skills/post-module-test-guard/scripts/run_test_gate.sh --mode full`
+
+**DoD**
+
+1. AI service、chat、frontend 的核心门禁均通过，或有明确环境阻塞说明。
+2. runtime ops pack 输出 `local_reference_ready`。
+3. real-env closure 输出 `env_blocked` / `real_pass_ready=false` 时，文档明确不得冒充 pass。
+4. 本轮新增 API/DTO/OpenAPI/UI/ops projection 均有对应测试或 typecheck。
+
+### 7.9 `ai-judge-p40-stage-closure-execute`
+
+**目标**
+
+1. 在 P40 主体完成后执行阶段收口。
+2. 将 P40 完成态模块结构化追加到 `completed.md`。
+3. 将真实环境后置项、未完成但明确延后的技术债结构化追加到 `todo.md`。
+4. 归档并重置 `当前开发计划.md`。
+
+**收口前置**
+
+1. P40 执行矩阵中除真实环境模块外均为已完成或明确延后。
+2. `ai_judge_stage_closure_evidence.sh` 能识别最新 runtime ops pack、release/challenge evidence 和 real-env debt。
+3. `docs/harness/doc-governance.md` 的 completed/todo 规则仍通过。
+
+**建议执行**
+
+1. `bash scripts/harness/ai_judge_stage_closure_evidence.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --emit-json artifacts/harness/ai-judge-p40-stage-closure-evidence.summary.json --emit-md artifacts/harness/ai-judge-p40-stage-closure-evidence.summary.md`
+2. `bash scripts/harness/ai_judge_stage_closure_execute.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --emit-json artifacts/harness/ai-judge-p40-stage-closure-execute.summary.json --emit-md artifacts/harness/ai-judge-p40-stage-closure-execute.summary.md`
+3. `bash scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle`
+
+**DoD**
+
+1. stage closure evidence 与 execute 均为 `pass`。
+2. `completed.md` 只记录主体完成快照。
+3. `todo.md` 只记录延后技术债，尤其是真实环境 pass window。
+4. `当前开发计划.md` 被归档并重置。
+
+---
+
+## 8. 本轮不做清单
+
+1. 不做真实环境 `pass` 冒充；没有真实 provider/callback、真实样本、生产对象存储和真实服务窗口时，只能写 `env_blocked` 或 `local_reference_ready`。
+2. 不做 Identity Proof Gateway、Constitution Registry、Reason Passport、第三方 review network 或 on-chain anchor。
+3. 不把用户画像、长期声誉、钱包状态、历史胜率或身份标签输入单场官方裁决。
+4. 不开放客户端直连 AI 服务。
+5. 不做无限制自由申诉；challenge 必须受规则和状态机约束。
+6. 不新增长期兼容 alias、双字段或旧新 DTO 双写；如有短期兼容，必须写明移除条件。
+
+---
+
+## 9. 推荐整体门禁
+
+1. 文档与计划：
+   - `bash scripts/quality/harness_docs_lint.sh --root /Users/panyihang/Documents/EchoIsle`
+   - `bash scripts/harness/ai_judge_plan_consistency_gate.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md --arch-doc docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+2. AI 服务：
+   - `cd ai_judge_service && ../scripts/py -m pytest -q`
+3. chat 后端：
+   - `cd chat && cargo test -p chat-server debate_judge`
+   - `cd chat && cargo test -p chat-server config`
+4. 前端：
+   - `pnpm --dir frontend typecheck`
+5. 收口证据：
+   - `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence --allow-local-reference`
+   - `bash scripts/harness/ai_judge_real_env_window_closure.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`
+   - `bash scripts/harness/ai_judge_stage_closure_evidence.sh --root /Users/panyihang/Documents/EchoIsle --plan-doc docs/dev_plan/当前开发计划.md`
+
+---
+
+## 10. 下一轮启动建议
+
+1. 先执行 `ai-judge-p40-chat-challenge-proxy-pack`，把 AI 服务 public-safe challenge eligibility/status 接入 `chat_server` 主业务门面。
+2. 再执行 `ai-judge-p40-client-challenge-read-model-pack`，让 Web/Desktop 共享 domain 与 Judge & Draw 面板消费 challenge/review 状态。
+3. 然后执行 `ai-judge-p40-review-decision-sync-contract-pack`，收敛 review 决策结果到用户可见裁决视图。

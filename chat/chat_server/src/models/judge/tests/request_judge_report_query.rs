@@ -719,6 +719,148 @@ async fn spawn_mock_challenge_ops_queue_server(expected_internal_key: String) ->
     Ok(format!("http://{}", addr))
 }
 
+#[derive(Debug, Deserialize)]
+struct MockRuntimeReadinessQuery {
+    dispatch_type: Option<String>,
+    policy_version: Option<String>,
+    window_days: Option<u32>,
+}
+
+fn mock_runtime_readiness_payload() -> serde_json::Value {
+    json!({
+        "version": "ai-judge-runtime-readiness-v1",
+        "generatedAt": "2026-04-28T00:00:00Z",
+        "status": "env_blocked",
+        "statusReason": "real_env_evidence_env_blocked",
+        "summary": {
+            "calibrationHighRiskCount": 2,
+            "recommendedActionCount": 1,
+            "panelAttentionGroupCount": 1,
+            "trustChallengeQueueCount": 1,
+            "productionBlockerCount": 0,
+            "releaseBlockerCount": 2,
+            "evidenceBlockerCount": 1
+        },
+        "releaseGate": {
+            "passed": false,
+            "code": "real_env_evidence_not_ready",
+            "registryStatus": "blocked",
+            "blockedPolicyCount": 1,
+            "releaseReadinessEvidenceVersion": "rr-v1",
+            "releaseReadinessEvidenceCount": 2,
+            "releaseReadinessArtifactCount": 1,
+            "releaseReadinessManifestHashCount": 1,
+            "reasonCodes": ["real_env_evidence_not_ready"]
+        },
+        "fairnessCalibration": {
+            "gatePassed": false,
+            "gateCode": "real_env_evidence_not_ready",
+            "highRiskCount": 2,
+            "recommendedActionCount": 1,
+            "panelShadowStatus": "blocked"
+        },
+        "panelRuntime": {
+            "status": "blocked",
+            "readyGroupCount": 3,
+            "watchGroupCount": 1,
+            "attentionGroupCount": 1,
+            "scannedRecordCount": 80
+        },
+        "trustAndChallenge": {
+            "overallStatus": "blocked",
+            "artifactStoreStatus": "ready",
+            "publicVerificationStatus": "ready",
+            "challengeReviewLagStatus": "watch",
+            "openChallengeCount": 1,
+            "urgentChallengeCount": 0
+        },
+        "realEnv": {
+            "status": "env_blocked",
+            "evidenceAvailable": true,
+            "latestRunStatus": "completed",
+            "latestRunThresholdDecision": "blocked",
+            "latestRunEnvironmentMode": "production",
+            "reasonCodes": ["real_env_evidence_not_ready"]
+        },
+        "recommendedActions": [
+            {
+                "id": "collect-real-env-samples",
+                "source": "fairnessCalibrationAdvisor",
+                "severity": "blocker",
+                "code": "real_env_evidence_not_ready",
+                "title": "Collect real environment calibration evidence",
+                "owner": "ai_ops",
+                "status": "open"
+            }
+        ],
+        "evidenceRefs": [
+            {
+                "kind": "release_readiness",
+                "status": "blocked",
+                "evidenceVersion": "rr-v1",
+                "artifactCount": 1,
+                "manifestHashCount": 1
+            }
+        ],
+        "visibilityContract": {
+            "allowedSections": ["summary", "releaseGate"],
+            "forbiddenKeys": ["rawTrace", "provider"],
+            "rawPromptVisible": false,
+            "rawTraceVisible": false,
+            "internalAuditPayloadVisible": false,
+            "providerConfigVisible": false,
+            "artifactRefsVisible": false,
+            "officialVerdictSemanticsChanged": false
+        },
+        "cacheProfile": {
+            "cacheKey": "ai_judge_runtime_readiness:final:v3-default:7",
+            "ttlSeconds": 30,
+            "sourceContractVersion": "ops_read_model_pack_v5"
+        }
+    })
+}
+
+async fn spawn_mock_runtime_readiness_server(expected_internal_key: String) -> Result<String> {
+    let payload = mock_runtime_readiness_payload();
+    let app = Router::new().route(
+        "/internal/judge/ops/runtime-readiness",
+        get(
+            move |headers: HeaderMap, Query(query): Query<MockRuntimeReadinessQuery>| {
+                let expected_internal_key = expected_internal_key.clone();
+                let payload = payload.clone();
+                async move {
+                    if headers
+                        .get("x-ai-internal-key")
+                        .and_then(|value| value.to_str().ok())
+                        != Some(expected_internal_key.as_str())
+                    {
+                        return (
+                            AxumStatusCode::UNAUTHORIZED,
+                            Json(json!({"error": "bad key"})),
+                        );
+                    }
+                    if query.dispatch_type.as_deref() != Some("final")
+                        || query.policy_version.as_deref() != Some("v3-default")
+                        || query.window_days != Some(7)
+                    {
+                        return (
+                            AxumStatusCode::BAD_REQUEST,
+                            Json(json!({"error": "bad query"})),
+                        );
+                    }
+                    (AxumStatusCode::OK, Json(payload))
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
 async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Result<i64> {
     let (session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count): (
         i64,
@@ -1493,6 +1635,67 @@ async fn list_judge_challenge_ops_queue_by_owner_should_require_judge_review_per
         }
         other => panic!("unexpected error: {other}"),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_runtime_readiness_by_owner_should_require_judge_review_permission() -> Result<()>
+{
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .get_judge_runtime_readiness_by_owner(
+            &outsider,
+            GetJudgeRuntimeReadinessOpsQuery::default(),
+        )
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_judge_runtime_readiness_by_owner_should_proxy_public_safe_contract() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let service_base_url =
+        spawn_mock_runtime_readiness_server("runtime-readiness-key".to_string()).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "runtime-readiness-key".to_string();
+    inner.config.ai_judge.runtime_readiness_timeout_ms = 2_000;
+
+    let out = state
+        .get_judge_runtime_readiness_by_owner(
+            &owner,
+            GetJudgeRuntimeReadinessOpsQuery {
+                dispatch_type: Some("final".to_string()),
+                policy_version: Some("v3-default".to_string()),
+                window_days: Some(7),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    assert_eq!(out.version, "ai-judge-runtime-readiness-v1");
+    assert_eq!(out.status, "env_blocked");
+    assert_eq!(out.status_reason, "real_env_evidence_env_blocked");
+    assert_eq!(out.summary["calibrationHighRiskCount"], json!(2));
+    assert_eq!(out.release_gate["passed"], json!(false));
+    assert_eq!(out.panel_runtime["attentionGroupCount"], json!(1));
+    assert_eq!(out.trust_and_challenge["openChallengeCount"], json!(1));
+    assert_eq!(out.real_env["status"], json!("env_blocked"));
+    assert_eq!(
+        out.recommended_actions[0]["id"],
+        json!("collect-real-env-samples")
+    );
+    assert_eq!(out.visibility_contract["rawTraceVisible"], json!(false));
     Ok(())
 }
 

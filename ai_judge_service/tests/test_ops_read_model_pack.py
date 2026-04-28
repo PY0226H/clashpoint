@@ -642,6 +642,7 @@ class OpsReadModelPackTests(unittest.TestCase):
             set(OPS_READ_MODEL_PACK_V5_READ_CONTRACT_KEYS),
         )
         self.assertIn("/internal/judge/ops/read-model/pack", payload["opsRoutes"])
+        self.assertIn("/internal/judge/ops/runtime-readiness", payload["opsRoutes"])
         self.assertIn("winner", payload["fieldLayers"]["userVisible"])
         self.assertIn("caseLifecycleOverview", payload["fieldLayers"]["opsVisible"])
         self.assertIn("artifactCoverage", payload["fieldLayers"]["opsVisible"])

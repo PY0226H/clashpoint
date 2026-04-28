@@ -239,6 +239,10 @@ class AppFactoryOpsPanelRouteTests(
             "/internal/judge/ops/read-model/pack",
             payload["readContract"]["opsRoutes"],
         )
+        self.assertIn(
+            "/internal/judge/ops/runtime-readiness",
+            payload["readContract"]["opsRoutes"],
+        )
         self.assertIn("winner", payload["readContract"]["fieldLayers"]["userVisible"])
         self.assertIn(
             "caseLifecycleOverview",

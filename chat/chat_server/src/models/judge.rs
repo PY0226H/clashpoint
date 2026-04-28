@@ -9,6 +9,7 @@ mod phase_final_report_submit;
 mod request_report;
 mod request_report_query;
 mod rows;
+mod runtime_readiness_ops_projection;
 mod types;
 
 use rows::*;

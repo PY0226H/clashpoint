@@ -8,13 +8,13 @@ use crate::{
     },
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput,
     ApplyOpsObservabilityAnomalyActionMeta, ExecuteJudgeReplayOpsInput,
-    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery, KafkaDlqActionInput,
-    KafkaDlqActionMeta, ListJudgeChallengeOpsQueueQuery, ListJudgeReplayActionsOpsQuery,
-    ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery,
-    ListOpsAlertNotificationsQuery, ListOpsRoleAssignmentsQuery,
-    ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
-    OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta, OpsUpdateDebateSessionInput,
-    OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
+    GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery,
+    GetJudgeRuntimeReadinessOpsQuery, KafkaDlqActionInput, KafkaDlqActionMeta,
+    ListJudgeChallengeOpsQueueQuery, ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery,
+    ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
+    ListOpsRoleAssignmentsQuery, ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput,
+    OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta,
+    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityAnomalyStateMeta,
     UpsertOpsObservabilityThresholdsMeta, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
@@ -3393,6 +3393,63 @@ pub(crate) async fn list_judge_reviews_ops_handler(
         latency_ms,
         decision = "success",
         "list ops judge reviews served"
+    );
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Proxy the AI Judge runtime readiness view as a redacted ops control-plane contract.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/judge-runtime-readiness",
+    params(
+        GetJudgeRuntimeReadinessOpsQuery
+    ),
+    responses(
+        (status = 200, description = "Ops judge runtime readiness", body = crate::GetJudgeRuntimeReadinessOpsOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn get_judge_runtime_readiness_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<GetJudgeRuntimeReadinessOpsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let ret = match state
+        .get_judge_runtime_readiness_by_owner(&user, input)
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                "get ops judge runtime readiness failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        status = ret.status.as_str(),
+        status_reason = ret.status_reason.as_str(),
+        latency_ms,
+        decision = "success",
+        "get ops judge runtime readiness served"
     );
     Ok((StatusCode::OK, Json(ret)))
 }

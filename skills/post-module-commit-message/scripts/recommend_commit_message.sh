@@ -147,6 +147,30 @@ collect_changed_files() {
   } | awk 'NF' | sort -u
 }
 
+hydrate_context_from_files() {
+  local files="$1"
+  local phase=""
+
+  if [[ "$files" =~ ai-judge-p([0-9]+)-stage-closure ]]; then
+    phase="p${BASH_REMATCH[1]}"
+  fi
+
+  if [[ -z "$MODULE" && -n "$phase" ]]; then
+    MODULE="ai-judge-${phase}-stage-closure-execute"
+  elif [[ -z "$MODULE" ]] &&
+       printf '%s\n' "$files" | grep -qE '(^docs/dev_plan/(completed|todo|当前开发计划)\.md$|^docs/dev_plan/archive/.*ai-judge-stage-closure|^docs/loadtest/evidence/ai_judge_stage_closure_|^artifacts/harness/.*ai-judge-stage-closure)'; then
+    MODULE="ai-judge-stage-closure-execute"
+  fi
+
+  if [[ -z "$SUMMARY" && "$MODULE" == *"stage-closure"* ]]; then
+    if [[ -n "$phase" ]]; then
+      SUMMARY="Archive ${phase} AI Judge stage closure and reset active plan"
+    else
+      SUMMARY="Archive AI Judge stage closure and reset active plan"
+    fi
+  fi
+}
+
 detect_type() {
   local files="$1"
   local non_docs_count
@@ -163,6 +187,7 @@ detect_type() {
 
   if [[ "$module_key" == *"plan-bootstrap"* ||
         "$module_key" == *"completion-map"* ||
+        "$module_key" == *"stage-closure"* ||
         "$summary_lower" == *"development plan"* ]]; then
     echo "docs"
     return 0
@@ -467,6 +492,7 @@ if [[ -z "$ROOT" ]]; then
 fi
 
 changed_files="$(collect_changed_files)"
+hydrate_context_from_files "$changed_files"
 scope="$(infer_scope "$changed_files")"
 type="$(detect_type "$changed_files")"
 subject="$(build_subject "$scope")"

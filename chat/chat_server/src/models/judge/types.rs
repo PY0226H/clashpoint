@@ -555,6 +555,49 @@ pub struct ListJudgeReviewOpsOutput {
 
 #[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GetJudgeRuntimeReadinessOpsQuery {
+    pub dispatch_type: Option<String>,
+    pub policy_version: Option<String>,
+    pub window_days: Option<u32>,
+    pub case_scan_limit: Option<u32>,
+    pub include_case_trust: Option<bool>,
+    pub trust_case_limit: Option<u32>,
+    pub calibration_risk_limit: Option<u32>,
+    pub panel_group_limit: Option<u32>,
+    pub panel_attention_limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJudgeRuntimeReadinessOpsOutput {
+    pub version: String,
+    pub generated_at: Option<String>,
+    pub status: String,
+    pub status_reason: String,
+    #[serde(default)]
+    pub summary: Value,
+    #[serde(default)]
+    pub release_gate: Value,
+    #[serde(default)]
+    pub fairness_calibration: Value,
+    #[serde(default)]
+    pub panel_runtime: Value,
+    #[serde(default)]
+    pub trust_and_challenge: Value,
+    #[serde(default)]
+    pub real_env: Value,
+    #[serde(default)]
+    pub recommended_actions: Vec<Value>,
+    #[serde(default)]
+    pub evidence_refs: Vec<Value>,
+    #[serde(default)]
+    pub visibility_contract: Value,
+    #[serde(default)]
+    pub cache_profile: Value,
+}
+
+#[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListJudgeChallengeOpsQueueQuery {
     pub status: Option<String>,
     pub dispatch_type: Option<String>,

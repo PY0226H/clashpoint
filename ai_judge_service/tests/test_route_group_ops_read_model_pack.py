@@ -46,7 +46,12 @@ class RouteGroupOpsReadModelPackTests(unittest.TestCase):
 
         paths = {route.path for route in app.routes}
         self.assertIn("/internal/judge/ops/read-model/pack", paths)
+        self.assertIn("/internal/judge/ops/runtime-readiness", paths)
         self.assertEqual(
             handles.get_judge_ops_read_model_pack.__name__,
             "get_judge_ops_read_model_pack",
+        )
+        self.assertEqual(
+            handles.get_judge_runtime_readiness.__name__,
+            "get_judge_runtime_readiness",
         )

@@ -129,6 +129,23 @@ expect_contains "p39 stage closure uses current phase alternative" "docs(ai-judg
 expect_not_contains "p39 stage closure avoids stale p36 subject" "archive p36 stage closure" "$P39_STAGE_OUT"
 expect_not_contains "p39 stage closure avoids sync follow-up alternative" "sync ai-judge follow-up" "$P39_STAGE_OUT"
 
+AUTO_STAGE_REPO="$TMP_DIR/auto-stage-repo"
+mkdir -p "$AUTO_STAGE_REPO/artifacts/harness" "$AUTO_STAGE_REPO/docs/dev_plan"
+git -C "$AUTO_STAGE_REPO" init -q
+touch "$AUTO_STAGE_REPO/artifacts/harness/ai-judge-p40-stage-closure-execute.summary.md"
+touch "$AUTO_STAGE_REPO/artifacts/harness/ai-judge-p40-stage-closure-evidence.summary.md"
+touch "$AUTO_STAGE_REPO/docs/dev_plan/completed.md"
+touch "$AUTO_STAGE_REPO/docs/dev_plan/todo.md"
+touch "$AUTO_STAGE_REPO/docs/dev_plan/当前开发计划.md"
+
+AUTO_STAGE_OUT="$TMP_DIR/auto-stage.out"
+bash "$SCRIPT" --root "$AUTO_STAGE_REPO" >"$AUTO_STAGE_OUT"
+
+expect_contains "auto stage closure infers p40 title from dirty files" "docs(ai-judge): archive p40 stage closure" "$AUTO_STAGE_OUT"
+expect_contains "auto stage closure infers p40 alternative" "docs(ai-judge): record p40 closure state" "$AUTO_STAGE_OUT"
+expect_not_contains "auto stage closure avoids generic docs capability" "add docs capability" "$AUTO_STAGE_OUT"
+expect_not_contains "auto stage closure avoids generic docs subject" "update docs docs" "$AUTO_STAGE_OUT"
+
 P40_PLAN_OUT="$TMP_DIR/p40-plan.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

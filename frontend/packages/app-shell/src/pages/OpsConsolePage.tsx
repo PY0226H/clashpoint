@@ -5,6 +5,7 @@ import {
   getOpsDomainErrorInfo,
   getOpsMetricsDictionary,
   getOpsObservabilityConfig,
+  getOpsJudgeRuntimeReadiness,
   getOpsRbacMe,
   getOpsServiceSplitReadiness,
   getOpsSloSnapshot,
@@ -71,6 +72,16 @@ function formatDecimal(value: number, digits = 2): string {
     return "--";
   }
   return num.toFixed(digits);
+}
+
+function formatMaybeBoolean(value: boolean | null | undefined): string {
+  if (value === true) {
+    return "yes";
+  }
+  if (value === false) {
+    return "no";
+  }
+  return "--";
 }
 
 function toObservabilityErrorPreview(message: string): string {
@@ -266,6 +277,18 @@ export function OpsConsolePage() {
       listOpsJudgeChallengeQueue({
         challengeState: "open",
         limit: 5
+      }),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
+  });
+  const judgeRuntimeReadinessQuery = useQuery({
+    queryKey: ["ops-judge-runtime-readiness"],
+    queryFn: () =>
+      getOpsJudgeRuntimeReadiness({
+        dispatchType: "final",
+        windowDays: 7,
+        includeCaseTrust: true,
+        trustCaseLimit: 5
       }),
     enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
     retry: false
@@ -508,6 +531,9 @@ export function OpsConsolePage() {
   const topRules = sloSnapshotQuery.data?.rules.slice(0, 4) || [];
   const topAlerts = alertsQuery.data?.items || [];
   const topChallengeItems = judgeChallengeQueueQuery.data?.items || [];
+  const runtimeReadiness = judgeRuntimeReadinessQuery.data;
+  const runtimeActions = runtimeReadiness?.recommendedActions.slice(0, 4) || [];
+  const runtimeReasonCodes = runtimeReadiness?.realEnv.reasonCodes || [];
   const totalAlerts = alertsQuery.data?.total ?? 0;
   const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
   const canGoPrevPage = alertPageIndex > 0;
@@ -640,7 +666,7 @@ export function OpsConsolePage() {
     <section className="echo-ops-page">
       <header className="echo-ops-header">
         <SectionTitle>Ops Console</SectionTitle>
-        <p>Phase 5 ops slice: RBAC capability snapshot and role assignment management.</p>
+        <p>Ops control plane: RBAC, judge runtime readiness, challenge queue, and observability.</p>
       </header>
 
       <section className="echo-lobby-summary">
@@ -790,6 +816,146 @@ export function OpsConsolePage() {
           </>
         ) : (
           <InlineHint>Role management requires `role_manage` permission from platform owner scope.</InlineHint>
+        )}
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Judge Runtime Readiness</h3>
+        {canReadJudgeReview ? (
+          <>
+            <div className="echo-ops-alert-toolbar">
+              <Button
+                disabled={judgeRuntimeReadinessQuery.isLoading}
+                onClick={() => void queryClient.invalidateQueries({ queryKey: ["ops-judge-runtime-readiness"] })}
+                type="button"
+              >
+                Refresh Runtime
+              </Button>
+              <InlineHint>
+                status: {runtimeReadiness?.status || "loading"} | reason: {runtimeReadiness?.statusReason || "--"}
+              </InlineHint>
+              {runtimeReadiness?.generatedAt ? <InlineHint>generated: {formatUtc(runtimeReadiness.generatedAt)}</InlineHint> : null}
+            </div>
+            {judgeRuntimeReadinessQuery.isLoading ? <InlineHint>Loading runtime readiness...</InlineHint> : null}
+            {judgeRuntimeReadinessQuery.isError ? (
+              <p className="echo-error">{toOpsDomainError(judgeRuntimeReadinessQuery.error)}</p>
+            ) : null}
+            <div className="echo-lobby-summary">
+              <article>
+                <strong>{runtimeReadiness?.status || "unknown"}</strong>
+                <span>Runtime Status</span>
+              </article>
+              <article>
+                <strong>{formatMaybeBoolean(runtimeReadiness?.releaseGate.passed)}</strong>
+                <span>Release Gate</span>
+              </article>
+              <article>
+                <strong>{runtimeReadiness?.summary.calibrationHighRiskCount ?? 0}</strong>
+                <span>Calibration Risk</span>
+              </article>
+              <article>
+                <strong>{runtimeReadiness?.panelRuntime.attentionGroupCount ?? 0}</strong>
+                <span>Panel Attention</span>
+              </article>
+            </div>
+
+            <div className="echo-ops-observability-grid">
+              <article className="echo-topic-item">
+                <h4>Release Gate</h4>
+                <InlineHint>
+                  code: {runtimeReadiness?.releaseGate.code || "--"} | registry:{" "}
+                  {runtimeReadiness?.releaseGate.registryStatus || "--"}
+                </InlineHint>
+                <InlineHint>
+                  blocked policies: {runtimeReadiness?.releaseGate.blockedPolicyCount ?? 0} | high risk items:{" "}
+                  {runtimeReadiness?.releaseGate.highRiskItemCount ?? 0}
+                </InlineHint>
+                <InlineHint>
+                  evidence: {runtimeReadiness?.releaseGate.releaseReadinessEvidenceCount ?? 0} | artifacts:{" "}
+                  {runtimeReadiness?.releaseGate.releaseReadinessArtifactCount ?? 0} | hashes:{" "}
+                  {runtimeReadiness?.releaseGate.releaseReadinessManifestHashCount ?? 0}
+                </InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Fairness Calibration</h4>
+                <InlineHint>
+                  gate: {formatMaybeBoolean(runtimeReadiness?.fairnessCalibration.gatePassed)} | high risk:{" "}
+                  {runtimeReadiness?.fairnessCalibration.highRiskCount ?? 0}
+                </InlineHint>
+                <InlineHint>
+                  actions: {runtimeReadiness?.fairnessCalibration.recommendedActionCount ?? 0} | shadow:{" "}
+                  {runtimeReadiness?.fairnessCalibration.panelShadowStatus || "--"}
+                </InlineHint>
+                <InlineHint>
+                  shadow violations: {runtimeReadiness?.fairnessCalibration.shadowThresholdViolationCount ?? 0} | drift breaches:{" "}
+                  {runtimeReadiness?.fairnessCalibration.driftBreachCount ?? 0}
+                </InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Panel Runtime</h4>
+                <InlineHint>
+                  status: {runtimeReadiness?.panelRuntime.status || "--"} | scanned:{" "}
+                  {runtimeReadiness?.panelRuntime.scannedRecordCount ?? 0}
+                </InlineHint>
+                <InlineHint>
+                  ready: {runtimeReadiness?.panelRuntime.readyGroupCount ?? 0} | watch:{" "}
+                  {runtimeReadiness?.panelRuntime.watchGroupCount ?? 0} | attention:{" "}
+                  {runtimeReadiness?.panelRuntime.attentionGroupCount ?? 0}
+                </InlineHint>
+                <InlineHint>
+                  shadow gate: {formatMaybeBoolean(runtimeReadiness?.panelRuntime.shadowGatePassed)} | mode:{" "}
+                  {runtimeReadiness?.panelRuntime.latestShadowRunEnvironmentMode || "--"}
+                </InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Real Environment</h4>
+                <InlineHint>
+                  status: {runtimeReadiness?.realEnv.status || "--"} | available:{" "}
+                  {formatMaybeBoolean(runtimeReadiness?.realEnv.evidenceAvailable)}
+                </InlineHint>
+                <InlineHint>
+                  latest: {runtimeReadiness?.realEnv.latestRunStatus || "--"} | decision:{" "}
+                  {runtimeReadiness?.realEnv.latestRunThresholdDecision || "--"} | mode:{" "}
+                  {runtimeReadiness?.realEnv.latestRunEnvironmentMode || "--"}
+                </InlineHint>
+                <InlineHint>
+                  reasons: {runtimeReasonCodes.length > 0 ? runtimeReasonCodes.join(", ") : "--"}
+                </InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Trust & Challenge</h4>
+                <InlineHint>
+                  overall: {runtimeReadiness?.trustAndChallenge.overallStatus || "--"} | public verify:{" "}
+                  {runtimeReadiness?.trustAndChallenge.publicVerificationStatus || "--"}
+                </InlineHint>
+                <InlineHint>
+                  open challenges: {runtimeReadiness?.trustAndChallenge.openChallengeCount ?? 0} | urgent:{" "}
+                  {runtimeReadiness?.trustAndChallenge.urgentChallengeCount ?? 0}
+                </InlineHint>
+                <InlineHint>
+                  production blockers: {runtimeReadiness?.trustAndChallenge.productionBlockerCount ?? 0} | review blockers:{" "}
+                  {runtimeReadiness?.trustAndChallenge.reviewBlockerCount ?? 0}
+                </InlineHint>
+              </article>
+
+              <article className="echo-topic-item">
+                <h4>Recommended Actions</h4>
+                {runtimeActions.map((action) => (
+                  <InlineHint key={action.id}>
+                    {action.severity} | {action.code} | {action.title}
+                  </InlineHint>
+                ))}
+                {runtimeActions.length === 0 ? <InlineHint>No runtime actions.</InlineHint> : null}
+                <InlineHint>contract: {runtimeReadiness?.version || "--"}</InlineHint>
+              </article>
+            </div>
+          </>
+        ) : (
+          <InlineHint>Judge runtime readiness requires `judge_review` permission.</InlineHint>
         )}
       </section>
 

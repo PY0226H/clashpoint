@@ -92,4 +92,5 @@ class AppFactorySmokeTests(unittest.TestCase):
         self.assertIn("/internal/judge/fairness/calibration-pack", paths)
         self.assertIn("/internal/judge/fairness/policy-calibration-advisor", paths)
         self.assertIn("/internal/judge/ops/read-model/pack", paths)
+        self.assertIn("/internal/judge/ops/runtime-readiness", paths)
         self.assertNotIn("/internal/judge/dispatch", paths)

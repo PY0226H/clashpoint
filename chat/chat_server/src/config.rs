@@ -150,6 +150,10 @@ pub struct AiJudgeConfig {
     pub challenge_ops_queue_path: String,
     #[serde(default = "default_ai_judge_challenge_timeout_ms")]
     pub challenge_timeout_ms: u64,
+    #[serde(default = "default_ai_judge_runtime_readiness_path")]
+    pub runtime_readiness_path: String,
+    #[serde(default = "default_ai_judge_runtime_readiness_timeout_ms")]
+    pub runtime_readiness_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +269,8 @@ impl Default for AiJudgeConfig {
             challenge_request_path: default_ai_judge_challenge_request_path(),
             challenge_ops_queue_path: default_ai_judge_challenge_ops_queue_path(),
             challenge_timeout_ms: default_ai_judge_challenge_timeout_ms(),
+            runtime_readiness_path: default_ai_judge_runtime_readiness_path(),
+            runtime_readiness_timeout_ms: default_ai_judge_runtime_readiness_timeout_ms(),
         }
     }
 }
@@ -524,6 +530,14 @@ fn default_ai_judge_challenge_ops_queue_path() -> String {
 }
 
 fn default_ai_judge_challenge_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_ai_judge_runtime_readiness_path() -> String {
+    "/internal/judge/ops/runtime-readiness".to_string()
+}
+
+fn default_ai_judge_runtime_readiness_timeout_ms() -> u64 {
     5_000
 }
 
@@ -841,6 +855,11 @@ mod tests {
             "/internal/judge/trust/challenges/ops-queue"
         );
         assert_eq!(cfg.challenge_timeout_ms, 5_000);
+        assert_eq!(
+            cfg.runtime_readiness_path,
+            "/internal/judge/ops/runtime-readiness"
+        );
+        assert_eq!(cfg.runtime_readiness_timeout_ms, 5_000);
     }
 
     #[test]

@@ -199,6 +199,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         )
         .route("/ops/judge-reviews", get(list_judge_reviews_ops_handler))
         .route(
+            "/ops/judge-runtime-readiness",
+            get(get_judge_runtime_readiness_ops_handler),
+        )
+        .route(
             "/ops/judge-challenge-queue",
             get(list_judge_challenge_queue_ops_handler),
         )
