@@ -117,8 +117,10 @@ Python AI Ops 优先看：
 7. [route_group_panel_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_panel_runtime.py)
 8. [panel_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_routes.py)
 9. [panel_runtime_profile_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_profile_contract.py)
-10. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
-11. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
+10. [registry_release_gate.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_release_gate.py)
+11. [release_readiness_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/release_readiness_projection.py)
+12. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
+13. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
 
 ### 3.5 钱包 / IAP / 账本
 
@@ -262,6 +264,8 @@ Python AI Ops 优先看：
    - [route_group_panel_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_panel_runtime.py)
    - [panel_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_routes.py)
    - [panel_runtime_profile_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_profile_contract.py)
+   - [registry_release_gate.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_release_gate.py)
+   - [release_readiness_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/release_readiness_projection.py)
    - [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
    - [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
    - [facts repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py)
@@ -344,10 +348,13 @@ Python AI Ops 优先看：
 7. `artifacts/`、`frontend/test-results/`、`e2e/test-results/`、`e2e/playwright-report/`
    - 执行证据、测试输出或生成产物
 
-8. `target/`、`node_modules/`、`dist/`、`.turbo/`、`__pycache__/`
+8. `scripts/harness/`
+   - AI Judge runtime ops pack、stage closure evidence、real-env closure 等阶段证据脚本
+
+9. `target/`、`node_modules/`、`dist/`、`.turbo/`、`__pycache__/`
    - 构建产物、依赖或缓存
 
-9. `docs/explanation/`、`docs/interview/`、`docs/learning/`、`docs/resume/`
+10. `docs/explanation/`、`docs/interview/`、`docs/learning/`、`docs/resume/`
    - 复盘和沉淀材料，不适合当实现入口
 
 ---

@@ -495,6 +495,12 @@ def _build_evidence_refs(*, trust_monitoring: dict[str, Any]) -> list[dict[str, 
             "manifestHashCount": _to_int(
                 registry_readiness.get("releaseReadinessManifestHashCount")
             ),
+            "p41ControlPlaneEvidenceCount": _to_int(
+                registry_readiness.get("p41ControlPlaneEvidenceCount")
+            ),
+            "p41ControlPlaneStatusCounts": _dict_or_empty(
+                registry_readiness.get("p41ControlPlaneStatusCounts")
+            ),
         },
         {
             "kind": "real_env_evidence",

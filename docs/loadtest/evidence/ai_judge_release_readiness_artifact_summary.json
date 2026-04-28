@@ -41,6 +41,32 @@
   ],
   "evidenceVersion": "policy-release-readiness-evidence-v1",
   "manifestHash": "419e68249e86d5ebcb7e99b14070c325129e28a92e973eccb28dc9b2cb5460ca",
+  "p41CalibrationDecisionLogStatus": "ready",
+  "p41ChatProxyStatus": "ready",
+  "p41ControlPlaneEvidence": {
+    "calibrationDecisionLogStatus": "ready",
+    "chatProxyStatus": "ready",
+    "frontendContractStatus": "ready",
+    "officialVerdictAuthority": false,
+    "panelShadowCandidateStatus": "env_blocked",
+    "releaseBlocking": true,
+    "runtimeOpsPackStatus": "local_reference_ready",
+    "runtimeReadinessStatus": "ready",
+    "signalCounts": {
+      "blocked": 0,
+      "env_blocked": 1,
+      "missing": 0,
+      "needs_review": 0,
+      "ready": 5
+    },
+    "status": "env_blocked",
+    "version": "p41-control-plane-evidence-v1"
+  },
+  "p41ControlPlaneStatus": "env_blocked",
+  "p41FrontendContractStatus": "ready",
+  "p41PanelShadowCandidateStatus": "env_blocked",
+  "p41RuntimeOpsPackStatus": "local_reference_ready",
+  "p41RuntimeReadinessStatus": "ready",
   "policyVersion": "policy-v3-local-reference",
   "realEnvEvidenceStatus": {
     "code": "real_env_evidence_not_available",

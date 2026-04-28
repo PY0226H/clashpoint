@@ -8,6 +8,7 @@ from app.applications.fairness_panel_evidence import (
 from app.domain.judge.evidence_ledger import CITATION_VERIFICATION_VERSION
 
 RELEASE_READINESS_EVIDENCE_VERSION = "policy-release-readiness-evidence-v1"
+P41_CONTROL_PLANE_EVIDENCE_VERSION = "p41-control-plane-evidence-v1"
 
 RELEASE_GATE_READY_STATUSES = {
     "ready",
@@ -433,6 +434,265 @@ def _release_readiness_artifact_summary_input(
     }
 
 
+def _release_input_dict_any(
+    *,
+    release_inputs: dict[str, Any],
+    keys: tuple[str, ...],
+) -> dict[str, Any]:
+    for key in keys:
+        value = release_inputs.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _normalize_p41_control_plane_status(raw_status: str | None) -> str:
+    if not raw_status:
+        return "missing"
+    if raw_status in RELEASE_GATE_READY_STATUSES:
+        return "ready"
+    if raw_status in RELEASE_GATE_LOCAL_REFERENCE_STATUSES:
+        return "env_blocked"
+    if raw_status in RELEASE_GATE_BLOCKED_STATUSES:
+        return "blocked"
+    if raw_status in RELEASE_GATE_ENV_BLOCKED_STATUSES:
+        return "env_blocked"
+    if raw_status in {"missing", "not_sampled"}:
+        return "missing"
+    return "needs_review"
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _p41_signal_status_counts(signals: dict[str, dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "ready": 0,
+        "blocked": 0,
+        "env_blocked": 0,
+        "needs_review": 0,
+        "missing": 0,
+    }
+    for signal in signals.values():
+        status = str(signal.get("status") or "missing").strip().lower()
+        if status not in counts:
+            status = "needs_review"
+        counts[status] += 1
+    return counts
+
+
+def _derive_p41_control_plane_status(counts: dict[str, int]) -> str:
+    if int(counts.get("blocked") or 0) > 0:
+        return "blocked"
+    if int(counts.get("env_blocked") or 0) > 0:
+        return "env_blocked"
+    if int(counts.get("needs_review") or 0) > 0:
+        return "needs_review"
+    if int(counts.get("missing") or 0) > 0:
+        return "missing"
+    return "ready"
+
+
+def _p41_base_signal(
+    *,
+    raw: dict[str, Any],
+    default_source_status: str = "missing",
+) -> dict[str, Any]:
+    source_status = (
+        _lower_token(raw.get("status") or raw.get("decision") or raw.get("overallStatus"))
+        or default_source_status
+    )
+    status = _normalize_p41_control_plane_status(source_status)
+    return {
+        "status": status,
+        "sourceStatus": source_status,
+        "code": _safe_token(raw.get("code")),
+        "evidenceRef": _artifact_ref_from_payload(raw),
+        "localReferenceOnly": source_status in RELEASE_GATE_LOCAL_REFERENCE_STATUSES,
+    }
+
+
+def _build_p41_runtime_readiness_signal(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _release_input_dict_any(
+        release_inputs=release_inputs,
+        keys=(
+            "runtimeReadiness",
+            "runtime_readiness",
+            "runtimeReadinessProxy",
+            "runtime_readiness_proxy",
+        ),
+    )
+    signal = _p41_base_signal(raw=raw)
+    signal.update(
+        {
+            "releaseGateStatus": _lower_token(raw.get("releaseGateStatus")),
+            "releaseReadinessEvidenceCount": _to_int(
+                raw.get("releaseReadinessEvidenceCount")
+            ),
+            "recommendedActionCount": _to_int(raw.get("recommendedActionCount")),
+        }
+    )
+    return signal
+
+
+def _build_p41_chat_proxy_signal(release_inputs: dict[str, Any]) -> dict[str, Any]:
+    raw = _release_input_dict_any(
+        release_inputs=release_inputs,
+        keys=("chatRuntimeReadinessProxy", "chat_runtime_readiness_proxy"),
+    )
+    signal = _p41_base_signal(raw=raw)
+    signal.update(
+        {
+            "route": _safe_token(raw.get("route")),
+            "rbacEnforced": _bool_or_none(raw.get("rbacEnforced")),
+            "noSecretContractPassed": _bool_or_none(
+                raw.get("noSecretContractPassed")
+            ),
+            "timeoutMs": _to_int(raw.get("timeoutMs")),
+        }
+    )
+    if signal["rbacEnforced"] is False or signal["noSecretContractPassed"] is False:
+        signal["status"] = "blocked"
+        signal["code"] = signal["code"] or "p41_chat_proxy_contract_blocked"
+    return signal
+
+
+def _build_p41_frontend_contract_signal(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _release_input_dict_any(
+        release_inputs=release_inputs,
+        keys=("frontendOpsConsoleContract", "frontend_ops_console_contract"),
+    )
+    signal = _p41_base_signal(raw=raw)
+    signal.update(
+        {
+            "packageName": _safe_token(raw.get("packageName")),
+            "typecheckStatus": _lower_token(raw.get("typecheckStatus")),
+            "panelCandidateSummaryVisible": _bool_or_none(
+                raw.get("panelCandidateSummaryVisible")
+            ),
+            "calibrationDecisionSummaryVisible": _bool_or_none(
+                raw.get("calibrationDecisionSummaryVisible")
+            ),
+        }
+    )
+    if signal["typecheckStatus"] in {"failed", "blocked"}:
+        signal["status"] = "blocked"
+        signal["code"] = signal["code"] or "p41_frontend_contract_typecheck_failed"
+    return signal
+
+
+def _build_p41_calibration_decision_signal(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _release_input_dict_any(
+        release_inputs=release_inputs,
+        keys=(
+            "calibrationDecisionLog",
+            "calibration_decision_log",
+            "fairnessCalibrationDecisionLog",
+            "fairness_calibration_decision_log",
+        ),
+    )
+    signal = _p41_base_signal(raw=raw)
+    signal.update(
+        {
+            "decisionCount": _to_int(raw.get("decisionCount")),
+            "acceptedCount": _to_int(raw.get("acceptedCount")),
+            "productionReadyBlockerCount": _to_int(
+                raw.get("productionReadyBlockerCount")
+            ),
+            "autoApplyAllowed": bool(raw.get("autoApplyAllowed")),
+        }
+    )
+    if signal["autoApplyAllowed"]:
+        signal["status"] = "blocked"
+        signal["code"] = signal["code"] or "p41_calibration_auto_apply_forbidden"
+    return signal
+
+
+def _build_p41_panel_candidate_signal(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _release_input_dict_any(
+        release_inputs=release_inputs,
+        keys=(
+            "panelShadowCandidateReadiness",
+            "panel_shadow_candidate_readiness",
+            "panelRuntimeReadiness",
+            "panel_runtime_readiness",
+        ),
+    )
+    signal = _p41_base_signal(raw=raw)
+    signal.update(
+        {
+            "candidateModelGroupCount": _to_int(raw.get("candidateModelGroupCount")),
+            "switchBlockerCount": _to_int(raw.get("switchBlockerCount")),
+            "releaseBlockedGroupCount": _to_int(raw.get("releaseBlockedGroupCount")),
+            "autoSwitchAllowed": bool(raw.get("autoSwitchAllowed")),
+            "officialWinnerSemanticsChanged": bool(
+                raw.get("officialWinnerSemanticsChanged")
+            ),
+        }
+    )
+    if signal["autoSwitchAllowed"] or signal["officialWinnerSemanticsChanged"]:
+        signal["status"] = "blocked"
+        signal["code"] = signal["code"] or "p41_panel_candidate_auto_switch_forbidden"
+    return signal
+
+
+def _build_p41_runtime_ops_pack_signal(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw = _release_input_dict_any(
+        release_inputs=release_inputs,
+        keys=("runtimeOpsPack", "runtime_ops_pack"),
+    )
+    signal = _p41_base_signal(raw=raw)
+    signal.update(
+        {
+            "artifactRef": _safe_token(raw.get("artifactRef")),
+            "manifestHash": _safe_token(raw.get("manifestHash")),
+            "storageMode": _lower_token(raw.get("storageMode")),
+            "allowLocalReference": _bool_or_none(raw.get("allowLocalReference")),
+        }
+    )
+    return signal
+
+
+def _build_p41_control_plane_evidence(
+    release_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    signals = {
+        "runtimeReadiness": _build_p41_runtime_readiness_signal(release_inputs),
+        "chatRuntimeReadinessProxy": _build_p41_chat_proxy_signal(release_inputs),
+        "frontendOpsConsoleContract": _build_p41_frontend_contract_signal(
+            release_inputs
+        ),
+        "calibrationDecisionLog": _build_p41_calibration_decision_signal(
+            release_inputs
+        ),
+        "panelShadowCandidate": _build_p41_panel_candidate_signal(release_inputs),
+        "runtimeOpsPack": _build_p41_runtime_ops_pack_signal(release_inputs),
+    }
+    counts = _p41_signal_status_counts(signals)
+    status = _derive_p41_control_plane_status(counts)
+    return {
+        "version": P41_CONTROL_PLANE_EVIDENCE_VERSION,
+        "status": status,
+        "signalCounts": counts,
+        "signals": signals,
+        "releaseBlocking": status in {"blocked", "env_blocked"},
+        "officialVerdictAuthority": False,
+    }
+
+
 def _build_citation_verifier_release_component(
     *,
     release_inputs: dict[str, Any],
@@ -638,6 +898,7 @@ def _build_release_readiness_evidence(
             fairness_gate=fairness_gate if isinstance(fairness_gate, dict) else {},
             release_inputs=release_inputs,
         ),
+        "p41ControlPlaneEvidence": _build_p41_control_plane_evidence(release_inputs),
         "realEnvEvidenceStatus": _build_real_env_evidence_status(
             release_inputs=release_inputs,
             decision=decision,

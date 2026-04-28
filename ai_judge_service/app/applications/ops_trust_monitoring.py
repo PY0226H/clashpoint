@@ -179,6 +179,9 @@ def _summarize_release_readiness_evidence_items(
     citation_verifier_missing_count = 0
     citation_verifier_weak_count = 0
     citation_verifier_forbidden_count = 0
+    p41_control_plane_status_counts: dict[str, int] = {}
+    p41_control_plane_signal_counts: dict[str, int] = {}
+    p41_control_plane_evidence_count = 0
     for item in evidence_items:
         public_verification = _dict_or_empty(item.get("publicVerificationReadiness"))
         if _lower_token(public_verification.get("status")) == "ready":
@@ -207,6 +210,21 @@ def _summarize_release_readiness_evidence_items(
         citation_verifier_forbidden_count += _to_int(
             citation_verification.get("forbiddenSourceCount")
         )
+        p41_control_plane = _dict_or_empty(item.get("p41ControlPlaneEvidence"))
+        if p41_control_plane:
+            p41_control_plane_evidence_count += 1
+            p41_status = _lower_token(p41_control_plane.get("status")) or "unknown"
+            p41_control_plane_status_counts[p41_status] = (
+                p41_control_plane_status_counts.get(p41_status, 0) + 1
+            )
+            for signal_status, count in _dict_or_empty(
+                p41_control_plane.get("signalCounts")
+            ).items():
+                token = str(signal_status or "").strip().lower() or "unknown"
+                p41_control_plane_signal_counts[token] = (
+                    p41_control_plane_signal_counts.get(token, 0)
+                    + _to_int(count)
+                )
     return {
         "evidenceVersion": evidence_version,
         "evidenceCount": len(evidence_items),
@@ -226,6 +244,13 @@ def _summarize_release_readiness_evidence_items(
         "citationVerifierMissingCitationCount": citation_verifier_missing_count,
         "citationVerifierWeakCitationCount": citation_verifier_weak_count,
         "citationVerifierForbiddenSourceCount": citation_verifier_forbidden_count,
+        "p41ControlPlaneEvidenceCount": p41_control_plane_evidence_count,
+        "p41ControlPlaneStatusCounts": dict(
+            sorted(p41_control_plane_status_counts.items(), key=lambda kv: kv[0])
+        ),
+        "p41ControlPlaneSignalCounts": dict(
+            sorted(p41_control_plane_signal_counts.items(), key=lambda kv: kv[0])
+        ),
     }
 
 
@@ -473,6 +498,15 @@ def _build_registry_release_readiness(
         ],
         "citationVerifierForbiddenSourceCount": evidence_summary[
             "citationVerifierForbiddenSourceCount"
+        ],
+        "p41ControlPlaneEvidenceCount": evidence_summary[
+            "p41ControlPlaneEvidenceCount"
+        ],
+        "p41ControlPlaneStatusCounts": evidence_summary[
+            "p41ControlPlaneStatusCounts"
+        ],
+        "p41ControlPlaneSignalCounts": evidence_summary[
+            "p41ControlPlaneSignalCounts"
         ],
     }
 

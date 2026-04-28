@@ -179,6 +179,13 @@ seed_release_readiness_summary() {
   "evidenceVersion": "policy-release-readiness-evidence-v1",
   "decision": "$decision",
   "storageMode": "local_reference",
+  "p41ControlPlaneStatus": "env_blocked",
+  "p41RuntimeReadinessStatus": "ready",
+  "p41ChatProxyStatus": "ready",
+  "p41FrontendContractStatus": "ready",
+  "p41CalibrationDecisionLogStatus": "ready",
+  "p41PanelShadowCandidateStatus": "env_blocked",
+  "p41RuntimeOpsPackStatus": "local_reference_ready",
   "redactionContract": {
     "storageUriVisible": false,
     "objectStorePathVisible": false
@@ -244,6 +251,8 @@ expect_contains "local stage closure" "stage_closure_evidence_status: pass" "$LO
 expect_contains "local closure backfill stdout" "closure_backfill_archive_detected: false" "$LOCAL_STDOUT"
 expect_contains "local closure backfill env" "STAGE_CLOSURE_ACTIVE_PLAN_EVIDENCE_STATUS=pass" "$EVIDENCE_LOCAL/ai_judge_runtime_ops_pack.env"
 expect_contains "local release artifact present" "RELEASE_READINESS_ARTIFACT_STATUS=present" "$EVIDENCE_LOCAL/ai_judge_runtime_ops_pack.env"
+expect_contains "local p41 status env" "P41_CONTROL_PLANE_STATUS=env_blocked" "$EVIDENCE_LOCAL/ai_judge_runtime_ops_pack.env"
+expect_contains "local p41 stdout" "p41_panel_shadow_candidate_status: env_blocked" "$LOCAL_STDOUT"
 
 # 场景2b：release readiness artifact 缺失 -> evidence_missing
 WORK_MISSING_ARTIFACT="$TMP_DIR/missing-artifact"

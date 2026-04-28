@@ -1,7 +1,7 @@
 # AI Judge Stage Closure Evidence 摘要
 
 1. 生成日期：2026-04-28
-2. 运行窗口：2026-04-28T06:54:19Z -> 2026-04-28T06:54:19Z
+2. 运行窗口：2026-04-28T21:38:16Z -> 2026-04-28T21:38:16Z
 3. 统一状态：`pass`
 4. plan_doc：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md`
 5. draft_script：`/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_stage_closure_draft.sh`
@@ -9,10 +9,10 @@
 ## 收口草案统计
 
 1. draft_status：`pass`
-2. completed_candidates_total：`10`
-3. todo_candidates_total：`1`
-4. draft_summary_json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T065419Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json`
-5. draft_summary_md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T065419Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md`
+2. completed_candidates_total：`8`
+3. todo_candidates_total：`0`
+4. draft_summary_json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T213816Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json`
+5. draft_summary_md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T213816Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md`
 
 ## runtime ops pack 关联
 
@@ -30,6 +30,16 @@
 5. storage_mode：`local_reference`
 6. summary_path：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_release_readiness_artifact_summary.json`
 
+## P41 control plane evidence
+
+1. control_plane_status：`env_blocked`
+2. runtime_readiness_status：`ready`
+3. chat_proxy_status：`ready`
+4. frontend_contract_status：`ready`
+5. calibration_decision_log_status：`ready`
+6. panel_shadow_candidate_status：`env_blocked`
+7. runtime_ops_pack_status：`local_reference_ready`
+
 ## active plan evidence
 
 1. active_plan_evidence_status：`pass`
@@ -39,13 +49,13 @@
 1. archive_detected：`true`
 2. archive_source：`plan_doc`
 3. archive_status：`archived`
-4. archive_path：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260426T104553Z-ai-judge-stage-closure-execute.md`
+4. archive_path：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260428T065429Z-ai-judge-stage-closure-execute.md`
 
 ## long-term completed/todo evidence
 
-1. completed_section：`B43`
-2. completed_module_count：`9`
-3. todo_section：`C42`
+1. completed_section：`B44`
+2. completed_module_count：`10`
+3. todo_section：`C43`
 4. todo_env_blocked_debt_count：`0`
 5. linked_real_env_debt_id：``
 6. long_term_evidence_status：`pass`
@@ -54,5 +64,5 @@
 
 1. stage closure env：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_stage_closure_evidence.env`
 2. stage closure doc：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`
-3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/ai-judge-p40-stage-closure-evidence.summary.json`
-4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/ai-judge-p40-stage-closure-evidence.summary.md`
+3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T213816Z-ai-judge-stage-closure-evidence.summary.json`
+4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T213816Z-ai-judge-stage-closure-evidence.summary.md`

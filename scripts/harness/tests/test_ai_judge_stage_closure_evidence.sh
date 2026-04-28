@@ -124,6 +124,13 @@ RELEASE_READINESS_ARTIFACT_REF=release-readiness-artifact-test
 RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 RELEASE_READINESS_ARTIFACT_DECISION=env_blocked
 RELEASE_READINESS_ARTIFACT_STORAGE_MODE=local_reference
+P41_CONTROL_PLANE_STATUS=env_blocked
+P41_RUNTIME_READINESS_STATUS=ready
+P41_CHAT_PROXY_STATUS=ready
+P41_FRONTEND_CONTRACT_STATUS=ready
+P41_CALIBRATION_DECISION_LOG_STATUS=ready
+P41_PANEL_SHADOW_CANDIDATE_STATUS=env_blocked
+P41_RUNTIME_OPS_PACK_STATUS=local_reference_ready
 EOF_ENV
 cat >"$EVIDENCE_PASS/ai_judge_runtime_ops_pack.md" <<'EOF_MD'
 # runtime pack
@@ -147,6 +154,8 @@ expect_contains "pass json status" "\"status\": \"pass\"" "$PASS_JSON"
 expect_contains "pass json linked" "\"linked\": true" "$PASS_JSON"
 expect_contains "pass json backfill" "\"closure_backfill\"" "$PASS_JSON"
 expect_contains "pass release artifact" "\"artifact_ref\": \"release-readiness-artifact-test\"" "$PASS_JSON"
+expect_contains "pass p41 status" "\"status\": \"env_blocked\"" "$PASS_JSON"
+expect_contains "pass p41 stdout" "p41_panel_shadow_candidate_status: env_blocked" "$PASS_STDOUT"
 expect_contains "pass markdown title" "# ai-judge-stage-closure-evidence" "$PASS_MD"
 
 # 场景1b：runtime pack 已关联但 release artifact 缺失 -> evidence_missing
@@ -248,6 +257,13 @@ RELEASE_READINESS_ARTIFACT_REF=release-readiness-artifact-test
 RELEASE_READINESS_ARTIFACT_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 RELEASE_READINESS_ARTIFACT_DECISION=env_blocked
 RELEASE_READINESS_ARTIFACT_STORAGE_MODE=local_reference
+P41_CONTROL_PLANE_STATUS=env_blocked
+P41_RUNTIME_READINESS_STATUS=ready
+P41_CHAT_PROXY_STATUS=ready
+P41_FRONTEND_CONTRACT_STATUS=ready
+P41_CALIBRATION_DECISION_LOG_STATUS=ready
+P41_PANEL_SHADOW_CANDIDATE_STATUS=env_blocked
+P41_RUNTIME_OPS_PACK_STATUS=local_reference_ready
 EOF_ENV
 cat >"$EVIDENCE_ARCHIVE/ai_judge_runtime_ops_pack.md" <<'EOF_MD'
 # runtime pack

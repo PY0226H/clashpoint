@@ -266,6 +266,27 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
                     "source": "release_gate",
                     "realEnvEvidenceAvailable": False,
                 },
+                "p41ControlPlaneEvidence": {
+                    "version": "p41-control-plane-evidence-v1",
+                    "status": "env_blocked",
+                    "signalCounts": {
+                        "ready": 5,
+                        "env_blocked": 1,
+                        "blocked": 0,
+                        "needs_review": 0,
+                        "missing": 0,
+                    },
+                    "signals": {
+                        "runtimeReadiness": {"status": "ready"},
+                        "chatRuntimeReadinessProxy": {"status": "ready"},
+                        "frontendOpsConsoleContract": {"status": "ready"},
+                        "calibrationDecisionLog": {"status": "ready"},
+                        "panelShadowCandidate": {"status": "env_blocked"},
+                        "runtimeOpsPack": {"status": "local_reference_ready"},
+                    },
+                    "releaseBlocking": True,
+                    "officialVerdictAuthority": False,
+                },
             },
         )
 
@@ -274,6 +295,11 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(export["summary"]["manifestHash"]), 64)
         self.assertEqual(export["summary"]["storageMode"], "local_reference")
         self.assertEqual(export["summary"]["envBlockedComponents"], ["fairnessBenchmark"])
+        self.assertEqual(export["summary"]["p41ControlPlaneStatus"], "env_blocked")
+        self.assertEqual(
+            export["summary"]["p41PanelShadowCandidateStatus"],
+            "env_blocked",
+        )
         self.assertFalse(export["summary"]["redactionContract"]["storageUriVisible"])
         summary_text = str(export["summary"])
         self.assertNotIn(self._tmpdir.name, summary_text)

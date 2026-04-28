@@ -18,6 +18,15 @@ def _tokens_from_list(value: Any) -> list[str]:
     return [token for item in value if (token := _token(item))]
 
 
+def _non_negative_int(value: Any) -> int:
+    try:
+        if isinstance(value, bool):
+            return 0
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def summarize_release_readiness_evidence(
     evidence_items: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -67,12 +76,33 @@ def summarize_release_readiness_evidence(
         }
     )
     real_env_evidence_status_counts: dict[str, int] = {}
+    p41_control_plane_status_counts: dict[str, int] = {}
+    p41_control_plane_signal_counts: dict[str, int] = {}
+    p41_control_plane_evidence_count = 0
     for item in evidence_items:
         real_env_status = _dict_or_empty(item.get("realEnvEvidenceStatus"))
         status = str(real_env_status.get("status") or "").strip().lower() or "unknown"
         real_env_evidence_status_counts[status] = (
             real_env_evidence_status_counts.get(status, 0) + 1
         )
+        p41_control_plane = _dict_or_empty(item.get("p41ControlPlaneEvidence"))
+        if p41_control_plane:
+            p41_control_plane_evidence_count += 1
+            p41_status = (
+                str(p41_control_plane.get("status") or "").strip().lower()
+                or "unknown"
+            )
+            p41_control_plane_status_counts[p41_status] = (
+                p41_control_plane_status_counts.get(p41_status, 0) + 1
+            )
+            for signal_status, count in _dict_or_empty(
+                p41_control_plane.get("signalCounts")
+            ).items():
+                token = str(signal_status or "").strip().lower() or "unknown"
+                p41_control_plane_signal_counts[token] = (
+                    p41_control_plane_signal_counts.get(token, 0)
+                    + _non_negative_int(count)
+                )
     return {
         "evidenceVersion": evidence_version,
         "evidenceCount": len(evidence_items),
@@ -83,6 +113,13 @@ def summarize_release_readiness_evidence(
         "releaseReadinessManifestHashCount": len(release_manifest_hashes),
         "realEnvEvidenceStatusCounts": dict(
             sorted(real_env_evidence_status_counts.items(), key=lambda kv: kv[0])
+        ),
+        "p41ControlPlaneEvidenceCount": p41_control_plane_evidence_count,
+        "p41ControlPlaneStatusCounts": dict(
+            sorted(p41_control_plane_status_counts.items(), key=lambda kv: kv[0])
+        ),
+        "p41ControlPlaneSignalCounts": dict(
+            sorted(p41_control_plane_signal_counts.items(), key=lambda kv: kv[0])
         ),
     }
 
@@ -121,6 +158,15 @@ def build_registry_release_readiness_projection(
         ],
         "realEnvEvidenceStatusCounts": evidence_summary[
             "realEnvEvidenceStatusCounts"
+        ],
+        "p41ControlPlaneEvidenceCount": evidence_summary[
+            "p41ControlPlaneEvidenceCount"
+        ],
+        "p41ControlPlaneStatusCounts": evidence_summary[
+            "p41ControlPlaneStatusCounts"
+        ],
+        "p41ControlPlaneSignalCounts": evidence_summary[
+            "p41ControlPlaneSignalCounts"
         ],
         "items": [
             {

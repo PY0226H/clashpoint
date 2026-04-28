@@ -34,6 +34,48 @@ class RegistryReleaseGateTests(unittest.TestCase):
                             "manifestHash": "a" * 64,
                             "storageUri": "s3://hidden-bucket/path",
                         },
+                        "runtimeReadiness": {
+                            "status": "ready",
+                            "releaseReadinessEvidenceCount": 2,
+                            "rawTrace": "hidden runtime trace",
+                        },
+                        "chatRuntimeReadinessProxy": {
+                            "status": "ready",
+                            "route": "/api/debate/ops/judge-runtime-readiness",
+                            "rbacEnforced": True,
+                            "noSecretContractPassed": True,
+                            "timeoutMs": 8000,
+                            "secret": "hidden internal key",
+                        },
+                        "frontendOpsConsoleContract": {
+                            "status": "ready",
+                            "packageName": "@echoisle/app-shell",
+                            "typecheckStatus": "passed",
+                            "panelCandidateSummaryVisible": True,
+                            "calibrationDecisionSummaryVisible": True,
+                        },
+                        "calibrationDecisionLog": {
+                            "status": "ready",
+                            "decisionCount": 3,
+                            "acceptedCount": 1,
+                            "productionReadyBlockerCount": 1,
+                            "autoApplyAllowed": False,
+                        },
+                        "panelShadowCandidateReadiness": {
+                            "status": "local_reference_ready",
+                            "candidateModelGroupCount": 2,
+                            "switchBlockerCount": 1,
+                            "releaseBlockedGroupCount": 1,
+                            "autoSwitchAllowed": False,
+                            "officialWinnerSemanticsChanged": False,
+                        },
+                        "runtimeOpsPack": {
+                            "status": "local_reference_ready",
+                            "artifactRef": "runtime-ops-pack-local",
+                            "manifestHash": "b" * 64,
+                            "storageMode": "local_reference",
+                            "allowLocalReference": True,
+                        },
                     }
                 }
             },
@@ -96,6 +138,32 @@ class RegistryReleaseGateTests(unittest.TestCase):
         self.assertNotIn(
             "s3://hidden-bucket/path",
             json.dumps(evidence, ensure_ascii=False),
+        )
+        self.assertNotIn(
+            "hidden internal key",
+            json.dumps(evidence, ensure_ascii=False),
+        )
+        self.assertNotIn(
+            "hidden runtime trace",
+            json.dumps(evidence, ensure_ascii=False),
+        )
+        self.assertEqual(
+            evidence["p41ControlPlaneEvidence"]["status"],
+            "env_blocked",
+        )
+        self.assertEqual(
+            evidence["p41ControlPlaneEvidence"]["signals"]["panelShadowCandidate"][
+                "sourceStatus"
+            ],
+            "local_reference_ready",
+        )
+        self.assertFalse(
+            evidence["p41ControlPlaneEvidence"]["signals"]["panelShadowCandidate"][
+                "autoSwitchAllowed"
+            ]
+        )
+        self.assertFalse(
+            evidence["p41ControlPlaneEvidence"]["officialVerdictAuthority"]
         )
         self.assertEqual(evidence["realEnvEvidenceStatus"]["status"], "env_blocked")
         self.assertEqual(

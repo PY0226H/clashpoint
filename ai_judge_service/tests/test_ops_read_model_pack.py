@@ -919,6 +919,16 @@ class OpsReadModelPackTests(unittest.TestCase):
                                 "weakCitationCount": 2,
                                 "forbiddenSourceCount": 0,
                             },
+                            "p41ControlPlaneEvidence": {
+                                "status": "env_blocked",
+                                "signalCounts": {
+                                    "ready": 5,
+                                    "env_blocked": 1,
+                                    "blocked": 0,
+                                    "needs_review": 0,
+                                    "missing": 0,
+                                },
+                            },
                             "realEnvEvidenceStatus": {"status": "env_blocked"},
                         },
                     }
@@ -983,6 +993,14 @@ class OpsReadModelPackTests(unittest.TestCase):
         self.assertNotIn("hidden-bucket", str(payload["registryReleaseReadiness"]))
         self.assertEqual(
             payload["registryReleaseReadiness"]["realEnvEvidenceStatusCounts"],
+            {"env_blocked": 1},
+        )
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["p41ControlPlaneEvidenceCount"],
+            1,
+        )
+        self.assertEqual(
+            payload["registryReleaseReadiness"]["p41ControlPlaneStatusCounts"],
             {"env_blocked": 1},
         )
         self.assertEqual(payload["citationVerifierEvidence"]["status"], "watch")

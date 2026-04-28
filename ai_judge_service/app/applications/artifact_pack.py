@@ -477,6 +477,7 @@ def build_release_readiness_artifact(
     public_verification = _dict_or_empty(evidence.get("publicVerificationReadiness"))
     citation_verification = _dict_or_empty(evidence.get("citationVerification"))
     fairness_panel = _dict_or_empty(evidence.get("fairnessPanelEvidence"))
+    p41_control_plane = _dict_or_empty(evidence.get("p41ControlPlaneEvidence"))
     real_env = _dict_or_empty(evidence.get("realEnvEvidenceStatus"))
     return {
         "version": RELEASE_READINESS_ARTIFACT_VERSION,
@@ -527,6 +528,9 @@ def build_release_readiness_artifact(
             ),
             "shadowEvidenceStatus": _payload_str(fairness_panel.get("shadowEvidenceStatus")),
         },
+        "p41ControlPlaneEvidence": _release_p41_control_plane_summary(
+            p41_control_plane
+        ),
         "realEnvEvidenceStatus": {
             "status": _payload_str(real_env.get("status")),
             "source": _payload_str(real_env.get("source")),
@@ -535,6 +539,52 @@ def build_release_readiness_artifact(
         },
         "redactionContract": _redaction_contract(),
         "decisionAuthority": "release_gate_only",
+        "officialVerdictAuthority": False,
+    }
+
+
+def _release_p41_signal_status(
+    *,
+    p41_control_plane: dict[str, Any],
+    signal: str,
+) -> str | None:
+    signals = _dict_or_empty(p41_control_plane.get("signals"))
+    payload = _dict_or_empty(signals.get(signal))
+    return _payload_str(payload.get("status"))
+
+
+def _release_p41_control_plane_summary(
+    p41_control_plane: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "version": _payload_str(p41_control_plane.get("version")),
+        "status": _payload_str(p41_control_plane.get("status")),
+        "signalCounts": _dict_or_empty(p41_control_plane.get("signalCounts")),
+        "releaseBlocking": bool(p41_control_plane.get("releaseBlocking")),
+        "runtimeReadinessStatus": _release_p41_signal_status(
+            p41_control_plane=p41_control_plane,
+            signal="runtimeReadiness",
+        ),
+        "chatProxyStatus": _release_p41_signal_status(
+            p41_control_plane=p41_control_plane,
+            signal="chatRuntimeReadinessProxy",
+        ),
+        "frontendContractStatus": _release_p41_signal_status(
+            p41_control_plane=p41_control_plane,
+            signal="frontendOpsConsoleContract",
+        ),
+        "calibrationDecisionLogStatus": _release_p41_signal_status(
+            p41_control_plane=p41_control_plane,
+            signal="calibrationDecisionLog",
+        ),
+        "panelShadowCandidateStatus": _release_p41_signal_status(
+            p41_control_plane=p41_control_plane,
+            signal="panelShadowCandidate",
+        ),
+        "runtimeOpsPackStatus": _release_p41_signal_status(
+            p41_control_plane=p41_control_plane,
+            signal="runtimeOpsPack",
+        ),
         "officialVerdictAuthority": False,
     }
 
@@ -550,6 +600,7 @@ def build_release_readiness_artifact_summary(
     artifact = _dict_or_empty(release_readiness_artifact)
     metadata = _dict_or_empty(manifest_payload.get("metadata"))
     artifact_store = _dict_or_empty(metadata.get("artifactStore"))
+    p41_control_plane = _dict_or_empty(artifact.get("p41ControlPlaneEvidence"))
     return {
         "version": RELEASE_READINESS_ARTIFACT_SUMMARY_VERSION,
         "artifactRef": ref_payload["artifactId"],
@@ -568,6 +619,24 @@ def build_release_readiness_artifact_summary(
             "status": _payload_str(artifact_store.get("status")),
             "productionReady": bool(artifact_store.get("productionReady")),
         },
+        "p41ControlPlaneEvidence": p41_control_plane,
+        "p41ControlPlaneStatus": _payload_str(p41_control_plane.get("status")),
+        "p41RuntimeReadinessStatus": _payload_str(
+            p41_control_plane.get("runtimeReadinessStatus")
+        ),
+        "p41ChatProxyStatus": _payload_str(p41_control_plane.get("chatProxyStatus")),
+        "p41FrontendContractStatus": _payload_str(
+            p41_control_plane.get("frontendContractStatus")
+        ),
+        "p41CalibrationDecisionLogStatus": _payload_str(
+            p41_control_plane.get("calibrationDecisionLogStatus")
+        ),
+        "p41PanelShadowCandidateStatus": _payload_str(
+            p41_control_plane.get("panelShadowCandidateStatus")
+        ),
+        "p41RuntimeOpsPackStatus": _payload_str(
+            p41_control_plane.get("runtimeOpsPackStatus")
+        ),
         "realEnvEvidenceStatus": _dict_or_empty(artifact.get("realEnvEvidenceStatus")),
         "redactionContract": _redaction_contract(),
     }

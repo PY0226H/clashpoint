@@ -23,6 +23,16 @@ class ReleaseReadinessProjectionTests(unittest.TestCase):
                         "artifactRef": "release-readiness-artifact-a",
                         "manifestHash": "a" * 64,
                     },
+                    "p41ControlPlaneEvidence": {
+                        "status": "env_blocked",
+                        "signalCounts": {
+                            "ready": 5,
+                            "env_blocked": 1,
+                            "blocked": 0,
+                            "needs_review": 0,
+                            "missing": 0,
+                        },
+                    },
                     "realEnvEvidenceStatus": {"status": "env_blocked"},
                 },
                 {
@@ -57,6 +67,18 @@ class ReleaseReadinessProjectionTests(unittest.TestCase):
             summary["realEnvEvidenceStatusCounts"],
             {"env_blocked": 1, "ready": 1},
         )
+        self.assertEqual(summary["p41ControlPlaneEvidenceCount"], 1)
+        self.assertEqual(summary["p41ControlPlaneStatusCounts"], {"env_blocked": 1})
+        self.assertEqual(
+            summary["p41ControlPlaneSignalCounts"],
+            {
+                "blocked": 0,
+                "env_blocked": 1,
+                "missing": 0,
+                "needs_review": 0,
+                "ready": 5,
+            },
+        )
 
     def test_registry_projection_should_keep_route_contract_and_items(self) -> None:
         rows = [
@@ -75,6 +97,10 @@ class ReleaseReadinessProjectionTests(unittest.TestCase):
                     "releaseReadinessArtifactSummary": {
                         "artifactRef": "release-readiness-artifact",
                         "manifestHash": "c" * 64,
+                    },
+                    "p41ControlPlaneEvidence": {
+                        "status": "env_blocked",
+                        "signalCounts": {"ready": 5, "env_blocked": 1},
                     },
                     "realEnvEvidenceStatus": {"status": "env_blocked"},
                 },
@@ -98,6 +124,8 @@ class ReleaseReadinessProjectionTests(unittest.TestCase):
         self.assertEqual(payload["evidenceCount"], 1)
         self.assertEqual(payload["releaseReadinessArtifactCount"], 1)
         self.assertEqual(payload["releaseReadinessManifestHashCount"], 1)
+        self.assertEqual(payload["p41ControlPlaneEvidenceCount"], 1)
+        self.assertEqual(payload["p41ControlPlaneStatusCounts"], {"env_blocked": 1})
         self.assertEqual(payload["items"][0]["policyVersion"], "policy-v3-local")
         self.assertEqual(
             payload["items"][0]["evidence"]["releaseReadinessArtifactSummary"][
