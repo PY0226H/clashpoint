@@ -204,6 +204,19 @@ expect_contains "p40 challenge ops bridge has projection alternative" "chore(ai-
 expect_not_contains "p40 challenge ops bridge avoids generic capability subject" "add ai-judge capability" "$P40_CHALLENGE_OPS_OUT"
 expect_not_contains "p40 challenge ops bridge avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CHALLENGE_OPS_OUT"
 
+P40_CHALLENGE_ROUTE_SPLIT_OUT="$TMP_DIR/p40-challenge-route-split.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-challenge-route-hotspot-split-pack \
+  --summary "Split P40 challenge ops and read-model projection helpers without changing public contracts" >"$P40_CHALLENGE_ROUTE_SPLIT_OUT"
+
+expect_contains "p40 challenge route split uses refactor title" "refactor(ai-judge): split challenge ops projections" "$P40_CHALLENGE_ROUTE_SPLIT_OUT"
+expect_contains "p40 challenge route split has helper alternative" "refactor(ai-judge): extract challenge ops helpers" "$P40_CHALLENGE_ROUTE_SPLIT_OUT"
+expect_contains "p40 challenge route split has thin projection alternative" "chore(ai-judge): thin challenge proxy projections" "$P40_CHALLENGE_ROUTE_SPLIT_OUT"
+expect_not_contains "p40 challenge route split avoids challenge ops bridge subject" "bridge challenge ops queue" "$P40_CHALLENGE_ROUTE_SPLIT_OUT"
+expect_not_contains "p40 challenge route split avoids generic capability subject" "add ai-judge capability" "$P40_CHALLENGE_ROUTE_SPLIT_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

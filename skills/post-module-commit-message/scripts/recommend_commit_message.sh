@@ -189,6 +189,7 @@ detect_type() {
 
   if [[ "$module_key" == *"route-dependency-hotspot-split"* ||
         "$module_key" == *"registry-trust-route-hotspot-split"* ||
+        "$module_key" == *"challenge-route-hotspot-split"* ||
         "$summary_lower" == *"route projection"* ||
         "$summary_lower" == *"route projections"* ||
         "$summary_lower" == *"hotspot split"* ||
@@ -253,6 +254,10 @@ build_subject() {
   elif [[ "$module_key" == *"route-dependency-hotspot-split"* ||
           "$summary_lower" == *"route dependency"* ]]; then
     echo "split trust and ops route wiring"
+  elif [[ "$module_key" == *"challenge-route-hotspot-split"* ||
+          "$summary_lower" == *"challenge projection helper"* ||
+          "$summary_lower" == *"challenge projections"* ]]; then
+    echo "split challenge ops projections"
   elif [[ "$module_key" == *"registry-trust-route-hotspot-split"* ||
           "$summary_lower" == *"route projection"* ||
           "$summary_lower" == *"route projections"* ||
@@ -352,6 +357,7 @@ build_alt_one_subject() {
     "archive stage closure") echo "record stage closure state" ;;
     "split trust and ops route wiring") echo "extract trust dependency builders" ;;
     "split registry trust route projections") echo "extract public verify projections" ;;
+    "split challenge ops projections") echo "extract challenge ops helpers" ;;
     "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
     "record p39 local reference evidence") echo "refresh p39 runtime ops evidence" ;;
     "record local reference evidence") echo "refresh runtime ops evidence" ;;
@@ -386,6 +392,7 @@ build_alt_two_subject() {
     "archive stage closure") echo "reset active plan" ;;
     "split trust and ops route wiring") echo "thin app factory route assembly" ;;
     "split registry trust route projections") echo "thin registry and trust routes" ;;
+    "split challenge ops projections") echo "thin challenge proxy projections" ;;
     "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
     "record p39 local reference evidence") echo "mark p39 local reference ready" ;;
     "record local reference evidence") echo "mark local reference ready" ;;

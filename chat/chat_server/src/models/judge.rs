@@ -2,6 +2,7 @@ use crate::{AppError, AppState, JudgeDispatchTrigger};
 use chat_core::User;
 use chrono::{DateTime, Utc};
 
+mod challenge_ops_projection;
 mod draw_vote;
 mod helpers;
 mod phase_final_report_submit;

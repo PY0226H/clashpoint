@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from app.applications.trust_ops_views import (
-    build_public_trust_verify_payload,
+from app.applications.trust_challenge_ops_projection import (
     build_trust_challenge_ops_queue_item,
     build_trust_challenge_ops_queue_payload,
 )
+from app.applications.trust_ops_views import build_public_trust_verify_payload
 
 
 class TrustOpsViewsTests(unittest.TestCase):
