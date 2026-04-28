@@ -71,6 +71,15 @@ def _to_int(value: Any, *, default: int = 0) -> int:
         return default
 
 
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        if value is None or isinstance(value, bool):
+            return float(default)
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _token(value: Any) -> str | None:
     token = str(value or "").strip()
     return token or None
@@ -237,10 +246,17 @@ def _build_fairness_section(
 
 def _build_panel_runtime_section(
     *,
+    panel_runtime_readiness: dict[str, Any],
     trust_monitoring: dict[str, Any],
     adaptive_summary: dict[str, Any],
 ) -> dict[str, Any]:
     panel_shadow_drift = _dict_or_empty(trust_monitoring.get("panelShadowDrift"))
+    readiness_overview = _dict_or_empty(panel_runtime_readiness.get("overview"))
+    readiness_shadow = _dict_or_empty(readiness_overview.get("shadow"))
+    switch_blocker_counts = _dict_or_empty(readiness_shadow.get("switchBlockerCounts"))
+    release_gate_signal_counts = _dict_or_empty(
+        readiness_shadow.get("releaseGateSignalCounts")
+    )
     return {
         "status": _lower_token(panel_shadow_drift.get("status")),
         "readyGroupCount": _to_int(adaptive_summary.get("panelReadyGroupCount")),
@@ -260,6 +276,22 @@ def _build_panel_runtime_section(
         "latestShadowRunEnvironmentMode": _lower_token(
             panel_shadow_drift.get("latestShadowRunEnvironmentMode")
         ),
+        "candidateModelGroupCount": _to_int(
+            readiness_shadow.get("candidateModelGroupCount")
+        ),
+        "switchBlockerCount": sum(
+            _to_int(value) for value in switch_blocker_counts.values()
+        ),
+        "releaseBlockedGroupCount": _to_int(release_gate_signal_counts.get("blocked")),
+        "avgShadowDecisionAgreement": _safe_float(
+            readiness_shadow.get("avgDecisionAgreement")
+        ),
+        "avgShadowCostEstimate": _safe_float(readiness_shadow.get("avgCostEstimate")),
+        "avgShadowLatencyEstimate": _safe_float(
+            readiness_shadow.get("avgLatencyEstimate")
+        ),
+        "autoSwitchAllowed": False,
+        "officialWinnerSemanticsChanged": False,
     }
 
 
@@ -534,6 +566,7 @@ def build_runtime_readiness_public_payload(
     fairness_calibration_advisor = _dict_or_empty(
         pack_payload.get("fairnessCalibrationAdvisor")
     )
+    panel_runtime_readiness = _dict_or_empty(pack_payload.get("panelRuntimeReadiness"))
     release_gate = _dict_or_empty(fairness_calibration_advisor.get("releaseGate"))
     adaptive_summary = _dict_or_empty(pack_payload.get("adaptiveSummary"))
     trust_monitoring = _dict_or_empty(pack_payload.get("trustMonitoring"))
@@ -564,6 +597,7 @@ def build_runtime_readiness_public_payload(
             adaptive_summary=adaptive_summary,
         ),
         "panelRuntime": _build_panel_runtime_section(
+            panel_runtime_readiness=panel_runtime_readiness,
             trust_monitoring=trust_monitoring,
             adaptive_summary=adaptive_summary,
         ),

@@ -4,6 +4,12 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from .panel_runtime_profile_contract import PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS
+
+PANEL_SHADOW_CANDIDATE_AGREEMENT_MIN = 0.8
+PANEL_SHADOW_CANDIDATE_COST_BUDGET_MAX = 0.05
+PANEL_SHADOW_CANDIDATE_LATENCY_BUDGET_MS_MAX = 2000.0
+
 
 class PanelRuntimeRouteError(Exception):
     def __init__(self, *, status_code: int, detail: Any):
@@ -47,6 +53,64 @@ def _unique_tokens(values: list[Any] | tuple[Any, ...] | set[Any]) -> list[str]:
         seen.add(token)
         out.append(token)
     return out
+
+
+def _build_shadow_candidate_switch_blockers(
+    *,
+    candidate_models: list[str],
+    shadow_enabled_rate: float,
+    shadow_release_gate_signals: set[str],
+    shadow_drift_signal_rate: float,
+    avg_shadow_decision_agreement: float,
+    avg_shadow_cost_estimate: float,
+    avg_shadow_latency_estimate: float,
+) -> list[str]:
+    blockers: list[str] = []
+    if shadow_enabled_rate <= 0 or "watch" in shadow_release_gate_signals:
+        blockers.append("real_samples_missing")
+    if avg_shadow_decision_agreement < PANEL_SHADOW_CANDIDATE_AGREEMENT_MIN:
+        blockers.append("shadow_agreement_below_threshold")
+    if avg_shadow_cost_estimate > PANEL_SHADOW_CANDIDATE_COST_BUDGET_MAX:
+        blockers.append("cost_budget_exceeded")
+    if avg_shadow_latency_estimate > PANEL_SHADOW_CANDIDATE_LATENCY_BUDGET_MS_MAX:
+        blockers.append("latency_budget_exceeded")
+    if "blocked" in shadow_release_gate_signals or shadow_drift_signal_rate > 0:
+        blockers.append("release_gate_blocked")
+    if not candidate_models:
+        blockers.append("candidate_models_missing")
+    allowed = set(PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS)
+    return [item for item in _unique_tokens(blockers) if item in allowed]
+
+
+def _build_shadow_candidate_release_gate_signals(
+    *,
+    switch_blockers: list[str],
+    candidate_model_count: int,
+) -> dict[str, Any]:
+    blocking_codes = {
+        "shadow_agreement_below_threshold",
+        "cost_budget_exceeded",
+        "latency_budget_exceeded",
+        "release_gate_blocked",
+    }
+    if any(code in blocking_codes for code in switch_blockers):
+        status = "blocked"
+    elif switch_blockers:
+        status = "watch"
+    else:
+        status = "ready"
+    return {
+        "status": status,
+        "blocksCandidateRollout": bool(switch_blockers),
+        "switchBlockers": switch_blockers,
+        "candidateModelCount": max(0, int(candidate_model_count)),
+        "shadowAgreementThreshold": PANEL_SHADOW_CANDIDATE_AGREEMENT_MIN,
+        "costBudgetMax": PANEL_SHADOW_CANDIDATE_COST_BUDGET_MAX,
+        "latencyBudgetMsMax": PANEL_SHADOW_CANDIDATE_LATENCY_BUDGET_MS_MAX,
+        "advisoryOnly": True,
+        "autoSwitchAllowed": False,
+        "officialWinnerSemanticsChanged": False,
+    }
 
 
 def normalize_panel_runtime_profile_source(value: str | None) -> str | None:
@@ -640,6 +704,24 @@ def build_panel_runtime_readiness_summary(
             if record_count > 0
             else 0.0
         )
+        shadow_release_gate_signals = {
+            str(item).strip()
+            for item in row["shadowReleaseGateSignals"]
+            if str(item).strip()
+        }
+        switch_blockers = _build_shadow_candidate_switch_blockers(
+            candidate_models=candidate_models,
+            shadow_enabled_rate=shadow_enabled_rate,
+            shadow_release_gate_signals=shadow_release_gate_signals,
+            shadow_drift_signal_rate=shadow_drift_signal_rate,
+            avg_shadow_decision_agreement=avg_shadow_decision_agreement,
+            avg_shadow_cost_estimate=avg_shadow_cost_estimate,
+            avg_shadow_latency_estimate=avg_shadow_latency_estimate,
+        )
+        release_gate_signals = _build_shadow_candidate_release_gate_signals(
+            switch_blockers=switch_blockers,
+            candidate_model_count=len(candidate_models),
+        )
         readiness_score = max(
             0.0,
             min(
@@ -729,6 +811,8 @@ def build_panel_runtime_readiness_summary(
                 "avgPanelDisagreementRatio": round(avg_disagreement_ratio, 4),
                 "readinessScore": round(readiness_score, 2),
                 "readinessLevel": readiness_level,
+                "switchBlockers": switch_blockers,
+                "releaseGateSignals": release_gate_signals,
                 "recommendedSwitchConditions": switch_conditions,
                 "simulations": simulations,
             }
@@ -756,8 +840,18 @@ def build_panel_runtime_readiness_summary(
     shadow_blocked_groups = 0
     shadow_watch_groups = 0
     shadow_drift_signal_groups = 0
+    shadow_candidate_model_groups = 0
     shadow_cost_sum = 0.0
     shadow_latency_sum = 0.0
+    shadow_decision_agreement_sum = 0.0
+    release_gate_signal_counts = {
+        "ready": 0,
+        "watch": 0,
+        "blocked": 0,
+    }
+    switch_blocker_counts = {
+        blocker: 0 for blocker in PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS
+    }
     for row in limited_group_rows:
         level = str(row.get("readinessLevel") or "").strip().lower()
         if level in readiness_counts:
@@ -776,8 +870,25 @@ def build_panel_runtime_readiness_summary(
             shadow_watch_groups += 1
         if int(row.get("shadowDriftSignalCount") or 0) > 0:
             shadow_drift_signal_groups += 1
+        if int(row.get("candidateModelCount") or 0) > 0:
+            shadow_candidate_model_groups += 1
         shadow_cost_sum += float(row.get("avgShadowCostEstimate") or 0.0)
         shadow_latency_sum += float(row.get("avgShadowLatencyEstimate") or 0.0)
+        shadow_decision_agreement_sum += float(
+            row.get("avgShadowDecisionAgreement") or 0.0
+        )
+        release_gate_signals = (
+            row.get("releaseGateSignals")
+            if isinstance(row.get("releaseGateSignals"), dict)
+            else {}
+        )
+        release_status = str(release_gate_signals.get("status") or "").strip().lower()
+        if release_status in release_gate_signal_counts:
+            release_gate_signal_counts[release_status] += 1
+        for blocker in row.get("switchBlockers") or []:
+            blocker_token = str(blocker or "").strip()
+            if blocker_token in switch_blocker_counts:
+                switch_blocker_counts[blocker_token] += 1
 
     return {
         "groups": limited_group_rows,
@@ -792,6 +903,14 @@ def build_panel_runtime_readiness_summary(
                 "blockedGroupCount": shadow_blocked_groups,
                 "watchGroupCount": shadow_watch_groups,
                 "driftSignalGroupCount": shadow_drift_signal_groups,
+                "candidateModelGroupCount": shadow_candidate_model_groups,
+                "releaseGateSignalCounts": release_gate_signal_counts,
+                "switchBlockerCounts": switch_blocker_counts,
+                "avgDecisionAgreement": (
+                    shadow_decision_agreement_sum / len(limited_group_rows)
+                    if limited_group_rows
+                    else 0.0
+                ),
                 "avgCostEstimate": (
                     shadow_cost_sum / len(limited_group_rows)
                     if limited_group_rows
@@ -803,6 +922,8 @@ def build_panel_runtime_readiness_summary(
                     else 0.0
                 ),
                 "officialWinnerMutationAllowed": False,
+                "officialWinnerSemanticsChanged": False,
+                "autoSwitchAllowed": False,
             },
         },
     }
@@ -1242,9 +1363,21 @@ async def build_panel_runtime_readiness_payload(
                     "blockedGroupCount": 0,
                     "watchGroupCount": 0,
                     "driftSignalGroupCount": 0,
+                    "candidateModelGroupCount": 0,
+                    "releaseGateSignalCounts": {
+                        "ready": 0,
+                        "watch": 0,
+                        "blocked": 0,
+                    },
+                    "switchBlockerCounts": {
+                        blocker: 0 for blocker in PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS
+                    },
+                    "avgDecisionAgreement": 0.0,
                     "avgCostEstimate": 0.0,
                     "avgLatencyEstimate": 0.0,
                     "officialWinnerMutationAllowed": False,
+                    "officialWinnerSemanticsChanged": False,
+                    "autoSwitchAllowed": False,
                 }
             ),
         },

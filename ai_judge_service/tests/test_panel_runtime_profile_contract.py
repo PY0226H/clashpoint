@@ -7,7 +7,9 @@ from app.applications.panel_runtime_profile_contract import (
     PANEL_RUNTIME_PROFILE_FILTER_KEYS,
     PANEL_RUNTIME_PROFILE_ITEM_KEYS,
     PANEL_RUNTIME_PROFILE_TOP_LEVEL_KEYS,
+    PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS,
     validate_panel_runtime_profile_contract,
+    validate_panel_runtime_readiness_contract,
 )
 
 
@@ -166,6 +168,95 @@ class PanelRuntimeProfileContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             validate_panel_runtime_profile_contract(payload)
         self.assertIn("panel_runtime_profile_by_model_strategy_sum_mismatch", str(ctx.exception))
+
+    def test_validate_panel_runtime_readiness_contract_should_require_safe_candidate_shape(
+        self,
+    ) -> None:
+        blocker_counts = {blocker: 0 for blocker in PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS}
+        blocker_counts["real_samples_missing"] = 1
+        group = {
+            "groupKey": "path|general|weighted|profile-a|v3-default",
+            "strategySlot": "path",
+            "domainSlot": "general",
+            "modelStrategy": "weighted",
+            "profileId": "profile-a",
+            "policyVersion": "v3-default",
+            "recordCount": 3,
+            "caseCount": 1,
+            "judgeIds": ["judgeA", "judgeB", "judgeC"],
+            "profileSources": ["trace"],
+            "candidateModels": ["gpt-4.1-mini"],
+            "candidateModelCount": 1,
+            "adaptiveEnabledRate": 0.0,
+            "shadowEnabledCount": 3,
+            "shadowEnabledRate": 1.0,
+            "shadowDriftSignalCount": 0,
+            "shadowDriftSignalRate": 0.0,
+            "avgShadowDecisionAgreement": 0.91,
+            "avgShadowCostEstimate": 0.02,
+            "avgShadowLatencyEstimate": 900.0,
+            "shadowReleaseGateSignals": ["watch"],
+            "panelHighDisagreementCount": 0,
+            "panelHighDisagreementRate": 0.0,
+            "reviewRequiredCount": 0,
+            "reviewRequiredRate": 0.0,
+            "openReviewCount": 0,
+            "openReviewRate": 0.0,
+            "avgPanelDisagreementRatio": 0.0,
+            "readinessScore": 95.0,
+            "readinessLevel": "ready",
+            "switchBlockers": ["real_samples_missing"],
+            "releaseGateSignals": {
+                "status": "watch",
+                "blocksCandidateRollout": True,
+                "switchBlockers": ["real_samples_missing"],
+                "candidateModelCount": 1,
+                "shadowAgreementThreshold": 0.8,
+                "costBudgetMax": 0.05,
+                "latencyBudgetMsMax": 2000.0,
+                "advisoryOnly": True,
+                "autoSwitchAllowed": False,
+                "officialWinnerSemanticsChanged": False,
+            },
+            "recommendedSwitchConditions": ["stable_runtime"],
+            "simulations": [{"scenarioId": "keep", "advisoryOnly": True}],
+        }
+        payload = {
+            "generatedAt": "2026-04-28T00:00:00Z",
+            "overview": {
+                "totalMatched": 3,
+                "scannedRecords": 3,
+                "scanTruncated": False,
+                "totalGroups": 1,
+                "attentionGroupCount": 0,
+                "readinessCounts": {"ready": 1, "watch": 0, "attention": 0},
+                "shadow": {
+                    "enabledGroupCount": 1,
+                    "blockedGroupCount": 0,
+                    "watchGroupCount": 1,
+                    "driftSignalGroupCount": 0,
+                    "candidateModelGroupCount": 1,
+                    "releaseGateSignalCounts": {"ready": 0, "watch": 1, "blocked": 0},
+                    "switchBlockerCounts": blocker_counts,
+                    "avgDecisionAgreement": 0.91,
+                    "avgCostEstimate": 0.02,
+                    "avgLatencyEstimate": 900.0,
+                    "officialWinnerMutationAllowed": False,
+                    "officialWinnerSemanticsChanged": False,
+                    "autoSwitchAllowed": False,
+                },
+            },
+            "groups": [group],
+            "attentionGroups": [],
+            "notes": ["advisory-only"],
+            "filters": {},
+        }
+
+        validate_panel_runtime_readiness_contract(payload)
+
+        payload["groups"][0]["releaseGateSignals"]["autoSwitchAllowed"] = True
+        with self.assertRaisesRegex(ValueError, "auto_switch_allowed_not_false"):
+            validate_panel_runtime_readiness_contract(payload)
 
 
 if __name__ == "__main__":

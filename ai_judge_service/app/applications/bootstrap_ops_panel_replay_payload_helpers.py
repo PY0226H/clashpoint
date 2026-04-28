@@ -42,6 +42,9 @@ from .ops_read_model_trust_projection import summarize_ops_read_model_pack_trust
 from .panel_runtime_profile_contract import (
     validate_panel_runtime_profile_contract as validate_panel_runtime_profile_contract_v3,
 )
+from .panel_runtime_profile_contract import (
+    validate_panel_runtime_readiness_contract as validate_panel_runtime_readiness_contract_v3,
+)
 from .panel_runtime_routes import (
     build_panel_runtime_profile_aggregations as build_panel_runtime_profile_aggregations_v3,
 )
@@ -466,7 +469,7 @@ async def build_panel_runtime_readiness_payload_for_runtime(
         [Awaitable[dict[str, Any]]], Awaitable[dict[str, Any]]
     ],
 ) -> dict[str, Any]:
-    return await run_panel_runtime_route_guard(
+    payload = await run_panel_runtime_route_guard(
         build_panel_runtime_readiness_route_payload_v3(
             list_panel_runtime_profiles=list_panel_runtime_profiles,
             build_panel_runtime_readiness_summary=build_panel_runtime_readiness_summary_v3,
@@ -501,6 +504,8 @@ async def build_panel_runtime_readiness_payload_for_runtime(
             attention_limit=attention_limit,
         )
     )
+    validate_panel_runtime_readiness_contract_v3(payload)
+    return payload
 
 
 async def build_replay_report_payload_for_runtime(

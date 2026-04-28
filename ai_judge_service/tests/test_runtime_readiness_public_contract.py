@@ -62,6 +62,29 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
                 "evidenceClaimQueueCount": 2,
                 "trustChallengeQueueCount": 1,
             },
+            "panelRuntimeReadiness": {
+                "overview": {
+                    "shadow": {
+                        "candidateModelGroupCount": 2,
+                        "releaseGateSignalCounts": {
+                            "ready": 1,
+                            "watch": 0,
+                            "blocked": 1,
+                        },
+                        "switchBlockerCounts": {
+                            "real_samples_missing": 1,
+                            "shadow_agreement_below_threshold": 0,
+                            "cost_budget_exceeded": 0,
+                            "latency_budget_exceeded": 0,
+                            "release_gate_blocked": 1,
+                            "candidate_models_missing": 0,
+                        },
+                        "avgDecisionAgreement": 0.82,
+                        "avgCostEstimate": 0.031,
+                        "avgLatencyEstimate": 1200.0,
+                    }
+                }
+            },
             "trustMonitoring": {
                 "overallStatus": "blocked",
                 "sampledCaseCount": 8,
@@ -167,6 +190,11 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
             2,
         )
         self.assertEqual(payload["panelRuntime"]["attentionGroupCount"], 1)
+        self.assertEqual(payload["panelRuntime"]["candidateModelGroupCount"], 2)
+        self.assertEqual(payload["panelRuntime"]["switchBlockerCount"], 2)
+        self.assertEqual(payload["panelRuntime"]["releaseBlockedGroupCount"], 1)
+        self.assertFalse(payload["panelRuntime"]["autoSwitchAllowed"])
+        self.assertFalse(payload["panelRuntime"]["officialWinnerSemanticsChanged"])
         self.assertEqual(payload["trustAndChallenge"]["openChallengeCount"], 1)
         self.assertTrue(payload["realEnv"]["evidenceAvailable"])
         self.assertEqual(payload["recommendedActions"][0]["id"], "collect-real-env-samples")

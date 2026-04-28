@@ -4,6 +4,7 @@ import unittest
 
 from app.applications.panel_runtime_routes import (
     PanelRuntimeRouteError,
+    build_panel_runtime_readiness_summary,
     build_panel_shadow_evaluation,
     normalize_panel_runtime_profile_query,
 )
@@ -68,6 +69,51 @@ class PanelRuntimeRoutesTests(unittest.TestCase):
         self.assertEqual(payload["driftSignals"], ["shadow_run_missing"])
         self.assertEqual(payload["releaseGateSignal"]["status"], "watch")
         self.assertFalse(payload["releaseGateSignal"]["blocksAutoRelease"])
+
+    def test_build_panel_runtime_readiness_summary_should_emit_candidate_contract(
+        self,
+    ) -> None:
+        items = [
+            {
+                "caseId": 7001,
+                "judgeId": "judgeA",
+                "profileSource": "trace",
+                "strategySlot": "path_alignment",
+                "domainSlot": "general",
+                "modelStrategy": "weighted_panel",
+                "profileId": "profile-a",
+                "policyVersion": "v3-default",
+                "candidateModels": ["candidate-a"],
+                "adaptiveEnabled": False,
+                "reviewRequired": False,
+                "hasOpenReview": False,
+                "panelDisagreement": {"high": False, "ratio": 0.0},
+                "shadowEnabled": True,
+                "shadowDriftSignals": [],
+                "shadowDecisionAgreement": 0.91,
+                "shadowCostEstimate": 0.02,
+                "shadowLatencyEstimate": 900.0,
+                "shadowReleaseGateSignal": {"status": "watch"},
+            }
+        ]
+
+        payload = build_panel_runtime_readiness_summary(
+            items=items,
+            group_limit=10,
+            attention_limit=5,
+        )
+
+        group = payload["groups"][0]
+        self.assertEqual(group["candidateModelCount"], 1)
+        self.assertEqual(group["switchBlockers"], ["real_samples_missing"])
+        self.assertEqual(group["releaseGateSignals"]["status"], "watch")
+        self.assertFalse(group["releaseGateSignals"]["autoSwitchAllowed"])
+        self.assertFalse(group["releaseGateSignals"]["officialWinnerSemanticsChanged"])
+        self.assertEqual(payload["overview"]["shadow"]["candidateModelGroupCount"], 1)
+        self.assertEqual(
+            payload["overview"]["shadow"]["switchBlockerCounts"]["real_samples_missing"],
+            1,
+        )
 
     def test_normalize_panel_runtime_profile_query_should_raise_for_invalid_judge_id(
         self,

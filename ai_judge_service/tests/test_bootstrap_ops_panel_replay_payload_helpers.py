@@ -7,6 +7,9 @@ from typing import Any
 from unittest.mock import patch
 
 from app.applications import bootstrap_ops_panel_replay_payload_helpers as helpers
+from app.applications.panel_runtime_profile_contract import (
+    PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS,
+)
 from fastapi import HTTPException
 
 
@@ -241,10 +244,48 @@ class BootstrapOpsPanelReplayPayloadHelpersTests(unittest.IsolatedAsyncioTestCas
 
         async def _build_readiness(**kwargs: Any) -> dict[str, Any]:
             calls["builder"] = kwargs
-            return {"scan": kwargs["profile_scan_limit"]}
+            return {
+                "generatedAt": "2026-04-28T00:00:00Z",
+                "overview": {
+                    "totalMatched": 0,
+                    "scannedRecords": kwargs["profile_scan_limit"],
+                    "scanTruncated": False,
+                    "totalGroups": 0,
+                    "attentionGroupCount": 0,
+                    "readinessCounts": {"ready": 0, "watch": 0, "attention": 0},
+                    "shadow": {
+                        "enabledGroupCount": 0,
+                        "blockedGroupCount": 0,
+                        "watchGroupCount": 0,
+                        "driftSignalGroupCount": 0,
+                        "candidateModelGroupCount": 0,
+                        "releaseGateSignalCounts": {
+                            "ready": 0,
+                            "watch": 0,
+                            "blocked": 0,
+                        },
+                        "switchBlockerCounts": {
+                            blocker: 0
+                            for blocker in PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS
+                        },
+                        "avgDecisionAgreement": 0.0,
+                        "avgCostEstimate": 0.0,
+                        "avgLatencyEstimate": 0.0,
+                        "officialWinnerMutationAllowed": False,
+                        "officialWinnerSemanticsChanged": False,
+                        "autoSwitchAllowed": False,
+                    },
+                },
+                "groups": [],
+                "attentionGroups": [],
+                "notes": [],
+                "filters": {},
+            }
 
         async def _guard(awaitable: Any) -> dict[str, Any]:
-            return {"guarded": await awaitable}
+            payload = await awaitable
+            calls["guarded"] = payload
+            return payload
 
         async def _list_profiles(**_kwargs: Any) -> dict[str, Any]:
             return {}
@@ -283,7 +324,8 @@ class BootstrapOpsPanelReplayPayloadHelpersTests(unittest.IsolatedAsyncioTestCas
                 run_panel_runtime_route_guard=_guard,
             )
 
-        self.assertEqual(payload, {"guarded": {"scan": 60}})
+        self.assertEqual(payload["overview"]["scannedRecords"], 60)
+        self.assertEqual(calls["guarded"]["overview"]["scannedRecords"], 60)
         self.assertEqual(calls["builder"]["panel_judge_ids"], ("judgeA", "judgeB"))
         self.assertIs(
             calls["builder"]["build_panel_runtime_readiness_summary"],

@@ -109,6 +109,106 @@ PANEL_RUNTIME_PROFILE_WINNER_COUNT_KEYS: tuple[str, ...] = (
     "unknown",
 )
 
+PANEL_RUNTIME_READINESS_TOP_LEVEL_KEYS: tuple[str, ...] = (
+    "generatedAt",
+    "overview",
+    "groups",
+    "attentionGroups",
+    "notes",
+    "filters",
+)
+
+PANEL_RUNTIME_READINESS_OVERVIEW_KEYS: tuple[str, ...] = (
+    "totalMatched",
+    "scannedRecords",
+    "scanTruncated",
+    "totalGroups",
+    "attentionGroupCount",
+    "readinessCounts",
+    "shadow",
+)
+
+PANEL_RUNTIME_READINESS_SHADOW_KEYS: tuple[str, ...] = (
+    "enabledGroupCount",
+    "blockedGroupCount",
+    "watchGroupCount",
+    "driftSignalGroupCount",
+    "candidateModelGroupCount",
+    "releaseGateSignalCounts",
+    "switchBlockerCounts",
+    "avgDecisionAgreement",
+    "avgCostEstimate",
+    "avgLatencyEstimate",
+    "officialWinnerMutationAllowed",
+    "officialWinnerSemanticsChanged",
+    "autoSwitchAllowed",
+)
+
+PANEL_RUNTIME_READINESS_GROUP_KEYS: tuple[str, ...] = (
+    "groupKey",
+    "strategySlot",
+    "domainSlot",
+    "modelStrategy",
+    "profileId",
+    "policyVersion",
+    "recordCount",
+    "caseCount",
+    "judgeIds",
+    "profileSources",
+    "candidateModels",
+    "candidateModelCount",
+    "adaptiveEnabledRate",
+    "shadowEnabledCount",
+    "shadowEnabledRate",
+    "shadowDriftSignalCount",
+    "shadowDriftSignalRate",
+    "avgShadowDecisionAgreement",
+    "avgShadowCostEstimate",
+    "avgShadowLatencyEstimate",
+    "shadowReleaseGateSignals",
+    "panelHighDisagreementCount",
+    "panelHighDisagreementRate",
+    "reviewRequiredCount",
+    "reviewRequiredRate",
+    "openReviewCount",
+    "openReviewRate",
+    "avgPanelDisagreementRatio",
+    "readinessScore",
+    "readinessLevel",
+    "switchBlockers",
+    "releaseGateSignals",
+    "recommendedSwitchConditions",
+    "simulations",
+)
+
+PANEL_RUNTIME_READINESS_RELEASE_GATE_SIGNAL_KEYS: tuple[str, ...] = (
+    "status",
+    "blocksCandidateRollout",
+    "switchBlockers",
+    "candidateModelCount",
+    "shadowAgreementThreshold",
+    "costBudgetMax",
+    "latencyBudgetMsMax",
+    "advisoryOnly",
+    "autoSwitchAllowed",
+    "officialWinnerSemanticsChanged",
+)
+
+PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS: tuple[str, ...] = (
+    "real_samples_missing",
+    "shadow_agreement_below_threshold",
+    "cost_budget_exceeded",
+    "latency_budget_exceeded",
+    "release_gate_blocked",
+    "candidate_models_missing",
+)
+
+PANEL_RUNTIME_READINESS_RELEASE_GATE_STATUSES: tuple[str, ...] = (
+    "ready",
+    "watch",
+    "blocked",
+)
+
 
 def _required_keys_missing(payload: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     return [key for key in keys if key not in payload]
@@ -315,3 +415,128 @@ def validate_panel_runtime_profile_contract(payload: dict[str, Any]) -> None:
     limit = _non_negative_int(filters.get("limit"), default=0)
     if limit <= 0:
         raise ValueError("panel_runtime_profile_filters_limit_invalid")
+
+
+def _validate_switch_blockers(value: Any, *, section: str) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"{section}_switch_blockers_not_list")
+    allowed = set(PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS)
+    for item in value:
+        if str(item or "").strip() not in allowed:
+            raise ValueError(f"{section}_switch_blocker_invalid")
+
+
+def _validate_release_gate_signals(payload: Any, *, section: str) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError(f"{section}_release_gate_signals_not_dict")
+    _assert_required_keys(
+        section=f"{section}_release_gate_signals",
+        payload=payload,
+        keys=PANEL_RUNTIME_READINESS_RELEASE_GATE_SIGNAL_KEYS,
+    )
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in PANEL_RUNTIME_READINESS_RELEASE_GATE_STATUSES:
+        raise ValueError(f"{section}_release_gate_status_invalid")
+    if payload.get("autoSwitchAllowed") is not False:
+        raise ValueError(f"{section}_auto_switch_allowed_not_false")
+    if payload.get("officialWinnerSemanticsChanged") is not False:
+        raise ValueError(f"{section}_official_winner_semantics_changed_not_false")
+    if payload.get("advisoryOnly") is not True:
+        raise ValueError(f"{section}_advisory_only_not_true")
+    switch_blockers = payload.get("switchBlockers")
+    _validate_switch_blockers(
+        switch_blockers,
+        section=f"{section}_release_gate_signals",
+    )
+    if payload.get("blocksCandidateRollout") is not bool(switch_blockers):
+        raise ValueError(f"{section}_blocks_candidate_rollout_mismatch")
+
+
+def validate_panel_runtime_readiness_contract(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("panel_runtime_readiness_payload_not_dict")
+    _assert_required_keys(
+        section="panel_runtime_readiness",
+        payload=payload,
+        keys=PANEL_RUNTIME_READINESS_TOP_LEVEL_KEYS,
+    )
+    overview = payload.get("overview")
+    if not isinstance(overview, dict):
+        raise ValueError("panel_runtime_readiness_overview_not_dict")
+    _assert_required_keys(
+        section="panel_runtime_readiness_overview",
+        payload=overview,
+        keys=PANEL_RUNTIME_READINESS_OVERVIEW_KEYS,
+    )
+    readiness_counts = overview.get("readinessCounts")
+    _assert_count_map(
+        section="panel_runtime_readiness_readiness_counts",
+        payload=readiness_counts,
+        total=_non_negative_int(overview.get("totalGroups")),
+        required_keys=("ready", "watch", "attention"),
+    )
+    shadow = overview.get("shadow")
+    if not isinstance(shadow, dict):
+        raise ValueError("panel_runtime_readiness_shadow_not_dict")
+    _assert_required_keys(
+        section="panel_runtime_readiness_shadow",
+        payload=shadow,
+        keys=PANEL_RUNTIME_READINESS_SHADOW_KEYS,
+    )
+    if shadow.get("autoSwitchAllowed") is not False:
+        raise ValueError("panel_runtime_readiness_shadow_auto_switch_allowed_not_false")
+    if shadow.get("officialWinnerSemanticsChanged") is not False:
+        raise ValueError(
+            "panel_runtime_readiness_shadow_official_winner_semantics_changed_not_false"
+        )
+    if shadow.get("officialWinnerMutationAllowed") is not False:
+        raise ValueError(
+            "panel_runtime_readiness_shadow_official_winner_mutation_allowed_not_false"
+        )
+    switch_blocker_counts = shadow.get("switchBlockerCounts")
+    if not isinstance(switch_blocker_counts, dict):
+        raise ValueError("panel_runtime_readiness_switch_blocker_counts_not_dict")
+    for blocker in PANEL_RUNTIME_READINESS_SWITCH_BLOCKERS:
+        _non_negative_int(switch_blocker_counts.get(blocker), default=0)
+    _assert_count_map(
+        section="panel_runtime_readiness_release_gate_signal_counts",
+        payload=shadow.get("releaseGateSignalCounts"),
+        total=_non_negative_int(overview.get("totalGroups")),
+        required_keys=PANEL_RUNTIME_READINESS_RELEASE_GATE_STATUSES,
+    )
+
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        raise ValueError("panel_runtime_readiness_groups_not_list")
+    for group in groups:
+        if not isinstance(group, dict):
+            raise ValueError("panel_runtime_readiness_group_not_dict")
+        _assert_required_keys(
+            section="panel_runtime_readiness_group",
+            payload=group,
+            keys=PANEL_RUNTIME_READINESS_GROUP_KEYS,
+        )
+        candidate_models = group.get("candidateModels")
+        if not isinstance(candidate_models, list):
+            raise ValueError("panel_runtime_readiness_group_candidate_models_not_list")
+        if _non_negative_int(group.get("candidateModelCount")) != len(candidate_models):
+            raise ValueError("panel_runtime_readiness_group_candidate_model_count_mismatch")
+        _validate_switch_blockers(
+            group.get("switchBlockers"),
+            section="panel_runtime_readiness_group",
+        )
+        _validate_release_gate_signals(
+            group.get("releaseGateSignals"),
+            section="panel_runtime_readiness_group",
+        )
+        for simulation in group.get("simulations") or []:
+            if isinstance(simulation, dict) and simulation.get("advisoryOnly") is not True:
+                raise ValueError("panel_runtime_readiness_simulation_advisory_only_not_true")
+
+    attention_groups = payload.get("attentionGroups")
+    if not isinstance(attention_groups, list):
+        raise ValueError("panel_runtime_readiness_attention_groups_not_list")
+    if not isinstance(payload.get("notes"), list):
+        raise ValueError("panel_runtime_readiness_notes_not_list")
+    if not isinstance(payload.get("filters"), dict):
+        raise ValueError("panel_runtime_readiness_filters_not_dict")

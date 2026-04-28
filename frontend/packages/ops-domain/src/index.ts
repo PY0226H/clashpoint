@@ -332,6 +332,14 @@ export type OpsJudgeRuntimeReadinessPanelRuntime = {
   latestShadowRunStatus?: string | null;
   latestShadowRunThresholdDecision?: string | null;
   latestShadowRunEnvironmentMode?: string | null;
+  candidateModelGroupCount?: number;
+  switchBlockerCount?: number;
+  releaseBlockedGroupCount?: number;
+  avgShadowDecisionAgreement?: number;
+  avgShadowCostEstimate?: number;
+  avgShadowLatencyEstimate?: number;
+  autoSwitchAllowed?: boolean;
+  officialWinnerSemanticsChanged?: boolean;
 };
 
 export type OpsJudgeRuntimeReadinessTrustAndChallenge = {

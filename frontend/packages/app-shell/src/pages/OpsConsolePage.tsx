@@ -913,6 +913,11 @@ export function OpsConsolePage() {
                   shadow gate: {formatMaybeBoolean(runtimeReadiness?.panelRuntime.shadowGatePassed)} | mode:{" "}
                   {runtimeReadiness?.panelRuntime.latestShadowRunEnvironmentMode || "--"}
                 </InlineHint>
+                <InlineHint>
+                  candidates: {runtimeReadiness?.panelRuntime.candidateModelGroupCount ?? 0} | blockers:{" "}
+                  {runtimeReadiness?.panelRuntime.switchBlockerCount ?? 0} | release blocked:{" "}
+                  {runtimeReadiness?.panelRuntime.releaseBlockedGroupCount ?? 0}
+                </InlineHint>
               </article>
 
               <article className="echo-topic-item">

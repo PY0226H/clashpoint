@@ -34,7 +34,7 @@
 
 2. `ai_judge_service/`
    - Python FastAPI AI 裁判服务
-   - 裁判 dispatch、回调、RAG、trace、registry、trust、fairness、review、replay 与内部 ops 读路径
+   - 裁判 dispatch、回调、RAG、trace、registry、trust、fairness、panel runtime、review、replay 与内部 ops 读路径
 
 3. `frontend/`
    - React + TypeScript + Tauri monorepo
@@ -114,8 +114,11 @@ Python AI Ops 优先看：
 4. [route_group_review.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_review.py)
 5. [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py)
 6. [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
-7. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
-8. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
+7. [route_group_panel_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_panel_runtime.py)
+8. [panel_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_routes.py)
+9. [panel_runtime_profile_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_profile_contract.py)
+10. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
+11. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
 
 ### 3.5 钱包 / IAP / 账本
 
@@ -256,6 +259,9 @@ Python AI Ops 优先看：
    - [route_group_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_registry.py)
    - [route_group_fairness.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_fairness.py)
    - [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
+   - [route_group_panel_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_panel_runtime.py)
+   - [panel_runtime_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_routes.py)
+   - [panel_runtime_profile_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/panel_runtime_profile_contract.py)
    - [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
    - [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
    - [facts repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py)
