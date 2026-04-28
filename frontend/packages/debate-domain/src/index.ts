@@ -146,6 +146,7 @@ export type JudgeFinalReportDetail = {
   winnerSecond?: string | null;
   rejudgeTriggered: boolean;
   needsDrawVote: boolean;
+  reviewDecisionSync?: JudgeReviewDecisionSync | null;
   dimensionScores?: JsonValue;
   verdictEvidenceRefs?: JsonValue[];
   phaseRollupSummary?: JsonValue[];
@@ -296,6 +297,30 @@ export type JudgeChallengePolicySummary = {
   [key: string]: JsonValue | undefined;
 };
 
+export type JudgeReviewDecisionSync = {
+  version: string;
+  syncState: string;
+  result: string;
+  userVisibleStatus: string;
+  source?: {
+    originalCaseId?: number;
+    originalVerdictVersion?: string;
+    challengeId?: string | null;
+    reviewDecisionId?: string | null;
+    reviewDecisionEventSeq?: number | null;
+    reviewDecidedAt?: string | null;
+    decisionSource?: string;
+  };
+  verdictEffect?: {
+    ledgerAction?: string;
+    directWinnerWriteAllowed?: boolean;
+    requiresVerdictLedgerSource?: boolean;
+    drawVoteRequired?: boolean;
+    reviewRequired?: boolean;
+  };
+  nextStep?: string;
+};
+
 export type GetDebateJudgeChallengeOutput = {
   sessionId: number;
   status: JudgeChallengeEligibilityStatus;
@@ -309,6 +334,7 @@ export type GetDebateJudgeChallengeOutput = {
   blockers: string[];
   cacheProfile: JudgeChallengeCacheProfile;
   policy: JudgeChallengePolicySummary;
+  reviewDecisionSync?: JudgeReviewDecisionSync;
 };
 
 export type RequestDebateJudgeChallengeOutput = GetDebateJudgeChallengeOutput;
@@ -333,6 +359,9 @@ export type DebateJudgeChallengeView = {
   policyStatus: string | null;
   activeChallengeId: string | null;
   latestDecision: string | null;
+  reviewSyncState: string;
+  reviewVisibleStatus: string;
+  reviewNextStep: string | null;
   totalChallenges: number;
   allowedActions: string[];
   blockers: string[];
@@ -649,6 +678,9 @@ export function resolveDebateJudgeChallengeView(
       policyStatus: null,
       activeChallengeId: null,
       latestDecision: null,
+      reviewSyncState: "not_available",
+      reviewVisibleStatus: "not_available",
+      reviewNextStep: null,
       totalChallenges: 0,
       allowedActions: [],
       blockers: [],
@@ -676,6 +708,7 @@ export function resolveDebateJudgeChallengeView(
     state === "eligible" &&
     Boolean(output.eligibility?.requestable) &&
     allowedActions.includes("challenge.request");
+  const reviewDecisionSync = output.reviewDecisionSync;
 
   return {
     state,
@@ -691,6 +724,11 @@ export function resolveDebateJudgeChallengeView(
     policyStatus: jsonString(output.policy?.policyStatus),
     activeChallengeId: jsonString(output.challenge?.activeChallengeId),
     latestDecision: jsonString(output.challenge?.latestDecision),
+    reviewSyncState: String(reviewDecisionSync?.syncState || "not_available"),
+    reviewVisibleStatus: String(
+      reviewDecisionSync?.userVisibleStatus || "not_available",
+    ),
+    reviewNextStep: jsonString(reviewDecisionSync?.nextStep),
     totalChallenges: jsonNumber(output.challenge?.totalChallenges) ?? 0,
     allowedActions,
     blockers,

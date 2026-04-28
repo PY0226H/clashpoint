@@ -155,6 +155,9 @@ class TrustOpsViewsTests(unittest.TestCase):
         self.assertEqual(payload["scanned"], 2)
         self.assertEqual(payload["skipped"], 1)
         self.assertEqual(payload["errorCount"], 1)
+        self.assertEqual(payload["summary"]["openCount"], 1)
+        self.assertEqual(payload["summary"]["oldestOpenAgeMinutes"], 20)
+        self.assertEqual(payload["summary"]["reasonCodeCounts"], {"manual_challenge": 1})
 
 
 if __name__ == "__main__":

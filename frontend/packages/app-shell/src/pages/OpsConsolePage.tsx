@@ -8,6 +8,7 @@ import {
   getOpsRbacMe,
   getOpsServiceSplitReadiness,
   getOpsSloSnapshot,
+  listOpsJudgeChallengeQueue,
   listOpsRoleAssignments,
   listOpsAlertNotifications,
   listOpsServiceSplitReviewAudits,
@@ -259,6 +260,16 @@ export function OpsConsolePage() {
     enabled: Boolean(rbacMeQuery.data?.permissions.roleManage),
     retry: false
   });
+  const judgeChallengeQueueQuery = useQuery({
+    queryKey: ["ops-judge-challenge-queue"],
+    queryFn: () =>
+      listOpsJudgeChallengeQueue({
+        challengeState: "open",
+        limit: 5
+      }),
+    enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
+    retry: false
+  });
   const observabilityConfigQuery = useQuery({
     queryKey: ["ops-observability-config"],
     queryFn: () => getOpsObservabilityConfig(),
@@ -476,6 +487,7 @@ export function OpsConsolePage() {
   });
 
   const canManageRoles = Boolean(rbacMeQuery.data?.permissions.roleManage);
+  const canReadJudgeReview = Boolean(rbacMeQuery.data?.permissions.judgeReview);
   const canReadObservability = Boolean(rbacMeQuery.data?.permissions.observabilityRead);
   const canManageObservability = Boolean(rbacMeQuery.data?.permissions.observabilityManage);
   const permissions = rbacMeQuery.data?.permissions;
@@ -495,6 +507,7 @@ export function OpsConsolePage() {
   const topDictionaryItems = metricsDictionaryQuery.data?.items.slice(0, 4) || [];
   const topRules = sloSnapshotQuery.data?.rules.slice(0, 4) || [];
   const topAlerts = alertsQuery.data?.items || [];
+  const topChallengeItems = judgeChallengeQueueQuery.data?.items || [];
   const totalAlerts = alertsQuery.data?.total ?? 0;
   const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
   const canGoPrevPage = alertPageIndex > 0;
@@ -777,6 +790,75 @@ export function OpsConsolePage() {
           </>
         ) : (
           <InlineHint>Role management requires `role_manage` permission from platform owner scope.</InlineHint>
+        )}
+      </section>
+
+      <section className="echo-lobby-panel">
+        <h3>Judge Challenge Queue</h3>
+        {canReadJudgeReview ? (
+          <>
+            <div className="echo-ops-alert-toolbar">
+              <Button
+                disabled={judgeChallengeQueueQuery.isLoading}
+                onClick={() => void queryClient.invalidateQueries({ queryKey: ["ops-judge-challenge-queue"] })}
+                type="button"
+              >
+                Refresh Challenges
+              </Button>
+              <InlineHint>
+                status: {judgeChallengeQueueQuery.data?.status || "loading"} | reason:{" "}
+                {judgeChallengeQueueQuery.data?.statusReason || "--"}
+              </InlineHint>
+            </div>
+            {judgeChallengeQueueQuery.isLoading ? <InlineHint>Loading challenge queue...</InlineHint> : null}
+            {judgeChallengeQueueQuery.isError ? (
+              <p className="echo-error">{toOpsDomainError(judgeChallengeQueueQuery.error)}</p>
+            ) : null}
+            <div className="echo-lobby-summary">
+              <article>
+                <strong>{judgeChallengeQueueQuery.data?.summary.openCount ?? 0}</strong>
+                <span>Open Challenges</span>
+              </article>
+              <article>
+                <strong>{judgeChallengeQueueQuery.data?.summary.highPriorityCount ?? 0}</strong>
+                <span>High Priority</span>
+              </article>
+              <article>
+                <strong>{judgeChallengeQueueQuery.data?.summary.urgentCount ?? 0}</strong>
+                <span>Urgent SLA</span>
+              </article>
+              <article>
+                <strong>{judgeChallengeQueueQuery.data?.summary.oldestOpenAgeMinutes ?? "--"}</strong>
+                <span>Oldest Age (min)</span>
+              </article>
+            </div>
+            <div className="echo-ops-role-list">
+              {topChallengeItems.map((item) => (
+                <article className="echo-room-message" key={`${item.caseId}-${item.traceId || "trace"}`}>
+                  <header>
+                    <strong>
+                      #{item.caseId} | {item.challengeReview.state || "unknown"}
+                    </strong>
+                    <span>{item.priorityProfile.slaBucket || "unknown"}</span>
+                  </header>
+                  <p>
+                    priority: {item.priorityProfile.level || "--"} | score:{" "}
+                    {String(item.priorityProfile.score ?? "--")} | review:{" "}
+                    {item.challengeReview.reviewState || "--"}
+                  </p>
+                  <InlineHint>
+                    reasons: {(item.challengeReview.challengeReasons || []).join(", ") || "--"} | actions:{" "}
+                    {item.actionHints.join(", ") || "--"}
+                  </InlineHint>
+                </article>
+              ))}
+              {!judgeChallengeQueueQuery.isLoading && topChallengeItems.length === 0 ? (
+                <InlineHint>No open judge challenges.</InlineHint>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <InlineHint>Judge challenge queue requires `judge_review` permission.</InlineHint>
         )}
       </section>
 

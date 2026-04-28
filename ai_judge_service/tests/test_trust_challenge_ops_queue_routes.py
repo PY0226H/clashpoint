@@ -174,6 +174,18 @@ class TrustChallengeOpsQueueRoutesTests(unittest.TestCase):
                 build_trust_challenge_ops_queue_payload=lambda **kwargs: {
                     "count": len(kwargs["items"]),
                     "returned": len(kwargs["page_items"]),
+                    "summary": {
+                        "openCount": len(kwargs["items"]),
+                        "urgentCount": 0,
+                        "highPriorityCount": len(kwargs["items"]),
+                        "oldestOpenAgeMinutes": None,
+                        "stateCounts": {"under_internal_review": len(kwargs["items"])},
+                        "reviewStateCounts": {"pending_review": len(kwargs["items"])},
+                        "priorityLevelCounts": {"high": len(kwargs["items"])},
+                        "slaBucketCounts": {"warning": len(kwargs["items"])},
+                        "reasonCodeCounts": {},
+                        "actionHintCounts": {"trust.challenge.decide": len(kwargs["items"])},
+                    },
                     "items": kwargs["page_items"],
                     "errors": kwargs["errors"],
                     "filters": kwargs["filters"],
@@ -184,6 +196,7 @@ class TrustChallengeOpsQueueRoutesTests(unittest.TestCase):
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["returned"], 1)
+        self.assertEqual(payload["summary"]["highPriorityCount"], 1)
         self.assertEqual(payload["items"][0]["caseId"], 4001)
         self.assertEqual(payload["items"][0]["actionHints"], ["trust.challenge.decide"])
         self.assertEqual(payload["errors"][0]["caseId"], 4002)

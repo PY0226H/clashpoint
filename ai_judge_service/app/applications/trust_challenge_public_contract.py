@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .trust_challenge_review_contract import (
+    build_trust_challenge_review_decision_sync,
+    validate_trust_challenge_review_decision_sync_contract,
+)
+
 TRUST_CHALLENGE_PUBLIC_STATUS_VERSION = "trust-challenge-public-status-v1"
 TRUST_CHALLENGE_PUBLIC_VISIBILITY_VERSION = "trust-challenge-public-visibility-v1"
 
@@ -18,6 +23,7 @@ TRUST_CHALLENGE_PUBLIC_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "policy",
     "challenge",
     "review",
+    "reviewDecisionSync",
     "visibilityContract",
     "cacheProfile",
 )
@@ -143,6 +149,7 @@ TRUST_CHALLENGE_PUBLIC_ALLOWED_SECTIONS: tuple[str, ...] = (
     "eligibility",
     "challenge_status",
     "review_status",
+    "review_decision_sync",
     "policy_summary",
     "cache_profile",
 )
@@ -373,6 +380,16 @@ def build_trust_challenge_public_status(
     latest_challenge_id = _token(latest.get("challengeId")) if latest else None
     latest_decision = _token(latest.get("decision")) if latest else None
     latest_reason_code = _token(latest.get("reasonCode")) if latest else None
+    review_decision_sync = review_payload.get("reviewDecisionSync")
+    if not isinstance(review_decision_sync, dict):
+        review_decision_sync = build_trust_challenge_review_decision_sync(
+            case_id=case_id,
+            challenge_state=challenge_state,
+            review_state=review_state,
+            workflow_status=workflow_status,
+            latest_challenge=latest,
+            report_payload=None,
+        )
 
     blockers: list[str] = []
     if case_absent:
@@ -462,6 +479,7 @@ def build_trust_challenge_public_status(
             "required": review_required,
             "workflowStatus": _token(workflow_status),
         },
+        "reviewDecisionSync": review_decision_sync,
         "visibilityContract": _build_visibility_contract(),
         "cacheProfile": _build_cache_profile(
             case_id=int(case_id),
@@ -717,6 +735,21 @@ def validate_trust_challenge_public_contract(payload: dict[str, Any]) -> None:
     if not isinstance(review, dict):
         raise ValueError("trust_challenge_public_review_not_dict")
     _validate_review(review, parent=payload)
+
+    review_decision_sync = payload.get("reviewDecisionSync")
+    if not isinstance(review_decision_sync, dict):
+        raise ValueError("trust_challenge_public_review_decision_sync_not_dict")
+    validate_trust_challenge_review_decision_sync_contract(review_decision_sync)
+    if (
+        _non_negative_int(
+            review_decision_sync.get("source", {}).get("originalCaseId")
+            if isinstance(review_decision_sync.get("source"), dict)
+            else None,
+            default=0,
+        )
+        != case_id
+    ):
+        raise ValueError("trust_challenge_public_review_decision_sync_case_id_mismatch")
 
     visibility = payload.get("visibilityContract")
     if not isinstance(visibility, dict):

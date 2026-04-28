@@ -189,6 +189,77 @@ export type ListOpsAlertNotificationsOutput = {
   items: OpsAlertNotificationItem[];
 };
 
+export type OpsJudgeChallengeQueueSummary = {
+  openCount: number;
+  urgentCount: number;
+  highPriorityCount: number;
+  oldestOpenAgeMinutes?: number | null;
+  stateCounts: Record<string, number>;
+  reviewStateCounts: Record<string, number>;
+  priorityLevelCounts: Record<string, number>;
+  slaBucketCounts: Record<string, number>;
+  reasonCodeCounts: Record<string, number>;
+  actionHintCounts: Record<string, number>;
+};
+
+export type OpsJudgeChallengeQueueItem = {
+  caseId: number;
+  dispatchType?: string | null;
+  traceId?: string | null;
+  workflow: JsonValue;
+  trace: JsonValue;
+  challengeReview: {
+    state?: string | null;
+    activeChallengeId?: string | null;
+    totalChallenges?: number | null;
+    reviewState?: string | null;
+    reviewRequired?: boolean | null;
+    challengeReasons?: string[];
+    alertSummary?: JsonValue;
+  };
+  priorityProfile: {
+    score?: number | null;
+    level?: string | null;
+    tags?: string[];
+    ageMinutes?: number | null;
+    slaBucket?: string | null;
+    challengeState?: string | null;
+    reviewState?: string | null;
+    reviewRequired?: boolean | null;
+    totalChallenges?: number | null;
+    openAlertCount?: number | null;
+  };
+  review: JsonValue;
+  actionHints: string[];
+};
+
+export type ListOpsJudgeChallengeQueueInput = {
+  challengeState?: string;
+  reviewState?: string;
+  priorityLevel?: string;
+  slaBucket?: string;
+  hasOpenAlert?: boolean;
+  sortBy?: string;
+  sortOrder?: string;
+  scanLimit?: number;
+  offset?: number;
+  limit?: number;
+};
+
+export type ListOpsJudgeChallengeQueueOutput = {
+  status: string;
+  statusReason: string;
+  count: number;
+  returned: number;
+  scanned: number;
+  skipped: number;
+  errorCount: number;
+  summary: OpsJudgeChallengeQueueSummary;
+  items: OpsJudgeChallengeQueueItem[];
+  errors: JsonValue[];
+  filters: JsonValue;
+};
+
 export type ApplyOpsObservabilityAnomalyActionInput = {
   alertKey: string;
   action: "acknowledge" | "suppress" | "clear";
@@ -445,6 +516,26 @@ export async function listOpsAlertNotifications(input?: {
       status: input?.status,
       limit: input?.limit ?? 10,
       offset: input?.offset ?? 0
+    }
+  });
+  return response.data;
+}
+
+export async function listOpsJudgeChallengeQueue(
+  input?: ListOpsJudgeChallengeQueueInput
+): Promise<ListOpsJudgeChallengeQueueOutput> {
+  const response = await http.get<ListOpsJudgeChallengeQueueOutput>("/debate/ops/judge-challenge-queue", {
+    params: {
+      challengeState: input?.challengeState ?? "open",
+      reviewState: input?.reviewState,
+      priorityLevel: input?.priorityLevel,
+      slaBucket: input?.slaBucket,
+      hasOpenAlert: input?.hasOpenAlert,
+      sortBy: input?.sortBy ?? "priority_score",
+      sortOrder: input?.sortOrder ?? "desc",
+      scanLimit: input?.scanLimit ?? 500,
+      offset: input?.offset ?? 0,
+      limit: input?.limit ?? 10
     }
   });
   return response.data;

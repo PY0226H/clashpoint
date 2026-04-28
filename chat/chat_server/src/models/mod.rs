@@ -33,12 +33,13 @@ pub use judge::{
     JudgeReplayActionOpsItem, JudgeReplayPreviewMeta, JudgeReportDetail, JudgeReportProgress,
     JudgeRetrievalBundleItemPayload, JudgeRetrievalBundlePayload, JudgeReviewOpsItem,
     JudgeStageSummariesMeta, JudgeStageSummaryDetail, JudgeStageSummaryInput,
-    JudgeTraceReplayOpsItem, ListJudgeReplayActionsOpsOutput, ListJudgeReplayActionsOpsQuery,
-    ListJudgeReviewOpsOutput, ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsOutput,
-    ListJudgeTraceReplayOpsQuery, RequestJudgeChallengeInput, RequestJudgeJobInput,
-    RequestJudgeJobOutput, SubmitDrawVoteInput, SubmitDrawVoteOutput,
-    SubmitJudgeFailedCallbackInput, SubmitJudgeFailedCallbackOutput, SubmitJudgeFinalReportInput,
-    SubmitJudgeFinalReportOutput, SubmitJudgePhaseReportInput, SubmitJudgePhaseReportOutput,
+    JudgeTraceReplayOpsItem, ListJudgeChallengeOpsQueueOutput, ListJudgeChallengeOpsQueueQuery,
+    ListJudgeReplayActionsOpsOutput, ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsOutput,
+    ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsOutput, ListJudgeTraceReplayOpsQuery,
+    RequestJudgeChallengeInput, RequestJudgeJobInput, RequestJudgeJobOutput, SubmitDrawVoteInput,
+    SubmitDrawVoteOutput, SubmitJudgeFailedCallbackInput, SubmitJudgeFailedCallbackOutput,
+    SubmitJudgeFinalReportInput, SubmitJudgeFinalReportOutput, SubmitJudgePhaseReportInput,
+    SubmitJudgePhaseReportOutput,
 };
 pub(crate) use judge_dispatch::AiJudgeDispatchMetrics;
 pub use judge_dispatch::GetJudgeDispatchMetricsOutput;

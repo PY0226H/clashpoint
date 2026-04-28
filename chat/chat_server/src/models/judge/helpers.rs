@@ -37,6 +37,7 @@ pub(super) fn validate_non_empty_text(
 }
 
 pub(super) fn map_final_report_detail(v: JudgeFinalReportRow) -> JudgeFinalReportDetail {
+    let review_decision_sync = final_report_review_decision_sync(&v.verdict_ledger);
     JudgeFinalReportDetail {
         final_report_id: v.id as u64,
         final_job_id: v.final_job_id as u64,
@@ -56,6 +57,7 @@ pub(super) fn map_final_report_detail(v: JudgeFinalReportRow) -> JudgeFinalRepor
         rejudge_triggered: v.rejudge_triggered,
         needs_draw_vote: v.needs_draw_vote,
         review_required: v.review_required,
+        review_decision_sync,
         claim_graph: v.claim_graph,
         claim_graph_summary: v.claim_graph_summary,
         evidence_ledger: v.evidence_ledger,
@@ -69,6 +71,13 @@ pub(super) fn map_final_report_detail(v: JudgeFinalReportRow) -> JudgeFinalRepor
         degradation_level: v.degradation_level,
         created_at: v.created_at,
     }
+}
+
+fn final_report_review_decision_sync(verdict_ledger: &Value) -> Option<Value> {
+    verdict_ledger
+        .get("reviewDecisionSync")
+        .filter(|value| value.is_object())
+        .cloned()
 }
 
 fn value_array_or_empty(v: Value) -> Vec<Value> {

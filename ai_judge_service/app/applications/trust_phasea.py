@@ -4,6 +4,10 @@ import hashlib
 import json
 from typing import Any
 
+from .trust_challenge_review_contract import (
+    build_trust_challenge_review_decision_sync,
+)
+
 
 def _stable_json_bytes(value: Any) -> bytes:
     return json.dumps(
@@ -107,11 +111,13 @@ def _extract_challenge_timeline(
             )
 
         decision = str(payload.get("reviewDecision") or "").strip().lower()
-        if decision in {"approve", "reject"}:
+        if decision in {"approve", "reject", "retain"}:
             review_decisions.append(
                 {
                     "eventSeq": event_seq,
                     "decision": decision,
+                    "challengeId": challenge_id or None,
+                    "challengeState": challenge_state or None,
                     "actor": str(payload.get("reviewActor") or "").strip() or None,
                     "reason": str(payload.get("reviewReason") or "").strip() or None,
                     "createdAt": created_at,
@@ -156,6 +162,7 @@ def _build_challenge_entries(
                 "acceptedAt": None,
                 "reviewStartedAt": None,
                 "decision": None,
+                "decisionEventSeq": None,
                 "decisionBy": None,
                 "decisionReason": None,
                 "decisionAt": None,
@@ -199,6 +206,7 @@ def _build_challenge_entries(
                 entry["reviewStartedAt"] = created_at
         elif state in _CHALLENGE_DECISION_STATES:
             entry["decision"] = state
+            entry["decisionEventSeq"] = event_seq
             if created_at:
                 entry["decisionAt"] = created_at
             if actor:
@@ -348,6 +356,19 @@ def build_challenge_review_registry(
     else:
         review_state = "not_required"
 
+    latest_challenge_for_sync = next(
+        (row for row in challenge_entries if str(row.get("decision") or "").strip()),
+        challenge_entries[0] if challenge_entries else None,
+    )
+    review_decision_sync = build_trust_challenge_review_decision_sync(
+        case_id=case_id,
+        challenge_state=challenge_state,
+        review_state=review_state,
+        workflow_status=workflow_status,
+        latest_challenge=latest_challenge_for_sync,
+        report_payload=report_payload,
+    )
+
     alert_summary = {
         "total": 0,
         "raised": 0,
@@ -396,6 +417,7 @@ def build_challenge_review_registry(
         "reviewState": review_state,
         "reviewRequired": bool(report.get("reviewRequired")),
         "reviewDecisions": review_decisions,
+        "reviewDecisionSync": review_decision_sync,
         "challengeReasons": challenge_reasons,
         "alertSummary": alert_summary,
         "openAlertIds": open_alert_ids,

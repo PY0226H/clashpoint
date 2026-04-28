@@ -9,11 +9,12 @@ use crate::{
     AppError, AppState, ApplyOpsObservabilityAnomalyActionInput,
     ApplyOpsObservabilityAnomalyActionMeta, ExecuteJudgeReplayOpsInput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgeReplayPreviewOpsQuery, KafkaDlqActionInput,
-    KafkaDlqActionMeta, ListJudgeReplayActionsOpsQuery, ListJudgeReviewOpsQuery,
-    ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery, ListOpsAlertNotificationsQuery,
-    ListOpsRoleAssignmentsQuery, ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput,
-    OpsCreateDebateTopicInput, OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta,
-    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
+    KafkaDlqActionMeta, ListJudgeChallengeOpsQueueQuery, ListJudgeReplayActionsOpsQuery,
+    ListJudgeReviewOpsQuery, ListJudgeTraceReplayOpsQuery, ListKafkaDlqEventsQuery,
+    ListOpsAlertNotificationsQuery, ListOpsRoleAssignmentsQuery,
+    ListOpsServiceSplitReviewAuditsQuery, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
+    OpsObservabilityThresholds, OpsRbacRevokeMeta, OpsRbacUpsertMeta, OpsUpdateDebateSessionInput,
+    OpsUpdateDebateTopicInput, RunOpsObservabilityEvaluationQuery,
     UpdateOpsObservabilityAnomalyStateInput, UpsertOpsObservabilityAnomalyStateMeta,
     UpsertOpsObservabilityThresholdsMeta, UpsertOpsRoleInput, UpsertOpsServiceSplitReviewInput,
 };
@@ -3392,6 +3393,68 @@ pub(crate) async fn list_judge_reviews_ops_handler(
         latency_ms,
         decision = "success",
         "list ops judge reviews served"
+    );
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+/// Proxy the AI Trust Challenge ops queue as a public-safe ops read model.
+#[utoipa::path(
+    get,
+    path = "/api/debate/ops/judge-challenge-queue",
+    params(
+        ListJudgeChallengeOpsQueueQuery
+    ),
+    responses(
+        (status = 200, description = "Ops judge challenge queue", body = crate::ListJudgeChallengeOpsQueueOutput),
+        (status = 401, description = "Auth error", body = crate::ErrorOutput),
+        (status = 403, description = "Phone not bound", body = crate::ErrorOutput),
+        (status = 409, description = "Permission conflict", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn list_judge_challenge_queue_ops_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<ListJudgeChallengeOpsQueueQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    let request_id = request_id_from_headers(&headers);
+    let ret = match state
+        .list_judge_challenge_ops_queue_by_owner(&user, input)
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let latency_ms = started_at.elapsed().as_millis() as u64;
+            tracing::warn!(
+                user_id = user.id,
+                request_id = request_id.as_deref().unwrap_or_default(),
+                latency_ms,
+                decision = "failed",
+                "list ops judge challenge queue failed: {}",
+                err
+            );
+            return Err(err);
+        }
+    };
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+        user_id = user.id,
+        request_id = request_id.as_deref().unwrap_or_default(),
+        status = ret.status.as_str(),
+        returned_count = ret.returned,
+        high_priority_count = ret
+            .summary
+            .get("highPriorityCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        latency_ms,
+        decision = "success",
+        "list ops judge challenge queue served"
     );
     Ok((StatusCode::OK, Json(ret)))
 }

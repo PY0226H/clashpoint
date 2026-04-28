@@ -50,6 +50,126 @@ def _sha256_hex(value: Any) -> str:
     ).hexdigest()
 
 
+def _build_review_decision_sync(
+    *,
+    case_id: int,
+    state: str,
+    review_state: str,
+    latest_challenge: dict[str, Any],
+    original_verdict_version: str,
+) -> dict[str, Any]:
+    result = str(latest_challenge.get("decision") or "").strip().lower() or "none"
+    if result not in {
+        "none",
+        "verdict_upheld",
+        "verdict_overturned",
+        "draw_after_review",
+        "review_retained",
+    }:
+        result = "none"
+    challenge_id = str(latest_challenge.get("challengeId") or "").strip() or None
+    event_seq = int(
+        latest_challenge.get("decisionEventSeq")
+        or latest_challenge.get("latestEventSeq")
+        or 0
+    ) or None
+    decided_at = str(latest_challenge.get("decisionAt") or "").strip() or None
+    decision_id = (
+        f"review-decision:{int(case_id)}:{challenge_id}:{event_seq}"
+        if result != "none" and challenge_id and event_seq
+        else None
+    )
+
+    mapping = {
+        "verdict_upheld": (
+            "completed",
+            "completed",
+            "retain_original_verdict",
+            False,
+            False,
+            False,
+            "show_original_verdict_with_review_upheld",
+        ),
+        "verdict_overturned": (
+            "awaiting_verdict_source",
+            "review_required",
+            "await_revised_verdict_ledger",
+            True,
+            False,
+            True,
+            "await_revised_verdict_artifact",
+        ),
+        "draw_after_review": (
+            "draw_pending_vote",
+            "draw_pending_vote",
+            "open_draw_vote",
+            False,
+            True,
+            False,
+            "open_or_continue_draw_vote",
+        ),
+        "review_retained": (
+            "review_retained",
+            "review_required",
+            "retain_review_required",
+            False,
+            False,
+            True,
+            "continue_internal_review",
+        ),
+    }
+    if result in mapping:
+        (
+            sync_state,
+            visible_status,
+            ledger_action,
+            requires_source,
+            draw_required,
+            review_required,
+            next_step,
+        ) = mapping[result]
+    elif state in _TRUST_CHALLENGE_OPEN_STATES or review_state == "pending_review":
+        sync_state = "pending_review"
+        visible_status = "review_required"
+        ledger_action = "none"
+        requires_source = False
+        draw_required = False
+        review_required = True
+        next_step = "await_review_decision"
+    else:
+        sync_state = "not_available"
+        visible_status = "not_available"
+        ledger_action = "none"
+        requires_source = False
+        draw_required = False
+        review_required = False
+        next_step = "none"
+
+    return {
+        "version": "trust-challenge-review-decision-sync-v1",
+        "syncState": sync_state,
+        "result": result,
+        "userVisibleStatus": visible_status,
+        "source": {
+            "originalCaseId": int(case_id),
+            "originalVerdictVersion": original_verdict_version or "unknown",
+            "challengeId": challenge_id,
+            "reviewDecisionId": decision_id,
+            "reviewDecisionEventSeq": event_seq if result != "none" else None,
+            "reviewDecidedAt": decided_at if result != "none" else None,
+            "decisionSource": "trust_challenge_timeline" if result != "none" else "none",
+        },
+        "verdictEffect": {
+            "ledgerAction": ledger_action,
+            "directWinnerWriteAllowed": False,
+            "requiresVerdictLedgerSource": requires_source,
+            "drawVoteRequired": draw_required,
+            "reviewRequired": review_required,
+        },
+        "nextStep": next_step,
+    }
+
+
 def _event_seq(challenge_review: dict[str, Any]) -> int:
     registry_events = challenge_review.get("registryEvents")
     if isinstance(registry_events, list):
@@ -62,6 +182,7 @@ def _event_seq(challenge_review: dict[str, Any]) -> int:
 
 def _append_challenge_timeline_event(
     *,
+    case_id: int,
     challenge_review: dict[str, Any],
     event: TrustChallengeEvent,
 ) -> dict[str, Any]:
@@ -117,6 +238,7 @@ def _append_challenge_timeline_event(
             "acceptedAt": None,
             "reviewStartedAt": None,
             "decision": None,
+            "decisionEventSeq": None,
             "decisionBy": None,
             "decisionReason": None,
             "decisionAt": None,
@@ -153,6 +275,7 @@ def _append_challenge_timeline_event(
         )
     elif state in _TRUST_CHALLENGE_DECISION_STATES:
         challenge_entry["decision"] = state
+        challenge_entry["decisionEventSeq"] = event_seq
         challenge_entry["decisionBy"] = actor
         challenge_entry["decisionReason"] = reason
         challenge_entry["decisionAt"] = created_at
@@ -185,6 +308,8 @@ def _append_challenge_timeline_event(
             {
                 "eventSeq": event_seq,
                 "decision": review_decision,
+                "challengeId": challenge_id,
+                "challengeState": state,
                 "actor": actor,
                 "reason": reason,
                 "createdAt": created_at,
@@ -202,7 +327,12 @@ def _append_challenge_timeline_event(
                 active_challenge_id = str(row.get("challengeId") or "").strip() or None
                 break
 
-    if state in {"challenge_requested", "challenge_accepted", "under_internal_review", "review_retained"}:
+    if state in {
+        "challenge_requested",
+        "challenge_accepted",
+        "under_internal_review",
+        "review_retained",
+    }:
         review_state = "pending_review"
     elif state == "verdict_upheld":
         review_state = "approved"
@@ -210,6 +340,33 @@ def _append_challenge_timeline_event(
         review_state = "rejected"
     else:
         review_state = str(challenge_review.get("reviewState") or "").strip() or "not_required"
+
+    latest_challenge_for_sync = next(
+        (
+            row
+            for row in challenges
+            if isinstance(row, dict) and str(row.get("decision") or "").strip()
+        ),
+        challenge_entry,
+    )
+    previous_sync = (
+        challenge_review.get("reviewDecisionSync")
+        if isinstance(challenge_review.get("reviewDecisionSync"), dict)
+        else {}
+    )
+    previous_source = (
+        previous_sync.get("source") if isinstance(previous_sync.get("source"), dict) else {}
+    )
+    original_verdict_version = (
+        str(previous_source.get("originalVerdictVersion") or "").strip() or "unknown"
+    )
+    review_decision_sync = _build_review_decision_sync(
+        case_id=case_id,
+        state=state,
+        review_state=review_state,
+        latest_challenge=latest_challenge_for_sync,
+        original_verdict_version=original_verdict_version,
+    )
 
     registry_basis = {
         **challenge_review,
@@ -221,6 +378,7 @@ def _append_challenge_timeline_event(
         "reviewState": review_state,
         "reviewRequired": bool(active_challenge_id or review_state == "pending_review"),
         "reviewDecisions": review_decisions,
+        "reviewDecisionSync": review_decision_sync,
         "challengeReasons": challenge_reasons,
     }
     registry_basis.pop("registryHash", None)
@@ -484,6 +642,7 @@ class TrustRegistryRepository:
                 challenge_review["registryEvents"] = registry_events
                 challenge_review["latestRegistryEvent"] = event.to_payload()
                 challenge_review = _append_challenge_timeline_event(
+                    case_id=case_id,
                     challenge_review=challenge_review,
                     event=event,
                 )

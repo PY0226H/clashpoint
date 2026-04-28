@@ -126,6 +126,8 @@ pub struct JudgeFinalReportDetail {
     pub rejudge_triggered: bool,
     pub needs_draw_vote: bool,
     pub review_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_decision_sync: Option<Value>,
     #[serde(default)]
     pub claim_graph: Value,
     #[serde(default)]
@@ -274,6 +276,8 @@ pub struct GetJudgeChallengeOutput {
     pub cache_profile: Value,
     #[serde(default)]
     pub policy: Value,
+    #[serde(default)]
+    pub review_decision_sync: Value,
 }
 
 #[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
@@ -305,6 +309,8 @@ pub struct JudgeFinalReportSummary {
     pub rejudge_triggered: bool,
     pub needs_draw_vote: bool,
     pub review_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_decision_sync: Option<Value>,
     pub degradation_level: i32,
     pub created_at: DateTime<Utc>,
 }
@@ -545,6 +551,43 @@ pub struct ListJudgeReviewOpsOutput {
     pub scanned_count: u32,
     pub returned_count: u32,
     pub items: Vec<JudgeReviewOpsItem>,
+}
+
+#[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListJudgeChallengeOpsQueueQuery {
+    pub status: Option<String>,
+    pub dispatch_type: Option<String>,
+    pub challenge_state: Option<String>,
+    pub review_state: Option<String>,
+    pub priority_level: Option<String>,
+    pub sla_bucket: Option<String>,
+    pub has_open_alert: Option<bool>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+    pub scan_limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListJudgeChallengeOpsQueueOutput {
+    pub status: String,
+    pub status_reason: String,
+    pub count: u32,
+    pub returned: u32,
+    pub scanned: u32,
+    pub skipped: u32,
+    pub error_count: u32,
+    #[serde(default)]
+    pub summary: Value,
+    #[serde(default)]
+    pub items: Vec<Value>,
+    #[serde(default)]
+    pub errors: Vec<Value>,
+    #[serde(default)]
+    pub filters: Value,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]

@@ -216,12 +216,19 @@ describe("debate-domain normalize helpers", () => {
         policyStatus: "enabled",
         challengeWindow: "open",
       },
+      reviewDecisionSync: {
+        version: "trust-challenge-review-decision-sync-v1",
+        syncState: "not_available",
+        result: "none",
+        userVisibleStatus: "not_available",
+      },
     });
 
     expect(view.state).toBe("eligible");
     expect(view.label).toBe("Challenge available");
     expect(view.requestable).toBe(true);
     expect(view.caseId).toBe(42);
+    expect(view.reviewSyncState).toBe("not_available");
     expect(view.blockerLabels).toEqual([]);
   });
 
@@ -263,11 +270,19 @@ describe("debate-domain normalize helpers", () => {
         policyStatus: "enabled",
         provider: "must-not-render",
       },
+      reviewDecisionSync: {
+        version: "trust-challenge-review-decision-sync-v1",
+        syncState: "pending_review",
+        result: "none",
+        userVisibleStatus: "review_required",
+        nextStep: "await_review_decision",
+      },
     });
 
     expect(open.state).toBe("under_review");
     expect(open.label).toBe("Review in progress");
     expect(open.requestable).toBe(false);
+    expect(open.reviewVisibleStatus).toBe("review_required");
     expect(open.blockerLabels).toEqual(["A challenge is already open"]);
 
     const overturned = resolveDebateJudgeChallengeView({
@@ -307,10 +322,18 @@ describe("debate-domain normalize helpers", () => {
         policy: {
           policyStatus: "enabled",
         },
+        reviewDecisionSync: {
+          version: "trust-challenge-review-decision-sync-v1",
+          syncState: "awaiting_verdict_source",
+          result: "verdict_overturned",
+          userVisibleStatus: "review_required",
+          nextStep: "await_revised_verdict_artifact",
+        },
       },
     });
     expect(overturned.state).toBe("closed");
     expect(overturned.label).toBe("Verdict changed");
     expect(overturned.latestDecision).toBe("overturn");
+    expect(overturned.reviewSyncState).toBe("awaiting_verdict_source");
   });
 });

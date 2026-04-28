@@ -1,6 +1,6 @@
 # Dev Task Flow
 
-更新时间：2026-04-13
+更新时间：2026-04-27
 状态：当前默认 dev 流程
 
 ---
@@ -39,8 +39,12 @@
 
 代码实现完成后，再按需要触发 post hooks：
 
-1. 使用 `post-module-test-guard` 检查测试变更并运行合适的测试门禁。
-2. 使用 `post-module-commit-message` 在终端/对话中输出 commit message 推荐。
-3. 使用 `post-module-plan-sync` 回写当前活动计划。
-4. 仅在高价值或用户明确要求时补写 explanation/interview。
-5. 如果需要统一运行态验证，再单独使用 `journey_verify.sh`。
+1. 先做代码地图漂移检查：如果改动影响子系统划分、主入口、模块边界、跨层调用路径、workspace/package 成员、主要页面/handler/service/domain 位置，更新 `docs/architecture/README.md`。
+2. 只有影响“第一跳定位”的变化才更新代码地图；局部函数实现、算法细节、测试细节、临时脚本变化通常不更新。
+3. 更新代码地图时保持轻量，不展开成完整架构说明。
+4. 使用 `post-module-test-guard` 检查测试变更并运行合适的测试门禁。
+5. 使用 `post-module-commit-message` 在终端/对话中输出 commit message 推荐。
+6. 使用 `post-module-plan-sync` 回写当前活动计划。
+7. 仅在高价值或用户明确要求时补写 explanation/interview。
+8. 如果需要统一运行态验证，再单独使用 `journey_verify.sh`。
+9. 最终回复说明代码地图是否已更新；若未更新，简述“不影响第一跳定位”的判断依据。

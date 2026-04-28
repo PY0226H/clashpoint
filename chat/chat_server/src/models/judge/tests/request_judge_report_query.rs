@@ -434,11 +434,34 @@ fn mock_challenge_public_status_payload(
             "required": review_required,
             "workflowStatus": workflow_status
         },
+        "reviewDecisionSync": {
+            "version": "trust-challenge-review-decision-sync-v1",
+            "syncState": if review_required { "pending_review" } else { "not_available" },
+            "result": "none",
+            "userVisibleStatus": if review_required { "review_required" } else { "not_available" },
+            "source": {
+                "originalCaseId": case_id,
+                "originalVerdictVersion": "v2-panel-arbiter-opinion",
+                "challengeId": if status == "under_review" { json!("challenge-1") } else { serde_json::Value::Null },
+                "reviewDecisionId": serde_json::Value::Null,
+                "reviewDecisionEventSeq": serde_json::Value::Null,
+                "reviewDecidedAt": serde_json::Value::Null,
+                "decisionSource": "none"
+            },
+            "verdictEffect": {
+                "ledgerAction": "none",
+                "directWinnerWriteAllowed": false,
+                "requiresVerdictLedgerSource": false,
+                "drawVoteRequired": false,
+                "reviewRequired": review_required
+            },
+            "nextStep": if review_required { "await_review_decision" } else { "none" }
+        },
         "visibilityContract": {
             "version": "trust-challenge-public-visibility-v1",
             "layer": "public",
             "payloadLayer": "challenge_status_only",
-            "allowedSections": ["eligibility", "challenge_status", "review_status", "policy_summary", "cache_profile"],
+            "allowedSections": ["eligibility", "challenge_status", "review_status", "review_decision_sync", "policy_summary", "cache_profile"],
             "forbiddenFieldFamilies": ["raw_prompt", "raw_trace", "private_audit", "object_storage_locator", "internal_route", "provider_runtime"],
             "chatProxyRequired": true,
             "directAiServiceAccessAllowed": false,
@@ -544,6 +567,150 @@ async fn spawn_mock_challenge_server(
                 },
             ),
         );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
+#[derive(Debug, Deserialize)]
+struct MockChallengeOpsQueueQuery {
+    challenge_state: Option<String>,
+    limit: Option<u32>,
+}
+
+fn mock_challenge_ops_queue_payload() -> serde_json::Value {
+    json!({
+        "count": 1,
+        "returned": 1,
+        "scanned": 2,
+        "skipped": 1,
+        "errorCount": 0,
+        "summary": {
+            "openCount": 1,
+            "urgentCount": 1,
+            "highPriorityCount": 1,
+            "oldestOpenAgeMinutes": 420,
+            "stateCounts": {"under_internal_review": 1},
+            "reviewStateCounts": {"pending_review": 1},
+            "priorityLevelCounts": {"high": 1},
+            "slaBucketCounts": {"urgent": 1},
+            "reasonCodeCounts": {"manual_challenge": 1},
+            "actionHintCounts": {"trust.challenge.decide": 1}
+        },
+        "items": [
+            {
+                "caseId": 4101,
+                "dispatchType": "final",
+                "traceId": "trace-final-4101",
+                "workflow": {
+                    "caseId": 4101,
+                    "dispatchType": "final",
+                    "traceId": "trace-final-4101",
+                    "status": "review_required",
+                    "scopeId": "4101",
+                    "sessionId": "room-4101",
+                    "idempotencyKey": "judge-final-secret-idem",
+                    "rubricVersion": "v3",
+                    "judgePolicyVersion": "v3-default",
+                    "topicDomain": "general",
+                    "retrievalProfile": "hybrid",
+                    "createdAt": "2026-04-20T00:00:00Z",
+                    "updatedAt": "2026-04-20T07:00:00Z"
+                },
+                "trace": {
+                    "status": "success",
+                    "callbackStatus": "reported",
+                    "callbackError": "internal callback detail",
+                    "updatedAt": "2026-04-20T07:00:00Z"
+                },
+                "challengeReview": {
+                    "state": "under_internal_review",
+                    "activeChallengeId": "challenge-4101",
+                    "totalChallenges": 1,
+                    "reviewState": "pending_review",
+                    "reviewRequired": true,
+                    "challengeReasons": ["manual_challenge"],
+                    "alertSummary": {"critical": 1},
+                    "openAlertIds": ["alert-private"],
+                    "timeline": []
+                },
+                "priorityProfile": {
+                    "score": 91,
+                    "level": "high",
+                    "tags": ["open_challenge"],
+                    "ageMinutes": 420,
+                    "slaBucket": "urgent",
+                    "challengeState": "under_internal_review",
+                    "reviewState": "pending_review",
+                    "reviewRequired": true,
+                    "totalChallenges": 1,
+                    "openAlertCount": 1
+                },
+                "review": {
+                    "required": true,
+                    "state": "pending_review",
+                    "workflowStatus": "review_required",
+                    "detailPath": "/internal/judge/review/cases/4101"
+                },
+                "actionHints": ["trust.challenge.decide", "ops.escalate_priority"],
+                "actionPaths": {
+                    "requestChallengePath": "/internal/judge/cases/4101/trust/challenges/request",
+                    "decisionPath": "/internal/judge/cases/4101/trust/challenges/challenge-4101/decision",
+                    "reviewDetailPath": "/internal/judge/review/cases/4101"
+                }
+            }
+        ],
+        "errors": [],
+        "filters": {
+            "status": null,
+            "dispatchType": "auto",
+            "challengeState": "open",
+            "reviewState": null,
+            "priorityLevel": null,
+            "slaBucket": null,
+            "hasOpenAlert": null,
+            "sortBy": "priority_score",
+            "sortOrder": "desc",
+            "scanLimit": 500,
+            "offset": 0,
+            "limit": 50
+        }
+    })
+}
+
+async fn spawn_mock_challenge_ops_queue_server(expected_internal_key: String) -> Result<String> {
+    let payload = mock_challenge_ops_queue_payload();
+    let app = Router::new().route(
+        "/internal/judge/trust/challenges/ops-queue",
+        get(
+            move |headers: HeaderMap, Query(query): Query<MockChallengeOpsQueueQuery>| {
+                let expected_internal_key = expected_internal_key.clone();
+                let payload = payload.clone();
+                async move {
+                    if headers
+                        .get("x-ai-internal-key")
+                        .and_then(|value| value.to_str().ok())
+                        != Some(expected_internal_key.as_str())
+                    {
+                        return (
+                            AxumStatusCode::UNAUTHORIZED,
+                            Json(json!({"error": "bad key"})),
+                        );
+                    }
+                    if query.challenge_state.as_deref() != Some("open") || query.limit != Some(10) {
+                        return (
+                            AxumStatusCode::BAD_REQUEST,
+                            Json(json!({"error": "bad query"})),
+                        );
+                    }
+                    (AxumStatusCode::OK, Json(payload))
+                }
+            },
+        ),
+    );
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     tokio::spawn(async move {
@@ -972,6 +1139,80 @@ async fn judge_report_overview_and_final_detail_should_be_consistent_when_ready(
 }
 
 #[tokio::test]
+async fn judge_report_should_surface_review_decision_sync_from_verdict_ledger() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let final_report_id = upsert_final_report(&state, session_id, final_job_id, "draw").await?;
+    let review_decision_sync = json!({
+        "version": "trust-challenge-review-decision-sync-v1",
+        "syncState": "draw_pending_vote",
+        "result": "draw_after_review",
+        "userVisibleStatus": "draw_pending_vote",
+        "source": {
+            "originalCaseId": final_job_id,
+            "originalVerdictVersion": "v2-panel-arbiter-opinion",
+            "challengeId": "challenge-final-1",
+            "reviewDecisionId": format!("review-decision:{final_job_id}:challenge-final-1:4"),
+            "reviewDecisionEventSeq": 4,
+            "reviewDecidedAt": "2026-04-26T00:00:00+00:00",
+            "decisionSource": "trust_challenge_timeline"
+        },
+        "verdictEffect": {
+            "ledgerAction": "open_draw_vote",
+            "directWinnerWriteAllowed": false,
+            "requiresVerdictLedgerSource": false,
+            "drawVoteRequired": true,
+            "reviewRequired": false
+        },
+        "nextStep": "open_or_continue_draw_vote"
+    });
+    sqlx::query(
+        r#"
+        UPDATE judge_final_reports
+        SET verdict_ledger = $1,
+            needs_draw_vote = TRUE,
+            updated_at = NOW()
+        WHERE id = $2
+        "#,
+    )
+    .bind(json!({
+        "version": "v2-panel-arbiter-opinion",
+        "reviewDecisionSync": review_decision_sync
+    }))
+    .bind(final_report_id)
+    .execute(&state.pool)
+    .await?;
+
+    let overview = state
+        .get_latest_judge_report(session_id as u64, &participant, None)
+        .await?;
+    let summary = overview
+        .final_report_summary
+        .as_ref()
+        .expect("summary should exist");
+    assert_eq!(summary.winner, "draw");
+    assert!(summary.needs_draw_vote);
+    assert_eq!(
+        summary.review_decision_sync.as_ref().unwrap()["result"],
+        json!("draw_after_review")
+    );
+
+    let detail = state
+        .get_latest_judge_final_report(session_id as u64, &participant, None)
+        .await?;
+    let final_report = detail.final_report.as_ref().expect("detail should exist");
+    assert_eq!(
+        final_report.review_decision_sync.as_ref().unwrap()["verdictEffect"]
+            ["directWinnerWriteAllowed"],
+        json!(false)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_judge_public_verify_should_proxy_final_case_and_preserve_public_payload() -> Result<()>
 {
     let (_tdb, mut state) = AppState::new_for_test().await?;
@@ -1087,6 +1328,14 @@ async fn get_judge_challenge_should_proxy_final_case_and_preserve_public_status(
     );
     assert_eq!(out.challenge["state"], json!("not_challenged"));
     assert_eq!(out.policy["policyStatus"], json!("enabled"));
+    assert_eq!(
+        out.review_decision_sync["syncState"],
+        json!("not_available")
+    );
+    assert_eq!(
+        out.review_decision_sync["verdictEffect"]["directWinnerWriteAllowed"],
+        json!(false)
+    );
     Ok(())
 }
 
@@ -1165,6 +1414,14 @@ async fn request_judge_challenge_should_submit_when_eligible() -> Result<()> {
     assert_eq!(out.status_reason, "challenge_duplicate_open");
     assert_eq!(out.challenge["activeChallengeId"], json!("challenge-1"));
     assert_eq!(out.review["required"], json!(true));
+    assert_eq!(
+        out.review_decision_sync["syncState"],
+        json!("pending_review")
+    );
+    assert_eq!(
+        out.review_decision_sync["userVisibleStatus"],
+        json!("review_required")
+    );
     assert!(!out
         .allowed_actions
         .contains(&"challenge.request".to_string()));
@@ -1214,6 +1471,69 @@ async fn request_judge_challenge_should_forbid_ops_viewer_non_participant() -> R
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_challenge_ops_queue_by_owner_should_require_judge_review_permission(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .list_judge_challenge_ops_queue_by_owner(
+            &outsider,
+            ListJudgeChallengeOpsQueueQuery::default(),
+        )
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_judge_challenge_ops_queue_by_owner_should_proxy_and_strip_internal_fields(
+) -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let service_base_url =
+        spawn_mock_challenge_ops_queue_server("challenge-ops-key".to_string()).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "challenge-ops-key".to_string();
+    inner.config.ai_judge.challenge_timeout_ms = 2_000;
+
+    let out = state
+        .list_judge_challenge_ops_queue_by_owner(
+            &owner,
+            ListJudgeChallengeOpsQueueQuery {
+                challenge_state: Some("open".to_string()),
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "ready");
+    assert_eq!(out.status_reason, "challenge_ops_queue_ready");
+    assert_eq!(out.count, 1);
+    assert_eq!(out.summary["highPriorityCount"], json!(1));
+    assert_eq!(out.items[0]["caseId"], json!(4101));
+    assert_eq!(
+        out.items[0]["priorityProfile"]["slaBucket"],
+        json!("urgent")
+    );
+    assert!(out.items[0].get("actionPaths").is_none());
+    assert!(out.items[0]["workflow"].get("idempotencyKey").is_none());
+    assert!(out.items[0]["trace"].get("callbackError").is_none());
+    assert!(out.items[0]["challengeReview"]
+        .get("openAlertIds")
+        .is_none());
     Ok(())
 }
 

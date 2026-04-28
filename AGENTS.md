@@ -28,6 +28,12 @@ Detailed explanations now live under `docs/harness/`.
 2. The authority PRD remains `/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
 3. The default fast path is now `/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md`; high-risk modules must fall back to the authority PRD.
 
+### Architecture map freshness rule
+
+1. 每次 dev 或 refactor/optimization 修改代码结构、模块边界、主入口、跨层调用路径、workspace/package 成员、主要页面/handler/service/domain 位置后，必须判断 `docs/architecture/README.md` 是否需要同步更新。
+2. 只有影响“第一跳定位”的变化才更新代码地图；内部函数实现、局部算法、测试细节、临时脚本变化通常不更新。
+3. 更新时保持代码地图轻量，只记录主线子系统、职责、需求反查入口和非优先目录，不展开成完整架构说明。
+
 ### Pre-release compatibility rule
 
 1. EchoIsle is still in local development and has not been released to production users.

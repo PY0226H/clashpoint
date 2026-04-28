@@ -6,6 +6,15 @@ from typing import Any
 from .trust_public_verify_contract import TRUST_PUBLIC_VERIFY_KERNEL_VECTOR_PUBLIC_KEYS
 
 
+def _increment_count(target: dict[str, int], value: Any) -> None:
+    token = str(value or "").strip().lower() or "unknown"
+    target[token] = target.get(token, 0) + 1
+
+
+def _sorted_counts(target: dict[str, int]) -> dict[str, int]:
+    return dict(sorted(target.items(), key=lambda pair: pair[0]))
+
+
 def _build_public_kernel_vector(payload: dict[str, Any]) -> dict[str, Any]:
     kernel_vector = payload.get("kernelVector")
     if not isinstance(kernel_vector, dict):
@@ -171,6 +180,88 @@ def build_trust_challenge_ops_queue_item(
     }
 
 
+def build_trust_challenge_ops_queue_summary(
+    *,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    terminal_states = {
+        "case_absent",
+        "challenge_closed",
+        "draw_after_review",
+        "not_challenged",
+        "review_retained",
+        "verdict_overturned",
+        "verdict_upheld",
+    }
+    open_count = 0
+    urgent_count = 0
+    high_priority_count = 0
+    oldest_open_age_minutes: int | None = None
+    state_counts: dict[str, int] = {}
+    review_state_counts: dict[str, int] = {}
+    priority_level_counts: dict[str, int] = {}
+    sla_bucket_counts: dict[str, int] = {}
+    reason_code_counts: dict[str, int] = {}
+    action_hint_counts: dict[str, int] = {}
+
+    for item in items:
+        challenge_review = (
+            item.get("challengeReview")
+            if isinstance(item.get("challengeReview"), dict)
+            else {}
+        )
+        priority_profile = (
+            item.get("priorityProfile")
+            if isinstance(item.get("priorityProfile"), dict)
+            else {}
+        )
+        challenge_state = str(challenge_review.get("state") or "").strip().lower()
+        review_state = str(challenge_review.get("reviewState") or "").strip().lower()
+        priority_level = str(priority_profile.get("level") or "").strip().lower()
+        sla_bucket = str(priority_profile.get("slaBucket") or "").strip().lower()
+
+        _increment_count(state_counts, challenge_state or "unknown")
+        _increment_count(review_state_counts, review_state or "unknown")
+        _increment_count(priority_level_counts, priority_level or "unknown")
+        _increment_count(sla_bucket_counts, sla_bucket or "unknown")
+
+        if challenge_state and challenge_state not in terminal_states:
+            open_count += 1
+        if priority_level == "high":
+            high_priority_count += 1
+        if sla_bucket == "urgent":
+            urgent_count += 1
+        age_minutes = priority_profile.get("ageMinutes")
+        if isinstance(age_minutes, int) and age_minutes >= 0:
+            oldest_open_age_minutes = (
+                age_minutes
+                if oldest_open_age_minutes is None
+                else max(oldest_open_age_minutes, age_minutes)
+            )
+
+        challenge_reasons = challenge_review.get("challengeReasons")
+        if isinstance(challenge_reasons, list):
+            for reason in challenge_reasons:
+                _increment_count(reason_code_counts, reason)
+        action_hints = item.get("actionHints")
+        if isinstance(action_hints, list):
+            for hint in action_hints:
+                _increment_count(action_hint_counts, hint)
+
+    return {
+        "openCount": open_count,
+        "urgentCount": urgent_count,
+        "highPriorityCount": high_priority_count,
+        "oldestOpenAgeMinutes": oldest_open_age_minutes,
+        "stateCounts": _sorted_counts(state_counts),
+        "reviewStateCounts": _sorted_counts(review_state_counts),
+        "priorityLevelCounts": _sorted_counts(priority_level_counts),
+        "slaBucketCounts": _sorted_counts(sla_bucket_counts),
+        "reasonCodeCounts": _sorted_counts(reason_code_counts),
+        "actionHintCounts": _sorted_counts(action_hint_counts),
+    }
+
+
 def build_trust_challenge_ops_queue_payload(
     *,
     items: list[dict[str, Any]],
@@ -186,6 +277,7 @@ def build_trust_challenge_ops_queue_payload(
         "scanned": int(jobs_count),
         "skipped": max(0, int(jobs_count) - count),
         "errorCount": len(errors),
+        "summary": build_trust_challenge_ops_queue_summary(items=items),
         "items": page_items,
         "errors": errors,
         "filters": dict(filters),

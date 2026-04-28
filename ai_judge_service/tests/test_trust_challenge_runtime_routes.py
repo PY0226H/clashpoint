@@ -489,7 +489,23 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
                         ]
                     }
                 }
-            return {"challengeReview": {"state": "challenge_closed"}}
+            return {
+                "challengeReview": {
+                    "challengeState": "challenge_closed",
+                    "reviewState": "approved",
+                    "reviewRequired": False,
+                    "totalChallenges": 1,
+                    "challenges": [
+                        {
+                            "challengeId": "ch-3003-01",
+                            "currentState": "challenge_closed",
+                            "decision": "verdict_upheld",
+                            "latestEventSeq": 2,
+                            "decisionAt": "2026-04-26T00:00:00+00:00",
+                        }
+                    ],
+                }
+            }
 
         def _serialize_workflow_job(job: _DummyJob) -> dict[str, Any]:
             return {"status": job.status}
@@ -531,8 +547,17 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
         self.assertEqual(payload["challengeId"], "ch-3003-01")
         self.assertEqual(payload["decision"], "uphold")
         self.assertEqual(payload["resolvedAlertIds"], ["alert-open-1"])
-        self.assertEqual(payload["item"]["state"], "challenge_closed")
+        self.assertEqual(payload["item"]["challengeState"], "challenge_closed")
         self.assertEqual(payload["job"]["status"], "completed")
+        self.assertEqual(
+            payload["publicStatus"]["reviewDecisionSync"]["syncState"],
+            "completed",
+        )
+        self.assertFalse(
+            payload["publicStatus"]["reviewDecisionSync"]["verdictEffect"][
+                "directWinnerWriteAllowed"
+            ]
+        )
         self.assertEqual(len(events), 2)
         self.assertEqual(len(completed_payloads), 1)
         self.assertEqual(
@@ -580,6 +605,17 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
                 "challengeReview": {
                     "challengeState": "challenge_closed",
                     "reviewState": "pending_review",
+                    "reviewRequired": True,
+                    "totalChallenges": 1,
+                    "challenges": [
+                        {
+                            "challengeId": "ch-3006-01",
+                            "currentState": "challenge_closed",
+                            "decision": "review_retained",
+                            "latestEventSeq": 2,
+                            "decisionAt": "2026-04-26T00:00:00+00:00",
+                        }
+                    ],
                 }
             }
 
@@ -620,6 +656,14 @@ class TrustChallengeRuntimeRoutesTests(unittest.TestCase):
         self.assertEqual(payload["decision"], "retain_review")
         self.assertEqual(payload["job"]["status"], "review_required")
         self.assertEqual(payload["item"]["reviewState"], "pending_review")
+        self.assertEqual(
+            payload["publicStatus"]["reviewDecisionSync"]["userVisibleStatus"],
+            "review_required",
+        )
+        self.assertEqual(
+            payload["publicStatus"]["reviewDecisionSync"]["nextStep"],
+            "continue_internal_review",
+        )
         self.assertEqual(len(events), 2)
         self.assertEqual(
             [row["state"] for row in registry_events],

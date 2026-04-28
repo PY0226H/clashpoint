@@ -1,7 +1,7 @@
 # EchoIsle Architecture Map
 
-更新时间：2026-04-06
-状态：当前主线代码地图
+更新时间：2026-04-27
+状态：当前主线轻量代码地图
 
 ---
 
@@ -16,33 +16,39 @@
 3. 遇到某类需求时，第一眼应该去哪里看代码
 4. 哪些目录是运行主线，哪些目录更偏测试、脚本、文档或辅助资产
 
-如果你要看规则，优先读 `AGENTS.md` 与 `docs/harness/`。
-如果你要找代码，优先从本文件开始。
+使用原则：
+
+1. 本文件只给“第一跳入口”，不要把它当实现细节索引。
+2. 找到相关入口后，再按代码里的 `mod`、router、exports 或测试继续下钻。
+3. 如果你要看工作规则，优先读 `AGENTS.md` 与 `docs/harness/`。
 
 ---
 
 ## 2. 仓库主线总览
 
-当前 EchoIsle 可以先按 5 个区域理解：
+当前 EchoIsle 先按 6 个区域理解：
 
 1. `chat/`
-   - Rust 后端工作区
-   - 承载主 API、通知、分析、测试与共享基础设施
+   - Rust 后端 workspace
+   - 主 API、通知服务、分析服务、AI SDK、Bot/RAG 辅助服务、模拟器、迁移与后端专项脚本
 
 2. `ai_judge_service/`
-   - Python AI 裁判服务
-   - 承载裁判推理、RAG、回调、运行时策略与专项验证脚本
+   - Python FastAPI AI 裁判服务
+   - 裁判 dispatch、回调、RAG、trace、registry、trust、fairness、review、replay 与内部 ops 读路径
 
 3. `frontend/`
-   - React + TypeScript 前端 monorepo
-   - 承载 Web、Desktop 与共享包
+   - React + TypeScript + Tauri monorepo
+   - Web/Desktop 应用壳与共享页面、domain、SDK、UI、tokens、config
 
-4. `scripts/`
-   - 仓库级脚本
-   - 其中 `scripts/harness/` 是当前 Codex/harness 入口层
+4. `scripts/` 与 `skills/`
+   - 仓库级脚本与 Codex lifecycle skill
+   - harness、quality、release、PRD guard、test guard、plan sync 等入口
 
 5. `docs/`
-   - PRD、架构、harness、开发计划、讲解、学习与验证证据
+   - PRD、harness、架构、开发计划、阶段证据、讲解与学习材料
+
+6. `e2e/`、`protos/`、`fixtures/`、`swiftide-pgvector/`、`superset/`
+   - 端到端测试、协议/schema、配置 fixture、RAG 辅助库、本地 BI 配置
 
 ---
 
@@ -53,62 +59,104 @@
 优先看：
 
 1. [auth.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/auth.rs)
-2. [lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)
-3. [auth-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/auth-sdk/src/index.ts)
-4. [LoginPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/LoginPage.tsx)
-5. [PhoneBindPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/PhoneBindPage.tsx)
+2. [user.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/user.rs)
+3. [lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)
+4. [auth-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/auth-sdk/src/index.ts)
+5. [LoginPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/LoginPage.tsx)
+6. [PhoneBindPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/PhoneBindPage.tsx)
 
-### 3.2 Debate Lobby / Room / 消息 / WS / 裁判流程
+### 3.2 Debate Lobby / Room / 消息 / WS
 
 优先看：
 
 1. [debate.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate.rs)
 2. [debate_room.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_room.rs)
-3. [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)
-4. [DebateLobbyPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateLobbyPage.tsx)
-5. [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx)
-6. [realtime-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)
+3. [notify ws.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/ws.rs)
+4. [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
+5. [realtime-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)
+6. [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx)
 
-### 3.3 钱包 / IAP / 账本
+### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
+
+Rust 侧优先看：
+
+1. [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)
+2. [ai_internal.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/ai_internal.rs)
+3. [judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge.rs)
+4. [judge_dispatch.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge_dispatch.rs)
+5. [runtime_workers.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/application/runtime_workers.rs)
+
+Python 侧优先看：
+
+1. [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py)
+2. [judge_command_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py)
+3. [judge_dispatch_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_dispatch_runtime.py)
+4. [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py)
+5. [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py)
+
+### 3.4 AI Ops / Registry / Trust / Fairness / Review / Replay
+
+Rust Ops 优先看：
+
+1. [debate_ops.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_ops.rs)
+2. [rbac.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/rbac.rs)
+3. [ops_observability.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/ops_observability.rs)
+4. [kafka_dlq.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/kafka_dlq.rs)
+5. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+6. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
+
+Python AI Ops 优先看：
+
+1. [route_group_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_registry.py)
+2. [route_group_trust.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_trust.py)
+3. [route_group_fairness.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_fairness.py)
+4. [route_group_review.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_review.py)
+5. [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py)
+6. [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
+
+### 3.5 钱包 / IAP / 账本
 
 优先看：
 
 1. [payment.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/payment.rs)
-2. [WalletPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/WalletPage.tsx)
+2. [payment model.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/payment.rs)
 3. [wallet-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/wallet-domain/src/index.ts)
+4. [WalletPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/WalletPage.tsx)
+5. [Tauri commands/mod.rs](/Users/panyihang/Documents/EchoIsle/frontend/apps/desktop/src-tauri/src/commands/mod.rs)
 
-### 3.4 Ops / 观测 / 运维读路径
+### 3.6 Analytics / 通知 / 文件 ticket
 
 优先看：
 
-1. [debate_ops.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_ops.rs)
+1. [analytics_server lib.rs](/Users/panyihang/Documents/EchoIsle/chat/analytics_server/src/lib.rs)
 2. [analytics_proxy.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/analytics_proxy.rs)
-3. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
-4. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+3. [notify_server lib.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/lib.rs)
+4. [notify sse.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/sse.rs)
+5. [ticket.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/ticket.rs)
+6. [messages.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/messages.rs)
 
-### 3.5 AI 裁判 / RAG / 推理链路
+### 3.7 AI RAG / 检索 / Bot
 
 优先看：
 
-1. [main.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/main.py)
-2. [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py)
-3. [phase_pipeline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/phase_pipeline.py)
-4. [openai_judge_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/openai_judge_client.py)
-5. [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py)
-6. [runtime_policy.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_policy.py)
+1. [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py)
+2. [runtime_rag.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_rag.py)
+3. [lexical_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/lexical_retriever.py)
+4. [reranker_engine.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/reranker_engine.py)
+5. [bot_server notif.rs](/Users/panyihang/Documents/EchoIsle/chat/bot_server/src/notif.rs)
+6. [bot_server indexer.rs](/Users/panyihang/Documents/EchoIsle/chat/bot_server/src/indexer.rs)
 
-### 3.6 Codex / Harness / 开发流程编排
+### 3.8 Codex / Harness / 质量门禁
 
 优先看：
 
 1. [AGENTS.md](/Users/panyihang/Documents/EchoIsle/AGENTS.md)
 2. [task-flows/README.md](/Users/panyihang/Documents/EchoIsle/docs/harness/task-flows/README.md)
 3. [product-goals.md](/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md)
-4. [doc-governance.md](/Users/panyihang/Documents/EchoIsle/docs/harness/doc-governance.md)
-5. [quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/quality-gates.md)
-6. [runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/runtime-verify.md)
-7. [usage-tutorial.md](/Users/panyihang/Documents/EchoIsle/docs/harness/usage-tutorial.md)
-8. [journey_verify.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/journey_verify.sh)
+4. [quality-gates.md](/Users/panyihang/Documents/EchoIsle/docs/harness/quality-gates.md)
+5. [runtime-verify.md](/Users/panyihang/Documents/EchoIsle/docs/harness/runtime-verify.md)
+6. [scripts/harness](/Users/panyihang/Documents/EchoIsle/scripts/harness)
+7. [scripts/quality](/Users/panyihang/Documents/EchoIsle/scripts/quality)
 
 ---
 
@@ -119,55 +167,50 @@
 关键入口：
 
 1. [chat/Cargo.toml](/Users/panyihang/Documents/EchoIsle/chat/Cargo.toml)
-2. [chat_server/Cargo.toml](/Users/panyihang/Documents/EchoIsle/chat/chat_server/Cargo.toml)
-3. [chat_server/src/lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)
+2. [chat_server/src/lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)
+3. [chat_server/src/openapi.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/openapi.rs)
 
 主要子项目：
 
 1. `chat/chat_server`
-   - 主 API 服务
-   - 大部分业务 handler、middleware、model、event bus 都在这里
+   - 主 API 服务，业务 handler、model、middleware、Redis、Kafka/outbox、OpenAPI、后台 worker
 
 2. `chat/chat_core`
-   - 共享基础层
-   - JWT、中间件、配置加载、公共错误与工具函数
+   - 共享基础层，JWT、middleware、配置加载、公共错误、基础 DTO
 
 3. `chat/notify_server`
-   - 通知服务
+   - SSE、WS、debate room WS、replay、syncRequired、access ticket 校验
 
 4. `chat/analytics_server`
-   - 分析服务
+   - ClickHouse event ingest 与分析读 API
 
-5. `chat/chat_test`
-   - Rust 侧测试项目与辅助测试资源
+5. `chat/ai_sdk`
+   - Rust AI adapter SDK，当前包含 OpenAI/Ollama adapter
 
-6. `chat/migrations`
-   - 数据库迁移
+6. `chat/bot_server`
+   - Bot 消息监听与代码索引/RAG 辅助
 
-7. `chat/scripts`
-   - 后端专项脚本
+7. `chat/chat_test`、`chat/simulator`、`chat/migrations`、`chat/scripts`
+   - 测试、模拟器、数据库迁移、后端专项脚本
 
-### 4.2 `chat_server` 内部优先理解方式
+### 4.2 `chat_server` 下钻规则
 
-先看 [lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)，因为它同时告诉你：
-
-1. 模块分层
-2. router 组装方式
-3. handler 对外暴露的 API 面
-4. middleware 和 runtime worker 的挂接点
-
-然后再按问题跳：
+先看 [lib.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/lib.rs)，再按目录跳：
 
 1. `handlers/`
    - HTTP 入口
-2. `middlewares/`
-   - 鉴权、ticket、chat/phone-bound 等访问控制
-3. `models/`
-   - 域模型与 DB 交互
+
+2. `models/`
+   - DB 访问、DTO、分页、状态字段
+
+3. `middlewares/`
+   - chat、phone-bound、ticket、internal AI key 等访问控制
+
 4. `application/`
-   - 编排与后台 worker
-5. `event_bus/`
-   - 事件总线、outbox、Kafka 相关
+   - 后台 worker 与请求保护
+
+5. `event_bus.rs`、`redis_store.rs`、`openapi.rs`
+   - 事件/outbox/Kafka、Redis/缓存/限流、公开 API 契约
 
 ---
 
@@ -179,32 +222,41 @@
 
 1. [main.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/main.py)
 2. [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py)
-3. [wiring.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/wiring.py)
-4. [settings.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/settings.py)
+3. [settings.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/settings.py)
+4. [wiring.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/wiring.py)
 
-按职责看：
+按目录看：
 
-1. 推理与阶段编排：
-   - [phase_pipeline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/phase_pipeline.py)
-   - [style_mode.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/style_mode.py)
-   - [token_budget.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/token_budget.py)
+1. `app/applications/`
+   - FastAPI route group 与应用服务，是当前 AI 服务第一优先入口
 
-2. 模型调用与回调：
+2. `app/core/`
+   - 裁判核心与 workflow 编排
+
+3. `app/domain/`
+   - agents、artifacts、facts、gateways、judge、trust、workflow 的模型与 ports
+
+4. `app/infra/`
+   - DB、repository、artifact store、gateway 实现
+
+5. `app/*.py`
+   - 根层保留运行时策略、RAG、OpenAI client、callback、trace store、专项 gate
+
+### 5.2 最常用 AI 服务文件
+
+1. 裁判主链：
+   - [judge_command_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py)
+   - [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py)
+
+2. 回放、治理与运维读路径：
+   - [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py)
+   - [route_group_registry.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_registry.py)
+   - [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
+
+3. RAG 与模型：
    - [openai_judge_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/openai_judge_client.py)
-   - [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py)
-
-3. RAG 与检索：
    - [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py)
-   - [rag_profiles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_profiles.py)
    - [runtime_rag.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_rag.py)
-   - [lexical_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/lexical_retriever.py)
-   - [reranker_engine.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/reranker_engine.py)
-   - [milvus_indexer.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/milvus_indexer.py)
-
-4. 运行时策略与专项门禁：
-   - [runtime_policy.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_policy.py)
-   - [b3_consistency_gate.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/b3_consistency_gate.py)
-   - [m7_acceptance_gate.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/m7_acceptance_gate.py)
 
 ---
 
@@ -216,6 +268,7 @@
 
 1. [frontend/package.json](/Users/panyihang/Documents/EchoIsle/frontend/package.json)
 2. [frontend/playwright.config.ts](/Users/panyihang/Documents/EchoIsle/frontend/playwright.config.ts)
+3. [AppRoot.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/AppRoot.tsx)
 
 主要分层：
 
@@ -226,28 +279,26 @@
    - Desktop 应用壳
 
 3. `frontend/apps/desktop/src-tauri`
-   - Desktop 的 Rust/Tauri 壳
+   - Tauri Rust 壳、窗口、菜单、日志、配置、IAP native bridge
 
-4. `frontend/packages/*`
-   - 共享业务域、SDK、UI、tokens、config、testing
+4. `frontend/packages/app-shell`
+   - 双端共享路由、布局、页面
+
+5. `frontend/packages/*`
+   - 共享业务域、SDK、UI、tokens、config、testing、proto scaffold
 
 ### 6.2 前端最常用入口
 
-1. 应用路由与页面入口：
-   - [AppRoot.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/AppRoot.tsx)
-
-2. 页面层：
-   - [HomePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/HomePage.tsx)
+1. 页面层：
+   - [LoginPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/LoginPage.tsx)
    - [DebateLobbyPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateLobbyPage.tsx)
    - [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx)
    - [WalletPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/WalletPage.tsx)
    - [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
 
-3. API 与认证 SDK：
+2. SDK / Domain：
    - [api-client index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/api-client/src/index.ts)
    - [auth-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/auth-sdk/src/index.ts)
-
-4. 共享域包：
    - [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
    - [wallet-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/wallet-domain/src/index.ts)
    - [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
@@ -255,24 +306,36 @@
 
 ---
 
-## 7. 哪些目录不是第一优先级
+## 7. 辅助与非优先目录
 
-这些目录不是没用，而是通常不应作为第一眼入口：
+这些目录常有用，但通常不是实现任务的第一入口：
 
-1. `docs/explanation/`
-   - 适合复盘，不适合当代码入口
+1. `e2e/`
+   - 独立 Playwright 端到端测试
 
-2. `docs/interview/`
-   - 适合沉淀，不适合当实现入口
+2. `frontend/tests/`
+   - 当前前端 smoke / e2e 测试入口之一
 
-3. `artifacts/`
-   - 适合看执行证据，不适合理解系统结构
+3. `protos/`
+   - protobuf 与 ClickHouse schema
 
-4. `e2e/`
-   - 是独立专项测试区，不是主业务实现入口
+4. `fixtures/`
+   - 本地配置 fixture 与少量测试素材
 
 5. `swiftide-pgvector/`
-   - 当前不是产品主线
+   - Bot/RAG 相关 pgvector helper library
+
+6. `superset/`
+   - 本地 BI / 分析配置
+
+7. `artifacts/`、`frontend/test-results/`、`e2e/test-results/`、`e2e/playwright-report/`
+   - 执行证据、测试输出或生成产物
+
+8. `target/`、`node_modules/`、`dist/`、`.turbo/`、`__pycache__/`
+   - 构建产物、依赖或缓存
+
+9. `docs/explanation/`、`docs/interview/`、`docs/learning/`、`docs/resume/`
+   - 复盘和沉淀材料，不适合当实现入口
 
 ---
 
@@ -281,10 +344,11 @@
 当 agent 进入新任务时，推荐按这个顺序压缩上下文：
 
 1. 先看 [AGENTS.md](/Users/panyihang/Documents/EchoIsle/AGENTS.md)
-2. 再看本文件判断该去哪一段代码
-3. 然后只打开相关入口文件，不要一开始就扫整个仓库
-4. 只有遇到跨服务边界或复杂链路时，再补读 PRD、harness 或专项架构文档
+2. 按任务类型读对应 `docs/harness/task-flows/*.md`
+3. 再看本文件判断第一跳入口
+4. 只打开相关入口文件，沿代码里的 router、exports、mod、tests 继续下钻
+5. 涉及 API、DTO、错误码、状态字段或 WS payload 时，再同步检查后端 `openapi.rs` 与前端 domain / SDK
 
 一句话原则：
 
-先看地图，再进代码。
+先看地图，再进代码；这份文档只负责帮你少开文件、少花 token。

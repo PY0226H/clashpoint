@@ -146,6 +146,8 @@ pub struct AiJudgeConfig {
     pub challenge_status_path: String,
     #[serde(default = "default_ai_judge_challenge_request_path")]
     pub challenge_request_path: String,
+    #[serde(default = "default_ai_judge_challenge_ops_queue_path")]
+    pub challenge_ops_queue_path: String,
     #[serde(default = "default_ai_judge_challenge_timeout_ms")]
     pub challenge_timeout_ms: u64,
 }
@@ -261,6 +263,7 @@ impl Default for AiJudgeConfig {
             public_verify_timeout_ms: default_ai_judge_public_verify_timeout_ms(),
             challenge_status_path: default_ai_judge_challenge_status_path(),
             challenge_request_path: default_ai_judge_challenge_request_path(),
+            challenge_ops_queue_path: default_ai_judge_challenge_ops_queue_path(),
             challenge_timeout_ms: default_ai_judge_challenge_timeout_ms(),
         }
     }
@@ -514,6 +517,10 @@ fn default_ai_judge_challenge_status_path() -> String {
 
 fn default_ai_judge_challenge_request_path() -> String {
     "/internal/judge/cases/{case_id}/trust/challenges/request".to_string()
+}
+
+fn default_ai_judge_challenge_ops_queue_path() -> String {
+    "/internal/judge/trust/challenges/ops-queue".to_string()
 }
 
 fn default_ai_judge_challenge_timeout_ms() -> u64 {
@@ -828,6 +835,10 @@ mod tests {
         assert_eq!(
             cfg.challenge_request_path,
             "/internal/judge/cases/{case_id}/trust/challenges/request"
+        );
+        assert_eq!(
+            cfg.challenge_ops_queue_path,
+            "/internal/judge/trust/challenges/ops-queue"
         );
         assert_eq!(cfg.challenge_timeout_ms, 5_000);
     }

@@ -178,6 +178,32 @@ expect_contains "p40 client challenge read model has sync alternative" "chore(ai
 expect_not_contains "p40 client challenge read model avoids generic capability subject" "add ai-judge capability" "$P40_CLIENT_CHALLENGE_OUT"
 expect_not_contains "p40 client challenge read model avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CLIENT_CHALLENGE_OUT"
 
+P40_REVIEW_SYNC_OUT="$TMP_DIR/p40-review-sync.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-review-decision-sync-contract-pack \
+  --summary "Add review decision sync contract for AI Judge challenge outcomes and user-visible verdict state" >"$P40_REVIEW_SYNC_OUT"
+
+expect_contains "p40 review sync uses feature title" "feat(ai-judge): add review decision sync contract" "$P40_REVIEW_SYNC_OUT"
+expect_contains "p40 review sync has judge report alternative" "feat(ai-judge): surface review sync in judge reports" "$P40_REVIEW_SYNC_OUT"
+expect_contains "p40 review sync has verdict protection alternative" "chore(ai-judge): protect review verdict sync" "$P40_REVIEW_SYNC_OUT"
+expect_not_contains "p40 review sync avoids generic capability subject" "add ai-judge capability" "$P40_REVIEW_SYNC_OUT"
+expect_not_contains "p40 review sync avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_REVIEW_SYNC_OUT"
+
+P40_CHALLENGE_OPS_OUT="$TMP_DIR/p40-challenge-ops.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-challenge-ops-read-model-bridge-pack \
+  --summary "Bridge AI Trust Challenge ops queue into chat ops and frontend ops-domain read model with public-safe summary and judge_review RBAC" >"$P40_CHALLENGE_OPS_OUT"
+
+expect_contains "p40 challenge ops bridge uses feature title" "feat(ai-judge): bridge challenge ops queue" "$P40_CHALLENGE_OPS_OUT"
+expect_contains "p40 challenge ops bridge has ops alternative" "feat(ai-judge): surface challenge queue in ops" "$P40_CHALLENGE_OPS_OUT"
+expect_contains "p40 challenge ops bridge has projection alternative" "chore(ai-judge): protect challenge ops projection" "$P40_CHALLENGE_OPS_OUT"
+expect_not_contains "p40 challenge ops bridge avoids generic capability subject" "add ai-judge capability" "$P40_CHALLENGE_OPS_OUT"
+expect_not_contains "p40 challenge ops bridge avoids sync follow-up alternative" "sync ai-judge follow-up" "$P40_CHALLENGE_OPS_OUT"
+
 TITLE_OUT="$TMP_DIR/title.out"
 bash "$SCRIPT" \
   --root "$ROOT" \

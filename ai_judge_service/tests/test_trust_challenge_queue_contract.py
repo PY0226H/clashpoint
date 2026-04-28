@@ -8,6 +8,7 @@ from app.applications.trust_challenge_queue_contract import (
     TRUST_CHALLENGE_QUEUE_ITEM_KEYS,
     TRUST_CHALLENGE_QUEUE_PRIORITY_PROFILE_KEYS,
     TRUST_CHALLENGE_QUEUE_REVIEW_KEYS,
+    TRUST_CHALLENGE_QUEUE_SUMMARY_KEYS,
     TRUST_CHALLENGE_QUEUE_TOP_LEVEL_KEYS,
     validate_trust_challenge_queue_contract,
 )
@@ -21,6 +22,18 @@ class TrustChallengeQueueContractTests(unittest.TestCase):
             "scanned": 1,
             "skipped": 0,
             "errorCount": 0,
+            "summary": {
+                "openCount": 1,
+                "urgentCount": 0,
+                "highPriorityCount": 0,
+                "oldestOpenAgeMinutes": 30,
+                "stateCounts": {"under_internal_review": 1},
+                "reviewStateCounts": {"pending_review": 1},
+                "priorityLevelCounts": {"medium": 1},
+                "slaBucketCounts": {"normal": 1},
+                "reasonCodeCounts": {"manual_challenge": 1},
+                "actionHintCounts": {"trust.challenge.decide": 1},
+            },
             "items": [
                 {
                     "caseId": 9201,
@@ -104,6 +117,10 @@ class TrustChallengeQueueContractTests(unittest.TestCase):
     def test_validate_trust_challenge_queue_contract_should_pass_for_stable_payload(self) -> None:
         payload = self._build_payload()
         self.assertEqual(set(payload.keys()), set(TRUST_CHALLENGE_QUEUE_TOP_LEVEL_KEYS))
+        self.assertEqual(
+            set(payload["summary"].keys()),
+            set(TRUST_CHALLENGE_QUEUE_SUMMARY_KEYS),
+        )
         self.assertEqual(
             set(payload["items"][0].keys()),
             set(TRUST_CHALLENGE_QUEUE_ITEM_KEYS),

@@ -190,6 +190,7 @@ class TrustPhaseATests(unittest.TestCase):
             report_payload={
                 "reviewRequired": False,
                 "errorCodes": [],
+                "verdictLedger": {"version": "v2-panel-arbiter-opinion"},
             },
         )
         self.assertEqual(registry["version"], "trust-phaseB-challenge-review-v1")
@@ -208,6 +209,101 @@ class TrustPhaseATests(unittest.TestCase):
         self.assertEqual(challenge["closedBy"], "reviewer-a")
         self.assertEqual(len(challenge["stateHistory"]), 5)
         self.assertEqual(len(registry["timeline"]), 5)
+        sync = registry["reviewDecisionSync"]
+        self.assertEqual(sync["result"], "verdict_upheld")
+        self.assertEqual(sync["syncState"], "completed")
+        self.assertEqual(sync["userVisibleStatus"], "completed")
+        self.assertEqual(sync["source"]["originalCaseId"], 9006)
+        self.assertEqual(
+            sync["source"]["originalVerdictVersion"],
+            "v2-panel-arbiter-opinion",
+        )
+        self.assertEqual(
+            sync["source"]["reviewDecisionId"],
+            "review-decision:9006:chlg-9006-1:4",
+        )
+        self.assertFalse(sync["verdictEffect"]["directWinnerWriteAllowed"])
+
+    def test_challenge_review_registry_should_map_review_decision_sync_outcomes(
+        self,
+    ) -> None:
+        cases = [
+            (
+                "verdict_overturned",
+                "awaiting_verdict_source",
+                "review_required",
+                "await_revised_verdict_ledger",
+            ),
+            (
+                "draw_after_review",
+                "draw_pending_vote",
+                "draw_pending_vote",
+                "open_draw_vote",
+            ),
+            (
+                "review_retained",
+                "review_retained",
+                "review_required",
+                "retain_review_required",
+            ),
+        ]
+        for state, sync_state, visible_status, ledger_action in cases:
+            with self.subTest(state=state):
+                registry = build_challenge_review_registry(
+                    case_id=9010,
+                    trace_id="trace-9010",
+                    workflow_status="review_required",
+                    workflow_events=[
+                        _event(
+                            seq=1,
+                            payload={
+                                "challengeId": "chlg-9010-1",
+                                "challengeState": "under_internal_review",
+                                "challengeActor": "reviewer-a",
+                            },
+                        ),
+                        _event(
+                            seq=2,
+                            payload={
+                                "challengeId": "chlg-9010-1",
+                                "challengeState": state,
+                                "challengeActor": "reviewer-a",
+                                "reviewDecision": (
+                                    "retain" if state == "review_retained" else "reject"
+                                ),
+                                "reviewActor": "reviewer-a",
+                                "reviewReason": "decision source retained",
+                            },
+                        ),
+                        _event(
+                            seq=3,
+                            payload={
+                                "challengeId": "chlg-9010-1",
+                                "challengeState": "challenge_closed",
+                                "challengeActor": "reviewer-a",
+                            },
+                        ),
+                    ],
+                    alerts=[],
+                    report_payload={
+                        "reviewRequired": state == "review_retained",
+                        "errorCodes": [],
+                        "verdictLedger": {"version": "v2-panel-arbiter-opinion"},
+                    },
+                )
+                sync = registry["reviewDecisionSync"]
+                self.assertEqual(sync["result"], state)
+                self.assertEqual(sync["syncState"], sync_state)
+                self.assertEqual(sync["userVisibleStatus"], visible_status)
+                self.assertEqual(
+                    sync["verdictEffect"]["ledgerAction"],
+                    ledger_action,
+                )
+                self.assertFalse(sync["verdictEffect"]["directWinnerWriteAllowed"])
+                self.assertEqual(
+                    sync["source"]["reviewDecisionId"],
+                    "review-decision:9010:chlg-9010-1:2",
+                )
 
     def test_judge_kernel_registry_should_resolve_latest_core_and_registry_versions(self) -> None:
         registry = build_judge_kernel_registry(

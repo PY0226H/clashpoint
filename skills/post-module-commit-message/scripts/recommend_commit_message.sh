@@ -271,6 +271,11 @@ build_subject() {
     fi
   elif [[ "$module_key" == *"audit-anchor-export"* || "$summary_lower" == *"audit anchor"* ]]; then
     echo "export audit anchor manifest"
+  elif [[ "$module_key" == *"challenge-ops-read-model-bridge"* ||
+          "$summary_lower" == *"challenge ops"* ||
+          "$summary_lower" == *"ops queue"* ||
+          "$summary_lower" == *"judge_review rbac"* ]]; then
+    echo "bridge challenge ops queue"
   elif [[ "$module_key" == *"ops-read-model-trust"* || "$summary_lower" == *"ops read model"* ]]; then
     echo "add trust coverage to ops read model"
   elif [[ "$module_key" == *"challenge-review-state-machine"* ]]; then
@@ -291,6 +296,10 @@ build_subject() {
           "$summary_lower" == *"challenge read model"* ||
           "$summary_lower" == *"challenge status/action view"* ]]; then
     echo "add judge challenge read model"
+  elif [[ "$module_key" == *"review-decision-sync-contract"* ||
+          "$summary_lower" == *"review decision sync"* ||
+          "$summary_lower" == *"verdict sync"* ]]; then
+    echo "add review decision sync contract"
   elif [[ "$module_key" == *"challenge-eligibility-contract"* ||
           "$summary_lower" == *"challenge eligibility"* ||
           "$summary_lower" == *"challenge status contract"* ]]; then
@@ -348,10 +357,12 @@ build_alt_one_subject() {
     "record local reference evidence") echo "refresh runtime ops evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
     "export audit anchor manifest") echo "attach artifact manifest to audit anchor" ;;
+    "bridge challenge ops queue") echo "surface challenge queue in ops" ;;
     "proxy judge public verification") echo "add chat public verify proxy" ;;
     "add judge public verification read model") echo "display judge verification readiness" ;;
     "proxy judge challenges through chat") echo "add chat challenge proxy" ;;
     "add judge challenge read model") echo "display judge challenge status" ;;
+    "add review decision sync contract") echo "surface review sync in judge reports" ;;
     "add challenge eligibility status contract") echo "expose public challenge status" ;;
     "add citation verification evidence gate") echo "wire citation verifier into release evidence" ;;
     "export release readiness artifacts") echo "attach release readiness manifest" ;;
@@ -380,10 +391,12 @@ build_alt_two_subject() {
     "record local reference evidence") echo "mark local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;
     "export audit anchor manifest") echo "prepare audit anchor export" ;;
+    "bridge challenge ops queue") echo "protect challenge ops projection" ;;
     "proxy judge public verification") echo "protect public verification contract" ;;
     "add judge public verification read model") echo "sync judge verification client state" ;;
     "proxy judge challenges through chat") echo "protect challenge request contract" ;;
     "add judge challenge read model") echo "sync challenge client state" ;;
+    "add review decision sync contract") echo "protect review verdict sync" ;;
     "add challenge eligibility status contract") echo "protect challenge status redaction" ;;
     "add citation verification evidence gate") echo "summarize citation gate readiness" ;;
     "export release readiness artifacts") echo "sync release readiness evidence" ;;

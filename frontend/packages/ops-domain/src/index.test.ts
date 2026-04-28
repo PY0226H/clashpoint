@@ -44,6 +44,18 @@ describe("getOpsDomainErrorInfo", () => {
     expect(info.message).toBe("rate_limit_exceeded:ops_rbac_roles_list");
   });
 
+  it("should normalize challenge queue permission denied code", () => {
+    const info = getOpsDomainErrorInfo({
+      response: {
+        status: 409,
+        data: {
+          error: "debate conflict: ops_permission_denied:judge_review"
+        }
+      }
+    });
+    expect(info.code).toBe("ops_permission_denied:judge_review");
+  });
+
   it("should fallback to request failed for unknown empty payload", () => {
     const info = getOpsDomainErrorInfo({});
     expect(info.status).toBeNull();

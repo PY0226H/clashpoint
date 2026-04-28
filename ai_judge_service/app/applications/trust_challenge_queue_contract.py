@@ -8,9 +8,23 @@ TRUST_CHALLENGE_QUEUE_TOP_LEVEL_KEYS: tuple[str, ...] = (
     "scanned",
     "skipped",
     "errorCount",
+    "summary",
     "items",
     "errors",
     "filters",
+)
+
+TRUST_CHALLENGE_QUEUE_SUMMARY_KEYS: tuple[str, ...] = (
+    "openCount",
+    "urgentCount",
+    "highPriorityCount",
+    "oldestOpenAgeMinutes",
+    "stateCounts",
+    "reviewStateCounts",
+    "priorityLevelCounts",
+    "slaBucketCounts",
+    "reasonCodeCounts",
+    "actionHintCounts",
 )
 
 TRUST_CHALLENGE_QUEUE_ITEM_KEYS: tuple[str, ...] = (
@@ -260,6 +274,30 @@ def validate_trust_challenge_queue_contract(payload: dict[str, Any]) -> None:
         keys=TRUST_CHALLENGE_QUEUE_TOP_LEVEL_KEYS,
     )
     _, returned, _, _, error_count = _assert_count_consistency(payload)
+
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        raise ValueError("trust_challenge_queue_summary_not_dict")
+    _assert_required_keys(
+        section="trust_challenge_queue_summary",
+        payload=summary,
+        keys=TRUST_CHALLENGE_QUEUE_SUMMARY_KEYS,
+    )
+    for key in (
+        "stateCounts",
+        "reviewStateCounts",
+        "priorityLevelCounts",
+        "slaBucketCounts",
+        "reasonCodeCounts",
+        "actionHintCounts",
+    ):
+        if not isinstance(summary.get(key), dict):
+            raise ValueError(f"trust_challenge_queue_summary_{key}_not_dict")
+    for key in ("openCount", "urgentCount", "highPriorityCount"):
+        _non_negative_int(summary.get(key), default=0)
+    oldest_open_age = summary.get("oldestOpenAgeMinutes")
+    if oldest_open_age is not None:
+        _non_negative_int(oldest_open_age, default=0)
 
     items = payload.get("items")
     if not isinstance(items, list):

@@ -774,6 +774,10 @@ export function DebateRoomPage() {
               Review: {judgeChallengeView.reviewState} | Challenges:{" "}
               {judgeChallengeView.totalChallenges}
             </InlineHint>
+            <InlineHint>
+              Verdict Sync: {judgeChallengeView.reviewVisibleStatus} |{" "}
+              {judgeChallengeView.reviewSyncState}
+            </InlineHint>
             {judgeChallengeView.latestDecision ? (
               <InlineHint>
                 Decision: {judgeChallengeView.latestDecision}

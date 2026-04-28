@@ -45,6 +45,7 @@ class TrustChallengePublicContractTests(unittest.TestCase):
         self.assertIn("challenge.request", payload["allowedActions"])
         self.assertEqual(payload["blockers"], [])
         self.assertEqual(payload["policy"]["policyVersion"], "policy-v5")
+        self.assertEqual(payload["reviewDecisionSync"]["syncState"], "not_available")
         validate_trust_challenge_public_contract(payload)
         self.assertEqual(find_trust_challenge_public_forbidden_keys(payload), set())
 
@@ -75,6 +76,11 @@ class TrustChallengePublicContractTests(unittest.TestCase):
         self.assertEqual(payload["blockers"], ["challenge_duplicate_open"])
         self.assertNotIn("challenge.request", payload["allowedActions"])
         self.assertIn("review.view", payload["allowedActions"])
+        self.assertEqual(payload["reviewDecisionSync"]["syncState"], "pending_review")
+        self.assertEqual(
+            payload["reviewDecisionSync"]["userVisibleStatus"],
+            "review_required",
+        )
         validate_trust_challenge_public_contract(payload)
 
     def test_public_status_should_mark_closed_challenge_cacheable(self) -> None:
@@ -93,6 +99,8 @@ class TrustChallengePublicContractTests(unittest.TestCase):
                         "challengeId": "chlg-9203-1",
                         "currentState": "challenge_closed",
                         "decision": "verdict_upheld",
+                        "latestEventSeq": 4,
+                        "decisionAt": "2026-04-26T00:00:00+00:00",
                         "reasonCode": "manual_challenge",
                     }
                 ],
@@ -104,6 +112,8 @@ class TrustChallengePublicContractTests(unittest.TestCase):
         self.assertEqual(payload["eligibility"]["status"], "closed")
         self.assertEqual(payload["blockers"], ["challenge_review_already_closed"])
         self.assertEqual(payload["challenge"]["latestDecision"], "verdict_upheld")
+        self.assertEqual(payload["reviewDecisionSync"]["result"], "verdict_upheld")
+        self.assertEqual(payload["reviewDecisionSync"]["syncState"], "completed")
         self.assertTrue(payload["cacheProfile"]["cacheable"])
         validate_trust_challenge_public_contract(payload)
 
