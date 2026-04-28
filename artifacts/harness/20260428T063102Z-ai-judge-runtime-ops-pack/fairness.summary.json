@@ -1,0 +1,63 @@
+{
+  "run_id": "20260428T063102Z-ai-judge-fairness-benchmark-freeze",
+  "status": "local_reference_frozen",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "benchmark_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_fairness_benchmark.env",
+  "env_marker": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_p5_real_env.env",
+  "environment_mode": "local_reference",
+  "allow_local_reference": true,
+  "policy_version": "fairness-benchmark-v1",
+  "threshold_decision": "accepted",
+  "needs_real_env_reconfirm": true,
+  "needs_remediation": false,
+  "benchmark_run_id": "20260428T063102Z-ai-judge-fairness-benchmark-freeze",
+  "registry_release_gate_input_ready": false,
+  "metrics": {
+    "sample_size": "384",
+    "draw_rate": "0.20",
+    "side_bias_delta": "0.04",
+    "appeal_overturn_rate": "0.07",
+    "draw_rate_ok": true,
+    "side_bias_delta_ok": true,
+    "appeal_overturn_rate_ok": true
+  },
+  "thresholds": {
+    "draw_rate_max": "0.30",
+    "side_bias_delta_max": "0.08",
+    "appeal_overturn_rate_max": "0.12"
+  },
+  "real_sample_manifest": {
+    "manifest_ref": "",
+    "ready": false,
+    "status": "not_required",
+    "missing_keys": "",
+    "blocker_hint": "",
+    "sample_id": "",
+    "topic_domain": "",
+    "pro_transcript_ref": "",
+    "con_transcript_ref": "",
+    "expected_review_hints_ref": "",
+    "privacy_redaction_status": "",
+    "source_evidence_link": "",
+    "public_raw_transcript_exposed": false
+  },
+  "missing_keys": "",
+  "note": "local reference fairness benchmark frozen; waiting real environment reconfirmation",
+  "ingest": {
+    "enabled": false,
+    "base_url": "",
+    "path": "/internal/judge/fairness/benchmark-runs",
+    "status": "skipped",
+    "http_code": "",
+    "error": "",
+    "response": ""
+  },
+  "started_at": "2026-04-28T06:31:02Z",
+  "finished_at": "2026-04-28T06:31:03Z",
+  "outputs": {
+    "threshold_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_fairness_benchmark_thresholds.env",
+    "freeze_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Fairness_Benchmark_冻结口径-2026-04-28.md",
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T063102Z-ai-judge-runtime-ops-pack/fairness.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T063102Z-ai-judge-runtime-ops-pack/fairness.summary.md"
+  }
+}

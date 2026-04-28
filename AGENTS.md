@@ -28,6 +28,13 @@ Detailed explanations now live under `docs/harness/`.
 2. The authority PRD remains `/Users/panyihang/Documents/EchoIsle/docs/PRD/在线辩论AI裁判平台完整PRD.md`.
 3. The default fast path is now `/Users/panyihang/Documents/EchoIsle/docs/harness/product-goals.md`; high-risk modules must fall back to the authority PRD.
 
+### Current code fact rule
+
+1. 回答本项目的代码、行为、调用链、接口、测试、配置或架构现状问题时，必须优先基于当前工作区代码事实。
+2. 文档只作为导航线索或背景，不得替代代码事实；若文档与代码不一致，以当前代码为准，并在回答中说明冲突。
+3. 给出确定性结论前，应通过 `rg`、文件阅读、测试、类型定义、配置或实际运行结果核验。
+4. 涉及具体实现结论时，优先给出文件路径、函数/类型/测试位置作为依据；无法核验时明确标注“不确定/未验证”。
+
 ### Architecture map freshness rule
 
 1. 每次 dev 或 refactor/optimization 修改代码结构、模块边界、主入口、跨层调用路径、workspace/package 成员、主要页面/handler/service/domain 位置后，必须判断 `docs/architecture/README.md` 是否需要同步更新。

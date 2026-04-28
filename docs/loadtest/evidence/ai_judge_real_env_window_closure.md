@@ -1,7 +1,7 @@
 # AI Judge Real Env Window Closure 摘要
 
-1. 生成日期：2026-04-26
-2. 运行窗口：2026-04-26T10:33:47Z -> 2026-04-26T10:33:50Z
+1. 生成日期：2026-04-28
+2. 运行窗口：2026-04-28T06:31:14Z -> 2026-04-28T06:31:17Z
 3. 统一状态：`local_reference_ready`
 4. environment_mode：`local_reference`
 5. marker_ready：`false`
@@ -50,5 +50,5 @@
 
 1. closure env：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_window_closure.env`
 2. closure doc：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_window_closure.md`
-3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/ai-judge-p39-local-reference-regression-real-env-window.summary.json`
-4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/ai-judge-p39-local-reference-regression-real-env-window.summary.md`
+3. summary json：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T063114Z-ai-judge-real-env-window-closure.summary.json`
+4. summary md：`/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260428T063114Z-ai-judge-real-env-window-closure.summary.md`

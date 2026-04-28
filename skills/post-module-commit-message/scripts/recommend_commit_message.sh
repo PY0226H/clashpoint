@@ -265,7 +265,10 @@ build_subject() {
     echo "split registry trust route projections"
   elif [[ "$module_key" == *"local-reference-regression"* ||
           "$summary_lower" == *"local reference"* ]]; then
-    if [[ "$module_key" == *"p39-local-reference-regression"* ||
+    if [[ "$module_key" == *"p40-local-reference-regression"* ||
+          "$summary_lower" == *"p40"* ]]; then
+      echo "record p40 local reference evidence"
+    elif [[ "$module_key" == *"p39-local-reference-regression"* ||
           "$summary_lower" == *"p39"* ]]; then
       echo "record p39 local reference evidence"
     elif [[ "$module_key" == *"p36-local-reference-regression"* ||
@@ -359,6 +362,7 @@ build_alt_one_subject() {
     "split registry trust route projections") echo "extract public verify projections" ;;
     "split challenge ops projections") echo "extract challenge ops helpers" ;;
     "record p36 local reference evidence") echo "refresh runtime ops pack evidence" ;;
+    "record p40 local reference evidence") echo "refresh p40 runtime ops evidence" ;;
     "record p39 local reference evidence") echo "refresh p39 runtime ops evidence" ;;
     "record local reference evidence") echo "refresh runtime ops evidence" ;;
     "improve commit message recommendations") echo "tighten commit message scope inference" ;;
@@ -394,6 +398,7 @@ build_alt_two_subject() {
     "split registry trust route projections") echo "thin registry and trust routes" ;;
     "split challenge ops projections") echo "thin challenge proxy projections" ;;
     "record p36 local reference evidence") echo "mark p36 local reference ready" ;;
+    "record p40 local reference evidence") echo "mark p40 local reference ready" ;;
     "record p39 local reference evidence") echo "mark p39 local reference ready" ;;
     "record local reference evidence") echo "mark local reference ready" ;;
     "improve commit message recommendations") echo "prefer concise commit titles" ;;

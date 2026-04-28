@@ -93,6 +93,19 @@ expect_contains "p39 local reference uses p39 alternative" "docs(ai-judge): refr
 expect_not_contains "p39 local reference avoids stale p36 subject" "record p36 local reference evidence" "$P39_LOCAL_REF_OUT"
 expect_not_contains "p39 local reference avoids sync follow-up alternative" "sync ai-judge follow-up" "$P39_LOCAL_REF_OUT"
 
+P40_LOCAL_REF_OUT="$TMP_DIR/p40-local-reference.out"
+bash "$SCRIPT" \
+  --root "$ROOT" \
+  --task-kind dev \
+  --module ai-judge-p40-local-reference-regression-pack \
+  --summary "Refresh P40 AI Judge local reference regression evidence while keeping real environment status env_blocked" >"$P40_LOCAL_REF_OUT"
+
+expect_contains "p40 local reference uses p40 docs title" "docs(ai-judge): record p40 local reference evidence" "$P40_LOCAL_REF_OUT"
+expect_contains "p40 local reference uses p40 alternative" "docs(ai-judge): refresh p40 runtime ops evidence" "$P40_LOCAL_REF_OUT"
+expect_contains "p40 local reference uses readiness alternative" "chore(ai-judge): mark p40 local reference ready" "$P40_LOCAL_REF_OUT"
+expect_not_contains "p40 local reference avoids stale generic subject" "record local reference evidence" "$P40_LOCAL_REF_OUT"
+expect_not_contains "p40 local reference avoids stale p39 subject" "record p39 local reference evidence" "$P40_LOCAL_REF_OUT"
+
 STAGE_OUT="$TMP_DIR/stage.out"
 bash "$SCRIPT" \
   --root "$ROOT" \
