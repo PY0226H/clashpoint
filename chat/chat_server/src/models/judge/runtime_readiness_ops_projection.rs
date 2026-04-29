@@ -1,5 +1,7 @@
 use super::*;
+use reqwest::Client;
 use serde_json::{json, Value};
+use std::time::Duration;
 
 pub(super) const JUDGE_RUNTIME_READINESS_REASON_PROXY_FAILED: &str =
     "runtime_readiness_proxy_failed";
@@ -8,6 +10,84 @@ const JUDGE_RUNTIME_READINESS_CONTRACT_VERSION: &str = "ai-judge-runtime-readine
 const JUDGE_RUNTIME_READINESS_REASON_CONTRACT_VIOLATION: &str =
     "runtime_readiness_contract_violation";
 const JUDGE_RUNTIME_READINESS_STATUS_PROXY_ERROR: &str = "proxy_error";
+
+fn build_ai_judge_runtime_readiness_url(base_url: &str, path: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    format!("{base}/{path}")
+}
+
+fn build_runtime_readiness_query_params(
+    query: &GetJudgeRuntimeReadinessOpsQuery,
+) -> Vec<(&'static str, String)> {
+    let mut params = Vec::new();
+    if let Some(value) = query
+        .dispatch_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        params.push(("dispatch_type", value.to_string()));
+    }
+    if let Some(value) = query
+        .policy_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        params.push(("policy_version", value.to_string()));
+    }
+    if let Some(value) = query.window_days {
+        params.push(("window_days", value.clamp(1, 30).to_string()));
+    }
+    if let Some(value) = query.case_scan_limit {
+        params.push(("case_scan_limit", value.clamp(20, 1_000).to_string()));
+    }
+    if let Some(value) = query.include_case_trust {
+        params.push(("include_case_trust", value.to_string()));
+    }
+    if let Some(value) = query.trust_case_limit {
+        params.push(("trust_case_limit", value.clamp(1, 20).to_string()));
+    }
+    if let Some(value) = query.calibration_risk_limit {
+        params.push(("calibration_risk_limit", value.clamp(1, 200).to_string()));
+    }
+    if let Some(value) = query.panel_group_limit {
+        params.push(("panel_group_limit", value.clamp(1, 200).to_string()));
+    }
+    if let Some(value) = query.panel_attention_limit {
+        params.push(("panel_attention_limit", value.clamp(1, 100).to_string()));
+    }
+    params
+}
+
+pub(super) async fn fetch_ai_judge_runtime_readiness_payload(
+    base_url: &str,
+    path: &str,
+    timeout_ms: u64,
+    internal_key: &str,
+    query: &GetJudgeRuntimeReadinessOpsQuery,
+) -> Result<Value, &'static str> {
+    let url = build_ai_judge_runtime_readiness_url(base_url, path);
+    let client = Client::builder()
+        .timeout(Duration::from_millis(timeout_ms.max(1)))
+        .build()
+        .map_err(|_| "runtime_readiness_http_client_failed")?;
+    let response = client
+        .get(url)
+        .header("x-ai-internal-key", internal_key)
+        .query(&build_runtime_readiness_query_params(query))
+        .send()
+        .await
+        .map_err(|_| "runtime_readiness_request_failed")?;
+    if !response.status().is_success() {
+        return Err("runtime_readiness_bad_status");
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "runtime_readiness_bad_json")
+}
 
 fn normalized_key(key: &str) -> String {
     key.chars()
@@ -214,5 +294,51 @@ pub(super) fn build_judge_runtime_readiness_ops_proxy_error_output(
             "officialVerdictSemanticsChanged": false,
         }),
         cache_profile: json!({}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_readiness_query_params_should_trim_and_clamp() {
+        let params = build_runtime_readiness_query_params(&GetJudgeRuntimeReadinessOpsQuery {
+            dispatch_type: Some(" final ".to_string()),
+            policy_version: Some(" v3-default ".to_string()),
+            window_days: Some(99),
+            case_scan_limit: Some(3),
+            include_case_trust: Some(false),
+            trust_case_limit: Some(999),
+            calibration_risk_limit: Some(999),
+            panel_group_limit: Some(999),
+            panel_attention_limit: Some(999),
+        });
+
+        assert_eq!(
+            params,
+            vec![
+                ("dispatch_type", "final".to_string()),
+                ("policy_version", "v3-default".to_string()),
+                ("window_days", "30".to_string()),
+                ("case_scan_limit", "20".to_string()),
+                ("include_case_trust", "false".to_string()),
+                ("trust_case_limit", "20".to_string()),
+                ("calibration_risk_limit", "200".to_string()),
+                ("panel_group_limit", "200".to_string()),
+                ("panel_attention_limit", "100".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_readiness_url_should_join_base_and_path_once() {
+        assert_eq!(
+            build_ai_judge_runtime_readiness_url(
+                "http://127.0.0.1:9000/",
+                "/internal/judge/ops/runtime-readiness",
+            ),
+            "http://127.0.0.1:9000/internal/judge/ops/runtime-readiness"
+        );
     }
 }

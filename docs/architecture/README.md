@@ -100,11 +100,13 @@ Rust Ops 优先看：
 
 1. [debate_ops.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_ops.rs)
 2. [judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge.rs)
-3. [rbac.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/rbac.rs)
-4. [ops_observability.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/ops_observability.rs)
-5. [kafka_dlq.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/kafka_dlq.rs)
-6. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
-7. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
+3. [runtime_readiness_ops_projection.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/runtime_readiness_ops_projection.rs)
+4. [rbac.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/rbac.rs)
+5. [ops_observability.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/ops_observability.rs)
+6. [kafka_dlq.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/kafka_dlq.rs)
+7. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+8. [ops-domain runtimeReadiness.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/runtimeReadiness.ts)
+9. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
 
 Python AI Ops 优先看：
 
@@ -120,7 +122,8 @@ Python AI Ops 优先看：
 10. [registry_release_gate.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/registry_release_gate.py)
 11. [release_readiness_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/release_readiness_projection.py)
 12. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
-13. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
+13. [runtime_readiness_public_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_projection.py)
+14. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
 
 ### 3.5 钱包 / IAP / 账本
 
@@ -268,6 +271,7 @@ Python AI Ops 优先看：
    - [release_readiness_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/release_readiness_projection.py)
    - [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
    - [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
+   - [runtime_readiness_public_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_projection.py)
    - [facts repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py)
 
 3. RAG 与模型：
@@ -319,6 +323,7 @@ Python AI Ops 优先看：
    - [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
    - [wallet-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/wallet-domain/src/index.ts)
    - [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+   - [ops-domain runtimeReadiness.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/runtimeReadiness.ts)
    - [realtime-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)
 
 ---

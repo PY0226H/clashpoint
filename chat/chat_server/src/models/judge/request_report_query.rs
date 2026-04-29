@@ -4,7 +4,7 @@ use super::challenge_ops_projection::{
 };
 use super::runtime_readiness_ops_projection::{
     build_judge_runtime_readiness_ops_output_from_payload,
-    build_judge_runtime_readiness_ops_proxy_error_output,
+    build_judge_runtime_readiness_ops_proxy_error_output, fetch_ai_judge_runtime_readiness_payload,
     JUDGE_RUNTIME_READINESS_REASON_PROXY_FAILED,
 };
 use super::*;
@@ -877,78 +877,6 @@ fn build_challenge_ops_query_params(
         params.push(("limit", value.clamp(1, 200).to_string()));
     }
     params
-}
-
-fn build_runtime_readiness_query_params(
-    query: &GetJudgeRuntimeReadinessOpsQuery,
-) -> Vec<(&'static str, String)> {
-    let mut params = Vec::new();
-    if let Some(value) = query
-        .dispatch_type
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        params.push(("dispatch_type", value.to_string()));
-    }
-    if let Some(value) = query
-        .policy_version
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        params.push(("policy_version", value.to_string()));
-    }
-    if let Some(value) = query.window_days {
-        params.push(("window_days", value.clamp(1, 30).to_string()));
-    }
-    if let Some(value) = query.case_scan_limit {
-        params.push(("case_scan_limit", value.clamp(20, 1_000).to_string()));
-    }
-    if let Some(value) = query.include_case_trust {
-        params.push(("include_case_trust", value.to_string()));
-    }
-    if let Some(value) = query.trust_case_limit {
-        params.push(("trust_case_limit", value.clamp(1, 20).to_string()));
-    }
-    if let Some(value) = query.calibration_risk_limit {
-        params.push(("calibration_risk_limit", value.clamp(1, 200).to_string()));
-    }
-    if let Some(value) = query.panel_group_limit {
-        params.push(("panel_group_limit", value.clamp(1, 200).to_string()));
-    }
-    if let Some(value) = query.panel_attention_limit {
-        params.push(("panel_attention_limit", value.clamp(1, 100).to_string()));
-    }
-    params
-}
-
-async fn fetch_ai_judge_runtime_readiness_payload(
-    base_url: &str,
-    path: &str,
-    timeout_ms: u64,
-    internal_key: &str,
-    query: &GetJudgeRuntimeReadinessOpsQuery,
-) -> Result<Value, &'static str> {
-    let url = build_ai_judge_http_url_for_path(base_url, path);
-    let client = Client::builder()
-        .timeout(Duration::from_millis(timeout_ms.max(1)))
-        .build()
-        .map_err(|_| "runtime_readiness_http_client_failed")?;
-    let response = client
-        .get(url)
-        .header("x-ai-internal-key", internal_key)
-        .query(&build_runtime_readiness_query_params(query))
-        .send()
-        .await
-        .map_err(|_| "runtime_readiness_request_failed")?;
-    if !response.status().is_success() {
-        return Err("runtime_readiness_bad_status");
-    }
-    response
-        .json::<Value>()
-        .await
-        .map_err(|_| "runtime_readiness_bad_json")
 }
 
 async fn fetch_ai_judge_challenge_ops_queue_payload(
