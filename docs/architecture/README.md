@@ -1,6 +1,6 @@
 # EchoIsle Architecture Map
 
-更新时间：2026-04-28
+更新时间：2026-04-29
 状态：当前主线轻量代码地图
 
 ---
@@ -93,6 +93,13 @@ Python 侧优先看：
 3. [judge_dispatch_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_dispatch_runtime.py)
 4. [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py)
 5. [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py)
+
+AI advisory / NPC Coach / Room QA 优先看：
+
+1. [route_group_assistant.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_assistant.py)
+2. [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py)
+3. [assistant_advisory_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_contract.py)
+4. [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
 
 ### 3.4 AI Ops / Registry / Trust / Fairness / Review / Replay
 

@@ -82,6 +82,7 @@ class AppFactoryAssistantRouteTests(
         )
         self.assertEqual(npc_resp.status_code, 200)
         body = npc_resp.json()
+        self.assertEqual(body["version"], "assistant_advisory_contract_v1")
         self.assertEqual(body["agentKind"], "npc_coach")
         self.assertTrue(body["advisoryOnly"])
         self.assertEqual(body["status"], "not_ready")
@@ -127,6 +128,8 @@ class AppFactoryAssistantRouteTests(
             ],
             "npc_coach_advisory_policy_v1",
         )
+        self.assertFalse(body["cacheProfile"]["cacheable"])
+        self.assertEqual(body["cacheProfile"]["ttlSeconds"], 0)
         ledger_after = await runtime.workflow_runtime.facts.list_judge_ledger_snapshots(
             case_id=phase_case_id,
             limit=20,
@@ -202,6 +205,7 @@ class AppFactoryAssistantRouteTests(
         )
         self.assertEqual(room_qa_resp.status_code, 200)
         body = room_qa_resp.json()
+        self.assertEqual(body["version"], "assistant_advisory_contract_v1")
         self.assertEqual(body["agentKind"], "room_qa")
         self.assertTrue(body["advisoryOnly"])
         self.assertEqual(body["status"], "not_ready")
@@ -236,8 +240,10 @@ class AppFactoryAssistantRouteTests(
             ],
             "room_qa_advisory_policy_v1",
         )
+        self.assertFalse(body["cacheProfile"]["cacheable"])
+        self.assertEqual(body["cacheProfile"]["ttlSeconds"], 0)
 
-    async def test_npc_coach_route_should_strip_official_verdict_chain_fields(
+    async def test_npc_coach_route_should_fail_closed_on_official_verdict_chain_fields(
         self,
     ) -> None:
         async def _noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
@@ -300,19 +306,9 @@ class AppFactoryAssistantRouteTests(
             },
             internal_key=runtime.settings.ai_internal_key,
         )
-        self.assertEqual(npc_resp.status_code, 200)
+        self.assertEqual(npc_resp.status_code, 500)
         body = npc_resp.json()
-        self.assertEqual(body["status"], "ok")
-        self.assertTrue(body["advisoryOnly"])
-        self.assertTrue(body["accepted"])
-        self.assertEqual(body["capabilityBoundary"]["mode"], "advisory_only")
-        self.assertFalse(bool(body["capabilityBoundary"]["officialVerdictAuthority"]))
-        self.assertNotIn("winner", body["output"])
-        self.assertNotIn("verdictReason", body["output"])
-        self.assertNotIn("needsDrawVote", body["output"]["nested"])
-        self.assertEqual(body["output"]["nested"]["hint"], "保留字段")
-        self.assertNotIn("dimensionScores", body["output"]["timeline"][0])
-        self.assertEqual(body["output"]["timeline"][0]["note"], "保留注记")
+        self.assertEqual(body["detail"], "assistant_advisory_contract_violation")
 
 if __name__ == "__main__":
     unittest.main()

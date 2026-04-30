@@ -74,9 +74,9 @@ class CaseCreateRequest(BaseModel):
 
 
 class NpcCoachAdviceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    trace_id: str
-    query: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    trace_id: str = Field(min_length=1, max_length=160)
+    query: str = Field(min_length=1, max_length=2000)
     side: PhaseSide | None = None
     case_id: int | None = Field(
         default=None,
@@ -86,9 +86,9 @@ class NpcCoachAdviceRequest(BaseModel):
 
 
 class RoomQaAnswerRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    trace_id: str
-    question: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    trace_id: str = Field(min_length=1, max_length=160)
+    question: str = Field(min_length=1, max_length=2000)
     case_id: int | None = Field(
         default=None,
         validation_alias=AliasChoices("case_id", "caseId"),

@@ -178,10 +178,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(npc_result.output.get("kind"), AGENT_KIND_NPC_COACH)
         self.assertEqual(npc_result.output.get("mode"), "advisory_only")
         self.assertTrue(bool(npc_result.output.get("advisoryOnly")))
-        self.assertFalse(bool(npc_result.output.get("officialVerdictAuthority")))
-        self.assertFalse(bool(npc_result.output.get("writesVerdictLedger")))
-        self.assertFalse(bool(npc_result.output.get("writesJudgeTrace")))
-        self.assertFalse(bool(npc_result.output.get("canTriggerOfficialJudgeRoles")))
+        self.assertNotIn("officialVerdictAuthority", npc_result.output)
+        self.assertNotIn("writesVerdictLedger", npc_result.output)
+        self.assertNotIn("writesJudgeTrace", npc_result.output)
+        self.assertNotIn("canTriggerOfficialJudgeRoles", npc_result.output)
         self.assertEqual(
             npc_result.output.get("policyIsolation"),
             "assistant_advisory_policy",

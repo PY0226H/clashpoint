@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from ..domain.agents import ROLE_CHIEF_ARBITER, ROLE_FAIRNESS_SENTINEL
+from .assistant_advisory_contract import (
+    ASSISTANT_ADVISORY_ALLOWED_CONTEXT_SOURCES,
+    ASSISTANT_ADVISORY_CONTRACT_VERSION,
+    ASSISTANT_ADVISORY_FORBIDDEN_OFFICIAL_ROLES,
+    ASSISTANT_ADVISORY_FORBIDDEN_WRITE_TARGETS,
+    AssistantAdvisoryContractViolation,
+    build_assistant_advisory_cache_profile,
+    sanitize_assistant_advisory_output,
+    validate_assistant_advisory_contract,
+    validate_assistant_advisory_raw_output,
+)
 
 
 @dataclass(frozen=True)
@@ -12,77 +22,10 @@ class AssistantAgentRouteError(Exception):
     detail: Any
 
 
-ASSISTANT_ADVISORY_ALLOWED_CONTEXT_SOURCES: tuple[str, ...] = (
-    "room_context_snapshot",
-    "stage_summary",
-    "knowledge_gateway",
-)
-ASSISTANT_ADVISORY_FORBIDDEN_WRITE_TARGETS: tuple[str, ...] = (
-    "verdict_ledger",
-    "judge_trace",
-    "fairness_report",
-    "official_review_queue",
-)
-ASSISTANT_ADVISORY_FORBIDDEN_OFFICIAL_ROLES: tuple[str, ...] = (
-    ROLE_FAIRNESS_SENTINEL,
-    ROLE_CHIEF_ARBITER,
-)
 ASSISTANT_ADVISORY_POLICY_VERSION_BY_KIND: dict[str, str] = {
     "npc_coach": "npc_coach_advisory_policy_v1",
     "room_qa": "room_qa_advisory_policy_v1",
 }
-
-_OFFICIAL_VERDICT_CHAIN_KEYS = frozenset(
-    {
-        "winner",
-        "proscore",
-        "conscore",
-        "dimensionscores",
-        "verdictevidencerefs",
-        "auditalerts",
-        "errorcodes",
-        "degradationlevel",
-        "debatesummary",
-        "sideanalysis",
-        "verdictreason",
-        "finalrationale",
-        "verdictledger",
-        "fairnesssummary",
-        "fairnessgate",
-        "trustattestation",
-        "needsdrawvote",
-        "reviewrequired",
-        "dispatchtype",
-        "judgepolicyversion",
-        "rubricversion",
-        "ruleversion",
-        "officialverdictauthority",
-        "writesverdictledger",
-        "writesjudgetrace",
-        "cantriggerofficialjudgeroles",
-    }
-)
-
-
-def _normalize_advisory_output_key(key: str) -> str:
-    return "".join(char for char in key.lower() if char.isalnum())
-
-
-def _is_official_verdict_chain_key(key: str) -> bool:
-    return _normalize_advisory_output_key(key) in _OFFICIAL_VERDICT_CHAIN_KEYS
-
-
-def sanitize_assistant_advisory_output(payload: Any) -> Any:
-    if isinstance(payload, dict):
-        sanitized: dict[Any, Any] = {}
-        for key, value in payload.items():
-            if isinstance(key, str) and _is_official_verdict_chain_key(key):
-                continue
-            sanitized[key] = sanitize_assistant_advisory_output(value)
-        return sanitized
-    if isinstance(payload, list):
-        return [sanitize_assistant_advisory_output(item) for item in payload]
-    return payload
 
 
 def _optional_context_token(value: Any) -> str | None:
@@ -238,11 +181,15 @@ def build_assistant_agent_response(
     advisory_context: dict[str, Any],
     execution_result: Any,
 ) -> dict[str, Any]:
-    output = (
-        sanitize_assistant_advisory_output(execution_result.output)
-        if isinstance(execution_result.output, dict)
-        else {}
-    )
+    raw_output = execution_result.output if isinstance(execution_result.output, dict) else {}
+    try:
+        validate_assistant_advisory_raw_output(raw_output)
+    except AssistantAdvisoryContractViolation as err:
+        raise AssistantAgentRouteError(
+            status_code=500,
+            detail="assistant_advisory_contract_violation",
+        ) from err
+    output = sanitize_assistant_advisory_output(raw_output)
     capability_boundary = {
         "mode": "advisory_only",
         "advisoryOnly": True,
@@ -259,7 +206,8 @@ def build_assistant_agent_response(
         if isinstance(advisory_context.get("roomContextSnapshot"), dict)
         else {}
     )
-    return {
+    response = {
+        "version": ASSISTANT_ADVISORY_CONTRACT_VERSION,
         "agentKind": agent_kind,
         "sessionId": session_id,
         "caseId": shared_context.get("caseId"),
@@ -272,7 +220,16 @@ def build_assistant_agent_response(
         "sharedContext": shared_context,
         "advisoryContext": advisory_context,
         "output": output,
+        "cacheProfile": build_assistant_advisory_cache_profile(),
     }
+    try:
+        validate_assistant_advisory_contract(response)
+    except AssistantAdvisoryContractViolation as err:
+        raise AssistantAgentRouteError(
+            status_code=500,
+            detail="assistant_advisory_contract_violation",
+        ) from err
+    return response
 
 
 def normalize_assistant_session_id(session_id: int) -> int:

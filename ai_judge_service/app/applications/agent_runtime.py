@@ -40,10 +40,6 @@ class _ReservedAgentExecutor(AgentExecutorPort):
                 "traceId": request.trace_id,
                 "mode": "advisory_only",
                 "advisoryOnly": True,
-                "officialVerdictAuthority": False,
-                "writesVerdictLedger": False,
-                "writesJudgeTrace": False,
-                "canTriggerOfficialJudgeRoles": False,
                 "policyIsolation": "assistant_advisory_policy",
                 "allowedContextSources": [
                     "room_context_snapshot",

@@ -3,17 +3,25 @@ from __future__ import annotations
 import asyncio
 import unittest
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
+from app.applications.assistant_advisory_contract import (
+    ASSISTANT_ADVISORY_CONTRACT_VERSION,
+    ASSISTANT_ADVISORY_TOP_LEVEL_KEYS,
+)
 from app.applications.assistant_agent_routes import (
     AssistantAgentRouteError,
     build_assistant_advisory_context,
+    build_assistant_agent_response,
     build_assistant_gateway_trace_snapshot,
     build_npc_coach_advice_route_payload,
     build_room_qa_answer_route_payload,
     normalize_assistant_session_id,
     sanitize_assistant_advisory_output,
 )
+from app.models import NpcCoachAdviceRequest, RoomQaAnswerRequest
+from pydantic import ValidationError
 
 
 @dataclass
@@ -247,6 +255,106 @@ class AssistantAgentRoutesTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertEqual(ctx.exception.detail, "invalid_session_id")
+
+    def test_build_assistant_agent_response_should_freeze_contract_shape(self) -> None:
+        response = build_assistant_agent_response(
+            agent_kind="room_qa",
+            session_id=2002,
+            advisory_context={
+                "advisoryOnly": True,
+                "roomContextSnapshot": {
+                    "sessionId": 2002,
+                    "caseId": 3002,
+                    "officialVerdictFieldsRedacted": True,
+                },
+                "stageSummary": {"officialVerdictFieldsRedacted": True},
+                "knowledgeGateway": {},
+                "readPolicy": {},
+            },
+            execution_result=SimpleNamespace(
+                status="not_ready",
+                output={
+                    "accepted": False,
+                    "kind": "room_qa",
+                    "reason": "room_qa runtime shell is reserved",
+                },
+                error_code="agent_not_enabled",
+                error_message="room_qa runtime shell is reserved",
+            ),
+        )
+
+        self.assertEqual(set(response.keys()), set(ASSISTANT_ADVISORY_TOP_LEVEL_KEYS))
+        self.assertEqual(response["version"], ASSISTANT_ADVISORY_CONTRACT_VERSION)
+        self.assertEqual(response["status"], "not_ready")
+        self.assertEqual(response["errorCode"], "agent_not_enabled")
+        self.assertFalse(response["accepted"])
+        self.assertFalse(response["cacheProfile"]["cacheable"])
+        self.assertEqual(response["cacheProfile"]["ttlSeconds"], 0)
+        self.assertEqual(response["capabilityBoundary"]["mode"], "advisory_only")
+        self.assertFalse(response["capabilityBoundary"]["officialVerdictAuthority"])
+        self.assertFalse(response["capabilityBoundary"]["writesVerdictLedger"])
+        self.assertFalse(response["capabilityBoundary"]["writesJudgeTrace"])
+        self.assertFalse(
+            response["capabilityBoundary"]["canTriggerOfficialJudgeRoles"]
+        )
+
+    def test_build_assistant_agent_response_should_fail_closed_on_forbidden_output(
+        self,
+    ) -> None:
+        with self.assertRaises(AssistantAgentRouteError) as ctx:
+            build_assistant_agent_response(
+                agent_kind="npc_coach",
+                session_id=2003,
+                advisory_context={
+                    "advisoryOnly": True,
+                    "roomContextSnapshot": {
+                        "sessionId": 2003,
+                        "caseId": 3003,
+                        "officialVerdictFieldsRedacted": True,
+                    },
+                    "stageSummary": {"officialVerdictFieldsRedacted": True},
+                    "knowledgeGateway": {},
+                    "readPolicy": {},
+                },
+                execution_result=SimpleNamespace(
+                    status="ok",
+                    output={
+                        "accepted": True,
+                        "advice": "先补证据。",
+                        "winner": "pro",
+                    },
+                    error_code=None,
+                    error_message=None,
+                ),
+            )
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(
+            ctx.exception.detail,
+            "assistant_advisory_contract_violation",
+        )
+
+    def test_assistant_request_models_should_reject_boundary_payloads(self) -> None:
+        with self.assertRaises(ValidationError):
+            NpcCoachAdviceRequest(trace_id="trace-npc", query="")
+        with self.assertRaises(ValidationError):
+            NpcCoachAdviceRequest(trace_id="trace-npc", query="x" * 2001)
+        with self.assertRaises(ValidationError):
+            NpcCoachAdviceRequest(
+                trace_id="trace-npc",
+                query="如何补强论点？",
+                extra="blocked",
+            )
+        with self.assertRaises(ValidationError):
+            RoomQaAnswerRequest(trace_id="trace-room", question="")
+        with self.assertRaises(ValidationError):
+            RoomQaAnswerRequest(trace_id="trace-room", question="x" * 2001)
+        with self.assertRaises(ValidationError):
+            RoomQaAnswerRequest(
+                trace_id="trace-room",
+                question="现在进展如何？",
+                extra="blocked",
+            )
 
     def test_sanitize_assistant_advisory_output_should_strip_official_verdict_fields(self) -> None:
         payload = {

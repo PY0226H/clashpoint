@@ -1,0 +1,631 @@
+# 当前开发计划
+
+关联 slot：`default`
+更新时间：2026-04-29
+当前主线：`AI_judge_service P41（Fairness / Adaptive Runtime Ops Control Plane）`
+当前状态：执行中（P41 runtime readiness contract / chat proxy / Ops Console / calibration decision log / panel shadow candidate contract / release readiness ops evidence / route hotspot split / local reference regression 已落地；下一步进入 stage closure）
+
+---
+
+## 1. 计划定位
+
+1. 本计划承接 P40 stage closure，输入包括：
+   - `docs/dev_plan/archive/20260428T065429Z-ai-judge-stage-closure-execute.md`
+   - `docs/dev_plan/completed.md`
+   - `docs/dev_plan/todo.md`
+   - `docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md`
+   - `docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md`
+   - 当前 `ai_judge_service`、`chat_server` 与前端调用面代码状态。
+2. P40 已完成受约束 challenge / review 产品桥接：
+   - AI 服务已有 public-safe challenge eligibility/status 合同、request/decision `publicStatus` 与 challenge ops queue。
+   - `chat_server` 已暴露参与者侧 challenge status/request 门面与 ops challenge queue 门面。
+   - `frontend/packages/debate-domain` 与 `DebateRoomPage` 已消费 challenge/review read model，Ops Console 已展示 challenge queue 最小视图。
+   - P40 本地参考回归与 stage closure 已通过，当前活动计划已被阶段收口重置。
+3. P41 的主线不是开启链上协议层，也不是把 Identity Proof、Constitution Registry、Reason Passport 或第三方 jury 接入单场裁决。P41 要把已在 AI 内部成型的 `fairness calibration / panel shadow / release readiness / policy registry` 能力，通过主业务门面与 Ops Console 做成可运营、可审计、不会污染官方裁决链的控制面。
+4. 当前仍没有真实 provider/callback、真实样本、生产对象存储真实验收与真实服务窗口；所有真实环境结论继续保持 `env_blocked` 或 `local_reference_ready`，不得宣称 real-env `pass`。
+5. 本轮默认采用硬切主链：尚未发布能力不保留长期兼容 alias、双字段或双路径；若某模块无法同轮同步调用方，才允许短期兼容并写清移除条件。
+
+---
+
+## 2. 当前代码状态快照
+
+| 维度 | 当前代码事实 | P41 判断 |
+| --- | --- | --- |
+| P40 收口 | `completed.md` 已追加 B44，`artifacts/harness/ai-judge-p40-stage-closure-execute.summary.md` 显示 `status=pass`、`completed_appended=10`，当前计划已被重置 | P41 可以从“下一轮待规划”进入新主线，不需要重复做 P40 challenge bridge |
+| AI 内部 Ops Pack | `GET /internal/judge/ops/read-model/pack` 已汇总 `fairnessCalibrationAdvisor`、`panelRuntimeReadiness`、`release/trust/challenge` 等内部读模型；`/internal/judge/ops/runtime-readiness` 已提供 public-safe readiness 投影，投影细节已下沉到 `runtime_readiness_public_projection.py` | runtime readiness、calibration decision、panel candidate readiness 与 release evidence 已形成治理动作输入；本轮本地参考回归已通过，下一步阶段收口 |
+| Fairness / Calibration | AI 服务已有 `/internal/judge/fairness/calibration-pack`、`/internal/judge/fairness/policy-calibration-advisor` 与 `/internal/judge/fairness/policy-calibration-decisions`；decision log 写入 durable facts table 并进入 advisor/runtime readiness summary | calibration recommendation 已具备人工审计记录与 release gate 输入；下一步转向 panel shadow candidate 合同 |
+| Panel Runtime / Shadow | AI 服务已有 `/internal/judge/panels/runtime/profiles` 与 `/readiness`，包含 shadow agreement、成本、时延、候选模型、switch blockers、release gate signals 与 `officialWinnerSemanticsChanged=false` | 多模型候选只进入 readiness/read model 与 Ops 摘要，不自动切换官方 panel；下一步让 release readiness artifact 消费该合同 |
+| Registry / Release Gate | `route_group_registry.py` 已提供 policy/prompt/tool registry、publish/activate/rollback/audit/release 入口；`registry_release_gate.py` 已收敛 release readiness evidence，并新增 `p41ControlPlaneEvidence` 摘要 | release gate 已能引用 runtime readiness、chat proxy、Ops Console、calibration decision log、panel candidate 与 runtime ops pack 状态，仍不把 local reference 抬成 real-env pass |
+| chat_server 门面 | 已有 `/api/debate/sessions/{id}/judge-report/public-verify`、`/challenge`、`/challenge/request`、`/api/debate/ops/judge-challenge-queue` 与 `/api/debate/ops/judge-runtime-readiness`；runtime readiness proxy fetch/param helper 已下沉到 `runtime_readiness_ops_projection.rs` | runtime readiness 已接入主业务 Ops 门面；panel candidate summary 通过 runtime readiness 白名单投影给 Ops，handler/model 继续保持薄装配 |
+| 前端/SDK | `debate-domain` 与 `DebateRoomPage` 已接入 public verify/challenge；`ops-domain` 与 `OpsConsolePage` 已展示 judge challenge queue、runtime readiness、calibration decision summary 与 panel candidate/blocker 摘要；runtime readiness DTO/API 已拆入 `runtimeReadiness.ts` | 首批 readiness 首屏、decision summary 与 candidate readiness 摘要已完成；本轮 frontend typecheck/test/lint 已通过 |
+| 文件热点 | 当前热点：`ops_read_model_pack.py`、`registry_routes.py`、`final_report.py`、`request_report_query.rs`、`OpsConsolePage.tsx` 仍偏大 | 已通过 `runtime_readiness_public_projection.py`、`runtime_readiness_ops_projection.rs` 与 `ops-domain/runtimeReadiness.ts` 控制 P41 新增逻辑继续膨胀 |
+| 真实环境 | P40 closure 仍为 `local_reference_ready` + `env_blocked`，真实样本、真实 AI provider/callback、生产对象存储窗口不可用 | real-env pass 只能作为阻塞后置项，不进入 P41 主线的“已通过”口径 |
+
+---
+
+## 3. 架构方案第13章一致性校验
+
+1. **角色一致性**：P41 不改 8 Agent 官方裁决顺序；fairness calibration、panel shadow 与 policy rollout 只作为运行态治理和发布门禁输入，不绕过 `Fairness Sentinel -> Chief Arbiter -> Opinion Writer`。
+2. **数据一致性**：六对象主链仍为唯一裁决事实源；P41 只读取已锁定的 `case_dossier / claim_graph / evidence_ledger / verdict_ledger / fairness_report / opinion_pack` 及其 trust/release 投影，不建立第二条 winner 写链。
+3. **门禁一致性**：calibration recommendation、shadow readiness、release gate 只能生成建议、阻断、人工决策记录或 rollout readiness，不得自动改写官方裁决结果。
+4. **边界一致性**：`NPC Coach / Room QA` 保持 `advisory_only`；P41 不把互动型 Agent、Reason Passport、Identity Proof、Constitution Registry、第三方 jury 或 on-chain anchor 接入单场官方裁决输入。
+5. **跨层一致性**：涉及 API、DTO、错误码、状态字段或 UI 展示时，同轮检查 `ai_judge_service`、`chat_server`、OpenAPI、前端共享 domain/SDK、必要测试与计划文档。
+6. **收口一致性**：P41 所有真实环境项继续区分 `local_reference_ready`、`readiness_ready`、`env_blocked` 与 real-env `pass`；未获得真实窗口前不得把本地参考证据写成真实通过。
+
+---
+
+## 4. P41 北极星与不可变边界
+
+1. 北极星：让运营能在主业务 Ops Console 中判断 AI Judge 当前是否“可发布、可调参、可观察、可追责”，而不需要直连 AI 服务或阅读内部 trace。
+2. AI 裁判正式公开结果只支持 `pro / con / draw`；`review_required` 与 `blocked_failed` 是保护性状态，不被 calibration 或 shadow 逻辑改写成胜负。
+3. 客户端永远通过 `chat_server` 使用裁判报告、公验状态、challenge/review 状态与 Ops 控制面；AI 服务继续保持内部服务。
+4. Calibration 不是自动学习上线；P41 只允许生成建议、风险、人工决策记录与 release gate 输入，不允许无人值守自动激活 policy/prompt/tool 版本。
+5. Panel shadow 不是生产多模型裁判；P41 只定义候选模型、成本/时延/一致性、drift signals 与 release readiness，不自动切换官方 panel。
+6. Release readiness 只展示可公开给 Ops 的证据摘要、状态、artifact ref/hash、阻塞原因和下一步动作；不得暴露 provider secret、prompt 原文、raw trace、私有审计、bucket、endpoint、对象路径或敏感证据原文。
+7. P41 不做真实环境 pass 硬闯；真实样本、真实 provider/callback、生产对象存储和真实服务窗口齐备后再执行后置 real-env 模块。
+
+---
+
+## 5. 执行矩阵与下一步
+
+### 已完成/未完成矩阵
+
+| 阶段 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-p40-stage-closure-execute` | P40 阶段收口 | 已完成 | 归档到 `docs/dev_plan/archive/20260428T065429Z-ai-judge-stage-closure-execute.md`，completed B44 已追加 |
+| `ai-judge-p41-plan-bootstrap-current-state` | 基于当前代码状态与两份方案生成 P41 计划 | 已完成 | 本文档即本模块输出 |
+| `ai-judge-p41-completion-map-refresh-p40-closure` | 将企业级 Agent 章节完成度映射刷新到 P40 closure / P41 启动口径 | 已完成 | 映射已吸收 P40 challenge/review 产品桥接成果，并把下一步切到 Fairness / Adaptive Ops 控制面 |
+| `ai-judge-p41-runtime-readiness-contract-freeze-pack` | 冻结 AI 内部 runtime readiness public-safe 合同 | 已完成 | 新增 `runtime_readiness_public_contract.py` 与 `/internal/judge/ops/runtime-readiness`，从 ops read model pack 提炼 fairness calibration、panel shadow、release gate、trust/challenge 与 real-env 摘要 |
+| `ai-judge-p41-chat-runtime-readiness-proxy-pack` | 在 `chat_server` 落地 Ops 侧 runtime readiness 代理接口 | 已完成 | 新增 `/api/debate/ops/judge-runtime-readiness`，复用 `judge_review` RBAC、AI internal key、timeout 与 no-secret 二次校验 |
+| `ai-judge-p41-client-runtime-readiness-console-pack` | 补齐前端/共享 domain 的 runtime readiness 读取模型与 Ops Console 面板 | 已完成 | `ops-domain` 新增 typed DTO/API，`OpsConsolePage` 展示 release gate、calibration risk、panel readiness、real-env 阻塞与推荐动作 |
+| `ai-judge-p41-calibration-decision-log-pack` | 建立 calibration recommendation 的人工决策日志 | 已完成 | 新增 AI 内部 POST/GET decision log、durable facts table、advisor/runtime readiness summary；不自动应用 policy |
+| `ai-judge-p41-panel-shadow-candidate-contract-pack` | 稳定多模型 shadow 候选合同 | 已完成 | 冻结 candidate model/profile、成本、时延、agreement、drift、switch blockers 与 release gate signals；public readiness / Ops 摘要明确不改变官方 winner 语义 |
+| `ai-judge-p41-release-readiness-ops-evidence-pack` | 将 release readiness artifact 与 Ops 代理证据归一 | 已完成 | release readiness evidence / artifact summary / runtime ops pack / stage closure evidence 已输出 P41 control-plane 状态；local_reference_ready 与 real-env pass 仍硬分层 |
+| `ai-judge-p41-route-hotspot-split-pack` | 控制 P41 新增 read-model / proxy / UI 热点膨胀 | 已完成 | AI runtime readiness projection、chat model/helper、frontend domain resolver 分层下沉；public contract 与 API 语义不变 |
+| `ai-judge-p41-local-reference-regression-pack` | 刷新 P41 本地参考回归与证据 | 已完成 | AI targeted/full、chat targeted、frontend typecheck/test/lint、runtime ops local reference 与 stage closure evidence 已通过；P41 control plane 仍保持 env_blocked |
+| `ai-judge-p41-stage-closure-execute` | P41 阶段收口 | 待执行 | 主体完成后归档活动计划、同步 completed/todo，真实环境 debt 去重 |
+| `ai-judge-real-env-pass-window-execute-on-env` | 真实环境 pass 补证 | 阻塞 | 仅在真实样本、真实 provider/callback、生产对象存储与真实服务窗口齐备后执行 |
+
+### 下一开发模块建议
+
+1. ai-judge-p41-stage-closure-execute
+2. ai-judge-real-env-pass-window-execute-on-env（仍阻塞，等真实环境）
+3. 阶段收口后按 todo.md 的真实环境后置项继续
+
+### 模块完成同步历史
+
+- 2026-04-28：推进 `ai-judge-p41-plan-bootstrap-current-state`；基于 P40 closure、当前代码状态、架构与技术栈方案、企业级 Agent 服务设计方案生成 P41 完整开发计划。
+- 2026-04-28：推进 `ai-judge-p41-completion-map-refresh-p40-closure`；将企业级 Agent 章节完成度映射刷新到 P40 stage closure / P41 启动口径，纳入 challenge/review 产品桥接成果，并把下一步优先级切换为 runtime readiness / fairness calibration / panel shadow / release gate 的 Ops 控制面。
+- 2026-04-28：完成 `ai-judge-p41-runtime-readiness-contract-freeze-pack`、`ai-judge-p41-chat-runtime-readiness-proxy-pack`、`ai-judge-p41-client-runtime-readiness-console-pack`；AI 服务、chat proxy、前端 Ops Console 已形成 runtime readiness 首批闭环，真实环境仍保持 `env_blocked` / `local_reference_only` 口径。
+- 2026-04-28：完成 `ai-judge-p41-calibration-decision-log-pack`；AI 服务新增 calibration decision log POST/GET、durable facts table、advisor/readiness 摘要与 Ops Console decision summary，不自动 publish/activate policy。
+- 2026-04-28：完成 `ai-judge-p41-panel-shadow-candidate-contract-pack`；panel runtime readiness 新增 candidate contract validator、switch blockers、release gate signals 与 public runtime 摘要，Ops Console 展示 candidate/blocker/release-blocked 计数，不自动切换官方 panel 或改写 winner 语义。
+- 2026-04-28：完成 `ai-judge-p41-release-readiness-ops-evidence-pack`；release readiness evidence 新增 P41 control-plane 摘要，runtime ops pack 与 stage closure evidence 可显示 runtime/chat/frontend/calibration/panel candidate 状态，当前 evidence 仍为 `local_reference_ready` + `p41_control_plane_status=env_blocked`。
+- 2026-04-29：完成 `ai-judge-p41-route-hotspot-split-pack`；AI runtime readiness projection、chat runtime readiness proxy helper 与 frontend ops-domain runtime readiness resolver 已下沉，热点文件不继续承载 P41 新增 JSON 拼装。
+- 2026-04-29：完成 `ai-judge-p41-local-reference-regression-pack`；AI/chat/frontend/harness 本地参考回归通过，runtime ops pack 为 `local_reference_ready`，stage closure evidence 为 `pass`，P41 control plane 仍为 `env_blocked` 且未冒充 real-env pass。
+
+---
+
+## 6. P41 总体执行路线图
+
+| 批次 | 模块包 | 本批目标 | 退出条件 |
+| --- | --- | --- | --- |
+| Batch-A | `completion-map-refresh-p40-closure` | 先把章节完成度映射刷新到 P40 收口真实状态 | 映射不再把 P40 challenge/review 产品桥接列为待做；下一步指向 P41 |
+| Batch-B | `runtime-readiness-contract-freeze` | 在 AI 服务内部形成 public-safe runtime readiness 合同 | 合同有 stable schema、allowed sections、blockers、no-secret 校验和测试 |
+| Batch-C | `chat-runtime-readiness-proxy` | 通过 `chat_server` 暴露 Ops 侧 AI Judge runtime readiness 门面 | Ops 可查 readiness，普通用户/非授权角色被阻断，合同违规 fail-closed |
+| Batch-D | `client-runtime-readiness-console` | 让 Ops Console 消费 runtime readiness | 前端能展示 release gate、calibration risk、panel shadow、real-env 阻塞与 recommended actions |
+| Batch-E | `calibration-decision-log` | 把 calibration advisor 从“只读建议”推进为可审计人工决策 | 已完成：accept/reject/defer/request_more_evidence 有稳定状态、actor、reason、evidence refs、durable facts table，不自动应用 policy |
+| Batch-F | `panel-shadow-candidate-contract` | 稳定 shadow candidate model/product readiness 合同 | 已完成：多模型候选只进入 readiness/read model 与 public-safe Ops 摘要，不切官方裁决 |
+| Batch-G | `release-readiness-ops-evidence` | 归一 P41 代理与 release readiness artifact 证据 | 已完成：release artifact / runtime ops pack / stage closure evidence 能引用 P41 ops bridge 状态，仍区分 local/reference/real-env |
+| Batch-H | `route-hotspot-split + regression + stage-closure` | 控制热点并完成本地证据收口 | route hotspot split 与 local reference regression 已完成；待执行 stage closure；real-env 仍阻塞时只进入 todo，不宣称 pass |
+
+---
+
+## 7. 详细模块计划
+
+### 7.1 `ai-judge-p41-completion-map-refresh-p40-closure`
+
+状态：已完成（2026-04-28）
+
+**目标**
+
+1. 将 `AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md` 从“P39 stage closure / P40 启动”刷新为“P40 stage closure / P41 启动”。
+2. 纳入 P40 已完成成果：
+   - challenge eligibility/status public-safe 合同
+   - chat challenge status/request proxy
+   - frontend challenge read model 与 Debate Room 最小 UI
+   - review decision sync contract
+   - challenge ops read model bridge
+   - challenge route/read-model hotspot split
+   - P40 local reference regression 与 stage closure
+3. 更新总进度判断：
+   - Enterprise MVP：基本落地，用户可见 trust/challenge/review 路径已接到主业务面。
+   - Fairness Hardened：内部能力高完成，真实样本和 Ops 产品控制面仍是下一步。
+   - Adaptive Judge Platform：registry、release gate、panel shadow readiness 已有内部读路径，auto-calibration、多模型 panel 生产化与 domain-specific judge families 仍后置。
+   - Verifiable Trust Layer：Phase A/B 在本地参考和产品桥接口径下基本闭环；生产对象存储真实验收与 real-env pass 仍阻塞。
+   - Protocol Expansion Layer：Identity Proof、Constitution Registry、Reason Passport、第三方 review network、on-chain anchor 继续后置。
+4. 将 P41 下一步优先级写入映射：runtime readiness contract、chat proxy、frontend ops console、calibration decision log、panel shadow candidate contract、release evidence、hotspot split、local regression。
+
+**优先文件**
+
+1. `docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md`
+2. `docs/dev_plan/completed.md`
+3. `docs/dev_plan/todo.md`
+4. `docs/dev_plan/archive/20260428T065429Z-ai-judge-stage-closure-execute.md`
+5. `artifacts/harness/ai-judge-p40-stage-closure-execute.summary.md`
+
+**DoD**
+
+1. 映射不再声称 P40 challenge eligibility、chat proxy、client read model、review sync、ops bridge 待执行。
+2. P40 B44 完成项与映射一致。
+3. 真实环境仍表述为 `env_blocked`，不出现 real-env `pass`。
+4. 下一步优先级明确指向 P41 runtime/fairness/adaptive Ops 控制面。
+
+### 7.2 `ai-judge-p41-runtime-readiness-contract-freeze-pack`
+
+状态：已完成（2026-04-28）
+
+**目标**
+
+1. 在 AI 服务内部冻结一个可给 chat proxy 消费的 `runtime readiness` public-safe 合同。
+2. 从现有 `ops_read_model_pack` 中提炼稳定摘要，不把内部大包原样暴露给产品面。
+3. 覆盖以下状态域：
+   - fairness calibration advisor
+   - panel runtime readiness / shadow candidate profile
+   - registry release gate
+   - release readiness artifact summary
+   - public verification readiness
+   - challenge/review bridge readiness
+   - real-env status
+4. 明确该合同只服务 Ops 决策与发布门禁，不允许反向改写 official verdict。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/ops_read_model_pack.py`
+2. `ai_judge_service/app/applications/route_group_ops_read_model_pack.py`
+3. `ai_judge_service/app/applications/registry_release_gate.py`
+4. `ai_judge_service/app/applications/release_readiness_projection.py`
+5. `ai_judge_service/app/applications/fairness_runtime_routes.py`
+6. `ai_judge_service/app/applications/panel_runtime_routes.py`
+7. `ai_judge_service/tests/test_ops_read_model_pack.py`
+8. `ai_judge_service/tests/test_route_group_ops_read_model_pack.py`
+
+**合同建议**
+
+1. 新增或提炼 helper，例如 `runtime_readiness_public_contract.py`。
+2. 输出建议 shape：
+   - `version`
+   - `status`
+   - `statusReason`
+   - `summary`
+   - `releaseGate`
+   - `fairnessCalibration`
+   - `panelRuntime`
+   - `trustAndChallenge`
+   - `realEnv`
+   - `recommendedActions`
+   - `evidenceRefs`
+   - `visibilityContract`
+   - `cacheProfile`
+3. `status` 建议枚举：
+   - `ready`
+   - `watch`
+   - `blocked`
+   - `env_blocked`
+   - `local_reference_only`
+   - `not_configured`
+4. forbidden keys 递归阻断：
+   - `provider`
+   - `apiKey`
+   - `secret`
+   - `prompt`
+   - `rawTrace`
+   - `privateAudit`
+   - `bucket`
+   - `endpoint`
+   - `path`
+   - `objectKey`
+   - `signedUrl`
+
+**落地步骤**
+
+1. 基于当前 ops pack 构造 runtime readiness projection helper。
+2. 给 release gate/fairness/panel/challenge 每块建立最小稳定摘要和 reason code。
+3. 增加 no-secret contract validator，并覆盖 bad payload fail-closed。
+4. 给 `route_group_ops_read_model_pack.py` 增加内部 route 或 query section 输出，保持原有内部 ops pack 不破坏。
+5. 用 targeted tests 固定 schema、枚举、缺失输入、local reference 与 env blocked 语义。
+
+**DoD**
+
+1. AI 服务已通过 `/internal/judge/ops/runtime-readiness` 输出稳定 public-safe runtime readiness payload。
+2. 合同已区分 `ready/watch/blocked/env_blocked/local_reference_only/not_configured`，并包含 `visibilityContract`。
+3. 本地参考证据不会被误标为真实 pass；缺真实 evidence 时收敛为 `local_reference_only`。
+4. 合同违规时 fail-closed，AI 侧返回 `runtime_readiness_public_contract_violation`。
+
+**建议回归**
+
+1. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_ops_read_model_pack.py tests/test_route_group_ops_read_model_pack.py`
+2. `cd ai_judge_service && ../scripts/py -m pytest -q tests/test_registry_release_gate.py tests/test_route_group_fairness.py tests/test_route_group_panel_runtime.py`
+
+### 7.3 `ai-judge-p41-chat-runtime-readiness-proxy-pack`
+
+状态：已完成（2026-04-28）
+
+**目标**
+
+1. 在 `chat_server` 提供 Ops 侧 AI Judge runtime readiness 门面，客户端仍不直连 AI 服务。
+2. 代理 AI 内部 runtime readiness 合同，并进行二次 no-secret 校验。
+3. 复用 Ops RBAC、phone-bound/auth、结构化日志、限流与 AI internal key 配置。
+4. 避免把 AI 内部错误细节透传给前端。
+
+**优先文件**
+
+1. `chat/chat_server/src/handlers/debate_ops.rs`
+2. `chat/chat_server/src/handlers/debate.rs`
+3. `chat/chat_server/src/models/judge/request_report_query.rs`
+4. `chat/chat_server/src/models/judge/challenge_ops_projection.rs`
+5. `chat/chat_server/src/models/judge/types.rs`
+6. `chat/chat_server/src/config.rs`
+7. `chat/chat_server/src/openapi.rs`
+8. `chat/chat_server/src/models/rbac.rs`
+
+**接口建议**
+
+1. 新增 Ops 路径：
+   - `GET /api/debate/ops/judge-runtime-readiness`
+2. 可选查询：
+   - `include=releaseGate,fairnessCalibration,panelRuntime,trustAndChallenge`
+   - `riskLimit`
+   - `benchmarkLimit`
+   - `shadowLimit`
+3. 响应必须为 chat 侧 DTO，不直接暴露 AI 原始 JSON。
+4. 权限建议：
+   - 读取：`judge_review` 或更窄的 AI Judge Ops read 权限；若当前权限矩阵尚未拆出新权限，先复用 `judge_review` 并在计划/注释写清后续拆分条件。
+
+**落地步骤**
+
+1. 给 `AiJudgeConfig` 增加 runtime readiness path 与 timeout。
+2. 新增 AI internal GET proxy helper，复用 challenge/public verify 的 header、timeout 和错误收敛模式。
+3. 增加 chat 侧 DTO 与 no-secret validator。
+4. 在 `debate_ops.rs` 注册 Ops route，并更新 OpenAPI。
+5. 补 route/model/config tests。
+
+**DoD**
+
+1. 授权 Ops 能通过 chat API 获取 runtime readiness。
+2. 未授权用户不能访问，当前复用 `judge_review` 权限。
+3. AI 服务非 2xx、坏 JSON、合同违规统一收敛为 `proxy_error` 与稳定 reason code（如 `runtime_readiness_proxy_failed` / `runtime_readiness_contract_violation`）。
+4. chat 侧不会泄漏 forbidden keys。
+
+**建议回归**
+
+1. `cd chat && cargo test -p chat-server ai_judge_runtime_readiness`
+2. `cd chat && cargo test -p chat-server debate_ops`
+3. `cd chat && cargo test -p chat-server config`
+
+### 7.4 `ai-judge-p41-client-runtime-readiness-console-pack`
+
+状态：已完成（2026-04-28）
+
+**目标**
+
+1. 在前端共享 `ops-domain` 中新增 AI Judge runtime readiness typed DTO、API client 与 view resolver。
+2. 在 `OpsConsolePage` 增加 AI Judge Runtime 面板，展示：
+   - release gate status
+   - calibration high-risk count / gate code
+   - panel shadow readiness / candidate model summary
+   - real-env status / local-reference warning
+   - recommended actions
+3. UI 只给 Ops 可行动摘要，不暴露内部 trace、prompt、provider 或对象存储细节。
+
+**优先文件**
+
+1. `frontend/packages/ops-domain/src/index.ts`
+2. `frontend/packages/ops-domain/src/index.test.ts`
+3. `frontend/packages/app-shell/src/pages/OpsConsolePage.tsx`
+4. `frontend/packages/app-shell/src/pages/OpsConsolePage.test.tsx`（如已有对应测试入口则同步）
+
+**落地步骤**
+
+1. 新增 `AiJudgeRuntimeReadiness` DTO 与 `fetchAiJudgeRuntimeReadiness`。
+2. 新增 resolver，把 raw status 映射为 `ready/watch/blocked/envBlocked/localReferenceOnly/unknown`。
+3. Ops Console 增加单独区块，避免塞入 challenge queue 面板。
+4. 加载失败时显示稳定错误摘要，不展示后端内部错误详情。
+5. request invalidate 逻辑只用于刷新 read model，不触发任何 policy activate。
+
+**DoD**
+
+1. Ops Console 已展示 runtime readiness 摘要。
+2. local reference / env blocked / real-env pass 状态通过后端 contract status 明确区分；当前未声明 real-env pass。
+3. recommended actions 只作为操作建议，不出现“自动应用”入口。
+4. `ops-domain` 与 `app-shell` typecheck 已覆盖新增类型调用面；后续可补 resolver 专项测试。
+
+**建议回归**
+
+1. `pnpm --dir frontend --filter @echoisle/ops-domain test`
+2. `pnpm --dir frontend --filter @echoisle/app-shell test`
+3. `pnpm --dir frontend typecheck`
+4. `pnpm --dir frontend lint`
+
+### 7.5 `ai-judge-p41-calibration-decision-log-pack`
+
+状态：已完成（2026-04-28）
+
+**目标**
+
+1. 将 fairness policy calibration advisor 的 recommended actions 推进为可审计人工决策记录。
+2. 决策类型只允许：
+   - `accept_for_review`
+   - `reject`
+   - `defer`
+   - `request_more_evidence`
+3. P41 不自动发布或激活 policy/prompt/tool 版本；所有决策只进入 audit/read model/release gate 输入。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/fairness_runtime_routes.py`
+2. `ai_judge_service/app/applications/policy_registry.py`
+3. `ai_judge_service/app/applications/registry_governance_routes.py`
+4. `ai_judge_service/app/applications/registry_release_gate.py`
+5. `ai_judge_service/app/infra/` 下对应 repository 或内存/DB 适配层
+6. `ai_judge_service/tests/test_route_group_fairness.py`
+7. `ai_judge_service/tests/test_registry_release_gate.py`
+
+**合同建议**
+
+1. 新增 decision log 对象：
+   - `decisionId`
+   - `sourceRecommendationId`
+   - `policyVersion`
+   - `decision`
+   - `actor`
+   - `reasonCode`
+   - `evidenceRefs`
+   - `createdAt`
+   - `visibility`
+2. reason code 稳定化：
+   - `calibration_real_samples_missing`
+   - `calibration_shadow_drift`
+   - `calibration_release_gate_blocked`
+   - `calibration_local_reference_only`
+   - `calibration_manual_reject`
+3. 所有输出进入 runtime readiness summary，但不进入 official verdict。
+
+**DoD**
+
+1. 已完成：`POST /internal/judge/fairness/policy-calibration-decisions` 可记录人工决策，决策类型限定为 `accept_for_review` / `reject` / `defer` / `request_more_evidence`。
+2. 已完成：`GET /internal/judge/fairness/policy-calibration-decisions` 可按 policy、source recommendation、decision 查询，记录写入 `fairness_calibration_decisions` durable facts table，并可被 advisor 回放读取。
+3. 已完成：advisor 输出 `decisionLog`，runtime readiness 的 `fairnessCalibration` 输出 decision count / accepted count / production-ready blocker count，作为 release gate 可读输入。
+4. 已完成：决策合同显式 `autoPublishAllowed=false`、`autoActivateAllowed=false`、`officialVerdictSemanticsChanged=false`，不存在自动 activate policy/prompt/tool 的路径。
+5. 已完成：`local_reference_only` 决策不能被标记为 `productionReady` / `eligibleForProductionReady`；如请求生产就绪会返回 422。
+
+**建议回归**
+
+1. 已运行：`ai_judge_service/.venv/bin/python -m pytest -q ai_judge_service/tests/test_fairness_calibration_decision_log.py ai_judge_service/tests/test_fact_repository.py ai_judge_service/tests/test_route_group_fairness.py ai_judge_service/tests/test_runtime_readiness_public_contract.py ai_judge_service/tests/test_app_factory_smoke.py ai_judge_service/tests/test_app_factory_fairness_routes.py ai_judge_service/tests/test_registry_release_gate.py ai_judge_service/tests/test_policy_registry_runtime.py ai_judge_service/tests/test_registry_governance_routes.py`
+2. 已运行：`ai_judge_service/.venv/bin/python -m ruff check ...`（触达本模块新增/修改 Python 文件）
+3. 已运行：`cd ai_judge_service && .venv/bin/python -m alembic -c alembic.ini heads`
+4. 已运行：`pnpm --dir frontend --filter @echoisle/ops-domain typecheck`
+5. 已运行：`pnpm --dir frontend --filter @echoisle/app-shell typecheck`
+
+### 7.6 `ai-judge-p41-panel-shadow-candidate-contract-pack`
+
+**目标**
+
+1. 稳定 shadow candidate model / panel profile 的生产化前合同。
+2. 明确 shadow candidate 只进入 readiness/read model，不自动影响官方 panel。
+3. 将成本、时延、agreement、drift signals 与 candidate models 统一成 release gate 可读输入。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/panel_runtime_routes.py`
+2. `ai_judge_service/app/applications/panel_runtime_profile_contract.py`
+3. `ai_judge_service/app/domain/judge/final_report.py`
+4. `ai_judge_service/tests/test_panel_runtime_profile_contract.py`
+5. `ai_judge_service/tests/test_route_group_panel_runtime.py`
+6. `ai_judge_service/tests/test_panel_runtime_routes.py`
+
+**合同建议**
+
+1. 新增或冻结：
+   - `candidateModels`
+   - `candidateModelCount`
+   - `shadowEnabledRate`
+   - `avgShadowDecisionAgreement`
+   - `avgShadowCostEstimate`
+   - `avgShadowLatencyEstimate`
+   - `shadowDriftSignalRate`
+   - `switchBlockers`
+   - `releaseGateSignals`
+2. `switchBlockers` 必须明确：
+   - `real_samples_missing`
+   - `shadow_agreement_below_threshold`
+   - `cost_budget_exceeded`
+   - `latency_budget_exceeded`
+   - `release_gate_blocked`
+   - `candidate_models_missing`
+
+**DoD**
+
+1. 已完成：panel runtime readiness 对多模型候选有稳定、可测试的 contract。
+2. 已完成：输出明确声明 `officialWinnerSemanticsChanged=false`、`autoSwitchAllowed=false` 与 `officialWinnerMutationAllowed=false`。
+3. 已完成：release gate 可读取 shadow candidate summary、switch blockers 与 release gate signal counts。
+4. 已完成：frontend 只展示 public-safe candidate/blocker/release-blocked 摘要；chat 继续通过 runtime readiness 白名单投影。
+
+**建议回归**
+
+1. 已运行：`ai_judge_service/.venv/bin/python -m ruff check ai_judge_service/app/applications/bootstrap_ops_panel_replay_payload_helpers.py ai_judge_service/app/applications/panel_runtime_profile_contract.py ai_judge_service/app/applications/panel_runtime_routes.py ai_judge_service/app/applications/route_group_panel_runtime.py ai_judge_service/app/applications/runtime_readiness_public_contract.py ai_judge_service/tests/test_bootstrap_ops_panel_replay_payload_helpers.py ai_judge_service/tests/test_panel_runtime_profile_contract.py ai_judge_service/tests/test_panel_runtime_routes.py ai_judge_service/tests/test_runtime_readiness_public_contract.py`
+2. 已运行：`ai_judge_service/.venv/bin/python -m pytest -q ai_judge_service/tests/test_panel_runtime_profile_contract.py ai_judge_service/tests/test_panel_runtime_routes.py ai_judge_service/tests/test_route_group_panel_runtime.py ai_judge_service/tests/test_runtime_readiness_public_contract.py ai_judge_service/tests/test_bootstrap_ops_panel_replay_payload_helpers.py`
+3. 已运行：`ai_judge_service/.venv/bin/python -m pytest -q ai_judge_service/tests/test_app_factory_ops_panel_routes.py ai_judge_service/tests/test_app_factory_smoke.py ai_judge_service/tests/test_ops_read_model_pack.py ai_judge_service/tests/test_runtime_readiness_public_contract.py`
+4. 已运行：`pnpm --dir frontend --filter @echoisle/ops-domain typecheck`
+5. 已运行：`pnpm --dir frontend --filter @echoisle/app-shell typecheck`
+6. 已运行：`bash /Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/scripts/run_test_gate.sh --mode full`，结果 `PASS`（chat 715 passed / 3 skipped；desktop 24 passed；swiftide-pgvector 0 tests，check/clippy 通过）。
+
+### 7.7 `ai-judge-p41-release-readiness-ops-evidence-pack`
+
+**目标**
+
+1. 把 P41 runtime readiness proxy、calibration decision log、panel shadow candidate contract 纳入 release readiness evidence。
+2. 继续保持 local reference 与 real-env pass 的硬分层。
+3. 让 release readiness artifact 能引用：
+   - runtime readiness status
+   - chat proxy evidence
+   - frontend Ops Console contract evidence
+   - calibration decision log status
+   - panel shadow candidate status
+4. 不把缺真实环境的 release artifact 写成 production ready。
+
+**优先文件**
+
+1. `ai_judge_service/app/applications/release_readiness_projection.py`
+2. `ai_judge_service/app/applications/registry_release_gate.py`
+3. `scripts/harness/ai_judge_runtime_ops_pack.sh`
+4. `scripts/harness/ai_judge_stage_closure_draft.sh`
+5. `scripts/harness/ai_judge_stage_closure_evidence.sh`
+6. `docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
+7. `docs/loadtest/evidence/ai_judge_stage_closure_evidence.md`
+
+**DoD**
+
+1. 已完成：release readiness evidence 能显示 P41 control plane status。
+2. 已完成：`env_blocked` 仍保持阻塞，不被 P41 local reference 误抬为 pass。
+3. 已完成：stage closure evidence 能识别 runtime ops pack、release artifact 与 P41 control-plane 状态。
+4. 已完成：输出 artifact ref / manifest hash / decision / storage mode 可追溯。
+
+**建议回归**
+
+1. 已运行：`ai_judge_service/.venv/bin/python -m ruff check ai_judge_service/app/applications/registry_release_gate.py ai_judge_service/app/applications/artifact_pack.py ai_judge_service/app/applications/release_readiness_projection.py ai_judge_service/app/applications/ops_trust_monitoring.py ai_judge_service/app/applications/runtime_readiness_public_contract.py ai_judge_service/tests/test_registry_release_gate.py ai_judge_service/tests/test_artifact_store.py ai_judge_service/tests/test_release_readiness_projection.py ai_judge_service/tests/test_ops_read_model_pack.py`
+2. 已运行：`ai_judge_service/.venv/bin/python -m pytest -q ai_judge_service/tests/test_registry_release_gate.py ai_judge_service/tests/test_release_readiness_projection.py ai_judge_service/tests/test_artifact_store.py ai_judge_service/tests/test_ops_read_model_pack.py ai_judge_service/tests/test_runtime_readiness_public_contract.py`
+3. 已运行：`bash scripts/harness/tests/test_ai_judge_runtime_ops_pack.sh`
+4. 已运行：`bash scripts/harness/tests/test_ai_judge_stage_closure_evidence.sh`
+5. 已运行：`bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`，结果 `local_reference_ready`；`p41_control_plane_status=env_blocked`。
+6. 已运行：`bash scripts/harness/ai_judge_stage_closure_evidence.sh --root /Users/panyihang/Documents/EchoIsle`，结果 `pass`。
+
+### 7.8 `ai-judge-p41-route-hotspot-split-pack`
+
+**目标**
+
+1. 控制 P41 新增 runtime readiness / proxy / frontend resolver 对热点文件的影响。
+2. 优先下沉：
+   - AI runtime readiness projection
+   - AI calibration decision serializer
+   - AI panel shadow candidate projection
+   - chat runtime readiness model/proxy helper
+   - frontend ops-domain resolver
+3. 保持 route/handler 只做薄装配。
+
+**当前热点基线**
+
+1. `ai_judge_service/app/applications/ops_read_model_pack.py`：2462 行。
+2. `ai_judge_service/app/applications/registry_routes.py`：1285 行。
+3. `ai_judge_service/app/domain/judge/final_report.py`：2546 行。
+4. `chat/chat_server/src/models/judge/request_report_query.rs`：3255 行。
+5. `frontend/packages/debate-domain/src/index.ts`：1048 行。
+
+**完成后拆分结果**
+
+1. AI：`runtime_readiness_public_contract.py` 从 677 行降到 477 行，新增 `runtime_readiness_public_projection.py` 承接 release gate、calibration、panel runtime 与 evidence refs 投影。
+2. chat：`request_report_query.rs` 从 3361 行降到 3290 行，runtime readiness query param / proxy fetch 已下沉到 `runtime_readiness_ops_projection.rs`。
+3. frontend：`ops-domain/src/index.ts` 从 730 行降到 577 行，runtime readiness DTO/API 已拆入 `runtimeReadiness.ts`，`JsonValue` 拆入 `json.ts`。
+
+**DoD**
+
+1. 已完成：P41 新增逻辑不继续显著堆大 `ops_read_model_pack.py`、`request_report_query.rs`、`OpsConsolePage.tsx`。
+2. 已完成：新增 helper 有独立 targeted tests。
+3. 已完成：route/handler 文件保持薄装配，不做大段 JSON 拼装。
+4. 已完成：无行为改动的拆分通过 targeted regression。
+
+**建议回归**
+
+1. 已运行：`ai_judge_service/.venv/bin/python -m ruff check ai_judge_service/app/applications/runtime_readiness_public_contract.py ai_judge_service/app/applications/runtime_readiness_public_projection.py ai_judge_service/tests/test_runtime_readiness_public_contract.py ai_judge_service/tests/test_runtime_readiness_public_projection.py`
+2. 已运行：`ai_judge_service/.venv/bin/python -m pytest -q ai_judge_service/tests/test_runtime_readiness_public_contract.py ai_judge_service/tests/test_runtime_readiness_public_projection.py`
+3. 已运行：`cargo test -p chat-server runtime_readiness`
+4. 已运行：`cargo fmt --all -- --check`
+5. 已运行：`cargo check -p chat-server`
+6. 已运行：`pnpm --dir frontend --filter @echoisle/ops-domain typecheck`
+7. 已运行：`pnpm --dir frontend --filter @echoisle/ops-domain test`
+8. 已运行：`pnpm --dir frontend --filter @echoisle/app-shell typecheck`
+9. 已运行：`pnpm --dir frontend typecheck`
+
+### 7.9 `ai-judge-p41-local-reference-regression-pack`
+
+**目标**
+
+1. 刷新 P41 本地参考证据，验证 runtime readiness / calibration / panel shadow / release gate / challenge product bridge 没有互相破坏。
+2. 明确真实环境仍为 `env_blocked` / `real_pass_ready=false` 时，不把结果写成 pass。
+3. 生成可供 stage closure 引用的证据摘要。
+
+**建议验证矩阵**
+
+1. AI 服务：
+   - 已运行：`ai_judge_service/.venv/bin/python -m ruff check ai_judge_service/app ai_judge_service/tests`。
+   - 已运行：`ai_judge_service/.venv/bin/python -m pytest -q ai_judge_service/tests/test_runtime_readiness_public_contract.py ai_judge_service/tests/test_runtime_readiness_public_projection.py ai_judge_service/tests/test_fairness_calibration_decision_log.py ai_judge_service/tests/test_panel_runtime_profile_contract.py ai_judge_service/tests/test_panel_runtime_routes.py ai_judge_service/tests/test_registry_release_gate.py ai_judge_service/tests/test_release_readiness_projection.py ai_judge_service/tests/test_trust_challenge_runtime_routes.py ai_judge_service/tests/test_ops_read_model_pack.py`，结果 58 passed。
+   - 已运行：`cd ai_judge_service && /Users/panyihang/Documents/EchoIsle/ai_judge_service/.venv/bin/python -m pytest -q`，结果通过。
+2. chat：
+   - 已运行：`cargo fmt --all -- --check`。
+   - 已运行：`cargo test -p chat-server runtime_readiness`，结果 4 passed。
+   - 已运行：`cargo test -p chat-server judge_challenge`，结果 8 passed。
+   - 已运行：`cargo test -p chat-server debate_ops`，结果 0 matched；已补跑 `cargo test -p chat-server ops_judge`，结果 38 passed。
+3. frontend：
+   - 已运行：`pnpm --dir frontend --filter @echoisle/ops-domain test`，结果 7 passed。
+   - 已运行：`pnpm --dir frontend --filter @echoisle/app-shell test`，结果 4 passed。
+   - 已运行：`pnpm --dir frontend typecheck`，结果 14 packages passed。
+   - 已运行：`pnpm --dir frontend lint`，结果 14 packages passed。
+4. harness：
+   - 已运行：`bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --allow-local-reference`，结果 `local_reference_ready`，`p41_control_plane_status=env_blocked`。
+   - 已运行：`bash scripts/harness/ai_judge_stage_closure_evidence.sh --root /Users/panyihang/Documents/EchoIsle`，结果 `pass`，`runtime_ops_pack_linked=true`。
+   - 已运行：`bash /Users/panyihang/Documents/EchoIsle/skills/post-module-test-guard/scripts/run_test_gate.sh --mode full`，结果 `PASS`（chat 717 passed / 3 skipped；desktop 24 passed；swiftide-pgvector 0 tests，check/clippy 通过）。
+
+**DoD**
+
+1. 已完成：本地证据显示 runtime ops 为 `local_reference_ready`，P41 control plane 明确阻塞为 `env_blocked`。
+2. 已完成：real-env closure 仍保持 `env_blocked` / `real_pass_ready=false` 口径，不冒充 pass。
+3. 已完成：stage closure evidence 能消费 runtime ops pack、release readiness artifact 与 P41 control-plane 状态。
+
+### 7.10 `ai-judge-p41-stage-closure-execute`
+
+**目标**
+
+1. 在 P41 主体完成后执行阶段收口。
+2. 将 P41 完成态模块结构化追加到 `completed.md`。
+3. 将真实环境后置项、生产对象存储真实验收、真实样本 benchmark、真实 provider/callback 等明确延后项结构化追加或去重到 `todo.md`。
+4. 归档当前活动计划并重置 `当前开发计划.md`。
+
+**DoD**
+
+1. P41 执行矩阵中除真实环境模块外均为已完成或明确延后。
+2. `ai_judge_stage_closure_evidence.sh` 能识别最新 runtime ops pack、release readiness artifact 与 P41 ops control plane evidence。
+3. `completed.md` 只记录主体完成快照。
+4. `todo.md` 只记录延后技术债，不复制活动计划正文。
+
+---
+
+## 8. 本轮不做
+
+1. 不做 Identity Proof Gateway、Constitution Registry、Reason Passport、第三方 review network 或 on-chain anchor。
+2. 不做无人值守 auto-calibration，不自动 activate policy/prompt/tool。
+3. 不做多模型 panel 生产自动切换。
+4. 不把 NPC Coach / Room QA 接入官方裁决链。
+5. 不让客户端直连 AI 服务。
+6. 不把本地参考证据写成真实环境 pass。
+7. 不为了 UI 方便暴露 raw trace、prompt、provider、object store locator 或私有审计内容。
+
+---
+
+## 9. 真实环境后置触发条件
+
+只有同时满足以下条件，才执行 real-env pass window：
+
+1. `REAL_CALIBRATION_ENV_READY=true`。
+2. 有真实辩论样本与可复核样本来源。
+3. 有真实 AI provider/callback 服务窗口。
+4. 生产对象存储或等价 S3-compatible 环境可做 roundtrip。
+5. P41 runtime readiness、release readiness artifact、challenge/review 产品桥接与 Ops 控制面本地证据均已稳定。
+6. 执行结果能归档到 `artifacts/harness` 与 `docs/loadtest/evidence`。
+
+---
+
+## 10. 下一轮启动建议
+
+1. 执行 `ai-judge-p41-stage-closure-execute`，将主体完成项与真实环境后置项按 stage closure 规则归档。
+2. `ai-judge-real-env-pass-window-execute-on-env` 继续等待真实样本、真实 provider/callback、生产对象存储与真实服务窗口齐备后再执行。
+3. 阶段收口时，`completed.md` 只记录 P41 主体完成快照，`todo.md` 只记录真实环境后置债务。
