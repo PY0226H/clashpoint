@@ -39,6 +39,83 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime.get_profile(AGENT_KIND_ROOM_QA).tags,  # type: ignore[union-attr]
         )
 
+    async def test_execute_should_enable_deterministic_assistant_placeholder_when_configured(
+        self,
+    ) -> None:
+        runtime = build_agent_runtime(
+            settings=SimpleNamespace(
+                openai_timeout_secs=25.0,
+                assistant_advisory_placeholder_enabled=True,
+            )
+        )
+
+        npc_profile = runtime.get_profile(AGENT_KIND_NPC_COACH)
+        room_qa_profile = runtime.get_profile(AGENT_KIND_ROOM_QA)
+        self.assertTrue(npc_profile.enabled)  # type: ignore[union-attr]
+        self.assertTrue(room_qa_profile.enabled)  # type: ignore[union-attr]
+
+        advisory_context = {
+            "roomContextSnapshot": {
+                "phaseReceiptCount": 1,
+                "finalReceiptCount": 0,
+            },
+            "stageSummary": {
+                "stage": "phase_context_available",
+                "workflowStatus": "done",
+                "hasPhaseReceipt": True,
+                "hasFinalReceipt": False,
+            },
+        }
+        result = await runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_NPC_COACH,
+                input_payload={
+                    "sessionId": 11,
+                    "query": "我该怎么回应？",
+                    "side": "pro",
+                    "advisoryContext": advisory_context,
+                },
+                trace_id="trace-npc-placeholder",
+                session_id=11,
+            )
+        )
+        room_qa_result = await runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_ROOM_QA,
+                input_payload={
+                    "sessionId": 11,
+                    "question": "当前上下文阶段是什么？",
+                    "advisoryContext": advisory_context,
+                },
+                trace_id="trace-room-placeholder",
+                session_id=11,
+            )
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertIsNone(result.error_code)
+        self.assertEqual(result.output.get("accepted"), True)
+        self.assertEqual(result.output.get("mode"), "advisory_only")
+        self.assertTrue(result.output.get("advisoryOnly"))
+        self.assertEqual(
+            result.output.get("availableContext"),
+            {
+                "stage": "phase_context_available",
+                "stageLabel": "已有阶段上下文",
+                "workflowStatus": "done",
+                "hasPhaseReceipt": True,
+                "hasFinalReceipt": False,
+                "receiptSummary": "phase 1 / final 0",
+                "officialVerdictFieldsRedacted": True,
+            },
+        )
+        self.assertIn("safeGuidanceSummary", result.output)
+        self.assertIn("suggestedNextQuestions", result.output)
+        self.assertNotIn("winner", result.output)
+        self.assertNotIn("verdictReason", result.output)
+        self.assertEqual(room_qa_result.status, "ok")
+        self.assertIn("当前上下文阶段：已有阶段上下文", room_qa_result.output["safeGuidanceSummary"])
+
     async def test_execute_should_enable_judge_courtroom_runtime(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))
 

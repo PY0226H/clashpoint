@@ -52,6 +52,110 @@ class _ReservedAgentExecutor(AgentExecutorPort):
         )
 
 
+class _AssistantAdvisoryPlaceholderExecutor(AgentExecutorPort):
+    _PLACEHOLDER_VERSION = "assistant_advisory_placeholder_v1"
+
+    def __init__(self, *, kind: AgentKind) -> None:
+        self._kind = kind
+
+    @staticmethod
+    def _advisory_context(request: AgentExecutionRequest) -> dict[str, Any]:
+        raw_context = request.input_payload.get("advisoryContext")
+        return raw_context if isinstance(raw_context, dict) else {}
+
+    @staticmethod
+    def _stage_label(stage: str) -> str:
+        if stage == "final_context_available":
+            return "已有最终上下文"
+        if stage == "phase_context_available":
+            return "已有阶段上下文"
+        return "仅有房间上下文"
+
+    def _available_context(self, request: AgentExecutionRequest) -> dict[str, Any]:
+        advisory_context = self._advisory_context(request)
+        stage_summary = (
+            advisory_context.get("stageSummary")
+            if isinstance(advisory_context.get("stageSummary"), dict)
+            else {}
+        )
+        room_context = (
+            advisory_context.get("roomContextSnapshot")
+            if isinstance(advisory_context.get("roomContextSnapshot"), dict)
+            else {}
+        )
+        stage = str(stage_summary.get("stage") or "room_context_only")
+        phase_count = int(room_context.get("phaseReceiptCount") or 0)
+        final_count = int(room_context.get("finalReceiptCount") or 0)
+        return {
+            "stage": stage,
+            "stageLabel": self._stage_label(stage),
+            "workflowStatus": stage_summary.get("workflowStatus"),
+            "hasPhaseReceipt": bool(stage_summary.get("hasPhaseReceipt")),
+            "hasFinalReceipt": bool(stage_summary.get("hasFinalReceipt")),
+            "receiptSummary": f"phase {phase_count} / final {final_count}",
+            "officialVerdictFieldsRedacted": True,
+        }
+
+    def _base_output(self, request: AgentExecutionRequest) -> dict[str, Any]:
+        return {
+            "kind": self._kind,
+            "accepted": True,
+            "mode": "advisory_only",
+            "advisoryOnly": True,
+            "placeholder": True,
+            "placeholderVersion": self._PLACEHOLDER_VERSION,
+            "traceId": request.trace_id,
+            "policyIsolation": "assistant_advisory_policy",
+            "availableContext": self._available_context(request),
+            "limitations": [
+                "仅提供流程性和表达组织建议。",
+                "不会预测胜负、评分或生成官方裁决理由。",
+                "不会写入 verdict ledger、judge trace 或 review queue。",
+            ],
+        }
+
+    def _npc_coach_output(self, request: AgentExecutionRequest) -> dict[str, Any]:
+        output = self._base_output(request)
+        output.update(
+            {
+                "safeGuidanceSummary": "当前为本地 deterministic 占位建议：请围绕公开上下文整理争点、补充证据，并回应对方尚未被充分回应的论点。",
+                "suggestedNextQuestions": [
+                    "请系统总结当前争点。",
+                    "我可以补充哪些公开证据来支撑本方观点？",
+                    "对方有哪些论点还没有被我正面回应？",
+                ],
+            }
+        )
+        return output
+
+    def _room_qa_output(self, request: AgentExecutionRequest) -> dict[str, Any]:
+        available_context = self._available_context(request)
+        output = self._base_output(request)
+        output.update(
+            {
+                "safeGuidanceSummary": (
+                    "当前上下文阶段："
+                    f"{available_context['stageLabel']}；"
+                    f"{available_context['receiptSummary']}。"
+                    "该回答只描述房间上下文，不代表官方裁决。"
+                ),
+                "suggestedNextQuestions": [
+                    "当前上下文阶段是什么？",
+                    "已经有阶段性或最终上下文了吗？",
+                    "我还可以补充哪些公开材料？",
+                ],
+            }
+        )
+        return output
+
+    async def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+        if self._kind == AGENT_KIND_ROOM_QA:
+            output = self._room_qa_output(request)
+        else:
+            output = self._npc_coach_output(request)
+        return AgentExecutionResult(status="ok", output=output)
+
+
 class _JudgeCourtroomExecutor(AgentExecutorPort):
     _RUNTIME_VERSION = "courtroom_agent_runtime_mvp_v1"
     _WORKFLOW_VERSION = "courtroom_8agent_chain_v1"
@@ -313,6 +417,9 @@ class AgentRuntime:
 
 def build_agent_runtime(*, settings: Any) -> AgentRuntime:
     timeout_ms = max(100, int(getattr(settings, "openai_timeout_secs", 30.0) * 1000))
+    assistant_placeholder_enabled = bool(
+        getattr(settings, "assistant_advisory_placeholder_enabled", False)
+    )
     profiles = [
         AgentProfile(
             kind=AGENT_KIND_JUDGE,
@@ -326,32 +433,40 @@ def build_agent_runtime(*, settings: Any) -> AgentRuntime:
         AgentProfile(
             kind=AGENT_KIND_NPC_COACH,
             display_name="NPC Coach",
-            description="Reserved shell for future in-room coaching guidance agent.",
-            enabled=False,
+            description="Advisory-only in-room coaching guidance agent.",
+            enabled=assistant_placeholder_enabled,
             owner="ai_judge_service",
             timeout_ms=timeout_ms,
-            tags=("shell", "future", "advisory_only", "no_verdict_write"),
+            tags=("shell", "deterministic_placeholder", "advisory_only", "no_verdict_write"),
         ),
         AgentProfile(
             kind=AGENT_KIND_ROOM_QA,
             display_name="Room QA",
-            description="Reserved shell for future room-state QA agent.",
-            enabled=False,
+            description="Advisory-only room-state QA agent.",
+            enabled=assistant_placeholder_enabled,
             owner="ai_judge_service",
             timeout_ms=timeout_ms,
-            tags=("shell", "future", "advisory_only", "no_verdict_write"),
+            tags=("shell", "deterministic_placeholder", "advisory_only", "no_verdict_write"),
         ),
     ]
-    executors: dict[AgentKind, AgentExecutorPort] = {
-        AGENT_KIND_JUDGE: _JudgeCourtroomExecutor(),
-        AGENT_KIND_NPC_COACH: _ReservedAgentExecutor(
+    npc_executor: AgentExecutorPort
+    room_qa_executor: AgentExecutorPort
+    if assistant_placeholder_enabled:
+        npc_executor = _AssistantAdvisoryPlaceholderExecutor(kind=AGENT_KIND_NPC_COACH)
+        room_qa_executor = _AssistantAdvisoryPlaceholderExecutor(kind=AGENT_KIND_ROOM_QA)
+    else:
+        npc_executor = _ReservedAgentExecutor(
             kind=AGENT_KIND_NPC_COACH,
             reason="npc_coach runtime shell is reserved for future rollout",
-        ),
-        AGENT_KIND_ROOM_QA: _ReservedAgentExecutor(
+        )
+        room_qa_executor = _ReservedAgentExecutor(
             kind=AGENT_KIND_ROOM_QA,
             reason="room_qa runtime shell is reserved for future rollout",
-        ),
+        )
+    executors: dict[AgentKind, AgentExecutorPort] = {
+        AGENT_KIND_JUDGE: _JudgeCourtroomExecutor(),
+        AGENT_KIND_NPC_COACH: npc_executor,
+        AGENT_KIND_ROOM_QA: room_qa_executor,
     }
     return AgentRuntime(
         registry=StaticAgentRegistry(

@@ -84,6 +84,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.prompt_registry_json, "")
         self.assertEqual(settings.tool_registry_default_version, "toolset-v3-default")
         self.assertEqual(settings.tool_registry_json, "")
+        self.assertFalse(settings.assistant_advisory_placeholder_enabled)
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -184,6 +185,7 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_PROMPT_REGISTRY_JSON": '{"profiles":[]}',
                 "AI_JUDGE_TOOL_REGISTRY_DEFAULT_VERSION": "toolset-v4-pro",
                 "AI_JUDGE_TOOL_REGISTRY_JSON": '{"profiles":[]}',
+                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED": "true",
             },
             clear=True,
         ):
@@ -279,6 +281,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.prompt_registry_json, '{"profiles":[]}')
         self.assertEqual(settings.tool_registry_default_version, "toolset-v4-pro")
         self.assertEqual(settings.tool_registry_json, '{"profiles":[]}')
+        self.assertTrue(settings.assistant_advisory_placeholder_enabled)
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -468,6 +471,25 @@ class SettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError,
                 "AI_JUDGE_ARTIFACT_STORE_PROVIDER=local is forbidden",
+            ):
+                load_settings()
+
+    def test_load_settings_should_reject_assistant_placeholder_in_production(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ECHOISLE_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED=true is forbidden",
             ):
                 load_settings()
 

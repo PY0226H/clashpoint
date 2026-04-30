@@ -34,4 +34,35 @@ describe("AssistantAdvisoryResult", () => {
     expect(html).not.toContain("Winner");
     expect(html).not.toContain("Score");
   });
+
+  it("renders deterministic placeholder guidance as advisory-only list", () => {
+    const view: JudgeAssistantAdvisoryView = {
+      state: "ready",
+      agentKind: "room_qa",
+      label: "辅助建议已生成",
+      reasonCode: "assistant_advisory_ready",
+      advisoryOnly: true,
+      accepted: true,
+      caseId: 42,
+      message: "当前上下文阶段：已有阶段上下文。",
+      items: ["当前上下文阶段是什么？", "我还可以补充哪些公开材料？"],
+      contextStage: "phase_context_available",
+      contextLabel: "已有阶段上下文",
+      workflowStatus: "done",
+      latestDispatchType: "phase",
+      receiptSummary: "phase 1 / final 0",
+      updatedAt: null,
+    };
+
+    const html = renderToStaticMarkup(
+      <AssistantAdvisoryResult title="Room QA" view={view} />,
+    );
+
+    expect(html).toContain("辅助建议已生成");
+    expect(html).toContain("辅助建议，不是官方裁决");
+    expect(html).toContain("当前上下文阶段是什么？");
+    expect(html).toContain("phase 1 / final 0");
+    expect(html).not.toContain("Winner");
+    expect(html).not.toContain("Score");
+  });
 });

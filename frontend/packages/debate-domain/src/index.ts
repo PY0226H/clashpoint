@@ -921,6 +921,7 @@ function firstAssistantOutputText(output: JsonValue): string | null {
     root?.message,
     root?.summary,
     root?.guidance,
+    root?.safeGuidanceSummary,
   ];
   for (const candidate of candidates) {
     const value = jsonString(candidate);
@@ -937,6 +938,7 @@ function assistantOutputItems(output: JsonValue): string[] {
     root?.suggestions,
     root?.points,
     root?.questions,
+    root?.suggestedNextQuestions,
     root?.nextSteps,
   ];
   for (const candidate of candidates) {

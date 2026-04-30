@@ -1869,6 +1869,69 @@ async fn request_npc_coach_advice_should_proxy_not_ready_advisory_contract() -> 
 }
 
 #[tokio::test]
+async fn request_npc_coach_advice_should_proxy_ready_placeholder_contract() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url = spawn_mock_assistant_advisory_server(
+        "assistant-key".to_string(),
+        json!({
+            "status": "ok",
+            "accepted": true,
+            "errorCode": Value::Null,
+            "errorMessage": Value::Null,
+            "output": {
+                "accepted": true,
+                "mode": "advisory_only",
+                "advisoryOnly": true,
+                "placeholder": true,
+                "safeGuidanceSummary": "当前为本地 deterministic 占位建议。",
+                "suggestedNextQuestions": ["请系统总结当前争点。"],
+                "availableContext": {
+                    "stage": "final_context_available",
+                    "officialVerdictFieldsRedacted": true
+                },
+                "limitations": ["不会预测胜负、评分或生成官方裁决理由。"]
+            }
+        }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "assistant-key".to_string();
+    inner.config.ai_judge.assistant_timeout_ms = 2_000;
+
+    let out = state
+        .request_npc_coach_advice(
+            session_id as u64,
+            &participant,
+            RequestNpcCoachAdviceInput {
+                query: "how should I tighten my next argument?".to_string(),
+                trace_id: Some("chat-test-trace-npc-ready".to_string()),
+                side: Some("pro".to_string()),
+                case_id: Some(final_job_id as u64),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "ok");
+    assert_eq!(out.status_reason, "assistant_advisory_ready");
+    assert!(out.accepted);
+    assert_eq!(out.error_code, None);
+    assert_eq!(
+        out.output["safeGuidanceSummary"],
+        json!("当前为本地 deterministic 占位建议。")
+    );
+    assert_eq!(
+        out.output["availableContext"]["officialVerdictFieldsRedacted"],
+        json!(true)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn request_room_qa_answer_should_return_proxy_error_when_ai_output_leaks_verdict(
 ) -> Result<()> {
     let (_tdb, mut state) = AppState::new_for_test().await?;

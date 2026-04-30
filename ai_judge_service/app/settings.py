@@ -175,6 +175,7 @@ class Settings:
     prompt_registry_json: str = ""
     tool_registry_default_version: str = "toolset-v3-default"
     tool_registry_json: str = ""
+    assistant_advisory_placeholder_enabled: bool = False
 
 
 def load_settings() -> Settings:
@@ -376,6 +377,10 @@ def load_settings() -> Settings:
             or "toolset-v3-default"
         ),
         tool_registry_json=os.getenv("AI_JUDGE_TOOL_REGISTRY_JSON", "").strip(),
+        assistant_advisory_placeholder_enabled=parse_env_bool(
+            os.getenv("AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED"),
+            default=False,
+        ),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
     return settings
@@ -514,6 +519,11 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         if settings.artifact_store_provider == ARTIFACT_STORE_PROVIDER_LOCAL:
             raise ValueError(
                 "AI_JUDGE_ARTIFACT_STORE_PROVIDER=local is forbidden when runtime env is production"
+            )
+        if settings.assistant_advisory_placeholder_enabled:
+            raise ValueError(
+                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED=true is forbidden "
+                "when runtime env is production"
             )
 
 

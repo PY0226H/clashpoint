@@ -259,6 +259,99 @@ class AppFactoryAssistantRouteTests(
         self.assertFalse(body["cacheProfile"]["cacheable"])
         self.assertEqual(body["cacheProfile"]["ttlSeconds"], 0)
 
+    async def test_npc_coach_placeholder_route_should_return_safe_advisory_without_writes(
+        self,
+    ) -> None:
+        async def _noop_callback(*, cfg: object, case_id: int, payload: dict) -> None:
+            return None
+
+        runtime = create_runtime(
+            settings=_build_settings(assistant_advisory_placeholder_enabled=True),
+            callback_phase_report_impl=_noop_callback,
+            callback_final_report_impl=_noop_callback,
+            callback_phase_failed_impl=_noop_callback,
+            callback_final_failed_impl=_noop_callback,
+        )
+        app = create_app(runtime)
+
+        phase_case_id = _unique_case_id(9361)
+        phase_req = _build_phase_request(
+            case_id=phase_case_id,
+            idempotency_key=f"phase:{phase_case_id}",
+        )
+        phase_resp = await self._post_json(
+            app=app,
+            path="/internal/judge/v3/phase/dispatch",
+            payload=phase_req.model_dump(mode="json"),
+            internal_key=runtime.settings.ai_internal_key,
+        )
+        self.assertEqual(phase_resp.status_code, 200)
+        ledger_before = await runtime.workflow_runtime.facts.list_judge_ledger_snapshots(
+            case_id=phase_case_id,
+            limit=20,
+        )
+        events_before = await runtime.workflow_runtime.store.list_events(
+            job_id=phase_case_id,
+        )
+
+        npc_resp = await self._post_json(
+            app=app,
+            path=f"/internal/judge/apps/npc-coach/sessions/{phase_req.session_id}/advice",
+            payload={
+                "trace_id": f"trace-npc-placeholder-{phase_case_id}",
+                "query": "请给我当前阶段的论点补强建议",
+                "side": "pro",
+                "caseId": phase_case_id,
+            },
+            internal_key=runtime.settings.ai_internal_key,
+        )
+
+        self.assertEqual(npc_resp.status_code, 200)
+        body = npc_resp.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertTrue(body["accepted"])
+        self.assertIsNone(body["errorCode"])
+        self.assertEqual(body["output"]["mode"], "advisory_only")
+        self.assertTrue(body["output"]["placeholder"])
+        self.assertEqual(
+            body["output"]["availableContext"],
+            {
+                "stage": "phase_context_available",
+                "stageLabel": "已有阶段上下文",
+                "workflowStatus": "callback_reported",
+                "hasPhaseReceipt": True,
+                "hasFinalReceipt": False,
+                "receiptSummary": "phase 1 / final 0",
+                "officialVerdictFieldsRedacted": True,
+            },
+        )
+        self.assertIn("safeGuidanceSummary", body["output"])
+        self.assertIn("suggestedNextQuestions", body["output"])
+        self.assertNotIn("winner", body["output"])
+        self.assertNotIn("verdictReason", body["output"])
+
+        ledger_after = await runtime.workflow_runtime.facts.list_judge_ledger_snapshots(
+            case_id=phase_case_id,
+            limit=20,
+        )
+        events_after = await runtime.workflow_runtime.store.list_events(
+            job_id=phase_case_id,
+        )
+        self.assertEqual(
+            [
+                (row.dispatch_type, row.trace_id, row.updated_at.isoformat())
+                for row in ledger_after
+            ],
+            [
+                (row.dispatch_type, row.trace_id, row.updated_at.isoformat())
+                for row in ledger_before
+            ],
+        )
+        self.assertEqual(
+            [(row.event_seq, row.event_type) for row in events_after],
+            [(row.event_seq, row.event_type) for row in events_before],
+        )
+
     async def test_npc_coach_route_should_fail_closed_on_official_verdict_chain_fields(
         self,
     ) -> None:

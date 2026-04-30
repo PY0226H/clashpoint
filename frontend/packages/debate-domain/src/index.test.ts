@@ -468,6 +468,38 @@ describe("debate-domain normalize helpers", () => {
     expect(view.receiptSummary).toBe("phase 0 / final 1");
   });
 
+  it("maps deterministic placeholder output into ready advisory text and questions", () => {
+    const output = advisoryOutput("npc_coach", {
+      status: "ok",
+      statusReason: "assistant_advisory_ready",
+      accepted: true,
+      errorCode: null,
+      output: {
+        safeGuidanceSummary: "当前为本地 deterministic 占位建议。",
+        suggestedNextQuestions: [
+          "请系统总结当前争点。",
+          "我可以补充哪些公开证据？",
+        ],
+        availableContext: {
+          stage: "final_context_available",
+          officialVerdictFieldsRedacted: true,
+        },
+        limitations: ["不会预测胜负、评分或生成官方裁决理由。"],
+      },
+    });
+
+    const view = resolveJudgeAssistantAdvisoryView(output);
+
+    expect(view.state).toBe("ready");
+    expect(view.label).toBe("辅助建议已生成");
+    expect(view.accepted).toBe(true);
+    expect(view.message).toBe("当前为本地 deterministic 占位建议。");
+    expect(view.items).toEqual([
+      "请系统总结当前争点。",
+      "我可以补充哪些公开证据？",
+    ]);
+  });
+
   it("fails closed when assistant advisory output includes official fields", async () => {
     apiClient.post.mockResolvedValue({
       data: advisoryOutput("room_qa", {
