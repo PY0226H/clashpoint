@@ -9,7 +9,7 @@ use crate::{
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use chat_core::User;
@@ -33,12 +33,19 @@ const JUDGE_REPORT_READ_IP_RATE_LIMIT_PER_WINDOW: u64 = 120;
 const JUDGE_REPORT_READ_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const JUDGE_REPORT_READ_LIMITER_SCOPE: &str = "judge_report_read";
 const JUDGE_REPORT_READ_LIMITER_KEY_PREFIX: &str = "judge_report";
+const JUDGE_ASSISTANT_ADVISORY_USER_RATE_LIMIT_PER_WINDOW: u64 = 20;
+const JUDGE_ASSISTANT_ADVISORY_IP_RATE_LIMIT_PER_WINDOW: u64 = 60;
+const JUDGE_ASSISTANT_ADVISORY_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE: &str = "judge_assistant_advisory";
+const JUDGE_ASSISTANT_ADVISORY_LIMITER_KEY_PREFIX: &str = "judge_assistant";
 
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_INVALID: &str = "judge_request_idempotency_key_invalid";
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_KEY_TOO_LONG: &str = "judge_request_idempotency_key_too_long";
 const JUDGE_REQUEST_CODE_IDEMPOTENCY_CONFLICT: &str = "judge_request_idempotency_conflict";
 const JUDGE_REPORT_READ_FORBIDDEN: &str = "judge_report_read_forbidden";
 const JUDGE_CHALLENGE_REQUEST_FORBIDDEN: &str = "judge_challenge_request_forbidden";
+const JUDGE_ASSISTANT_ADVISORY_FORBIDDEN: &str = "judge_assistant_advisory_forbidden";
+const JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH: &str = "judge_assistant_advisory_case_mismatch";
 
 #[derive(Debug, Default)]
 struct JudgeReportReadMetrics {
@@ -235,6 +242,67 @@ fn merge_rate_limit_decision(
         remaining: user.remaining.min(ip.remaining),
         reset_at_epoch_secs: user.reset_at_epoch_secs.max(ip.reset_at_epoch_secs),
     }
+}
+
+enum AssistantAdvisoryRateLimitOutcome {
+    Allowed(HeaderMap),
+    Limited(Response),
+}
+
+async fn enforce_judge_assistant_advisory_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    user: &User,
+    session_id: u64,
+) -> Result<AssistantAdvisoryRateLimitOutcome, AppError> {
+    let user_limiter_key = format!(
+        "{JUDGE_ASSISTANT_ADVISORY_LIMITER_KEY_PREFIX}:user:{}:session:{}",
+        user.id, session_id
+    );
+    let user_decision = enforce_rate_limit(
+        state,
+        JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE,
+        &user_limiter_key,
+        JUDGE_ASSISTANT_ADVISORY_USER_RATE_LIMIT_PER_WINDOW,
+        JUDGE_ASSISTANT_ADVISORY_RATE_LIMIT_WINDOW_SECS,
+    )
+    .await;
+    if !user_decision.allowed {
+        return Ok(AssistantAdvisoryRateLimitOutcome::Limited(
+            rate_limit_exceeded_response(
+                JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE,
+                build_rate_limit_headers(&user_decision)?,
+            ),
+        ));
+    }
+
+    let mut effective_decision = user_decision;
+    if let Some(ip_hash) = request_rate_limit_ip_key_from_headers(headers) {
+        let ip_limiter_key = format!(
+            "{JUDGE_ASSISTANT_ADVISORY_LIMITER_KEY_PREFIX}:ip:{ip_hash}:session:{session_id}"
+        );
+        let ip_decision = enforce_rate_limit(
+            state,
+            JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE,
+            &ip_limiter_key,
+            JUDGE_ASSISTANT_ADVISORY_IP_RATE_LIMIT_PER_WINDOW,
+            JUDGE_ASSISTANT_ADVISORY_RATE_LIMIT_WINDOW_SECS,
+        )
+        .await;
+        if !ip_decision.allowed {
+            return Ok(AssistantAdvisoryRateLimitOutcome::Limited(
+                rate_limit_exceeded_response(
+                    JUDGE_ASSISTANT_ADVISORY_LIMITER_SCOPE,
+                    build_rate_limit_headers(&ip_decision)?,
+                ),
+            ));
+        }
+        effective_decision = merge_rate_limit_decision(&effective_decision, &ip_decision);
+    }
+
+    Ok(AssistantAdvisoryRateLimitOutcome::Allowed(
+        build_rate_limit_headers(&effective_decision)?,
+    ))
 }
 
 #[cfg(test)]
@@ -706,6 +774,61 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let err: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(err.error, "judge_report_read_forbidden");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn assistant_npc_coach_route_should_forbid_non_participant() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "assistant-npc-forbid").await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "assistant npc outsider",
+            "assistant-npc-outsider@acme.org",
+            "+8613800771010",
+            "assistant-npc-outsider-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/api/debate/sessions/{session_id}/assistant/npc-coach/advice"
+            ))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"query":"help me prepare","side":"pro"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "judge_assistant_advisory_forbidden");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn assistant_room_qa_route_should_return_not_found_for_missing_session() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "assistant room missing",
+            "assistant-room-missing@acme.org",
+            "+8613800771011",
+            "assistant-room-missing-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/sessions/999999999/assistant/room-qa/answer")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"question":"what is happening?"}"#))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
         Ok(())
     }
 }
@@ -1264,6 +1387,150 @@ pub(crate) async fn request_judge_challenge_handler(
         dispatch_type = ret.dispatch_type,
         latency_ms = started_at.elapsed().as_millis() as u64,
         "judge challenge requested"
+    );
+    Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
+}
+
+/// Request advisory-only NPC Coach advice for a participant in a debate session.
+#[utoipa::path(
+    post,
+    path = "/api/debate/sessions/{id}/assistant/npc-coach/advice",
+    params(
+        ("id" = u64, Path, description = "Debate session id")
+    ),
+    request_body = crate::RequestNpcCoachAdviceInput,
+    responses(
+        (status = 200, description = "NPC Coach advisory proxy result", body = crate::JudgeAssistantAdvisoryOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn request_npc_coach_advice_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+    Json(input): Json<crate::RequestNpcCoachAdviceInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    let rate_headers =
+        match enforce_judge_assistant_advisory_rate_limit(&state, &headers, &user, id).await? {
+            AssistantAdvisoryRateLimitOutcome::Allowed(headers) => headers,
+            AssistantAdvisoryRateLimitOutcome::Limited(response) => return Ok(response),
+        };
+
+    let ret = match state.request_npc_coach_advice(id, &user, input).await {
+        Ok(v) => v,
+        Err(AppError::DebateConflict(code))
+            if code == JUDGE_ASSISTANT_ADVISORY_FORBIDDEN
+                || code == JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH =>
+        {
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(crate::ErrorOutput::new(code.as_str())),
+            )
+                .into_response());
+        }
+        Err(err) => {
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                latency_ms = started_at.elapsed().as_millis() as u64,
+                err = %err,
+                "NPC Coach advisory proxy failed"
+            );
+            return Err(err);
+        }
+    };
+
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        status = ret.status,
+        status_reason = ret.status_reason,
+        case_id = ret.case_id,
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "NPC Coach advisory proxy requested"
+    );
+    Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
+}
+
+/// Request advisory-only Room QA answer for a participant in a debate session.
+#[utoipa::path(
+    post,
+    path = "/api/debate/sessions/{id}/assistant/room-qa/answer",
+    params(
+        ("id" = u64, Path, description = "Debate session id")
+    ),
+    request_body = crate::RequestRoomQaAnswerInput,
+    responses(
+        (status = 200, description = "Room QA advisory proxy result", body = crate::JudgeAssistantAdvisoryOutput),
+        (status = 400, description = "Invalid request", body = crate::ErrorOutput),
+        (status = 401, description = "Unauthorized", body = crate::ErrorOutput),
+        (status = 403, description = "Phone bind required", body = crate::ErrorOutput),
+        (status = 404, description = "Debate session not found", body = crate::ErrorOutput),
+        (status = 409, description = "Request conflict", body = crate::ErrorOutput),
+        (status = 429, description = "Rate limit exceeded", body = crate::ErrorOutput),
+        (status = 500, description = "Internal server error", body = crate::ErrorOutput),
+    ),
+    security(
+        ("token" = [])
+    )
+)]
+pub(crate) async fn request_room_qa_answer_handler(
+    Extension(user): Extension<User>,
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+    Json(input): Json<crate::RequestRoomQaAnswerInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let started_at = Instant::now();
+    let rate_headers =
+        match enforce_judge_assistant_advisory_rate_limit(&state, &headers, &user, id).await? {
+            AssistantAdvisoryRateLimitOutcome::Allowed(headers) => headers,
+            AssistantAdvisoryRateLimitOutcome::Limited(response) => return Ok(response),
+        };
+
+    let ret = match state.request_room_qa_answer(id, &user, input).await {
+        Ok(v) => v,
+        Err(AppError::DebateConflict(code))
+            if code == JUDGE_ASSISTANT_ADVISORY_FORBIDDEN
+                || code == JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH =>
+        {
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(crate::ErrorOutput::new(code.as_str())),
+            )
+                .into_response());
+        }
+        Err(err) => {
+            tracing::warn!(
+                user_id = user.id,
+                session_id = id,
+                latency_ms = started_at.elapsed().as_millis() as u64,
+                err = %err,
+                "Room QA advisory proxy failed"
+            );
+            return Err(err);
+        }
+    };
+
+    tracing::info!(
+        user_id = user.id,
+        session_id = id,
+        status = ret.status,
+        status_reason = ret.status_reason,
+        case_id = ret.case_id,
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "Room QA advisory proxy requested"
     );
     Ok((StatusCode::OK, rate_headers, Json(ret)).into_response())
 }

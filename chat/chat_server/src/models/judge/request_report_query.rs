@@ -1,3 +1,12 @@
+use super::assistant_advisory_proxy::{
+    build_assistant_advisory_output_from_payload, build_assistant_advisory_proxy_error_output,
+    fetch_ai_judge_assistant_advisory_payload, normalize_npc_coach_advice_input,
+    normalize_room_qa_answer_input, validate_assistant_advisory_payload,
+    AssistantAdvisoryProxyParams, JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH,
+    JUDGE_ASSISTANT_ADVISORY_FORBIDDEN, JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION,
+    JUDGE_ASSISTANT_ADVISORY_REASON_PROXY_FAILED, JUDGE_ASSISTANT_AGENT_KIND_NPC_COACH,
+    JUDGE_ASSISTANT_AGENT_KIND_ROOM_QA,
+};
 use super::challenge_ops_projection::{
     build_judge_challenge_ops_queue_output_from_payload,
     build_judge_challenge_ops_queue_proxy_error_output, JUDGE_CHALLENGE_OPS_REASON_PROXY_FAILED,
@@ -2727,6 +2736,122 @@ impl AppState {
         ))
     }
 
+    async fn ensure_assistant_advisory_request_access(
+        &self,
+        session_id: i64,
+        user: &User,
+    ) -> Result<(), AppError> {
+        let participant_exists: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM session_participants
+            WHERE session_id = $1
+              AND user_id = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .bind(user.id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if participant_exists.is_some() {
+            return Ok(());
+        }
+
+        Err(AppError::DebateConflict(
+            JUDGE_ASSISTANT_ADVISORY_FORBIDDEN.to_string(),
+        ))
+    }
+
+    async fn ensure_assistant_advisory_session_exists(
+        &self,
+        session_id: i64,
+        display_session_id: u64,
+    ) -> Result<(), AppError> {
+        let session_exists: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM debate_sessions
+            WHERE id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if session_exists.is_none() {
+            return Err(AppError::NotFound(format!(
+                "debate session id {display_session_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn resolve_assistant_advisory_case_id(
+        &self,
+        session_id: i64,
+        requested_case_id: Option<u64>,
+    ) -> Result<Option<u64>, AppError> {
+        if let Some(case_id) = requested_case_id {
+            let case_id_i64 = i64::try_from(case_id).map_err(|_| {
+                AppError::DebateError(JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH.to_string())
+            })?;
+            let case_exists: Option<i32> = sqlx::query_scalar(
+                r#"
+                SELECT 1
+                FROM (
+                    SELECT id, session_id FROM judge_final_jobs
+                    UNION ALL
+                    SELECT id, session_id FROM judge_phase_jobs
+                ) judge_cases
+                WHERE id = $1
+                  AND session_id = $2
+                LIMIT 1
+                "#,
+            )
+            .bind(case_id_i64)
+            .bind(session_id)
+            .fetch_optional(&self.pool)
+            .await?;
+            if case_exists.is_none() {
+                return Err(AppError::DebateConflict(
+                    JUDGE_ASSISTANT_ADVISORY_CASE_MISMATCH.to_string(),
+                ));
+            }
+            return Ok(Some(case_id));
+        }
+
+        let latest_final_case_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM judge_final_jobs
+            WHERE session_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(case_id) = latest_final_case_id {
+            return Ok(u64::try_from(case_id).ok());
+        }
+
+        let latest_phase_case_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM judge_phase_jobs
+            WHERE session_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(latest_phase_case_id.and_then(|case_id| u64::try_from(case_id).ok()))
+    }
+
     pub async fn get_latest_judge_report(
         &self,
         session_id: u64,
@@ -3197,6 +3322,164 @@ impl AppState {
             session_id,
             case_id,
             dispatch_type,
+            payload,
+        ))
+    }
+
+    pub async fn request_npc_coach_advice(
+        &self,
+        session_id: u64,
+        user: &User,
+        input: RequestNpcCoachAdviceInput,
+    ) -> Result<JudgeAssistantAdvisoryOutput, AppError> {
+        let normalized_input = normalize_npc_coach_advice_input(input)?;
+        let session_id_i64 = session_id as i64;
+        self.ensure_assistant_advisory_session_exists(session_id_i64, session_id)
+            .await?;
+        self.ensure_assistant_advisory_request_access(session_id_i64, user)
+            .await?;
+        let case_id = self
+            .resolve_assistant_advisory_case_id(session_id_i64, normalized_input.case_id)
+            .await?;
+        let trace_id = normalized_input
+            .trace_id
+            .unwrap_or_else(|| format!("chat-assistant:npc-coach:{session_id}:{}", Uuid::new_v4()));
+
+        let payload =
+            match fetch_ai_judge_assistant_advisory_payload(AssistantAdvisoryProxyParams {
+                base_url: &self.config.ai_judge.service_base_url,
+                path: &self.config.ai_judge.assistant_npc_coach_path,
+                timeout_ms: self.config.ai_judge.assistant_timeout_ms,
+                internal_key: &self.config.ai_judge.internal_key,
+                session_id,
+                case_id,
+                trace_id: &trace_id,
+                query: Some(&normalized_input.query),
+                question: None,
+                side: normalized_input.side.as_deref(),
+            })
+            .await
+            {
+                Ok(payload) => payload,
+                Err(reason_code) => {
+                    tracing::warn!(
+                        session_id,
+                        case_id,
+                        reason_code,
+                        "AI judge NPC Coach advisory proxy failed"
+                    );
+                    return Ok(build_assistant_advisory_proxy_error_output(
+                        session_id,
+                        case_id,
+                        JUDGE_ASSISTANT_AGENT_KIND_NPC_COACH,
+                        JUDGE_ASSISTANT_ADVISORY_REASON_PROXY_FAILED,
+                    ));
+                }
+            };
+
+        if let Err(reason_code) = validate_assistant_advisory_payload(
+            &payload,
+            session_id,
+            case_id,
+            JUDGE_ASSISTANT_AGENT_KIND_NPC_COACH,
+        ) {
+            // chat 侧二次校验 Assistant 合同，防止裁决、trace 或密钥类字段穿透到用户端。
+            tracing::warn!(
+                session_id,
+                case_id,
+                reason_code,
+                "AI judge NPC Coach advisory contract violation blocked"
+            );
+            return Ok(build_assistant_advisory_proxy_error_output(
+                session_id,
+                case_id,
+                JUDGE_ASSISTANT_AGENT_KIND_NPC_COACH,
+                JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION,
+            ));
+        }
+
+        Ok(build_assistant_advisory_output_from_payload(
+            session_id,
+            JUDGE_ASSISTANT_AGENT_KIND_NPC_COACH,
+            payload,
+        ))
+    }
+
+    pub async fn request_room_qa_answer(
+        &self,
+        session_id: u64,
+        user: &User,
+        input: RequestRoomQaAnswerInput,
+    ) -> Result<JudgeAssistantAdvisoryOutput, AppError> {
+        let normalized_input = normalize_room_qa_answer_input(input)?;
+        let session_id_i64 = session_id as i64;
+        self.ensure_assistant_advisory_session_exists(session_id_i64, session_id)
+            .await?;
+        self.ensure_assistant_advisory_request_access(session_id_i64, user)
+            .await?;
+        let case_id = self
+            .resolve_assistant_advisory_case_id(session_id_i64, normalized_input.case_id)
+            .await?;
+        let trace_id = normalized_input
+            .trace_id
+            .unwrap_or_else(|| format!("chat-assistant:room-qa:{session_id}:{}", Uuid::new_v4()));
+
+        let payload =
+            match fetch_ai_judge_assistant_advisory_payload(AssistantAdvisoryProxyParams {
+                base_url: &self.config.ai_judge.service_base_url,
+                path: &self.config.ai_judge.assistant_room_qa_path,
+                timeout_ms: self.config.ai_judge.assistant_timeout_ms,
+                internal_key: &self.config.ai_judge.internal_key,
+                session_id,
+                case_id,
+                trace_id: &trace_id,
+                query: None,
+                question: Some(&normalized_input.question),
+                side: None,
+            })
+            .await
+            {
+                Ok(payload) => payload,
+                Err(reason_code) => {
+                    tracing::warn!(
+                        session_id,
+                        case_id,
+                        reason_code,
+                        "AI judge Room QA advisory proxy failed"
+                    );
+                    return Ok(build_assistant_advisory_proxy_error_output(
+                        session_id,
+                        case_id,
+                        JUDGE_ASSISTANT_AGENT_KIND_ROOM_QA,
+                        JUDGE_ASSISTANT_ADVISORY_REASON_PROXY_FAILED,
+                    ));
+                }
+            };
+
+        if let Err(reason_code) = validate_assistant_advisory_payload(
+            &payload,
+            session_id,
+            case_id,
+            JUDGE_ASSISTANT_AGENT_KIND_ROOM_QA,
+        ) {
+            // Room QA 同样只允许建议性上下文，不允许输出正式裁决字段。
+            tracing::warn!(
+                session_id,
+                case_id,
+                reason_code,
+                "AI judge Room QA advisory contract violation blocked"
+            );
+            return Ok(build_assistant_advisory_proxy_error_output(
+                session_id,
+                case_id,
+                JUDGE_ASSISTANT_AGENT_KIND_ROOM_QA,
+                JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION,
+            ));
+        }
+
+        Ok(build_assistant_advisory_output_from_payload(
+            session_id,
+            JUDGE_ASSISTANT_AGENT_KIND_ROOM_QA,
             payload,
         ))
     }

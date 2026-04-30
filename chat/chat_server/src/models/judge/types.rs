@@ -256,6 +256,48 @@ pub struct RequestJudgeChallengeInput {
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RequestNpcCoachAdviceInput {
+    pub query: String,
+    pub trace_id: Option<String>,
+    pub side: Option<String>,
+    pub case_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestRoomQaAnswerInput {
+    pub question: String,
+    pub trace_id: Option<String>,
+    pub case_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeAssistantAdvisoryOutput {
+    pub version: String,
+    pub agent_kind: String,
+    pub session_id: u64,
+    pub case_id: Option<u64>,
+    pub advisory_only: bool,
+    pub status: String,
+    pub status_reason: String,
+    pub accepted: bool,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub capability_boundary: Value,
+    #[serde(default)]
+    pub shared_context: Value,
+    #[serde(default)]
+    pub advisory_context: Value,
+    #[serde(default)]
+    pub output: Value,
+    #[serde(default)]
+    pub cache_profile: Value,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GetJudgeChallengeOutput {
     pub session_id: u64,
     pub status: String,

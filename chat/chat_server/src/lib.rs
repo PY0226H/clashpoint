@@ -262,6 +262,14 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             "/sessions/:id/judge-report/challenge/request",
             post(request_judge_challenge_handler),
         )
+        .route(
+            "/sessions/:id/assistant/npc-coach/advice",
+            post(request_npc_coach_advice_handler),
+        )
+        .route(
+            "/sessions/:id/assistant/room-qa/answer",
+            post(request_room_qa_answer_handler),
+        )
         .route("/sessions/:id/draw-vote", get(get_draw_vote_status_handler))
         .route(
             "/sessions/:id/draw-vote/ballots",

@@ -9,7 +9,7 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -562,6 +562,162 @@ async fn spawn_mock_challenge_server(
                                 &json!({})
                             )
                         });
+                        (AxumStatusCode::OK, Json(payload))
+                    }
+                },
+            ),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
+#[derive(Debug, Deserialize)]
+struct MockAssistantAdvisoryRequest {
+    trace_id: String,
+    query: Option<String>,
+    question: Option<String>,
+    side: Option<String>,
+    #[serde(rename = "caseId")]
+    case_id: Option<u64>,
+}
+
+fn mock_assistant_advisory_payload(
+    agent_kind: &str,
+    session_id: u64,
+    case_id: Option<u64>,
+    extra_payload: &Value,
+) -> Value {
+    let mut payload = json!({
+        "version": "assistant_advisory_contract_v1",
+        "agentKind": agent_kind,
+        "sessionId": session_id,
+        "caseId": case_id,
+        "advisoryOnly": true,
+        "status": "not_ready",
+        "accepted": false,
+        "errorCode": "agent_not_enabled",
+        "errorMessage": "assistant is not enabled in this phase",
+        "capabilityBoundary": {
+            "mode": "advisory_only",
+            "advisoryOnly": true,
+            "officialVerdictAuthority": false,
+            "writesVerdictLedger": false,
+            "writesJudgeTrace": false,
+            "canTriggerOfficialJudgeRoles": false
+        },
+        "sharedContext": {
+            "sessionId": session_id,
+            "caseId": case_id
+        },
+        "advisoryContext": {
+            "agentKind": agent_kind,
+            "source": "mock"
+        },
+        "output": {
+            "message": "not ready"
+        },
+        "cacheProfile": {
+            "cacheable": false,
+            "ttlSeconds": 0,
+            "cacheKey": format!("assistant-advisory:{agent_kind}:session:{session_id}"),
+            "varyBy": ["authorization", "agentKind", "caseId"]
+        }
+    });
+    if let Some(object) = extra_payload.as_object() {
+        let payload_object = payload
+            .as_object_mut()
+            .expect("mock assistant payload should be object");
+        for (key, value) in object {
+            payload_object.insert(key.clone(), value.clone());
+        }
+    }
+    payload
+}
+
+async fn spawn_mock_assistant_advisory_server(
+    expected_internal_key: String,
+    extra_payload: Value,
+) -> Result<String> {
+    let coach_key = expected_internal_key.clone();
+    let coach_extra = extra_payload.clone();
+    let room_key = expected_internal_key;
+    let room_extra = extra_payload;
+    let app = Router::new()
+        .route(
+            "/internal/judge/apps/npc-coach/sessions/:session_id/advice",
+            post(
+                move |Path(session_id): Path<u64>,
+                      headers: HeaderMap,
+                      Json(input): Json<MockAssistantAdvisoryRequest>| {
+                    let expected_internal_key = coach_key.clone();
+                    let extra_payload = coach_extra.clone();
+                    async move {
+                        if headers
+                            .get("x-ai-internal-key")
+                            .and_then(|value| value.to_str().ok())
+                            != Some(expected_internal_key.as_str())
+                        {
+                            return (AxumStatusCode::UNAUTHORIZED, Json(json!({ "ok": false })));
+                        }
+                        if input.trace_id.trim().is_empty()
+                            || input.query.as_deref().unwrap_or_default().trim().is_empty()
+                            || input.side.as_deref() != Some("pro")
+                        {
+                            return (
+                                AxumStatusCode::UNPROCESSABLE_ENTITY,
+                                Json(json!({ "ok": false })),
+                            );
+                        }
+                        let payload = mock_assistant_advisory_payload(
+                            "npc_coach",
+                            session_id,
+                            input.case_id,
+                            &extra_payload,
+                        );
+                        (AxumStatusCode::OK, Json(payload))
+                    }
+                },
+            ),
+        )
+        .route(
+            "/internal/judge/apps/room-qa/sessions/:session_id/answer",
+            post(
+                move |Path(session_id): Path<u64>,
+                      headers: HeaderMap,
+                      Json(input): Json<MockAssistantAdvisoryRequest>| {
+                    let expected_internal_key = room_key.clone();
+                    let extra_payload = room_extra.clone();
+                    async move {
+                        if headers
+                            .get("x-ai-internal-key")
+                            .and_then(|value| value.to_str().ok())
+                            != Some(expected_internal_key.as_str())
+                        {
+                            return (AxumStatusCode::UNAUTHORIZED, Json(json!({ "ok": false })));
+                        }
+                        if input.trace_id.trim().is_empty()
+                            || input
+                                .question
+                                .as_deref()
+                                .unwrap_or_default()
+                                .trim()
+                                .is_empty()
+                        {
+                            return (
+                                AxumStatusCode::UNPROCESSABLE_ENTITY,
+                                Json(json!({ "ok": false })),
+                            );
+                        }
+                        let payload = mock_assistant_advisory_payload(
+                            "room_qa",
+                            session_id,
+                            input.case_id,
+                            &extra_payload,
+                        );
                         (AxumStatusCode::OK, Json(payload))
                     }
                 },
@@ -1610,6 +1766,121 @@ async fn request_judge_challenge_should_forbid_ops_viewer_non_participant() -> R
     match err {
         AppError::DebateConflict(code) => {
             assert_eq!(code, "judge_challenge_request_forbidden");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_npc_coach_advice_should_proxy_not_ready_advisory_contract() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url =
+        spawn_mock_assistant_advisory_server("assistant-key".to_string(), json!({})).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "assistant-key".to_string();
+    inner.config.ai_judge.assistant_timeout_ms = 2_000;
+
+    let out = state
+        .request_npc_coach_advice(
+            session_id as u64,
+            &participant,
+            RequestNpcCoachAdviceInput {
+                query: "how should I tighten my next argument?".to_string(),
+                trace_id: Some("chat-test-trace-npc".to_string()),
+                side: Some("pro".to_string()),
+                case_id: Some(final_job_id as u64),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.version, "assistant_advisory_contract_v1");
+    assert_eq!(out.agent_kind, "npc_coach");
+    assert_eq!(out.session_id, session_id as u64);
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert_eq!(out.status, "not_ready");
+    assert_eq!(out.status_reason, "agent_not_enabled");
+    assert!(out.advisory_only);
+    assert!(!out.accepted);
+    assert_eq!(
+        out.capability_boundary["officialVerdictAuthority"],
+        json!(false)
+    );
+    assert_eq!(out.cache_profile["cacheable"], json!(false));
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_room_qa_answer_should_return_proxy_error_when_ai_output_leaks_verdict(
+) -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "con").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url = spawn_mock_assistant_advisory_server(
+        "assistant-key".to_string(),
+        json!({ "output": { "winner": "pro" } }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "assistant-key".to_string();
+    inner.config.ai_judge.assistant_timeout_ms = 2_000;
+
+    let out = state
+        .request_room_qa_answer(
+            session_id as u64,
+            &participant,
+            RequestRoomQaAnswerInput {
+                question: "what evidence did the other side rely on?".to_string(),
+                trace_id: Some("chat-test-trace-room".to_string()),
+                case_id: Some(final_job_id as u64),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.agent_kind, "room_qa");
+    assert_eq!(out.status, "proxy_error");
+    assert_eq!(out.status_reason, "assistant_advisory_contract_violation");
+    assert_eq!(out.case_id, Some(final_job_id as u64));
+    assert_eq!(out.output, json!({}));
+    assert_eq!(
+        out.error_code.as_deref(),
+        Some("assistant_advisory_contract_violation")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_npc_coach_advice_should_forbid_non_participant() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let outsider = find_user(&state, 2).await?;
+    upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+
+    let err = state
+        .request_npc_coach_advice(
+            session_id as u64,
+            &outsider,
+            RequestNpcCoachAdviceInput {
+                query: "help me prepare".to_string(),
+                trace_id: None,
+                side: Some("pro".to_string()),
+                case_id: None,
+            },
+        )
+        .await
+        .expect_err("non-participant should not request assistant advice");
+
+    match err {
+        AppError::DebateConflict(code) => {
+            assert_eq!(code, "judge_assistant_advisory_forbidden");
         }
         other => panic!("unexpected error: {other:?}"),
     }
