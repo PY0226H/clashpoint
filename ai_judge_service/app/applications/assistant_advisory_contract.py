@@ -71,6 +71,12 @@ ASSISTANT_ADVISORY_FORBIDDEN_OFFICIAL_ROLES: tuple[str, ...] = (
     ROLE_FAIRNESS_SENTINEL,
     ROLE_CHIEF_ARBITER,
 )
+ASSISTANT_ADVISORY_NOT_READY_ERROR_CODES = frozenset(
+    {
+        "agent_not_enabled",
+        "assistant_executor_not_configured",
+    }
+)
 
 _ASSISTANT_ADVISORY_PUBLIC_FORBIDDEN_KEYS = frozenset(
     {
@@ -462,7 +468,7 @@ def validate_assistant_advisory_contract(payload: dict[str, Any]) -> None:
             raise AssistantAdvisoryContractViolation(
                 "assistant_advisory_contract_not_ready_accepted"
             )
-        if payload.get("errorCode") != "agent_not_enabled":
+        if payload.get("errorCode") not in ASSISTANT_ADVISORY_NOT_READY_ERROR_CODES:
             raise AssistantAdvisoryContractViolation(
                 "assistant_advisory_contract_not_ready_error_code"
             )

@@ -14,6 +14,8 @@ pub(super) const JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION: &str =
 pub(super) const JUDGE_ASSISTANT_CONTRACT_VERSION: &str = "assistant_advisory_contract_v1";
 pub(super) const JUDGE_ASSISTANT_AGENT_KIND_NPC_COACH: &str = "npc_coach";
 pub(super) const JUDGE_ASSISTANT_AGENT_KIND_ROOM_QA: &str = "room_qa";
+const JUDGE_ASSISTANT_NOT_READY_AGENT_NOT_ENABLED: &str = "agent_not_enabled";
+const JUDGE_ASSISTANT_NOT_READY_EXECUTOR_NOT_CONFIGURED: &str = "assistant_executor_not_configured";
 
 const MAX_ASSISTANT_TRACE_ID_LEN: usize = 160;
 const MAX_ASSISTANT_QUERY_LEN: usize = 2_000;
@@ -125,7 +127,7 @@ pub(super) fn build_assistant_advisory_output_from_payload(
     let status_reason = if status == "not_ready" {
         error_code
             .clone()
-            .unwrap_or_else(|| "agent_not_enabled".to_string())
+            .unwrap_or_else(|| JUDGE_ASSISTANT_NOT_READY_AGENT_NOT_ENABLED.to_string())
     } else if status == "ok" {
         "assistant_advisory_ready".to_string()
     } else {
@@ -311,11 +313,21 @@ pub(super) fn validate_assistant_advisory_payload(
     }
     if object.get("status").and_then(Value::as_str) == Some("not_ready")
         && (object.get("accepted").and_then(Value::as_bool) != Some(false)
-            || object.get("errorCode").and_then(Value::as_str) != Some("agent_not_enabled"))
+            || !assistant_not_ready_error_code_allowed(
+                object.get("errorCode").and_then(Value::as_str),
+            ))
     {
         return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
     }
     Ok(())
+}
+
+fn assistant_not_ready_error_code_allowed(error_code: Option<&str>) -> bool {
+    matches!(
+        error_code,
+        Some(JUDGE_ASSISTANT_NOT_READY_AGENT_NOT_ENABLED)
+            | Some(JUDGE_ASSISTANT_NOT_READY_EXECUTOR_NOT_CONFIGURED)
+    )
 }
 
 fn normalize_required_assistant_text(field: &str, value: String) -> Result<String, AppError> {

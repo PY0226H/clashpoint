@@ -2024,6 +2024,50 @@ async fn request_npc_coach_advice_should_proxy_not_ready_advisory_contract() -> 
 }
 
 #[tokio::test]
+async fn request_npc_coach_advice_should_proxy_llm_canary_not_configured() -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let session_id = seed_topic_and_session(&state, "judging").await?;
+    let participant = find_user(&state, 2).await?;
+    add_participant(&state, session_id, participant.id, "pro").await?;
+    let final_job_id = upsert_final_job(&state, session_id, "succeeded", None, None, None).await?;
+    let service_base_url = spawn_mock_assistant_advisory_server(
+        "assistant-key".to_string(),
+        json!({
+            "errorCode": "assistant_executor_not_configured",
+            "errorMessage": "assistant llm_canary executor is not configured"
+        }),
+    )
+    .await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "assistant-key".to_string();
+    inner.config.ai_judge.assistant_timeout_ms = 2_000;
+
+    let out = state
+        .request_npc_coach_advice(
+            session_id as u64,
+            &participant,
+            RequestNpcCoachAdviceInput {
+                query: "how should I tighten my next argument?".to_string(),
+                trace_id: Some("chat-test-trace-npc-canary".to_string()),
+                side: Some("pro".to_string()),
+                case_id: Some(final_job_id as u64),
+            },
+        )
+        .await?;
+
+    assert_eq!(out.status, "not_ready");
+    assert_eq!(out.status_reason, "assistant_executor_not_configured");
+    assert_eq!(
+        out.error_code,
+        Some("assistant_executor_not_configured".to_string())
+    );
+    assert!(!out.accepted);
+    assert!(out.advisory_only);
+    Ok(())
+}
+
+#[tokio::test]
 async fn request_npc_coach_advice_should_proxy_ready_placeholder_contract() -> Result<()> {
     let (_tdb, mut state) = AppState::new_for_test().await?;
     let session_id = seed_topic_and_session(&state, "judging").await?;

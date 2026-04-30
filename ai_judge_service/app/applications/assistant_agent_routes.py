@@ -15,6 +15,7 @@ from .assistant_advisory_contract import (
     validate_assistant_advisory_contract,
     validate_assistant_advisory_raw_output,
 )
+from .assistant_advisory_output import validate_assistant_llm_public_output
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,7 @@ def build_assistant_agent_response(
     raw_output = execution_result.output if isinstance(execution_result.output, dict) else {}
     try:
         validate_assistant_advisory_raw_output(raw_output)
+        validate_assistant_llm_public_output(raw_output)
     except AssistantAdvisoryContractViolation as err:
         raise AssistantAgentRouteError(
             status_code=500,
