@@ -1,0 +1,60 @@
+{
+  "module": "ai-judge-stage-closure-evidence",
+  "status": "pass",
+  "run_id": "20260430T043500Z-ai-judge-stage-closure-evidence",
+  "started_at": "2026-04-30T04:35:00Z",
+  "finished_at": "2026-04-30T04:35:00Z",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "draft": {
+    "status": "pass",
+    "exit_code": 0,
+    "completed_candidates_total": 6,
+    "todo_candidates_total": 0,
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260430T043500Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260430T043500Z-ai-judge-stage-closure-evidence/stage_closure_draft.summary.md"
+  },
+  "runtime_ops_pack": {
+    "linked": true,
+    "status": "local_reference_ready",
+    "env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.env",
+    "doc": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.md",
+    "release_readiness_artifact": {
+      "status": "present",
+      "summary_path": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_release_readiness_artifact_summary.json",
+      "artifact_ref": "release_readiness-3905-final-p39_release_readiness_artifact_e-8e1b33444b4df74b",
+      "manifest_hash": "419e68249e86d5ebcb7e99b14070c325129e28a92e973eccb28dc9b2cb5460ca",
+      "decision": "env_blocked",
+      "storage_mode": "local_reference",
+      "p41_control_plane": {
+        "status": "env_blocked",
+        "runtime_readiness_status": "ready",
+        "chat_proxy_status": "ready",
+        "frontend_contract_status": "ready",
+        "calibration_decision_log_status": "ready",
+        "panel_shadow_candidate_status": "env_blocked",
+        "runtime_ops_pack_status": "local_reference_ready"
+      }
+    }
+  },
+  "closure_backfill": {
+    "active_plan_evidence_status": "pass",
+    "archive_detected": true,
+    "archive_source": "plan_doc",
+    "archive_status": "archived",
+    "archive_path": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260429T112512Z-ai-judge-stage-closure-execute.md",
+    "completed_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md",
+    "completed_section": "B45",
+    "completed_module_count": 11,
+    "todo_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md",
+    "todo_section": "C44",
+    "todo_env_blocked_debt_count": 1,
+    "linked_real_env_debt_id": "ai-judge-real-env-pass-window-execute-on-env（仍阻塞，等真实环境）",
+    "long_term_evidence_status": "pass"
+  },
+  "outputs": {
+    "output_env": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_stage_closure_evidence.env",
+    "output_doc": "/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_stage_closure_evidence.md",
+    "summary_json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260430T043459Z-ai-judge-runtime-ops-pack/stage_closure_evidence.summary.json",
+    "summary_md": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260430T043459Z-ai-judge-runtime-ops-pack/stage_closure_evidence.summary.md"
+  }
+}
