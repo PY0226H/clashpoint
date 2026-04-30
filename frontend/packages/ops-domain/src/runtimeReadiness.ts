@@ -143,6 +143,36 @@ export type GetOpsJudgeRuntimeReadinessOutput = {
   cacheProfile: JsonValue;
 };
 
+export type OpsJudgeCalibrationDecision = "accept_for_review" | "reject" | "defer" | "request_more_evidence";
+
+export type OpsJudgeCalibrationDecisionReasonCode =
+  | "calibration_real_samples_missing"
+  | "calibration_shadow_drift"
+  | "calibration_release_gate_blocked"
+  | "calibration_local_reference_only"
+  | "calibration_manual_reject";
+
+export type CreateOpsJudgeCalibrationDecisionInput = {
+  sourceRecommendationId: string;
+  policyVersion?: string;
+  decision: OpsJudgeCalibrationDecision;
+  reasonCode: OpsJudgeCalibrationDecisionReasonCode;
+  evidenceRefs?: JsonValue[];
+  localReferenceOnly?: boolean;
+  environmentMode?: string;
+  idempotencyKey?: string;
+};
+
+export type CreateOpsJudgeCalibrationDecisionOutput = {
+  version: string;
+  generatedAt?: string | null;
+  status: string;
+  statusReason: string;
+  entry: JsonValue;
+  decisionLog: JsonValue;
+  visibilityContract: JsonValue;
+};
+
 export async function getOpsJudgeRuntimeReadiness(
   input?: GetOpsJudgeRuntimeReadinessInput
 ): Promise<GetOpsJudgeRuntimeReadinessOutput> {
@@ -161,6 +191,32 @@ export async function getOpsJudgeRuntimeReadiness(
         panelAttentionLimit: input?.panelAttentionLimit ?? 20
       }
     }
+  );
+  return response.data;
+}
+
+export async function createOpsJudgeCalibrationDecision(
+  input: CreateOpsJudgeCalibrationDecisionInput
+): Promise<CreateOpsJudgeCalibrationDecisionOutput> {
+  const idempotencyKey = String(input.idempotencyKey || "").trim();
+  const response = await http.post<CreateOpsJudgeCalibrationDecisionOutput>(
+    "/debate/ops/judge-calibration-decisions",
+    {
+      sourceRecommendationId: input.sourceRecommendationId,
+      policyVersion: input.policyVersion ?? "active",
+      decision: input.decision,
+      reasonCode: input.reasonCode,
+      evidenceRefs: input.evidenceRefs ?? [],
+      localReferenceOnly: input.localReferenceOnly ?? false,
+      environmentMode: input.environmentMode
+    },
+    idempotencyKey
+      ? {
+          headers: {
+            "Idempotency-Key": idempotencyKey
+          }
+        }
+      : undefined
   );
   return response.data;
 }

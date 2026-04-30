@@ -3,6 +3,7 @@ use chat_core::User;
 use chrono::{DateTime, Utc};
 
 mod assistant_advisory_proxy;
+mod calibration_decision_ops_proxy;
 mod challenge_ops_projection;
 mod draw_vote;
 mod helpers;

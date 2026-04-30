@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   applyOpsObservabilityAnomalyAction,
+  createOpsJudgeCalibrationDecision,
   getOpsDomainErrorInfo,
   getOpsMetricsDictionary,
   getOpsObservabilityConfig,
@@ -19,6 +20,9 @@ import {
   upsertOpsServiceSplitReview,
   upsertOpsObservabilityThresholds,
   upsertOpsRoleAssignment,
+  type OpsJudgeCalibrationDecision,
+  type OpsJudgeCalibrationDecisionReasonCode,
+  type OpsJudgeRuntimeReadinessAction,
   type OpsObservabilityThresholds,
   type OpsRole,
   type ListOpsRoleAssignmentsInput
@@ -82,6 +86,31 @@ function formatMaybeBoolean(value: boolean | null | undefined): string {
     return "no";
   }
   return "--";
+}
+
+function calibrationDecisionReasonForAction(
+  action: OpsJudgeRuntimeReadinessAction,
+  decision: OpsJudgeCalibrationDecision
+): OpsJudgeCalibrationDecisionReasonCode {
+  if (decision === "reject") {
+    return "calibration_manual_reject";
+  }
+  const code = `${action.code || ""} ${action.title || ""}`.toLowerCase();
+  if (code.includes("shadow") || code.includes("drift")) {
+    return "calibration_shadow_drift";
+  }
+  if (code.includes("release")) {
+    return "calibration_release_gate_blocked";
+  }
+  if (code.includes("sample") || code.includes("real_env") || code.includes("environment")) {
+    return "calibration_real_samples_missing";
+  }
+  return "calibration_local_reference_only";
+}
+
+function buildCalibrationDecisionIdempotencyKey(actionId: string, decision: OpsJudgeCalibrationDecision): string {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `ops-calibration:${actionId}:${decision}:${random}`;
 }
 
 function toObservabilityErrorPreview(message: string): string {
@@ -292,6 +321,47 @@ export function OpsConsolePage() {
       }),
     enabled: Boolean(rbacMeQuery.data?.permissions.judgeReview),
     retry: false
+  });
+  const createCalibrationDecisionMutation = useMutation({
+    mutationFn: async (payload: {
+      action: OpsJudgeRuntimeReadinessAction;
+      decision: OpsJudgeCalibrationDecision;
+    }) => {
+      const runtime = judgeRuntimeReadinessQuery.data;
+      const environmentMode =
+        runtime?.realEnv.latestRunEnvironmentMode ||
+        (runtime?.status === "local_reference_only" || runtime?.status === "env_blocked" ? "local_reference" : undefined);
+      const localReferenceOnly =
+        environmentMode !== "production" ||
+        runtime?.status === "local_reference_only" ||
+        runtime?.status === "env_blocked" ||
+        runtime?.realEnv.status === "env_blocked";
+      const result = await createOpsJudgeCalibrationDecision({
+        sourceRecommendationId: payload.action.id,
+        policyVersion: "active",
+        decision: payload.decision,
+        reasonCode: calibrationDecisionReasonForAction(payload.action, payload.decision),
+        evidenceRefs: [
+          {
+            kind: "runtime_readiness",
+            ref: runtime?.statusReason || "runtime_readiness",
+            status: runtime?.status || "unknown",
+            reasonCode: payload.action.code
+          }
+        ],
+        localReferenceOnly,
+        environmentMode,
+        idempotencyKey: buildCalibrationDecisionIdempotencyKey(payload.action.id, payload.decision)
+      });
+      return { payload, result };
+    },
+    onSuccess: ({ payload, result }) => {
+      setPageHint(`Calibration decision ${payload.decision} recorded: ${result.statusReason}.`);
+      void queryClient.invalidateQueries({ queryKey: ["ops-judge-runtime-readiness"] });
+    },
+    onError: (error) => {
+      setPageHint(toOpsDomainError(error));
+    }
   });
   const observabilityConfigQuery = useQuery({
     queryKey: ["ops-observability-config"],
@@ -533,6 +603,7 @@ export function OpsConsolePage() {
   const topChallengeItems = judgeChallengeQueueQuery.data?.items || [];
   const runtimeReadiness = judgeRuntimeReadinessQuery.data;
   const runtimeActions = runtimeReadiness?.recommendedActions.slice(0, 4) || [];
+  const fairnessCalibrationActions = runtimeActions.filter((action) => action.source === "fairnessCalibrationAdvisor");
   const runtimeReasonCodes = runtimeReadiness?.realEnv.reasonCodes || [];
   const totalAlerts = alertsQuery.data?.total ?? 0;
   const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
@@ -896,6 +967,64 @@ export function OpsConsolePage() {
                   {runtimeReadiness?.fairnessCalibration.acceptedForReviewDecisionCount ?? 0} | blockers:{" "}
                   {runtimeReadiness?.fairnessCalibration.decisionLogBlocksProductionReadyCount ?? 0}
                 </InlineHint>
+                {fairnessCalibrationActions.slice(0, 2).map((action) => (
+                  <div className="echo-ops-rule-item" key={action.id}>
+                    <InlineHint>
+                      {action.id} | {action.severity} | {action.status || "open"}
+                    </InlineHint>
+                    <div className="echo-ops-rule-actions">
+                      <Button
+                        disabled={createCalibrationDecisionMutation.isPending}
+                        onClick={() =>
+                          createCalibrationDecisionMutation.mutate({
+                            action,
+                            decision: "accept_for_review"
+                          })
+                        }
+                        type="button"
+                      >
+                        Accept Review
+                      </Button>
+                      <Button
+                        disabled={createCalibrationDecisionMutation.isPending}
+                        onClick={() =>
+                          createCalibrationDecisionMutation.mutate({
+                            action,
+                            decision: "request_more_evidence"
+                          })
+                        }
+                        type="button"
+                      >
+                        More Evidence
+                      </Button>
+                      <Button
+                        disabled={createCalibrationDecisionMutation.isPending}
+                        onClick={() =>
+                          createCalibrationDecisionMutation.mutate({
+                            action,
+                            decision: "defer"
+                          })
+                        }
+                        type="button"
+                      >
+                        Defer
+                      </Button>
+                      <Button
+                        disabled={createCalibrationDecisionMutation.isPending}
+                        onClick={() =>
+                          createCalibrationDecisionMutation.mutate({
+                            action,
+                            decision: "reject"
+                          })
+                        }
+                        type="button"
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {fairnessCalibrationActions.length === 0 ? <InlineHint>No calibration actions.</InlineHint> : null}
               </article>
 
               <article className="echo-topic-item">

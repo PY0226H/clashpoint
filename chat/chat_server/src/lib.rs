@@ -203,6 +203,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             get(get_judge_runtime_readiness_ops_handler),
         )
         .route(
+            "/ops/judge-calibration-decisions",
+            post(create_judge_calibration_decision_ops_handler),
+        )
+        .route(
             "/ops/judge-challenge-queue",
             get(list_judge_challenge_queue_ops_handler),
         )

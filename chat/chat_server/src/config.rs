@@ -154,6 +154,10 @@ pub struct AiJudgeConfig {
     pub runtime_readiness_path: String,
     #[serde(default = "default_ai_judge_runtime_readiness_timeout_ms")]
     pub runtime_readiness_timeout_ms: u64,
+    #[serde(default = "default_ai_judge_calibration_decisions_path")]
+    pub calibration_decisions_path: String,
+    #[serde(default = "default_ai_judge_calibration_decisions_timeout_ms")]
+    pub calibration_decisions_timeout_ms: u64,
     #[serde(default = "default_ai_judge_assistant_npc_coach_path")]
     pub assistant_npc_coach_path: String,
     #[serde(default = "default_ai_judge_assistant_room_qa_path")]
@@ -277,6 +281,8 @@ impl Default for AiJudgeConfig {
             challenge_timeout_ms: default_ai_judge_challenge_timeout_ms(),
             runtime_readiness_path: default_ai_judge_runtime_readiness_path(),
             runtime_readiness_timeout_ms: default_ai_judge_runtime_readiness_timeout_ms(),
+            calibration_decisions_path: default_ai_judge_calibration_decisions_path(),
+            calibration_decisions_timeout_ms: default_ai_judge_calibration_decisions_timeout_ms(),
             assistant_npc_coach_path: default_ai_judge_assistant_npc_coach_path(),
             assistant_room_qa_path: default_ai_judge_assistant_room_qa_path(),
             assistant_timeout_ms: default_ai_judge_assistant_timeout_ms(),
@@ -547,6 +553,14 @@ fn default_ai_judge_runtime_readiness_path() -> String {
 }
 
 fn default_ai_judge_runtime_readiness_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_ai_judge_calibration_decisions_path() -> String {
+    "/internal/judge/fairness/policy-calibration-decisions".to_string()
+}
+
+fn default_ai_judge_calibration_decisions_timeout_ms() -> u64 {
     5_000
 }
 
@@ -881,6 +895,11 @@ mod tests {
             "/internal/judge/ops/runtime-readiness"
         );
         assert_eq!(cfg.runtime_readiness_timeout_ms, 5_000);
+        assert_eq!(
+            cfg.calibration_decisions_path,
+            "/internal/judge/fairness/policy-calibration-decisions"
+        );
+        assert_eq!(cfg.calibration_decisions_timeout_ms, 5_000);
         assert_eq!(
             cfg.assistant_npc_coach_path,
             "/internal/judge/apps/npc-coach/sessions/{session_id}/advice"

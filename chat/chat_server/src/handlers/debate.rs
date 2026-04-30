@@ -36,21 +36,22 @@ pub(crate) use super::debate_judge::{
 };
 pub(crate) use super::debate_ops::{
     apply_ops_observability_anomaly_action_handler, create_debate_session_ops_handler,
-    create_debate_topic_ops_handler, discard_kafka_dlq_event_handler,
-    execute_judge_replay_ops_handler, get_judge_replay_preview_ops_handler,
-    get_judge_runtime_readiness_ops_handler, get_kafka_transport_readiness_handler,
-    get_ops_observability_config_handler, get_ops_observability_metrics_dictionary_handler,
-    get_ops_observability_slo_snapshot_handler, get_ops_rbac_me_handler,
-    get_ops_service_split_readiness_handler, list_judge_challenge_queue_ops_handler,
-    list_judge_final_dispatch_failure_stats_ops_handler, list_judge_replay_actions_ops_handler,
-    list_judge_reviews_ops_handler, list_judge_trace_replay_ops_handler,
-    list_kafka_dlq_events_handler, list_ops_alert_notifications_handler,
-    list_ops_role_assignments_handler, list_ops_service_split_review_audits_handler,
-    replay_kafka_dlq_event_handler, request_judge_rejudge_ops_handler,
-    revoke_ops_role_assignment_handler, run_ops_observability_evaluation_once_handler,
-    update_debate_session_ops_handler, update_debate_topic_ops_handler,
-    upsert_ops_observability_anomaly_state_handler, upsert_ops_observability_thresholds_handler,
-    upsert_ops_role_assignment_handler, upsert_ops_service_split_review_handler,
+    create_debate_topic_ops_handler, create_judge_calibration_decision_ops_handler,
+    discard_kafka_dlq_event_handler, execute_judge_replay_ops_handler,
+    get_judge_replay_preview_ops_handler, get_judge_runtime_readiness_ops_handler,
+    get_kafka_transport_readiness_handler, get_ops_observability_config_handler,
+    get_ops_observability_metrics_dictionary_handler, get_ops_observability_slo_snapshot_handler,
+    get_ops_rbac_me_handler, get_ops_service_split_readiness_handler,
+    list_judge_challenge_queue_ops_handler, list_judge_final_dispatch_failure_stats_ops_handler,
+    list_judge_replay_actions_ops_handler, list_judge_reviews_ops_handler,
+    list_judge_trace_replay_ops_handler, list_kafka_dlq_events_handler,
+    list_ops_alert_notifications_handler, list_ops_role_assignments_handler,
+    list_ops_service_split_review_audits_handler, replay_kafka_dlq_event_handler,
+    request_judge_rejudge_ops_handler, revoke_ops_role_assignment_handler,
+    run_ops_observability_evaluation_once_handler, update_debate_session_ops_handler,
+    update_debate_topic_ops_handler, upsert_ops_observability_anomaly_state_handler,
+    upsert_ops_observability_thresholds_handler, upsert_ops_role_assignment_handler,
+    upsert_ops_service_split_review_handler,
 };
 
 const DEBATE_TOPICS_LIST_USER_RATE_LIMIT_PER_WINDOW: u64 = 120;
@@ -5962,6 +5963,57 @@ mod tests {
         let body = res.into_body().collect().await?.to_bytes();
         let error: ErrorOutput = serde_json::from_slice(&body)?;
         assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_calibration_decision_route_should_return_401_without_token(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-calibration-decisions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"sourceRecommendationId":"collect-real-env-samples","decision":"request_more_evidence","reasonCode":"calibration_real_samples_missing"}"#,
+            ))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(error.error, "auth_access_invalid");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_ops_judge_calibration_decision_route_should_return_409_for_missing_permission(
+    ) -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "Ops Calibration No Role",
+            "ops-calibration-no-role@acme.org",
+            "+8613810007791",
+            "ops-calibration-no-role-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/debate/ops/judge-calibration-decisions")
+            .header("Authorization", format!("Bearer {}", token))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"sourceRecommendationId":"collect-real-env-samples","decision":"request_more_evidence","reasonCode":"calibration_real_samples_missing"}"#,
+            ))?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let error: ErrorOutput = serde_json::from_slice(&body)?;
+        assert!(error.error.contains("ops_permission_denied:judge_review"));
         Ok(())
     }
 

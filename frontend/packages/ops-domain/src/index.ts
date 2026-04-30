@@ -4,11 +4,16 @@ import type { JsonValue } from "./json";
 
 export type { JsonValue } from "./json";
 export {
+  createOpsJudgeCalibrationDecision,
   getOpsJudgeRuntimeReadiness
 } from "./runtimeReadiness";
 export type {
+  CreateOpsJudgeCalibrationDecisionInput,
+  CreateOpsJudgeCalibrationDecisionOutput,
   GetOpsJudgeRuntimeReadinessInput,
   GetOpsJudgeRuntimeReadinessOutput,
+  OpsJudgeCalibrationDecision,
+  OpsJudgeCalibrationDecisionReasonCode,
   OpsJudgeRuntimeReadinessAction,
   OpsJudgeRuntimeReadinessFairnessCalibration,
   OpsJudgeRuntimeReadinessPanelRuntime,

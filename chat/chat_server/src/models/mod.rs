@@ -22,6 +22,7 @@ pub use debate::{
     OpsUpdateDebateTopicInput, PinDebateMessageInput, PinDebateMessageOutput,
 };
 pub use judge::{
+    CreateJudgeCalibrationDecisionOpsInput, CreateJudgeCalibrationDecisionOpsOutput,
     DrawVoteDetail, ExecuteJudgeReplayOpsInput, ExecuteJudgeReplayOpsOutput, GetDrawVoteOutput,
     GetJudgeChallengeOutput, GetJudgeChallengeQuery, GetJudgeFinalDispatchFailureStatsOutput,
     GetJudgeFinalDispatchFailureStatsQuery, GetJudgePublicVerifyOutput, GetJudgePublicVerifyQuery,

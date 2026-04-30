@@ -1070,6 +1070,161 @@ async fn spawn_mock_runtime_readiness_server(expected_internal_key: String) -> R
     Ok(format!("http://{}", addr))
 }
 
+fn mock_calibration_decision_create_payload(request_payload: Value, leak_forbidden: bool) -> Value {
+    let mut entry = json!({
+        "version": "ai-judge-fairness-calibration-decision-log-v1",
+        "decisionId": request_payload["decisionId"].clone(),
+        "sourceRecommendationId": request_payload["sourceRecommendationId"].clone(),
+        "policyVersion": request_payload["policyVersion"].clone(),
+        "decision": request_payload["decision"].clone(),
+        "actor": request_payload["actor"].clone(),
+        "reasonCode": request_payload["reasonCode"].clone(),
+        "evidenceRefs": request_payload["evidenceRefs"].clone(),
+        "createdAt": "2026-04-30T00:00:00Z",
+        "visibility": {
+            "opsVisible": true,
+            "releaseGateVisible": true,
+            "publicVisible": false,
+            "rawPromptVisible": false,
+            "rawTraceVisible": false,
+            "internalAuditPayloadVisible": false,
+            "providerConfigVisible": false,
+            "artifactRefsVisible": false,
+            "officialVerdictSemanticsChanged": false,
+            "autoPublishAllowed": false,
+            "autoActivateAllowed": false
+        },
+        "releaseGateInput": {
+            "policyVersion": request_payload["policyVersion"].clone(),
+            "sourceRecommendationId": request_payload["sourceRecommendationId"].clone(),
+            "decision": request_payload["decision"].clone(),
+            "reasonCode": request_payload["reasonCode"].clone(),
+            "eligibleForProductionReady": false,
+            "localReferenceOnly": true,
+            "blocksProductionReady": true,
+            "evidenceRefCount": 1,
+            "autoPublishAllowed": false,
+            "autoActivateAllowed": false,
+            "officialVerdictSemanticsChanged": false
+        }
+    });
+    if leak_forbidden {
+        entry["rawTrace"] = json!("should not cross chat proxy");
+    }
+    json!({
+        "version": "ai-judge-fairness-calibration-decision-log-v1",
+        "generatedAt": "2026-04-30T00:00:00Z",
+        "entry": entry.clone(),
+        "decisionLog": {
+            "version": "ai-judge-fairness-calibration-decision-log-v1",
+            "generatedAt": "2026-04-30T00:00:00Z",
+            "summary": {
+                "totalCount": 1,
+                "acceptedForReviewCount": 1,
+                "rejectedCount": 0,
+                "deferredCount": 0,
+                "requestMoreEvidenceCount": 0,
+                "localReferenceOnlyCount": 1,
+                "productionReadyDecisionCount": 0,
+                "autoPublishAllowed": false,
+                "autoActivateAllowed": false,
+                "officialVerdictSemanticsChanged": false
+            },
+            "items": [entry],
+            "filters": {
+                "policyVersion": request_payload["policyVersion"].clone(),
+                "sourceRecommendationId": request_payload["sourceRecommendationId"].clone(),
+                "decision": null,
+                "limit": 50
+            },
+            "releaseGateReference": {
+                "eligibleDecisionCount": 0,
+                "blockingDecisionCount": 1,
+                "latestDecisionId": request_payload["decisionId"].clone(),
+                "latestDecisionCreatedAt": "2026-04-30T00:00:00Z",
+                "localReferenceOnlyBlocksProductionReady": true,
+                "autoPublishAllowed": false,
+                "autoActivateAllowed": false,
+                "officialVerdictSemanticsChanged": false
+            },
+            "visibilityContract": {
+                "rawPromptVisible": false,
+                "rawTraceVisible": false,
+                "internalAuditPayloadVisible": false,
+                "providerConfigVisible": false,
+                "artifactRefsVisible": false,
+                "officialVerdictSemanticsChanged": false,
+                "autoPublishAllowed": false,
+                "autoActivateAllowed": false
+            }
+        },
+        "visibilityContract": {
+            "rawPromptVisible": false,
+            "rawTraceVisible": false,
+            "internalAuditPayloadVisible": false,
+            "providerConfigVisible": false,
+            "artifactRefsVisible": false,
+            "officialVerdictSemanticsChanged": false,
+            "autoPublishAllowed": false,
+            "autoActivateAllowed": false
+        }
+    })
+}
+
+async fn spawn_mock_calibration_decision_server(
+    expected_internal_key: String,
+    leak_forbidden: bool,
+) -> Result<String> {
+    let app = Router::new().route(
+        "/internal/judge/fairness/policy-calibration-decisions",
+        post(move |headers: HeaderMap, Json(payload): Json<Value>| {
+            let expected_internal_key = expected_internal_key.clone();
+            async move {
+                if headers
+                    .get("x-ai-internal-key")
+                    .and_then(|value| value.to_str().ok())
+                    != Some(expected_internal_key.as_str())
+                {
+                    return (
+                        AxumStatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "bad key"})),
+                    );
+                }
+                if payload["actor"]["id"] != json!("1") || payload["actor"]["type"] != json!("ops")
+                {
+                    return (
+                        AxumStatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({"error": "bad actor"})),
+                    );
+                }
+                if payload["decisionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .is_empty()
+                {
+                    return (
+                        AxumStatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({"error": "missing decision id"})),
+                    );
+                }
+                (
+                    AxumStatusCode::OK,
+                    Json(mock_calibration_decision_create_payload(
+                        payload,
+                        leak_forbidden,
+                    )),
+                )
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(format!("http://{}", addr))
+}
+
 async fn insert_phase_report_for_job(state: &AppState, phase_job_id: i64) -> Result<i64> {
     let (session_id, rejudge_run_no, phase_no, message_start_id, message_end_id, message_count): (
         i64,
@@ -2082,6 +2237,120 @@ async fn get_judge_runtime_readiness_by_owner_should_proxy_public_safe_contract(
         out.recommended_actions[0]["id"],
         json!("collect-real-env-samples")
     );
+    assert_eq!(out.visibility_contract["rawTraceVisible"], json!(false));
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_judge_calibration_decision_by_owner_should_require_judge_review_permission(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let outsider = find_user(&state, 2).await?;
+
+    let err = state
+        .create_judge_calibration_decision_by_owner(
+            &outsider,
+            CreateJudgeCalibrationDecisionOpsInput {
+                source_recommendation_id: "collect-real-env-samples".to_string(),
+                policy_version: Some("v3-default".to_string()),
+                decision: "accept_for_review".to_string(),
+                reason_code: "calibration_local_reference_only".to_string(),
+                evidence_refs: vec![json!({"kind": "runtime_readiness", "ref": "summary"})],
+                local_reference_only: Some(true),
+                environment_mode: Some("local_reference".to_string()),
+            },
+            Some("decision-key"),
+        )
+        .await
+        .expect_err("missing role should be denied");
+    match err {
+        AppError::DebateConflict(code) => {
+            assert!(code.contains("ops_permission_denied:judge_review"))
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_judge_calibration_decision_by_owner_should_proxy_public_safe_contract() -> Result<()>
+{
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let service_base_url =
+        spawn_mock_calibration_decision_server("calibration-key".to_string(), false).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "calibration-key".to_string();
+    inner.config.ai_judge.calibration_decisions_timeout_ms = 2_000;
+
+    let out = state
+        .create_judge_calibration_decision_by_owner(
+            &owner,
+            CreateJudgeCalibrationDecisionOpsInput {
+                source_recommendation_id: "collect-real-env-samples".to_string(),
+                policy_version: Some("v3-default".to_string()),
+                decision: "accept_for_review".to_string(),
+                reason_code: "calibration_local_reference_only".to_string(),
+                evidence_refs: vec![json!({"kind": "runtime_readiness", "ref": "summary"})],
+                local_reference_only: Some(true),
+                environment_mode: Some("local_reference".to_string()),
+            },
+            Some("decision-key"),
+        )
+        .await?;
+
+    assert_eq!(out.version, "ai-judge-fairness-calibration-decision-log-v1");
+    assert_eq!(out.status, "accepted");
+    assert_eq!(out.status_reason, "calibration_decision_logged");
+    assert_eq!(
+        out.entry["sourceRecommendationId"],
+        json!("collect-real-env-samples")
+    );
+    assert_eq!(out.entry["actor"]["id"], json!("1"));
+    assert_eq!(
+        out.entry["releaseGateInput"]["autoPublishAllowed"],
+        json!(false)
+    );
+    assert_eq!(
+        out.decision_log["summary"]["localReferenceOnlyCount"],
+        json!(1)
+    );
+    assert_eq!(out.visibility_contract["rawTraceVisible"], json!(false));
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_judge_calibration_decision_by_owner_should_proxy_error_when_ai_output_leaks_secret(
+) -> Result<()> {
+    let (_tdb, mut state) = AppState::new_for_test().await?;
+    let owner = find_user(&state, 1).await?;
+    let service_base_url =
+        spawn_mock_calibration_decision_server("calibration-key".to_string(), true).await?;
+    let inner = Arc::get_mut(&mut state.inner).expect("state should be unique");
+    inner.config.ai_judge.service_base_url = service_base_url;
+    inner.config.ai_judge.internal_key = "calibration-key".to_string();
+    inner.config.ai_judge.calibration_decisions_timeout_ms = 2_000;
+
+    let out = state
+        .create_judge_calibration_decision_by_owner(
+            &owner,
+            CreateJudgeCalibrationDecisionOpsInput {
+                source_recommendation_id: "collect-real-env-samples".to_string(),
+                policy_version: Some("v3-default".to_string()),
+                decision: "request_more_evidence".to_string(),
+                reason_code: "calibration_real_samples_missing".to_string(),
+                evidence_refs: vec![json!({"kind": "runtime_readiness", "ref": "summary"})],
+                local_reference_only: Some(true),
+                environment_mode: Some("local_reference".to_string()),
+            },
+            Some("decision-key"),
+        )
+        .await?;
+
+    assert_eq!(out.status, "proxy_error");
+    assert_eq!(out.status_reason, "calibration_decision_contract_violation");
+    assert_eq!(out.entry, json!({}));
     assert_eq!(out.visibility_contract["rawTraceVisible"], json!(false));
     Ok(())
 }

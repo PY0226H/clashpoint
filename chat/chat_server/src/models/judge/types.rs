@@ -638,6 +638,37 @@ pub struct GetJudgeRuntimeReadinessOpsOutput {
     pub cache_profile: Value,
 }
 
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateJudgeCalibrationDecisionOpsInput {
+    pub source_recommendation_id: String,
+    #[serde(default)]
+    pub policy_version: Option<String>,
+    pub decision: String,
+    pub reason_code: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<Value>,
+    #[serde(default)]
+    pub local_reference_only: Option<bool>,
+    #[serde(default)]
+    pub environment_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateJudgeCalibrationDecisionOpsOutput {
+    pub version: String,
+    pub generated_at: Option<String>,
+    pub status: String,
+    pub status_reason: String,
+    #[serde(default)]
+    pub entry: Value,
+    #[serde(default)]
+    pub decision_log: Value,
+    #[serde(default)]
+    pub visibility_contract: Value,
+}
+
 #[derive(Debug, Clone, Default, IntoParams, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListJudgeChallengeOpsQueueQuery {
