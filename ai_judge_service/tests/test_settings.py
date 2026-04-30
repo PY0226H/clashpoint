@@ -4,6 +4,9 @@ from unittest.mock import patch
 
 from app.runtime_policy import PROVIDER_OPENAI
 from app.settings import (
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER,
     build_callback_client_config,
     build_dispatch_runtime_config,
     load_settings,
@@ -84,7 +87,22 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.prompt_registry_json, "")
         self.assertEqual(settings.tool_registry_default_version, "toolset-v3-default")
         self.assertEqual(settings.tool_registry_json, "")
+        self.assertEqual(
+            settings.assistant_advisory_executor_mode,
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+        )
         self.assertFalse(settings.assistant_advisory_placeholder_enabled)
+        self.assertEqual(
+            settings.assistant_advisory_policy_version,
+            "assistant_advisory_policy_v1",
+        )
+        self.assertEqual(settings.assistant_openai_model, "gpt-4.1-mini")
+        self.assertEqual(settings.assistant_openai_api_key, "")
+        self.assertEqual(settings.assistant_timeout_seconds, 12.0)
+        self.assertEqual(settings.assistant_max_retries, 1)
+        self.assertEqual(settings.assistant_max_prompt_tokens, 2400)
+        self.assertEqual(settings.assistant_max_output_tokens, 700)
+        self.assertEqual(settings.assistant_daily_cost_budget_cents, 0)
 
     def test_load_settings_should_apply_env_overrides(self) -> None:
         with patch.dict(
@@ -185,7 +203,16 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_PROMPT_REGISTRY_JSON": '{"profiles":[]}',
                 "AI_JUDGE_TOOL_REGISTRY_DEFAULT_VERSION": "toolset-v4-pro",
                 "AI_JUDGE_TOOL_REGISTRY_JSON": '{"profiles":[]}',
-                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED": "true",
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE": "llm-canary",
+                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED": "false",
+                "AI_JUDGE_ASSISTANT_ADVISORY_POLICY_VERSION": "assistant-policy-v2",
+                "AI_JUDGE_ASSISTANT_OPENAI_MODEL": "gpt-assistant",
+                "AI_JUDGE_ASSISTANT_OPENAI_API_KEY": "sk-assistant",
+                "AI_JUDGE_ASSISTANT_TIMEOUT_SECONDS": "9.5",
+                "AI_JUDGE_ASSISTANT_MAX_RETRIES": "3",
+                "AI_JUDGE_ASSISTANT_MAX_PROMPT_TOKENS": "3200",
+                "AI_JUDGE_ASSISTANT_MAX_OUTPUT_TOKENS": "900",
+                "AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS": "1234",
             },
             clear=True,
         ):
@@ -281,7 +308,19 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.prompt_registry_json, '{"profiles":[]}')
         self.assertEqual(settings.tool_registry_default_version, "toolset-v4-pro")
         self.assertEqual(settings.tool_registry_json, '{"profiles":[]}')
-        self.assertTrue(settings.assistant_advisory_placeholder_enabled)
+        self.assertEqual(
+            settings.assistant_advisory_executor_mode,
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+        )
+        self.assertFalse(settings.assistant_advisory_placeholder_enabled)
+        self.assertEqual(settings.assistant_advisory_policy_version, "assistant-policy-v2")
+        self.assertEqual(settings.assistant_openai_model, "gpt-assistant")
+        self.assertEqual(settings.assistant_openai_api_key, "sk-assistant")
+        self.assertEqual(settings.assistant_timeout_seconds, 9.5)
+        self.assertEqual(settings.assistant_max_retries, 3)
+        self.assertEqual(settings.assistant_max_prompt_tokens, 3200)
+        self.assertEqual(settings.assistant_max_output_tokens, 900)
+        self.assertEqual(settings.assistant_daily_cost_budget_cents, 1234)
 
     def test_build_callback_and_dispatch_configs_should_map_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -415,6 +454,38 @@ class SettingsTests(unittest.TestCase):
             ):
                 load_settings()
 
+    def test_load_settings_should_map_legacy_assistant_placeholder_to_placeholder_mode(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        self.assertTrue(settings.assistant_advisory_placeholder_enabled)
+        self.assertEqual(
+            settings.assistant_advisory_executor_mode,
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER,
+        )
+
+    def test_load_settings_should_reject_invalid_assistant_executor_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE": "live",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE must be one of",
+            ):
+                load_settings()
+
     def test_load_settings_should_reject_invalid_phase_prompt_max_tokens(self) -> None:
         with patch.dict(
             os.environ,
@@ -492,6 +563,73 @@ class SettingsTests(unittest.TestCase):
                 "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED=true is forbidden",
             ):
                 load_settings()
+
+    def test_load_settings_should_reject_assistant_placeholder_mode_in_production(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ECHOISLE_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE": "placeholder",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=placeholder is forbidden",
+            ):
+                load_settings()
+
+    def test_load_settings_should_reject_llm_canary_without_budget_in_production(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ECHOISLE_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE": "llm_canary",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS must be > 0",
+            ):
+                load_settings()
+
+    def test_load_settings_should_allow_llm_canary_in_production_with_budget(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ECHOISLE_ENV": "production",
+                "AI_JUDGE_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ARTIFACT_PREFIX": "prod/ai-judge",
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE": "llm_canary",
+                "AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS": "2500",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        self.assertEqual(
+            settings.assistant_advisory_executor_mode,
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+        )
+        self.assertEqual(settings.assistant_daily_cost_budget_cents, 2500)
 
     def test_load_settings_should_allow_s3_artifact_store_in_production(self) -> None:
         with patch.dict(

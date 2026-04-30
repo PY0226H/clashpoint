@@ -52,6 +52,14 @@ VALID_ARTIFACT_STORE_PROVIDERS = {
     ARTIFACT_STORE_PROVIDER_LOCAL,
     ARTIFACT_STORE_PROVIDER_S3_COMPATIBLE,
 }
+ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED = "disabled"
+ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER = "placeholder"
+ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY = "llm_canary"
+VALID_ASSISTANT_ADVISORY_EXECUTOR_MODES = {
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+}
 
 
 def parse_csv_items(value: str | None) -> tuple[str, ...]:
@@ -75,6 +83,27 @@ def normalize_artifact_store_provider(value: str | None) -> str:
         return ARTIFACT_STORE_PROVIDER_LOCAL
     if token in {"s3", "minio", "s3_compatible"}:
         return ARTIFACT_STORE_PROVIDER_S3_COMPATIBLE
+    return token
+
+
+def normalize_assistant_advisory_executor_mode(
+    value: str | None,
+    *,
+    legacy_placeholder_enabled: bool,
+) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if not token:
+        # P42 的旧开关只保留为本地 deterministic placeholder 入口；
+        # 真实 LLM executor 必须显式使用 llm_canary mode。
+        return (
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
+            if legacy_placeholder_enabled
+            else ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED
+        )
+    if token in {"off", "none"}:
+        return ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED
+    if token in {"deterministic_placeholder", "local_placeholder"}:
+        return ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
     return token
 
 
@@ -175,11 +204,24 @@ class Settings:
     prompt_registry_json: str = ""
     tool_registry_default_version: str = "toolset-v3-default"
     tool_registry_json: str = ""
+    assistant_advisory_executor_mode: str = ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED
     assistant_advisory_placeholder_enabled: bool = False
+    assistant_advisory_policy_version: str = "assistant_advisory_policy_v1"
+    assistant_openai_model: str = "gpt-4.1-mini"
+    assistant_openai_api_key: str = ""
+    assistant_timeout_seconds: float = 12.0
+    assistant_max_retries: int = 1
+    assistant_max_prompt_tokens: int = 2400
+    assistant_max_output_tokens: int = 700
+    assistant_daily_cost_budget_cents: int = 0
 
 
 def load_settings() -> Settings:
     provider = normalize_provider(os.getenv("AI_JUDGE_PROVIDER"))
+    assistant_placeholder_enabled = parse_env_bool(
+        os.getenv("AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED"),
+        default=False,
+    )
     settings = Settings(
         ai_internal_key=os.getenv("AI_JUDGE_INTERNAL_KEY", "dev-ai-internal-key"),
         chat_server_base_url=os.getenv("CHAT_SERVER_BASE_URL", "http://127.0.0.1:6688"),
@@ -377,9 +419,38 @@ def load_settings() -> Settings:
             or "toolset-v3-default"
         ),
         tool_registry_json=os.getenv("AI_JUDGE_TOOL_REGISTRY_JSON", "").strip(),
-        assistant_advisory_placeholder_enabled=parse_env_bool(
-            os.getenv("AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED"),
-            default=False,
+        assistant_advisory_executor_mode=normalize_assistant_advisory_executor_mode(
+            os.getenv("AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE"),
+            legacy_placeholder_enabled=assistant_placeholder_enabled,
+        ),
+        assistant_advisory_placeholder_enabled=assistant_placeholder_enabled,
+        assistant_advisory_policy_version=(
+            os.getenv(
+                "AI_JUDGE_ASSISTANT_ADVISORY_POLICY_VERSION",
+                "assistant_advisory_policy_v1",
+            ).strip()
+            or "assistant_advisory_policy_v1"
+        ),
+        assistant_openai_model=(
+            os.getenv("AI_JUDGE_ASSISTANT_OPENAI_MODEL", "gpt-4.1-mini").strip()
+            or "gpt-4.1-mini"
+        ),
+        assistant_openai_api_key=os.getenv(
+            "AI_JUDGE_ASSISTANT_OPENAI_API_KEY",
+            "",
+        ).strip(),
+        assistant_timeout_seconds=float(
+            os.getenv("AI_JUDGE_ASSISTANT_TIMEOUT_SECONDS", "12")
+        ),
+        assistant_max_retries=int(os.getenv("AI_JUDGE_ASSISTANT_MAX_RETRIES", "1")),
+        assistant_max_prompt_tokens=int(
+            os.getenv("AI_JUDGE_ASSISTANT_MAX_PROMPT_TOKENS", "2400")
+        ),
+        assistant_max_output_tokens=int(
+            os.getenv("AI_JUDGE_ASSISTANT_MAX_OUTPUT_TOKENS", "700")
+        ),
+        assistant_daily_cost_budget_cents=int(
+            os.getenv("AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS", "0")
         ),
     )
     validate_for_runtime_env(settings, runtime_env=runtime_env_label())
@@ -495,6 +566,43 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
         raise ValueError("AI_JUDGE_PROMPT_REGISTRY_DEFAULT_VERSION cannot be empty")
     if not settings.tool_registry_default_version.strip():
         raise ValueError("AI_JUDGE_TOOL_REGISTRY_DEFAULT_VERSION cannot be empty")
+    if (
+        settings.assistant_advisory_executor_mode
+        not in VALID_ASSISTANT_ADVISORY_EXECUTOR_MODES
+    ):
+        raise ValueError(
+            "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE must be one of "
+            + ",".join(sorted(VALID_ASSISTANT_ADVISORY_EXECUTOR_MODES))
+        )
+    if not settings.assistant_advisory_policy_version.strip():
+        raise ValueError("AI_JUDGE_ASSISTANT_ADVISORY_POLICY_VERSION cannot be empty")
+    if not settings.assistant_openai_model.strip():
+        raise ValueError("AI_JUDGE_ASSISTANT_OPENAI_MODEL cannot be empty")
+    if settings.assistant_timeout_seconds < 1 or settings.assistant_timeout_seconds > 60:
+        raise ValueError("AI_JUDGE_ASSISTANT_TIMEOUT_SECONDS must be between 1 and 60")
+    if settings.assistant_max_retries < 0 or settings.assistant_max_retries > 5:
+        raise ValueError("AI_JUDGE_ASSISTANT_MAX_RETRIES must be between 0 and 5")
+    if (
+        settings.assistant_max_prompt_tokens < 256
+        or settings.assistant_max_prompt_tokens > 32000
+    ):
+        raise ValueError(
+            "AI_JUDGE_ASSISTANT_MAX_PROMPT_TOKENS must be between 256 and 32000"
+        )
+    if (
+        settings.assistant_max_output_tokens < 64
+        or settings.assistant_max_output_tokens > 8000
+    ):
+        raise ValueError(
+            "AI_JUDGE_ASSISTANT_MAX_OUTPUT_TOKENS must be between 64 and 8000"
+        )
+    if (
+        settings.assistant_daily_cost_budget_cents < 0
+        or settings.assistant_daily_cost_budget_cents > 10_000_000
+    ):
+        raise ValueError(
+            "AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS must be between 0 and 10000000"
+        )
     if settings.redis_enabled:
         if not settings.redis_url:
             raise ValueError("AI_JUDGE_REDIS_URL cannot be empty when AI_JUDGE_REDIS_ENABLED=true")
@@ -525,6 +633,35 @@ def validate_for_runtime_env(settings: Settings, runtime_env: str | None) -> Non
                 "AI_JUDGE_ASSISTANT_ADVISORY_PLACEHOLDER_ENABLED=true is forbidden "
                 "when runtime env is production"
             )
+        if (
+            settings.assistant_advisory_executor_mode
+            == ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
+        ):
+            raise ValueError(
+                "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=placeholder is forbidden "
+                "when runtime env is production"
+            )
+        if (
+            settings.assistant_advisory_executor_mode
+            == ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY
+        ):
+            assistant_key = settings.assistant_openai_api_key or settings.openai_api_key
+            if settings.provider != PROVIDER_OPENAI:
+                raise ValueError(
+                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm_canary requires "
+                    "AI_JUDGE_PROVIDER=openai when runtime env is production"
+                )
+            if not assistant_key.strip():
+                raise ValueError(
+                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm_canary requires "
+                    "AI_JUDGE_ASSISTANT_OPENAI_API_KEY or OPENAI_API_KEY when runtime env "
+                    "is production"
+                )
+            if settings.assistant_daily_cost_budget_cents <= 0:
+                raise ValueError(
+                    "AI_JUDGE_ASSISTANT_DAILY_COST_BUDGET_CENTS must be > 0 when "
+                    "AI_JUDGE_ASSISTANT_ADVISORY_EXECUTOR_MODE=llm_canary in production"
+                )
 
 
 def build_callback_client_config(settings: Settings) -> CallbackClientConfig:

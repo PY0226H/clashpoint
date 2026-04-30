@@ -870,3 +870,9 @@
 | 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
 |---|---|---|---|---|---|---|
 | ai-judge-real-env-pass-window-execute-on-env（仍阻塞，等真实环境） | ai-judge-stage-closure-execute | 环境依赖 | 当前计划建议包含真实环境模块，需在环境窗口就绪后执行收口 | REAL_CALIBRATION_ENV_READY=true 且具备可用真实样本后 | 完成该模块并产出 real-env 证据工件，状态达到 pass | 执行对应模块脚本并归档 artifacts/harness 与 docs/loadtest/evidence |
+
+### C45. AI Judge P42 后置技术债（来源：当前开发计划）
+| 债务项 | 来源模块 | 债务类型 | 当前不做原因 | 触发时机 | 完成定义（DoD） | 验证方式 |
+|---|---|---|---|---|---|---|
+| ai-judge-p42-real-env-and-production-enablement-debt | `ai-judge-p42-local-reference-regression-pack` / `ai-judge-p42-stage-closure-execute` | 环境依赖 | P42 当前只完成本地参考证据；真实样本、真实 provider/callback、生产对象存储与真实服务窗口尚不可用；不得把 `local_reference_ready` 宣称为 real-env `pass`。 | `REAL_CALIBRATION_ENV_READY=true`，且真实样本、真实服务窗口、生产对象存储与 P42 readiness 输入同时具备后 | 重新运行 P42 runtime ops / stage closure / real-env closure 链路，输出真实环境 `pass` 工件，并按结果更新 completed/todo 与章节完成度映射。 | `bash scripts/harness/ai_judge_runtime_ops_pack.sh --root /Users/panyihang/Documents/EchoIsle --evidence-dir docs/loadtest/evidence`（不带 `--allow-local-reference`，按最终脚本口径执行）+ `bash scripts/harness/ai_judge_stage_closure_evidence.sh --root /Users/panyihang/Documents/EchoIsle` + 真实 provider/callback/object-store 证据归档 |
+| ai-judge-p42-real-llm-assistant-executor-enablement | `ai-judge-p42-advisory-runtime-placeholder-pack` | 环境依赖 / 发布前增强 | 本轮只启用本地 deterministic placeholder；`npc_coach` / `room_qa` 默认仍 disabled/not_ready，生产环境禁止打开 placeholder，尚缺真实低延迟 LLM provider、成本/延迟预算、prompt/tool policy 与回滚策略。 | 真实 provider、成本/延迟预算、prompt/tool policy、安全门禁与回滚方案齐备后 | NPC Coach / Room QA 真实 LLM executor 通过 advisory-only 合同、forbidden official field fail-closed、成本/延迟门禁、no-secret guard 与产品回归验收；仍不得写 official verdict plane。 | AI assistant targeted tests + chat assistant proxy tests + frontend assistant read model tests + real provider canary evidence + runtime ops pack |

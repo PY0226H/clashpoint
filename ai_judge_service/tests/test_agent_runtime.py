@@ -18,6 +18,11 @@ from app.domain.agents import (
     ROLE_RECORDER,
     AgentExecutionRequest,
 )
+from app.runtime_policy import PROVIDER_OPENAI
+from app.settings import (
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+)
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -30,6 +35,14 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runtime.get_profile(AGENT_KIND_JUDGE).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_NPC_COACH).enabled)  # type: ignore[union-attr]
         self.assertFalse(runtime.get_profile(AGENT_KIND_ROOM_QA).enabled)  # type: ignore[union-attr]
+        self.assertIn(
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+            runtime.get_profile(AGENT_KIND_NPC_COACH).tags,  # type: ignore[union-attr]
+        )
+        self.assertNotIn(
+            "deterministic_placeholder",
+            runtime.get_profile(AGENT_KIND_NPC_COACH).tags,  # type: ignore[union-attr]
+        )
         self.assertIn(
             "advisory_only",
             runtime.get_profile(AGENT_KIND_NPC_COACH).tags,  # type: ignore[union-attr]
@@ -53,6 +66,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         room_qa_profile = runtime.get_profile(AGENT_KIND_ROOM_QA)
         self.assertTrue(npc_profile.enabled)  # type: ignore[union-attr]
         self.assertTrue(room_qa_profile.enabled)  # type: ignore[union-attr]
+        self.assertIn("deterministic_placeholder", npc_profile.tags)  # type: ignore[union-attr]
+        self.assertIn("deterministic_placeholder", room_qa_profile.tags)  # type: ignore[union-attr]
 
         advisory_context = {
             "roomContextSnapshot": {
@@ -115,6 +130,79 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("verdictReason", result.output)
         self.assertEqual(room_qa_result.status, "ok")
         self.assertIn("当前上下文阶段：已有阶段上下文", room_qa_result.output["safeGuidanceSummary"])
+
+    async def test_execute_should_not_fallback_to_placeholder_for_unconfigured_llm_canary(
+        self,
+    ) -> None:
+        runtime = build_agent_runtime(
+            settings=SimpleNamespace(
+                openai_timeout_secs=25.0,
+                provider="mock",
+                openai_api_key="",
+                assistant_openai_api_key="",
+                assistant_openai_model="gpt-assistant",
+                assistant_timeout_seconds=7.0,
+                assistant_daily_cost_budget_cents=500,
+                assistant_advisory_executor_mode=ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+            )
+        )
+
+        npc_profile = runtime.get_profile(AGENT_KIND_NPC_COACH)
+        self.assertTrue(npc_profile.enabled)  # type: ignore[union-attr]
+        self.assertEqual(npc_profile.timeout_ms, 7000)  # type: ignore[union-attr]
+        self.assertIn("llm_canary", npc_profile.tags)  # type: ignore[union-attr]
+        self.assertIn("executor_not_configured", npc_profile.tags)  # type: ignore[union-attr]
+        self.assertNotIn("deterministic_placeholder", npc_profile.tags)  # type: ignore[union-attr]
+
+        result = await runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_NPC_COACH,
+                input_payload={"sessionId": 11, "query": "我该怎么回应？"},
+                trace_id="trace-npc-llm-canary-missing-provider",
+                session_id=11,
+            )
+        )
+
+        self.assertEqual(result.status, "not_ready")
+        self.assertEqual(result.error_code, "assistant_executor_not_configured")
+        self.assertEqual(result.output.get("executorMode"), "llm_canary")
+        self.assertNotIn("placeholder", result.output)
+        self.assertNotIn("officialVerdictAuthority", result.output)
+
+    async def test_execute_should_mark_configured_llm_canary_without_running_gateway(
+        self,
+    ) -> None:
+        runtime = build_agent_runtime(
+            settings=SimpleNamespace(
+                openai_timeout_secs=25.0,
+                provider=PROVIDER_OPENAI,
+                openai_api_key="sk-test",
+                assistant_openai_api_key="",
+                assistant_openai_model="gpt-assistant",
+                assistant_timeout_seconds=8.0,
+                assistant_daily_cost_budget_cents=1000,
+                assistant_advisory_executor_mode=ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+            )
+        )
+
+        room_profile = runtime.get_profile(AGENT_KIND_ROOM_QA)
+        self.assertTrue(room_profile.enabled)  # type: ignore[union-attr]
+        self.assertIn("llm_canary", room_profile.tags)  # type: ignore[union-attr]
+        self.assertIn("executor_configured", room_profile.tags)  # type: ignore[union-attr]
+
+        result = await runtime.execute(
+            AgentExecutionRequest(
+                kind=AGENT_KIND_ROOM_QA,
+                input_payload={"sessionId": 11, "question": "现在是什么阶段？"},
+                trace_id="trace-room-llm-canary-configured",
+                session_id=11,
+            )
+        )
+
+        self.assertEqual(result.status, "not_ready")
+        self.assertEqual(result.error_code, "assistant_executor_not_configured")
+        self.assertEqual(result.output.get("executorMode"), "llm_canary")
+        self.assertIn("LLM gateway executor", result.error_message or "")
 
     async def test_execute_should_enable_judge_courtroom_runtime(self) -> None:
         runtime = build_agent_runtime(settings=SimpleNamespace(openai_timeout_secs=25.0))

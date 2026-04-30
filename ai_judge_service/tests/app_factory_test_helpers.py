@@ -9,7 +9,7 @@ from app.models import (
     PhaseDispatchMessage,
     PhaseDispatchRequest,
 )
-from app.settings import Settings
+from app.settings import ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER, Settings
 from httpx import ASGITransport, AsyncClient
 
 
@@ -87,6 +87,11 @@ def build_settings(**overrides: object) -> Settings:
         "compliance_block_enabled": True,
     }
     base.update(overrides)
+    if (
+        base.get("assistant_advisory_placeholder_enabled") is True
+        and "assistant_advisory_executor_mode" not in overrides
+    ):
+        base["assistant_advisory_executor_mode"] = ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
     return Settings(**base)
 
 

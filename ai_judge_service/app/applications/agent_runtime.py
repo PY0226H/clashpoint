@@ -23,12 +23,27 @@ from ..domain.agents import (
     AgentProfile,
     AgentRegistryPort,
 )
+from ..runtime_policy import PROVIDER_OPENAI
+from ..settings import (
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+    ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER,
+)
 
 
 class _ReservedAgentExecutor(AgentExecutorPort):
-    def __init__(self, *, kind: AgentKind, reason: str) -> None:
+    def __init__(
+        self,
+        *,
+        kind: AgentKind,
+        reason: str,
+        executor_mode: str = ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+        error_code: str = "agent_not_enabled",
+    ) -> None:
         self._kind = kind
         self._reason = reason
+        self._executor_mode = executor_mode
+        self._error_code = error_code
 
     async def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
         return AgentExecutionResult(
@@ -39,6 +54,7 @@ class _ReservedAgentExecutor(AgentExecutorPort):
                 "reason": self._reason,
                 "traceId": request.trace_id,
                 "mode": "advisory_only",
+                "executorMode": self._executor_mode,
                 "advisoryOnly": True,
                 "policyIsolation": "assistant_advisory_policy",
                 "allowedContextSources": [
@@ -47,7 +63,7 @@ class _ReservedAgentExecutor(AgentExecutorPort):
                     "knowledge_gateway",
                 ],
             },
-            error_code="agent_not_enabled",
+            error_code=self._error_code,
             error_message=self._reason,
         )
 
@@ -415,11 +431,67 @@ class AgentRuntime:
         return await executor.execute(request)
 
 
+def _assistant_llm_canary_configured(*, settings: Any) -> bool:
+    provider = str(getattr(settings, "provider", "") or "").strip().lower()
+    api_key = (
+        str(getattr(settings, "assistant_openai_api_key", "") or "").strip()
+        or str(getattr(settings, "openai_api_key", "") or "").strip()
+    )
+    model = str(getattr(settings, "assistant_openai_model", "") or "").strip()
+    budget_cents = int(getattr(settings, "assistant_daily_cost_budget_cents", 0) or 0)
+    return bool(
+        provider == PROVIDER_OPENAI
+        and api_key
+        and model
+        and budget_cents > 0
+    )
+
+
+def _assistant_llm_canary_not_ready_reason(*, settings: Any) -> str:
+    if not _assistant_llm_canary_configured(settings=settings):
+        return (
+            "assistant llm_canary executor is not configured: provider, API key, "
+            "assistant model and daily cost budget are required"
+        )
+    return "assistant llm_canary executor is reserved until the LLM gateway executor is wired"
+
+
+def _assistant_profile_tags(*, settings: Any, assistant_mode: str) -> tuple[str, ...]:
+    tags = ["shell", "advisory_only", "no_verdict_write"]
+    if assistant_mode == ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER:
+        tags.append("deterministic_placeholder")
+    elif assistant_mode == ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY:
+        tags.append("llm_canary")
+        tags.append(
+            "executor_configured"
+            if _assistant_llm_canary_configured(settings=settings)
+            else "executor_not_configured"
+        )
+    else:
+        tags.append("disabled")
+    return tuple(tags)
+
+
 def build_agent_runtime(*, settings: Any) -> AgentRuntime:
     timeout_ms = max(100, int(getattr(settings, "openai_timeout_secs", 30.0) * 1000))
-    assistant_placeholder_enabled = bool(
-        getattr(settings, "assistant_advisory_placeholder_enabled", False)
+    assistant_mode = str(
+        getattr(
+            settings,
+            "assistant_advisory_executor_mode",
+            ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER
+            if bool(getattr(settings, "assistant_advisory_placeholder_enabled", False))
+            else ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
+        )
     )
+    assistant_timeout_ms = max(
+        100,
+        int(getattr(settings, "assistant_timeout_seconds", timeout_ms / 1000) * 1000),
+    )
+    assistant_enabled = assistant_mode in {
+        ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER,
+        ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY,
+    }
+    assistant_tags = _assistant_profile_tags(settings=settings, assistant_mode=assistant_mode)
     profiles = [
         AgentProfile(
             kind=AGENT_KIND_JUDGE,
@@ -434,34 +506,50 @@ def build_agent_runtime(*, settings: Any) -> AgentRuntime:
             kind=AGENT_KIND_NPC_COACH,
             display_name="NPC Coach",
             description="Advisory-only in-room coaching guidance agent.",
-            enabled=assistant_placeholder_enabled,
+            enabled=assistant_enabled,
             owner="ai_judge_service",
-            timeout_ms=timeout_ms,
-            tags=("shell", "deterministic_placeholder", "advisory_only", "no_verdict_write"),
+            timeout_ms=assistant_timeout_ms,
+            tags=assistant_tags,
         ),
         AgentProfile(
             kind=AGENT_KIND_ROOM_QA,
             display_name="Room QA",
             description="Advisory-only room-state QA agent.",
-            enabled=assistant_placeholder_enabled,
+            enabled=assistant_enabled,
             owner="ai_judge_service",
-            timeout_ms=timeout_ms,
-            tags=("shell", "deterministic_placeholder", "advisory_only", "no_verdict_write"),
+            timeout_ms=assistant_timeout_ms,
+            tags=assistant_tags,
         ),
     ]
     npc_executor: AgentExecutorPort
     room_qa_executor: AgentExecutorPort
-    if assistant_placeholder_enabled:
+    if assistant_mode == ASSISTANT_ADVISORY_EXECUTOR_MODE_PLACEHOLDER:
         npc_executor = _AssistantAdvisoryPlaceholderExecutor(kind=AGENT_KIND_NPC_COACH)
         room_qa_executor = _AssistantAdvisoryPlaceholderExecutor(kind=AGENT_KIND_ROOM_QA)
+    elif assistant_mode == ASSISTANT_ADVISORY_EXECUTOR_MODE_LLM_CANARY:
+        reason = _assistant_llm_canary_not_ready_reason(settings=settings)
+        npc_executor = _ReservedAgentExecutor(
+            kind=AGENT_KIND_NPC_COACH,
+            reason=reason,
+            executor_mode=assistant_mode,
+            error_code="assistant_executor_not_configured",
+        )
+        room_qa_executor = _ReservedAgentExecutor(
+            kind=AGENT_KIND_ROOM_QA,
+            reason=reason,
+            executor_mode=assistant_mode,
+            error_code="assistant_executor_not_configured",
+        )
     else:
         npc_executor = _ReservedAgentExecutor(
             kind=AGENT_KIND_NPC_COACH,
             reason="npc_coach runtime shell is reserved for future rollout",
+            executor_mode=ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
         )
         room_qa_executor = _ReservedAgentExecutor(
             kind=AGENT_KIND_ROOM_QA,
             reason="room_qa runtime shell is reserved for future rollout",
+            executor_mode=ASSISTANT_ADVISORY_EXECUTOR_MODE_DISABLED,
         )
     executors: dict[AgentKind, AgentExecutorPort] = {
         AGENT_KIND_JUDGE: _JudgeCourtroomExecutor(),
