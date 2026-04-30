@@ -112,15 +112,18 @@ AI advisory / NPC Coach / Room QA 优先看：
 Rust Ops 优先看：
 
 1. [debate_ops.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_ops.rs)
-2. [judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge.rs)
-3. [runtime_readiness_ops_projection.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/runtime_readiness_ops_projection.rs)
-4. [calibration_decision_ops_proxy.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/calibration_decision_ops_proxy.rs)
-5. [rbac.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/rbac.rs)
-6. [ops_observability.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/ops_observability.rs)
-7. [kafka_dlq.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/kafka_dlq.rs)
-8. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
-9. [ops-domain runtimeReadiness.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/runtimeReadiness.ts)
-10. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
+2. [debate_ops/calibration_decision.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_ops/calibration_decision.rs)
+3. [judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge.rs)
+4. [runtime_readiness_ops_projection.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/runtime_readiness_ops_projection.rs)
+5. [calibration_decision_ops_proxy.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/calibration_decision_ops_proxy.rs)
+6. [rbac.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/rbac.rs)
+7. [ops_observability.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/ops_observability.rs)
+8. [kafka_dlq.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/kafka_dlq.rs)
+9. [ops-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/index.ts)
+10. [ops-domain runtimeReadiness.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/runtimeReadiness.ts)
+11. [OpsCalibrationDecisionActions.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/OpsCalibrationDecisionActions.tsx)
+12. [OpsCalibrationDecisionActionsModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/OpsCalibrationDecisionActionsModel.ts)
+13. [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
 
 Python AI Ops 优先看：
 
