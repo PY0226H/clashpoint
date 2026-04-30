@@ -125,6 +125,77 @@ export type JsonValue =
   | { [key: string]: JsonValue }
   | JsonValue[];
 
+export type JudgeAssistantAgentKind = "npc_coach" | "room_qa" | (string & {});
+
+export type JudgeAssistantAdvisoryStatus =
+  | "ok"
+  | "not_ready"
+  | "proxy_error"
+  | "contract_violation"
+  | "rate_limited"
+  | (string & {});
+
+export type RequestNpcCoachAdviceInput = {
+  query: string;
+  traceId?: string;
+  side?: DebateSide;
+  caseId?: number;
+};
+
+export type RequestRoomQaAnswerInput = {
+  question: string;
+  traceId?: string;
+  caseId?: number;
+};
+
+export type AssistantCapabilityBoundary = {
+  mode?: string;
+  advisoryOnly?: boolean;
+  officialVerdictAuthority?: boolean;
+  writesVerdictLedger?: boolean;
+  writesJudgeTrace?: boolean;
+  [key: string]: JsonValue | undefined;
+};
+
+export type JudgeAssistantAdvisoryCacheProfile = {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  staleWhileRevalidateSeconds?: number;
+  cacheKey?: string;
+  varyBy?: string[];
+  [key: string]: JsonValue | undefined;
+};
+
+export type JudgeAssistantAdvisoryOutput = {
+  version: string;
+  agentKind: JudgeAssistantAgentKind;
+  sessionId: number;
+  caseId?: number | null;
+  advisoryOnly: boolean;
+  status: JudgeAssistantAdvisoryStatus;
+  statusReason: string;
+  accepted: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  capabilityBoundary: AssistantCapabilityBoundary;
+  sharedContext: JsonValue;
+  advisoryContext: JsonValue;
+  output: JsonValue;
+  cacheProfile: JudgeAssistantAdvisoryCacheProfile;
+};
+
+export type JudgeAssistantAdvisoryView = {
+  state: "ready" | "not_ready" | "proxy_error" | "contract_violation" | "unknown";
+  agentKind: string;
+  label: string;
+  reasonCode: string;
+  advisoryOnly: boolean;
+  accepted: boolean;
+  caseId: number | null;
+  message: string | null;
+  items: string[];
+};
+
 export type RequestDebateJudgeJobOutput = {
   accepted: boolean;
   sessionId: number;
@@ -439,6 +510,10 @@ function jsonString(value: JsonValue | undefined): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function jsonBoolean(value: JsonValue | undefined): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
 function jsonStringArray(value: JsonValue | undefined): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -548,6 +623,218 @@ export function resolveDebateJudgePublicVerificationView(
     verificationVersion,
     hashSummary: firstPublicVerifyHash(output.publicVerify),
     blockers: jsonStringArray(output.verificationReadiness?.blockers),
+  };
+}
+
+const ASSISTANT_ADVISORY_CONTRACT_VERSION = "assistant_advisory_contract_v1";
+
+const ASSISTANT_FORBIDDEN_FIELD_KEYS = new Set([
+  "winner",
+  "proscore",
+  "conscore",
+  "dimensionscores",
+  "debatesummary",
+  "sideanalysis",
+  "verdictreason",
+  "verdictledger",
+  "fairnessgate",
+  "trustattestation",
+  "judgetrace",
+  "rawprompt",
+  "rawtrace",
+  "artifactref",
+  "artifactrefs",
+  "providerconfig",
+  "secret",
+  "credential",
+  "officialverdictauthority",
+  "writesverdictledger",
+  "writesjudgetrace",
+]);
+
+function normalizeAssistantFieldKey(key: string): string {
+  return key.replace(/[\s_.-]/g, "").toLowerCase();
+}
+
+function hasForbiddenAssistantField(value: JsonValue): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => hasForbiddenAssistantField(item));
+  }
+  return Object.entries(value).some(
+    ([key, nested]) =>
+      ASSISTANT_FORBIDDEN_FIELD_KEYS.has(normalizeAssistantFieldKey(key)) ||
+      hasForbiddenAssistantField(nested),
+  );
+}
+
+function assistantBoundaryIsSafe(
+  boundary: AssistantCapabilityBoundary | null | undefined,
+): boolean {
+  if (!boundary || typeof boundary !== "object" || Array.isArray(boundary)) {
+    return false;
+  }
+  return (
+    jsonString(boundary.mode) === "advisory_only" &&
+    jsonBoolean(boundary.advisoryOnly) === true &&
+    jsonBoolean(boundary.officialVerdictAuthority) === false &&
+    jsonBoolean(boundary.writesVerdictLedger) === false &&
+    jsonBoolean(boundary.writesJudgeTrace) === false
+  );
+}
+
+export function assertJudgeAssistantAdvisoryOutput(
+  output: JudgeAssistantAdvisoryOutput,
+  expectedAgentKind: "npc_coach" | "room_qa",
+): JudgeAssistantAdvisoryOutput {
+  if (!output || typeof output !== "object") {
+    throw new Error("assistant advisory response is invalid");
+  }
+  if (output.version !== ASSISTANT_ADVISORY_CONTRACT_VERSION) {
+    throw new Error("assistant advisory contract version is invalid");
+  }
+  if (output.agentKind !== expectedAgentKind) {
+    throw new Error("assistant advisory agent kind is invalid");
+  }
+  if (output.advisoryOnly !== true) {
+    throw new Error("assistant advisory response is not advisory-only");
+  }
+  if (!assistantBoundaryIsSafe(output.capabilityBoundary)) {
+    throw new Error("assistant advisory capability boundary is invalid");
+  }
+  if (output.status === "not_ready" && output.accepted) {
+    throw new Error("assistant advisory not_ready response cannot be accepted");
+  }
+  if (
+    hasForbiddenAssistantField(output.output) ||
+    hasForbiddenAssistantField(output.sharedContext) ||
+    hasForbiddenAssistantField(output.advisoryContext)
+  ) {
+    throw new Error("assistant advisory output contains forbidden official fields");
+  }
+  return output;
+}
+
+function assistantAdvisoryViewState(
+  output: JudgeAssistantAdvisoryOutput,
+): JudgeAssistantAdvisoryView["state"] {
+  if (output.status === "ok" && output.accepted) {
+    return "ready";
+  }
+  if (output.status === "not_ready") {
+    return "not_ready";
+  }
+  if (output.status === "proxy_error") {
+    return "proxy_error";
+  }
+  if (
+    output.status === "contract_violation" ||
+    output.statusReason === "assistant_advisory_contract_violation"
+  ) {
+    return "contract_violation";
+  }
+  return "unknown";
+}
+
+function assistantAdvisoryLabel(
+  state: JudgeAssistantAdvisoryView["state"],
+  reasonCode: string,
+): string {
+  if (state === "ready") {
+    return "辅助建议已生成";
+  }
+  if (state === "not_ready") {
+    return "辅助功能未启用";
+  }
+  if (state === "proxy_error") {
+    return "辅助建议暂不可用";
+  }
+  if (state === "contract_violation") {
+    return "辅助建议合同校验失败";
+  }
+  if (reasonCode === "rate_limited") {
+    return "辅助建议请求过快";
+  }
+  return "辅助建议状态未知";
+}
+
+function firstAssistantOutputText(output: JsonValue): string | null {
+  const root = asJsonObject(output);
+  const candidates = [
+    root?.advice,
+    root?.answer,
+    root?.message,
+    root?.summary,
+    root?.guidance,
+  ];
+  for (const candidate of candidates) {
+    const value = jsonString(candidate);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function assistantOutputItems(output: JsonValue): string[] {
+  const root = asJsonObject(output);
+  const candidates = [
+    root?.suggestions,
+    root?.points,
+    root?.questions,
+    root?.nextSteps,
+  ];
+  for (const candidate of candidates) {
+    const values = jsonStringArray(candidate);
+    if (values.length > 0) {
+      return values.slice(0, 4);
+    }
+  }
+  return [];
+}
+
+export function resolveJudgeAssistantAdvisoryView(
+  output: JudgeAssistantAdvisoryOutput | null | undefined,
+): JudgeAssistantAdvisoryView {
+  if (!output) {
+    return {
+      state: "unknown",
+      agentKind: "unknown",
+      label: "辅助建议状态未知",
+      reasonCode: "not_loaded",
+      advisoryOnly: true,
+      accepted: false,
+      caseId: null,
+      message: null,
+      items: [],
+    };
+  }
+
+  const state = assistantAdvisoryViewState(output);
+  const reasonCode =
+    String(output.errorCode || output.statusReason || output.status || "unknown") ||
+    "unknown";
+  const fallbackMessage =
+    state === "not_ready"
+      ? "辅助建议暂未启用，当前不会影响官方裁决。"
+      : state === "proxy_error"
+        ? "辅助建议服务暂时不可用，请稍后重试。"
+        : state === "contract_violation"
+          ? "辅助建议响应未通过安全合同校验。"
+          : null;
+
+  return {
+    state,
+    agentKind: String(output.agentKind || "unknown"),
+    label: assistantAdvisoryLabel(state, reasonCode),
+    reasonCode,
+    advisoryOnly: output.advisoryOnly === true,
+    accepted: Boolean(output.accepted) && state === "ready",
+    caseId: Number.isFinite(Number(output.caseId)) ? Number(output.caseId) : null,
+    message: firstAssistantOutputText(output.output) || fallbackMessage,
+    items: state === "ready" ? assistantOutputItems(output.output) : [],
   };
 }
 
@@ -927,6 +1214,78 @@ export async function getDebateJudgeChallenge(
     },
   );
   return response.data;
+}
+
+function normalizedRequiredAssistantText(field: string, value: string): string {
+  const text = String(value || "").trim();
+  if (!text) {
+    throw new Error(`${field} is required`);
+  }
+  return text;
+}
+
+function normalizedAssistantTraceId(
+  value: string | null | undefined,
+): string | undefined {
+  const text = String(value || "").trim();
+  return text || undefined;
+}
+
+function normalizedAssistantCaseId(
+  value: number | null | undefined,
+): number | undefined {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
+export async function requestNpcCoachAdvice(
+  sessionId: number,
+  input: RequestNpcCoachAdviceInput,
+): Promise<JudgeAssistantAdvisoryOutput> {
+  const body: RequestNpcCoachAdviceInput = {
+    query: normalizedRequiredAssistantText("query", input.query),
+  };
+  const traceId = normalizedAssistantTraceId(input.traceId);
+  const caseId = normalizedAssistantCaseId(input.caseId);
+  if (traceId) {
+    body.traceId = traceId;
+  }
+  if (input.side) {
+    body.side = normalizeDebateSide(input.side);
+  }
+  if (caseId) {
+    body.caseId = caseId;
+  }
+  const response = await http.post<JudgeAssistantAdvisoryOutput>(
+    `/debate/sessions/${sessionId}/assistant/npc-coach/advice`,
+    body,
+  );
+  return assertJudgeAssistantAdvisoryOutput(response.data, "npc_coach");
+}
+
+export async function requestRoomQaAnswer(
+  sessionId: number,
+  input: RequestRoomQaAnswerInput,
+): Promise<JudgeAssistantAdvisoryOutput> {
+  const body: RequestRoomQaAnswerInput = {
+    question: normalizedRequiredAssistantText("question", input.question),
+  };
+  const traceId = normalizedAssistantTraceId(input.traceId);
+  const caseId = normalizedAssistantCaseId(input.caseId);
+  if (traceId) {
+    body.traceId = traceId;
+  }
+  if (caseId) {
+    body.caseId = caseId;
+  }
+  const response = await http.post<JudgeAssistantAdvisoryOutput>(
+    `/debate/sessions/${sessionId}/assistant/room-qa/answer`,
+    body,
+  );
+  return assertJudgeAssistantAdvisoryOutput(response.data, "room_qa");
 }
 
 function buildJudgeChallengeIdempotencyKey(): string {

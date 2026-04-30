@@ -1,14 +1,73 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const apiClient = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
+}));
+
+vi.mock("@echoisle/api-client", () => ({
+  http: {
+    get: apiClient.get,
+    post: apiClient.post,
+  },
+  toApiError: (error: unknown) =>
+    error instanceof Error ? error.message : "request failed",
+}));
+
 import {
   getOldestDebateMessageId,
+  requestNpcCoachAdvice,
+  requestRoomQaAnswer,
   mergeDebateMessages,
   normalizeDebateSide,
   normalizeDebateStatusFilter,
+  resolveJudgeAssistantAdvisoryView,
   resolveDebateJudgeChallengeView,
   resolveDebateJudgePublicVerificationView,
+  type JudgeAssistantAdvisoryOutput,
+  type JsonValue,
 } from "./index";
 
+function advisoryOutput(
+  agentKind: "npc_coach" | "room_qa",
+  overrides?: Partial<JudgeAssistantAdvisoryOutput>,
+): JudgeAssistantAdvisoryOutput {
+  return {
+    version: "assistant_advisory_contract_v1",
+    agentKind,
+    sessionId: 9,
+    caseId: 42,
+    advisoryOnly: true,
+    status: "not_ready",
+    statusReason: "agent_not_enabled",
+    accepted: false,
+    errorCode: "agent_not_enabled",
+    errorMessage: null,
+    capabilityBoundary: {
+      mode: "advisory_only",
+      advisoryOnly: true,
+      officialVerdictAuthority: false,
+      writesVerdictLedger: false,
+      writesJudgeTrace: false,
+    },
+    sharedContext: {},
+    advisoryContext: {},
+    output: {},
+    cacheProfile: {
+      cacheable: false,
+      ttlSeconds: 0,
+      staleWhileRevalidateSeconds: 0,
+    },
+    ...overrides,
+  };
+}
+
 describe("debate-domain normalize helpers", () => {
+  beforeEach(() => {
+    apiClient.get.mockReset();
+    apiClient.post.mockReset();
+  });
+
   it("normalizes unknown status to all", () => {
     expect(normalizeDebateStatusFilter("invalid")).toBe("all");
   });
@@ -335,5 +394,67 @@ describe("debate-domain normalize helpers", () => {
     expect(overturned.label).toBe("Verdict changed");
     expect(overturned.latestDecision).toBe("overturn");
     expect(overturned.reviewSyncState).toBe("awaiting_verdict_source");
+  });
+
+  it("calls NPC Coach advisory proxy with trimmed typed body", async () => {
+    apiClient.post.mockResolvedValue({
+      data: advisoryOutput("npc_coach"),
+    });
+
+    const result = await requestNpcCoachAdvice(9, {
+      query: "  我该怎么回应？  ",
+      traceId: " trace-1 ",
+      side: "con",
+      caseId: 42,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/debate/sessions/9/assistant/npc-coach/advice",
+      {
+        query: "我该怎么回应？",
+        traceId: "trace-1",
+        side: "con",
+        caseId: 42,
+      },
+    );
+    expect(result.status).toBe("not_ready");
+    expect(result.advisoryOnly).toBe(true);
+  });
+
+  it("maps not_ready advisory response into a user-safe read model", () => {
+    const view = resolveJudgeAssistantAdvisoryView(advisoryOutput("room_qa"));
+
+    expect(view.state).toBe("not_ready");
+    expect(view.label).toBe("辅助功能未启用");
+    expect(view.message).toBe("辅助建议暂未启用，当前不会影响官方裁决。");
+    expect(view.advisoryOnly).toBe(true);
+    expect(view.accepted).toBe(false);
+  });
+
+  it("fails closed when assistant advisory output includes official fields", async () => {
+    apiClient.post.mockResolvedValue({
+      data: advisoryOutput("room_qa", {
+        status: "ok",
+        statusReason: "assistant_advisory_ready",
+        accepted: true,
+        errorCode: null,
+        output: {
+          answer: "当前争点是证据链是否足够。",
+          verdictReason: "must-not-render",
+        } satisfies JsonValue,
+      }),
+    });
+
+    await expect(
+      requestRoomQaAnswer(9, {
+        question: "  当前争点是什么？  ",
+      }),
+    ).rejects.toThrow("forbidden official fields");
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/debate/sessions/9/assistant/room-qa/answer",
+      {
+        question: "当前争点是什么？",
+      },
+    );
   });
 });

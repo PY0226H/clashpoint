@@ -206,6 +206,71 @@
   gap: 12px;
 }
 
+.echo-assistant-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.echo-assistant-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.echo-assistant-tool h4,
+.echo-assistant-result h4 {
+  margin: 0;
+}
+
+.echo-assistant-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.echo-assistant-segment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.echo-assistant-segment .echo-btn {
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--echo-surface-2) 70%, white 30%);
+  color: var(--echo-ink);
+  border-color: color-mix(in srgb, var(--echo-border) 80%, transparent 20%);
+}
+
+.echo-assistant-segment .echo-btn.is-active {
+  background: var(--echo-accent);
+  color: var(--echo-accent-ink);
+}
+
+.echo-assistant-result {
+  min-height: 132px;
+  padding: 12px;
+  border-radius: var(--echo-radius-md);
+  border: 1px solid color-mix(in srgb, var(--echo-border) 85%, transparent 15%);
+  background: color-mix(in srgb, white 92%, var(--echo-surface-2) 8%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.echo-assistant-result p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.echo-assistant-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--echo-ink);
+}
+
 .echo-room-history-actions {
   display: flex;
   justify-content: flex-start;
@@ -651,6 +716,7 @@
   .echo-session-grid,
   .echo-room-pins,
   .echo-room-judge-grid,
+  .echo-assistant-grid,
   .echo-ops-permission-grid,
   .echo-ops-observability-grid,
   .echo-wallet-products {
@@ -666,6 +732,10 @@
   }
 
   .echo-room-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .echo-assistant-row {
     grid-template-columns: 1fr;
   }
 

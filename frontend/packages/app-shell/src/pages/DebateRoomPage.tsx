@@ -32,6 +32,7 @@ import {
 } from "@echoisle/realtime-sdk";
 import { Button, InlineHint, SectionTitle, TextField } from "@echoisle/ui";
 import { useNavigate, useParams } from "react-router-dom";
+import { DebateAssistantPanel } from "../components/DebateAssistantPanel";
 
 const runtime = getRuntimeConfig();
 const HISTORY_LIMIT = 80;
@@ -561,6 +562,8 @@ export function DebateRoomPage() {
     () => resolveDebateJudgeChallengeView(judgeChallengeQuery.data),
     [judgeChallengeQuery.data],
   );
+  const assistantCaseId =
+    publicVerificationView.caseId ?? judgeChallengeView.caseId ?? null;
   const normalizedPinSeconds = Math.max(
     1,
     Math.floor(Number(pinSecondsInput) || 60),
@@ -847,6 +850,12 @@ export function DebateRoomPage() {
           </article>
         </div>
       </section>
+
+      <DebateAssistantPanel
+        caseId={assistantCaseId}
+        onHint={setPageHint}
+        sessionId={sessionIdNum}
+      />
 
       <section className="echo-lobby-panel">
         <h3>Message Stream</h3>
