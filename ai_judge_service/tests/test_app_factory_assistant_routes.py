@@ -103,13 +103,21 @@ class AppFactoryAssistantRouteTests(
         self.assertEqual(body["sharedContext"]["sessionId"], phase_req.session_id)
         self.assertEqual(body["sharedContext"]["caseId"], phase_case_id)
         self.assertEqual(body["sharedContext"]["latestDispatchType"], "phase")
-        self.assertEqual(body["sharedContext"]["rubricVersion"], phase_req.rubric_version)
+        self.assertNotIn("rubricVersion", body["sharedContext"])
         self.assertEqual(
-            body["sharedContext"]["judgePolicyVersion"],
+            body["advisoryContext"]["versionContext"]["rubricVersion"],
+            phase_req.rubric_version,
+        )
+        self.assertEqual(
+            body["advisoryContext"]["versionContext"]["judgePolicyVersion"],
             phase_req.judge_policy_version,
         )
-        self.assertEqual(body["sharedContext"]["ruleVersion"], phase_req.judge_policy_version)
+        self.assertEqual(
+            body["advisoryContext"]["versionContext"]["ruleVersion"],
+            phase_req.judge_policy_version,
+        )
         self.assertGreaterEqual(body["sharedContext"]["phaseReceiptCount"], 1)
+        self.assertTrue(body["sharedContext"]["officialVerdictFieldsRedacted"])
         self.assertNotIn("winnerHint", body["sharedContext"])
         self.assertNotIn("debateSummary", body["sharedContext"])
         self.assertTrue(body["advisoryContext"]["advisoryOnly"])
@@ -216,13 +224,21 @@ class AppFactoryAssistantRouteTests(
         self.assertEqual(body["sharedContext"]["sessionId"], final_req.session_id)
         self.assertEqual(body["sharedContext"]["caseId"], final_case_id)
         self.assertEqual(body["sharedContext"]["latestDispatchType"], "final")
-        self.assertEqual(body["sharedContext"]["rubricVersion"], final_req.rubric_version)
+        self.assertNotIn("rubricVersion", body["sharedContext"])
         self.assertEqual(
-            body["sharedContext"]["judgePolicyVersion"],
+            body["advisoryContext"]["versionContext"]["rubricVersion"],
+            final_req.rubric_version,
+        )
+        self.assertEqual(
+            body["advisoryContext"]["versionContext"]["judgePolicyVersion"],
             final_req.judge_policy_version,
         )
-        self.assertEqual(body["sharedContext"]["ruleVersion"], final_req.judge_policy_version)
+        self.assertEqual(
+            body["advisoryContext"]["versionContext"]["ruleVersion"],
+            final_req.judge_policy_version,
+        )
         self.assertGreaterEqual(body["sharedContext"]["finalReceiptCount"], 1)
+        self.assertTrue(body["sharedContext"]["officialVerdictFieldsRedacted"])
         self.assertNotIn("winnerHint", body["sharedContext"])
         self.assertNotIn("verdictReason", body["sharedContext"])
         self.assertEqual(

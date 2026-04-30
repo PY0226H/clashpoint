@@ -69,6 +69,15 @@ export function AssistantAdvisoryResult({
       <InlineHint>
         {view.label} | {view.reasonCode}
       </InlineHint>
+      <InlineHint>
+        {view.contextLabel} | {view.receiptSummary}
+      </InlineHint>
+      {view.workflowStatus || view.latestDispatchType ? (
+        <InlineHint>
+          Workflow: {view.workflowStatus || "--"} | Dispatch:{" "}
+          {view.latestDispatchType || "--"}
+        </InlineHint>
+      ) : null}
       {view.caseId ? <InlineHint>Case: #{view.caseId}</InlineHint> : null}
       {view.message ? <p>{view.message}</p> : null}
       {view.items.length > 0 ? (

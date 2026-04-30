@@ -166,6 +166,32 @@ export type JudgeAssistantAdvisoryCacheProfile = {
   [key: string]: JsonValue | undefined;
 };
 
+export type AssistantRoomContextSnapshot = {
+  sessionId: number;
+  scopeId: number;
+  caseId?: number | null;
+  workflowStatus?: string | null;
+  latestDispatchType?: "phase" | "final" | null | (string & {});
+  topicDomain?: string | null;
+  phaseReceiptCount: number;
+  finalReceiptCount: number;
+  updatedAt?: string | null;
+  officialVerdictFieldsRedacted: boolean;
+};
+
+export type AssistantStageSummary = {
+  stage:
+    | "room_context_only"
+    | "phase_context_available"
+    | "final_context_available"
+    | (string & {});
+  workflowStatus?: string | null;
+  latestDispatchType?: "phase" | "final" | null | (string & {});
+  hasPhaseReceipt: boolean;
+  hasFinalReceipt: boolean;
+  officialVerdictFieldsRedacted: boolean;
+};
+
 export type JudgeAssistantAdvisoryOutput = {
   version: string;
   agentKind: JudgeAssistantAgentKind;
@@ -194,6 +220,12 @@ export type JudgeAssistantAdvisoryView = {
   caseId: number | null;
   message: string | null;
   items: string[];
+  contextStage: string;
+  contextLabel: string;
+  workflowStatus: string | null;
+  latestDispatchType: string | null;
+  receiptSummary: string;
+  updatedAt: string | null;
 };
 
 export type RequestDebateJudgeJobOutput = {
@@ -628,6 +660,28 @@ export function resolveDebateJudgePublicVerificationView(
 
 const ASSISTANT_ADVISORY_CONTRACT_VERSION = "assistant_advisory_contract_v1";
 
+const ASSISTANT_ROOM_CONTEXT_KEYS = [
+  "sessionId",
+  "scopeId",
+  "caseId",
+  "workflowStatus",
+  "latestDispatchType",
+  "topicDomain",
+  "phaseReceiptCount",
+  "finalReceiptCount",
+  "updatedAt",
+  "officialVerdictFieldsRedacted",
+] as const;
+
+const ASSISTANT_STAGE_SUMMARY_KEYS = [
+  "stage",
+  "workflowStatus",
+  "latestDispatchType",
+  "hasPhaseReceipt",
+  "hasFinalReceipt",
+  "officialVerdictFieldsRedacted",
+] as const;
+
 const ASSISTANT_FORBIDDEN_FIELD_KEYS = new Set([
   "winner",
   "proscore",
@@ -685,6 +739,88 @@ function assistantBoundaryIsSafe(
   );
 }
 
+function objectHasExactKeys(
+  value: JsonValue | null | undefined,
+  keys: readonly string[],
+): value is Record<string, JsonValue> {
+  const root = asJsonObject(value);
+  if (!root) {
+    return false;
+  }
+  const actualKeys = Object.keys(root);
+  return (
+    actualKeys.length === keys.length &&
+    keys.every((key) => Object.prototype.hasOwnProperty.call(root, key))
+  );
+}
+
+function jsonNonNegativeNumber(value: JsonValue | undefined): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function jsonOptionalStringOrNull(value: JsonValue | undefined): boolean {
+  return value == null || typeof value === "string";
+}
+
+function jsonOptionalDispatchType(value: JsonValue | undefined): boolean {
+  return value == null || value === "phase" || value === "final";
+}
+
+function stableJsonValue(value: JsonValue | undefined): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJsonValue(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => {
+        const objectValue = value as Record<string, JsonValue>;
+        return `${JSON.stringify(key)}:${stableJsonValue(objectValue[key])}`;
+      });
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isAssistantRoomContextSnapshot(
+  value: JsonValue | null | undefined,
+  expectedSessionId: number,
+): boolean {
+  if (!objectHasExactKeys(value, ASSISTANT_ROOM_CONTEXT_KEYS)) {
+    return false;
+  }
+  return (
+    value.sessionId === expectedSessionId &&
+    jsonNonNegativeNumber(value.scopeId) &&
+    (value.caseId == null || jsonNonNegativeNumber(value.caseId)) &&
+    jsonOptionalStringOrNull(value.workflowStatus) &&
+    jsonOptionalDispatchType(value.latestDispatchType) &&
+    jsonOptionalStringOrNull(value.topicDomain) &&
+    jsonNonNegativeNumber(value.phaseReceiptCount) &&
+    jsonNonNegativeNumber(value.finalReceiptCount) &&
+    jsonOptionalStringOrNull(value.updatedAt) &&
+    value.officialVerdictFieldsRedacted === true
+  );
+}
+
+function isAssistantStageSummary(
+  value: JsonValue | null | undefined,
+): boolean {
+  if (!objectHasExactKeys(value, ASSISTANT_STAGE_SUMMARY_KEYS)) {
+    return false;
+  }
+  return (
+    (value.stage === "room_context_only" ||
+      value.stage === "phase_context_available" ||
+      value.stage === "final_context_available") &&
+    jsonOptionalStringOrNull(value.workflowStatus) &&
+    jsonOptionalDispatchType(value.latestDispatchType) &&
+    typeof value.hasPhaseReceipt === "boolean" &&
+    typeof value.hasFinalReceipt === "boolean" &&
+    value.officialVerdictFieldsRedacted === true
+  );
+}
+
 export function assertJudgeAssistantAdvisoryOutput(
   output: JudgeAssistantAdvisoryOutput,
   expectedAgentKind: "npc_coach" | "room_qa",
@@ -703,6 +839,23 @@ export function assertJudgeAssistantAdvisoryOutput(
   }
   if (!assistantBoundaryIsSafe(output.capabilityBoundary)) {
     throw new Error("assistant advisory capability boundary is invalid");
+  }
+  if (
+    !isAssistantRoomContextSnapshot(output.sharedContext, output.sessionId)
+  ) {
+    throw new Error("assistant advisory room context snapshot is invalid");
+  }
+  const advisoryContext = asJsonObject(output.advisoryContext);
+  const roomContextSnapshot = advisoryContext?.roomContextSnapshot;
+  const stageSummary = advisoryContext?.stageSummary;
+  if (
+    !isAssistantRoomContextSnapshot(roomContextSnapshot, output.sessionId) ||
+    stableJsonValue(roomContextSnapshot) !== stableJsonValue(output.sharedContext)
+  ) {
+    throw new Error("assistant advisory advisory context snapshot is invalid");
+  }
+  if (!isAssistantStageSummary(stageSummary)) {
+    throw new Error("assistant advisory stage summary is invalid");
   }
   if (output.status === "not_ready" && output.accepted) {
     throw new Error("assistant advisory not_ready response cannot be accepted");
@@ -795,6 +948,30 @@ function assistantOutputItems(output: JsonValue): string[] {
   return [];
 }
 
+function assistantContextStageLabel(stage: string): string {
+  if (stage === "final_context_available") {
+    return "已有最终上下文";
+  }
+  if (stage === "phase_context_available") {
+    return "已有阶段上下文";
+  }
+  return "仅有房间上下文";
+}
+
+function assistantContextReceiptSummary(
+  snapshot: Record<string, JsonValue> | null,
+): string {
+  const phaseCount =
+    typeof snapshot?.phaseReceiptCount === "number"
+      ? Math.floor(snapshot.phaseReceiptCount)
+      : 0;
+  const finalCount =
+    typeof snapshot?.finalReceiptCount === "number"
+      ? Math.floor(snapshot.finalReceiptCount)
+      : 0;
+  return `phase ${phaseCount} / final ${finalCount}`;
+}
+
 export function resolveJudgeAssistantAdvisoryView(
   output: JudgeAssistantAdvisoryOutput | null | undefined,
 ): JudgeAssistantAdvisoryView {
@@ -809,10 +986,20 @@ export function resolveJudgeAssistantAdvisoryView(
       caseId: null,
       message: null,
       items: [],
+      contextStage: "unknown",
+      contextLabel: "上下文未加载",
+      workflowStatus: null,
+      latestDispatchType: null,
+      receiptSummary: "phase 0 / final 0",
+      updatedAt: null,
     };
   }
 
   const state = assistantAdvisoryViewState(output);
+  const advisoryContext = asJsonObject(output.advisoryContext);
+  const stageSummary = asJsonObject(advisoryContext?.stageSummary);
+  const roomContextSnapshot = asJsonObject(output.sharedContext);
+  const contextStage = jsonString(stageSummary?.stage) || "room_context_only";
   const reasonCode =
     String(output.errorCode || output.statusReason || output.status || "unknown") ||
     "unknown";
@@ -835,6 +1022,12 @@ export function resolveJudgeAssistantAdvisoryView(
     caseId: Number.isFinite(Number(output.caseId)) ? Number(output.caseId) : null,
     message: firstAssistantOutputText(output.output) || fallbackMessage,
     items: state === "ready" ? assistantOutputItems(output.output) : [],
+    contextStage,
+    contextLabel: assistantContextStageLabel(contextStage),
+    workflowStatus: jsonString(roomContextSnapshot?.workflowStatus),
+    latestDispatchType: jsonString(roomContextSnapshot?.latestDispatchType),
+    receiptSummary: assistantContextReceiptSummary(roomContextSnapshot),
+    updatedAt: jsonString(roomContextSnapshot?.updatedAt),
   };
 }
 

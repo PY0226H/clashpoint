@@ -30,6 +30,37 @@ ASSISTANT_ADVISORY_ALLOWED_CONTEXT_SOURCES: tuple[str, ...] = (
     "stage_summary",
     "knowledge_gateway",
 )
+ASSISTANT_ROOM_CONTEXT_SNAPSHOT_KEYS = frozenset(
+    {
+        "sessionId",
+        "scopeId",
+        "caseId",
+        "workflowStatus",
+        "latestDispatchType",
+        "topicDomain",
+        "phaseReceiptCount",
+        "finalReceiptCount",
+        "updatedAt",
+        "officialVerdictFieldsRedacted",
+    }
+)
+ASSISTANT_STAGE_SUMMARY_KEYS = frozenset(
+    {
+        "stage",
+        "workflowStatus",
+        "latestDispatchType",
+        "hasPhaseReceipt",
+        "hasFinalReceipt",
+        "officialVerdictFieldsRedacted",
+    }
+)
+ASSISTANT_CONTEXT_VERSION_KEYS = frozenset(
+    {
+        "ruleVersion",
+        "rubricVersion",
+        "judgePolicyVersion",
+    }
+)
 ASSISTANT_ADVISORY_FORBIDDEN_WRITE_TARGETS: tuple[str, ...] = (
     "verdict_ledger",
     "judge_trace",
@@ -168,6 +199,170 @@ def _validate_dict_field(payload: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
+def _validate_exact_keys(
+    payload: dict[str, Any],
+    *,
+    expected_keys: frozenset[str],
+    path: str,
+) -> None:
+    actual_keys = set(payload.keys())
+    if actual_keys != expected_keys:
+        extra_keys = sorted(actual_keys - expected_keys)
+        missing_keys = sorted(expected_keys - actual_keys)
+        raise AssistantAdvisoryContractViolation(
+            f"assistant_advisory_contract_{path}_keys:"
+            f"extra={extra_keys}:missing={missing_keys}"
+        )
+
+
+def _validate_optional_token(
+    value: Any,
+    *,
+    path: str,
+    allowed_values: frozenset[str] | None = None,
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise AssistantAdvisoryContractViolation(
+            f"assistant_advisory_contract_{path}_not_string"
+        )
+    if allowed_values is not None and value not in allowed_values:
+        raise AssistantAdvisoryContractViolation(
+            f"assistant_advisory_contract_{path}_invalid"
+        )
+
+
+def _validate_required_token(
+    value: Any,
+    *,
+    path: str,
+    allowed_values: frozenset[str] | None = None,
+) -> None:
+    if not isinstance(value, str):
+        raise AssistantAdvisoryContractViolation(
+            f"assistant_advisory_contract_{path}_not_string"
+        )
+    if allowed_values is not None and value not in allowed_values:
+        raise AssistantAdvisoryContractViolation(
+            f"assistant_advisory_contract_{path}_invalid"
+        )
+
+
+def _validate_non_negative_int(value: Any, *, path: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AssistantAdvisoryContractViolation(
+            f"assistant_advisory_contract_{path}_invalid"
+        )
+
+
+def _validate_room_context_snapshot(
+    payload: dict[str, Any],
+    *,
+    expected_session_id: int,
+) -> None:
+    _validate_exact_keys(
+        payload,
+        expected_keys=ASSISTANT_ROOM_CONTEXT_SNAPSHOT_KEYS,
+        path="room_context_snapshot",
+    )
+    if payload.get("sessionId") != expected_session_id:
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_room_context_snapshot_session_mismatch"
+        )
+    _validate_non_negative_int(payload.get("scopeId"), path="room_context_snapshot_scope_id")
+    if payload.get("caseId") is not None:
+        _validate_non_negative_int(
+            payload.get("caseId"),
+            path="room_context_snapshot_case_id",
+        )
+    _validate_optional_token(
+        payload.get("workflowStatus"),
+        path="room_context_snapshot_workflow_status",
+    )
+    _validate_optional_token(
+        payload.get("latestDispatchType"),
+        path="room_context_snapshot_latest_dispatch_type",
+        allowed_values=frozenset({"phase", "final"}),
+    )
+    _validate_optional_token(
+        payload.get("topicDomain"),
+        path="room_context_snapshot_topic_domain",
+    )
+    _validate_optional_token(
+        payload.get("updatedAt"),
+        path="room_context_snapshot_updated_at",
+    )
+    _validate_non_negative_int(
+        payload.get("phaseReceiptCount"),
+        path="room_context_snapshot_phase_receipt_count",
+    )
+    _validate_non_negative_int(
+        payload.get("finalReceiptCount"),
+        path="room_context_snapshot_final_receipt_count",
+    )
+    if payload.get("officialVerdictFieldsRedacted") is not True:
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_room_context_snapshot_not_redacted"
+        )
+
+
+def _validate_stage_summary(payload: dict[str, Any]) -> None:
+    _validate_exact_keys(
+        payload,
+        expected_keys=ASSISTANT_STAGE_SUMMARY_KEYS,
+        path="stage_summary",
+    )
+    _validate_required_token(
+        payload.get("stage"),
+        path="stage_summary_stage",
+        allowed_values=frozenset(
+            {
+                "room_context_only",
+                "phase_context_available",
+                "final_context_available",
+            }
+        ),
+    )
+    _validate_optional_token(
+        payload.get("workflowStatus"),
+        path="stage_summary_workflow_status",
+    )
+    _validate_optional_token(
+        payload.get("latestDispatchType"),
+        path="stage_summary_latest_dispatch_type",
+        allowed_values=frozenset({"phase", "final"}),
+    )
+    if not isinstance(payload.get("hasPhaseReceipt"), bool):
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_stage_summary_has_phase_receipt"
+        )
+    if not isinstance(payload.get("hasFinalReceipt"), bool):
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_stage_summary_has_final_receipt"
+        )
+    if payload.get("officialVerdictFieldsRedacted") is not True:
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_stage_summary_not_redacted"
+        )
+
+
+def _validate_context_version(payload: Any) -> None:
+    if payload is None:
+        return
+    if not isinstance(payload, dict):
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_version_context_not_object"
+        )
+    _validate_exact_keys(
+        payload,
+        expected_keys=ASSISTANT_CONTEXT_VERSION_KEYS,
+        path="version_context",
+    )
+    for key in ASSISTANT_CONTEXT_VERSION_KEYS:
+        _validate_optional_token(payload.get(key), path=f"version_context_{key}")
+
+
 def validate_assistant_advisory_contract(payload: dict[str, Any]) -> None:
     actual_keys = set(payload.keys())
     if actual_keys != ASSISTANT_ADVISORY_TOP_LEVEL_KEYS:
@@ -218,10 +413,35 @@ def validate_assistant_advisory_contract(payload: dict[str, Any]) -> None:
             "assistant_advisory_contract_capability_boundary:advisoryOnly"
         )
 
+    shared_context = _validate_dict_field(payload, "sharedContext")
+    advisory_context = _validate_dict_field(payload, "advisoryContext")
+    room_context_snapshot = _validate_dict_field(
+        advisory_context,
+        "roomContextSnapshot",
+    )
+    stage_summary = _validate_dict_field(advisory_context, "stageSummary")
+    _validate_room_context_snapshot(
+        shared_context,
+        expected_session_id=payload["sessionId"],
+    )
+    _validate_room_context_snapshot(
+        room_context_snapshot,
+        expected_session_id=payload["sessionId"],
+    )
+    if shared_context != room_context_snapshot:
+        raise AssistantAdvisoryContractViolation(
+            "assistant_advisory_contract_room_context_snapshot_shared_mismatch"
+        )
+    _validate_stage_summary(stage_summary)
+    _validate_context_version(advisory_context.get("versionContext"))
+
     output = _validate_dict_field(payload, "output")
-    for key in ("sharedContext", "advisoryContext"):
+    for key, context_payload in (
+        ("sharedContext", shared_context),
+        ("advisoryContext", advisory_context),
+    ):
         found = _find_forbidden_key(
-            _validate_dict_field(payload, key),
+            context_payload,
             forbidden_keys=_ASSISTANT_ADVISORY_PUBLIC_FORBIDDEN_KEYS,
             path=key,
         )

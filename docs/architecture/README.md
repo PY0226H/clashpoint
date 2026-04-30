@@ -104,7 +104,8 @@ AI advisory / NPC Coach / Room QA 优先看：
 6. [route_group_assistant.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_assistant.py)
 7. [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py)
 8. [assistant_advisory_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_contract.py)
-9. [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
+9. [bootstrap_ops_panel_replay_payload_helpers.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/bootstrap_ops_panel_replay_payload_helpers.py)
+10. [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
 
 ### 3.4 AI Ops / Registry / Trust / Fairness / Review / Replay
 

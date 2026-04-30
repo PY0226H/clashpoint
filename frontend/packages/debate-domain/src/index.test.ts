@@ -15,6 +15,7 @@ vi.mock("@echoisle/api-client", () => ({
 }));
 
 import {
+  assertJudgeAssistantAdvisoryOutput,
   getOldestDebateMessageId,
   requestNpcCoachAdvice,
   requestRoomQaAnswer,
@@ -32,6 +33,18 @@ function advisoryOutput(
   agentKind: "npc_coach" | "room_qa",
   overrides?: Partial<JudgeAssistantAdvisoryOutput>,
 ): JudgeAssistantAdvisoryOutput {
+  const roomContextSnapshot = {
+    sessionId: 9,
+    scopeId: 1,
+    caseId: 42,
+    workflowStatus: "not_ready",
+    latestDispatchType: "final",
+    topicDomain: "public-policy",
+    phaseReceiptCount: 0,
+    finalReceiptCount: 1,
+    updatedAt: null,
+    officialVerdictFieldsRedacted: true,
+  };
   return {
     version: "assistant_advisory_contract_v1",
     agentKind,
@@ -50,8 +63,30 @@ function advisoryOutput(
       writesVerdictLedger: false,
       writesJudgeTrace: false,
     },
-    sharedContext: {},
-    advisoryContext: {},
+    sharedContext: roomContextSnapshot,
+    advisoryContext: {
+      advisoryOnly: true,
+      roomContextSnapshot,
+      stageSummary: {
+        stage: "final_context_available",
+        workflowStatus: "not_ready",
+        latestDispatchType: "final",
+        hasPhaseReceipt: false,
+        hasFinalReceipt: true,
+        officialVerdictFieldsRedacted: true,
+      },
+      versionContext: {
+        ruleVersion: "rule-v1",
+        rubricVersion: "rubric-v1",
+        judgePolicyVersion: "judge-policy-v1",
+      },
+      knowledgeGateway: {
+        advisoryOnly: true,
+      },
+      readPolicy: {
+        officialJudgeFeedbackAllowed: false,
+      },
+    },
     output: {},
     cacheProfile: {
       cacheable: false,
@@ -429,6 +464,8 @@ describe("debate-domain normalize helpers", () => {
     expect(view.message).toBe("辅助建议暂未启用，当前不会影响官方裁决。");
     expect(view.advisoryOnly).toBe(true);
     expect(view.accepted).toBe(false);
+    expect(view.contextLabel).toBe("已有最终上下文");
+    expect(view.receiptSummary).toBe("phase 0 / final 1");
   });
 
   it("fails closed when assistant advisory output includes official fields", async () => {
@@ -456,5 +493,28 @@ describe("debate-domain normalize helpers", () => {
         question: "当前争点是什么？",
       },
     );
+  });
+
+  it("fails closed when shared room context includes non-whitelisted fields", () => {
+    expect(() =>
+      assertJudgeAssistantAdvisoryOutput(
+        advisoryOutput("npc_coach", {
+          sharedContext: {
+            sessionId: 9,
+            scopeId: 1,
+            caseId: 42,
+            workflowStatus: "not_ready",
+            latestDispatchType: "phase",
+            topicDomain: "public-policy",
+            phaseReceiptCount: 1,
+            finalReceiptCount: 0,
+            updatedAt: null,
+            officialVerdictFieldsRedacted: true,
+            ruleVersion: "must-not-be-shared",
+          } satisfies JsonValue,
+        }),
+        "npc_coach",
+      ),
+    ).toThrow("room context snapshot");
   });
 });

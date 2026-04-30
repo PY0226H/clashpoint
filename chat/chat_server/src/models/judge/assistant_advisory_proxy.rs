@@ -277,6 +277,30 @@ pub(super) fn validate_assistant_advisory_payload(
     {
         return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
     }
+    let Some(shared_context) = object.get("sharedContext") else {
+        return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
+    };
+    if !assistant_room_context_snapshot_matches(shared_context, expected_session_id) {
+        return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
+    }
+    let advisory_context = object
+        .get("advisoryContext")
+        .and_then(Value::as_object)
+        .ok_or(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION)?;
+    let Some(room_context_snapshot) = advisory_context.get("roomContextSnapshot") else {
+        return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
+    };
+    if room_context_snapshot != shared_context
+        || !assistant_room_context_snapshot_matches(room_context_snapshot, expected_session_id)
+    {
+        return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
+    }
+    let Some(stage_summary) = advisory_context.get("stageSummary") else {
+        return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
+    };
+    if !assistant_stage_summary_matches(stage_summary) {
+        return Err(JUDGE_ASSISTANT_ADVISORY_REASON_CONTRACT_VIOLATION);
+    }
     for key in ["sharedContext", "advisoryContext", "output"] {
         if assistant_value_contains_forbidden_key(
             object.get(key).unwrap_or(&Value::Null),
@@ -378,6 +402,95 @@ fn assistant_top_level_keys_match(object: &Map<String, Value>) -> bool {
         "cacheProfile",
     ];
     object.len() == KEYS.len() && KEYS.iter().all(|key| object.contains_key(*key))
+}
+
+fn assistant_object_has_exact_keys(value: &Value, keys: &[&str]) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
+}
+
+fn assistant_context_non_negative_u64(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_u64).is_some()
+}
+
+fn assistant_context_optional_string(value: Option<&Value>) -> bool {
+    matches!(value, None | Some(Value::Null)) || value.and_then(Value::as_str).is_some()
+}
+
+fn assistant_context_optional_dispatch_type(value: Option<&Value>) -> bool {
+    matches!(value, None | Some(Value::Null))
+        || matches!(value.and_then(Value::as_str), Some("phase" | "final"))
+}
+
+fn assistant_room_context_snapshot_matches(value: &Value, expected_session_id: u64) -> bool {
+    const KEYS: &[&str] = &[
+        "sessionId",
+        "scopeId",
+        "caseId",
+        "workflowStatus",
+        "latestDispatchType",
+        "topicDomain",
+        "phaseReceiptCount",
+        "finalReceiptCount",
+        "updatedAt",
+        "officialVerdictFieldsRedacted",
+    ];
+    if !assistant_object_has_exact_keys(value, KEYS) {
+        return false;
+    }
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.get("sessionId").and_then(Value::as_u64) == Some(expected_session_id)
+        && assistant_context_non_negative_u64(object.get("scopeId"))
+        && (matches!(object.get("caseId"), Some(Value::Null))
+            || object.get("caseId").and_then(Value::as_u64).is_some())
+        && assistant_context_optional_string(object.get("workflowStatus"))
+        && assistant_context_optional_dispatch_type(object.get("latestDispatchType"))
+        && assistant_context_optional_string(object.get("topicDomain"))
+        && assistant_context_non_negative_u64(object.get("phaseReceiptCount"))
+        && assistant_context_non_negative_u64(object.get("finalReceiptCount"))
+        && assistant_context_optional_string(object.get("updatedAt"))
+        && object
+            .get("officialVerdictFieldsRedacted")
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
+fn assistant_stage_summary_matches(value: &Value) -> bool {
+    const KEYS: &[&str] = &[
+        "stage",
+        "workflowStatus",
+        "latestDispatchType",
+        "hasPhaseReceipt",
+        "hasFinalReceipt",
+        "officialVerdictFieldsRedacted",
+    ];
+    if !assistant_object_has_exact_keys(value, KEYS) {
+        return false;
+    }
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    matches!(
+        object.get("stage").and_then(Value::as_str),
+        Some("room_context_only" | "phase_context_available" | "final_context_available")
+    ) && assistant_context_optional_string(object.get("workflowStatus"))
+        && assistant_context_optional_dispatch_type(object.get("latestDispatchType"))
+        && object
+            .get("hasPhaseReceipt")
+            .and_then(Value::as_bool)
+            .is_some()
+        && object
+            .get("hasFinalReceipt")
+            .and_then(Value::as_bool)
+            .is_some()
+        && object
+            .get("officialVerdictFieldsRedacted")
+            .and_then(Value::as_bool)
+            == Some(true)
 }
 
 fn normalize_assistant_contract_key(key: &str) -> String {

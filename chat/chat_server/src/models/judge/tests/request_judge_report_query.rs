@@ -591,6 +591,17 @@ fn mock_assistant_advisory_payload(
     case_id: Option<u64>,
     extra_payload: &Value,
 ) -> Value {
+    let latest_dispatch_type = if case_id.is_some() {
+        json!("final")
+    } else {
+        Value::Null
+    };
+    let stage = if case_id.is_some() {
+        "final_context_available"
+    } else {
+        "room_context_only"
+    };
+    let final_receipt_count = if case_id.is_some() { 1 } else { 0 };
     let mut payload = json!({
         "version": "assistant_advisory_contract_v1",
         "agentKind": agent_kind,
@@ -611,11 +622,53 @@ fn mock_assistant_advisory_payload(
         },
         "sharedContext": {
             "sessionId": session_id,
-            "caseId": case_id
+            "scopeId": 1,
+            "caseId": case_id,
+            "workflowStatus": "not_ready",
+            "latestDispatchType": latest_dispatch_type,
+            "topicDomain": Value::Null,
+            "phaseReceiptCount": 0,
+            "finalReceiptCount": final_receipt_count,
+            "updatedAt": Value::Null,
+            "officialVerdictFieldsRedacted": true
         },
         "advisoryContext": {
-            "agentKind": agent_kind,
-            "source": "mock"
+            "advisoryOnly": true,
+            "roomContextSnapshot": {
+                "sessionId": session_id,
+                "scopeId": 1,
+                "caseId": case_id,
+                "workflowStatus": "not_ready",
+                "latestDispatchType": latest_dispatch_type,
+                "topicDomain": Value::Null,
+                "phaseReceiptCount": 0,
+                "finalReceiptCount": final_receipt_count,
+                "updatedAt": Value::Null,
+                "officialVerdictFieldsRedacted": true
+            },
+            "stageSummary": {
+                "stage": stage,
+                "workflowStatus": "not_ready",
+                "latestDispatchType": latest_dispatch_type,
+                "hasPhaseReceipt": false,
+                "hasFinalReceipt": case_id.is_some(),
+                "officialVerdictFieldsRedacted": true
+            },
+            "versionContext": {
+                "ruleVersion": Value::Null,
+                "rubricVersion": Value::Null,
+                "judgePolicyVersion": Value::Null
+            },
+            "knowledgeGateway": {
+                "useCase": agent_kind,
+                "advisoryOnly": true
+            },
+            "readPolicy": {
+                "allowedSources": ["room_context_snapshot", "stage_summary", "knowledge_gateway"],
+                "forbiddenWriteTargets": ["verdict_ledger", "judge_trace"],
+                "forbiddenOfficialRoles": ["fairness_sentinel", "chief_arbiter"],
+                "officialJudgeFeedbackAllowed": false
+            }
         },
         "output": {
             "message": "not ready"

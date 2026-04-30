@@ -8,6 +8,7 @@ from .assistant_advisory_contract import (
     ASSISTANT_ADVISORY_CONTRACT_VERSION,
     ASSISTANT_ADVISORY_FORBIDDEN_OFFICIAL_ROLES,
     ASSISTANT_ADVISORY_FORBIDDEN_WRITE_TARGETS,
+    ASSISTANT_CONTEXT_VERSION_KEYS,
     AssistantAdvisoryContractViolation,
     build_assistant_advisory_cache_profile,
     sanitize_assistant_advisory_output,
@@ -47,28 +48,36 @@ def build_assistant_room_context_snapshot(
     *,
     shared_context: dict[str, Any],
 ) -> dict[str, Any]:
-    snapshot: dict[str, Any] = {}
-    for key in (
-        "source",
-        "sessionId",
-        "scopeId",
-        "caseId",
-        "latestDispatchType",
-        "workflowStatus",
-        "ruleVersion",
-        "rubricVersion",
-        "judgePolicyVersion",
-        "topicDomain",
-        "retrievalProfile",
-        "phaseReceiptCount",
-        "finalReceiptCount",
-        "updatedAt",
-    ):
-        value = shared_context.get(key)
-        if value is not None:
-            snapshot[key] = value
-    snapshot["officialVerdictFieldsRedacted"] = True
-    return snapshot
+    return {
+        "sessionId": _optional_context_int(shared_context.get("sessionId")) or 0,
+        "scopeId": _optional_context_int(shared_context.get("scopeId")) or 1,
+        "caseId": _optional_context_int(shared_context.get("caseId")),
+        "workflowStatus": _optional_context_token(shared_context.get("workflowStatus")),
+        "latestDispatchType": _optional_context_token(
+            shared_context.get("latestDispatchType")
+        ),
+        "topicDomain": _optional_context_token(shared_context.get("topicDomain")),
+        "phaseReceiptCount": _optional_context_int(
+            shared_context.get("phaseReceiptCount")
+        )
+        or 0,
+        "finalReceiptCount": _optional_context_int(
+            shared_context.get("finalReceiptCount")
+        )
+        or 0,
+        "updatedAt": _optional_context_token(shared_context.get("updatedAt")),
+        "officialVerdictFieldsRedacted": True,
+    }
+
+
+def build_assistant_version_context(
+    *,
+    shared_context: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        key: _optional_context_token(shared_context.get(key))
+        for key in sorted(ASSISTANT_CONTEXT_VERSION_KEYS)
+    }
 
 
 def build_assistant_stage_summary(
@@ -105,7 +114,7 @@ def build_assistant_gateway_trace_snapshot(
     *,
     agent_kind: str,
     trace_id: str | None,
-    room_context_snapshot: dict[str, Any],
+    requested_retrieval_profile: Any,
     build_gateway_trace_snapshot: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     advisory_policy_version = (
@@ -115,7 +124,7 @@ def build_assistant_gateway_trace_snapshot(
     raw_snapshot = build_gateway_trace_snapshot(
         trace_id=trace_id,
         requested_policy_version=advisory_policy_version,
-        requested_retrieval_profile=room_context_snapshot.get("retrievalProfile"),
+        requested_retrieval_profile=_optional_context_token(requested_retrieval_profile),
         use_case=agent_kind,
     )
     snapshot = dict(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
@@ -151,19 +160,21 @@ def build_assistant_advisory_context(
     room_context_snapshot = build_assistant_room_context_snapshot(
         shared_context=shared_context,
     )
+    version_context = build_assistant_version_context(shared_context=shared_context)
     stage_summary = build_assistant_stage_summary(
         room_context_snapshot=room_context_snapshot,
     )
     knowledge_gateway = build_assistant_gateway_trace_snapshot(
         agent_kind=agent_kind,
         trace_id=trace_id,
-        room_context_snapshot=room_context_snapshot,
+        requested_retrieval_profile=shared_context.get("retrievalProfile"),
         build_gateway_trace_snapshot=build_gateway_trace_snapshot,
     )
     return {
         "advisoryOnly": True,
         "roomContextSnapshot": room_context_snapshot,
         "stageSummary": stage_summary,
+        "versionContext": version_context,
         "knowledgeGateway": knowledge_gateway,
         "readPolicy": {
             "allowedSources": list(ASSISTANT_ADVISORY_ALLOWED_CONTEXT_SOURCES),

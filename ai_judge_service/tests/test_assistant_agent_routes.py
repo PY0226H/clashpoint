@@ -9,6 +9,8 @@ from typing import Any
 from app.applications.assistant_advisory_contract import (
     ASSISTANT_ADVISORY_CONTRACT_VERSION,
     ASSISTANT_ADVISORY_TOP_LEVEL_KEYS,
+    ASSISTANT_ROOM_CONTEXT_SNAPSHOT_KEYS,
+    ASSISTANT_STAGE_SUMMARY_KEYS,
 )
 from app.applications.assistant_agent_routes import (
     AssistantAgentRouteError,
@@ -81,11 +83,22 @@ class AssistantAgentRoutesTests(unittest.TestCase):
 
         self.assertTrue(payload["advisoryOnly"])
         self.assertEqual(payload["roomContextSnapshot"]["caseId"], 3001)
+        self.assertEqual(
+            set(payload["roomContextSnapshot"].keys()),
+            ASSISTANT_ROOM_CONTEXT_SNAPSHOT_KEYS,
+        )
         self.assertNotIn("winnerHint", payload["roomContextSnapshot"])
         self.assertNotIn("debateSummary", payload["roomContextSnapshot"])
         self.assertNotIn("verdictReason", payload["roomContextSnapshot"])
+        self.assertNotIn("retrievalProfile", payload["roomContextSnapshot"])
+        self.assertNotIn("ruleVersion", payload["roomContextSnapshot"])
+        self.assertEqual(set(payload["stageSummary"].keys()), ASSISTANT_STAGE_SUMMARY_KEYS)
         self.assertEqual(payload["stageSummary"]["stage"], "final_context_available")
         self.assertTrue(payload["stageSummary"]["officialVerdictFieldsRedacted"])
+        self.assertEqual(
+            set(payload["versionContext"].keys()),
+            {"ruleVersion", "rubricVersion", "judgePolicyVersion"},
+        )
         self.assertEqual(
             payload["knowledgeGateway"]["policyBinding"]["policyVersion"],
             "room_qa_advisory_policy_v1",
@@ -106,7 +119,7 @@ class AssistantAgentRoutesTests(unittest.TestCase):
         payload = build_assistant_gateway_trace_snapshot(
             agent_kind="npc_coach",
             trace_id="trace-npc-1001",
-            room_context_snapshot={"retrievalProfile": "hybrid_v1"},
+            requested_retrieval_profile="hybrid_v1",
             build_gateway_trace_snapshot=lambda **kwargs: {
                 "traceId": kwargs["trace_id"],
                 "useCase": "judge",
@@ -143,6 +156,14 @@ class AssistantAgentRoutesTests(unittest.TestCase):
                 "caseId": 3001,
                 "latestDispatchType": "phase",
                 "retrievalProfile": "hybrid_v1",
+                "phaseReceiptCount": 1,
+                "finalReceiptCount": 0,
+                "workflowStatus": "done",
+                "topicDomain": "public-policy",
+                "updatedAt": "2026-04-30T00:00:00Z",
+                "ruleVersion": "rule-v1",
+                "rubricVersion": "rubric-v1",
+                "judgePolicyVersion": "judge-policy-v1",
                 "winnerHint": "pro",
                 "verdictReason": "official-chain-field",
             }
@@ -195,8 +216,13 @@ class AssistantAgentRoutesTests(unittest.TestCase):
         self.assertEqual(route_payload["agentKind"], "npc_coach")
         self.assertEqual(route_payload["sessionId"], 2001)
         self.assertEqual(route_payload["sharedContext"]["scopeId"], 9)
+        self.assertEqual(
+            set(route_payload["sharedContext"].keys()),
+            ASSISTANT_ROOM_CONTEXT_SNAPSHOT_KEYS,
+        )
         self.assertNotIn("winnerHint", route_payload["sharedContext"])
         self.assertNotIn("verdictReason", route_payload["sharedContext"])
+        self.assertNotIn("ruleVersion", route_payload["sharedContext"])
         self.assertTrue(route_payload["advisoryContext"]["advisoryOnly"])
         self.assertFalse(
             route_payload["advisoryContext"]["knowledgeGateway"]["policyBinding"][
@@ -262,15 +288,34 @@ class AssistantAgentRoutesTests(unittest.TestCase):
             session_id=2002,
             advisory_context={
                 "advisoryOnly": True,
-                "roomContextSnapshot": {
-                    "sessionId": 2002,
-                    "caseId": 3002,
-                    "officialVerdictFieldsRedacted": True,
+                    "roomContextSnapshot": {
+                        "sessionId": 2002,
+                        "scopeId": 1,
+                        "caseId": 3002,
+                        "workflowStatus": None,
+                        "latestDispatchType": None,
+                        "topicDomain": None,
+                        "phaseReceiptCount": 0,
+                        "finalReceiptCount": 0,
+                        "updatedAt": None,
+                        "officialVerdictFieldsRedacted": True,
+                    },
+                    "stageSummary": {
+                        "stage": "room_context_only",
+                        "workflowStatus": None,
+                        "latestDispatchType": None,
+                        "hasPhaseReceipt": False,
+                        "hasFinalReceipt": False,
+                        "officialVerdictFieldsRedacted": True,
+                    },
+                    "versionContext": {
+                        "ruleVersion": None,
+                        "rubricVersion": None,
+                        "judgePolicyVersion": None,
+                    },
+                    "knowledgeGateway": {},
+                    "readPolicy": {},
                 },
-                "stageSummary": {"officialVerdictFieldsRedacted": True},
-                "knowledgeGateway": {},
-                "readPolicy": {},
-            },
             execution_result=SimpleNamespace(
                 status="not_ready",
                 output={
@@ -309,10 +354,29 @@ class AssistantAgentRoutesTests(unittest.TestCase):
                     "advisoryOnly": True,
                     "roomContextSnapshot": {
                         "sessionId": 2003,
+                        "scopeId": 1,
                         "caseId": 3003,
+                        "workflowStatus": None,
+                        "latestDispatchType": None,
+                        "topicDomain": None,
+                        "phaseReceiptCount": 0,
+                        "finalReceiptCount": 0,
+                        "updatedAt": None,
                         "officialVerdictFieldsRedacted": True,
                     },
-                    "stageSummary": {"officialVerdictFieldsRedacted": True},
+                    "stageSummary": {
+                        "stage": "room_context_only",
+                        "workflowStatus": None,
+                        "latestDispatchType": None,
+                        "hasPhaseReceipt": False,
+                        "hasFinalReceipt": False,
+                        "officialVerdictFieldsRedacted": True,
+                    },
+                    "versionContext": {
+                        "ruleVersion": None,
+                        "rubricVersion": None,
+                        "judgePolicyVersion": None,
+                    },
                     "knowledgeGateway": {},
                     "readPolicy": {},
                 },
