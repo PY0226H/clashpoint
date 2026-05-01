@@ -169,6 +169,66 @@ seed_stage_closure_plan() {
 EOF_PLAN
 }
 
+seed_release_readiness_summary() {
+  local dir="$1"
+  local decision="${2:-env_blocked}"
+  mkdir -p "$dir"
+  cat >"$dir/ai_judge_release_readiness_artifact_summary.json" <<EOF_JSON
+{
+  "version": "release-readiness-artifact-summary-v1",
+  "artifactRef": "release-readiness-artifact-test",
+  "manifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "evidenceVersion": "policy-release-readiness-evidence-v1",
+  "decision": "$decision",
+  "storageMode": "local_reference",
+  "p41ControlPlaneStatus": "env_blocked",
+  "p41RuntimeReadinessStatus": "ready",
+  "p41ChatProxyStatus": "ready",
+  "p41FrontendContractStatus": "ready",
+  "p41CalibrationDecisionLogStatus": "ready",
+  "p41PanelShadowCandidateStatus": "env_blocked",
+  "p41RuntimeOpsPackStatus": "local_reference_ready",
+  "redactionContract": {
+    "storageUriVisible": false,
+    "objectStorePathVisible": false
+  }
+}
+EOF_JSON
+}
+
+write_artifact_store_healthcheck_evidence() {
+  local file="$1"
+  local ready="$2"
+  local roundtrip_status="$3"
+  local blocker_code="${4:-null}"
+  local blocker_value="null"
+  if [[ "$blocker_code" != "null" ]]; then
+    blocker_value="\"$blocker_code\""
+  fi
+  cat >"$file" <<EOF_JSON
+{
+  "version": "artifact-store-healthcheck-evidence-v1",
+  "provider": "s3_compatible",
+  "status": "$([[ "$ready" == "true" ]] && echo "ready" || echo "blocked")",
+  "productionReady": $ready,
+  "roundtrip": {
+    "status": "$roundtrip_status"
+  },
+  "realEnvWindow": {
+    "productionArtifactStoreReady": $ready,
+    "recommendedEnv": {
+      "PRODUCTION_ARTIFACT_STORE_READY": "$ready"
+    },
+    "blockerCode": $blocker_value
+  },
+  "healthcheck": {
+    "writeReadRoundtripStatus": "$roundtrip_status",
+    "productionReady": $ready
+  }
+}
+EOF_JSON
+}
+
 run_window_closure() {
   local work="$1"
   local plan_doc="$work/plan-stage-closure.md"
@@ -201,13 +261,15 @@ BLOCKED_STDOUT="$TMP_DIR/blocked.stdout"
 run_window_closure "$WORK_BLOCKED" >"$BLOCKED_STDOUT"
 expect_contains "blocked status" "ai_judge_real_env_window_closure_status: env_blocked" "$BLOCKED_STDOUT"
 expect_contains "blocked p5 status" "p5_status: env_blocked" "$BLOCKED_STDOUT"
-expect_contains "blocked runtime pack status" "runtime_ops_pack_status: env_blocked" "$BLOCKED_STDOUT"
+expect_contains "blocked runtime pack status" "runtime_ops_pack_status: evidence_missing" "$BLOCKED_STDOUT"
 
 # 场景2：真实环境通过 -> pass
 WORK_PASS="$TMP_DIR/pass"
 EVIDENCE_PASS="$WORK_PASS/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_PASS"
 seed_tracks_real "$EVIDENCE_PASS"
+seed_release_readiness_summary "$EVIDENCE_PASS" "allowed"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_PASS/ai_judge_artifact_store_healthcheck.json" "true" "pass"
 cat >"$EVIDENCE_PASS/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 CALIBRATION_ENV_MODE=real
@@ -215,7 +277,6 @@ REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
 REAL_SAMPLE_MANIFEST_READY=true
 REAL_PROVIDER_READY=true
 REAL_CALLBACK_READY=true
-PRODUCTION_ARTIFACT_STORE_READY=true
 BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
@@ -232,19 +293,25 @@ expect_contains "pass readiness input ready" "real_env_input_ready: true" "$PASS
 expect_contains "pass p5 status" "p5_status: pass" "$PASS_STDOUT"
 expect_contains "pass runtime pack status" "runtime_ops_pack_status: pass" "$PASS_STDOUT"
 expect_contains "pass real pass ready" "real_pass_ready: true" "$PASS_STDOUT"
+expect_contains "pass artifact evidence ready" "production_artifact_store_evidence_status: ready" "$PASS_STDOUT"
+expect_contains "pass artifact evidence roundtrip" "production_artifact_store_evidence_roundtrip_status: pass" "$PASS_STDOUT"
 expect_contains "pass json" "\"status\": \"pass\"" "$PASS_JSON"
 expect_contains "pass json readiness block" "\"readiness\"" "$PASS_JSON"
 expect_contains "pass json readiness input" "\"input_ready\": true" "$PASS_JSON"
+expect_contains "pass json artifact evidence status" "\"production_artifact_store_evidence_status\": \"ready\"" "$PASS_JSON"
 expect_contains "pass json real pass ready" "\"ready\": true" "$PASS_JSON"
 expect_contains "pass md title" "# ai-judge-real-env-window-closure" "$PASS_MD"
 expect_contains "pass closure env real pass" "REAL_PASS_READY=true" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
 expect_contains "pass closure env readiness" "REAL_ENV_READINESS_STATUS=pass" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
+expect_contains "pass closure env artifact ready" "PRODUCTION_ARTIFACT_STORE_READY=true" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
+expect_contains "pass closure env artifact evidence" "PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS=ready" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
 
 # 场景2b：真实阶段数据齐全但 readiness 输入缺失 -> env_blocked，防止 fake pass
 WORK_INPUT_BLOCKED="$TMP_DIR/input-blocked"
 EVIDENCE_INPUT_BLOCKED="$WORK_INPUT_BLOCKED/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_INPUT_BLOCKED"
 seed_tracks_real "$EVIDENCE_INPUT_BLOCKED"
+seed_release_readiness_summary "$EVIDENCE_INPUT_BLOCKED"
 cat >"$EVIDENCE_INPUT_BLOCKED/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 CALIBRATION_ENV_MODE=real
@@ -255,11 +322,63 @@ run_window_closure "$WORK_INPUT_BLOCKED" >"$INPUT_BLOCKED_STDOUT"
 expect_contains "input blocked status" "ai_judge_real_env_window_closure_status: env_blocked" "$INPUT_BLOCKED_STDOUT"
 expect_contains "input blocked readiness code" "real_sample_manifest_missing" "$INPUT_BLOCKED_STDOUT"
 
+# 场景2c：对象存储 healthcheck 证据未通过 -> env_blocked，并保留具体 blocker
+WORK_ARTIFACT_BLOCKED="$TMP_DIR/artifact-blocked"
+EVIDENCE_ARTIFACT_BLOCKED="$WORK_ARTIFACT_BLOCKED/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_ARTIFACT_BLOCKED"
+seed_tracks_real "$EVIDENCE_ARTIFACT_BLOCKED"
+seed_release_readiness_summary "$EVIDENCE_ARTIFACT_BLOCKED"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_ARTIFACT_BLOCKED/ai_judge_artifact_store_healthcheck.json" "false" "put_failed" "production_artifact_store_roundtrip_failed"
+cat >"$EVIDENCE_ARTIFACT_BLOCKED/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+
+ARTIFACT_BLOCKED_STDOUT="$TMP_DIR/artifact-blocked.stdout"
+run_window_closure "$WORK_ARTIFACT_BLOCKED" >"$ARTIFACT_BLOCKED_STDOUT"
+expect_contains "artifact blocked status" "ai_judge_real_env_window_closure_status: env_blocked" "$ARTIFACT_BLOCKED_STDOUT"
+expect_contains "artifact blocked evidence status" "production_artifact_store_evidence_status: blocked" "$ARTIFACT_BLOCKED_STDOUT"
+expect_contains "artifact blocked readiness code" "production_artifact_store_roundtrip_failed" "$ARTIFACT_BLOCKED_STDOUT"
+
+# 场景2d：显式 ready 与失败 evidence 冲突时，以 evidence 为准，避免 fake pass
+WORK_ARTIFACT_CONFLICT="$TMP_DIR/artifact-conflict"
+EVIDENCE_ARTIFACT_CONFLICT="$WORK_ARTIFACT_CONFLICT/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_ARTIFACT_CONFLICT"
+seed_tracks_real "$EVIDENCE_ARTIFACT_CONFLICT"
+seed_release_readiness_summary "$EVIDENCE_ARTIFACT_CONFLICT"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_ARTIFACT_CONFLICT/ai_judge_artifact_store_healthcheck.json" "false" "read_failed" "production_artifact_store_roundtrip_failed"
+cat >"$EVIDENCE_ARTIFACT_CONFLICT/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+
+ARTIFACT_CONFLICT_STDOUT="$TMP_DIR/artifact-conflict.stdout"
+run_window_closure "$WORK_ARTIFACT_CONFLICT" >"$ARTIFACT_CONFLICT_STDOUT"
+expect_contains "artifact conflict status" "ai_judge_real_env_window_closure_status: env_blocked" "$ARTIFACT_CONFLICT_STDOUT"
+expect_contains "artifact conflict evidence status" "production_artifact_store_evidence_status: blocked" "$ARTIFACT_CONFLICT_STDOUT"
+expect_contains "artifact conflict ready overridden" "PRODUCTION_ARTIFACT_STORE_READY=false" "$EVIDENCE_ARTIFACT_CONFLICT/ai_judge_real_env_window_closure.env"
+
 # 场景3：阈值违反 -> threshold_violation
 WORK_VIOLATION="$TMP_DIR/violation"
 EVIDENCE_VIOLATION="$WORK_VIOLATION/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_VIOLATION"
 seed_tracks_real "$EVIDENCE_VIOLATION" "0.45" "1600" "2900" "false" "0.90" "0.90" "0.12"
+seed_release_readiness_summary "$EVIDENCE_VIOLATION" "blocked"
 cat >"$EVIDENCE_VIOLATION/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 CALIBRATION_ENV_MODE=real
@@ -283,6 +402,7 @@ WORK_PENDING="$TMP_DIR/pending"
 EVIDENCE_PENDING="$WORK_PENDING/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_PENDING"
 seed_tracks_real "$EVIDENCE_PENDING"
+seed_release_readiness_summary "$EVIDENCE_PENDING"
 cat >"$EVIDENCE_PENDING/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 CALIBRATION_ENV_MODE=real
@@ -307,6 +427,7 @@ WORK_LOCAL="$TMP_DIR/local"
 EVIDENCE_LOCAL="$WORK_LOCAL/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_LOCAL"
 seed_tracks_local "$EVIDENCE_LOCAL"
+seed_release_readiness_summary "$EVIDENCE_LOCAL"
 cat >"$EVIDENCE_LOCAL/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=false
 LOCAL_REFERENCE_ENV_READY=true
@@ -326,6 +447,7 @@ WORK_INGEST="$TMP_DIR/ingest"
 EVIDENCE_INGEST="$WORK_INGEST/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_INGEST"
 seed_tracks_local "$EVIDENCE_INGEST"
+seed_release_readiness_summary "$EVIDENCE_INGEST"
 cat >"$EVIDENCE_INGEST/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=false
 LOCAL_REFERENCE_ENV_READY=true
