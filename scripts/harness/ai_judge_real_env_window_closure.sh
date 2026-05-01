@@ -538,6 +538,10 @@ derive_readiness_inputs() {
     blocker_codes+=("$artifact_blocker_code")
     blocker_hints+=("运行 artifact_store_healthcheck.py --enable-roundtrip 并确认 productionReady=true；或设置 PRODUCTION_ARTIFACT_STORE_READY=true")
   fi
+  if [[ "$PREFLIGHT_ONLY" == "true" && "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS" == "not_provided" ]]; then
+    blocker_codes+=("production_artifact_store_evidence_not_provided")
+    blocker_hints+=("preflight 需要提供 artifact_store_healthcheck.py 输出的对象存储 evidence")
+  fi
   if ! is_truthy "$BENCHMARK_TARGETS_READY"; then
     blocker_codes+=("benchmark_targets_not_ready")
     blocker_hints+=("设置 BENCHMARK_TARGETS_READY=true，确认 benchmark 阈值与样本口径已冻结")

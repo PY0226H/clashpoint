@@ -334,6 +334,30 @@ expect_contains "preflight runtime not run" "runtime_ops_pack_status: not_run" "
 expect_contains "preflight env flag" "PREFLIGHT_ONLY=true" "$EVIDENCE_PREFLIGHT/ai_judge_real_env_window_closure.env"
 expect_contains "preflight json flag" "\"preflight_only\": \"true\"" "$PREFLIGHT_JSON"
 
+# 场景2a-1：preflight-only 不接受手工 artifact ready 替代 healthcheck evidence
+WORK_PREFLIGHT_NO_EVIDENCE="$TMP_DIR/preflight-no-evidence"
+EVIDENCE_PREFLIGHT_NO_EVIDENCE="$WORK_PREFLIGHT_NO_EVIDENCE/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_PREFLIGHT_NO_EVIDENCE"
+cat >"$EVIDENCE_PREFLIGHT_NO_EVIDENCE/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+
+PREFLIGHT_NO_EVIDENCE_STDOUT="$TMP_DIR/preflight-no-evidence.stdout"
+run_window_closure "$WORK_PREFLIGHT_NO_EVIDENCE" --preflight-only >"$PREFLIGHT_NO_EVIDENCE_STDOUT"
+expect_contains "preflight no evidence blocked" "ai_judge_real_env_window_closure_status: env_blocked" "$PREFLIGHT_NO_EVIDENCE_STDOUT"
+expect_contains "preflight no evidence status" "production_artifact_store_evidence_status: not_provided" "$PREFLIGHT_NO_EVIDENCE_STDOUT"
+expect_contains "preflight no evidence blocker" "production_artifact_store_evidence_not_provided" "$PREFLIGHT_NO_EVIDENCE_STDOUT"
+expect_contains "preflight no evidence no p5" "p5_status: not_run" "$PREFLIGHT_NO_EVIDENCE_STDOUT"
+
 # 场景2a-2：preflight-only 输入缺失时阻断，且不执行子阶段
 WORK_PREFLIGHT_BLOCKED="$TMP_DIR/preflight-blocked"
 EVIDENCE_PREFLIGHT_BLOCKED="$WORK_PREFLIGHT_BLOCKED/docs/loadtest/evidence"
