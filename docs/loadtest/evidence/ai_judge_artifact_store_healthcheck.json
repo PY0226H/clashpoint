@@ -1,0 +1,39 @@
+{
+  "generatedAt": "2026-05-01T22:03:46.451819Z",
+  "healthcheck": {
+    "bucketConfigured": false,
+    "endpointConfigured": false,
+    "lastErrorCode": "local_provider_not_production",
+    "prefixConfigured": false,
+    "productionReady": false,
+    "provider": "local",
+    "status": "local_reference",
+    "uriScheme": "local-artifact",
+    "version": "artifact-store-healthcheck-v1",
+    "writeReadRoundtripStatus": "not_applicable"
+  },
+  "productionReady": false,
+  "provider": "local",
+  "realEnvWindow": {
+    "blockerCode": "production_artifact_store_local_reference",
+    "productionArtifactStoreReady": false,
+    "recommendedEnv": {
+      "PRODUCTION_ARTIFACT_STORE_READY": "false"
+    }
+  },
+  "redactionContract": {
+    "bucketNameVisible": false,
+    "endpointVisible": false,
+    "prefixVisible": false,
+    "secretVisible": false,
+    "storageUriVisible": false
+  },
+  "roundtrip": {
+    "enabled": true,
+    "lastErrorCode": "local_provider_not_production",
+    "source": "cli_override",
+    "status": "not_applicable"
+  },
+  "status": "local_reference",
+  "version": "artifact-store-healthcheck-evidence-v1"
+}

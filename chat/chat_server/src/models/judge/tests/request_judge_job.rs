@@ -1,6 +1,7 @@
 use super::*;
 use crate::models::CreateUser;
 use anyhow::Result;
+use serde_json::json;
 
 async fn create_user(state: &AppState, email: &str) -> Result<chat_core::User> {
     state
@@ -127,6 +128,34 @@ async fn seed_messages_for_session(state: &AppState, session_id: i64, count: usi
         .await?;
     }
     Ok(())
+}
+
+#[test]
+fn request_judge_job_input_should_reject_unknown_official_verdict_fields() {
+    let err = serde_json::from_value::<RequestJudgeJobInput>(json!({
+        "allowRejudge": false,
+        "winner": "pro"
+    }))
+    .expect_err("official judge job input must reject advisory/verdict fields");
+
+    let message = err.to_string();
+    assert!(message.contains("unknown field"));
+    assert!(message.contains("winner"));
+}
+
+#[test]
+fn request_judge_challenge_input_should_reject_verdict_mutation_fields() {
+    let err = serde_json::from_value::<RequestJudgeChallengeInput>(json!({
+        "idempotencyKey": "challenge-1",
+        "reasonCode": "manual_challenge",
+        "verdictEffect": {"winner": "con"},
+        "writesVerdictLedger": true
+    }))
+    .expect_err("challenge input must not accept direct verdict mutation fields");
+
+    let message = err.to_string();
+    assert!(message.contains("unknown field"));
+    assert!(message.contains("verdictEffect"));
 }
 
 #[tokio::test]

@@ -4,7 +4,7 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestJudgeJobInput {
     #[serde(default)]
     pub allow_rejudge: bool,
@@ -247,7 +247,7 @@ pub struct GetJudgeChallengeQuery {
 }
 
 #[derive(Debug, Clone, Default, ToSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestJudgeChallengeInput {
     pub idempotency_key: Option<String>,
     pub reason_code: Option<String>,
