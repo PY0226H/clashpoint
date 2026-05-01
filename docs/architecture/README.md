@@ -1,6 +1,6 @@
 # EchoIsle Architecture Map
 
-更新时间：2026-04-30
+更新时间：2026-05-01
 状态：当前主线轻量代码地图
 
 ---
@@ -143,6 +143,8 @@ Python AI Ops 优先看：
 12. [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
 13. [runtime_readiness_public_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_projection.py)
 14. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
+15. [artifact_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/artifact_pack.py)
+16. [artifact_store_healthcheck.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/scripts/artifact_store_healthcheck.py)
 
 ### 3.5 钱包 / IAP / 账本
 
@@ -272,6 +274,9 @@ Python AI Ops 优先看：
 5. `app/*.py`
    - 根层保留运行时策略、RAG、OpenAI client、callback、trace store、专项 gate
 
+6. `scripts/`
+   - AI 服务本地 gate、证据导出与运维辅助 CLI；生产对象存储 readiness 先看 `artifact_store_healthcheck.py`
+
 ### 5.2 最常用 AI 服务文件
 
 1. 裁判主链：
@@ -291,6 +296,8 @@ Python AI Ops 优先看：
    - [route_group_ops_read_model_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_ops_read_model_pack.py)
    - [runtime_readiness_public_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_contract.py)
    - [runtime_readiness_public_projection.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/runtime_readiness_public_projection.py)
+   - [artifact_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/artifact_pack.py)
+   - [artifact_store_healthcheck.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/scripts/artifact_store_healthcheck.py)
    - [facts repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py)
 
 3. RAG 与模型：

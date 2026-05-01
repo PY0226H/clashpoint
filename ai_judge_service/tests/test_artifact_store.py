@@ -17,6 +17,7 @@ from app.domain.artifacts import ArtifactRef
 from app.infra.artifacts import LocalArtifactStore, S3CompatibleArtifactStore
 from app.settings import load_settings
 from app.wiring import build_artifact_store
+from scripts import artifact_store_healthcheck
 
 
 class _FakeS3Client:
@@ -54,11 +55,7 @@ class _FakeS3Client:
         if self.fail_on_get:
             raise RuntimeError("s3_get_failed")
         if self.corrupt_get:
-            return {
-                "Body": BytesIO(
-                    b'{"probe":"artifact_store_healthcheck","version":"tampered"}'
-                )
-            }
+            return {"Body": BytesIO(b'{"probe":"artifact_store_healthcheck","version":"tampered"}')}
         return {"Body": BytesIO(self.objects[(Bucket, Key)])}
 
     def head_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
@@ -256,9 +253,7 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
                         "code": "registry_release_gate_fairness_benchmark_local_reference_only",
                     }
                 ],
-                "reasonCodes": [
-                    "registry_release_gate_fairness_benchmark_local_reference_only"
-                ],
+                "reasonCodes": ["registry_release_gate_fairness_benchmark_local_reference_only"],
                 "envBlockedComponents": ["fairnessBenchmark"],
                 "artifactRefs": ["internal-release-manifest"],
                 "realEnvEvidenceStatus": {
@@ -610,9 +605,7 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
                 "policyVersion": "policy-v3-prod",
                 "decision": "allowed",
                 "decisionCode": "registry_release_gate_allowed",
-                "componentStatuses": [
-                    {"component": "artifactStoreReadiness", "status": "ready"}
-                ],
+                "componentStatuses": [{"component": "artifactStoreReadiness", "status": "ready"}],
                 "realEnvEvidenceStatus": {
                     "status": "ready",
                     "source": "release_gate",
@@ -628,6 +621,117 @@ class ArtifactStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("endpoint", summary_text.lower())
         self.assertEqual(export["summary"]["artifactStore"]["provider"], "s3_compatible")
         self.assertTrue(export["summary"]["artifactStore"]["productionReady"])
+
+
+class ArtifactStoreHealthcheckCliTests(unittest.TestCase):
+    def test_evidence_should_keep_local_reference_out_of_real_env_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                "os.environ",
+                {
+                    "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "local",
+                    "AI_JUDGE_ARTIFACT_STORE_ROOT": tmpdir,
+                },
+                clear=True,
+            ):
+                evidence = asyncio_run_healthcheck(roundtrip_enabled=True)
+
+            self.assertEqual(evidence["version"], "artifact-store-healthcheck-evidence-v1")
+            self.assertEqual(evidence["provider"], "local")
+            self.assertEqual(evidence["status"], "local_reference")
+            self.assertFalse(evidence["productionReady"])
+            self.assertEqual(
+                evidence["realEnvWindow"],
+                {
+                    "productionArtifactStoreReady": False,
+                    "recommendedEnv": {"PRODUCTION_ARTIFACT_STORE_READY": "false"},
+                    "blockerCode": "production_artifact_store_local_reference",
+                },
+            )
+            self.assertNotIn(tmpdir, str(evidence))
+
+    def test_evidence_should_export_real_env_ready_signal_for_s3_roundtrip(self) -> None:
+        store = S3CompatibleArtifactStore(
+            bucket="judge-artifacts",
+            prefix="prod/ai-judge",
+            client=_FakeS3Client(),
+            endpoint_configured=True,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "s3_compatible",
+                "AI_JUDGE_ARTIFACT_BUCKET": "judge-artifacts",
+                "AI_JUDGE_ARTIFACT_PREFIX": "prod/ai-judge",
+                "AI_JUDGE_ARTIFACT_HEALTHCHECK_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            with patch(
+                "scripts.artifact_store_healthcheck.build_artifact_store",
+                return_value=store,
+            ):
+                evidence = asyncio_run_healthcheck()
+
+        self.assertEqual(evidence["provider"], "s3_compatible")
+        self.assertEqual(evidence["status"], "ready")
+        self.assertTrue(evidence["productionReady"])
+        self.assertEqual(evidence["roundtrip"]["source"], "settings")
+        self.assertEqual(evidence["roundtrip"]["status"], "pass")
+        self.assertEqual(
+            evidence["realEnvWindow"],
+            {
+                "productionArtifactStoreReady": True,
+                "recommendedEnv": {"PRODUCTION_ARTIFACT_STORE_READY": "true"},
+                "blockerCode": None,
+            },
+        )
+        self.assertNotIn("judge-artifacts", str(evidence))
+        self.assertNotIn("prod/ai-judge", str(evidence))
+
+    def test_cli_should_write_sanitized_evidence_and_fail_when_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "artifact_store_healthcheck.json"
+            with patch.dict(
+                "os.environ",
+                {
+                    "AI_JUDGE_ARTIFACT_STORE_PROVIDER": "local",
+                    "AI_JUDGE_ARTIFACT_STORE_ROOT": str(Path(tmpdir) / "artifacts"),
+                },
+                clear=True,
+            ):
+                code = artifact_store_healthcheck.main(
+                    [
+                        "--enable-roundtrip",
+                        "--output",
+                        str(output_path),
+                        "--fail-on-not-ready",
+                    ]
+                )
+
+            self.assertEqual(code, 1)
+            payload = json_load(output_path)
+            self.assertEqual(payload["status"], "local_reference")
+            self.assertEqual(
+                payload["realEnvWindow"]["recommendedEnv"],
+                {"PRODUCTION_ARTIFACT_STORE_READY": "false"},
+            )
+            self.assertNotIn(str(Path(tmpdir) / "artifacts"), output_path.read_text())
+
+
+def asyncio_run_healthcheck(*, roundtrip_enabled: bool | None = None) -> dict[str, object]:
+    import asyncio
+
+    return asyncio.run(
+        artifact_store_healthcheck.run_healthcheck(roundtrip_enabled=roundtrip_enabled)
+    )
+
+
+def json_load(path: Path) -> dict[str, object]:
+    import json
+
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

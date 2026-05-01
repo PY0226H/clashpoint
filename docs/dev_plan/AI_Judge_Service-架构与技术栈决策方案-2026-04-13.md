@@ -3,6 +3,13 @@
 状态：已拍板  
 目标：为 `ai_judge_service` 确定可落地的架构、技术栈、框架与关键技术决策，并兼顾未来 `AI NPC` 与 `辩论间问答 Agent` 扩展
 
+暂停声明（2026-05-01）：
+
+1. 根据最新产品决策，`NPC Coach App` 与 `Room QA App` 相关的一切开发内容全部暂停。
+2. 暂停范围包括：运行时注册、HTTP / chat / frontend 入口、prompt 与输出合同、真实 LLM executor、低延迟交互平面、Ops 证据、阶段计划和上线准备。
+3. 本文后续所有关于 `AI NPC`、`NPC Coach`、`Room QA`、`辩论间问答 Agent`、`Interactive Guidance Plane` 的内容仅保留为历史设计背景，不再作为当前开发依据。
+4. 当前有效开发主线只保留官方 `Judge App` / `Official Verdict Plane`，不得继续新增或推进 `NPC Coach` 与 `Room QA` 能力。
+
 ---
 
 ## 1. 一句话结论
