@@ -306,6 +306,56 @@ expect_contains "pass closure env readiness" "REAL_ENV_READINESS_STATUS=pass" "$
 expect_contains "pass closure env artifact ready" "PRODUCTION_ARTIFACT_STORE_READY=true" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
 expect_contains "pass closure env artifact evidence" "PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS=ready" "$EVIDENCE_PASS/ai_judge_real_env_window_closure.env"
 
+# 场景2a：preflight-only 只校验真实窗口输入，不执行 P5/runtime ops
+WORK_PREFLIGHT="$TMP_DIR/preflight"
+EVIDENCE_PREFLIGHT="$WORK_PREFLIGHT/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_PREFLIGHT"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_PREFLIGHT/ai_judge_artifact_store_healthcheck.json" "true" "pass"
+cat >"$EVIDENCE_PREFLIGHT/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+
+PREFLIGHT_STDOUT="$TMP_DIR/preflight.stdout"
+PREFLIGHT_JSON="$TMP_DIR/preflight.summary.json"
+run_window_closure "$WORK_PREFLIGHT" --preflight-only --emit-json "$PREFLIGHT_JSON" >"$PREFLIGHT_STDOUT"
+expect_contains "preflight status ready" "ai_judge_real_env_window_closure_status: preflight_ready" "$PREFLIGHT_STDOUT"
+expect_contains "preflight flag" "preflight_only: true" "$PREFLIGHT_STDOUT"
+expect_contains "preflight input ready" "real_env_input_ready: true" "$PREFLIGHT_STDOUT"
+expect_contains "preflight p5 not run" "p5_status: not_run" "$PREFLIGHT_STDOUT"
+expect_contains "preflight runtime not run" "runtime_ops_pack_status: not_run" "$PREFLIGHT_STDOUT"
+expect_contains "preflight env flag" "PREFLIGHT_ONLY=true" "$EVIDENCE_PREFLIGHT/ai_judge_real_env_window_closure.env"
+expect_contains "preflight json flag" "\"preflight_only\": \"true\"" "$PREFLIGHT_JSON"
+
+# 场景2a-2：preflight-only 输入缺失时阻断，且不执行子阶段
+WORK_PREFLIGHT_BLOCKED="$TMP_DIR/preflight-blocked"
+EVIDENCE_PREFLIGHT_BLOCKED="$WORK_PREFLIGHT_BLOCKED/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_PREFLIGHT_BLOCKED"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_PREFLIGHT_BLOCKED/ai_judge_artifact_store_healthcheck.json" "false" "read_failed" "production_artifact_store_roundtrip_failed"
+cat >"$EVIDENCE_PREFLIGHT_BLOCKED/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+
+PREFLIGHT_BLOCKED_STDOUT="$TMP_DIR/preflight-blocked.stdout"
+run_window_closure "$WORK_PREFLIGHT_BLOCKED" --preflight-only >"$PREFLIGHT_BLOCKED_STDOUT"
+expect_contains "preflight blocked status" "ai_judge_real_env_window_closure_status: env_blocked" "$PREFLIGHT_BLOCKED_STDOUT"
+expect_contains "preflight blocked no p5" "p5_status: not_run" "$PREFLIGHT_BLOCKED_STDOUT"
+expect_contains "preflight blocked manifest" "real_sample_manifest_missing" "$PREFLIGHT_BLOCKED_STDOUT"
+expect_contains "preflight blocked artifact" "production_artifact_store_roundtrip_failed" "$PREFLIGHT_BLOCKED_STDOUT"
+
 # 场景2b：真实阶段数据齐全但 readiness 输入缺失 -> env_blocked，防止 fake pass
 WORK_INPUT_BLOCKED="$TMP_DIR/input-blocked"
 EVIDENCE_INPUT_BLOCKED="$WORK_INPUT_BLOCKED/docs/loadtest/evidence"

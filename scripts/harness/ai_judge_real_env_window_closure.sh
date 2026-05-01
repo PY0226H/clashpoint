@@ -13,6 +13,7 @@ STAGE_CLOSURE_PLAN_DOC=""
 STAGE_CLOSURE_DRAFT_SCRIPT=""
 STAGE_CLOSURE_EVIDENCE_SCRIPT=""
 ALLOW_LOCAL_REFERENCE="${AI_JUDGE_ALLOW_LOCAL_REFERENCE:-false}"
+PREFLIGHT_ONLY="${AI_JUDGE_REAL_ENV_PREFLIGHT_ONLY:-false}"
 OUTPUT_DOC=""
 OUTPUT_ENV=""
 EMIT_JSON=""
@@ -78,6 +79,7 @@ usage() {
     [--stage-closure-draft-script <path>] \
     [--stage-closure-evidence-script <path>] \
     [--allow-local-reference] \
+    [--preflight-only] \
     [--fairness-ingest-enabled] \
     [--fairness-ingest-base-url <url>] \
     [--fairness-ingest-path <path>] \
@@ -94,8 +96,9 @@ usage() {
   - 真实环境窗口收口总控：
     1) 执行 P5 real calibration on env
     2) 执行 runtime ops pack（含 stage closure evidence 联动）
+  - --preflight-only 只校验真实窗口 readiness 输入，不执行 P5/runtime ops。
   - 输出统一状态：
-    pass/local_reference_ready/threshold_violation/pending_real_evidence/env_blocked/evidence_missing/stage_failed/mixed
+    pass/preflight_ready/local_reference_ready/threshold_violation/pending_real_evidence/env_blocked/evidence_missing/stage_failed/mixed
 USAGE
 }
 
@@ -277,6 +280,10 @@ parse_args() {
         ;;
       --allow-local-reference)
         ALLOW_LOCAL_REFERENCE="true"
+        shift 1
+        ;;
+      --preflight-only)
+        PREFLIGHT_ONLY="true"
         shift 1
         ;;
       --fairness-ingest-enabled)
@@ -602,6 +609,23 @@ derive_status() {
   STATUS="mixed"
 }
 
+derive_preflight_status() {
+  P5_EXIT_CODE=0
+  RUNTIME_OPS_EXIT_CODE=0
+  P5_STATUS="not_run"
+  RUNTIME_OPS_STATUS="not_run"
+  FAIRNESS_STATUS="not_run"
+  FAIRNESS_INGEST_STATUS="not_run"
+  RUNTIME_SLA_STATUS="not_run"
+  REAL_ENV_CLOSURE_STATUS="not_run"
+  STAGE_CLOSURE_EVIDENCE_STATUS="not_run"
+  if [[ "$REAL_ENV_INPUT_READY" == "true" ]]; then
+    STATUS="preflight_ready"
+    return
+  fi
+  STATUS="env_blocked"
+}
+
 derive_real_pass_readiness() {
   local -a blocker_codes=()
   local -a blocker_hints=()
@@ -691,6 +715,7 @@ write_output_env() {
 AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=$STATUS
 UPDATED_AT=$FINISHED_AT
 RUN_ID=$RUN_ID
+PREFLIGHT_ONLY=$PREFLIGHT_ONLY
 REAL_CALIBRATION_ENV_READY=$MARKER_READY
 ENVIRONMENT_MODE=$ENV_MODE
 ALLOW_LOCAL_REFERENCE=$ALLOW_LOCAL_REFERENCE
@@ -733,10 +758,11 @@ write_output_doc() {
 1. 生成日期：$(date_cn)
 2. 运行窗口：$STARTED_AT -> $FINISHED_AT
 3. 统一状态：\`$STATUS\`
-4. environment_mode：\`$ENV_MODE\`
-5. marker_ready：\`$MARKER_READY\`
-6. allow_local_reference：\`$ALLOW_LOCAL_REFERENCE\`
-7. real_env_readiness_status：\`$REAL_ENV_READINESS_STATUS\`
+4. preflight_only：\`$PREFLIGHT_ONLY\`
+5. environment_mode：\`$ENV_MODE\`
+6. marker_ready：\`$MARKER_READY\`
+7. allow_local_reference：\`$ALLOW_LOCAL_REFERENCE\`
+8. real_env_readiness_status：\`$REAL_ENV_READINESS_STATUS\`
 
 ## 子阶段状态
 
@@ -797,6 +823,7 @@ write_json_summary() {
   "run_id": "$(json_escape "$RUN_ID")",
   "started_at": "$(json_escape "$STARTED_AT")",
   "finished_at": "$(json_escape "$FINISHED_AT")",
+  "preflight_only": "$PREFLIGHT_ONLY",
   "environment_mode": "$(json_escape "$ENV_MODE")",
   "marker_ready": "$MARKER_READY",
   "allow_local_reference": "$ALLOW_LOCAL_REFERENCE",
@@ -865,6 +892,7 @@ write_md_summary() {
 - run_id: \`$RUN_ID\`
 - started_at: \`$STARTED_AT\`
 - finished_at: \`$FINISHED_AT\`
+- preflight_only: \`$PREFLIGHT_ONLY\`
 - environment_mode: \`$ENV_MODE\`
 - marker_ready: \`$MARKER_READY\`
 - allow_local_reference: \`$ALLOW_LOCAL_REFERENCE\`
@@ -916,6 +944,11 @@ main() {
     ALLOW_LOCAL_REFERENCE="true"
   else
     ALLOW_LOCAL_REFERENCE="false"
+  fi
+  if is_truthy "$PREFLIGHT_ONLY"; then
+    PREFLIGHT_ONLY="true"
+  else
+    PREFLIGHT_ONLY="false"
   fi
 
   if [[ -z "$EVIDENCE_DIR" ]]; then
@@ -1004,6 +1037,36 @@ main() {
   resolve_env_mode
   derive_readiness_inputs
 
+  if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
+    derive_preflight_status
+    derive_real_pass_readiness
+    derive_readiness_status
+    FINISHED_AT="$(iso_now)"
+    write_output_env
+    write_output_doc
+    write_json_summary
+    write_md_summary
+
+    echo "ai_judge_real_env_window_closure_status: $STATUS"
+    echo "preflight_only: true"
+    echo "environment_mode: $ENV_MODE (marker_ready=$MARKER_READY)"
+    echo "real_env_readiness_status: $REAL_ENV_READINESS_STATUS"
+    echo "real_env_input_ready: $REAL_ENV_INPUT_READY"
+    echo "real_env_readiness_blocker_codes: ${REAL_ENV_READINESS_BLOCKER_CODES:-none}"
+    echo "production_artifact_store_evidence_status: $PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS"
+    echo "production_artifact_store_evidence_roundtrip_status: ${PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS:-none}"
+    echo "p5_status: $P5_STATUS (exit=$P5_EXIT_CODE)"
+    echo "runtime_ops_pack_status: $RUNTIME_OPS_STATUS (exit=$RUNTIME_OPS_EXIT_CODE)"
+    echo "real_pass_ready: $REAL_PASS_READY"
+    echo "real_pass_blocker_codes: ${REAL_PASS_BLOCKER_CODES:-none}"
+    echo "real_pass_blocker_hints: ${REAL_PASS_BLOCKER_HINTS:-none}"
+    echo "output_env: $OUTPUT_ENV"
+    echo "output_doc: $OUTPUT_DOC"
+    echo "summary_json: $EMIT_JSON"
+    echo "summary_md: $EMIT_MD"
+    return
+  fi
+
   local p5_json p5_md p5_stdout
   p5_json="$run_dir/p5.summary.json"
   p5_md="$run_dir/p5.summary.md"
@@ -1050,6 +1113,7 @@ main() {
   write_md_summary
 
   echo "ai_judge_real_env_window_closure_status: $STATUS"
+  echo "preflight_only: $PREFLIGHT_ONLY"
   echo "environment_mode: $ENV_MODE (marker_ready=$MARKER_READY)"
   echo "real_env_readiness_status: $REAL_ENV_READINESS_STATUS"
   echo "real_env_input_ready: $REAL_ENV_INPUT_READY"
