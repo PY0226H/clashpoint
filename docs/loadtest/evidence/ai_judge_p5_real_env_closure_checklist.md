@@ -1,6 +1,6 @@
 # AI Judge P5 Real Env 证据收口清单
 
-更新时间：2026-04-30
+更新时间：2026-05-02
 状态：local_reference_ready
 
 ## 1. 当前判定
