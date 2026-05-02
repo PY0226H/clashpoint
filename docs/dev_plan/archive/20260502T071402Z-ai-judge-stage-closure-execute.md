@@ -1,0 +1,342 @@
+# 当前开发计划
+
+关联 slot：`default`
+更新时间：2026-05-02
+当前主线：`ai-judge-official-plane-maintainability-and-real-env-readiness-pack`
+当前状态：P0-A / P0-B / P1-C / P1-D / P2-E 已完成；本地参考回归已刷新并通过，真实环境仍正确停在 `env_blocked`；下一步可进入 P3-F stage closure
+
+---
+
+## 1. 计划定位
+
+1. 本计划基于当前工作区代码事实、[AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md) 与 [AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent服务设计方案-2026-04-13.md) 生成。
+2. 上一阶段 `ai-judge-official-verdict-plane-local-stability-pack` 已完成并阶段收口，主体完成快照位于 [completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md) B48，归档位于 [20260502T040430Z-ai-judge-stage-closure-execute.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260502T040430Z-ai-judge-stage-closure-execute.md)。
+3. 当前没有真实环境，真实环境 pass 后置债继续由 [todo.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md) C46 承接；本计划不得把 `local_reference_ready`、mock provider/callback、本地对象存储或手工 ready 写成 real-env `pass`。
+4. `NPC Coach` / `Room QA` 已按产品决策暂停；本计划不删除历史实现、不继续开发、不接真实 LLM executor、不补 ready-state、不做成本/延迟 guard，仅在第一跳代码地图中标注其“暂停/历史资产”边界。
+5. 本轮主线目标是：在无真实环境的条件下，收紧官方 `Judge App` / `Official Verdict Plane` 的第一跳定位、可维护性边界、证据门禁演练与本地参考回归，为后续真实环境窗口或继续开发提供稳定基线。
+
+## 2. 当前代码事实快照
+
+| 领域 | 当前事实 | 计划影响 |
+| --- | --- | --- |
+| AI 服务装配热点 | [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py) 当前约 2346 行，集中承载 runtime 创建、route 注册、依赖装配与多个 helper import | 下一步不做大重构，先更新第一跳地图并输出 route/hotspot inventory；只有影响定位时才拆 helper |
+| 官方裁决命令入口 | [judge_command_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py) 当前约 2204 行；[judge_dispatch_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_dispatch_runtime.py) 约 180 行；[judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py) 约 61 行 | 官方裁决链主入口已形成，但命令 route 仍是热点；本轮优先做合同索引与第一跳定位，不急于拆主链 |
+| 法庭式角色实现 | [judge_workflow_roles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_workflow_roles.py) 当前约 1485 行，承载 Clerk/Recorder/Claim/Evidence/Panel/Fairness/Arbiter/Opinion 角色语义 | 继续保护 8 Agent 顺序、fact lock、Fairness Sentinel 与 Chief Arbiter 边界，不新增绕过路径 |
+| chat_server 裁判门面 | [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs) 当前约 1589 行，包含 official judge job/report/public verify/challenge，也仍包含暂停的 assistant advisory 路由 | 本轮不删除或推进 assistant 路由；先在代码地图和热点 inventory 中分清“官方主线”和“暂停历史资产” |
+| Ops runtime readiness | [runtime_readiness_ops_projection.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/runtime_readiness_ops_projection.rs) 约 344 行，[runtimeReadiness.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/runtimeReadiness.ts) 约 223 行，[OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx) 约 1491 行 | P1-C 已完成三层语义对齐；本轮只做 evidence dry-run 与本地回归，避免 UI 继续扩写 |
+| 真实环境证据 | [ai_judge_runtime_ops_pack.env](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.env) 当前 `AI_JUDGE_RUNTIME_OPS_PACK_STATUS=local_reference_ready`，`REAL_CALIBRATION_ENV_READY=false`，`P41_CONTROL_PLANE_STATUS=env_blocked` | 本轮只允许 preflight / dry-run / local reference 口径；真实 pass 等 C46 |
+| 对象存储证据 | [ai_judge_artifact_store_healthcheck.json](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_artifact_store_healthcheck.json) 当前仍是 `provider=local`、`status=local_reference`、`productionReady=false` | 任何计划/证据/映射都必须继续区分本地对象存储参考态与生产对象存储通过态 |
+| 测试资产 | AI 服务已有 `test_judge_mainline.py`、`test_judge_command_routes.py`、`test_public_verify_projection.py`、`test_runtime_readiness_public_contract.py` 等；chat 有 `request_judge_job.rs`、`request_judge_report_query.rs`；frontend 有 `debate-domain` 与 `ops-domain` 测试 | 下一轮验证优先跑 targeted gate；只有改到共享契约或路由边界时再扩大到 full gate |
+
+> 说明：上表来自当前工作区 `wc -l`、`rg`、计划证据与测试文件扫描；若方案文档与当前代码冲突，下一轮执行以当前代码事实为准，并在完成度映射中留痕。
+
+## 3. 与两份方案的对齐判断
+
+1. 架构方案当前有效主线是 `Official Verdict Plane`：客户端只经 `chat_server`，AI 服务作为内部服务，裁决链强审计、强版本化、强证据链。
+2. 企业级 Agent 方案的 Phase 1 / Phase 2 已基本落地，Phase 3 已推进到 runtime readiness、release evidence、panel candidate、calibration decision log、local reference regression 与 B48 阶段收口。
+3. `Verifiable Trust Layer` 已有 public verification、challenge/review、artifact store healthcheck evidence CLI、preflight-only 与 readiness input template；真实对象存储 roundtrip、真实样本、真实 provider/callback 仍阻塞。
+4. `Interactive Guidance Plane` / `NPC Coach` / `Room QA` 在两份方案中都已标记暂停；当前代码中仍有历史路由和合同，但不作为本轮开发入口。
+5. 当前最值得推进的不是新功能，而是把“官方裁决主线从哪里进、哪些是暂停资产、哪些证据能证明 ready/blocked”整理成可维护、可审计、可回归的下一阶段底座。
+
+## 4. 完成度与缺口矩阵
+
+### 已完成/未完成矩阵
+
+| 模块 | 目标 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ai-judge-next-iteration-planning-current-state` | 生成下一轮完整开发计划并同步完成度映射 | 已完成 | 已根据当前代码、两份方案、B48/C46 与暂停边界生成本计划，并同步章节完成度映射 |
+| Enterprise MVP | 维持 8 Agent 官方裁决主链与基础产品闭环 | 已完成 | 官方裁决主链、六对象 ledger、workflow、trace/replay、report、public verify、challenge/review 产品桥接均已形成 |
+| Fairness Hardened | 维持公平门禁、panel shadow 与 readiness 控制面 | 进行中 | 本地参考、release gate、panel candidate 与 runtime readiness 已具备；真实样本实跑仍后置 |
+| Adaptive Judge Platform | 维持 registry/gateway/ops/readiness 平台能力 | 进行中 | registry、ops read model、calibration decision log、release evidence 与 B48 收口已完成；auto-calibration、多模型生产切换后置 |
+| Verifiable Trust Layer | 维持本地可信外部化与 real-env readiness 输入门禁 | 进行中 | healthcheck evidence CLI、preflight-only、输入模板、证据门禁已完成；生产对象存储真实执行后置 |
+| Interactive Guidance Plane | 保持暂停，不进入当前开发 | 阻塞 | `NPC Coach` / `Room QA` 不做 executor、ready-state、成本/延迟 guard、Ops evidence 或 stage closure |
+| P0-A. `ai-judge-first-hop-map-pause-boundary-sync-pack` | 同步第一跳代码地图与暂停边界 | 已完成 | [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md) 已区分官方 Judge 主线、Ops/readiness 证据入口与暂停 assistant 历史资产；未恢复或删除 `NPC Coach` / `Room QA` |
+| P0-B. `ai-judge-route-hotspot-inventory-pack` | 输出 route/hotspot inventory，决定是否需要小拆分 | 已完成 | 已产出 [ai_judge_route_hotspot_inventory.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_route_hotspot_inventory.md)；结论为 `completed_no_split`，本轮不拆代码 |
+| P1-C. `ai-judge-official-contract-test-index-pack` | 建立官方裁决合同测试索引与 targeted gate | 已完成 | 已产出 [ai_judge_official_contract_test_index.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_official_contract_test_index.md)；补齐 `GET /judge-report/challenge` 非参与者读取拒绝测试并通过 targeted Rust test |
+| P1-D. `ai-judge-real-env-readiness-dry-run-pack` | 在无真实环境下复跑 preflight/dry-run，防止口径漂移 | 已完成 | 已产出 [ai_judge_real_env_readiness_dry_run.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_readiness_dry_run.md)；preflight 为 `env_blocked`，runtime ops pack 为 `local_reference_ready`，stage closure evidence 为 `pass` |
+| P2-E. `ai-judge-local-reference-regression-refresh-pack` | 刷新本轮本地参考回归与证据摘要 | 已完成 | 已刷新 [ai_judge_local_reference_regression_refresh.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_local_reference_regression_refresh.md)；AI/chat/frontend/harness targeted/full-enough gates 通过，runtime ops pack 为 `local_reference_ready`，real-env preflight 为 `env_blocked` |
+
+## 5. 下一轮开发模块拆分
+
+### 下一开发模块建议
+
+1. P0-A 已完成：第一跳代码地图与暂停边界已同步，当前 `docs/architecture/README.md` 已把 AI advisory / NPC Coach / Room QA 标为暂停历史资产。
+2. P0-B 已完成：route/hotspot inventory 已沉淀为 evidence；当前结论是不立即拆代码。
+3. P1-C 已完成：官方裁决合同测试索引已沉淀为 evidence，并补齐 challenge 状态读取非参与者拒绝测试。
+4. P1-D 已完成：real-env dry-run 已证明 `local_reference_ready` 与 `env_blocked` 没有冒充 real-env `pass`。
+5. P2-E 已完成：本地参考回归证据已刷新，AI/chat/frontend/harness 均通过本轮验证。
+6. 当前推荐执行 P3-F：进入 stage closure，把本轮主体成果归档到长期完成快照，并保留 C46 真实环境后置债。
+
+### P0-A. `ai-judge-first-hop-map-pause-boundary-sync-pack`
+
+目标：
+
+1. 让 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md) 与当前产品决策一致：官方 Judge 是当前有效主线，`NPC Coach` / `Room QA` 是暂停历史资产。
+2. 保留暂停资产的查找入口，但明确标记“不可作为当前开发入口”，避免后续误从 advisory routes 继续扩展。
+3. 将 real-env readiness / artifact store / runtime ops pack 的第一跳入口补进代码地图，方便下一轮真实环境窗口时快速定位。
+
+执行范围：
+
+1. `docs/architecture/README.md` 中 AI 裁判 / 报告 / 申诉 / 平局投票、AI advisory、AI Ops / Registry / Trust / Fairness / Review / Replay 相关小节。
+2. `docs/dev_plan/当前开发计划.md` 与完成度映射中的暂停声明、下一步优先级。
+3. 必要时补一个轻量 evidence 文档，记录本次代码地图同步依据。
+
+开发步骤：
+
+1. 对照当前代码事实重新排列第一跳入口：
+   - 官方 Judge 主线：`debate_judge.rs`、`judge.rs`、`judge_dispatch.rs`、`runtime_workers.rs`、`app_factory.py`、`judge_command_routes.py`、`judge_dispatch_runtime.py`、`judge_mainline.py`、`callback_client.py`。
+   - Ops/readiness 主线：`runtime_readiness_ops_projection.rs`、`runtime_readiness_public_contract.py`、`runtime_readiness_public_projection.py`、`runtimeReadiness.ts`、`OpsConsolePage.tsx`、real-env harness scripts。
+   - 暂停历史资产：`assistant_advisory_proxy.rs`、`route_group_assistant.py`、`assistant_agent_routes.py`、`DebateAssistantPanel.tsx` 等只标记为暂停入口。
+2. 检查是否影响第一跳定位；若影响，更新 architecture map；若只是内部实现说明，不改架构地图。
+3. 确认所有新增文字不暗示恢复 `NPC Coach` / `Room QA`。
+4. 运行 `harness_docs_lint.sh` 与 `git diff --check`。
+
+验收标准：
+
+1. 新人或 agent 看到 architecture map 后，能直接区分官方裁决主线、Ops readiness 主线和暂停历史资产。
+2. 文档不要求删除暂停代码，也不把暂停代码列为下一开发模块。
+3. `NPC Coach` / `Room QA` 恢复条件继续是“先冻结独立 PRD 和模块设计”。
+
+执行结果（2026-05-02）：
+
+1. 已更新 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md)，在 AI 裁判第一跳中明确当前有效主线为官方 `Judge App` / `Official Verdict Plane`。
+2. 已将 AI advisory / `NPC Coach` / `Room QA` 标为暂停历史资产，仅保留排查暂停边界和未来复用的查找入口。
+3. 已补充 AI Judge real-env / runtime evidence 第一跳入口，并明确 `local_reference_ready` / `env_blocked` 不等于 real-env `pass`。
+4. 本模块只改文档定位，不改运行代码、API/DTO、测试合同或暂停功能实现。
+
+### P0-B. `ai-judge-route-hotspot-inventory-pack`
+
+目标：
+
+1. 用可复查证据描述当前 AI Judge route/hotspot 分布，而不是直接重构。
+2. 找出下一轮最值得小拆分的第一跳热点，并明确“不拆”的理由。
+3. 如果不需要立刻拆代码，沉淀为 inventory evidence，避免开发计划反复停留在主观判断。
+
+执行范围：
+
+1. AI 服务热点：
+   - [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py)
+   - [judge_command_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py)
+   - [judge_workflow_roles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_workflow_roles.py)
+   - `route_group_*` 与 `bootstrap_*_helpers.py`
+2. chat_server 热点：
+   - [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)
+   - [debate_ops.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_ops.rs)
+   - `chat/chat_server/src/models/judge/*`
+3. frontend 热点：
+   - [OpsConsolePage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/OpsConsolePage.tsx)
+   - [runtimeReadiness.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/ops-domain/src/runtimeReadiness.ts)
+   - [frontend/packages/debate-domain/src/index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
+
+开发步骤：
+
+1. 输出一份 route/hotspot inventory，至少包含：文件行数、主职责、active official plane / ops plane / paused advisory 标记、已有测试入口、建议动作。
+2. 将 `debate_judge.rs` 中 official route 与暂停 advisory route 的边界标出来，但不移动暂停代码。
+3. 将 `app_factory.py` 中 route registration 归类为 command/case/trust/fairness/panel/review/ops/assistant，并指出哪些 helper 已经下沉。
+4. 决策是否进入小拆分：
+   - 只有“第一跳定位明显变差”或“后续模块必须继续修改同一热点”时才拆。
+   - 若拆，优先抽官方主线或 Ops helper，不触碰暂停 assistant 语义。
+   - 若不拆，写入 inventory 作为后续依据。
+
+验收标准：
+
+1. 产出可引用的 inventory evidence 或计划章节，后续可以直接支撑 stage closure。
+2. 不因为 hotspot audit 而恢复、删除或扩写 `NPC Coach` / `Room QA`。
+3. 若产生代码拆分，必须同步 targeted tests 与 architecture map。
+
+执行结果（2026-05-02）：
+
+1. 已产出 [ai_judge_route_hotspot_inventory.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_route_hotspot_inventory.md)，记录 AI service、chat_server、frontend 三层 hotspot、route boundary、测试入口与建议动作。
+2. 决策结果为 `completed_no_split`：当前第一跳已经清楚，且热点已有 route group/helper/test 保护；本轮不做大重构或小拆分。
+3. 已明确后续小拆分触发顺序：优先 `judge_command_routes.py` dispatch helper、`request_report_query.rs` report/challenge helper、`debate_ops.rs` judge ops 子模块、`OpsConsolePage.tsx` runtime readiness panel。
+4. `NPC Coach` / `Room QA` 只作为暂停历史资产记录；未恢复、未删除、未新增 executor/ready-state/Ops evidence。
+5. 本模块未改变运行代码、API/DTO、测试合同或第一跳架构入口，因此无需二次更新 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md)，也无需运行代码测试。
+
+### P1-C. `ai-judge-official-contract-test-index-pack`
+
+目标：
+
+1. 建立官方 Judge 主链合同测试索引，让关键合同从“知道有测试”变成“能按需求反查测试”。
+2. 覆盖 job request、report read、final report、public verify、challenge request、runtime readiness、real-env evidence guard 的现有保护面。
+3. 找出真实缺口；本轮只补官方裁决主线缺口，不补暂停 advisory 功能。
+
+执行范围：
+
+1. AI targeted tests：
+   - `test_judge_mainline.py`
+   - `test_judge_command_routes.py`
+   - `test_runtime_readiness_public_contract.py`
+   - `test_runtime_readiness_public_projection.py`
+   - `test_public_verify_projection.py`
+   - `test_trust_challenge_public_contract.py`
+2. chat targeted tests：
+   - `request_judge_job.rs`
+   - `request_judge_report_query.rs`
+   - `phase_final_report_submit.rs`
+3. frontend targeted tests：
+   - `frontend/packages/debate-domain/src/index.test.ts`
+   - `frontend/packages/ops-domain/src/runtimeReadiness.test.ts`
+   - 必要时 `OpsConsolePage` 相关 smoke / component tests。
+
+开发步骤：
+
+1. 用矩阵列出每个官方合同：入口、DTO、错误语义、权限边界、状态字段、现有测试、缺口。
+2. 若发现关键负向路径没有测试，补最小测试：
+   - 未参与者读取 report/public verify/challenge 必须被拒绝。
+   - 裁决请求未知 verdict mutation 字段必须被拒绝。
+   - local reference / env blocked 不能渲染成 ready/pass。
+   - public verify 不暴露内部字段。
+3. 运行 targeted tests；若只改文档，则说明不需要跑代码测试。
+4. 更新计划历史和完成度映射。
+
+验收标准：
+
+1. 官方 Judge 合同能从计划或 evidence 反查到测试位置。
+2. 新增测试只覆盖真实业务语义，不复制生产代码算法生成 expected。
+3. 不新增 test-only 分支、宽松解析或长期兼容 alias。
+
+执行结果（2026-05-02）：
+
+1. 已产出 [ai_judge_official_contract_test_index.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_official_contract_test_index.md)，覆盖 job request、AI internal dispatch、final report、report read、public verify、challenge、runtime readiness、real-env evidence guard 与 Ops calibration decision。
+2. 发现并补齐 1 个真实缺口：`GET /api/debate/sessions/{id}/judge-report/challenge` 非参与者读取必须返回 `judge_report_read_forbidden`。
+3. 新增测试位于 [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)：`judge_challenge_route_should_forbid_non_participant`。
+4. 已运行 `cargo test -p chat-server judge_challenge_route_should_forbid_non_participant`，结果 `1 passed; 0 failed; 642 filtered out`。
+5. 本模块未改变 API/DTO/OpenAPI/前端 SDK 语义，也未改变第一跳架构入口，因此无需更新 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md)。
+
+### P1-D. `ai-judge-real-env-readiness-dry-run-pack`
+
+目标：
+
+1. 在当前没有真实环境时，继续证明 real-env readiness 门禁能正确阻断 fake ready。
+2. 将对象存储 healthcheck evidence、preflight-only、runtime ops pack、stage closure evidence 的状态保持一致。
+3. 为未来真实窗口提供清晰执行顺序。
+
+执行范围：
+
+1. [ai_judge_real_env_window_closure.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_real_env_window_closure.sh)
+2. [ai_judge_runtime_ops_pack.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_runtime_ops_pack.sh)
+3. [ai_judge_stage_closure_evidence.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_stage_closure_evidence.sh)
+4. [ai_judge_real_env_readiness_inputs.env.example](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_readiness_inputs.env.example)
+5. [ai_judge_real_env_readiness_inputs_checklist.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_readiness_inputs_checklist.md)
+
+开发步骤：
+
+1. 跑 `ai_judge_real_env_window_closure.sh --preflight-only`，确认当前状态仍是 `env_blocked`。
+2. 跑 `ai_judge_runtime_ops_pack.sh --allow-local-reference`，确认仍是 `local_reference_ready` 且 `p41_control_plane_status=env_blocked`。
+3. 跑 `ai_judge_stage_closure_evidence.sh`，确认 B48/C46 与 active plan evidence 一致。
+4. 如脚本或文档口径出现偏差，只修真实证据口径，不制造 fake pass。
+
+验收标准：
+
+1. 当前无真实环境时，real-env preflight 不能通过。
+2. runtime ops pack 可以是 `local_reference_ready`，但必须明确不等于 real-env pass。
+3. 完成度映射、当前计划、evidence 三处口径一致。
+
+执行结果（2026-05-02）：
+
+1. 已运行 `bash scripts/harness/ai_judge_real_env_window_closure.sh --preflight-only`，结果为 `AI_JUDGE_REAL_ENV_WINDOW_CLOSURE_STATUS=env_blocked`、`REAL_ENV_INPUT_READY=false`、`REAL_PASS_READY=false`。
+2. 已运行 `bash scripts/harness/ai_judge_runtime_ops_pack.sh --allow-local-reference`，结果为 `AI_JUDGE_RUNTIME_OPS_PACK_STATUS=local_reference_ready`、`ALLOW_LOCAL_REFERENCE=true`、`P41_CONTROL_PLANE_STATUS=env_blocked`。
+3. 已运行 `bash scripts/harness/ai_judge_stage_closure_evidence.sh`，结果为 `AI_JUDGE_STAGE_CLOSURE_EVIDENCE_STATUS=pass`、`RUNTIME_OPS_PACK_LINKED=true`、`ACTIVE_PLAN_EVIDENCE_STATUS=pass`，并继续反查到 B48/C46。
+4. 已产出 [ai_judge_real_env_readiness_dry_run.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_readiness_dry_run.md)，作为本轮 P1-D 的统一 evidence 摘要。
+5. 本模块只刷新 dry-run evidence 与计划口径，不改运行代码、API/DTO、测试合同或暂停功能实现。
+
+### P2-E. `ai-judge-local-reference-regression-refresh-pack`
+
+目标：
+
+1. 在 P0/P1 完成后刷新本地参考回归证据。
+2. 为进入下一次 stage closure 或等待真实环境窗口提供稳定基线。
+
+执行范围：
+
+1. AI targeted / full-enough tests。
+2. chat_server 官方 judge targeted tests。
+3. frontend debate-domain / ops-domain / app-shell targeted tests。
+4. harness docs lint、plan consistency gate、stage closure evidence。
+
+执行步骤：
+
+1. 先跑 targeted gate，避免把文档或小拆分问题扩大成全量失败。
+2. 若涉及代码结构或 API/DTO，追加相应跨层测试。
+3. 刷新本地 evidence summary，但不覆盖真实环境缺口。
+4. 更新 `当前开发计划.md`、完成度映射；如果模块全部完成，再进入 stage closure。
+
+验收标准：
+
+1. 本地参考回归通过，或失败被明确归类为真实 bug / 环境阻塞 / 测试假设错误。
+2. 所有 evidence 仍清楚标记 `local_reference_ready`、`env_blocked` 或真实 `pass`。
+3. 不触碰 `NPC Coach` / `Room QA` 暂停边界。
+
+执行结果（2026-05-02）：
+
+1. AI service 回归通过：targeted pytest、`ruff check app tests scripts` 与全量 `pytest -q` 均通过。
+2. chat_server 官方 judge targeted 回归通过：`request_judge_job` 为 `17 passed`，`request_judge_report_query` 为 `65 passed`。
+3. frontend 回归通过：`@echoisle/debate-domain` test/typecheck/lint、`@echoisle/ops-domain` test/typecheck/lint、`@echoisle/app-shell` test/typecheck/lint 均通过；其中 test 分别为 `14 passed`、`8 passed`、`9 passed`。
+4. harness 自测通过：`test_ai_judge_real_env_window_closure.sh`、`test_ai_judge_real_env_evidence_closure.sh`、`test_ai_judge_plan_consistency_gate.sh` 均通过。
+5. evidence 刷新通过：runtime ops pack 为 `local_reference_ready`，real-env evidence closure 为 `local_reference_ready`，real-env window preflight 为 `env_blocked`，plan consistency gate 为 `pass`，stage closure evidence 为 `pass`。
+6. 已刷新 [ai_judge_local_reference_regression_refresh.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_local_reference_regression_refresh.md) 与 [ai_judge_local_reference_regression_refresh.env](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_local_reference_regression_refresh.env)。
+7. 本模块未改变运行代码、API/DTO、测试合同或第一跳架构入口，因此无需更新 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md)。
+
+### P3-F. `ai-judge-official-plane-maintainability-stage-closure`
+
+触发条件：
+
+1. P0-A / P0-B / P1-C / P1-D / P2-E 主体完成。
+2. 当前没有真实环境时，C46 仍保留为唯一 real-env pass 后置债。
+3. `harness_docs_lint.sh`、`git diff --check` 与必要 targeted gate 通过。
+
+收口动作：
+
+1. 归档当前活动计划。
+2. 将主体成果写入 [completed.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/completed.md)。
+3. 如未新增真实环境债，不新增 [todo.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/todo.md)；如发现新的真实阻塞，合并到 C46 或写清独立触发条件。
+4. 更新完成度映射，明确下一轮入口。
+
+## 6. 明确不做与阻塞项
+
+1. 不执行 real-env pass：当前缺真实对象存储、真实样本 manifest、真实 provider、真实 callback、真实服务窗口与真实阈值目标。
+2. 不把本地对象存储 healthcheck、mock provider/callback、`local_reference_ready` 或 `env_blocked` 写成真实通过。
+3. 不继续 `ai-judge-p43-assistant-*`、`NPC Coach`、`Room QA`、用户辩论助手、低延迟交互型 Agent 或 assistant real LLM executor。
+4. 不删除 `NPC Coach` / `Room QA` 历史实现；这些内容已暂停，未来是否复用等待独立 PRD 和模块设计。
+5. 不进入远期 Protocol Expansion：Identity Proof、Constitution Registry、Reason Passport、第三方 review network、on-chain anchor 继续后置。
+6. 不做大范围 route 重构；只有 P0-B 证据显示影响第一跳定位或后续模块不可维护时，才做小拆分。
+
+## 7. 推荐执行顺序
+
+1. P0-A 已完成，architecture map 与暂停边界已同步。
+2. P0-B 已完成，route/hotspot inventory 已输出，结论为本轮不拆代码。
+3. P1-C 已完成，官方裁决合同测试索引已建立，并补齐 challenge read 非参与者拒绝测试。
+4. P1-D 已完成，real-env readiness dry-run 已确认当前仍正确阻断 fake pass。
+5. P2-E 已完成，本地参考回归证据已刷新。
+6. 当前可进入 P3-F stage closure；若真实环境突然具备，暂停本地维护计划，优先按 C46 执行 real-env readiness / pass window。
+
+## 8. 风险与控制
+
+| 风险 | 控制方式 |
+| --- | --- |
+| 暂停的 assistant 历史资产被误当成当前主线 | P0-A 在 architecture map 中明确“暂停/历史资产”标签；P0-B inventory 区分 active official / ops / paused advisory |
+| route hotspot audit 滑向大重构 | P0-B 只输出证据和小拆分建议；没有第一跳定位收益不拆 |
+| local reference 被误写成 real-env pass | P1-D 继续执行 preflight-only 与 runtime ops pack，所有文档使用 `local_reference_ready` / `env_blocked` |
+| 合同测试索引变成文档清单，没有真实保护 | P1-C 只接受能反查到真实测试或明确缺口的条目；缺关键负向路径时补 targeted tests |
+| 当前已有未提交 stage closure 改动被误回退 | 执行时保留 B48、C46、stage closure evidence 与归档，不清理用户或前序改动 |
+| 真实环境突然开放 | 停止本地维护包，先按 C46 checklist 补真实 evidence，再执行 `--preflight-only` 与 real-env pass window |
+
+## 9. 架构方案第13章一致性校验
+
+1. **角色一致性**：下一轮继续沿用 Clerk/Recorder/Claim/Evidence/Panel/Fairness/Arbiter/Opinion 的法庭式主链，不新增绕过 Fairness Sentinel 或 Chief Arbiter 的路径。
+2. **数据一致性**：六对象主链（case/claim/evidence/verdict/fairness/opinion）仍为唯一业务事实源，不引入平行 winner 写链或 assistant 写 verdict 链。
+3. **门禁一致性**：发布、裁决、复核、readiness 与 real-env preflight 门禁不得弱化；本地参考状态不得写成真实环境 `pass`。
+4. **边界一致性**：`NPC Coach` / `Room QA` 保持暂停，未冻结独立 PRD 前不进入官方裁决链；代码地图只标记历史资产，不恢复开发。
+5. **跨层一致性**：若改 API/DTO/错误码/WS payload，必须同轮检查 AI service、chat_server、frontend domain/SDK、OpenAPI 与测试。
+6. **收口一致性**：真实环境结论与本地参考结论继续分层表达；未获得真实窗口前不宣称 real-env `pass`。
+
+## 10. 模块完成同步历史
+
+### 模块完成同步历史
+
+- 2026-05-02：推进 `ai-judge-next-iteration-planning-current-state`；基于当前代码事实、两份方案、B48/C46、真实环境状态与 `NPC Coach` / `Room QA` 暂停边界，生成 `ai-judge-official-plane-maintainability-and-real-env-readiness-pack` 下一轮开发计划，并同步章节完成度映射。
+- 2026-05-02：完成 `P0-A. ai-judge-first-hop-map-pause-boundary-sync-pack`；同步 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md) 的官方 Judge 第一跳、Ops/readiness 证据入口与暂停 assistant 历史资产边界，下一步进入 `P0-B. ai-judge-route-hotspot-inventory-pack`。
+- 2026-05-02：完成 `P0-B. ai-judge-route-hotspot-inventory-pack`；产出 [ai_judge_route_hotspot_inventory.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_route_hotspot_inventory.md)，结论为 `completed_no_split`，下一步进入 `P1-C. ai-judge-official-contract-test-index-pack`。
+- 2026-05-02：完成 `P1-C. ai-judge-official-contract-test-index-pack`；产出 [ai_judge_official_contract_test_index.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_official_contract_test_index.md)，补齐 `GET /judge-report/challenge` 非参与者读取拒绝测试并通过 targeted Rust test，下一步进入 `P1-D. ai-judge-real-env-readiness-dry-run-pack`。
+- 2026-05-02：完成 `P1-D. ai-judge-real-env-readiness-dry-run-pack`；产出 [ai_judge_real_env_readiness_dry_run.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_readiness_dry_run.md)，确认 real-env preflight 为 `env_blocked`、runtime ops pack 为 `local_reference_ready`、stage closure evidence 为 `pass`，下一步进入 `P2-E. ai-judge-local-reference-regression-refresh-pack`。
+- 2026-05-02：完成 `P2-E. ai-judge-local-reference-regression-refresh-pack`；刷新 [ai_judge_local_reference_regression_refresh.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_local_reference_regression_refresh.md)，AI service、chat_server、frontend 与 harness 回归均通过，real-env preflight 仍为 `env_blocked`，下一步可进入 `P3-F. ai-judge-official-plane-maintainability-stage-closure`。

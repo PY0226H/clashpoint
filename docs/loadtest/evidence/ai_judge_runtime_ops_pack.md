@@ -1,7 +1,7 @@
 # AI Judge Runtime Ops Pack 收口摘要
 
 1. 生成日期：2026-05-02
-2. 运行窗口：2026-05-02T03:47:27Z -> 2026-05-02T03:47:30Z
+2. 运行窗口：2026-05-02T06:29:51Z -> 2026-05-02T06:29:53Z
 3. 统一状态：`local_reference_ready`
 4. allow_local_reference：`true`
 5. evidence_dir：`/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence`
@@ -19,17 +19,17 @@
 
 1. pack env: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.env`
 2. pack doc: `/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.md`
-3. pack json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260502T034727Z-ai-judge-runtime-ops-pack.summary.json`
-4. pack md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260502T034727Z-ai-judge-runtime-ops-pack.summary.md`
+3. pack json: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260502T062951Z-ai-judge-runtime-ops-pack.summary.json`
+4. pack md: `/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260502T062951Z-ai-judge-runtime-ops-pack.summary.md`
 
 ## closure backfill
 
 1. active_plan_evidence_status：`pass`
 2. archive_detected：`true`
-3. archive_source：`latest_archive`
+3. archive_source：`plan_doc`
 4. archive_status：`archived`
-5. archive_path：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260430T111133Z-ai-judge-stage-closure-execute.md`
-6. completed_section：`B47`
+5. archive_path：`/Users/panyihang/Documents/EchoIsle/docs/dev_plan/archive/20260502T040430Z-ai-judge-stage-closure-execute.md`
+6. completed_section：`B48`
 7. completed_module_count：`1`
 8. todo_section：`C46`
 9. todo_env_blocked_debt_count：`1`

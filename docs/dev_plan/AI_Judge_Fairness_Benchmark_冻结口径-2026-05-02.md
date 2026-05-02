@@ -10,7 +10,7 @@
 3. policy_version: `fairness-benchmark-v1`
 4. needs_real_env_reconfirm: `true`
 5. needs_remediation: `false`
-6. benchmark_run_id: `20260502T034727Z-ai-judge-fairness-benchmark-freeze`
+6. benchmark_run_id: `20260502T062951Z-ai-judge-fairness-benchmark-freeze`
 7. registry_release_gate_input_ready: `false`
 
 ## 2. 阈值与观测值
