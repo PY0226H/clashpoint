@@ -989,6 +989,8 @@ fn mock_runtime_readiness_payload() -> serde_json::Value {
             "latestRunStatus": "completed",
             "latestRunThresholdDecision": "blocked",
             "latestRunEnvironmentMode": "production",
+            "envBlockedComponents": ["calibration_samples"],
+            "realEnvEvidenceStatusCounts": {"env_blocked": 2, "ready": 0},
             "reasonCodes": ["real_env_evidence_not_ready"]
         },
         "recommendedActions": [
@@ -2277,6 +2279,14 @@ async fn get_judge_runtime_readiness_by_owner_should_proxy_public_safe_contract(
     assert_eq!(out.panel_runtime["attentionGroupCount"], json!(1));
     assert_eq!(out.trust_and_challenge["openChallengeCount"], json!(1));
     assert_eq!(out.real_env["status"], json!("env_blocked"));
+    assert_eq!(
+        out.real_env["envBlockedComponents"],
+        json!(["calibration_samples"])
+    );
+    assert_eq!(
+        out.real_env["realEnvEvidenceStatusCounts"]["env_blocked"],
+        json!(2)
+    );
     assert_eq!(
         out.recommended_actions[0]["id"],
         json!("collect-real-env-samples")

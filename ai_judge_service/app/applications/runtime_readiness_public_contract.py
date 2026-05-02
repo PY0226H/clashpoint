@@ -108,6 +108,20 @@ def _tokens(value: Any, *, limit: int = 20) -> list[str]:
     return items
 
 
+def _count_map(value: Any, *, limit: int = 20) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    items: dict[str, int] = {}
+    for raw_key, raw_count in sorted(value.items(), key=lambda row: str(row[0])):
+        key = _token(raw_key)
+        if key is None:
+            continue
+        items[key] = _to_int(raw_count)
+        if len(items) >= limit:
+            break
+    return items
+
+
 def _blocker_count(blocker_counts: dict[str, Any], *buckets: str) -> int:
     return sum(_to_int(blocker_counts.get(bucket)) for bucket in buckets)
 
@@ -227,6 +241,9 @@ def _build_real_env_section(*, trust_monitoring: dict[str, Any]) -> dict[str, An
         ),
         "envBlockedComponents": _tokens(
             registry_readiness.get("envBlockedComponents")
+        ),
+        "realEnvEvidenceStatusCounts": _count_map(
+            registry_readiness.get("realEnvEvidenceStatusCounts")
         ),
         "reasonCodes": reason_codes[:20],
     }

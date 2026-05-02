@@ -113,6 +113,7 @@ export type OpsJudgeRuntimeReadinessRealEnv = {
   citationVerifierWeakCitationCount?: number;
   citationVerifierForbiddenSourceCount?: number;
   envBlockedComponents?: string[];
+  realEnvEvidenceStatusCounts?: Record<string, number>;
   reasonCodes?: string[];
 };
 

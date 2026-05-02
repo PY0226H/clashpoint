@@ -118,6 +118,10 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
                     "releaseReadinessArtifactCount": 1,
                     "releaseReadinessManifestHashCount": 1,
                     "envBlockedComponents": ["calibration_samples"],
+                    "realEnvEvidenceStatusCounts": {
+                        "env_blocked": 2,
+                        "ready": 0,
+                    },
                     "reasonCodes": ["real_env_evidence_not_ready"],
                 },
                 "citationVerifierEvidence": {
@@ -197,6 +201,14 @@ class RuntimeReadinessPublicContractTests(unittest.TestCase):
         self.assertFalse(payload["panelRuntime"]["officialWinnerSemanticsChanged"])
         self.assertEqual(payload["trustAndChallenge"]["openChallengeCount"], 1)
         self.assertTrue(payload["realEnv"]["evidenceAvailable"])
+        self.assertEqual(
+            payload["realEnv"]["envBlockedComponents"],
+            ["calibration_samples"],
+        )
+        self.assertEqual(
+            payload["realEnv"]["realEnvEvidenceStatusCounts"],
+            {"env_blocked": 2, "ready": 0},
+        )
         self.assertEqual(payload["recommendedActions"][0]["id"], "collect-real-env-samples")
         self.assertNotIn("provider", payload["recommendedActions"][0])
         self.assertFalse(payload["visibilityContract"]["rawTraceVisible"])

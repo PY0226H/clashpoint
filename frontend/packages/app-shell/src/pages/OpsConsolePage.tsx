@@ -560,6 +560,10 @@ export function OpsConsolePage() {
   const runtimeActions = runtimeReadiness?.recommendedActions.slice(0, 4) || [];
   const fairnessCalibrationActions = runtimeActions.filter((action) => action.source === "fairnessCalibrationAdvisor");
   const runtimeReasonCodes = runtimeReadiness?.realEnv.reasonCodes || [];
+  const runtimeBlockedComponents = runtimeReadiness?.realEnv.envBlockedComponents || [];
+  const runtimeRealEnvStatusCounts = Object.entries(runtimeReadiness?.realEnv.realEnvEvidenceStatusCounts || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([status, count]) => `${status}: ${count}`);
   const totalAlerts = alertsQuery.data?.total ?? 0;
   const alertPageCount = Math.max(1, Math.ceil(totalAlerts / alertPageSize));
   const canGoPrevPage = alertPageIndex > 0;
@@ -965,6 +969,12 @@ export function OpsConsolePage() {
                 <InlineHint>
                   reasons: {runtimeReasonCodes.length > 0 ? runtimeReasonCodes.join(", ") : "--"}
                 </InlineHint>
+                <InlineHint>
+                  blocked: {runtimeBlockedComponents.length > 0 ? runtimeBlockedComponents.join(", ") : "--"}
+                </InlineHint>
+                <InlineHint>
+                  evidence states: {runtimeRealEnvStatusCounts.length > 0 ? runtimeRealEnvStatusCounts.join(", ") : "--"}
+                </InlineHint>
               </article>
 
               <article className="echo-topic-item">
@@ -972,6 +982,10 @@ export function OpsConsolePage() {
                 <InlineHint>
                   overall: {runtimeReadiness?.trustAndChallenge.overallStatus || "--"} | public verify:{" "}
                   {runtimeReadiness?.trustAndChallenge.publicVerificationStatus || "--"}
+                </InlineHint>
+                <InlineHint>
+                  artifact store: {runtimeReadiness?.trustAndChallenge.artifactStoreStatus || "--"} | challenge lag:{" "}
+                  {runtimeReadiness?.trustAndChallenge.challengeReviewLagStatus || "--"}
                 </InlineHint>
                 <InlineHint>
                   open challenges: {runtimeReadiness?.trustAndChallenge.openChallengeCount ?? 0} | urgent:{" "}
@@ -987,7 +1001,7 @@ export function OpsConsolePage() {
                 <h4>Recommended Actions</h4>
                 {runtimeActions.map((action) => (
                   <InlineHint key={action.id}>
-                    {action.severity} | {action.code} | {action.title}
+                    {action.severity} | {action.code} | {action.status || "open"} | {action.title}
                   </InlineHint>
                 ))}
                 {runtimeActions.length === 0 ? <InlineHint>No runtime actions.</InlineHint> : null}
