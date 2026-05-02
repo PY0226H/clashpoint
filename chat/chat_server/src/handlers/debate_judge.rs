@@ -747,6 +747,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn judge_challenge_route_should_forbid_non_participant() -> Result<()> {
+        let (_tdb, state) = AppState::new_for_test().await?;
+        let session_id =
+            seed_judge_topic_and_session(&state, "judging", "judge-challenge-read-forbid").await?;
+        let (_user, token) = create_bound_user_and_token(
+            &state,
+            "judge challenge read outsider",
+            "judge-challenge-read-outsider@acme.org",
+            "+8613800771010",
+            "judge-challenge-read-outsider-sid",
+        )
+        .await?;
+        let app = get_router(state).await?;
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/api/debate/sessions/{session_id}/judge-report/challenge"
+            ))
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())?;
+        let res = app.oneshot(req).await?;
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = res.into_body().collect().await?.to_bytes();
+        let err: ErrorOutput = serde_json::from_slice(&body)?;
+        assert_eq!(err.error, "judge_report_read_forbidden");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn judge_challenge_request_route_should_forbid_non_participant() -> Result<()> {
         let (_tdb, state) = AppState::new_for_test().await?;
         let session_id =

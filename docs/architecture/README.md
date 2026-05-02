@@ -1,7 +1,7 @@
 # EchoIsle Architecture Map
 
-更新时间：2026-05-01
-状态：当前主线轻量代码地图
+更新时间：2026-05-02
+状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；NPC Coach / Room QA 已暂停）
 
 ---
 
@@ -78,7 +78,9 @@
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 
-Rust 侧优先看：
+当前有效主线是官方 `Judge App` / `Official Verdict Plane`。查 AI 裁判、报告、公验、challenge、复核或平局投票时，优先看下面这些入口。
+
+Rust 官方主线优先看：
 
 1. [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)
 2. [ai_internal.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/ai_internal.rs)
@@ -86,7 +88,7 @@ Rust 侧优先看：
 4. [judge_dispatch.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge_dispatch.rs)
 5. [runtime_workers.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/application/runtime_workers.rs)
 
-Python 侧优先看：
+Python 官方主线优先看：
 
 1. [app_factory.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/app_factory.py)
 2. [judge_command_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py)
@@ -94,7 +96,13 @@ Python 侧优先看：
 4. [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py)
 5. [callback_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/callback_client.py)
 
-AI advisory / NPC Coach / Room QA 优先看：
+AI advisory / NPC Coach / Room QA 当前是暂停历史资产：
+
+1. 不作为当前开发入口。
+2. 不接真实 LLM executor、ready-state、成本/延迟 guard 或 Ops evidence。
+3. 不删除历史实现；恢复前必须先冻结独立 PRD 和模块设计。
+
+如只需理解历史实现或排查暂停边界，再看：
 
 1. [debate_judge.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_judge.rs)
 2. [request_report_query.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/judge/request_report_query.rs)
@@ -145,6 +153,18 @@ Python AI Ops 优先看：
 14. [fairness_calibration_decision_log.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/fairness_calibration_decision_log.py)
 15. [artifact_pack.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/artifact_pack.py)
 16. [artifact_store_healthcheck.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/scripts/artifact_store_healthcheck.py)
+
+AI Judge real-env / runtime evidence 优先看：
+
+1. [ai_judge_runtime_ops_pack.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_runtime_ops_pack.sh)
+2. [ai_judge_real_env_window_closure.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_real_env_window_closure.sh)
+3. [ai_judge_real_env_evidence_closure.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_real_env_evidence_closure.sh)
+4. [ai_judge_stage_closure_evidence.sh](/Users/panyihang/Documents/EchoIsle/scripts/harness/ai_judge_stage_closure_evidence.sh)
+5. [ai_judge_runtime_ops_pack.env](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_runtime_ops_pack.env)
+6. [ai_judge_real_env_readiness_inputs_checklist.md](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_real_env_readiness_inputs_checklist.md)
+7. [ai_judge_artifact_store_healthcheck.json](/Users/panyihang/Documents/EchoIsle/docs/loadtest/evidence/ai_judge_artifact_store_healthcheck.json)
+
+注意：当前没有真实环境时，`local_reference_ready` / `env_blocked` 只能证明本地参考与阻塞门禁有效，不等于 real-env `pass`。
 
 ### 3.5 钱包 / IAP / 账本
 
@@ -281,7 +301,9 @@ Python AI Ops 优先看：
 
 1. 裁判主链：
    - [judge_command_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_command_routes.py)
+   - [judge_dispatch_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_dispatch_runtime.py)
    - [judge_mainline.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_mainline.py)
+   - [judge_workflow_roles.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/judge_workflow_roles.py)
 
 2. 回放、治理与运维读路径：
    - [route_group_replay.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_replay.py)
@@ -300,7 +322,17 @@ Python AI Ops 优先看：
    - [artifact_store_healthcheck.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/scripts/artifact_store_healthcheck.py)
    - [facts repository.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/infra/facts/repository.py)
 
-3. RAG 与模型：
+3. 暂停历史资产（NPC Coach / Room QA / advisory）：
+   - [route_group_assistant.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/route_group_assistant.py)
+   - [assistant_agent_routes.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_agent_routes.py)
+   - [assistant_advisory_contract.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_contract.py)
+   - [assistant_advisory_prompt.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_prompt.py)
+   - [assistant_advisory_output.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/assistant_advisory_output.py)
+   - [agent_runtime.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/applications/agent_runtime.py)
+
+   这些文件只用于理解历史实现或暂停边界；当前不要从这里继续新增 NPC Coach / Room QA 开发任务。
+
+4. RAG 与模型：
    - [openai_judge_client.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/openai_judge_client.py)
    - [rag_retriever.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/rag_retriever.py)
    - [runtime_rag.py](/Users/panyihang/Documents/EchoIsle/ai_judge_service/app/runtime_rag.py)
