@@ -229,6 +229,46 @@ write_artifact_store_healthcheck_evidence() {
 EOF_JSON
 }
 
+append_real_readiness_evidence_links() {
+  local file="$1"
+  cat >>"$file" <<'EOF'
+REAL_SAMPLE_MANIFEST_EVIDENCE=https://example.com/evidence/sample-manifest
+REAL_PROVIDER_EVIDENCE=https://example.com/evidence/provider-health
+REAL_CALLBACK_EVIDENCE=https://example.com/evidence/callback-health
+BENCHMARK_TARGETS_EVIDENCE=https://example.com/evidence/benchmark-targets
+FAIRNESS_TARGETS_EVIDENCE=https://example.com/evidence/fairness-targets
+RUNTIME_OPS_TARGETS_EVIDENCE=https://example.com/evidence/runtime-ops-targets
+EOF
+}
+
+write_polluted_local_reference_artifact_store_evidence() {
+  local file="$1"
+  cat >"$file" <<'EOF_JSON'
+{
+  "version": "artifact-store-healthcheck-evidence-v1",
+  "provider": "local",
+  "status": "local_reference",
+  "productionReady": true,
+  "roundtrip": {
+    "status": "pass"
+  },
+  "realEnvWindow": {
+    "productionArtifactStoreReady": true,
+    "recommendedEnv": {
+      "PRODUCTION_ARTIFACT_STORE_READY": "true"
+    },
+    "blockerCode": null
+  },
+  "healthcheck": {
+    "provider": "local",
+    "status": "local_reference",
+    "writeReadRoundtripStatus": "pass",
+    "productionReady": true
+  }
+}
+EOF_JSON
+}
+
 run_window_closure() {
   local work="$1"
   local plan_doc="$work/plan-stage-closure.md"
@@ -282,6 +322,7 @@ FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 REAL_EVIDENCE_LINK=https://example.com/evidence/window-pass
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_PASS/ai_judge_p5_real_env.env"
 
 PASS_STDOUT="$TMP_DIR/pass.stdout"
 PASS_JSON="$TMP_DIR/pass.summary.json"
@@ -322,6 +363,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_PREFLIGHT/ai_judge_p5_real_env.env"
 
 PREFLIGHT_STDOUT="$TMP_DIR/preflight.stdout"
 PREFLIGHT_JSON="$TMP_DIR/preflight.summary.json"
@@ -333,6 +375,30 @@ expect_contains "preflight p5 not run" "p5_status: not_run" "$PREFLIGHT_STDOUT"
 expect_contains "preflight runtime not run" "runtime_ops_pack_status: not_run" "$PREFLIGHT_STDOUT"
 expect_contains "preflight env flag" "PREFLIGHT_ONLY=true" "$EVIDENCE_PREFLIGHT/ai_judge_real_env_window_closure.env"
 expect_contains "preflight json flag" "\"preflight_only\": \"true\"" "$PREFLIGHT_JSON"
+
+# 场景2a-0：preflight-only 不接受只有 READY=true、缺少对应 evidence 链接的输入
+WORK_PREFLIGHT_MISSING_EVIDENCE_LINKS="$TMP_DIR/preflight-missing-evidence-links"
+EVIDENCE_PREFLIGHT_MISSING_EVIDENCE_LINKS="$WORK_PREFLIGHT_MISSING_EVIDENCE_LINKS/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_PREFLIGHT_MISSING_EVIDENCE_LINKS"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_PREFLIGHT_MISSING_EVIDENCE_LINKS/ai_judge_artifact_store_healthcheck.json" "true" "pass"
+cat >"$EVIDENCE_PREFLIGHT_MISSING_EVIDENCE_LINKS/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+
+PREFLIGHT_MISSING_EVIDENCE_LINKS_STDOUT="$TMP_DIR/preflight-missing-evidence-links.stdout"
+run_window_closure "$WORK_PREFLIGHT_MISSING_EVIDENCE_LINKS" --preflight-only >"$PREFLIGHT_MISSING_EVIDENCE_LINKS_STDOUT"
+expect_contains "preflight missing links blocked" "ai_judge_real_env_window_closure_status: env_blocked" "$PREFLIGHT_MISSING_EVIDENCE_LINKS_STDOUT"
+expect_contains "preflight missing sample evidence" "real_sample_manifest_evidence_missing" "$PREFLIGHT_MISSING_EVIDENCE_LINKS_STDOUT"
+expect_contains "preflight missing provider evidence" "real_provider_evidence_missing" "$PREFLIGHT_MISSING_EVIDENCE_LINKS_STDOUT"
+expect_contains "preflight missing runtime evidence" "runtime_ops_targets_evidence_missing" "$PREFLIGHT_MISSING_EVIDENCE_LINKS_STDOUT"
 
 # 场景2a-1：preflight-only 不接受手工 artifact ready 替代 healthcheck evidence
 WORK_PREFLIGHT_NO_EVIDENCE="$TMP_DIR/preflight-no-evidence"
@@ -350,6 +416,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_PREFLIGHT_NO_EVIDENCE/ai_judge_p5_real_env.env"
 
 PREFLIGHT_NO_EVIDENCE_STDOUT="$TMP_DIR/preflight-no-evidence.stdout"
 run_window_closure "$WORK_PREFLIGHT_NO_EVIDENCE" --preflight-only >"$PREFLIGHT_NO_EVIDENCE_STDOUT"
@@ -372,6 +439,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_PREFLIGHT_BLOCKED/ai_judge_p5_real_env.env"
 
 PREFLIGHT_BLOCKED_STDOUT="$TMP_DIR/preflight-blocked.stdout"
 run_window_closure "$WORK_PREFLIGHT_BLOCKED" --preflight-only >"$PREFLIGHT_BLOCKED_STDOUT"
@@ -414,6 +482,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_ARTIFACT_BLOCKED/ai_judge_p5_real_env.env"
 
 ARTIFACT_BLOCKED_STDOUT="$TMP_DIR/artifact-blocked.stdout"
 run_window_closure "$WORK_ARTIFACT_BLOCKED" >"$ARTIFACT_BLOCKED_STDOUT"
@@ -440,6 +509,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_ARTIFACT_CONFLICT/ai_judge_p5_real_env.env"
 
 ARTIFACT_CONFLICT_STDOUT="$TMP_DIR/artifact-conflict.stdout"
 run_window_closure "$WORK_ARTIFACT_CONFLICT" >"$ARTIFACT_CONFLICT_STDOUT"
@@ -447,12 +517,41 @@ expect_contains "artifact conflict status" "ai_judge_real_env_window_closure_sta
 expect_contains "artifact conflict evidence status" "production_artifact_store_evidence_status: blocked" "$ARTIFACT_CONFLICT_STDOUT"
 expect_contains "artifact conflict ready overridden" "PRODUCTION_ARTIFACT_STORE_READY=false" "$EVIDENCE_ARTIFACT_CONFLICT/ai_judge_real_env_window_closure.env"
 
+# 场景2e：污染的 local_reference healthcheck 即使写 productionReady=true 也不能通过
+WORK_ARTIFACT_LOCAL_POLLUTED="$TMP_DIR/artifact-local-polluted"
+EVIDENCE_ARTIFACT_LOCAL_POLLUTED="$WORK_ARTIFACT_LOCAL_POLLUTED/docs/loadtest/evidence"
+mkdir -p "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED"
+seed_tracks_real "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED"
+seed_release_readiness_summary "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED"
+write_polluted_local_reference_artifact_store_evidence "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED/ai_judge_artifact_store_healthcheck.json"
+cat >"$EVIDENCE_ARTIFACT_LOCAL_POLLUTED/ai_judge_p5_real_env.env" <<'EOF'
+REAL_CALIBRATION_ENV_READY=true
+CALIBRATION_ENV_MODE=real
+REAL_SAMPLE_MANIFEST=s3://echoisle-real-samples/p37/manifest.json
+REAL_SAMPLE_MANIFEST_READY=true
+REAL_PROVIDER_READY=true
+REAL_CALLBACK_READY=true
+PRODUCTION_ARTIFACT_STORE_READY=true
+BENCHMARK_TARGETS_READY=true
+FAIRNESS_TARGETS_READY=true
+RUNTIME_OPS_TARGETS_READY=true
+EOF
+append_real_readiness_evidence_links "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED/ai_judge_p5_real_env.env"
+
+ARTIFACT_LOCAL_POLLUTED_STDOUT="$TMP_DIR/artifact-local-polluted.stdout"
+run_window_closure "$WORK_ARTIFACT_LOCAL_POLLUTED" --preflight-only >"$ARTIFACT_LOCAL_POLLUTED_STDOUT"
+expect_contains "artifact polluted blocked" "ai_judge_real_env_window_closure_status: env_blocked" "$ARTIFACT_LOCAL_POLLUTED_STDOUT"
+expect_contains "artifact polluted local blocker" "production_artifact_store_local_reference" "$ARTIFACT_LOCAL_POLLUTED_STDOUT"
+expect_contains "artifact polluted ready overridden" "PRODUCTION_ARTIFACT_STORE_READY=false" "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED/ai_judge_real_env_window_closure.env"
+expect_contains "artifact polluted provider recorded" "PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER=local" "$EVIDENCE_ARTIFACT_LOCAL_POLLUTED/ai_judge_real_env_window_closure.env"
+
 # 场景3：阈值违反 -> threshold_violation
 WORK_VIOLATION="$TMP_DIR/violation"
 EVIDENCE_VIOLATION="$WORK_VIOLATION/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_VIOLATION"
 seed_tracks_real "$EVIDENCE_VIOLATION" "0.45" "1600" "2900" "false" "0.90" "0.90" "0.12"
 seed_release_readiness_summary "$EVIDENCE_VIOLATION" "blocked"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_VIOLATION/ai_judge_artifact_store_healthcheck.json" "true" "pass"
 cat >"$EVIDENCE_VIOLATION/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 CALIBRATION_ENV_MODE=real
@@ -465,6 +564,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_VIOLATION/ai_judge_p5_real_env.env"
 
 VIOLATION_STDOUT="$TMP_DIR/violation.stdout"
 run_window_closure "$WORK_VIOLATION" >"$VIOLATION_STDOUT"
@@ -477,6 +577,7 @@ EVIDENCE_PENDING="$WORK_PENDING/docs/loadtest/evidence"
 mkdir -p "$EVIDENCE_PENDING"
 seed_tracks_real "$EVIDENCE_PENDING"
 seed_release_readiness_summary "$EVIDENCE_PENDING"
+write_artifact_store_healthcheck_evidence "$EVIDENCE_PENDING/ai_judge_artifact_store_healthcheck.json" "true" "pass"
 cat >"$EVIDENCE_PENDING/ai_judge_p5_real_env.env" <<'EOF'
 REAL_CALIBRATION_ENV_READY=true
 CALIBRATION_ENV_MODE=real
@@ -489,6 +590,7 @@ BENCHMARK_TARGETS_READY=true
 FAIRNESS_TARGETS_READY=true
 RUNTIME_OPS_TARGETS_READY=true
 EOF
+append_real_readiness_evidence_links "$EVIDENCE_PENDING/ai_judge_p5_real_env.env"
 sed -i '' '/^REAL_ENV_EVIDENCE=/d' "$EVIDENCE_PENDING/ai_judge_p5_latency_baseline.env"
 
 PENDING_STDOUT="$TMP_DIR/pending.stdout"

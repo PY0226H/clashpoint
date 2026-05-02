@@ -6,7 +6,7 @@
 ## 1. 当前口径
 
 1. 当前没有真实环境窗口，`REAL_CALIBRATION_ENV_READY` 必须保持 `false`。
-2. 当前对象存储证据为 `local_reference` / `productionReady=false`，只能证明门禁会阻断 fake ready。
+2. 当前对象存储证据为 `local_reference` / `productionReady=false`，只能证明门禁会阻断 fake ready；即使出现污染 JSON 写成 `productionReady=true`，只要 `provider=local` 或 `status=local_reference`，preflight 也必须阻断。
 3. `NPC Coach` / `Room QA` 仍保持暂停，本清单只服务官方 AI Judge / Official Verdict Plane。
 4. 所有 `*_READY=true` 都必须有对应证据链接，不能只靠手工布尔值。
 
@@ -26,8 +26,8 @@
 | `REAL_SAMPLE_MANIFEST_READY` | `false` | manifest 通过校验 | fairness benchmark manifest evidence |
 | `REAL_PROVIDER_READY` | `false` | 真实模型/provider 可用 | provider 健康检查或运行窗口记录 |
 | `REAL_CALLBACK_READY` | `false` | 回写 callback 可用 | callback 健康检查或端到端回写记录 |
-| `PRODUCTION_ARTIFACT_STORE_READY` | `false` | 对象存储 roundtrip 通过 | `artifact_store_healthcheck.py` 输出 `productionReady=true` |
-| `PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON` | `docs/loadtest/evidence/ai_judge_artifact_store_healthcheck.json` | 指向生产对象存储 healthcheck evidence | evidence 必须脱敏，且不是 `local_reference` |
+| `PRODUCTION_ARTIFACT_STORE_READY` | `false` | 对象存储 roundtrip 通过 | `artifact_store_healthcheck.py` 输出 `productionReady=true`、`provider!=local` 且 roundtrip 为 `pass` |
+| `PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON` | `docs/loadtest/evidence/ai_judge_artifact_store_healthcheck.json` | 指向生产对象存储 healthcheck evidence | evidence 必须脱敏，且不是 `local_reference`；不得只手工设置 `PRODUCTION_ARTIFACT_STORE_READY=true` |
 | `BENCHMARK_TARGETS_READY` | `false` | benchmark 样本口径与阈值冻结 | benchmark target freeze evidence |
 | `FAIRNESS_TARGETS_READY` | `false` | fairness 阈值冻结 | fairness benchmark threshold evidence |
 | `RUNTIME_OPS_TARGETS_READY` | `false` | runtime ops / SLA 目标冻结 | runtime ops / SLA freeze evidence |
@@ -51,6 +51,6 @@
 ## 5. 禁止事项
 
 1. 不把 `local_reference`、mock provider、mock callback 或本机对象存储写成真实通过。
-2. 不只设置 `PRODUCTION_ARTIFACT_STORE_READY=true` 而缺少 healthcheck evidence。
+2. 不只设置 `PRODUCTION_ARTIFACT_STORE_READY=true` 而缺少 healthcheck evidence；不使用 `provider=local`、`status=local_reference` 或 roundtrip 非 `pass` 的 evidence。
 3. 不在 `NPC Coach` / `Room QA` 暂停期间推进 assistant executor、prompt/output、chat/frontend ready-state 或 Ops evidence。
 4. 不把 preflight 的 `env_blocked` 解释成失败；在无真实环境时，它是正确阻断。

@@ -39,16 +39,24 @@ REAL_ENV_READINESS_STATUS="env_blocked"
 REAL_ENV_READINESS_BLOCKER_CODES=""
 REAL_ENV_READINESS_BLOCKER_HINTS=""
 REAL_SAMPLE_MANIFEST=""
+REAL_SAMPLE_MANIFEST_READY="false"
+REAL_SAMPLE_MANIFEST_EVIDENCE=""
 REAL_PROVIDER_READY="false"
+REAL_PROVIDER_EVIDENCE=""
 REAL_CALLBACK_READY="false"
+REAL_CALLBACK_EVIDENCE=""
 PRODUCTION_ARTIFACT_STORE_READY="false"
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON=""
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS="not_provided"
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS=""
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE=""
+PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER=""
 BENCHMARK_TARGETS_READY="false"
+BENCHMARK_TARGETS_EVIDENCE=""
 FAIRNESS_TARGETS_READY="false"
+FAIRNESS_TARGETS_EVIDENCE=""
 RUNTIME_OPS_TARGETS_READY="false"
+RUNTIME_OPS_TARGETS_EVIDENCE=""
 LOCAL_REFERENCE_EVIDENCE_LINK=""
 REAL_EVIDENCE_LINK=""
 REAL_PASS_READY="false"
@@ -440,7 +448,7 @@ join_with_delim() {
 }
 
 resolve_artifact_store_evidence_ready() {
-  local evidence_path ready
+  local evidence_path ready evidence_status roundtrip_status
 
   PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON="$(trim "$(read_input_value "PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON")")"
   if [[ -z "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON" ]]; then
@@ -467,13 +475,28 @@ resolve_artifact_store_evidence_ready() {
   if [[ -z "$ready" ]]; then
     ready="$(read_json_bool_value "$evidence_path" "productionReady")"
   fi
-  PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS="$(read_json_string_value "$evidence_path" "writeReadRoundtripStatus")"
-  if [[ -z "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS" ]]; then
-    PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS="$(read_json_string_value "$evidence_path" "status")"
+  PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER="$(read_json_string_value "$evidence_path" "provider")"
+  evidence_status="$(read_json_string_value "$evidence_path" "status")"
+  roundtrip_status="$(read_json_string_value "$evidence_path" "writeReadRoundtripStatus")"
+  if [[ -z "$roundtrip_status" ]]; then
+    roundtrip_status="$(read_json_string_value "$evidence_path" "status")"
   fi
+  PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS="$roundtrip_status"
   PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE="$(read_json_nullable_string_value "$evidence_path" "blockerCode")"
 
   if [[ "$ready" == "true" ]]; then
+    if [[ "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER" == "local" || "$evidence_status" == "local_reference" ]]; then
+      PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS="blocked"
+      PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE="production_artifact_store_local_reference"
+      PRODUCTION_ARTIFACT_STORE_READY="false"
+      return
+    fi
+    if [[ "$roundtrip_status" != "pass" ]]; then
+      PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS="blocked"
+      PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE="production_artifact_store_roundtrip_not_pass"
+      PRODUCTION_ARTIFACT_STORE_READY="false"
+      return
+    fi
     PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS="ready"
     PRODUCTION_ARTIFACT_STORE_READY="true"
     return
@@ -497,13 +520,20 @@ derive_readiness_inputs() {
   local -a blocker_hints=()
 
   REAL_SAMPLE_MANIFEST="$(trim "$(read_input_value "REAL_SAMPLE_MANIFEST")")"
+  REAL_SAMPLE_MANIFEST_READY="$(trim "$(read_input_value "REAL_SAMPLE_MANIFEST_READY")")"
+  REAL_SAMPLE_MANIFEST_EVIDENCE="$(trim "$(read_input_value "REAL_SAMPLE_MANIFEST_EVIDENCE")")"
   REAL_PROVIDER_READY="$(trim "$(read_input_value "REAL_PROVIDER_READY")")"
+  REAL_PROVIDER_EVIDENCE="$(trim "$(read_input_value "REAL_PROVIDER_EVIDENCE")")"
   REAL_CALLBACK_READY="$(trim "$(read_input_value "REAL_CALLBACK_READY")")"
+  REAL_CALLBACK_EVIDENCE="$(trim "$(read_input_value "REAL_CALLBACK_EVIDENCE")")"
   PRODUCTION_ARTIFACT_STORE_READY="$(trim "$(read_input_value "PRODUCTION_ARTIFACT_STORE_READY")")"
   resolve_artifact_store_evidence_ready
   BENCHMARK_TARGETS_READY="$(trim "$(read_input_value "BENCHMARK_TARGETS_READY")")"
+  BENCHMARK_TARGETS_EVIDENCE="$(trim "$(read_input_value "BENCHMARK_TARGETS_EVIDENCE")")"
   FAIRNESS_TARGETS_READY="$(trim "$(read_input_value "FAIRNESS_TARGETS_READY")")"
+  FAIRNESS_TARGETS_EVIDENCE="$(trim "$(read_input_value "FAIRNESS_TARGETS_EVIDENCE")")"
   RUNTIME_OPS_TARGETS_READY="$(trim "$(read_input_value "RUNTIME_OPS_TARGETS_READY")")"
+  RUNTIME_OPS_TARGETS_EVIDENCE="$(trim "$(read_input_value "RUNTIME_OPS_TARGETS_EVIDENCE")")"
   LOCAL_REFERENCE_EVIDENCE_LINK="$(trim "$(read_input_value "LOCAL_REFERENCE_EVIDENCE_LINK")")"
   REAL_EVIDENCE_LINK="$(trim "$(read_input_value "REAL_EVIDENCE_LINK")")"
 
@@ -521,14 +551,26 @@ derive_readiness_inputs() {
   if [[ -z "$REAL_SAMPLE_MANIFEST" ]]; then
     blocker_codes+=("real_sample_manifest_missing")
     blocker_hints+=("在 ai_judge_p5_real_env.env 或环境变量中设置 REAL_SAMPLE_MANIFEST")
+  elif ! is_truthy "$REAL_SAMPLE_MANIFEST_READY"; then
+    blocker_codes+=("real_sample_manifest_not_ready")
+    blocker_hints+=("设置 REAL_SAMPLE_MANIFEST_READY=true，并确认真实样本 manifest 已审核")
+  elif [[ -z "$REAL_SAMPLE_MANIFEST_EVIDENCE" ]]; then
+    blocker_codes+=("real_sample_manifest_evidence_missing")
+    blocker_hints+=("为 REAL_SAMPLE_MANIFEST_READY=true 提供 REAL_SAMPLE_MANIFEST_EVIDENCE")
   fi
   if ! is_truthy "$REAL_PROVIDER_READY"; then
     blocker_codes+=("real_provider_not_ready")
     blocker_hints+=("设置 REAL_PROVIDER_READY=true，确认真实模型/provider 服务可用")
+  elif [[ -z "$REAL_PROVIDER_EVIDENCE" ]]; then
+    blocker_codes+=("real_provider_evidence_missing")
+    blocker_hints+=("为 REAL_PROVIDER_READY=true 提供 REAL_PROVIDER_EVIDENCE")
   fi
   if ! is_truthy "$REAL_CALLBACK_READY"; then
     blocker_codes+=("real_callback_not_ready")
     blocker_hints+=("设置 REAL_CALLBACK_READY=true，确认真实 callback/回写服务可用")
+  elif [[ -z "$REAL_CALLBACK_EVIDENCE" ]]; then
+    blocker_codes+=("real_callback_evidence_missing")
+    blocker_hints+=("为 REAL_CALLBACK_READY=true 提供 REAL_CALLBACK_EVIDENCE")
   fi
   if ! is_truthy "$PRODUCTION_ARTIFACT_STORE_READY"; then
     local artifact_blocker_code="production_artifact_store_not_ready"
@@ -536,23 +578,32 @@ derive_readiness_inputs() {
       artifact_blocker_code="$PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE"
     fi
     blocker_codes+=("$artifact_blocker_code")
-    blocker_hints+=("运行 artifact_store_healthcheck.py --enable-roundtrip 并确认 productionReady=true；或设置 PRODUCTION_ARTIFACT_STORE_READY=true")
+    blocker_hints+=("运行 artifact_store_healthcheck.py --enable-roundtrip 并确认 productionReady=true，不能只手工设置 PRODUCTION_ARTIFACT_STORE_READY")
   fi
-  if [[ "$PREFLIGHT_ONLY" == "true" && "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS" == "not_provided" ]]; then
+  if [[ "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS" == "not_provided" ]]; then
     blocker_codes+=("production_artifact_store_evidence_not_provided")
-    blocker_hints+=("preflight 需要提供 artifact_store_healthcheck.py 输出的对象存储 evidence")
+    blocker_hints+=("真实环境 readiness 需要提供 artifact_store_healthcheck.py 输出的对象存储 evidence")
   fi
   if ! is_truthy "$BENCHMARK_TARGETS_READY"; then
     blocker_codes+=("benchmark_targets_not_ready")
     blocker_hints+=("设置 BENCHMARK_TARGETS_READY=true，确认 benchmark 阈值与样本口径已冻结")
+  elif [[ -z "$BENCHMARK_TARGETS_EVIDENCE" ]]; then
+    blocker_codes+=("benchmark_targets_evidence_missing")
+    blocker_hints+=("为 BENCHMARK_TARGETS_READY=true 提供 BENCHMARK_TARGETS_EVIDENCE")
   fi
   if ! is_truthy "$FAIRNESS_TARGETS_READY"; then
     blocker_codes+=("fairness_targets_not_ready")
     blocker_hints+=("设置 FAIRNESS_TARGETS_READY=true，确认 fairness 目标阈值已冻结")
+  elif [[ -z "$FAIRNESS_TARGETS_EVIDENCE" ]]; then
+    blocker_codes+=("fairness_targets_evidence_missing")
+    blocker_hints+=("为 FAIRNESS_TARGETS_READY=true 提供 FAIRNESS_TARGETS_EVIDENCE")
   fi
   if ! is_truthy "$RUNTIME_OPS_TARGETS_READY"; then
     blocker_codes+=("runtime_ops_targets_not_ready")
     blocker_hints+=("设置 RUNTIME_OPS_TARGETS_READY=true，确认 runtime ops/SLA 目标阈值已冻结")
+  elif [[ -z "$RUNTIME_OPS_TARGETS_EVIDENCE" ]]; then
+    blocker_codes+=("runtime_ops_targets_evidence_missing")
+    blocker_hints+=("为 RUNTIME_OPS_TARGETS_READY=true 提供 RUNTIME_OPS_TARGETS_EVIDENCE")
   fi
 
   if [[ ${#blocker_codes[@]} -eq 0 ]]; then
@@ -728,16 +779,24 @@ REAL_ENV_INPUT_READY=$REAL_ENV_INPUT_READY
 REAL_ENV_READINESS_BLOCKER_CODES=$REAL_ENV_READINESS_BLOCKER_CODES
 REAL_ENV_READINESS_BLOCKER_HINTS=$REAL_ENV_READINESS_BLOCKER_HINTS
 REAL_SAMPLE_MANIFEST=$REAL_SAMPLE_MANIFEST
+REAL_SAMPLE_MANIFEST_READY=$REAL_SAMPLE_MANIFEST_READY
+REAL_SAMPLE_MANIFEST_EVIDENCE=$REAL_SAMPLE_MANIFEST_EVIDENCE
 REAL_PROVIDER_READY=$REAL_PROVIDER_READY
+REAL_PROVIDER_EVIDENCE=$REAL_PROVIDER_EVIDENCE
 REAL_CALLBACK_READY=$REAL_CALLBACK_READY
+REAL_CALLBACK_EVIDENCE=$REAL_CALLBACK_EVIDENCE
 PRODUCTION_ARTIFACT_STORE_READY=$PRODUCTION_ARTIFACT_STORE_READY
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON=$PRODUCTION_ARTIFACT_STORE_EVIDENCE_JSON
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS=$PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS=$PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS
 PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE=$PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE
+PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER=$PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER
 BENCHMARK_TARGETS_READY=$BENCHMARK_TARGETS_READY
+BENCHMARK_TARGETS_EVIDENCE=$BENCHMARK_TARGETS_EVIDENCE
 FAIRNESS_TARGETS_READY=$FAIRNESS_TARGETS_READY
+FAIRNESS_TARGETS_EVIDENCE=$FAIRNESS_TARGETS_EVIDENCE
 RUNTIME_OPS_TARGETS_READY=$RUNTIME_OPS_TARGETS_READY
+RUNTIME_OPS_TARGETS_EVIDENCE=$RUNTIME_OPS_TARGETS_EVIDENCE
 LOCAL_REFERENCE_EVIDENCE_LINK=$LOCAL_REFERENCE_EVIDENCE_LINK
 REAL_EVIDENCE_LINK=$REAL_EVIDENCE_LINK
 REAL_PASS_READY=$REAL_PASS_READY
@@ -794,14 +853,22 @@ write_output_doc() {
 | 输入 | 当前值 |
 | --- | --- |
 | real_sample_manifest | \`${REAL_SAMPLE_MANIFEST:-（缺失）}\` |
+| real_sample_manifest_ready | \`$REAL_SAMPLE_MANIFEST_READY\` |
+| real_sample_manifest_evidence | \`${REAL_SAMPLE_MANIFEST_EVIDENCE:-（缺失）}\` |
 | real_provider_ready | \`$REAL_PROVIDER_READY\` |
+| real_provider_evidence | \`${REAL_PROVIDER_EVIDENCE:-（缺失）}\` |
 | real_callback_ready | \`$REAL_CALLBACK_READY\` |
+| real_callback_evidence | \`${REAL_CALLBACK_EVIDENCE:-（缺失）}\` |
 | production_artifact_store_ready | \`$PRODUCTION_ARTIFACT_STORE_READY\` |
 | production_artifact_store_evidence_status | \`$PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS\` |
+| production_artifact_store_evidence_provider | \`${PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER:-（无）}\` |
 | production_artifact_store_evidence_roundtrip_status | \`${PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS:-（无）}\` |
 | benchmark_targets_ready | \`$BENCHMARK_TARGETS_READY\` |
+| benchmark_targets_evidence | \`${BENCHMARK_TARGETS_EVIDENCE:-（缺失）}\` |
 | fairness_targets_ready | \`$FAIRNESS_TARGETS_READY\` |
+| fairness_targets_evidence | \`${FAIRNESS_TARGETS_EVIDENCE:-（缺失）}\` |
 | runtime_ops_targets_ready | \`$RUNTIME_OPS_TARGETS_READY\` |
+| runtime_ops_targets_evidence | \`${RUNTIME_OPS_TARGETS_EVIDENCE:-（缺失）}\` |
 
 1. readiness_blocker_codes：\`${REAL_ENV_READINESS_BLOCKER_CODES:-（无）}\`
 2. readiness_blocker_hints：\`${REAL_ENV_READINESS_BLOCKER_HINTS:-（无）}\`
@@ -838,15 +905,23 @@ write_json_summary() {
     "blocker_hints": "$(json_escape "$REAL_ENV_READINESS_BLOCKER_HINTS")",
     "inputs": {
       "real_sample_manifest": "$(json_escape "$REAL_SAMPLE_MANIFEST")",
+      "real_sample_manifest_ready": "$(json_escape "$REAL_SAMPLE_MANIFEST_READY")",
+      "real_sample_manifest_evidence": "$(json_escape "$REAL_SAMPLE_MANIFEST_EVIDENCE")",
       "real_provider_ready": "$(json_escape "$REAL_PROVIDER_READY")",
+      "real_provider_evidence": "$(json_escape "$REAL_PROVIDER_EVIDENCE")",
       "real_callback_ready": "$(json_escape "$REAL_CALLBACK_READY")",
+      "real_callback_evidence": "$(json_escape "$REAL_CALLBACK_EVIDENCE")",
       "production_artifact_store_ready": "$(json_escape "$PRODUCTION_ARTIFACT_STORE_READY")",
       "production_artifact_store_evidence_status": "$(json_escape "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_STATUS")",
+      "production_artifact_store_evidence_provider": "$(json_escape "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_PROVIDER")",
       "production_artifact_store_evidence_roundtrip_status": "$(json_escape "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_ROUNDTRIP_STATUS")",
       "production_artifact_store_evidence_blocker_code": "$(json_escape "$PRODUCTION_ARTIFACT_STORE_EVIDENCE_BLOCKER_CODE")",
       "benchmark_targets_ready": "$(json_escape "$BENCHMARK_TARGETS_READY")",
+      "benchmark_targets_evidence": "$(json_escape "$BENCHMARK_TARGETS_EVIDENCE")",
       "fairness_targets_ready": "$(json_escape "$FAIRNESS_TARGETS_READY")",
-      "runtime_ops_targets_ready": "$(json_escape "$RUNTIME_OPS_TARGETS_READY")"
+      "fairness_targets_evidence": "$(json_escape "$FAIRNESS_TARGETS_EVIDENCE")",
+      "runtime_ops_targets_ready": "$(json_escape "$RUNTIME_OPS_TARGETS_READY")",
+      "runtime_ops_targets_evidence": "$(json_escape "$RUNTIME_OPS_TARGETS_EVIDENCE")"
     },
     "links": {
       "local_reference_evidence": "$(json_escape "$LOCAL_REFERENCE_EVIDENCE_LINK")",
