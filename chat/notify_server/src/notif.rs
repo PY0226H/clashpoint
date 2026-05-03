@@ -25,12 +25,14 @@ const KAFKA_EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joi
 const KAFKA_EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
 const KAFKA_EVENT_TYPE_DEBATE_MESSAGE_CREATED: &str = "debate.message.created";
 const KAFKA_EVENT_TYPE_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned";
+const KAFKA_EVENT_TYPE_DEBATE_NPC_ACTION_CREATED: &str = "debate.npc.action.created";
 
-const KAFKA_DEFAULT_BASE_TOPICS: [&str; 4] = [
+const KAFKA_DEFAULT_BASE_TOPICS: [&str; 5] = [
     "debate.participant.joined.v1",
     "debate.session.status.changed.v1",
     "debate.message.created.v1",
     "debate.message.pinned.v1",
+    "debate.npc.action.created.v1",
 ];
 
 const PG_LISTEN_CHANNELS: [&str; 9] = [
@@ -56,6 +58,7 @@ pub enum AppEvent {
     DebateSessionStatusChanged(DebateSessionStatusChanged),
     DebateMessageCreated(DebateMessageCreated),
     DebateMessagePinned(DebateMessagePinned),
+    DebateNpcActionCreated(DebateNpcActionCreated),
     DebateJudgeReportReady(DebateJudgeReportReady),
     DebateDrawVoteResolved(DebateDrawVoteResolved),
     OpsObservabilityAlert(OpsObservabilityAlert),
@@ -100,6 +103,25 @@ pub struct DebateMessagePinned {
     pub cost_coins: i64,
     pub pin_seconds: i32,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcActionCreated {
+    pub action_id: i64,
+    pub action_uid: String,
+    pub session_id: i64,
+    pub npc_id: String,
+    pub display_name: String,
+    pub action_type: String,
+    pub public_text: Option<String>,
+    pub target_message_id: Option<i64>,
+    pub target_user_id: Option<i64>,
+    pub target_side: Option<String>,
+    pub effect_kind: Option<String>,
+    pub npc_status: Option<String>,
+    pub reason_code: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -832,6 +854,15 @@ impl Notification {
                     event: Arc::new(AppEvent::DebateMessagePinned(event)),
                 }))
             }
+            KAFKA_EVENT_TYPE_DEBATE_NPC_ACTION_CREATED => {
+                let event: DebateNpcActionCreated =
+                    serde_json::from_value(envelope.payload.clone())?;
+                let user_ids = load_debate_session_user_ids(state, event.session_id).await?;
+                Ok(Some(Self {
+                    user_ids,
+                    event: Arc::new(AppEvent::DebateNpcActionCreated(event)),
+                }))
+            }
             _ => Ok(None),
         }
     }
@@ -999,6 +1030,7 @@ impl AppEvent {
             AppEvent::DebateSessionStatusChanged(_) => "DebateSessionStatusChanged",
             AppEvent::DebateMessageCreated(_) => "DebateMessageCreated",
             AppEvent::DebateMessagePinned(_) => "DebateMessagePinned",
+            AppEvent::DebateNpcActionCreated(_) => "DebateNpcActionCreated",
             AppEvent::DebateJudgeReportReady(_) => "DebateJudgeReportReady",
             AppEvent::DebateDrawVoteResolved(_) => "DebateDrawVoteResolved",
             AppEvent::OpsObservabilityAlert(_) => "OpsObservabilityAlert",
@@ -1011,6 +1043,7 @@ impl AppEvent {
             AppEvent::DebateSessionStatusChanged(v) => Some(v.session_id),
             AppEvent::DebateMessageCreated(v) => Some(v.session_id),
             AppEvent::DebateMessagePinned(v) => Some(v.session_id),
+            AppEvent::DebateNpcActionCreated(v) => Some(v.session_id),
             AppEvent::DebateJudgeReportReady(v) => Some(v.session_id),
             AppEvent::DebateDrawVoteResolved(v) => Some(v.session_id),
             _ => None,
@@ -1029,6 +1062,7 @@ impl AppEvent {
             )),
             AppEvent::DebateMessageCreated(v) => Some(format!("message:{}", v.message_id)),
             AppEvent::DebateMessagePinned(v) => Some(format!("pin:{}", v.pin_id)),
+            AppEvent::DebateNpcActionCreated(v) => Some(format!("npc_action:{}", v.action_uid)),
             AppEvent::DebateJudgeReportReady(v) => Some(format!("report:{}", v.report_id)),
             AppEvent::DebateDrawVoteResolved(v) => Some(format!("vote:{}", v.vote_id)),
             _ => None,
@@ -1042,6 +1076,7 @@ impl AppEvent {
                 | AppEvent::DebateSessionStatusChanged(_)
                 | AppEvent::DebateMessageCreated(_)
                 | AppEvent::DebateMessagePinned(_)
+                | AppEvent::DebateNpcActionCreated(_)
                 | AppEvent::DebateJudgeReportReady(_)
                 | AppEvent::DebateDrawVoteResolved(_)
         )
@@ -1111,6 +1146,27 @@ mod tests {
             redis: RedisConfig::default(),
         };
         AppState::new(config)
+    }
+
+    fn sample_debate_npc_action_created() -> DebateNpcActionCreated {
+        DebateNpcActionCreated {
+            action_id: 301,
+            action_uid: "npc-action-301".to_string(),
+            session_id: 15,
+            npc_id: "virtual_judge_default".to_string(),
+            display_name: "虚拟裁判".to_string(),
+            action_type: "praise".to_string(),
+            public_text: Some("这段反驳很漂亮。".to_string()),
+            target_message_id: Some(100),
+            target_user_id: Some(7),
+            target_side: Some("pro".to_string()),
+            effect_kind: Some("sparkle".to_string()),
+            npc_status: Some("praising".to_string()),
+            reason_code: Some("strong_rebuttal".to_string()),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-05-03T09:00:00Z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc),
+        }
     }
 
     #[test]
@@ -1237,6 +1293,77 @@ mod tests {
                 assert_eq!(v.cost_coins, 20);
             }
             _ => panic!("expected DebateMessagePinned event"),
+        }
+    }
+
+    #[test]
+    fn app_event_debate_npc_action_created_should_use_room_replay_contract() {
+        let action = sample_debate_npc_action_created();
+        let event = AppEvent::DebateNpcActionCreated(action);
+
+        assert!(event.is_debate_event());
+        assert_eq!(event.event_name(), "DebateNpcActionCreated");
+        assert_eq!(event.debate_session_id(), Some(15));
+        assert_eq!(
+            event.debate_dedupe_key(),
+            Some("npc_action:npc-action-301".to_string())
+        );
+
+        let payload = serde_json::to_value(&event).expect("serializes");
+        assert_eq!(payload["event"], "DebateNpcActionCreated");
+        assert_eq!(payload["actionUid"], "npc-action-301");
+        assert_eq!(payload["actionType"], "praise");
+        assert_eq!(payload["targetMessageId"], 100);
+        assert!(payload.get("policyVersion").is_none());
+        assert!(payload.get("executorVersion").is_none());
+        assert!(payload.get("traceId").is_none());
+        assert!(payload.get("winner").is_none());
+        assert!(payload.get("proScore").is_none());
+        assert!(payload.get("conScore").is_none());
+    }
+
+    #[test]
+    fn debate_npc_action_created_should_drop_internal_kafka_fields() {
+        let raw = serde_json::json!({
+            "actionId": 301,
+            "actionUid": "npc-action-301",
+            "sessionId": 15,
+            "npcId": "virtual_judge_default",
+            "displayName": "虚拟裁判",
+            "actionType": "praise",
+            "publicText": "这段反驳很漂亮。",
+            "targetMessageId": 100,
+            "targetUserId": 7,
+            "targetSide": "pro",
+            "effectKind": "sparkle",
+            "npcStatus": "praising",
+            "reasonCode": "strong_rebuttal",
+            "createdAt": "2026-05-03T09:00:00Z",
+            "policyVersion": "internal-policy-v1",
+            "executorVersion": "llm-executor-v1",
+            "traceId": "trace-hidden",
+            "winner": "pro",
+            "proScore": 99,
+            "conScore": 1
+        });
+
+        let action: DebateNpcActionCreated =
+            serde_json::from_value(raw).expect("unknown fields should not leak into event");
+        let payload = serde_json::to_value(AppEvent::DebateNpcActionCreated(action))
+            .expect("visible payload serializes");
+
+        for hidden_key in [
+            "policyVersion",
+            "executorVersion",
+            "traceId",
+            "winner",
+            "proScore",
+            "conScore",
+        ] {
+            assert!(
+                payload.get(hidden_key).is_none(),
+                "{hidden_key} should not be visible in room replay payload"
+            );
         }
     }
 
@@ -1385,17 +1512,7 @@ mod tests {
 
     #[test]
     fn app_event_is_debate_event_should_match_debate_variants() {
-        let debate_event = AppEvent::DebateMessagePinned(DebateMessagePinned {
-            pin_id: 1,
-            session_id: 11,
-            message_id: 22,
-            user_id: 3,
-            cost_coins: 30,
-            pin_seconds: 60,
-            expires_at: chrono::DateTime::parse_from_rfc3339("2026-02-23T12:10:00Z")
-                .expect("valid timestamp")
-                .with_timezone(&Utc),
-        });
+        let debate_event = AppEvent::DebateNpcActionCreated(sample_debate_npc_action_created());
         assert!(debate_event.is_debate_event());
 
         let non_debate_event = AppEvent::OpsObservabilityAlert(OpsObservabilityAlert {
@@ -1479,11 +1596,12 @@ mod tests {
             ..Default::default()
         };
         let topics = resolved_kafka_topics(&cfg);
-        assert_eq!(topics.len(), 4);
+        assert_eq!(topics.len(), 5);
         assert_eq!(topics[0], "echoisle.debate.participant.joined.v1");
         assert_eq!(topics[1], "echoisle.debate.session.status.changed.v1");
         assert_eq!(topics[2], "echoisle.debate.message.created.v1");
         assert_eq!(topics[3], "echoisle.debate.message.pinned.v1");
+        assert_eq!(topics[4], "echoisle.debate.npc.action.created.v1");
     }
 
     #[test]

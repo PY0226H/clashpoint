@@ -40,7 +40,7 @@
 | notify WS | [ws.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/ws.rs) 支持 `lastAckSeq`、replay、ack、syncRequired | NPC action 必须进入可 replay 房间事件，断线重连不能丢失或重复 |
 | notify event mapping | [notif.rs](/Users/panyihang/Documents/EchoIsle/chat/notify_server/src/notif.rs) 的 `AppEvent` 决定 debate event 识别、session id 与 dedupe key | 需要新增 `DebateNpcActionCreated` 映射和 dedupe 规则 |
 | 用户发言主链路 | [debate_room.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_room.rs) 与 [message_pin.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/message_pin.rs) 承载发言、置顶、消息落库 | NPC 决策必须异步，不能阻塞用户发言事务 |
-| DomainEvent | [event_bus.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/event_bus.rs) 已有 `DebateMessageCreated` / `DebateMessagePinned`，P1-A 已新增 `DebateNpcActionCreated` 事件骨架 | P1-B 需要把 `DebateNpcActionCreated` 接入 notify replay；P2-E 再把 `DebateMessageCreated` 作为 NPC 首个触发输入 |
+| DomainEvent | [event_bus.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/event_bus.rs) 已有 `DebateMessageCreated` / `DebateMessagePinned`，P1-A 已新增 `DebateNpcActionCreated` 事件骨架，P1-B 已接入 notify replay 合同 | P2-E 再把 `DebateMessageCreated` 作为 NPC 首个触发输入 |
 | AI advisory 历史资产 | 当前 `npc_coach` / `room_qa` 是用户辅助咨询，不是公开房间 NPC | 只复用安全隔离思想，不作为本模块开发入口 |
 
 ## 3. 完成度与执行矩阵
@@ -49,7 +49,7 @@
 | --- | --- | --- | --- |
 | P0-A. `virtual-judge-npc-planning-current-state` | 生成开发计划并切换 active 主线 | 已完成 | 本文档与 [当前开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md) 完成同步后即完成 |
 | P1-A. `virtual-judge-npc-chat-action-spine` | 建立 chat 侧 NPC action 数据模型、内部 API 与 guard | 已完成 | 已新增 action/config 表、内部 candidate 接收接口、guard、限频、幂等重放、outbox 事件与 targeted tests |
-| P1-B. `virtual-judge-npc-notify-replay-contract` | 打通 `DebateNpcActionCreated` outbox、notify WS、replay 和 dedupe | 待执行 | 让 mock NPC action 能被房间客户端稳定收到 |
+| P1-B. `virtual-judge-npc-notify-replay-contract` | 打通 `DebateNpcActionCreated` outbox、notify WS、replay 和 dedupe | 已完成 | 已新增 notify Kafka topic / AppEvent 映射、稳定 dedupe key、前端 payload 类型与可见字段 guard |
 | P1-C. `virtual-judge-npc-frontend-shell` | 前端新增 NPC 动态展示壳、action feed 与轻量动效 | 待执行 | 先用 mock / fixture 事件驱动 UI，不等待 LLM |
 | P2-D. `virtual-judge-npc-service-skeleton-executor-router` | 新增 `npc_service/`、LLM provider adapter、executor router、rule fallback | 待执行 | `llm_executor_v1` 为主路径，rule 只兜底 |
 | P2-E. `virtual-judge-npc-event-consumption-loop` | 消费 `DebateMessageCreated`，拉取 context，提交 candidate | 待执行 | 从用户发言到 NPC action 的服务间闭环 |
@@ -153,6 +153,14 @@
 1. notify targeted tests。
 2. realtime-sdk / debate-domain type tests。
 3. 必要时跑现有 web smoke，确认房间 WS 未回归。
+
+完成记录：
+
+1. `DebateNpcActionCreated` 已加入 notify 默认 Kafka topic 与 debate room event 识别。
+2. room replay dedupe key 固定为 `npc_action:{action_uid}`。
+3. 前端 `realtime-sdk` 暴露 NPC room event/payload 类型，`debate-domain` 暴露可见 payload guard。
+4. 用户可见 payload 测试覆盖 `policyVersion`、`executorVersion`、trace 与正式裁决字段不泄漏。
+5. 已通过 notify targeted tests、前端 targeted tests/typecheck 与 `post-module-test-guard --mode full`。
 
 ### P1-C. `virtual-judge-npc-frontend-shell`
 
@@ -346,7 +354,7 @@
 
 ## 7. 当前待决问题
 
-1. 第一版事件投递是否直接接 Kafka / event bus，还是先用 chat 内部 webhook 建本地闭环。
+1. `npc_service` 首个输入消费方式：直接消费 Kafka / event bus，还是先通过 chat 内部 webhook 建本地闭环。
 2. 首个可运行环境是否必须配置真实 OpenAI API，还是本地允许 rule-only fallback。
 3. LLM provider 配置名、默认模型、超时、重试和成本上限。
 4. 前端动态形象首版资产采用 CSS / 图片序列 / Lottie / canvas 哪一种。
@@ -357,3 +365,4 @@
 
 - 2026-05-03：基于已定档的虚拟裁判 NPC PRD、MVP 切片与系统设计，生成本开发计划；主线为独立 `npc_service` + LLM executor router + rule fallback。
 - 2026-05-03：完成 P1-A `virtual-judge-npc-chat-action-spine`；chat 侧已具备 NPC action/config 表、内部 candidate sink、二次 guard、限频、幂等重放与 `DebateNpcActionCreated` outbox 事件骨架；下一步执行 P1-B notify replay 合同。
+- 2026-05-03：完成 P1-B `virtual-judge-npc-notify-replay-contract`；`DebateNpcActionCreated` 已纳入 notify Kafka topic、AppEvent、room replay、ack/dedupe 合同，并同步 realtime-sdk / debate-domain payload 类型与可见字段 guard；下一步执行 P1-C 前端展示壳。

@@ -15,8 +15,10 @@ vi.mock("@echoisle/api-client", () => ({
 }));
 
 import {
+  DEBATE_NPC_ACTION_CREATED_EVENT,
   assertJudgeAssistantAdvisoryOutput,
   getOldestDebateMessageId,
+  isDebateNpcActionCreatedPayload,
   requestNpcCoachAdvice,
   requestRoomQaAnswer,
   mergeDebateMessages,
@@ -116,6 +118,54 @@ describe("debate-domain normalize helpers", () => {
   it("normalizes debate side to pro/con", () => {
     expect(normalizeDebateSide("con")).toBe("con");
     expect(normalizeDebateSide("anything")).toBe("pro");
+  });
+
+  it("accepts virtual judge NPC visible room payload", () => {
+    expect(
+      isDebateNpcActionCreatedPayload({
+        event: DEBATE_NPC_ACTION_CREATED_EVENT,
+        actionId: 301,
+        actionUid: "npc-action-301",
+        sessionId: 15,
+        npcId: "virtual_judge_default",
+        displayName: "虚拟裁判",
+        actionType: "praise",
+        publicText: "这段反驳很漂亮。",
+        targetMessageId: 100,
+        targetUserId: 7,
+        targetSide: "pro",
+        effectKind: "sparkle",
+        npcStatus: "praising",
+        reasonCode: "strong_rebuttal",
+        createdAt: "2026-05-03T09:00:00Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects virtual judge NPC payload with official verdict or internal fields", () => {
+    const payload = {
+      event: DEBATE_NPC_ACTION_CREATED_EVENT,
+      actionId: 301,
+      actionUid: "npc-action-301",
+      sessionId: 15,
+      npcId: "virtual_judge_default",
+      displayName: "虚拟裁判",
+      actionType: "praise",
+      publicText: "这段反驳很漂亮。",
+      targetMessageId: 100,
+      targetUserId: 7,
+      targetSide: "pro",
+      effectKind: "sparkle",
+      npcStatus: "praising",
+      reasonCode: "strong_rebuttal",
+      createdAt: "2026-05-03T09:00:00Z",
+      policyVersion: "internal-policy-v1",
+      executorVersion: "llm-executor-v1",
+      traceId: "trace-hidden",
+      winner: "pro",
+    };
+
+    expect(isDebateNpcActionCreatedPayload(payload)).toBe(false);
   });
 
   it("merges messages by id and keeps ascending order", () => {

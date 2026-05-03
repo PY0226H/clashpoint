@@ -125,6 +125,32 @@ export type JsonValue =
   | { [key: string]: JsonValue }
   | JsonValue[];
 
+export const DEBATE_NPC_ACTION_CREATED_EVENT = "DebateNpcActionCreated" as const;
+
+export type DebateNpcActionType =
+  | "speak"
+  | "praise"
+  | "effect"
+  | "state_changed";
+
+export type DebateNpcActionCreatedPayload = {
+  event: typeof DEBATE_NPC_ACTION_CREATED_EVENT;
+  actionId: number;
+  actionUid: string;
+  sessionId: number;
+  npcId: string;
+  displayName: string;
+  actionType: DebateNpcActionType;
+  publicText?: string | null;
+  targetMessageId?: number | null;
+  targetUserId?: number | null;
+  targetSide?: DebateSide | null;
+  effectKind?: string | null;
+  npcStatus?: string | null;
+  reasonCode?: string | null;
+  createdAt: string;
+};
+
 export type JudgeAssistantAgentKind = "npc_coach" | "room_qa" | (string & {});
 
 export type JudgeAssistantAdvisoryStatus =
@@ -527,6 +553,100 @@ export function normalizeDebateSide(
   value: string | null | undefined,
 ): DebateSide {
   return (value || "").trim().toLowerCase() === "con" ? "con" : "pro";
+}
+
+const DEBATE_NPC_ALLOWED_ACTION_TYPES = new Set<DebateNpcActionType>([
+  "speak",
+  "praise",
+  "effect",
+  "state_changed",
+]);
+
+const DEBATE_NPC_FORBIDDEN_VISIBLE_FIELDS = new Set([
+  "policyVersion",
+  "executorVersion",
+  "traceId",
+  "trace",
+  "winner",
+  "proScore",
+  "conScore",
+  "finalRationale",
+  "judgeTrace",
+  "verdictEvidenceRefs",
+  "dimensionScores",
+]);
+
+function hasForbiddenDebateNpcVisibleField(
+  value: Record<string, unknown>,
+): boolean {
+  return Object.keys(value).some((key) =>
+    DEBATE_NPC_FORBIDDEN_VISIBLE_FIELDS.has(key),
+  );
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isOptionalStringOrNull(value: unknown): boolean {
+  return value == null || typeof value === "string";
+}
+
+function isOptionalNonNegativeNumberOrNull(value: unknown): boolean {
+  return value == null || isNonNegativeFiniteNumber(value);
+}
+
+function isOptionalDebateSideOrNull(value: unknown): value is DebateSide | null | undefined {
+  return value == null || value === "pro" || value === "con";
+}
+
+export function isDebateNpcActionCreatedPayload(
+  value: unknown,
+): value is DebateNpcActionCreatedPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const payload = value as Record<string, unknown>;
+  if (hasForbiddenDebateNpcVisibleField(payload)) {
+    return false;
+  }
+
+  if (payload.event !== DEBATE_NPC_ACTION_CREATED_EVENT) {
+    return false;
+  }
+
+  if (
+    !isNonNegativeFiniteNumber(payload.actionId) ||
+    !isNonNegativeFiniteNumber(payload.sessionId) ||
+    typeof payload.actionUid !== "string" ||
+    !payload.actionUid.trim() ||
+    typeof payload.npcId !== "string" ||
+    !payload.npcId.trim() ||
+    typeof payload.displayName !== "string" ||
+    !payload.displayName.trim() ||
+    typeof payload.createdAt !== "string" ||
+    !payload.createdAt.trim()
+  ) {
+    return false;
+  }
+
+  if (
+    typeof payload.actionType !== "string" ||
+    !DEBATE_NPC_ALLOWED_ACTION_TYPES.has(payload.actionType as DebateNpcActionType)
+  ) {
+    return false;
+  }
+
+  return (
+    isOptionalStringOrNull(payload.publicText) &&
+    isOptionalNonNegativeNumberOrNull(payload.targetMessageId) &&
+    isOptionalNonNegativeNumberOrNull(payload.targetUserId) &&
+    isOptionalDebateSideOrNull(payload.targetSide) &&
+    isOptionalStringOrNull(payload.effectKind) &&
+    isOptionalStringOrNull(payload.npcStatus) &&
+    isOptionalStringOrNull(payload.reasonCode)
+  );
 }
 
 function asJsonObject(

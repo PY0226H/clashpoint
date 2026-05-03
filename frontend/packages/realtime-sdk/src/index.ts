@@ -3,6 +3,39 @@ export type DebateRoomClientMessage =
   | { type: "pong" }
   | { type: "ack"; eventSeq: number };
 
+export const DEBATE_NPC_ACTION_CREATED_EVENT = "DebateNpcActionCreated" as const;
+
+export type DebateRoomKnownEventName =
+  | "DebateParticipantJoined"
+  | "DebateSessionStatusChanged"
+  | "DebateMessageCreated"
+  | "DebateMessagePinned"
+  | typeof DEBATE_NPC_ACTION_CREATED_EVENT
+  | "DebateJudgeReportReady"
+  | "DebateDrawVoteResolved";
+
+export type DebateRoomEventName = DebateRoomKnownEventName | (string & {});
+
+export type DebateNpcActionCreatedRoomPayload = {
+  event: typeof DEBATE_NPC_ACTION_CREATED_EVENT;
+  actionId: number;
+  actionUid: string;
+  sessionId: number;
+  npcId: string;
+  displayName: string;
+  actionType: "speak" | "praise" | "effect" | "state_changed";
+  publicText?: string | null;
+  targetMessageId?: number | null;
+  targetUserId?: number | null;
+  targetSide?: "pro" | "con" | null;
+  effectKind?: string | null;
+  npcStatus?: string | null;
+  reasonCode?: string | null;
+  createdAt: string;
+};
+
+export type DebateRoomKnownEventPayload = DebateNpcActionCreatedRoomPayload;
+
 export type DebateRoomWelcomeMessage = {
   type: "welcome";
   sessionId: number;
@@ -18,8 +51,8 @@ export type DebateRoomEventMessage = {
   type: "roomEvent";
   eventSeq: number;
   eventAtMs: number;
-  eventName: string;
-  payload: Record<string, unknown>;
+  eventName: DebateRoomEventName;
+  payload: DebateRoomKnownEventPayload | Record<string, unknown>;
 };
 
 export type DebateRoomSyncRequiredMessage = {
