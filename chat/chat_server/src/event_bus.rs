@@ -26,10 +26,12 @@ pub const TOPIC_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined.v1"
 pub const TOPIC_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed.v1";
 pub const TOPIC_DEBATE_MESSAGE_CREATED: &str = "debate.message.created.v1";
 pub const TOPIC_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned.v1";
+pub const TOPIC_DEBATE_NPC_ACTION_CREATED: &str = "debate.npc.action.created.v1";
 pub const EVENT_TYPE_DEBATE_PARTICIPANT_JOINED: &str = "debate.participant.joined";
 pub const EVENT_TYPE_DEBATE_SESSION_STATUS_CHANGED: &str = "debate.session.status.changed";
 pub const EVENT_TYPE_DEBATE_MESSAGE_CREATED: &str = "debate.message.created";
 pub const EVENT_TYPE_DEBATE_MESSAGE_PINNED: &str = "debate.message.pinned";
+pub const EVENT_TYPE_DEBATE_NPC_ACTION_CREATED: &str = "debate.npc.action.created";
 
 const OUTBOX_STATUS_PENDING: &str = "pending";
 const OUTBOX_STATUS_SENDING: &str = "sending";
@@ -44,6 +46,7 @@ pub enum DomainEvent {
     DebateSessionStatusChanged(DebateSessionStatusChangedEvent),
     DebateMessageCreated(DebateMessageCreatedEvent),
     DebateMessagePinned(DebateMessagePinnedEvent),
+    DebateNpcActionCreated(DebateNpcActionCreatedEvent),
 }
 
 impl DomainEvent {
@@ -75,6 +78,13 @@ impl DomainEvent {
                 EVENT_TYPE_DEBATE_MESSAGE_PINNED,
                 format!("session:{}", event.session_id),
                 event.pinned_at,
+                serde_json::to_value(event)?,
+            ),
+            Self::DebateNpcActionCreated(event) => build_outbox_message(
+                TOPIC_DEBATE_NPC_ACTION_CREATED,
+                EVENT_TYPE_DEBATE_NPC_ACTION_CREATED,
+                format!("session:{}", event.session_id),
+                event.created_at,
                 serde_json::to_value(event)?,
             ),
         }
@@ -583,6 +593,25 @@ pub struct DebateMessagePinnedEvent {
     pub pin_seconds: i32,
     pub pinned_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcActionCreatedEvent {
+    pub action_id: u64,
+    pub action_uid: String,
+    pub session_id: u64,
+    pub npc_id: String,
+    pub display_name: String,
+    pub action_type: String,
+    pub public_text: Option<String>,
+    pub target_message_id: Option<u64>,
+    pub target_user_id: Option<u64>,
+    pub target_side: Option<String>,
+    pub effect_kind: Option<String>,
+    pub npc_status: Option<String>,
+    pub reason_code: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]

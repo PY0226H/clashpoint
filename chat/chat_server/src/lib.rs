@@ -31,9 +31,10 @@ use tracing::{info, warn};
 use application::runtime_workers::spawn_background_workers;
 pub use error::{AppError, ErrorOutput};
 pub(crate) use event_bus::{
-    DebateMessageCreatedEvent, DebateMessagePinnedEvent, DebateParticipantJoinedEvent,
-    DebateSessionStatusChangedEvent, DomainEvent, EventBus, EventOutboxRelayConfig,
-    EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher, KafkaConsumerRuntimeMetrics,
+    DebateMessageCreatedEvent, DebateMessagePinnedEvent, DebateNpcActionCreatedEvent,
+    DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent, DomainEvent, EventBus,
+    EventOutboxRelayConfig, EventOutboxRelayMetrics, EventOutboxRelayReport, EventPublisher,
+    KafkaConsumerRuntimeMetrics,
 };
 use models::JudgeDispatchTrigger;
 pub use models::*;
@@ -323,6 +324,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
         .route(
             "/judge/dispatch/metrics",
             get(get_judge_dispatch_metrics_handler),
+        )
+        .route(
+            "/debate/npc/actions/candidates",
+            post(submit_debate_npc_action_candidate_handler),
         )
         .layer(from_fn_with_state(state.clone(), verify_ai_internal_key));
     let auth_session_api = Router::new()

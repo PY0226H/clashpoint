@@ -1,7 +1,7 @@
 # EchoIsle Architecture Map
 
-更新时间：2026-05-02
-状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；NPC Coach / Room QA 已暂停）
+更新时间：2026-05-03
+状态：当前主线轻量代码地图（AI Judge 当前有效主线为 Official Verdict Plane；虚拟裁判 NPC MVP 正在开发；NPC Coach / Room QA 已暂停）
 
 ---
 
@@ -75,6 +75,18 @@
 4. [debate-domain index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)
 5. [realtime-sdk index.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)
 6. [DebateRoomPage.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/pages/DebateRoomPage.tsx)
+
+### 3.2.1 虚拟裁判 NPC（公开房间娱乐角色）
+
+虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 P1-A 已落地 chat 侧 action spine；notify replay、前端展示壳与独立 `npc_service/` 仍按开发计划推进。
+
+优先看：
+
+1. [debate_npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/handlers/debate_npc.rs)
+2. [debate/npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs)
+3. [event_bus.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/event_bus.rs)
+4. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
+5. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 

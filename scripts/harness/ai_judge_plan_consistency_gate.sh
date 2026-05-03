@@ -360,7 +360,7 @@ main() {
     PLAN_DOC="$(abs_path "$PLAN_DOC")"
   fi
   if [[ -z "$ARCH_DOC" ]]; then
-    ARCH_DOC="$ROOT/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md"
+    ARCH_DOC="$ROOT/docs/module_design/AI裁判团/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md"
   else
     ARCH_DOC="$(abs_path "$ARCH_DOC")"
   fi

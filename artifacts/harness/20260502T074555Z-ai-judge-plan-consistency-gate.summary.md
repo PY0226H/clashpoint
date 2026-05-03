@@ -1,0 +1,23 @@
+# ai-judge-plan-consistency-gate
+
+- run_id: `20260502T074555Z-ai-judge-plan-consistency-gate`
+- status: `pass`
+- plan_doc: `/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md`
+- arch_doc: `/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md`
+- consistency_section_found: `true`
+- arch_checklist_found: `true`
+- missing_items: `none`
+- empty_items: `none`
+- placeholder_items: `none`
+- arch_missing_items: `none`
+- started_at: `2026-05-02T07:45:55Z`
+- finished_at: `2026-05-02T07:45:55Z`
+
+## 6项一致性检查结果
+
+1. 角色一致性：`pass`（本轮只硬化 harness、计划脚本、演练边界与证据索引，不改变 Clerk/Recorder/Claim/Evidence/Panel/Fairness/Arbiter/Opinion 的官方 8 Agent 职责，也不引入绕过 Fairness Sentinel 或 Chief Arbiter 的路径。）
+2. 数据一致性：`pass`（六对象主链和 trust/evidence artifacts 仍是唯一事实源；P0-B/P1-C/P1-D 不新增平行 winner、平行 verdict、assistant 写 verdict 或 rehearsal 覆盖 official evidence 的路径。）
+3. 门禁一致性：`pass`（real-env preflight、artifact store healthcheck、runtime ops pack、stage closure evidence 与 plan consistency gate 均不得弱化；`local_reference_ready`、`env_blocked`、`rehearsal_only` 必须分层表达。）
+4. 边界一致性：`pass`（`NPC Coach` / `Room QA` 保持暂停；本轮只允许在文档和测试里保留历史保护面，不接 executor、ready-state、成本/延迟 guard 或 Ops evidence。）
+5. 跨层一致性：`pass`（若 P0-B/P1-C 改脚本输出字段，必须同步脚本测试、evidence 文档和完成度映射；若未改 API/DTO/WS payload，则不强制改 AI/chat/frontend SDK。）
+6. 收口一致性：`pass`（无真实环境时，本轮收口只能写本地参考、harness hardening 或 environment-blocked 结论；只有 C46 输入全部满足并在真实窗口运行后，才能写 real-env `pass`。）

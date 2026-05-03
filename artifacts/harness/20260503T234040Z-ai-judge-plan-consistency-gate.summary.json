@@ -1,0 +1,27 @@
+{
+  "run_id": "20260503T234040Z-ai-judge-plan-consistency-gate",
+  "status": "pass",
+  "root": "/Users/panyihang/Documents/EchoIsle",
+  "plan_doc": "/Users/panyihang/Documents/EchoIsle/docs/dev_plan/当前开发计划.md",
+  "arch_doc": "/Users/panyihang/Documents/EchoIsle/docs/module_design/AI裁判团/AI_Judge_Service-架构与技术栈决策方案-2026-04-13.md",
+  "consistency_section_found": true,
+  "arch_checklist_found": true,
+  "checks": [
+    {"label":"角色一致性","status":"pass","answer":"虚拟裁判 NPC 是娱乐导向公开房间角色，不是赛后 AI 裁判团成员，也不替代正式裁决报告。"},
+    {"label":"数据一致性","status":"pass","answer":"`chat` 是 NPC action 的房间事实源；`npc_service` 不直接写 DB、不直接广播 WS。"},
+    {"label":"门禁一致性","status":"pass","answer":"候选动作必须经过 `npc_service` guard 与 `chat` 二次校验；LLM 输出不能绕过 schema、限频、幂等和 forbidden fields。"},
+    {"label":"边界一致性","status":"pass","answer":"`llm_executor_v1` 是主路径，`rule_executor_v1` 只是 fallback；`NPC Coach` / `Room QA` 不恢复。"},
+    {"label":"跨层一致性","status":"pass","answer":"新增 API/DTO/WS payload 时同步检查 chat、notify、realtime-sdk、debate-domain、app-shell 与测试。"},
+    {"label":"收口一致性","status":"pass","answer":"阶段完成后再写 completed/todo；当前只更新 active 计划，不写长期完成或债务条目。"}
+  ],
+  "missing_items": [],
+  "empty_items": [],
+  "placeholder_items": [],
+  "arch_missing_items": [],
+  "started_at": "2026-05-03T23:40:40Z",
+  "finished_at": "2026-05-03T23:40:40Z",
+  "outputs": {
+    "json": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260503T234040Z-ai-judge-plan-consistency-gate.summary.json",
+    "markdown": "/Users/panyihang/Documents/EchoIsle/artifacts/harness/20260503T234040Z-ai-judge-plan-consistency-gate.summary.md"
+  }
+}

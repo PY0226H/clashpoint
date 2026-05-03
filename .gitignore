@@ -69,6 +69,9 @@ docs/**
 !docs/harness/**
 !docs/dev_plan/
 !docs/dev_plan/**
+!docs/module_design/
+!docs/module_design/AI裁判团/
+!docs/module_design/AI裁判团/**
 !docs/PRD/
 !docs/PRD/**
 !docs/architecture/

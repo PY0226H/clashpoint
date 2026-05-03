@@ -155,7 +155,7 @@ $START_MARK
 ### 2.5 参考资料
 
 1. 章节完成度映射：
-   - [AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md)
+   - [AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md](/Users/panyihang/Documents/EchoIsle/docs/module_design/AI裁判团/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md)
 2. P5 校准脚本：
    - \`scripts/harness/ai_judge_p5_real_calibration_on_env.sh\`
    - \`scripts/harness/ai_judge_calibration_prep.sh\`
@@ -288,7 +288,7 @@ main() {
     PLAN_DOC="$(abs_path "$PLAN_DOC")"
   fi
   if [[ -z "$MAPPING_DOC" ]]; then
-    MAPPING_DOC="$ROOT/docs/dev_plan/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md"
+    MAPPING_DOC="$ROOT/docs/module_design/AI裁判团/AI_Judge_Service-企业级Agent方案-章节完成度映射-2026-04-13.md"
   else
     MAPPING_DOC="$(abs_path "$MAPPING_DOC")"
   fi

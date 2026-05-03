@@ -1,6 +1,7 @@
 use crate::{
     AppError, AppState, DebateMessageCreatedEvent, DebateMessagePinnedEvent,
-    DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent, DomainEvent, EventPublisher,
+    DebateNpcActionCreatedEvent, DebateParticipantJoinedEvent, DebateSessionStatusChangedEvent,
+    DomainEvent, EventPublisher,
 };
 use chat_core::User;
 use chrono::{DateTime, Utc};
@@ -12,6 +13,7 @@ use utoipa::{IntoParams, ToSchema};
 
 mod helpers;
 mod message_pin;
+mod npc;
 mod ops;
 use helpers::{
     build_phase_trigger_idempotency_key, build_phase_trigger_trace_id, can_join_status,
@@ -70,6 +72,35 @@ const DEBATE_PIN_CONFLICT_IDEMPOTENCY_OWNED_BY_OTHER: &str =
 const DEBATE_PIN_CONFLICT_IDEMPOTENCY_LEDGER_MISMATCH: &str =
     "debate_pin_idempotency_ledger_mismatch";
 const DEBATE_PIN_CONFLICT_INSUFFICIENT_BALANCE: &str = "debate_pin_insufficient_balance";
+const DEBATE_NPC_ACTION_UID_EMPTY: &str = "debate_npc_action_uid_empty";
+const DEBATE_NPC_ACTION_UID_TOO_LONG: &str = "debate_npc_action_uid_too_long";
+const DEBATE_NPC_ID_EMPTY: &str = "debate_npc_id_empty";
+const DEBATE_NPC_ID_TOO_LONG: &str = "debate_npc_id_too_long";
+const DEBATE_NPC_ACTION_INVALID_TYPE: &str = "debate_npc_action_invalid_type";
+const DEBATE_NPC_ACTION_TEXT_REQUIRED: &str = "debate_npc_action_text_required";
+const DEBATE_NPC_ACTION_TEXT_TOO_LONG: &str = "debate_npc_action_text_too_long";
+const DEBATE_NPC_ACTION_TARGET_REQUIRED: &str = "debate_npc_action_target_required";
+const DEBATE_NPC_ACTION_TARGET_SIDE_INVALID: &str = "debate_npc_action_target_side_invalid";
+const DEBATE_NPC_ACTION_POLICY_VERSION_EMPTY: &str = "debate_npc_action_policy_version_empty";
+const DEBATE_NPC_ACTION_POLICY_VERSION_TOO_LONG: &str = "debate_npc_action_policy_version_too_long";
+const DEBATE_NPC_ACTION_EXECUTOR_VERSION_EMPTY: &str = "debate_npc_action_executor_version_empty";
+const DEBATE_NPC_ACTION_EXECUTOR_VERSION_TOO_LONG: &str =
+    "debate_npc_action_executor_version_too_long";
+const DEBATE_NPC_ACTION_FIELD_TOO_LONG: &str = "debate_npc_action_field_too_long";
+const DEBATE_NPC_ACTION_INVALID_PAYLOAD: &str = "debate_npc_action_invalid_payload";
+const DEBATE_NPC_ACTION_DISABLED: &str = "npc_disabled";
+const DEBATE_NPC_ACTION_CAPABILITY_DISABLED: &str = "npc_capability_disabled";
+const DEBATE_NPC_ACTION_TARGET_MESSAGE_MISMATCH: &str = "npc_target_message_mismatch";
+const DEBATE_NPC_ACTION_TARGET_USER_MISMATCH: &str = "npc_target_user_mismatch";
+const DEBATE_NPC_ACTION_TARGET_SIDE_MISMATCH: &str = "npc_target_side_mismatch";
+const DEBATE_NPC_ACTION_SOURCE_MESSAGE_MISMATCH: &str = "npc_source_message_mismatch";
+const DEBATE_NPC_ACTION_TARGET_ALREADY_HAS_PRAISE: &str = "npc_target_message_praise_exists";
+const DEBATE_NPC_ACTION_RATE_LIMITED: &str = "npc_rate_limited";
+const DEBATE_NPC_ACTION_FORBIDDEN_FIELD: &str = "npc_forbidden_official_field";
+const DEBATE_NPC_ACTION_OUTBOX_ENQUEUE_FAILED: &str = "debate_npc_action_outbox_enqueue_failed";
+const DEBATE_NPC_ACTION_ROOM_MIN_INTERVAL_SECS: i64 = 3;
+const DEBATE_NPC_ACTION_ROOM_MAX_PER_MINUTE: i64 = 10;
+const DEBATE_NPC_ACTION_TARGET_USER_PRAISE_MIN_INTERVAL_SECS: i64 = 30;
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,6 +302,62 @@ pub struct DebatePinnedMessage {
     pub pinned_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub status: String,
+}
+
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcAction {
+    pub id: i64,
+    pub action_uid: String,
+    pub session_id: i64,
+    pub npc_id: String,
+    pub display_name: String,
+    pub action_type: String,
+    pub public_text: Option<String>,
+    pub target_message_id: Option<i64>,
+    pub target_user_id: Option<i64>,
+    pub target_side: Option<String>,
+    pub effect_kind: Option<String>,
+    pub npc_status: Option<String>,
+    pub reason_code: Option<String>,
+    pub source_event_id: Option<String>,
+    pub source_message_id: Option<i64>,
+    pub policy_version: String,
+    pub executor_kind: String,
+    pub executor_version: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubmitDebateNpcActionCandidateInput {
+    pub action_uid: String,
+    pub session_id: u64,
+    pub npc_id: String,
+    pub action_type: String,
+    pub public_text: Option<String>,
+    pub target_message_id: Option<u64>,
+    pub target_user_id: Option<u64>,
+    pub target_side: Option<String>,
+    pub effect_kind: Option<String>,
+    pub npc_status: Option<String>,
+    pub reason_code: Option<String>,
+    pub source_event_id: Option<String>,
+    pub source_message_id: Option<u64>,
+    pub policy_version: String,
+    pub executor_kind: String,
+    pub executor_version: String,
+    pub trace_id: Option<String>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitDebateNpcActionCandidateOutput {
+    pub accepted: bool,
+    pub action_id: Option<u64>,
+    pub action_uid: String,
+    pub status: String,
+    pub reason_code: Option<String>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]

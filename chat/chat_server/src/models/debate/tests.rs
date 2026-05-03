@@ -62,5 +62,6 @@ async fn set_wallet_balance(state: &AppState, user_id: i64, balance: i64) -> Res
 }
 
 mod lifecycle;
+mod npc_action;
 mod ops_and_listing;
 mod session_actions;

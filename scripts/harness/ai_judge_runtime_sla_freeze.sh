@@ -506,7 +506,7 @@ main() {
     OUTPUT_ENV="$(abs_path "$OUTPUT_ENV")"
   fi
   if [[ -z "$OUTPUT_DOC" ]]; then
-    OUTPUT_DOC="$ROOT/docs/dev_plan/AI_Judge_Runtime_SLA_冻结口径-$(date_cn).md"
+    OUTPUT_DOC="$ROOT/docs/loadtest/evidence/ai_judge_freeze/AI_Judge_Runtime_SLA_冻结口径-$(date_cn).md"
   else
     OUTPUT_DOC="$(abs_path "$OUTPUT_DOC")"
   fi

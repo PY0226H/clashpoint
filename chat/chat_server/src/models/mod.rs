@@ -14,12 +14,14 @@ mod user;
 pub use agent::{CreateAgent, UpdateAgent};
 pub use chat::{CreateChat, UpdateChat, UpdateChatMembers};
 pub use debate::{
-    CreateDebateMessageInput, DebateMessage, DebatePinnedMessage, DebateSessionSummary,
-    DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput, ListDebateMessages,
-    ListDebateMessagesOutput, ListDebatePinnedMessages, ListDebatePinnedMessagesOutput,
-    ListDebateSessions, ListDebateSessionsOutput, ListDebateTopics, ListDebateTopicsOutput,
-    OpsCreateDebateSessionInput, OpsCreateDebateTopicInput, OpsUpdateDebateSessionInput,
-    OpsUpdateDebateTopicInput, PinDebateMessageInput, PinDebateMessageOutput,
+    CreateDebateMessageInput, DebateMessage, DebateNpcAction, DebatePinnedMessage,
+    DebateSessionSummary, DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput,
+    ListDebateMessages, ListDebateMessagesOutput, ListDebatePinnedMessages,
+    ListDebatePinnedMessagesOutput, ListDebateSessions, ListDebateSessionsOutput, ListDebateTopics,
+    ListDebateTopicsOutput, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,
+    OpsUpdateDebateSessionInput, OpsUpdateDebateTopicInput, PinDebateMessageInput,
+    PinDebateMessageOutput, SubmitDebateNpcActionCandidateInput,
+    SubmitDebateNpcActionCandidateOutput,
 };
 pub use judge::{
     CreateJudgeCalibrationDecisionOpsInput, CreateJudgeCalibrationDecisionOpsOutput,
