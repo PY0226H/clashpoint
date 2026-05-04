@@ -938,7 +938,10 @@ async fn ensure_debate_npc_public_call_allowed(
     if !config.enabled
         || config.status != DEBATE_NPC_STATUS_ACTIVE
         || !config.allow_public_call
-        || !(config.allow_speak || config.allow_effect || config.allow_state_change)
+        || !(config.allow_speak
+            || config.allow_effect
+            || config.allow_state_change
+            || config.allow_pause)
     {
         return Err(AppError::DebateConflict(
             DEBATE_NPC_PUBLIC_CALL_DISABLED.to_string(),
@@ -1254,7 +1257,11 @@ fn normalize_npc_action_candidate(
     )?;
     let action_type = normalize_action_type(input.action_type)?;
     let public_text = normalize_optional_text(input.public_text, 500)?;
-    if matches!(action_type.as_str(), "speak" | "praise") && public_text.is_none() {
+    if matches!(
+        action_type.as_str(),
+        "speak" | "praise" | "pause_suggestion"
+    ) && public_text.is_none()
+    {
         return Err(AppError::ValidationError(
             DEBATE_NPC_ACTION_TEXT_REQUIRED.to_string(),
         ));
@@ -1281,6 +1288,11 @@ fn normalize_npc_action_candidate(
     let effect_kind = normalize_optional_text(input.effect_kind, 40)?;
     let npc_status = normalize_optional_text(input.npc_status, 40)?;
     let reason_code = normalize_optional_text(input.reason_code, 80)?;
+    if action_type == "pause_suggestion" && reason_code.is_none() {
+        return Err(AppError::ValidationError(
+            DEBATE_NPC_ACTION_REASON_REQUIRED.to_string(),
+        ));
+    }
     let source_event_id = normalize_optional_text(input.source_event_id, 160)?;
     let policy_version = normalize_required_text(
         input.policy_version,
@@ -1325,7 +1337,7 @@ fn normalize_npc_action_candidate(
 fn normalize_action_type(raw: String) -> Result<String, AppError> {
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "speak" | "praise" | "effect" | "state_changed" => Ok(normalized),
+        "speak" | "praise" | "effect" | "state_changed" | "pause_suggestion" => Ok(normalized),
         _ => Err(AppError::ValidationError(
             DEBATE_NPC_ACTION_INVALID_TYPE.to_string(),
         )),
@@ -1429,6 +1441,7 @@ fn is_action_capability_enabled(config: &DebateNpcRoomConfig, action_type: &str)
         "praise" => config.allow_praise,
         "effect" => config.allow_effect,
         "state_changed" => config.allow_state_change,
+        "pause_suggestion" => config.allow_pause,
         _ => false,
     }
 }

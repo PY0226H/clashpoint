@@ -1,7 +1,7 @@
 # 虚拟裁判 NPC 下一阶段开发计划
 
 更新时间：2026-05-04
-文档状态：active 开发计划，P2-E 已完成
+文档状态：active 开发计划，P2-F 已完成
 当前主线：`virtual-judge-npc-real-env-and-pause-suggestion`
 
 关联 PRD：[虚拟裁判NPC完整PRD.md](/Users/panyihang/Documents/EchoIsle/docs/PRD/虚拟裁判NPC完整PRD.md)
@@ -41,9 +41,9 @@
 
 | 领域 | 当前事实 | 下一阶段影响 |
 | --- | --- | --- |
-| action 类型 | `chat` 当前只接受 `speak/praise/effect/state_changed`，见 [npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs) 的 `normalize_action_type` | `pause_suggestion` 需要作为新的公开 NPC action type 接入，但不能映射为房间暂停态 |
-| pause 能力位 | `DebateNpcRoomConfig` 已有 `allow_pause`，但当前 `is_action_capability_enabled` 没有 action type 使用它 | 下一阶段应让 `allow_pause=true` 仅授权 `pause_suggestion`，不授权 `soft_pause/hard_pause/resume` |
-| 公开呼叫 | `pause_review` 已是合法 public call type；`rule_executor_v1` 当前会返回普通 `speak` 文案 | 下一阶段可把 `pause_review` 与 `pause_suggestion` 最小闭环对齐 |
+| action 类型 | `chat` 已接受 `speak/praise/effect/state_changed/pause_suggestion`，见 [npc.rs](/Users/panyihang/Documents/EchoIsle/chat/chat_server/src/models/debate/npc.rs) 的 `normalize_action_type` | 下一阶段由 `npc_service` 生成合法 `pause_suggestion` 候选，`chat` 不把它映射为房间暂停态 |
+| pause 能力位 | `DebateNpcRoomConfig.allow_pause` 已映射到 `pause_suggestion` candidate，并接入 `pause_review` public call 门禁 | `allow_pause=true` 仅授权暂停建议，不授权 `soft_pause/hard_pause/resume` |
+| 公开呼叫 | `pause_review` 已是合法 public call type；`chat` 门禁允许只开启 `allow_pause` 的房间创建该公开呼叫 | 下一阶段让 `npc_service` 把 `pause_review` 与 `pause_suggestion` 最小闭环对齐 |
 | `npc_service` action schema | [models.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/models.py) 的 `NpcActionType` 仍只有 `speak/praise/effect/state_changed` | LLM / rule 输出、guard、测试都要同步扩展 |
 | 前端 action union | [debate-domain](/Users/panyihang/Documents/EchoIsle/frontend/packages/debate-domain/src/index.ts)、[realtime-sdk](/Users/panyihang/Documents/EchoIsle/frontend/packages/realtime-sdk/src/index.ts)、[DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts) 仍只识别四类 action | 需要新增 suggestion 类型的文案、样式、replay hydration 与 smoke |
 | 实时与 replay | `DebateNpcActionCreated` 已有 replay key `npc_action:<action_uid>`，观战 WS 测试已覆盖 | `pause_suggestion` 默认复用现有 NPC action 事件，不新增房间状态事件 |
@@ -93,7 +93,7 @@
 | P1-C. `virtual-judge-npc-dashboard-query-pack` | 固化 NPC canary dashboard / 日志查询 / 告警演练基线 | 已完成 | 已输出查询与告警基线；不把字段存在误写成 dashboard 已接入 |
 | P1-D. `virtual-judge-npc-real-env-canary-run` | 在真实环境执行 NPC canary 并归档证据 | 待执行 | 条件模块；仅在 Beta / staging provider、Kafka、服务编排、dashboard 可用时执行；否则输出 env_blocked |
 | P2-E. `virtual-judge-npc-pause-suggestion-contract-freeze` | 冻结 `pause_suggestion` 合同、文案、权限、展示和非目标 | 已完成 | 已冻结产品与技术合同；默认复用 `DebateNpcActionCreated`，不新增房间状态事件 |
-| P2-F. `virtual-judge-npc-pause-suggestion-chat-spine` | `chat` 支持 `pause_suggestion` candidate、能力位、OpenAPI 和测试 | 待执行 | `allow_pause` 只控制建议，不允许强暂停 |
+| P2-F. `virtual-judge-npc-pause-suggestion-chat-spine` | `chat` 支持 `pause_suggestion` candidate、能力位、OpenAPI 和测试 | 已完成 | 已新增 DB check 迁移、chat guard、public call 门禁和 targeted tests；`allow_pause` 只控制建议，不允许强暂停 |
 | P2-G. `virtual-judge-npc-pause-suggestion-npc-service-executor` | `npc_service` LLM / rule / guard 支持生成暂停建议 | 待执行 | `pause_review` public call 优先产生建议或明确静默 |
 | P2-H. `virtual-judge-npc-pause-suggestion-frontend-ux` | 前端展示暂停建议卡片、action feed、replay hydration 与反馈 | 待执行 | 不禁用输入，不展示全局暂停遮罩 |
 | P3-I. `virtual-judge-npc-pause-suggestion-smoke-and-guard` | 完成 pause suggestion 端到端 smoke、负向边界和正式裁决隔离验证 | 待执行 | 覆盖观战 replay、allow_pause=false、LLM 违规输出隔离 |
@@ -101,8 +101,8 @@
 
 ## 6. 下一开发模块建议
 
-1. 默认下一步执行 P2-F `virtual-judge-npc-pause-suggestion-chat-spine`，让 `chat` 主事实源先支持 `pause_suggestion`。
-2. P2-F 完成后执行 P2-G `virtual-judge-npc-pause-suggestion-npc-service-executor`，再进入 P2-H 前端展示。
+1. 默认下一步执行 P2-G `virtual-judge-npc-pause-suggestion-npc-service-executor`，让 `npc_service` LLM / rule / guard 生成合法暂停建议候选。
+2. P2-G 完成后执行 P2-H `virtual-judge-npc-pause-suggestion-frontend-ux`，再进入 P3-I 端到端 smoke。
 3. P1-D 必须等真实 Beta / staging 环境具备后再执行；没有环境时只允许产出 `env_blocked`，不得写成 pass。
 
 ## 7. 模块详情
@@ -284,6 +284,16 @@
 3. 不新增 `soft_paused/hard_paused` 房间状态。
 4. 正式发言、置顶、Judge / Draw 不受影响。
 
+完成结果：
+
+1. `chat` 已将 `pause_suggestion` 加入 action type normalizer，并要求 `publicText` 与 `reasonCode`。
+2. `pause_suggestion` 已映射到 `DebateNpcRoomConfig.allow_pause`；`allow_pause=false` 时 candidate 会在 chat 边界被拒绝。
+3. 已新增 `debate_npc_actions` DB check 迁移，允许 `pause_suggestion` 落库。
+4. `pause_review` public call 门禁已支持只开启 `allow_pause` 的房间，但仍不改变房间状态。
+5. OpenAPI schema 已检查：当前 candidate DTO 的 `actionType` 是字符串 schema，没有手写 enum 需要同步；路由与 DTO 仍由现有 schema 自动导出。
+6. 已补 targeted tests 覆盖创建、action_uid replay、能力位拒绝、缺少 reason 拒绝、官方裁决字段拒绝、公开呼叫门禁和 `debate_sessions.status` 不变。
+7. 本切片没有新增 `soft_pause/hard_pause/resume`，也没有写入正式裁决字段。
+
 ### P2-G. `virtual-judge-npc-pause-suggestion-npc-service-executor`
 
 目标：
@@ -400,7 +410,7 @@
 
 1. 真实 Beta / staging 环境是否已经具备 OpenAI-compatible provider、Kafka topic、服务编排和查询权限；若不具备，P1-D 应输出 `env_blocked`。
 2. 是否需要在后续单独补 Grafana / Datadog / Loki / Kibana / CloudWatch 可导入面板模板；P1-C 当前只冻结字段与查询口径。
-3. P2-F 是否在同一切片内同步 OpenAPI schema 与 chat targeted tests；当前建议必须同步。
+3. P2-F 已完成；OpenAPI 字符串 schema 已检查，chat targeted tests 已覆盖。
 4. `pause_suggestion` 的前端 reasonCode 是否展示给用户；P2-E 默认只展示 `publicText`。
 5. `soft_pause` 是否必须由运营 / 管理员批准。当前设计建议是必须批准，本阶段不实现。
 
@@ -414,3 +424,4 @@
 - 2026-05-04：完成 P1-B `virtual-judge-npc-real-env-readiness-pack`，新增真实 Beta / staging readiness 输入清单、执行步骤、回滚和 evidence 模板；下一步默认推进 P1-C。
 - 2026-05-04：完成 P1-C `virtual-judge-npc-dashboard-query-pack`，新增 canary dashboard / 日志查询 / 告警演练基线；下一步按真实环境可用性选择 P1-D 或 P2-E。
 - 2026-05-04：完成 P2-E `virtual-judge-npc-pause-suggestion-contract-freeze`，新增 `pause_suggestion` 产品与技术合同冻结文档；下一步默认推进 P2-F。
+- 2026-05-04：完成 P2-F `virtual-judge-npc-pause-suggestion-chat-spine`，`chat` 支持 `pause_suggestion` candidate、`allow_pause` 能力位、DB check 迁移和 targeted tests；下一步默认推进 P2-G。

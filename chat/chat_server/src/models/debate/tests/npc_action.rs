@@ -11,6 +11,7 @@ struct SeedNpcConfig {
     allow_praise: bool,
     allow_effect: bool,
     allow_state_change: bool,
+    allow_pause: bool,
 }
 
 #[tokio::test]
@@ -215,6 +216,7 @@ async fn npc_action_candidate_should_reject_non_active_room_status() -> Result<(
             allow_praise: true,
             allow_effect: true,
             allow_state_change: true,
+            allow_pause: false,
         },
     )
     .await?;
@@ -250,6 +252,7 @@ async fn npc_action_candidate_should_reject_disabled_state_change_capability() -
             allow_praise: true,
             allow_effect: true,
             allow_state_change: false,
+            allow_pause: false,
         },
     )
     .await?;
@@ -380,6 +383,166 @@ async fn ops_npc_config_should_disable_praise_candidate_at_chat_boundary() -> Re
 }
 
 #[tokio::test]
+async fn npc_action_candidate_should_create_pause_suggestion_without_mutating_session_state(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config_with_status(
+        &state,
+        session_id,
+        SeedNpcConfig {
+            enabled: true,
+            status: "active",
+            allow_speak: true,
+            allow_praise: true,
+            allow_effect: true,
+            allow_state_change: true,
+            allow_pause: true,
+        },
+    )
+    .await?;
+    let message = seed_joined_message(&state, session_id, 1, "pro", "刚才这轮有点跑题。").await?;
+
+    let first = state
+        .submit_debate_npc_action_candidate(pause_suggestion_candidate(
+            "npc-act-pause-suggestion-001",
+            session_id,
+            message.id,
+            "我建议先短暂停一下，把争议焦点对齐后再继续。",
+            Some("heated_exchange"),
+        ))
+        .await?;
+    assert!(first.accepted);
+    assert_eq!(first.status, "created");
+    let action_id = first.action_id.expect("created action should have id");
+
+    let second = state
+        .submit_debate_npc_action_candidate(pause_suggestion_candidate(
+            "npc-act-pause-suggestion-001",
+            session_id,
+            message.id,
+            "我建议先短暂停一下，把争议焦点对齐后再继续。",
+            Some("heated_exchange"),
+        ))
+        .await?;
+    assert!(second.accepted);
+    assert_eq!(second.status, "replayed");
+    assert_eq!(second.action_id, Some(action_id));
+
+    let stored: DebateNpcAction = sqlx::query_as(
+        r#"
+        SELECT
+          id, action_uid, session_id, npc_id, display_name, action_type, public_text,
+          target_message_id, target_user_id, target_side, effect_kind, npc_status,
+          reason_code, source_event_id, source_message_id, policy_version,
+          executor_kind, executor_version, created_at
+        FROM debate_npc_actions
+        WHERE id = $1
+        "#,
+    )
+    .bind(action_id as i64)
+    .fetch_one(&state.pool)
+    .await?;
+    assert_eq!(stored.action_type, "pause_suggestion");
+    assert_eq!(
+        stored.public_text.as_deref(),
+        Some("我建议先短暂停一下，把争议焦点对齐后再继续。")
+    );
+    assert_eq!(stored.reason_code.as_deref(), Some("heated_exchange"));
+    assert_eq!(stored.source_message_id, Some(message.id));
+    assert_eq!(stored.target_message_id, None);
+    assert_eq!(stored.executor_kind, "llm_executor_v1");
+
+    let session_status: String =
+        sqlx::query_scalar("SELECT status FROM debate_sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_one(&state.pool)
+            .await?;
+    assert_eq!(session_status, "open");
+    assert_eq!(npc_action_count(&state).await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_action_candidate_should_reject_disabled_pause_suggestion_capability() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config_with_status(
+        &state,
+        session_id,
+        SeedNpcConfig {
+            enabled: true,
+            status: "active",
+            allow_speak: true,
+            allow_praise: true,
+            allow_effect: true,
+            allow_state_change: true,
+            allow_pause: false,
+        },
+    )
+    .await?;
+    let message =
+        seed_joined_message(&state, session_id, 1, "pro", "这一段出现了互相打断。").await?;
+
+    let output = state
+        .submit_debate_npc_action_candidate(pause_suggestion_candidate(
+            "npc-act-pause-disabled",
+            session_id,
+            message.id,
+            "建议先暂停一下。",
+            Some("interruption"),
+        ))
+        .await?;
+
+    assert!(!output.accepted);
+    assert_eq!(
+        output.reason_code.as_deref(),
+        Some("npc_capability_disabled")
+    );
+    assert_eq!(npc_action_count(&state).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_action_candidate_should_require_reason_for_pause_suggestion() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config_with_status(
+        &state,
+        session_id,
+        SeedNpcConfig {
+            enabled: true,
+            status: "active",
+            allow_speak: true,
+            allow_praise: true,
+            allow_effect: true,
+            allow_state_change: true,
+            allow_pause: true,
+        },
+    )
+    .await?;
+    let message = seed_joined_message(&state, session_id, 1, "pro", "这一段需要整理。").await?;
+
+    let err = state
+        .submit_debate_npc_action_candidate(pause_suggestion_candidate(
+            "npc-act-pause-reason-required",
+            session_id,
+            message.id,
+            "建议先暂停一下。",
+            None,
+        ))
+        .await
+        .expect_err("pause_suggestion must explain why it is suggested");
+
+    assert!(matches!(
+        err,
+        AppError::ValidationError(ref code) if code == "debate_npc_action_reason_required"
+    ));
+    assert_eq!(npc_action_count(&state).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn npc_action_candidate_should_reject_target_message_from_other_session() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
@@ -435,15 +598,17 @@ async fn npc_action_candidate_should_rate_limit_room_actions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn npc_action_candidate_should_reject_official_verdict_fields() -> Result<()> {
+async fn npc_action_candidate_should_reject_pause_suggestion_official_verdict_fields() -> Result<()>
+{
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
     let payload = json!({
         "actionUid": "npc-act-official-field",
         "sessionId": session_id as u64,
         "npcId": NPC_ID,
-        "actionType": "speak",
-        "publicText": "我只负责活跃气氛，不生成正式裁决。",
+        "actionType": "pause_suggestion",
+        "publicText": "我建议先短暂停一下，但不会改变正式赛况。",
+        "reasonCode": "heated_exchange",
         "policyVersion": "npc-mvp-v1",
         "executorKind": "llm_executor_v1",
         "executorVersion": "gpt-4.1-mini",
@@ -517,6 +682,49 @@ async fn npc_public_call_should_create_room_public_trigger_context() -> Result<(
         "帮忙概括一下目前争议焦点。"
     );
     assert_eq!(context.recent_messages.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_public_call_should_accept_pause_review_when_only_pause_capability_enabled(
+) -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    seed_npc_config_with_status(
+        &state,
+        session_id,
+        SeedNpcConfig {
+            enabled: true,
+            status: "active",
+            allow_speak: false,
+            allow_praise: false,
+            allow_effect: false,
+            allow_state_change: false,
+            allow_pause: true,
+        },
+    )
+    .await?;
+    enable_public_call(&state, session_id, true).await?;
+    let _message =
+        seed_joined_message(&state, session_id, 1, "pro", "我想让裁判看看要不要停一下。").await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+
+    let call = state
+        .create_debate_npc_public_call(
+            &user,
+            session_id as u64,
+            CreateDebateNpcPublicCallInput {
+                call_type: "pause_review".to_string(),
+                content: "现在是否应该短暂停一下？".to_string(),
+            },
+        )
+        .await?;
+
+    assert_eq!(call.status, "queued");
+    assert_eq!(call.call_type, "pause_review");
     Ok(())
 }
 
@@ -640,6 +848,7 @@ async fn seed_npc_config(
             allow_praise,
             allow_effect,
             allow_state_change: true,
+            allow_pause: false,
         },
     )
     .await
@@ -654,9 +863,9 @@ async fn seed_npc_config_with_status(
         r#"
         INSERT INTO debate_npc_room_configs(
           session_id, npc_id, display_name, enabled, status,
-          allow_speak, allow_praise, allow_effect, allow_state_change
+          allow_speak, allow_praise, allow_effect, allow_state_change, allow_pause
         )
-        VALUES ($1, $2, '虚拟裁判', $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, '虚拟裁判', $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(session_id)
@@ -667,6 +876,7 @@ async fn seed_npc_config_with_status(
     .bind(config.allow_praise)
     .bind(config.allow_effect)
     .bind(config.allow_state_change)
+    .bind(config.allow_pause)
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -756,6 +966,27 @@ fn state_changed_candidate(action_uid: &str, session_id: i64, status: &str) -> V
         "actionType": "state_changed",
         "publicText": "状态更新。",
         "npcStatus": status,
+        "policyVersion": "npc-mvp-v1",
+        "executorKind": "llm_executor_v1",
+        "executorVersion": "gpt-4.1-mini"
+    })
+}
+
+fn pause_suggestion_candidate(
+    action_uid: &str,
+    session_id: i64,
+    source_message_id: i64,
+    text: &str,
+    reason_code: Option<&str>,
+) -> Value {
+    json!({
+        "actionUid": action_uid,
+        "sessionId": session_id as u64,
+        "npcId": NPC_ID,
+        "actionType": "pause_suggestion",
+        "publicText": text,
+        "sourceMessageId": source_message_id as u64,
+        "reasonCode": reason_code,
         "policyVersion": "npc-mvp-v1",
         "executorKind": "llm_executor_v1",
         "executorVersion": "gpt-4.1-mini"

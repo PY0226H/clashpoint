@@ -79,6 +79,7 @@ const DEBATE_NPC_ID_TOO_LONG: &str = "debate_npc_id_too_long";
 const DEBATE_NPC_ACTION_INVALID_TYPE: &str = "debate_npc_action_invalid_type";
 const DEBATE_NPC_ACTION_TEXT_REQUIRED: &str = "debate_npc_action_text_required";
 const DEBATE_NPC_ACTION_TEXT_TOO_LONG: &str = "debate_npc_action_text_too_long";
+const DEBATE_NPC_ACTION_REASON_REQUIRED: &str = "debate_npc_action_reason_required";
 const DEBATE_NPC_ACTION_TARGET_REQUIRED: &str = "debate_npc_action_target_required";
 const DEBATE_NPC_ACTION_TARGET_SIDE_INVALID: &str = "debate_npc_action_target_side_invalid";
 const DEBATE_NPC_ACTION_POLICY_VERSION_EMPTY: &str = "debate_npc_action_policy_version_empty";
