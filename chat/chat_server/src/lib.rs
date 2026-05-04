@@ -329,6 +329,10 @@ pub async fn get_router(state: AppState) -> Result<Router, AppError> {
             "/debate/npc/actions/candidates",
             post(submit_debate_npc_action_candidate_handler),
         )
+        .route(
+            "/debate/npc/sessions/:session_id/context",
+            get(get_debate_npc_decision_context_handler),
+        )
         .layer(from_fn_with_state(state.clone(), verify_ai_internal_key));
     let auth_session_api = Router::new()
         .route("/auth/logout", post(logout_handler))

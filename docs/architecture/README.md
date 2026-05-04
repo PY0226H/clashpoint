@@ -82,7 +82,7 @@
 
 ### 3.2.1 虚拟裁判 NPC（公开房间娱乐角色）
 
-虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 P1-A / P1-B / P1-C 已落地 chat 侧 action spine、notify replay 合同与 Debate Room 前端展示壳；P2-D 已新增独立 `npc_service/` 服务骨架、LLM executor router、rule fallback 与本地 guard。
+虚拟裁判 NPC 是房间内公开可见的娱乐导向角色，不是赛后官方 AI 裁判团，也不替代正式裁决报告。当前 P1-A / P1-B / P1-C 已落地 chat 侧 action spine、notify replay 合同与 Debate Room 前端展示壳；P2-D 已新增独立 `npc_service/` 服务骨架、LLM executor router、rule fallback 与本地 guard；P2-E 已新增本地 webhook 事件触发路径和 chat 公开 context 查询接口，后续 Kafka/event-bus consumer 接管后可移除 webhook。
 
 优先看：
 
@@ -97,10 +97,12 @@
 9. [npc_service app_factory.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/app_factory.py)
 10. [npc_service executors.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/executors.py)
 11. [npc_service guard.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/guard.py)
-12. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
-13. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
-14. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
-15. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
+12. [npc_service event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
+13. [npc_service chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
+14. [DebateNpcPanel.tsx](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcPanel.tsx)
+15. [DebateNpcModel.ts](/Users/panyihang/Documents/EchoIsle/frontend/packages/app-shell/src/components/DebateNpcModel.ts)
+16. [NPC action migration](/Users/panyihang/Documents/EchoIsle/chat/migrations/20260503090000_debate_npc_action_spine.sql)
+17. [虚拟裁判NPC_开发计划.md](/Users/panyihang/Documents/EchoIsle/docs/dev_plan/虚拟裁判NPC_开发计划.md)
 
 ### 3.3 AI 裁判 / 报告 / 申诉 / 平局投票
 
@@ -344,10 +346,13 @@ AI Judge real-env / runtime evidence 优先看：
    - 禁止正式裁决字段、限制公开文本长度、校验 action 语义
 
 4. [chat_client.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/chat_client.py)
-   - 提交候选动作到 `chat` 内部 action sink；`chat` 仍是房间事实源
+   - 从 `chat` 拉取公开 context，并提交候选动作到 `chat` 内部 action sink；`chat` 仍是房间事实源
 
-5. [tests](/Users/panyihang/Documents/EchoIsle/npc_service/tests)
-   - 当前覆盖 executor router、LLM fallback、guard、OpenAI adapter、chat client 与 FastAPI 路由
+5. [event_processor.py](/Users/panyihang/Documents/EchoIsle/npc_service/app/event_processor.py)
+   - 处理 `DebateMessageCreated` trigger，串联 context fetch、executor router 与 candidate callback；当前 webhook 为本地 MVP 路径
+
+6. [tests](/Users/panyihang/Documents/EchoIsle/npc_service/tests)
+   - 当前覆盖 executor router、LLM fallback、guard、OpenAI adapter、chat client、event processor 与 FastAPI 路由
 
 ### 5.3 最常用 AI 服务文件
 

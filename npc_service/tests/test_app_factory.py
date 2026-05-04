@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 from app.app_factory import create_app
+from app.chat_client import NpcChatClient
 from app.guard import candidate_from_raw_output
 from app.models import NpcDecisionContext, NpcDecisionRun
 
-from helpers import make_context, make_settings
+from helpers import make_context, make_settings, make_trigger
 
 
 class FakeRouter:
@@ -76,5 +78,55 @@ def test_evaluate_decision_route_returns_router_run() -> None:
         assert payload["executorKind"] == "llm_executor_v1"
         assert payload["candidate"]["actionType"] == "praise"
         assert payload["candidate"]["publicText"] == "这个点很有张力。"
+
+    asyncio.run(scenario())
+
+
+def test_debate_message_event_route_requires_internal_key_and_processes_trigger() -> None:
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json=make_context().model_dump(by_alias=True))
+            payload = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "accepted": True,
+                    "actionId": 9002,
+                    "actionUid": payload["actionUid"],
+                    "status": "created",
+                    "reasonCode": None,
+                },
+            )
+
+        settings = make_settings()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as chat_http_client:
+            app = create_app(
+                settings=settings,
+                router=FakeRouter(),
+                chat_client=NpcChatClient(settings=settings, client=chat_http_client),
+            )
+            app_transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=app_transport,
+                base_url="http://test",
+            ) as client:
+                unauthorized = await client.post(
+                    "/api/internal/npc/events/debate-message-created",
+                    json=make_trigger().model_dump(by_alias=True),
+                )
+                authorized = await client.post(
+                    "/api/internal/npc/events/debate-message-created",
+                    headers={"x-ai-internal-key": "test-internal-key"},
+                    json=make_trigger().model_dump(by_alias=True),
+                )
+
+        assert unauthorized.status_code == 401
+        assert authorized.status_code == 200
+        payload = authorized.json()
+        assert payload["status"] == "submitted"
+        assert payload["submitResult"]["actionId"] == 9002
+        assert payload["decisionRun"]["candidate"]["actionType"] == "praise"
 
     asyncio.run(scenario())

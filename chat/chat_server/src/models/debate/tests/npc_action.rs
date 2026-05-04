@@ -4,6 +4,76 @@ use serde_json::{json, Value};
 const NPC_ID: &str = "virtual_judge_default";
 
 #[tokio::test]
+async fn npc_decision_context_should_return_public_room_messages_only() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let first = seed_joined_message(&state, session_id, 1, "pro", "first public point").await?;
+    let user = state
+        .find_user_by_id(1)
+        .await?
+        .expect("fixture user should exist");
+    let second = state
+        .create_debate_message(
+            session_id as u64,
+            &user,
+            CreateDebateMessageInput {
+                content: "second public point".to_string(),
+            },
+        )
+        .await?;
+
+    let context = state
+        .get_debate_npc_decision_context(
+            session_id as u64,
+            GetDebateNpcDecisionContextQuery {
+                trigger_message_id: second.id as u64,
+                source_event_id: Some("evt-message-2".to_string()),
+                limit: Some(10),
+            },
+        )
+        .await?;
+    let payload = serde_json::to_value(&context)?;
+
+    assert_eq!(context.session_id, session_id as u64);
+    assert_eq!(context.npc_id, NPC_ID);
+    assert_eq!(context.source_event_id.as_deref(), Some("evt-message-2"));
+    assert_eq!(context.trigger_message.message_id, second.id);
+    assert_eq!(context.trigger_message.content, "second public point");
+    assert_eq!(context.recent_messages.len(), 2);
+    assert_eq!(context.recent_messages[0].message_id, first.id);
+    assert_eq!(context.recent_messages[1].message_id, second.id);
+    assert!(payload.get("phone").is_none());
+    assert!(payload.get("email").is_none());
+    assert!(payload.get("walletBalance").is_none());
+    assert!(payload.get("winner").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn npc_decision_context_should_reject_trigger_message_from_other_session() -> Result<()> {
+    let (_tdb, state) = AppState::new_for_test().await?;
+    let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let (_other_topic_id, other_session_id) = seed_topic_and_session(&state, "open", 10).await?;
+    let other_message =
+        seed_joined_message(&state, other_session_id, 1, "pro", "other room point").await?;
+
+    let err = state
+        .get_debate_npc_decision_context(
+            session_id as u64,
+            GetDebateNpcDecisionContextQuery {
+                trigger_message_id: other_message.id as u64,
+                source_event_id: None,
+                limit: Some(10),
+            },
+        )
+        .await
+        .expect_err("cross-room trigger should be rejected");
+
+    assert!(matches!(err, AppError::NotFound(_)));
+    Ok(())
+}
+
+#[tokio::test]
 async fn npc_action_candidate_should_create_and_replay_by_action_uid() -> Result<()> {
     let (_tdb, state) = AppState::new_for_test().await?;
     let (_topic_id, session_id) = seed_topic_and_session(&state, "open", 10).await?;

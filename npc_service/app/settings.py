@@ -36,6 +36,9 @@ class Settings:
     ai_internal_key: str
     chat_server_base_url: str
     chat_action_candidate_path: str
+    chat_context_path_template: str
+    event_submit_max_attempts: int
+    event_submit_retry_backoff_ms: int
     npc_id: str
     npc_policy_version: str
     llm_enabled: bool
@@ -51,6 +54,15 @@ def load_settings() -> Settings:
         chat_action_candidate_path=os.getenv(
             "NPC_CHAT_ACTION_CANDIDATE_PATH",
             "/api/internal/ai/debate/npc/actions/candidates",
+        ),
+        chat_context_path_template=os.getenv(
+            "NPC_CHAT_CONTEXT_PATH_TEMPLATE",
+            "/api/internal/ai/debate/npc/sessions/{session_id}/context",
+        ),
+        event_submit_max_attempts=max(1, int(os.getenv("NPC_EVENT_SUBMIT_MAX_ATTEMPTS", "2"))),
+        event_submit_retry_backoff_ms=max(
+            0,
+            int(os.getenv("NPC_EVENT_SUBMIT_RETRY_BACKOFF_MS", "100")),
         ),
         npc_id=os.getenv("NPC_SERVICE_NPC_ID", "virtual_judge_default"),
         npc_policy_version=os.getenv("NPC_SERVICE_POLICY_VERSION", "npc_policy_v1"),

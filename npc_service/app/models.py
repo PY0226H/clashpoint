@@ -73,3 +73,29 @@ class SubmitActionCandidateOutput(CamelModel):
     action_uid: str = Field(alias="actionUid")
     status: str
     reason_code: str | None = Field(default=None, alias="reasonCode")
+
+
+class DebateMessageCreatedTrigger(CamelModel):
+    event: Literal["DebateMessageCreated"] = "DebateMessageCreated"
+    session_id: int = Field(alias="sessionId")
+    message_id: int = Field(alias="messageId")
+    user_id: int = Field(alias="userId")
+    side: DebateSide
+    content: str
+    created_at: str = Field(alias="createdAt")
+    source_event_id: str | None = Field(default=None, alias="sourceEventId")
+
+
+class NpcEventProcessingRun(CamelModel):
+    status: Literal[
+        "submitted",
+        "candidate_rejected",
+        "silent",
+        "decision_rejected",
+        "submit_failed",
+    ]
+    trigger: DebateMessageCreatedTrigger
+    decision_run: NpcDecisionRun = Field(alias="decisionRun")
+    submit_result: SubmitActionCandidateOutput | None = Field(default=None, alias="submitResult")
+    submit_attempts: int = Field(default=0, alias="submitAttempts")
+    failures: list[str] = Field(default_factory=list)

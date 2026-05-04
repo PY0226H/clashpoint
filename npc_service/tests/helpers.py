@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import DebateMessageSnapshot, NpcDecisionContext
+from app.models import DebateMessageCreatedTrigger, DebateMessageSnapshot, NpcDecisionContext
 from app.settings import OpenAIProviderSettings, Settings
 
 
@@ -9,12 +9,16 @@ def make_settings(
     api_key: str = "test-openai-key",
     llm_enabled: bool = True,
     rule_fallback_enabled: bool = True,
+    event_submit_max_attempts: int = 2,
 ) -> Settings:
     return Settings(
         service_name="npc_service_test",
         ai_internal_key="test-internal-key",
         chat_server_base_url="http://chat.test",
         chat_action_candidate_path="/api/internal/ai/debate/npc/actions/candidates",
+        chat_context_path_template="/api/internal/ai/debate/npc/sessions/{session_id}/context",
+        event_submit_max_attempts=event_submit_max_attempts,
+        event_submit_retry_backoff_ms=0,
         npc_id="virtual_judge_default",
         npc_policy_version="npc_policy_test",
         llm_enabled=llm_enabled,
@@ -62,4 +66,17 @@ def make_context(
         triggerMessage=trigger,
         recentMessages=[trigger] if trigger is not None else [],
         now="2026-05-03T00:00:01Z",
+    )
+
+
+def make_trigger() -> DebateMessageCreatedTrigger:
+    return DebateMessageCreatedTrigger(
+        event="DebateMessageCreated",
+        sessionId=77,
+        messageId=1001,
+        userId=42,
+        side="pro",
+        content="这段发言把核心矛盾说清楚了，值得回应。",
+        createdAt="2026-05-03T00:00:00Z",
+        sourceEventId="evt-1",
     )

@@ -127,6 +127,7 @@ pub(crate) trait OpenApiRouter {
             crate::handlers::debate_room::create_debate_message_handler,
             crate::handlers::debate_room::list_debate_pinned_messages_handler,
             crate::handlers::debate_room::pin_debate_message_handler,
+            get_debate_npc_decision_context_handler,
             submit_debate_npc_action_candidate_handler,
             crate::handlers::debate_judge::request_judge_job_handler,
             crate::handlers::debate_judge::get_latest_judge_report_handler,

@@ -10,6 +10,40 @@ from app.guard import candidate_from_raw_output
 from helpers import make_context, make_settings
 
 
+def test_chat_client_fetches_public_decision_context() -> None:
+    async def scenario() -> None:
+        observed: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["url"] = str(request.url)
+            observed["internal_key"] = request.headers.get("x-ai-internal-key")
+            return httpx.Response(
+                200,
+                json=make_context().model_dump(by_alias=True),
+            )
+
+        settings = make_settings()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            context = await NpcChatClient(settings=settings, client=client).fetch_decision_context(
+                session_id=77,
+                trigger_message_id=1001,
+                source_event_id="evt-1",
+                limit=20,
+            )
+
+        assert (
+            observed["url"]
+            == "http://chat.test/api/internal/ai/debate/npc/sessions/77/context?triggerMessageId=1001&sourceEventId=evt-1&limit=20"
+        )
+        assert observed["internal_key"] == "test-internal-key"
+        assert context.session_id == 77
+        assert context.trigger_message is not None
+        assert context.trigger_message.message_id == 1001
+
+    asyncio.run(scenario())
+
+
 def test_chat_client_posts_candidate_with_internal_key_and_camel_payload() -> None:
     async def scenario() -> None:
         observed: dict[str, object] = {}

@@ -39,6 +39,41 @@ struct NormalizedNpcActionCandidate {
 
 #[allow(dead_code)]
 impl AppState {
+    pub async fn get_debate_npc_decision_context(
+        &self,
+        session_id: u64,
+        query: GetDebateNpcDecisionContextQuery,
+    ) -> Result<GetDebateNpcDecisionContextOutput, AppError> {
+        let session_id_i64 = safe_u64_to_i64(session_id, DEBATE_NPC_CONTEXT_INVALID_SESSION_ID)?;
+        let trigger_message_id_i64 = safe_u64_to_i64(
+            query.trigger_message_id,
+            DEBATE_NPC_CONTEXT_INVALID_MESSAGE_ID,
+        )?;
+        let limit = normalize_npc_context_limit(query.limit);
+        let trigger_message = load_npc_message_snapshot(&self.pool, trigger_message_id_i64).await?;
+        if trigger_message.session_id != session_id_i64 {
+            return Err(AppError::NotFound(format!(
+                "debate message id {}",
+                query.trigger_message_id
+            )));
+        }
+        let recent_messages = load_recent_npc_message_snapshots(
+            &self.pool,
+            session_id_i64,
+            trigger_message_id_i64,
+            limit,
+        )
+        .await?;
+        Ok(GetDebateNpcDecisionContextOutput {
+            session_id,
+            npc_id: DEBATE_NPC_DEFAULT_ID.to_string(),
+            source_event_id: query.source_event_id,
+            trigger_message,
+            recent_messages,
+            now: Utc::now(),
+        })
+    }
+
     pub async fn submit_debate_npc_action_candidate(
         &self,
         payload: Value,
@@ -221,6 +256,68 @@ impl AppState {
             reason_code: None,
         })
     }
+}
+
+async fn load_npc_message_snapshot(
+    pool: &sqlx::PgPool,
+    message_id: i64,
+) -> Result<DebateNpcMessageSnapshot, AppError> {
+    let row = sqlx::query_as::<_, DebateNpcMessageSnapshot>(
+        r#"
+        SELECT
+          id AS message_id,
+          session_id,
+          user_id,
+          side,
+          content,
+          created_at
+        FROM session_messages
+        WHERE id = $1
+        "#,
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or_else(|| AppError::NotFound(format!("debate message id {message_id}")))
+}
+
+async fn load_recent_npc_message_snapshots(
+    pool: &sqlx::PgPool,
+    session_id: i64,
+    trigger_message_id: i64,
+    limit: i64,
+) -> Result<Vec<DebateNpcMessageSnapshot>, AppError> {
+    let rows = sqlx::query_as::<_, DebateNpcMessageSnapshot>(
+        r#"
+        SELECT message_id, session_id, user_id, side, content, created_at
+        FROM (
+            SELECT
+              id AS message_id,
+              session_id,
+              user_id,
+              side,
+              content,
+              created_at
+            FROM session_messages
+            WHERE session_id = $1
+              AND id <= $2
+            ORDER BY id DESC
+            LIMIT $3
+        ) recent
+        ORDER BY message_id ASC
+        "#,
+    )
+    .bind(session_id)
+    .bind(trigger_message_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+fn normalize_npc_context_limit(raw: Option<u64>) -> i64 {
+    raw.unwrap_or(DEBATE_NPC_CONTEXT_DEFAULT_LIMIT)
+        .clamp(1, DEBATE_NPC_CONTEXT_MAX_LIMIT) as i64
 }
 
 async fn load_npc_action_by_uid(

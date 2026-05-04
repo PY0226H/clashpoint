@@ -14,8 +14,9 @@ mod user;
 pub use agent::{CreateAgent, UpdateAgent};
 pub use chat::{CreateChat, UpdateChat, UpdateChatMembers};
 pub use debate::{
-    CreateDebateMessageInput, DebateMessage, DebateNpcAction, DebatePinnedMessage,
-    DebateSessionSummary, DebateTopic, JoinDebateSessionInput, JoinDebateSessionOutput,
+    CreateDebateMessageInput, DebateMessage, DebateNpcAction, DebateNpcMessageSnapshot,
+    DebatePinnedMessage, DebateSessionSummary, DebateTopic, GetDebateNpcDecisionContextOutput,
+    GetDebateNpcDecisionContextQuery, JoinDebateSessionInput, JoinDebateSessionOutput,
     ListDebateMessages, ListDebateMessagesOutput, ListDebatePinnedMessages,
     ListDebatePinnedMessagesOutput, ListDebateSessions, ListDebateSessionsOutput, ListDebateTopics,
     ListDebateTopicsOutput, OpsCreateDebateSessionInput, OpsCreateDebateTopicInput,

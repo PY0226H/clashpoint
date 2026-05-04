@@ -101,6 +101,11 @@ const DEBATE_NPC_ACTION_OUTBOX_ENQUEUE_FAILED: &str = "debate_npc_action_outbox_
 const DEBATE_NPC_ACTION_ROOM_MIN_INTERVAL_SECS: i64 = 3;
 const DEBATE_NPC_ACTION_ROOM_MAX_PER_MINUTE: i64 = 10;
 const DEBATE_NPC_ACTION_TARGET_USER_PRAISE_MIN_INTERVAL_SECS: i64 = 30;
+const DEBATE_NPC_DEFAULT_ID: &str = "virtual_judge_default";
+const DEBATE_NPC_CONTEXT_DEFAULT_LIMIT: u64 = 20;
+const DEBATE_NPC_CONTEXT_MAX_LIMIT: u64 = 50;
+const DEBATE_NPC_CONTEXT_INVALID_SESSION_ID: &str = "debate_npc_context_invalid_session_id";
+const DEBATE_NPC_CONTEXT_INVALID_MESSAGE_ID: &str = "debate_npc_context_invalid_message_id";
 
 #[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -358,6 +363,36 @@ pub struct SubmitDebateNpcActionCandidateOutput {
     pub action_uid: String,
     pub status: String,
     pub reason_code: Option<String>,
+}
+
+#[derive(Debug, Clone, IntoParams, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDebateNpcDecisionContextQuery {
+    pub trigger_message_id: u64,
+    pub source_event_id: Option<String>,
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, FromRow, ToSchema, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DebateNpcMessageSnapshot {
+    pub message_id: i64,
+    pub session_id: i64,
+    pub user_id: i64,
+    pub side: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDebateNpcDecisionContextOutput {
+    pub session_id: u64,
+    pub npc_id: String,
+    pub source_event_id: Option<String>,
+    pub trigger_message: DebateNpcMessageSnapshot,
+    pub recent_messages: Vec<DebateNpcMessageSnapshot>,
+    pub now: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
