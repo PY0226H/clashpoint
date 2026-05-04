@@ -51,7 +51,7 @@
 | P1-A. `virtual-judge-npc-chat-action-spine` | 建立 chat 侧 NPC action 数据模型、内部 API 与 guard | 已完成 | 已新增 action/config 表、内部 candidate 接收接口、guard、限频、幂等重放、outbox 事件与 targeted tests |
 | P1-B. `virtual-judge-npc-notify-replay-contract` | 打通 `DebateNpcActionCreated` outbox、notify WS、replay 和 dedupe | 已完成 | 已新增 notify Kafka topic / AppEvent 映射、稳定 dedupe key、前端 payload 类型与可见字段 guard |
 | P1-C. `virtual-judge-npc-frontend-shell` | 前端新增 NPC 动态展示壳、action feed 与轻量动效 | 已完成 | 已新增 `DebateNpcPanel`、`DebateNpcModel`、CSS 动效和 DebateRoomPage room event 接入 |
-| P2-D. `virtual-judge-npc-service-skeleton-executor-router` | 新增 `npc_service/`、LLM provider adapter、executor router、rule fallback | 待执行 | `llm_executor_v1` 为主路径，rule 只兜底 |
+| P2-D. `virtual-judge-npc-service-skeleton-executor-router` | 新增 `npc_service/`、LLM provider adapter、executor router、rule fallback | 已完成 | `llm_executor_v1` 为主路径，rule 只兜底；已覆盖 guard、fallback、chat client 与 FastAPI routes |
 | P2-E. `virtual-judge-npc-event-consumption-loop` | 消费 `DebateMessageCreated`，拉取 context，提交 candidate | 待执行 | 从用户发言到 NPC action 的服务间闭环 |
 | P3-F. `virtual-judge-npc-e2e-smoke-and-fallback-hardening` | 端到端 smoke、LLM fallback、限频、幂等、隔离验证 | 待执行 | 证明 NPC 不影响发言、置顶、Judge / Draw |
 | P4-G. `virtual-judge-npc-stage-closure` | 阶段收口与长期文档同步 | 待执行 | 根据实际完成情况写 completed/todo，不复制活动计划原文 |
@@ -250,6 +250,15 @@
 2. `npc_service` unit tests：executor router、LLM fallback、guard、chat client mock。
 3. `git diff --check`。
 
+完成记录（2026-05-03）：
+
+1. 已新增独立 [npc_service](/Users/panyihang/Documents/EchoIsle/npc_service)，包含 FastAPI `/healthz` 与 `/api/internal/npc/decisions/evaluate`。
+2. 已定义 `NpcDecisionContext`、`NpcActionCandidate`、`NpcDecisionRun`、settings 与 chat client。
+3. 已实现 OpenAI-compatible provider、`llm_executor_v1` 主路径、`rule_executor_v1` fallback 与 decision run 失败原因记录。
+4. 已实现本地 guard，拒绝正式裁决字段、过长公开文本、非法 action type 与缺少必要目标的 praise/effect。
+5. 已补 13 个 targeted unit tests，覆盖 guard、executor router、LLM fallback、OpenAI adapter、chat client 与 FastAPI routes。
+6. 已同步 [docs/architecture/README.md](/Users/panyihang/Documents/EchoIsle/docs/architecture/README.md)。
+
 ### P2-E. `virtual-judge-npc-event-consumption-loop`
 
 目标：
@@ -376,3 +385,4 @@
 - 2026-05-03：完成 P1-A `virtual-judge-npc-chat-action-spine`；chat 侧已具备 NPC action/config 表、内部 candidate sink、二次 guard、限频、幂等重放与 `DebateNpcActionCreated` outbox 事件骨架；下一步执行 P1-B notify replay 合同。
 - 2026-05-03：完成 P1-B `virtual-judge-npc-notify-replay-contract`；`DebateNpcActionCreated` 已纳入 notify Kafka topic、AppEvent、room replay、ack/dedupe 合同，并同步 realtime-sdk / debate-domain payload 类型与可见字段 guard；下一步执行 P1-C 前端展示壳。
 - 2026-05-03：完成 P1-C `virtual-judge-npc-frontend-shell`；Debate Room 已展示虚拟裁判 NPC 面板，支持状态、action feed、赞赏目标、轻量动效和 replay 去重；下一步执行 P2-D 独立 `npc_service` 与 executor router。
+- 2026-05-03：完成 P2-D `virtual-judge-npc-service-skeleton-executor-router`；独立 `npc_service` 已具备 FastAPI skeleton、OpenAI-compatible LLM adapter、executor router、rule fallback、本地 guard、chat client 和 targeted tests；下一步执行 P2-E 事件消费闭环。
